@@ -17,6 +17,9 @@ const cases = spatial.flatMap(([name, profile, duration, samples]) => samples.ma
   file: `manim_example_${name}.py`,
   factory: "createDirectSpecialCameraSettingsRenderer", factoryArgs: [profile],
   duration, sampleTime, playback: duration > 0 ? "live" : undefined, boundaries: [1, 2],
+  // The native host sleeps until the wait deadline after ambient motion stops.
+  // Its held frame stays at 2s; Python's explicit sample may evaluate 2.5s.
+  directHeldSampleTime: profile === "ambient" && sampleTime === 2.5 ? 2 : undefined,
 })));
 for (const [name, factory, duration, samples] of [
   ["following_graph_camera", "createDirectFollowingGraphCameraRenderer", 3, [0.5, 1.5, 2.5, 3]],

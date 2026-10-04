@@ -1,4 +1,5 @@
 import asyncio
+import ast
 import inspect
 import sys
 from types import SimpleNamespace
@@ -12,6 +13,13 @@ from _manim_source_execution import (
     has_portable_scene_methods,
     authoring_source_scope, current_source_invocation,
 )
+
+
+def _nested_code_objects(code):
+    for value in code.co_consts:
+        if isinstance(value, type(code)):
+            yield value
+            yield from _nested_code_objects(value)
 
 
 class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -273,6 +281,73 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         original, portable = next(iter(pairs.items()))
         self.assertEqual(original.co_qualname, "FollowingGraphCamera.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_timed_supplementary_camera_fixtures_are_portable(self):
+        examples = Path(__file__).with_name("examples")
+        filenames = (
+            "manim_example_fixed_in_frame_mobject_test.py",
+            "manim_example_three_d_camera_rotation.py",
+            "manim_example_three_d_camera_illusion_rotation.py",
+            "manim_example_following_graph_camera.py",
+            "manim_example_moving_zoomed_scene_around.py",
+        )
+        for filename in filenames:
+            with self.subTest(filename=filename):
+                source = examples.joinpath(filename).read_text()
+                code, pairs = compile_authoring_source(source, filename=filename)
+                constructs = [
+                    item for item in _nested_code_objects(code)
+                    if item.co_name == "construct"
+                ]
+                self.assertEqual(len(constructs), 1)
+                original = constructs[0]
+                explicit_async = bool(original.co_flags & inspect.CO_COROUTINE)
+                compiled_portable = original in pairs and bool(
+                    pairs[original].co_flags & inspect.CO_COROUTINE
+                )
+                self.assertTrue(explicit_async or compiled_portable)
+                if explicit_async:
+                    tree = ast.parse(source, filename=filename)
+                    construct = next(
+                        node for node in ast.walk(tree)
+                        if isinstance(node, ast.AsyncFunctionDef)
+                        and node.name == "construct"
+                    )
+                    parents = {
+                        child: parent
+                        for parent in ast.walk(construct)
+                        for child in ast.iter_child_nodes(parent)
+                    }
+                    for node in ast.walk(construct):
+                        if (
+                            isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Attribute)
+                            and isinstance(node.func.value, ast.Name)
+                            and node.func.value.id == "self"
+                            and node.func.attr in {"play", "wait", "move_camera"}
+                        ):
+                            self.assertIsInstance(parents.get(node), ast.Await)
+
+    def test_static_camera_surface_fixtures_select_native_point_lighting(self):
+        examples = Path(__file__).with_name("examples")
+        for filename in (
+            "manim_example_three_d_light_source_position.py",
+            "manim_example_three_d_surface_plot.py",
+        ):
+            with self.subTest(filename=filename):
+                tree = ast.parse(examples.joinpath(filename).read_text(), filename=filename)
+                surfaces = [
+                    node for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "Surface"
+                ]
+                self.assertEqual(len(surfaces), 1)
+                options = {keyword.arg: keyword.value for keyword in surfaces[0].keywords}
+                self.assertIsInstance(options.get("shade_in_3d"), ast.Constant)
+                self.assertIs(options["shade_in_3d"].value, False)
+                self.assertIsInstance(options.get("point_lit"), ast.Constant)
+                self.assertIs(options["point_lit"].value, True)
 
     def test_click_indicate_gallery_uses_portable_continuation(self):
         source = Path(__file__).with_name("examples").joinpath("showcase_pointer_selection.py").read_text()

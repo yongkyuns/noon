@@ -117,23 +117,31 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
         };
         // Direct hosts must consume the initial publication before a seek.
         let presented = await present();
+        let sample;
         if (presented && playback === "live") {
           const { sampleDirectProgram } = await import("../scripts/direct-program-sample.mjs");
           const times = [...new Set([0, ...boundaries.filter(time => time < sampleTime), sampleTime])]
             .sort((a, b) => a - b);
-          for (const time of times) await sampleDirectProgram(renderer, time);
+          for (const time of times) sample = await sampleDirectProgram(renderer, time);
         } else if (presented && sampleTime > 0) {
           renderer.seekDirect(sampleTime);
           presented = await present();
         }
         return { presented, time: renderer.time(), objectCount: renderer.objectCount(),
-          drawCalls: renderer.lastDrawCalls(), rendererBackend: renderer.rendererBackend() };
+          drawCalls: renderer.lastDrawCalls(), rendererBackend: renderer.rendererBackend(),
+          cadence: sample?.cadence, delayMs: sample?.delayMs };
       }, { label, source: fixture.source, factory: fixture.factory, factoryArgs: fixture.factoryArgs ?? [],
         preparation: fixture.preparation, playback: fixture.playback, boundaries: fixture.boundaries ?? [],
         duration: fixture.duration ?? 0, sampleTime: fixture.sampleTime ?? 0 });
       assert.deepEqual(errors, []);
       assert.equal(metrics.presented, true);
-      assert.ok(Math.abs(metrics.time - (fixture.sampleTime ?? 0)) < 1e-6, `${fixture.id}/${label}: sample time ${metrics.time} differs from ${fixture.sampleTime ?? 0}`);
+      const expectedTime = label === "rust-wasm"
+        ? fixture.directHeldSampleTime ?? fixture.sampleTime ?? 0 : fixture.sampleTime ?? 0;
+      assert.ok(Math.abs(metrics.time - expectedTime) < 1e-6, `${fixture.id}/${label}: sample time ${metrics.time} differs from ${expectedTime}`);
+      if (label === "rust-wasm" && fixture.directHeldSampleTime !== undefined) {
+        assert.equal(metrics.cadence, "timer", "quiet waits must retain deadline scheduling");
+        assert.ok(metrics.delayMs > 0, "quiet waits must not request continuous frames");
+      }
       assert.ok(metrics.objectCount > 0, "paired scenes must contain render objects");
       if (fixture.objectCount !== undefined) assert.equal(metrics.objectCount, fixture.objectCount);
       assert.equal(metrics.rendererBackend, expectedBackend);

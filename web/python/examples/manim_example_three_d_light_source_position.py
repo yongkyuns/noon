@@ -14,8 +14,9 @@ class ThreeDLightSourcePosition(ThreeDScene):
                 1.5 * math.cos(u) * math.sin(v),
                 1.5 * math.sin(u)
             ]), v_range=[0, TAU], u_range=[-PI / 2, PI / 2],
-            checkerboard_colors=[RED_D, RED_E], resolution=(15, 32)
+            checkerboard_colors=[RED_D, RED_E], resolution=(15, 32),
+            shade_in_3d=False, point_lit=True
         )
-        self.renderer.camera.light_source.move_to(3*IN) # changes the source of the light
+        self.renderer.camera.light_source.move_to([0, 0, -3])  # Match the native point-light profile.
         self.set_camera_orientation(phi=75 * DEGREES, theta=30 * DEGREES)
         self.add(axes, sphere)

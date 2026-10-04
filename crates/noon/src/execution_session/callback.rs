@@ -1241,6 +1241,26 @@ impl ExecutionSession {
         Ok(staged)
     }
 
+    pub(super) fn carry_callback_ownership_through_completion(
+        &mut self,
+        time: f64,
+        previous_publication: PublicationContext,
+    ) {
+        let publication = self.publication_context();
+        if let Some(receipt) = self
+            .last_callback_receipt
+            .as_mut()
+            .filter(|receipt| receipt.time == time && receipt.publication == previous_publication)
+        {
+            receipt.publication = publication;
+            receipt
+                .domains
+                .retain(|target, _| self.callback_schedule.continues_for_target(*target));
+        } else {
+            self.last_callback_receipt = None;
+        }
+    }
+
     pub(crate) fn callback_progression_is_coherent_at(&self, time: f64) -> bool {
         self.callback_termination.is_none()
             && self.pending_callback.is_none()

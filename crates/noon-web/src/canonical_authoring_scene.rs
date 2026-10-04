@@ -2348,7 +2348,13 @@ impl CanonicalAuthoringScene {
                     }
                     source.validate().map_err(|error| error.to_string())?;
                     target_state.validate().map_err(|error| error.to_string())?;
-                    noon_core::resolve_animation_options(
+                    if options.reverse_rate_function == Some(true) {
+                        return Err(
+                            noon_core::AnimationOptionsError::UnsupportedReverseRateFunction
+                                .to_string(),
+                        );
+                    }
+                    noon_core::resolve_transform_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
                         noon_core::AnimationOptions::new(),
@@ -11155,7 +11161,8 @@ mod tests {
         let transform_options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear)
-            .lag_ratio(0.25);
+            .lag_ratio(0.25)
+            .path_arc(std::f64::consts::FRAC_PI_2);
         let indicate_options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::ThereAndBack);
@@ -11165,6 +11172,19 @@ mod tests {
             options: transform_options,
         }];
         let revision = context.scene.integration_store().borrow().scene_revision();
+        let reversed = [OrdinaryCompositionChild::FamilyTransformTo {
+            source: source.clone(),
+            target_state: target.clone(),
+            options: transform_options.reverse_rate_function(true),
+        }];
+        assert!(context
+            .validate_ordinary_mixed_composition(
+                &reversed,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap_err()
+            .contains("reverse_rate_function"));
         assert!(context
             .ordinary_play_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
