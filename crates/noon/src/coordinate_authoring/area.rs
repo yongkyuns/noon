@@ -10,10 +10,10 @@ pub(crate) fn axes_area(
     x_range: Option<[f64; 2]>,
     bounded: Option<(&Mobject, &PathQuery)>,
 ) -> Result<ManimGeometryOptions, CoordinateAuthoringError> {
-    let range = graph.function_plot_range()?;
+    let range = graph.axes_plot_range()?;
     let mut interval = clip_interval(x_range.unwrap_or(range), range)?;
     if let Some((bound, _)) = bounded {
-        interval = clip_interval(interval, bound.function_plot_range()?)?;
+        interval = clip_interval(interval, bound.axes_plot_range()?)?;
     }
     let mut top = graph_interval_points(frame, graph_path, interval)?;
     if let Some((_, bound_path)) = bounded {
@@ -68,10 +68,10 @@ impl RiemannRectanglePlan {
         if let Some((bound, _)) = bounded {
             graph.require_same_store(bound)?;
         }
-        let range = graph.function_plot_range()?;
+        let range = graph.axes_plot_range()?;
         let mut interval = clip_interval(options.x_range.unwrap_or(range), range)?;
         if let Some((bound, _)) = bounded {
-            interval = clip_interval(interval, bound.function_plot_range()?)?;
+            interval = clip_interval(interval, bound.axes_plot_range()?)?;
         }
         let partition =
             riemann_partition_plan(interval, options.dx).map_err(PlotAuthoringError::from)?;

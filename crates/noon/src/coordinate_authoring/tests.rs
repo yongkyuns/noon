@@ -257,6 +257,42 @@ fn graph_input_queries_evaluate_once_before_capturing_current_axes() {
 }
 
 #[test]
+fn scene_coordinate_query_metadata_does_not_admit_axes_area_operations() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = scene
+        .function_plot(
+            &PlotSamplingOptions::parametric(&[-1.0, 1.0, 0.5]).unwrap(),
+            |x| x * x,
+            false,
+        )
+        .unwrap();
+    let copy = graph.copy_handle().unwrap();
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let resource_count = resources(&scene);
+    for graph in [&graph, &copy] {
+        assert_eq!(graph.function_plot_range().unwrap(), [-1.0, 1.0]);
+        assert!(matches!(
+            axes.get_area(graph, None, None),
+            Err(CoordinateAuthoringError::InvalidOptions(
+                "area helpers require an Axes graph"
+            ))
+        ));
+        assert!(axes
+            .riemann_plan(graph, RiemannRectangleOptions::default())
+            .is_err());
+    }
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), resource_count);
+    let mapped = axes
+        .plot(|x| x * x, Some(&[-1.0, 1.0, 0.5]), false)
+        .unwrap();
+    assert!(axes.get_area(&mapped, None, None).is_ok());
+}
+
+#[test]
 fn axes_plot_creates_one_detached_object_in_the_axes_store() {
     let mut scene = Scene::new();
     let axes = scene.axes(&axes_options()).unwrap();

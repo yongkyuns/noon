@@ -70,7 +70,10 @@ impl ManimGeometryOptions {
     ) -> Result<Self, PlotAuthoringError> {
         let mut options = Self::parametric_plot(sampling, |x| [x, function(x)], use_smoothing)?;
         options.set_semantic_role(noon_core::SemanticObjectRole::FunctionPlot(
-            noon_core::SemanticFunctionPlotRole::new([sampling.range[0], sampling.range[1]]),
+            noon_core::SemanticFunctionPlotRole::scene_coordinates([
+                sampling.range[0],
+                sampling.range[1],
+            ]),
         ));
         Ok(options)
     }
@@ -96,10 +99,24 @@ impl Mobject {
     /// preserve the interval; copy carries it to the new identity. Manim `become`
     /// replaces appearance while preserving the receiver's declared interval.
     pub fn function_plot_range(&self) -> Result<[f64; 2], crate::CoordinateAuthoringError> {
+        Ok(self.function_plot_role()?.range())
+    }
+
+    pub(crate) fn axes_plot_range(&self) -> Result<[f64; 2], crate::CoordinateAuthoringError> {
+        let role = self.function_plot_role()?;
+        if !role.is_axes_mapped() {
+            return Err(crate::CoordinateAuthoringError::InvalidOptions(
+                "area helpers require an Axes graph",
+            ));
+        }
+        Ok(role.range())
+    }
+
+    fn function_plot_role(
+        &self,
+    ) -> Result<noon_core::SemanticFunctionPlotRole, crate::CoordinateAuthoringError> {
         match self.state()?.role() {
-            noon_core::SemanticObjectRole::FunctionPlot(role) if role.is_valid() => {
-                Ok(role.range())
-            }
+            noon_core::SemanticObjectRole::FunctionPlot(role) if role.is_valid() => Ok(role),
             _ => Err(crate::CoordinateAuthoringError::InvalidOptions(
                 "graph queries require a function plot",
             )),

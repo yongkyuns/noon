@@ -1222,6 +1222,9 @@ that semantic interval through the typed handle. Copy carries the declaration;
 Manim `become` changes appearance while preserving the receiver's callable and
 interval. Retained-path inversion and default 2D axis tips remain outside
 this bounded graph-query profile.
+The interval records whether the plot was mapped through Axes; standalone
+scene-coordinate graphs retain query metadata without widening the existing
+Axes-only area/partition profile.
 
 **Phase B exit:** representative common 2D Manim scenes require only the intended language/browser adaptation and run through the same semantic/runtime path from Python and Rust, with representative paired examples usable on the supported Rust execution targets.
 

@@ -122,12 +122,14 @@ impl WasmPlotSamplingPlan {
                 .map(|(&x, &y)| [x, y]),
         );
         let mut options = self.geometry(points, smooth)?;
-        let range = self.plan.range();
-        options
-            .options
-            .set_semantic_role(noon_core::SemanticObjectRole::FunctionPlot(
-                noon_core::SemanticFunctionPlotRole::new([range[0], range[1]]),
-            ));
+        if self.frame.is_none() {
+            let range = self.plan.range();
+            options
+                .options
+                .set_semantic_role(noon_core::SemanticObjectRole::FunctionPlot(
+                    noon_core::SemanticFunctionPlotRole::scene_coordinates([range[0], range[1]]),
+                ));
+        }
         Ok(options)
     }
 
