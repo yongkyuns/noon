@@ -265,6 +265,24 @@ test("product gate resolves the installer and verifies the downloaded package la
   assert.match(restoration, /artifact-ids: \$\{\{ needs\.build\.outputs\.candidate-artifact \}\}[\s\S]*?path: candidate\/web/);
 });
 
+test("Pages builds use the shared optimized production WASM configuration", async () => {
+  const workflow = await readFile(new URL("../workflows/pages.yml", import.meta.url), "utf8");
+  const buildJob = workflow.slice(workflow.indexOf("  build:"), workflow.indexOf("\n  deploy:"));
+  const installer = buildJob.indexOf("uses: ./.github/actions/install-wasm-opt");
+  const browserBuild = buildJob.indexOf("- name: Build and validate playground");
+  assert.ok(installer >= 0 && browserBuild > installer,
+    "Pages must install the shared verified wasm-opt before building the browser package");
+
+  const product = productConfig("candidate");
+  assert.equal(product.profile, "release");
+  assert.equal(product.skipOpt, "0");
+  assert.equal(product.rendererSmoke, "0");
+  assert.equal(product.features, "default");
+  assert.match(buildJob, new RegExp(`^\\s+NOON_WASM_PROFILE: ${product.profile}$`, "m"));
+  assert.match(buildJob, new RegExp(`^\\s+NOON_WASM_SKIP_OPT: "${product.skipOpt}"$`, "m"));
+  assert.match(buildJob, new RegExp(`^\\s+NOON_RENDERER_SMOKE: "${product.rendererSmoke}"$`, "m"));
+});
+
 test("unknown product roles cannot select a default build", () => {
   assert.throws(() => productConfig("other"), /invalid product artifact role/);
 });
