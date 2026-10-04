@@ -129,6 +129,46 @@ function acknowledgePointers(engine) {
   }
 }
 
+test("unchanged pointermove button labels do not invent an edge or cancel a new source", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointermove", { button: 0, buttons: 0 });
+  dom.emit("pointerdown");
+  dom.emit("pointermove", { button: 0, buttons: 1 });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(m => m.kind), ["move", "press", "move", "release"]);
+  assert.equal(new Set(pointerMessages(engine).map(m => m.source_id)).size, 1);
+  assert.deepEqual(errors, []);
+});
+
+test("an unmatched first button edge cannot cancel a source that was never submitted", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown", { buttons: 0 });
+  dom.emit("pointerup");
+  dom.win.dispatchEvent(new Event("blur"));
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine), []);
+  dom.emit("pointerdown");
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(m => m.kind), ["press", "release"]);
+});
+
+test("motion with a missing button transition cancels its existing source without a fatal fault", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointerdown");
+  dom.emit("pointermove", { buttons: 0, button: -1 });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(m => m.kind), ["press", "cancel"]);
+  assert.deepEqual(errors, []);
+});
+
 test("coalesced out-and-back motion preserves every occurrence before release, not the parent summary", async t => {
   const dom = pointerCanvas(t);
   const { engine } = await startInputClient(t, dom.canvas);

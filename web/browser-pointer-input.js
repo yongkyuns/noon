@@ -82,28 +82,41 @@ export function attachBrowserPointerInput(canvas, {
     if (rect === null) return;
     // View invalidation and pointer replacement retire the previous contact.
     // Never turn a release or an in-progress outside contact into a new press.
-    if (selected === null || event.pointerId !== selected.id) {
+    const newContact = selected === null || event.pointerId !== selected.id;
+    if (newContact) {
       if (type === "pointerup" || (type === "pointermove" && event.buttons !== 0)) return;
-      cancel();
-      selected = { id: event.pointerId, source: allocateSource(), buttons: 0, viewRevision: viewRevision() };
     }
+    const previousButtons = newContact ? 0 : selected.buttons;
     let kind = "move";
     let button = null;
-    if (type === "pointerdown" || type === "pointerup" || event.button !== -1) {
+    const changedButtons = previousButtons ^ event.buttons;
+    // A button label alone is not an edge: some browsers copy a label onto
+    // ordinary motion. Preserve chord transitions by checking the button mask.
+    if (event.button !== -1 && BUTTON_BITS[event.button] === undefined) {
+      throw new TypeError("unsupported DOM pointer button");
+    }
+    if (type === "pointerdown" || type === "pointerup" || changedButtons !== 0) {
+      if (type === "pointermove" && event.button === -1) {
+        if (!newContact) cancel();
+        return;
+      }
       button = event.button;
       const bit = BUTTON_BITS[button];
       if (bit === undefined) throw new TypeError("unsupported DOM pointer button");
       const pressed = (event.buttons & bit) !== 0;
-      const wasPressed = (selected.buttons & bit) !== 0;
-      if (pressed === wasPressed || (selected.buttons ^ event.buttons) !== bit) {
+      const wasPressed = (previousButtons & bit) !== 0;
+      if (pressed === wasPressed || changedButtons !== bit) {
         // Missing platform history cannot be reconstructed into successful edges.
-        cancel();
+        if (!newContact) cancel();
         return;
       }
       kind = pressed ? "press" : "release";
-    } else if (event.buttons !== selected.buttons) {
+    }
+    // Validate the occurrence before allocating a source. Rust cannot cancel
+    // a contact that has never received a positional occurrence.
+    if (newContact) {
       cancel();
-      return;
+      selected = { id: event.pointerId, source: allocateSource(), buttons: 0, viewRevision: viewRevision() };
     }
     const contact = selected;
     const admitted = send({

@@ -217,6 +217,47 @@ try {
             assert.equal(await page.evaluate(() => window.__noonNoJspiWorkerWrapped), true,
               'no-JSPI smoke did not wrap the production authoring worker');
           }
+          if (entry.id === 'showcase-camera-follows-path') {
+            // Exercise DOM normalization through the real Rust worker. Observe
+            // every delivery so a late recoverable input error cannot pass as
+            // a successful autoplay. These are injected events, not hardware.
+            result.pointerProbe = await page.evaluate(async () => {
+              const { ExecutionWorkerClient } = await import('./execution-worker-client.js');
+              const original = ExecutionWorkerClient.prototype.submitBrowserPointerInput;
+              const inputs = [], deliveries = [];
+              ExecutionWorkerClient.prototype.submitBrowserPointerInput = function (input) {
+                inputs.push(input);
+                const delivery = original.call(this, input);
+                deliveries.push(delivery.then(() => null, error => String(error)));
+                return delivery;
+              };
+              try {
+                const canvas = document.querySelector('#scene'), rect = canvas.getBoundingClientRect();
+                const emit = (type, button, buttons) => canvas.dispatchEvent(new PointerEvent(type, {
+                  pointerId: 73, pointerType: 'mouse', isPrimary: true, button, buttons,
+                  clientX: rect.left + rect.width * .2, clientY: rect.top + rect.height * .2,
+                }));
+                emit('pointerdown', 0, 0); // Unmatched first edge establishes no source.
+                emit('pointermove', 0, 0); // Unchanged label is ordinary hover.
+                emit('pointerdown', 0, 1);
+                emit('pointermove', 0, 1); // Unchanged held label is ordinary motion.
+                emit('pointerup', 0, 0);
+                let count;
+                do {
+                  count = deliveries.length;
+                  await Promise.all(deliveries);
+                  await new Promise(resolve => setTimeout(resolve, 0));
+                } while (deliveries.length !== count);
+                return { stimulus: 'injected-pointer-events', inputs,
+                  errors: (await Promise.all(deliveries)).filter(Boolean),
+                  state: document.querySelector('#patch-status').dataset.state };
+              } finally { ExecutionWorkerClient.prototype.submitBrowserPointerInput = original; }
+            });
+            assert.deepEqual(result.pointerProbe.inputs.map(input => input.kind), ['move', 'press', 'move', 'release']);
+            assert.equal(new Set(result.pointerProbe.inputs.map(input => input.source_id)).size, 1);
+            assert.deepEqual(result.pointerProbe.errors, []);
+            assert.equal(result.pointerProbe.state, 'applied');
+          }
           const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
           result.finalMetrics = metrics;
           assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
