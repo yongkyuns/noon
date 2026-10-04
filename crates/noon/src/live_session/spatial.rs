@@ -8,11 +8,16 @@ impl LiveSession<'_> {
         target: MobjectTarget<'_>,
         edit: crate::WorldAffineEdit,
     ) -> Result<(), LiveSessionError> {
+        if let MobjectTarget::Object(object) = &target {
+            crate::camera_motion_authoring::ensure_camera_motion_closed(object)?;
+        }
         let transaction = crate::world_affine::prepare_world_affine_with(
             self.store,
             target,
             edit,
-            |store, node| crate::spatial_authoring::effective_world(self.session, store, node),
+            |store, node| {
+                crate::spatial_authoring::effective_world_or_authored(self.session, store, node)
+            },
         )?;
         self.apply(transaction).map(|_| ())
     }
@@ -28,6 +33,24 @@ impl LiveSession<'_> {
             object.node_id(),
         )
         .map_err(LiveSessionError::from)
+    }
+
+    pub fn effective_world_center(
+        &self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticVec3, LiveSessionError> {
+        self.require_mobject(object)?;
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(object.node_id())
+            .map_err(AuthoringError::from)?;
+        let world = crate::spatial_authoring::effective_world_or_authored(
+            self.session,
+            &store,
+            object.node_id(),
+        )?;
+        crate::world_affine::world_bounds_center(&store, object.node_id(), state, world)
+            .map_err(Into::into)
     }
 
     /// Detached creation uses the same resource/publication boundary as Scene.
@@ -54,6 +77,7 @@ impl LiveSession<'_> {
         world: noon_core::SemanticWorldTransform3D,
     ) -> Result<(), LiveSessionError> {
         self.require_mobject(object)?;
+        crate::camera_motion_authoring::ensure_camera_motion_closed(object)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_object_transform(object.node_id(), world.into());
         self.apply(transaction).map(|_| ())
@@ -97,3 +121,36 @@ impl LiveSession<'_> {
 
 #[cfg(test)]
 mod tests;
+
+impl crate::LiveSession<'_> {
+    /// Ordinary spatial-scene add retains any existing label registration.
+    pub fn add_all_world_mobjects(
+        &mut self,
+        targets: &[MobjectTarget<'_>],
+    ) -> Result<noon_core::SemanticMutationTransactionResult, crate::SpatialCompositionError> {
+        let transaction = crate::spatial_composition::add_transaction(
+            self.integration_store(),
+            self.root,
+            targets,
+            noon_core::SemanticSpatialCompositionDomain::World,
+            true,
+        )?;
+        self.apply(transaction).map_err(Into::into)
+    }
+
+    /// Attach a batch with its spatial domain through the current publication.
+    pub fn add_all_in_spatial_composition_domain(
+        &mut self,
+        targets: &[MobjectTarget<'_>],
+        domain: noon_core::SemanticSpatialCompositionDomain,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, crate::SpatialCompositionError> {
+        let transaction = crate::spatial_composition::add_transaction(
+            self.integration_store(),
+            self.root,
+            targets,
+            domain,
+            false,
+        )?;
+        self.apply(transaction).map_err(Into::into)
+    }
+}

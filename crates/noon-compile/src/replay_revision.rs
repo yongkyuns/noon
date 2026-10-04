@@ -26,6 +26,9 @@ pub struct CompiledReplayRevision {
     rows: Vec<SavedRow>,
     channels: Vec<CompiledChannelKey>,
     tracks: Vec<(TrackId, Option<CompiledTrack>)>,
+    // Reserve both sides of changed camera metadata. Exchanging revisions must
+    // never retain a larger motion history than the scope budget admitted.
+    camera_motion_payloads: usize,
 }
 
 impl CompiledReplayRevision {
@@ -38,7 +41,7 @@ impl CompiledReplayRevision {
     /// Reserve one payload for each affected track even when the saved side is
     /// absent. Exchanges therefore cannot grow beyond the admitted scope budget.
     pub fn retention_cost(&self) -> usize {
-        self.rows.len() + self.channels.len() + self.tracks.len()
+        self.rows.len() + self.channels.len() + self.tracks.len() + self.camera_motion_payloads
     }
 }
 
@@ -81,6 +84,7 @@ impl CompiledScene {
             ExecutionPatch::SetContent { object, .. }
             | ExecutionPatch::SetTransform { object, .. }
             | ExecutionPatch::SetSemanticTransform { object, .. }
+            | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetStyle { object, .. } => {
                 rows.insert(index(*object)?);
             }
@@ -107,9 +111,30 @@ impl CompiledScene {
                 // The runtime admits this only when the interval does not start
                 // before publication. No row or channel payload is replaced.
             }
-            ExecutionPatch::SetGraphDependencies { .. } => return None,
+            ExecutionPatch::SetGraphDependencies { .. }
+            | ExecutionPatch::SetFixedOrientationGroupBoundsMembers { .. } => return None,
         }
+        let saved_motion_payloads: usize = rows
+            .iter()
+            .filter_map(|&index| {
+                self.objects
+                    .get(index as usize)?
+                    .spatial
+                    .as_deref()?
+                    .camera_motions
+                    .as_deref()
+            })
+            .map(<[_]>::len)
+            .sum();
+        let incoming_motion_payloads = match patch {
+            ExecutionPatch::CreateObject(object) => object.spatial.as_deref(),
+            ExecutionPatch::SetSpatialState { spatial, .. } => spatial.as_ref(),
+            _ => None,
+        }
+        .and_then(|spatial| spatial.camera_motions.as_deref())
+        .map_or(0, <[_]>::len);
         Some(CompiledReplayRevision {
+            camera_motion_payloads: saved_motion_payloads + incoming_motion_payloads,
             rows: rows
                 .into_iter()
                 .map(|index| SavedRow {

@@ -1,7 +1,9 @@
 use crate::{Color, GeometryRef, SemanticImageContent, SemanticProjection3D, TextResourceHandle};
 use crate::{
-    SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticSpatialMaterial,
-    SemanticSpatialProperties, SemanticStyle, SemanticTransform, SemanticVec3, StoredGeometry,
+    SemanticNodeId, SemanticPresentation, SemanticSignalValueKind,
+    SemanticSpatialCompositionDomain, SemanticSpatialCompositionDomainError,
+    SemanticSpatialMaterial, SemanticSpatialProperties, SemanticStyle, SemanticTransform,
+    SemanticVec3, StoredGeometry,
 };
 use std::sync::Arc;
 
@@ -386,8 +388,9 @@ pub struct SemanticObjectState {
     /// invocation; this declaration is only the language-neutral trigger/action.
     /// Unbound objects pay one pointer, with allocation only for declared actions.
     click_indicate: Option<Arc<SemanticClickIndicate>>,
-    /// Camera projection and non-default spatial material share one optional
-    /// immutable payload. Ordinary objects keep no spatial metadata allocation.
+    /// Camera projection, non-default material, and non-default composition
+    /// domain share one optional immutable payload. Ordinary 2D objects keep no
+    /// spatial metadata allocation.
     spatial_properties: Option<Arc<SemanticSpatialProperties>>,
 }
 
@@ -464,7 +467,7 @@ impl SemanticObjectState {
     /// Keep this as an exhaustive struct literal: adding a new authored-state field
     /// must fail to compile until its ownership is explicitly classified here.
     pub fn with_visual_state_from(&self, target: &Self) -> Self {
-        Self {
+        let mut copied = Self {
             content: target.content,
             transform: target.transform,
             style: target.style.clone(),
@@ -478,7 +481,13 @@ impl SemanticObjectState {
             signal_bindings: self.signal_bindings.clone(),
             click_indicate: self.click_indicate.clone(),
             spatial_properties: self.spatial_properties.clone(),
+        };
+        // Visual copy may replace a camera pose, so retain its projection
+        // declaration while dropping a profile that no longer derives it.
+        if copied.camera_profile().is_some() {
+            copied.set_transform(target.transform);
         }
+        copied
     }
 
     pub const fn presentation(&self) -> SemanticPresentation {
@@ -511,6 +520,39 @@ impl SemanticObjectState {
             .and_then(|properties| properties.camera_projection())
     }
 
+    pub fn camera_profile(&self) -> Option<crate::ManimCamera3DProfile> {
+        self.spatial_properties
+            .as_deref()
+            .and_then(|properties| properties.camera_profile())
+    }
+
+    pub fn camera_motions(&self) -> &[crate::CameraAngularMotion] {
+        self.spatial_properties
+            .as_deref()
+            .map_or(&[], |properties| properties.camera_motions())
+    }
+
+    /// Replace this camera's authored native driver occurrences. No evaluation or clock is stored here.
+    pub fn set_camera_motions(
+        &mut self,
+        motions: std::sync::Arc<[crate::CameraAngularMotion]>,
+    ) -> Result<(), crate::SemanticManimCameraProfileError> {
+        if self.role != SemanticObjectRole::Camera3D {
+            return Err(crate::SemanticManimCameraProfileError::RequiresCamera3D);
+        }
+        if (self.camera_profile().is_none() && motions.iter().any(|motion| motion.end().is_none()))
+            || !crate::camera_motion_history_is_valid(&motions)
+        {
+            return Err(crate::SemanticManimCameraProfileError::InvalidProfile);
+        }
+        let properties = self
+            .spatial_properties()
+            .expect("profile camera has spatial properties")
+            .with_camera_motions((!motions.is_empty()).then_some(motions));
+        self.spatial_properties = Some(Arc::new(properties));
+        Ok(())
+    }
+
     pub fn spatial_material(&self) -> SemanticSpatialMaterial {
         self.spatial_properties
             .as_deref()
@@ -519,21 +561,55 @@ impl SemanticObjectState {
             })
     }
 
+    pub fn spatial_composition_domain(&self) -> SemanticSpatialCompositionDomain {
+        self.spatial_properties
+            .as_deref()
+            .map_or(SemanticSpatialCompositionDomain::World, |properties| {
+                properties.composition_domain()
+            })
+    }
+
+    pub fn spatial_anchor_family(&self) -> Option<SemanticNodeId> {
+        self.spatial_properties
+            .as_deref()
+            .and_then(|properties| properties.anchor_family())
+    }
+
     pub fn spatial_properties(&self) -> Option<SemanticSpatialProperties> {
-        self.spatial_properties.as_deref().copied()
+        self.spatial_properties.as_deref().cloned()
     }
 
     fn update_spatial_properties(
         &mut self,
         camera_projection: Option<SemanticProjection3D>,
+        camera_profile: Option<crate::ManimCamera3DProfile>,
         material: SemanticSpatialMaterial,
+        composition_domain: SemanticSpatialCompositionDomain,
+        anchor_family: Option<SemanticNodeId>,
     ) {
-        let properties = SemanticSpatialProperties::new(camera_projection, material);
+        let properties = SemanticSpatialProperties::new(
+            camera_projection,
+            camera_profile,
+            material,
+            composition_domain,
+            anchor_family,
+        )
+        .with_camera_motions(
+            self.spatial_properties
+                .as_deref()
+                .and_then(|properties| properties.camera_motions_arc()),
+        );
         self.spatial_properties = (!properties.is_default()).then(|| Arc::new(properties));
     }
 
     pub fn set_spatial_material(&mut self, material: SemanticSpatialMaterial) {
-        self.update_spatial_properties(self.camera_projection(), material);
+        self.update_spatial_properties(
+            self.camera_projection(),
+            self.camera_profile(),
+            material,
+            self.spatial_composition_domain(),
+            self.spatial_anchor_family(),
+        );
     }
 
     /// Set the projection for a Camera3D declaration. The role is authored
@@ -545,27 +621,157 @@ impl SemanticObjectState {
         if projection.is_some_and(|value| !value.is_valid()) {
             return Err(SemanticCameraDeclarationError::InvalidProjection);
         }
-        self.update_spatial_properties(projection, self.spatial_material());
+        self.update_spatial_properties(
+            projection,
+            None,
+            self.spatial_material(),
+            self.spatial_composition_domain(),
+            self.spatial_anchor_family(),
+        );
+        Ok(())
+    }
+
+    /// Set the canonical Manim profile and derive world pose and perspective
+    /// projection together. The profile remains the sole authored camera
+    /// coordinate representation for animated camera motion.
+    pub fn set_camera_profile(
+        &mut self,
+        profile: crate::ManimCamera3DProfile,
+        near: f64,
+        far: f64,
+    ) -> Result<(), crate::SemanticManimCameraProfileError> {
+        if self.role != SemanticObjectRole::Camera3D {
+            return Err(crate::SemanticManimCameraProfileError::RequiresCamera3D);
+        }
+        if self
+            .camera_motions()
+            .last()
+            .is_some_and(|motion| motion.end().is_none())
+        {
+            return Err(crate::SemanticManimCameraProfileError::AmbientMotionOwnsCamera);
+        }
+        let camera = profile
+            .camera(near, far)
+            .ok_or(crate::SemanticManimCameraProfileError::InvalidProfile)?;
+        let world = crate::SemanticWorldTransform3D::new(
+            camera.position,
+            camera.orientation,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .ok_or(crate::SemanticManimCameraProfileError::InvalidProfile)?;
+        self.transform = world.into();
+        self.update_spatial_properties(
+            Some(camera.projection),
+            Some(profile),
+            self.spatial_material(),
+            self.spatial_composition_domain(),
+            self.spatial_anchor_family(),
+        );
+        Ok(())
+    }
+
+    /// Replace an authored transform and invalidate any cached canonical camera
+    /// profile. Direct pose writes cannot silently leave stale Euler coordinates.
+    pub fn set_transform(&mut self, transform: SemanticTransform) {
+        self.transform = transform;
+        if self.camera_profile().is_some() {
+            self.update_spatial_properties(
+                self.camera_projection(),
+                None,
+                self.spatial_material(),
+                self.spatial_composition_domain(),
+                self.spatial_anchor_family(),
+            );
+        }
+    }
+
+    pub fn set_spatial_composition_domain(
+        &mut self,
+        domain: SemanticSpatialCompositionDomain,
+    ) -> Result<(), SemanticSpatialCompositionDomainError> {
+        self.set_spatial_composition_domain_with_anchor(domain, None)
+    }
+
+    pub(crate) fn set_spatial_composition_domain_with_anchor(
+        &mut self,
+        domain: SemanticSpatialCompositionDomain,
+        anchor_family: Option<SemanticNodeId>,
+    ) -> Result<(), SemanticSpatialCompositionDomainError> {
+        if matches!(
+            self.role,
+            SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D
+        ) && domain != SemanticSpatialCompositionDomain::World
+        {
+            return Err(SemanticSpatialCompositionDomainError::CameraOrLightMustRemainWorld);
+        }
+        if anchor_family.is_some() && domain != SemanticSpatialCompositionDomain::FixedOrientation {
+            return Err(SemanticSpatialCompositionDomainError::AnchorRequiresFixedOrientation);
+        }
+        self.update_spatial_properties(
+            self.camera_projection(),
+            self.camera_profile(),
+            self.spatial_material(),
+            domain,
+            anchor_family,
+        );
         Ok(())
     }
 
     /// Whether role and optional projection metadata form a complete camera
     /// declaration suitable for semantic publication.
     pub fn camera_declaration_is_valid(&self) -> bool {
-        match (self.role, self.camera_projection()) {
+        let projection_valid = match (self.role, self.camera_projection()) {
             (SemanticObjectRole::Camera3D, Some(projection)) => {
                 projection.is_valid() && self.camera_transform_is_valid(self.transform)
             }
             (SemanticObjectRole::Camera3D, None) => false,
             (_, None) => true,
             (_, Some(_)) => false,
-        }
+        };
+        projection_valid && self.camera_profile_cache_is_valid()
+    }
+
+    fn camera_profile_cache_is_valid(&self) -> bool {
+        let Some(profile) = self.camera_profile() else {
+            return true;
+        };
+        let Some(SemanticProjection3D::Perspective { near, far, .. }) = self.camera_projection()
+        else {
+            return false;
+        };
+        let Some(camera) = profile.camera(near, far) else {
+            return false;
+        };
+        self.transform
+            == crate::SemanticWorldTransform3D::new(
+                camera.position,
+                camera.orientation,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .expect("validated camera profile produces a finite unit-scale pose")
+            .into()
+            && self.camera_projection() == Some(camera.projection)
     }
 
     /// Validate all optional spatial declarations attached to this ordinary
     /// semantic object, including the effective pose constraints for a point light.
     pub fn spatial_declaration_is_valid(&self) -> bool {
         self.camera_declaration_is_valid()
+            && (self.camera_motions().is_empty()
+                || (self.role == SemanticObjectRole::Camera3D
+                    && (self.camera_profile().is_some()
+                        || self
+                            .camera_motions()
+                            .iter()
+                            .all(|motion| motion.end().is_some()))
+                    && crate::camera_motion_history_is_valid(self.camera_motions())))
+            && (!matches!(
+                self.role,
+                SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D
+            ) || self.spatial_composition_domain() == SemanticSpatialCompositionDomain::World)
+            && (self.spatial_anchor_family().is_none()
+                || self.spatial_composition_domain()
+                    == SemanticSpatialCompositionDomain::FixedOrientation)
             && (self.role != SemanticObjectRole::PointLight3D
                 || (self.transform.world_transform().is_some()
                     && self.transform.scale == SemanticVec3::new(1.0, 1.0, 1.0)))
@@ -821,6 +1027,18 @@ mod tests {
         }
     }
 
+    fn valid_manim_profile() -> crate::ManimCamera3DProfile {
+        crate::ManimCamera3DProfile {
+            phi: 0.4,
+            theta: -1.2,
+            gamma: 0.15,
+            focal_distance: 12.0,
+            zoom: 1.3,
+            frame_height: 8.0,
+            frame_center: SemanticVec3::new(0.25, -0.5, 0.75),
+        }
+    }
+
     #[test]
     fn camera_declaration_requires_a_valid_projection_only_for_camera3d() {
         let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
@@ -879,6 +1097,77 @@ mod tests {
     }
 
     #[test]
+    fn manim_camera_profile_derives_pose_and_projection_and_pose_writes_clear_it() {
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        let profile = valid_manim_profile();
+        camera.set_camera_profile(profile, 0.1, 100.0).unwrap();
+        assert_eq!(camera.camera_profile(), Some(profile));
+        let expected = profile.camera(0.1, 100.0).unwrap();
+        assert_eq!(camera.camera_projection(), Some(expected.projection));
+        assert_eq!(
+            camera.transform.world_transform().unwrap().translation,
+            expected.position
+        );
+        assert!(camera.spatial_declaration_is_valid());
+
+        camera.set_spatial_material(SemanticSpatialMaterial::PointLit);
+        assert_eq!(camera.camera_profile(), Some(profile));
+        let clone = camera.clone();
+        assert_eq!(clone.camera_profile(), Some(profile));
+        assert_eq!(clone, camera);
+
+        let mut visual_target = SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
+        visual_target.transform.translation.x = 3.0;
+        let copied = camera.with_visual_state_from(&visual_target);
+        assert_eq!(copied.camera_profile(), None);
+        assert_eq!(copied.camera_projection(), Some(expected.projection));
+        assert!(copied.camera_declaration_is_valid());
+
+        let mut stale_cache = camera.clone();
+        stale_cache.transform.translation.x += 0.125;
+        assert!(!stale_cache.spatial_declaration_is_valid());
+
+        let updated = crate::SemanticWorldTransform3D::new(
+            SemanticVec3::new(5.0, 4.0, 3.0),
+            crate::SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+        camera.set_transform(updated.into());
+        assert_eq!(camera.camera_profile(), None);
+        assert_eq!(camera.camera_projection(), Some(expected.projection));
+        assert!(camera.spatial_declaration_is_valid());
+
+        camera
+            .set_camera_projection(Some(expected.projection))
+            .unwrap();
+        assert_eq!(camera.camera_profile(), None);
+        assert!(camera.spatial_declaration_is_valid());
+    }
+
+    #[test]
+    fn profile_setter_rejects_non_camera_and_invalid_endpoints_atomically() {
+        let profile = valid_manim_profile();
+        let mut ordinary = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        let before = ordinary.clone();
+        assert_eq!(
+            ordinary.set_camera_profile(profile, 0.1, 100.0),
+            Err(crate::SemanticManimCameraProfileError::RequiresCamera3D)
+        );
+        assert_eq!(ordinary, before);
+
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        let before = camera.clone();
+        assert_eq!(
+            camera.set_camera_profile(profile, 1.0, 1.0),
+            Err(crate::SemanticManimCameraProfileError::InvalidProfile)
+        );
+        assert_eq!(camera, before);
+    }
+
+    #[test]
     fn spatial_properties_share_optional_allocation_and_validate_point_light_pose() {
         let mut ordinary = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
         assert!(ordinary.spatial_properties.is_none());
@@ -904,6 +1193,65 @@ mod tests {
         assert!(light.spatial_declaration_is_valid());
         light.transform.scale = SemanticVec3::new(1.0, 0.0, 1.0);
         assert!(!light.spatial_declaration_is_valid());
+    }
+
+    #[test]
+    fn composition_domain_defaults_without_storage_and_survives_spatial_updates_and_clone() {
+        let mut ordinary = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(2.0, 3.0),
+        });
+        assert_eq!(
+            ordinary.spatial_composition_domain(),
+            SemanticSpatialCompositionDomain::World
+        );
+        assert!(ordinary.spatial_properties.is_none());
+
+        ordinary
+            .set_spatial_composition_domain(SemanticSpatialCompositionDomain::FixedOrientation)
+            .unwrap();
+        ordinary.set_spatial_material(SemanticSpatialMaterial::PointLit);
+        assert_eq!(
+            ordinary.spatial_composition_domain(),
+            SemanticSpatialCompositionDomain::FixedOrientation
+        );
+        let cloned = ordinary.clone();
+        assert_eq!(cloned, ordinary);
+        assert_eq!(cloned.spatial_properties(), ordinary.spatial_properties());
+
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera.set_spatial_material(SemanticSpatialMaterial::PointLit);
+        camera
+            .set_camera_projection(Some(valid_camera_projection()))
+            .unwrap();
+        assert_eq!(
+            camera.spatial_composition_domain(),
+            SemanticSpatialCompositionDomain::World
+        );
+        assert!(camera.spatial_declaration_is_valid());
+    }
+
+    #[test]
+    fn camera_and_point_light_reject_non_world_composition_domains() {
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera
+            .set_camera_projection(Some(valid_camera_projection()))
+            .unwrap();
+        assert_eq!(
+            camera.set_spatial_composition_domain(SemanticSpatialCompositionDomain::FixedFrame),
+            Err(SemanticSpatialCompositionDomainError::CameraOrLightMustRemainWorld)
+        );
+        assert!(camera.spatial_declaration_is_valid());
+
+        let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        light.set_role(SemanticObjectRole::PointLight3D);
+        assert_eq!(
+            light
+                .set_spatial_composition_domain(SemanticSpatialCompositionDomain::FixedOrientation),
+            Err(SemanticSpatialCompositionDomainError::CameraOrLightMustRemainWorld)
+        );
+        assert!(light.spatial_declaration_is_valid());
     }
 
     #[test]

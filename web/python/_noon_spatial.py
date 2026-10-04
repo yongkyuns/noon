@@ -87,7 +87,7 @@ class _WorldMobject(_base.Mobject):
         return _pose(self._world_call("worldTransform", "effectiveWorldTransform"))
 
     def get_center(self):
-        return self.world_transform[:3]
+        return _pose(self._world_call("worldCenter", "effectiveWorldCenter"))
 
     @property
     def animate(self):
@@ -149,6 +149,24 @@ class Mesh3D(_WorldMobject):
         return cls._solid("cube", (float(size),), options)
 
     @classmethod
+    def line3d(cls, start=(0, 0, 0), end=(1, 0, 0), *, thickness=0.02, segments=16, **options):
+        return cls._solid("line3D", (_bulk(_vector(start)), _bulk(_vector(end)),
+                                    float(thickness), _count(segments)), options)
+
+    @classmethod
+    def polyhedron(cls, vertices, triangular_faces, **options):
+        _mesh_arguments(options)
+        from pyodide.ffi import to_js
+        points = array("d", (v for point in vertices for v in _vector(point)))
+        faces = array("I")
+        for face in triangular_faces:
+            face = tuple(face)
+            if len(face) != 3:
+                raise ValueError("polyhedron faces require three indices")
+            faces.extend(_count(index) for index in face)
+        return cls._solid("polyhedron", (_bulk(points), to_js(memoryview(faces))), options)
+
+    @classmethod
     def prism(cls, dimensions=(2, 2, 2), **options):
         return cls._solid("prism", _vector(dimensions), options)
 
@@ -191,8 +209,8 @@ class WorldTransformTo:
 
     def __init__(self, mobject, translation=(0, 0, 0), rotation=(1, 0, 0, 0),
                  scale=(1, 1, 1), **kwargs):
-        if not isinstance(mobject, _WorldMobject):
-            raise TypeError("WorldTransformTo requires a spatial Mobject")
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("WorldTransformTo requires a Mobject")
         self.mobject = mobject
         self.endpoint = (*_vector(translation), *_vector(rotation, 4), *_vector(scale))
         self.anim_args = dict(kwargs)
@@ -204,19 +222,26 @@ class SpatialScene(_base.Scene):
     def __init__(self, *, position=(0, 0, 5), rotation=(1, 0, 0, 0),
                  vertical_fov=1, near=0.1, far=100):
         super().__init__()
+        self._initialize_camera("createCamera3D", _bulk(_vector(position)),
+                                _bulk(_vector(rotation, 4)), float(vertical_fov), float(near), float(far))
+
+    def _initialize_camera(self, method, *args):
         from _manim_scene import _context, _reserve_typed_binding, _commit_typed_binding
-        camera = object.__new__(_WorldMobject)
         from _manim_semantic_handles import _initialize_shared_wrapper
+        camera = object.__new__(_WorldMobject)
         _initialize_shared_wrapper(camera)
         context = _context(self)
-        # The context creates and binds the one camera before scene content.
         object_id = self._next_object_id
-        handle = engine_call(context.createCamera3D, str(object_id), _bulk(_vector(position)),
-                             _bulk(_vector(rotation, 4)), float(vertical_fov), float(near), float(far))
+        handle = engine_call(getattr(context, method), str(object_id), *args)
         _attach_shared_handle(camera, handle)
         reservation = _reserve_typed_binding(camera, self, handle, None, object_id=object_id)
         _commit_typed_binding(camera, self, reservation, handle)
         self.camera = camera
+
+    def _edit_membership(self, kind, values=(), *, key=None):
+        from _manim_scene import _canonical_edit_membership
+        _canonical_edit_membership(self, kind, values, key=key,
+                                   spatial_domain="world_default" if kind == "add" else None)
 
     def point_light(self, position=(4, -3, 6), color=_base.WHITE, intensity=1):
         from _manim_compat import _as_color
@@ -227,3 +252,96 @@ class SpatialScene(_base.Scene):
         light = object.__new__(_WorldMobject)
         _attach_shared_handle(light, handle)
         return light
+
+    def add_world_mobjects(self, *mobjects):
+        from _manim_scene import _canonical_edit_membership
+        _canonical_edit_membership(self, "add", mobjects, spatial_domain="world")
+        return self
+
+    def add_fixed_in_frame_mobjects(self, *mobjects):
+        from _manim_scene import _canonical_edit_membership
+        _canonical_edit_membership(self, "add", mobjects, spatial_domain="fixed_frame")
+        return self
+
+    def add_fixed_orientation_mobjects(self, *mobjects):
+        from _manim_scene import _canonical_edit_membership
+        _canonical_edit_membership(self, "add", mobjects, spatial_domain="fixed_orientation")
+        return self
+
+    def shift_world(self, mobject, vector):
+        from _manim_scene import _context
+        context = _context(self)
+        family = getattr(mobject, "_semantic_family_handle", None)
+        if family is not None:
+            engine_call(context.shiftFamilyWorld, family, *_vector(vector))
+        else:
+            handle = _handle_for(mobject)
+            if handle is None:
+                raise TypeError("world shift requires a typed Mobject or Group")
+            engine_call(context.shiftWorld, handle, *_vector(vector))
+        return self
+
+
+class CameraProfileTo:
+    """Inert finite camera endpoint sampled by the existing Rust timeline."""
+
+    def __init__(self, mobject, endpoint, **kwargs):
+        self.mobject = mobject
+        self.endpoint = _vector(endpoint, 9)
+        self.anim_args = dict(kwargs)
+
+
+class ThreeDScene(SpatialScene):
+    """Finite perspective, one camera, and explicit camera driver ownership.
+
+    Camera moves use Manim's unwrapped angles. Ambient rotation must stop before
+    another camera edit. Exponential projection and behind-camera fallback are
+    outside this finite perspective profile.
+    """
+
+    def __init__(self, *, near=0.1, far=100):
+        _base.Scene.__init__(self)
+        from math import pi
+        self._initialize_camera("createCamera3DProfile",
+                                _bulk((0, -pi / 2, 0, 20, 1, 8, 0, 0, 0)), float(near), float(far))
+
+    def _camera_endpoint(self, *, phi=None, theta=None, gamma=None,
+                         focal_distance=None, zoom=None, frame_height=None,
+                         frame_center=None):
+        from _manim_scene import _context
+        # Transient argument assembly; Rust remains the camera/profile authority.
+        values = list(_pose(engine_call(_context(self).effectiveCameraProfile,
+                                        _handle_for(self.camera))))
+        for index, value in enumerate((phi, theta, gamma, focal_distance, zoom, frame_height)):
+            if value is not None:
+                values[index] = float(value)
+        if frame_center is not None:
+            values[6:9] = _vector(frame_center)
+        return tuple(values)
+
+    def set_camera_orientation(self, *, phi=None, theta=None, gamma=None,
+                               zoom=None, focal_distance=None, frame_center=None):
+        from _manim_scene import _context
+        endpoint = self._camera_endpoint(phi=phi, theta=theta, gamma=gamma, zoom=zoom,
+                                         focal_distance=focal_distance, frame_center=frame_center)
+        engine_call(_context(self).setCameraProfile, _handle_for(self.camera), _bulk(endpoint))
+        return self
+
+    def move_camera(self, *, phi=None, theta=None, gamma=None, zoom=None,
+                    focal_distance=None, frame_center=None, added_anims=(), **kwargs):
+        endpoint = self._camera_endpoint(phi=phi, theta=theta, gamma=gamma, zoom=zoom,
+                                         focal_distance=focal_distance, frame_center=frame_center)
+        return self.play(CameraProfileTo(self.camera, endpoint), *added_anims, **kwargs)
+
+    def begin_ambient_camera_rotation(self, rate=0.02, about="theta"):
+        from _manim_scene import _context
+        if about not in {"phi", "theta", "gamma"}:
+            raise ValueError("ambient rotation axis must be phi, theta, or gamma")
+        engine_call(_context(self).beginAmbientCameraRotation,
+                    _handle_for(self.camera), float(rate), about)
+        return self
+
+    def stop_ambient_camera_rotation(self):
+        from _manim_scene import _context
+        engine_call(_context(self).stopAmbientCameraRotation, _handle_for(self.camera))
+        return self

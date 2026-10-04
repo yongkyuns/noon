@@ -209,6 +209,7 @@ mod tests {
                 appearance: 1.0,
                 reveal: 1.0,
                 world_transform: None,
+                camera_profile: None,
             },
             tracks: Vec::new(),
         };

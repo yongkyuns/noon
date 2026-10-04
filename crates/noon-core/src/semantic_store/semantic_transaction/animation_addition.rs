@@ -12,7 +12,9 @@ use super::{
     SemanticLocalNodeToken, SemanticMutationTransactionError, SemanticNodeId, SemanticStore,
     SemanticTransactionNodeRef, TransactionNodeCatalog,
 };
-use crate::semantic_store::semantic_animations::validate_object_property_track;
+use crate::semantic_store::semantic_animations::{
+    validate_camera_profile_track_target, validate_object_property_track,
+};
 
 /// An authored animation intent whose references may name nodes staged by the
 /// same semantic transaction.
@@ -39,6 +41,10 @@ pub enum SemanticTransactionAnimationIntent {
     WorldTransformTo {
         target: SemanticTransactionNodeRef,
         transform: crate::SemanticWorldTransform3D,
+    },
+    CameraProfileTo {
+        target: SemanticTransactionNodeRef,
+        profile: crate::ManimCamera3DProfile,
     },
     FamilyTransformTo {
         source: SemanticTransactionNodeRef,
@@ -120,6 +126,7 @@ impl SemanticTransactionAnimationIntent {
                 ..
             } => Some([Some(*target), Some(*target_state), None]),
             Self::WorldTransformTo { target, .. } => Some([Some(*target), None, None]),
+            Self::CameraProfileTo { target, .. } => Some([Some(*target), None, None]),
             Self::FamilyTransformTo {
                 source,
                 target_state,
@@ -151,6 +158,7 @@ impl SemanticTransactionAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::TransformTo { .. }
             | Self::WorldTransformTo { .. }
+            | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
@@ -228,6 +236,12 @@ impl SemanticTransactionAnimation {
                 SemanticTransactionAnimationIntent::WorldTransformTo {
                     target: (*target).into(),
                     transform: *transform,
+                }
+            }
+            SemanticAnimationIntent::CameraProfileTo { target, profile } => {
+                SemanticTransactionAnimationIntent::CameraProfileTo {
+                    target: (*target).into(),
+                    profile: *profile,
                 }
             }
             SemanticAnimationIntent::FamilyTransformTo {
@@ -378,6 +392,12 @@ impl SemanticTransactionAnimation {
                     transform: *transform,
                 }
             }
+            SemanticTransactionAnimationIntent::CameraProfileTo { target, profile } => {
+                SemanticAnimationIntent::CameraProfileTo {
+                    target: resolve_node_ref(*target, committed),
+                    profile: *profile,
+                }
+            }
             SemanticTransactionAnimationIntent::FamilyTransformTo {
                 source,
                 target_state,
@@ -524,6 +544,17 @@ fn map_object_track_values<R, T>(
                 to: *to,
             }
         }
+        SemanticObjectTrackValues::CameraProfile {
+            from,
+            to,
+            near,
+            far,
+        } => SemanticObjectTrackValues::CameraProfile {
+            from: *from,
+            to: *to,
+            near: *near,
+            far: *far,
+        },
     }
 }
 
@@ -572,6 +603,9 @@ pub(super) fn preflight_transaction_animation(
             catalog.ensure_animation_target(*target, index)?;
             let state =
                 catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if validate_camera_profile_track_target(state, *property, values).is_err() {
+                return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
+            }
             if state.content.image().is_some()
                 && !matches!(
                     property,
@@ -649,6 +683,27 @@ pub(super) fn preflight_transaction_animation(
                 transform.scale,
             )
             .is_none()
+            {
+                return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
+            }
+        }
+        SemanticTransactionAnimationIntent::CameraProfileTo { target, profile } => {
+            catalog.ensure_animation_target(*target, index)?;
+            let state =
+                catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            let clips = match state.camera_projection() {
+                Some(crate::SemanticProjection3D::Perspective { near, far, .. }) => {
+                    Some((near, far))
+                }
+                _ => None,
+            };
+            if state.role() != crate::SemanticObjectRole::Camera3D
+                || state.camera_profile().is_none()
+                || state
+                    .camera_motions()
+                    .last()
+                    .is_some_and(|motion| motion.end().is_none())
+                || clips.is_none_or(|(near, far)| profile.camera(near, far).is_none())
             {
                 return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
             }
@@ -917,6 +972,16 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::WorldTransformTo { target, transform } => store
             .insert_semantic_world_transform_animation(*target, *transform, options)
             .expect("preflighted world-pose animation insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::CameraProfileTo { target, profile } => {
+            let (near, far) = match store.semantic_object_state_checked(*target)
+                .expect("preflighted camera animation target remains valid")
+                .camera_projection().expect("preflighted camera has projection") {
+                    crate::SemanticProjection3D::Perspective { near, far, .. } => (near, far),
+                    _ => unreachable!("preflighted camera uses perspective projection"),
+                };
+            store.insert_semantic_camera_profile_animation(*target, *profile, near, far, options)
+                .expect("preflighted camera profile animation insertion remains valid")
+        }
         SemanticAnimationIntent::FamilyTransformTo {
             source,
             target_state,

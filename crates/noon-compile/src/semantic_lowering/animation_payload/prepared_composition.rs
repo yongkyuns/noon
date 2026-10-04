@@ -326,6 +326,7 @@ where
                 leaf.payload,
                 PreparedSemanticScheduledAnimationPayload::TransformTo { .. }
                     | PreparedSemanticScheduledAnimationPayload::WorldTransformTo { .. }
+                    | PreparedSemanticScheduledAnimationPayload::CameraProfileTo { .. }
             );
         captures.begin_leaf(
             leaf,
@@ -413,6 +414,80 @@ where
             });
             continue;
         }
+        if let PreparedSemanticScheduledAnimationPayload::CameraProfileTo { profile } = leaf.payload
+        {
+            if !super::super::projection::object_requires_spatial_lowering(source, prepared.store())
+                || source.camera_profile().is_none()
+            {
+                return Err(
+                    PreparedSemanticAnimationLoweringError::InvalidEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                    },
+                );
+            }
+            let current = capture_effective(
+                leaf,
+                source,
+                admitted.contains(&leaf.target),
+                &mut captures,
+                &mut effective_properties,
+            )?;
+            let (from, near, far) = current.camera_profile.ok_or(
+                PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+                    animation: leaf.animation,
+                    target: leaf.target,
+                    execution_object_id: leaf.execution_object_id,
+                },
+            )?;
+            if from.camera(near, far).is_none() || profile.camera(near, far).is_none() {
+                return Err(
+                    PreparedSemanticAnimationLoweringError::InvalidEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                    },
+                );
+            }
+            if let Some(first_animation) = super::affine::transform_driver_conflict(
+                &driven,
+                leaf.execution_object_id,
+                Property::CameraProfile,
+                leaf.animation,
+            ) {
+                return Err(
+                    PreparedSemanticAnimationLoweringError::MultipleWorldTransformDrivers {
+                        first_animation,
+                        next_animation: leaf.animation,
+                        target: leaf.target,
+                    },
+                );
+            }
+            let key = driver_key(leaf.execution_object_id, Property::CameraProfile);
+            if let Some(first_animation) = driven.insert(key, leaf.animation) {
+                return Err(
+                    PreparedSemanticAnimationLoweringError::MultipleWorldTransformDrivers {
+                        first_animation,
+                        next_animation: leaf.animation,
+                        target: leaf.target,
+                    },
+                );
+            }
+            let channel = super::affine::camera_profile_channel(from, profile, near, far);
+            tracks.push(PreparedSemanticAnimationTrack {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+                property: Property::CameraProfile,
+                completion: super::affine::completion_at_endpoint(
+                    channel.completion,
+                    leaf.timing.easing,
+                ),
+                values: channel.values,
+                timing: leaf.timing,
+                time_map: leaf.time_map.clone(),
+            });
+            continue;
+        }
         let channel = match leaf.payload {
             PreparedSemanticScheduledAnimationPayload::TransformTo {
                 target_state,
@@ -487,6 +562,9 @@ where
                     });
                 }
                 continue;
+            }
+            PreparedSemanticScheduledAnimationPayload::CameraProfileTo { .. } => {
+                unreachable!("camera profile payload was emitted directly as a typed track")
             }
             PreparedSemanticScheduledAnimationPayload::PassingFlash { time_width } => {
                 let from = capture_effective(
@@ -957,6 +1035,7 @@ where
             appearance: 1.0,
             reveal: 1.0,
             world_transform: None,
+            camera_profile: source_camera_profile(source),
         }
     } else {
         return Err(
@@ -971,6 +1050,17 @@ where
     Ok(captures
         .get(leaf.execution_object_id)
         .expect("inserted base capture"))
+}
+
+fn source_camera_profile(
+    source: &noon_core::SemanticObjectState,
+) -> Option<(noon_core::ManimCamera3DProfile, f64, f64)> {
+    let profile = source.camera_profile()?;
+    let (near, far) = match source.camera_projection()? {
+        noon_core::SemanticProjection3D::Perspective { near, far, .. } => (near, far),
+        noon_core::SemanticProjection3D::Orthographic { .. } => return None,
+    };
+    Some((profile, near, far))
 }
 
 fn push_prepared_channel(
@@ -1169,6 +1259,7 @@ mod tests {
             appearance: 1.0,
             reveal: 1.0,
             world_transform: None,
+            camera_profile: None,
         }
     }
 
@@ -1656,6 +1747,7 @@ mod tests {
             appearance: 1.0,
             reveal: 1.0,
             world_transform: None,
+            camera_profile: None,
         };
         let activation = lower_prepared_semantic_animation_composition(
             &prepared,

@@ -144,6 +144,52 @@ impl WasmMeshOptions {
             .map(|options| Self { options })
             .map_err(|e| invalid("spatial.invalid_mesh", e))
     }
+    #[wasm_bindgen(js_name = line3D)]
+    pub fn line_3d(
+        start: &[f64],
+        end: &[f64],
+        thickness: f64,
+        segments: usize,
+    ) -> Result<Self, JsValue> {
+        noon::line_3d_mesh(
+            vec3(start, "start")?,
+            vec3(end, "end")?,
+            thickness,
+            segments,
+        )
+        .map(mesh_options)
+        .map(|options| Self { options })
+        .map_err(|e| invalid("spatial.invalid_mesh", e))
+    }
+
+    /// Explicit triangular faces preserve winding and use flat normals.
+    pub fn polyhedron(vertices: &[f64], faces: &[u32]) -> Result<Self, JsValue> {
+        let (vertices, vertex_tail) = vertices.as_chunks::<3>();
+        let (faces, face_tail) = faces.as_chunks::<3>();
+        if !vertex_tail.is_empty() || !face_tail.is_empty() {
+            return Err(invalid(
+                "spatial.invalid_mesh",
+                "polyhedron inputs require triples",
+            ));
+        }
+        if vertices.len() > noon_geometry::MAX_SURFACE_VERTICES
+            || faces.len() > noon_geometry::MAX_SURFACE_CELLS
+        {
+            return Err(invalid(
+                "spatial.invalid_mesh",
+                "polyhedron exceeds the bounded mesh size",
+            ));
+        }
+        let vertices = vertices
+            .iter()
+            .map(|v| SemanticVec3::new(v[0], v[1], v[2]))
+            .collect::<Vec<_>>();
+        noon::triangular_polyhedron_mesh(&vertices, faces)
+            .map(mesh_options)
+            .map(|options| Self { options })
+            .map_err(|e| invalid("spatial.invalid_mesh", e))
+    }
+
     pub fn cube(size: f64) -> Result<Self, JsValue> {
         noon::cube_mesh(size)
             .map(mesh_options)
@@ -390,6 +436,13 @@ impl WasmAuthoringMobjectHandle {
     pub fn world_transform(&self) -> Result<Vec<f64>, JsValue> {
         transform_array(self.semantic_mobject())
     }
+    #[wasm_bindgen(js_name = worldCenter)]
+    pub fn world_center(&self) -> Result<Vec<f64>, JsValue> {
+        self.semantic_mobject()
+            .world_center()
+            .map(|center| vec![center.x, center.y, center.z])
+            .map_err(js_error)
+    }
     #[wasm_bindgen(js_name = shiftWorld)]
     pub fn shift_world(&mut self, x: f64, y: f64, z: f64) -> Result<(), JsValue> {
         self.semantic_mobject()
@@ -400,13 +453,19 @@ impl WasmAuthoringMobjectHandle {
     #[wasm_bindgen(js_name = rotateWorld)]
     pub fn rotate_world(
         &mut self,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
         radians: f64,
-        axis: &[f64],
         about_values: &[f64],
     ) -> Result<(), JsValue> {
         self.semantic_mobject()
             .clone()
-            .world_affine(rotate(radians, axis, about_values)?)
+            .world_affine(WorldAffineEdit::Rotate {
+                axis: SemanticVec3::new(axis_x, axis_y, axis_z),
+                radians,
+                about: about(about_values)?,
+            })
             .map_err(js_error)
     }
     #[wasm_bindgen(js_name = scaleWorld)]

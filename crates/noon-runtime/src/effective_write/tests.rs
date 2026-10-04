@@ -1,8 +1,11 @@
 use noon_compile::{
-    CompiledObject, CompiledResources, CompiledScene, ExecutionMutationTransaction,
+    lower_semantic_execution_root, CompiledObject, CompiledResources, CompiledScene,
+    ExecutionMutationTransaction, SemanticExecutionIndex,
 };
 use noon_core::{
-    CompositionTimeMap, GeometryRef, RateFunction, TrackDefinition, TrackId, TrackTiming,
+    CompositionTimeMap, GeometryRef, RateFunction, SemanticMutationTransaction,
+    SemanticObjectState, SemanticOrientation, SemanticSpatialCompositionDomain, SemanticStore,
+    SemanticTransform, SemanticVec3, StoredGeometry, TrackDefinition, TrackId, TrackTiming,
     TrackValues,
 };
 
@@ -553,8 +556,14 @@ fn effective_world_transform_updates_only_frame_epoch_and_rejects_bad_camera_sca
     mesh.spatial = Some(Box::new(noon_compile::CompiledSpatialState {
         world: noon_core::SemanticWorldTransform3D::IDENTITY,
         camera_projection: None,
+        camera_profile: None,
+        camera_motions: None,
         material: noon_core::SemanticSpatialMaterial::Unlit,
         point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+        draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+        fixed_orientation_anchor_family: None,
+        fixed_orientation_center: None,
     }));
     let mut instance = SceneInstance::new(CompiledScene::compile_objects(vec![mesh], &[]).unwrap());
     instance.take_frame_changes();
@@ -603,8 +612,14 @@ fn effective_world_transform_updates_only_frame_epoch_and_rejects_bad_camera_sca
             near: 0.1,
             far: 100.0,
         }),
+        camera_profile: None,
+        camera_motions: None,
         material: noon_core::SemanticSpatialMaterial::Unlit,
         point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+        draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+        fixed_orientation_anchor_family: None,
+        fixed_orientation_center: None,
     }));
     let camera_instance =
         SceneInstance::new(CompiledScene::compile_objects(vec![camera], &[]).unwrap());
@@ -638,8 +653,14 @@ fn presence_effective_write_is_valid_on_spatial_mesh_rows() {
     mesh.spatial = Some(Box::new(noon_compile::CompiledSpatialState {
         world: noon_core::SemanticWorldTransform3D::IDENTITY,
         camera_projection: None,
+        camera_profile: None,
+        camera_motions: None,
         material: noon_core::SemanticSpatialMaterial::Unlit,
         point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+        draw_kind: noon_compile::CompiledSpatialDrawKind::Mesh,
+        fixed_orientation_anchor_family: None,
+        fixed_orientation_center: None,
     }));
     let mut instance = SceneInstance::new(CompiledScene::compile_objects(vec![mesh], &[]).unwrap());
     let phase = instance.prepare_advance_to(0.0).unwrap();
@@ -651,4 +672,134 @@ fn presence_effective_write_is_valid_on_spatial_mesh_rows() {
         .unwrap();
     instance.commit_prepared_frame(phase, batch).unwrap();
     assert!(!instance.frame().is_present(0));
+}
+
+#[test]
+fn fixed_orientation_family_rows_share_and_locally_refresh_world_bounds_center() {
+    let mut store = SemanticStore::new();
+    let anchor = store.insert_family();
+    let (first, second) = {
+        let mut insert_fixed = |x: f64| {
+            let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+                size: Vec2::new(2.0, 2.0),
+            });
+            state.transform = SemanticTransform {
+                translation: SemanticVec3::new(x, 0.0, 0.0),
+                scale: SemanticVec3::new(1.0, 1.0, 1.0),
+                orientation: SemanticOrientation::Spatial(noon_core::SemanticRotation3D::IDENTITY),
+            };
+            store.insert_semantic_object(state)
+        };
+        (insert_fixed(-3.0), insert_fixed(5.0))
+    };
+    store.add_semantic_family_member(anchor, first).unwrap();
+    store.add_semantic_family_member(anchor, second).unwrap();
+    let mut declaration = SemanticMutationTransaction::new();
+    for member in [first, second] {
+        declaration.set_spatial_composition_domain_with_anchor(
+            member,
+            SemanticSpatialCompositionDomain::FixedOrientation,
+            Some(anchor),
+        );
+    }
+    declaration.apply(&mut store).unwrap();
+
+    let mut index = SemanticExecutionIndex::new();
+    let lowered = lower_semantic_execution_root(&store, anchor, &mut index).unwrap();
+    let first_id = index.execution_object_id(first).unwrap();
+    let second_id = index.execution_object_id(second).unwrap();
+    let mut instance = SceneInstance::from_semantic_execution(lowered);
+    let expected_initial = noon_core::SemanticVec3::new(1.0, 0.0, 0.0);
+    for row in &instance.frame().objects {
+        assert_eq!(
+            row.spatial.as_deref().unwrap().fixed_orientation_center,
+            Some(expected_initial)
+        );
+    }
+    instance.take_frame_changes();
+
+    // Move one member only. The derived group center changes for both rows, while
+    // the authored/compiled pose and untouched row remain independent.
+    let moved_world = noon_core::SemanticWorldTransform3D::new(
+        noon_core::SemanticVec3::new(-1.0, 0.0, 0.0),
+        noon_core::SemanticRotation3D::IDENTITY,
+        noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+    )
+    .unwrap();
+    commit(
+        &mut instance,
+        0.0,
+        &[EffectivePropertyWrite::WorldTransform {
+            object: first_id,
+            world: moved_world,
+        }],
+    );
+    let expected_updated = noon_core::SemanticVec3::new(2.0, 0.0, 0.0);
+    assert_eq!(
+        instance.frame().objects[0]
+            .spatial
+            .as_deref()
+            .unwrap()
+            .fixed_orientation_center,
+        Some(expected_updated)
+    );
+    assert_eq!(
+        instance.frame().objects[1]
+            .spatial
+            .as_deref()
+            .unwrap()
+            .fixed_orientation_center,
+        Some(expected_updated)
+    );
+    assert_eq!(
+        instance.frame().objects[1]
+            .world_transform()
+            .unwrap()
+            .translation
+            .x,
+        5.0
+    );
+    assert_eq!(instance.frame().objects[0].id, first_id);
+    assert_eq!(instance.frame().objects[1].id, second_id);
+    assert_eq!(instance.take_frame_changes().object_indices(), &[0, 1]);
+}
+
+#[test]
+fn prepared_spatial_state_promotes_one_row_and_preserves_2d_payload() {
+    let id = object();
+    let mut instance = SceneInstance::new(scene(2, &[]));
+    instance.take_frame_changes();
+    let before = instance.publication_context();
+    let mut planar = Transform2D::IDENTITY;
+    planar.translation = Vec2::new(2.0, -3.0);
+    let spatial = noon_compile::CompiledSpatialState {
+        world: noon_core::SemanticWorldTransform3D::IDENTITY,
+        camera_projection: None,
+        camera_profile: None,
+        camera_motions: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::FixedFrame,
+        draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+        fixed_orientation_anchor_family: None,
+        fixed_orientation_center: None,
+    };
+    instance
+        .apply_execution_patch(&noon_compile::ExecutionPatch::SetSpatialState {
+            object: id,
+            base_transform: planar,
+            spatial: Some(spatial.clone()),
+        })
+        .unwrap();
+
+    let row = &instance.frame().objects[0];
+    assert_eq!(row.transform, planar);
+    assert_eq!(row.style, base_style());
+    assert_eq!(row.spatial.as_deref(), Some(&spatial));
+    assert!(row.geometry().is_some());
+    assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(
+        instance.publication_context().execution_revision(),
+        before.execution_revision().checked_next().unwrap()
+    );
 }

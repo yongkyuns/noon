@@ -1,6 +1,7 @@
-//! Collection-time worker association. Retains one issued shared snapshot, not
-//! geometry/history. Consumption is not presentation, and receipt IDs never
-//! reconstruct a frame. A newer issued delta conservatively retires its predecessor.
+//! Collection-time worker association. Retains constant-size shared snapshots,
+//! never geometry/history. Consumption is not presentation, and receipt IDs never
+//! reconstruct a frame. New input requires the latest coherent presentation;
+//! an acquired drag retains its one mapping until release or invalidation.
 use serde::{Deserialize, Serialize};
 
 const MAX_JS_INTEGER: u64 = (1_u64 << 53) - 1;
@@ -96,12 +97,32 @@ mod admission {
         frame: PointerFrameSnapshot,
     }
 
-    /// The one frame the host has actually presented for a held contact. It is
-    /// intentionally separate from `issued`: local drag motion can issue a
-    /// newer, unpresented delta while DOM events still carry this receipt.
+    /// The last presented mapping, pinned when a press acquires a drag. Motion
+    /// and acknowledgements use independent worker channels: a later receipt
+    /// can reach the engine before an occurrence collected against an older one.
+    /// Keeping this one mapping avoids retaining presentation history.
     struct PresentedFrame {
         receipt: WorkerPointerReceipt,
         frame: PointerFrameSnapshot,
+    }
+
+    impl PresentedFrame {
+        fn contains_drag_receipt(
+            &self,
+            receipt: WorkerPointerReceipt,
+            latest: WorkerPointerReceipt,
+        ) -> bool {
+            receipt.session == self.receipt.session
+                && receipt.view_revision == self.receipt.view_revision
+                && latest.session == self.receipt.session
+                && latest.view_revision == self.receipt.view_revision
+                && receipt.presentation >= self.receipt.presentation
+                && receipt.presentation <= latest.presentation
+                && receipt.sequence >= self.receipt.sequence
+                && receipt.sequence <= latest.sequence
+                && (receipt.presentation != self.receipt.presentation || receipt == self.receipt)
+                && (receipt.presentation != latest.presentation || receipt == latest)
+        }
     }
 
     #[derive(Default)]
@@ -232,10 +253,12 @@ mod admission {
                     .map_err(|error| error.to_string())?;
             }
             self.presented = Some(receipt);
-            self.presented_frame = Some(PresentedFrame {
-                receipt,
-                frame: issued.frame.clone(),
-            });
+            if !session.translation_drag_active() {
+                self.presented_frame = Some(PresentedFrame {
+                    receipt,
+                    frame: issued.frame.clone(),
+                });
+            }
             Ok(true)
         }
 
@@ -410,10 +433,12 @@ mod admission {
                 browser_pointer_input::submit_browser_pointer_input(
                     target, binding, sequence, input,
                 )?;
+                self.presented_frame = None;
                 return Ok(true);
             }
+            let drag_active = target.session().translation_drag_active();
             let captured_continuation = !needs_binding
-                && target.session().translation_drag_active()
+                && drag_active
                 && matches!(
                     input.kind,
                     BrowserPointerKind::Move | BrowserPointerKind::Release
@@ -421,8 +446,9 @@ mod admission {
             if captured_continuation {
                 let captured_frame = receipt.and_then(|receipt| {
                     self.presented_frame.as_ref().and_then(|presented| {
-                        (self.presented == Some(receipt) && presented.receipt == receipt)
-                            .then(|| presented.frame.clone())
+                        self.presented
+                            .filter(|latest| presented.contains_drag_receipt(receipt, *latest))
+                            .map(|_| presented.frame.clone())
                     })
                 });
                 if let Some(frame) = captured_frame {
@@ -431,6 +457,9 @@ mod admission {
                     ) {
                         Ok(()) => {
                             self.rejected = None;
+                            if !target.session().translation_drag_active() {
+                                self.presented_frame = None;
+                            }
                             return Ok(true);
                         }
                         Err(BrowserPointerAdmissionError::Frame(error))
@@ -439,7 +468,11 @@ mod admission {
                     }
                 }
             }
-            if let (Some(receipt), Some(issued)) = (receipt, self.issued.as_ref()) {
+            // A captured gesture cannot fall back to a newer camera mapping or
+            // ordinary picking after its acquired mapping fails validation.
+            if let (false, Some(receipt), Some(issued)) =
+                (captured_continuation, receipt, self.issued.as_ref())
+            {
                 if self.presented == Some(receipt)
                     && receipt.session == issued.session
                     && receipt.sequence == issued.sequence
@@ -453,6 +486,14 @@ mod admission {
                     ) {
                         Ok(()) => {
                             self.rejected = None;
+                            if !drag_active && target.session().translation_drag_active() {
+                                // Acquisition alone pins a mapping. Later receipt
+                                // IDs never authorize a new hit or replace it.
+                                self.presented_frame = Some(PresentedFrame {
+                                    receipt,
+                                    frame: issued.frame.clone(),
+                                });
+                            }
                             return Ok(true);
                         }
                         Err(BrowserPointerAdmissionError::Frame(error))
@@ -462,6 +503,7 @@ mod admission {
                 }
             }
             browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
+            self.presented_frame = None;
             self.rejected = Some(RejectedSource {
                 source: input.source_id,
                 pointer: input.pointer_id,

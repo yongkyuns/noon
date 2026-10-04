@@ -177,6 +177,11 @@ pub(crate) enum SemanticCompositionRequest {
         transform: noon_core::SemanticWorldTransform3D,
         options: AnimationOptions,
     },
+    CameraProfile {
+        target: SemanticNodeId,
+        profile: noon_core::ManimCamera3DProfile,
+        options: AnimationOptions,
+    },
     FamilyTransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
@@ -301,6 +306,7 @@ impl SemanticCompositionRequest {
         match self {
             Self::TransformTo { source, .. }
             | Self::WorldTransform { target: source, .. }
+            | Self::CameraProfile { target: source, .. }
             | Self::FamilyTransformTo { source, .. }
             | Self::MatchingFamilyTransformTo { source, .. }
             | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
@@ -1232,6 +1238,21 @@ impl ExecutionSession {
         })
     }
 
+    /// Published authored-time cursor for one coherent runtime frame.
+    pub fn effective_time(&self) -> f64 {
+        self.runtime.frame().time
+    }
+
+    /// Effective unwrapped profile and clipping planes from the same frame epoch.
+    pub fn effective_camera_profile(
+        &self,
+        object: SemanticNodeId,
+    ) -> Option<(noon_core::ManimCamera3DProfile, f64, f64)> {
+        let id = self.execution_index.execution_object_id(object)?;
+        let index = self.runtime.frame_index_for_object(id)?;
+        self.runtime.frame().objects.get(index)?.camera_profile()
+    }
+
     /// Active inset views derived from ordinary objects in the current frame epoch.
     ///
     /// The authoritative semantic relation is resolved only when topology changes.
@@ -1555,7 +1576,8 @@ impl ExecutionSession {
                 style: row.style,
                 appearance: row.appearance,
                 reveal: *frame.reveals.get(index)?,
-                world_transform: row.spatial.as_deref().map(|spatial| spatial.world),
+                world_transform: row.world_transform(),
+                camera_profile: row.camera_profile(),
             })
         })?;
         let family_animations =
@@ -2179,6 +2201,16 @@ impl ExecutionSession {
                     admit(*target, admitted)?;
                 }
                 Ok(declaration.create_world_transform_animation(*target, *transform, *options))
+            }
+            SemanticCompositionRequest::CameraProfile {
+                target,
+                profile,
+                options,
+            } => {
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*target).into())) {
+                    admit(*target, admitted)?;
+                }
+                Ok(declaration.create_camera_profile_animation(*target, *profile, *options))
             }
             SemanticCompositionRequest::MatchingFamilyTransformTo {
                 source,
@@ -2905,6 +2937,12 @@ impl ExecutionSession {
                     return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
                 }
                 Ok(declaration.create_world_transform_animation(*target, *transform, *options))
+            }
+            SemanticCompositionRequest::CameraProfile { target, profile, options } => {
+                if !self.reachability.is_object_reachable(*target) {
+                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
+                }
+                Ok(declaration.create_camera_profile_animation(*target, *profile, *options))
             }
             SemanticCompositionRequest::Rotate { target, angle, hold_origin, options } => {
                 if !self.reachability.is_object_reachable(*target) {
@@ -3739,7 +3777,8 @@ impl ExecutionSession {
                     style: row.style,
                     appearance: row.appearance,
                     reveal: *frame.reveals.get(index)?,
-                    world_transform: row.spatial.as_deref().map(|spatial| spatial.world),
+                    world_transform: row.world_transform(),
+                    camera_profile: row.camera_profile(),
                 })
             },
         )?;
@@ -3779,6 +3818,7 @@ impl ExecutionSession {
                                     .spatial
                                     .as_deref()
                                     .map(|spatial| spatial.world),
+                                camera_profile: row.camera_profile(),
                             })
                         },
                     )
@@ -3823,6 +3863,7 @@ impl ExecutionSession {
                                     .spatial
                                     .as_deref()
                                     .map(|spatial| spatial.world),
+                                camera_profile: row.camera_profile(),
                             })
                         },
                     )

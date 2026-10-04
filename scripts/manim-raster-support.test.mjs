@@ -1,8 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareEffectiveFrames, rasterFixtureSource } from "./manim-raster-support.mjs";
+import {
+  compareEffectiveFrames,
+  dominantImageRgba,
+  rasterFixtureSource,
+} from "./manim-raster-support.mjs";
 
 const frame = { objects: [{ id: 7, present: true, transform: { y: 3.9542133808135986 }, opacity: 0.5 }] };
+
+test("full-image background estimate ignores a colored perimeter", () => {
+  const width = 7;
+  const height = 7;
+  const background = [12, 34, 56, 255];
+  const perimeter = [180, 40, 220, 255];
+  const data = Buffer.alloc(width * height * 4);
+  for (let offset = 0; offset < data.length; offset += 4) {
+    data.set(background, offset);
+  }
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (x === 0 || y === 0 || x === width - 1 || y === height - 1) {
+        data.set(perimeter, (y * width + x) * 4);
+      }
+    }
+  }
+  assert.deepEqual(dominantImageRgba({ data, width, height }), background);
+});
 
 test("raster fixture adaptation leaves default sources without LaTeX preparation", () => {
   const source = "from manim import *\nclass Example(Scene):\n    pass\n";

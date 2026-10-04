@@ -8,6 +8,13 @@ It does **not** define a second architecture, roadmap, goal set, acceptance crit
 
 The purpose of this document is only to expose safe concurrency inside the existing Phase D plan and to separate the future JS/TypeScript frontend lane from the 3D capability lane.
 
+The bounded D1–D5 profiles are implemented by #1865, #1866, and #1867. Their
+qualification uses the shared native, direct-WASM, and worker paths; the camera,
+axes, surface, primitive, and vector-space raster pairs run on WebGPU and WebGL.
+The optional D6 facade remains tracked by #259. Full pinned gallery cases that
+require capabilities outside these profiles remain explicit follow-ups in #254;
+the inventory below distinguishes them from the qualified representative scenes.
+
 ## Principle
 
 The existing D1 -> D2 -> D3 -> D4 -> D5 capability progression remains authoritative. Parallelism exists inside and beside that progression; it does not erase the stated readiness gates.
@@ -50,8 +57,10 @@ clip depth 0..w. Viewport aspect is supplied at evaluation time.
 The finite ordinary projection in [ManimCE v0.21.0's ThreeDCamera](https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/camera/three_d_camera.py)
 can map focal distance, frame height, and zoom to this perspective convention;
 the numeric tests pin that mapping. This does not qualify the public camera API,
-exponential projection, or Manim's behind-camera fallback. Shared authored and
-effective camera integration, mesh resources, and D1's full gate remain pending.
+exponential projection, or Manim's behind-camera fallback. Public camera-profile,
+finite camera-move, and authored-time ambient-rotation paths use the shared
+semantic camera and effective runtime state. The numeric oracle alone does not
+qualify those APIs or the exact #254 source cases tracked below.
 
 ### DH2 — immutable mesh-resource contract
 
@@ -182,6 +191,29 @@ DJ must not:
 **Owner:** existing B7-style qualification infrastructure and Phase D gallery/reference cases such as #254.
 
 **Runs continuously.** It pins numeric world/camera behavior early, renderer/depth behavior at D2, and source-equivalent public cases as D3–D5 slices are promoted. Existing 2D regression coverage remains part of every relevant handoff.
+
+### #254 pinned camera-case inventory
+
+This is an evidence index, not a change to #254's required case list or its
+acceptance bar. A source fixture or passing unit test does not constitute
+ManimCE semantic/raster/timing parity. No case below is recorded as parity-
+qualified here; browser and cross-backend gates must be recorded separately.
+
+| Required pinned case | Current representative implementation/evidence | Owner and status |
+|---|---|---|
+| `FollowingGraphCamera` | Existing 2D moving-camera coverage (`manim-moving-camera-center`); no exact FollowingGraphCamera source pairing is listed. | #254 follow-up, B6/#89 capability owner; exact pinned case deferred. |
+| `MovingZoomedSceneAround` | `noon-zoomed-scene` is a narrower ZoomedCamera candidate in `manim_compatibility_manifest.json`; it is not the pinned moving zoomed-scene composition. | #254 follow-up, B6/#89 capability owner; full case deferred pending its text/image/compositing dependencies. |
+| `FixedInFrameMObjectTest` | `spatial-camera-labels-direct`/`worker` qualify fixed-frame and fixed-orientation composition during camera motion on WebGPU/WebGL, including numeric domains, HUD pixels, seek, and sample cadence. The showcase exposes the same operation. | #254 follow-up, D4 owner; exact pinned case deferred because its default ThreeDAxes includes Cairo axis pieces/shading outside the bounded profile. |
+| `ThreeDLightSourcePosition` | `noon_spatial_surface_lighting.py` and `showcase-spatial-scene` exercise the shared point-lit material and moving light, with retained-resource and GPU/GL evidence from #1866. | #254 follow-up, D3 owner; exact case deferred for its checkerboard Surface, per-face appearance, and Cairo light-source semantics. Native point-lit material is an explicit separate profile. |
+| `ThreeDCameraRotation` | The paired camera/axes fixtures qualify finite effective camera motion, while native/runtime tests and the browser compatibility smoke cover authored ambient start/stop and endpoint ownership. | #254 follow-up, D4 owner; exact pinned case deferred for default Cairo-shaded ThreeDAxes. Ambient motion itself is implemented and qualified. |
+| `ThreeDCameraIllusionRotation` | Ordinary authored-time ambient rotation has native/runtime tests and Python APIs. Manim's separate oscillating illusion-rotation helper has no supported implementation or paired fixture. | #254 follow-up, D4 owner; illusion rotation is intentionally outside the bounded profile and explicitly deferred. |
+| `ThreeDSurfacePlot` | `spatial-surface-direct`/`worker` qualify a source-equivalent bounded indexed surface on WebGPU/WebGL with exact sparse/dense playback; the lit surface and showcase reuse the same mesh lane. | #254 follow-up, D2/D3 owner; exact pinned plot deferred for checkerboard/per-face strokes/shading outside the bounded profile. |
+
+Keep the full pinned examples as required evidence even where a narrower
+representative fixture already exercises the underlying semantic operation.
+When a case is promoted, record semantic state, intermediate timing/seek, and
+supported-backend raster results against the pinned source; do not infer a pass
+from manifest presence, compilation, unit tests, or a related showcase.
 
 ## Dependency view
 

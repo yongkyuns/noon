@@ -501,3 +501,131 @@ fn invalid_complete_transform_is_rejected_without_publication() {
         &before
     );
 }
+
+#[test]
+fn spatial_composition_domain_publishes_as_one_object_mutation() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_spatial_composition_domain(
+        target,
+        crate::SemanticSpatialCompositionDomain::FixedFrame,
+    );
+
+    let result = transaction.apply(&mut store).unwrap();
+
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .spatial_composition_domain(),
+        crate::SemanticSpatialCompositionDomain::FixedFrame
+    );
+    assert_eq!(store.last_mutation_stats().slots_written, 1);
+    assert_eq!(
+        result.impacts(),
+        &[SemanticMutationImpact::SpatialCompositionDomain { object: target }]
+    );
+}
+
+#[test]
+fn invalid_camera_composition_domain_rolls_back_transaction() {
+    let mut store = SemanticStore::new();
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    camera.set_role(crate::SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_projection(Some(crate::SemanticProjection3D::Perspective {
+            vertical_fov_radians: 1.0,
+            near: 0.1,
+            far: 100.0,
+        }))
+        .unwrap();
+    let target = store.insert_semantic_object(camera);
+    let before = store.semantic_object_state_checked(target).unwrap().clone();
+    let revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_spatial_composition_domain(
+        target,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+    );
+
+    assert!(transaction.apply(&mut store).is_err());
+    assert_eq!(
+        store.semantic_object_state_checked(target).unwrap(),
+        &before
+    );
+    assert_eq!(store.scene_revision(), revision);
+}
+
+#[test]
+fn fixed_orientation_anchor_accepts_self_or_containing_family() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let family = store.insert_family();
+    store.add_member(family, target).unwrap();
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_spatial_composition_domain_with_anchor(
+        target,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        Some(family),
+    );
+    transaction.apply(&mut store).unwrap();
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .spatial_anchor_family(),
+        Some(family)
+    );
+
+    let mut self_anchor = SemanticMutationTransaction::new();
+    self_anchor.set_spatial_composition_domain_with_anchor(
+        target,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        Some(target),
+    );
+    self_anchor.apply(&mut store).unwrap();
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .spatial_anchor_family(),
+        Some(target)
+    );
+}
+
+#[test]
+fn invalid_fixed_orientation_anchor_rolls_back_and_rejects_unrelated_or_stale_roots() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let unrelated_family = store.insert_family();
+    let before = store.semantic_object_state_checked(target).unwrap().clone();
+    let revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_spatial_composition_domain_with_anchor(
+        target,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        Some(unrelated_family),
+    );
+    assert!(transaction.apply(&mut store).is_err());
+    assert_eq!(
+        store.semantic_object_state_checked(target).unwrap(),
+        &before
+    );
+    assert_eq!(store.scene_revision(), revision);
+
+    let stale_root = store.insert_family();
+    store.remove_node(stale_root).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_spatial_composition_domain_with_anchor(
+        target,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        Some(stale_root),
+    );
+    assert!(transaction.apply(&mut store).is_err());
+    assert_eq!(
+        store.semantic_object_state_checked(target).unwrap(),
+        &before
+    );
+}

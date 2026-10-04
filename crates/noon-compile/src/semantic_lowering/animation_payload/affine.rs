@@ -33,6 +33,8 @@ pub struct EffectiveAnimationProperties {
     pub reveal: f32,
     /// Effective world pose when the row is spatial (mesh, light, or camera).
     pub world_transform: Option<noon_core::SemanticWorldTransform3D>,
+    /// Effective unwrapped camera profile and its perspective clipping planes.
+    pub camera_profile: Option<(noon_core::ManimCamera3DProfile, f64, f64)>,
 }
 
 /// Exact authored reconciliation performed when one execution channel is released.
@@ -62,6 +64,12 @@ pub enum SemanticAnimationCompletion {
     WorldTransform {
         value: noon_core::SemanticWorldTransform3D,
     },
+    /// Exact authored endpoint of an unwrapped camera profile animation.
+    CameraProfile {
+        profile: noon_core::ManimCamera3DProfile,
+        near: f64,
+        far: f64,
+    },
     /// Execution-only affine lifecycle channel. Authored object properties remain unchanged.
     Release,
 }
@@ -81,6 +89,7 @@ pub(super) fn completion_at_endpoint(
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::ContentMorph { .. }
                 | SemanticAnimationCompletion::WorldTransform { .. }
+                | SemanticAnimationCompletion::CameraProfile { .. }
         )
     {
         SemanticAnimationCompletion::Release
@@ -565,6 +574,44 @@ where
             )?;
             continue;
         }
+        if let SemanticScheduledAnimationPayload::CameraProfileTo { profile } = leaf.payload {
+            let captured = if let Some(captured) = captures.get(&leaf.execution_object_id).copied()
+            {
+                captured
+            } else {
+                let captured = effective_properties(leaf.execution_object_id).ok_or(
+                    SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                    },
+                )?;
+                captures.insert(leaf.execution_object_id, captured);
+                captured
+            };
+            let (from, near, far) = captured.camera_profile.ok_or(
+                SemanticAffineAnimationTrackError::MissingEffectiveTransform {
+                    animation: leaf.animation,
+                    target: leaf.target,
+                    execution_object_id: leaf.execution_object_id,
+                },
+            )?;
+            if from.camera(near, far).is_none() || profile.camera(near, far).is_none() {
+                return Err(
+                    SemanticAffineAnimationTrackError::InvalidEffectiveTransform {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                    },
+                );
+            }
+            push_published_channel(
+                leaf,
+                camera_profile_channel(from, profile, near, far),
+                &mut driven,
+                &mut tracks,
+            )?;
+            continue;
+        }
         if let SemanticScheduledAnimationPayload::Indicate {
             scale_factor,
             color,
@@ -740,6 +787,9 @@ where
             SemanticScheduledAnimationPayload::WorldTransformTo { .. } => {
                 unreachable!("world transform payload was lowered above")
             }
+            SemanticScheduledAnimationPayload::CameraProfileTo { .. } => {
+                unreachable!("camera profile payload was lowered above")
+            }
             SemanticScheduledAnimationPayload::SubsetDisplayMember { .. } => {
                 unreachable!("subset display payload was lowered above")
             }
@@ -852,6 +902,29 @@ pub(super) fn world_transform_channel(
     }
 }
 
+pub(super) fn camera_profile_channel(
+    from: noon_core::ManimCamera3DProfile,
+    to: noon_core::ManimCamera3DProfile,
+    near: f64,
+    far: f64,
+) -> LoweredAffineChannel {
+    LoweredAffineChannel {
+        property: Property::CameraProfile,
+        conflict_property: SemanticObjectProperty::Translation,
+        completion: SemanticAnimationCompletion::CameraProfile {
+            profile: to,
+            near,
+            far,
+        },
+        values: TrackValues::CameraProfile {
+            from,
+            to,
+            near,
+            far,
+        },
+    }
+}
+
 fn validate_leaf_matches_declaration(
     store: &SemanticStore,
     leaf: &SemanticScheduledAnimationLeaf,
@@ -866,6 +939,13 @@ fn validate_leaf_matches_declaration(
                     == SemanticScheduledAnimationPayload::WorldTransformTo {
                         transform: *transform,
                     } =>
+        {
+            Ok(())
+        }
+        SemanticAnimationIntent::CameraProfileTo { target, profile }
+            if *target == leaf.target
+                && leaf.payload
+                    == SemanticScheduledAnimationPayload::CameraProfileTo { profile: *profile } =>
         {
             Ok(())
         }
@@ -2419,8 +2499,8 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
                 driven.get(&(object, slot)).copied()
             }
         })
-    } else if property == Property::WorldTransform {
-        (0..=morph_slot)
+    } else if matches!(property, Property::WorldTransform | Property::CameraProfile) {
+        (0..=driver_key(ObjectId::new(object), Property::CameraProfile).1)
             .filter(|slot| *slot != reveal_slot)
             .find_map(|slot| driven.get(&(object, slot)).copied())
             .filter(|owner| *owner != animation)
@@ -2486,6 +2566,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Morph => 11,
         Property::ZIndex => 12,
         Property::Presence => 13,
+        Property::CameraProfile => 14,
     };
     (object.get(), slot)
 }
@@ -2516,8 +2597,8 @@ pub(super) fn transform_is_finite(transform: Transform2D) -> bool {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, Color, SemanticObjectState, SemanticPaint, SemanticVec3, StoredGeometry,
-        Vec2,
+        AnimationOptions, Color, RateFunction, SemanticObjectState, SemanticPaint, SemanticVec3,
+        StoredGeometry, StrokeWidthMode, Vec2,
     };
 
     use super::*;
@@ -2534,6 +2615,7 @@ mod tests {
             appearance: 1.0,
             reveal: 1.0,
             world_transform: None,
+            camera_profile: None,
         }
     }
 
@@ -2545,6 +2627,37 @@ mod tests {
         assert_ne!(width, driver_key(object, Property::Stroke));
         assert_ne!(width, driver_key(object, Property::Opacity));
         assert_ne!(width, driver_key(ObjectId::new(8), Property::StrokeWidth));
+    }
+
+    #[test]
+    fn public_transform_payload_validation_accepts_rotated_screen_space_lines() {
+        let mut source = SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(0.75, 0.0),
+        });
+        let mut target = SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(0.0, 0.75),
+        });
+        let line_style = noon_core::SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.0375,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..noon_core::SemanticStyle::default()
+        };
+        source.style = line_style.clone();
+        target.style = line_style;
+        let mut store = SemanticStore::new();
+        let source = store.insert_semantic_object(source);
+        let target = store.insert_semantic_object(target);
+        crate::validate_semantic_transform_to_payload(
+            &store,
+            source,
+            target,
+            AnimationOptions::new().run_time(3.0),
+        )
+        .expect("Line-to-Line content edits are a supported retained morph");
     }
 
     fn visible_object(store: &mut SemanticStore) -> SemanticNodeId {
@@ -2568,6 +2681,131 @@ mod tests {
     ) -> SemanticAnimationScheduleProjection {
         lower_semantic_animation_schedule(store, index, animation, 4.0, AnimationOptions::new())
             .unwrap()
+    }
+
+    fn camera_profile(theta: f64) -> noon_core::ManimCamera3DProfile {
+        noon_core::ManimCamera3DProfile {
+            phi: 1.0,
+            theta,
+            gamma: 0.0,
+            focal_distance: 10.0,
+            zoom: 1.0,
+            frame_height: 8.0,
+            frame_center: noon_core::SemanticVec3::ZERO,
+        }
+    }
+
+    #[test]
+    fn camera_profile_activation_keeps_unwrapped_full_turn_endpoints() {
+        let mut store = SemanticStore::new();
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        camera.set_role(noon_core::SemanticObjectRole::Camera3D);
+        let from = camera_profile(0.0);
+        camera.set_camera_profile(from, 0.1, 100.0).unwrap();
+        let target = store.insert_semantic_object(camera);
+        store.attach_to_scene(target).unwrap();
+        let to = camera_profile(std::f64::consts::TAU);
+        let animation = store
+            .insert_semantic_camera_profile_animation(
+                target,
+                to,
+                0.1,
+                100.0,
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+        let execution = index(&store);
+        let object = execution.execution_object_id(target).unwrap();
+        let schedule = schedule(&store, &execution, animation);
+        let lowered = lower_semantic_affine_animation_tracks(&store, &schedule, |_| {
+            Some(EffectiveAnimationProperties {
+                camera_profile: Some((from, 0.1, 100.0)),
+                world_transform: from.camera(0.1, 100.0).and_then(|camera| {
+                    noon_core::SemanticWorldTransform3D::new(
+                        camera.position,
+                        camera.orientation,
+                        noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+                    )
+                }),
+                ..effective(Transform2D::IDENTITY)
+            })
+        })
+        .unwrap();
+        let track = &lowered.tracks()[0];
+        assert_eq!(track.execution_object_id, object);
+        assert_eq!(track.property, Property::CameraProfile);
+        assert_eq!(
+            track.values,
+            TrackValues::CameraProfile {
+                from,
+                to,
+                near: 0.1,
+                far: 100.0,
+            }
+        );
+        assert_eq!(
+            track.completion,
+            SemanticAnimationCompletion::CameraProfile {
+                profile: to,
+                near: 0.1,
+                far: 100.0,
+            }
+        );
+        let midpoint = noon_core::ManimCamera3DProfile::interpolate(from, to, 0.5).unwrap();
+        assert_eq!(midpoint.theta, std::f64::consts::PI);
+    }
+
+    #[test]
+    fn parallel_camera_profile_intents_keep_independent_drivers() {
+        let mut store = SemanticStore::new();
+        let mut animations = Vec::new();
+        let mut effective_profiles = HashMap::new();
+        for (index, end) in [std::f64::consts::TAU, 2.0 * std::f64::consts::TAU]
+            .into_iter()
+            .enumerate()
+        {
+            let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+            camera.set_role(noon_core::SemanticObjectRole::Camera3D);
+            let from = camera_profile(0.0);
+            camera.set_camera_profile(from, 0.1, 100.0).unwrap();
+            let target = store.insert_semantic_object(camera);
+            store.attach_to_scene(target).unwrap();
+            let animation = store
+                .insert_semantic_camera_profile_animation(
+                    target,
+                    camera_profile(end),
+                    0.1,
+                    100.0,
+                    AnimationOptions::new(),
+                )
+                .unwrap();
+            animations.push(animation);
+            effective_profiles.insert(
+                noon_core::ObjectId::new((target.generation() as u64) << 32 | target.slot() as u64),
+                (from, 0.1, 100.0),
+            );
+            assert_eq!(index, animations.len() - 1);
+        }
+        let root = store
+            .insert_semantic_parallel_animation(&animations, AnimationOptions::new())
+            .unwrap();
+        let execution = index(&store);
+        let schedule = schedule(&store, &execution, root);
+        let lowered = lower_semantic_affine_animation_tracks(&store, &schedule, |object| {
+            effective_profiles
+                .get(&object)
+                .copied()
+                .map(|(profile, near, far)| EffectiveAnimationProperties {
+                    camera_profile: Some((profile, near, far)),
+                    ..effective(Transform2D::IDENTITY)
+                })
+        })
+        .unwrap();
+        assert_eq!(lowered.len(), 2);
+        assert!(lowered
+            .tracks()
+            .iter()
+            .all(|track| track.property == Property::CameraProfile));
     }
 
     #[test]
@@ -2649,6 +2887,7 @@ mod tests {
             appearance: 1.0,
             reveal: 1.0,
             world_transform: None,
+            camera_profile: None,
         };
         let phases = lower_passing_flash_phases(&source, from, 0.25).unwrap();
         assert_eq!(phases.len(), 3);
@@ -2780,6 +3019,7 @@ mod tests {
             appearance: 1.0,
             reveal: 1.0,
             world_transform: None,
+            camera_profile: None,
         };
         let channels = lower_indicate_channels(
             &source,
@@ -2970,6 +3210,7 @@ mod tests {
                     appearance: 1.0,
                     reveal: 1.0,
                     world_transform: None,
+                    camera_profile: None,
                 })
             },
         )
@@ -3215,6 +3456,7 @@ mod tests {
             appearance: 1.0,
             reveal: 1.0,
             world_transform: None,
+            camera_profile: None,
         };
 
         let predeclared = lower_semantic_affine_animation_tracks(

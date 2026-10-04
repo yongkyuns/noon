@@ -1,7 +1,8 @@
-"""Linear 2D coordinates and preparation-only plots over shared Rust handles.
+"""Linear coordinate families and preparation-only plots over shared Rust handles.
 
-The initial coordinate constructors require explicit three-value ranges and do
-not support tips. Coordinates may be constructed after ordinary plays/waits;
+The 2D coordinate constructors require explicit three-value ranges and do not
+support tips. The bounded ThreeDAxes constructor retains its three default tips.
+Coordinates may be constructed after ordinary plays/waits;
 add late coordinates to the Scene before querying or plotting against them.
 Numeric native Text label families must be constructed before the first play/wait.
 Existing coordinates remain queryable after plays; curves use ordinary live
@@ -329,7 +330,7 @@ class Axes(_compat.Group):
         return graph
 
     def plot_samples(self, points, *, color=None, **kwargs):
-        """Noon extension: preserve data order and repeated x values as a polyline."""
+        """Preserve sample order and repeated x values as a retained polyline."""
         with _owned(self._coordinate_frame()) as frame:
             options = engine_call(frame.sampledPlot, _points(points))
         return _curve(object.__new__(_compat.VMobject), options, color, kwargs)
@@ -501,6 +502,102 @@ class Axes(_compat.Group):
         from _manim_implicit import plot_implicit_curve
         return plot_implicit_curve(self, func, min_depth, max_quads, **kwargs)
 
+
+def _attach_three_d_axis(wrapper, handle, tip_handle):
+    shaft = _leaf(engine_call(handle.coordinateShaft))
+    ticks = _family(
+        object.__new__(_compat.Group),
+        engine_call(handle.coordinateTicks),
+        [_leaf(tick) for tick in engine_call(handle.coordinateTickObjects)],
+    )
+    members = [shaft, ticks]
+    wrapper.tip = None
+    if tip_handle is not None:
+        wrapper.tip = _leaf(tip_handle, _compat.VMobject)
+        members.append(wrapper.tip)
+    return _family(wrapper, handle, members)
+
+
+class ThreeDAxes(_compat.Group):
+    """Linear X/Y/Z axes with pinned Manim ranges, lengths and positive tips.
+
+    The numeric frame, world-axis transforms, ticks, tips, and coordinate
+    conversions are Rust-owned. Cairo axis pieces/shading, labels, custom axis
+    configurations, z-normal changes, and custom tip shapes are unsupported.
+    """
+
+    def __init__(self, x_range=(-6, 6, 1), y_range=(-5, 5, 1),
+                 z_range=(-4, 4, 1), x_length=10.5, y_length=10.5,
+                 z_length=6.5, *, tips=True, include_ticks=True, tick_size=0.1,
+                 labels=None, color=None, **kwargs):
+        context = _coordinate_constructor_context()
+        if labels is not None:
+            raise NotImplementedError("ThreeDAxes axis labels are not yet supported")
+        if not isinstance(tips, bool) or not isinstance(include_ticks, bool):
+            raise TypeError("tips and include_ticks require booleans")
+        options = engine_call(
+            _coordinate_options.threeDAxes, _array(x_range), _array(y_range),
+            _array(z_range), float(x_length), float(y_length), float(z_length),
+        )
+        try:
+            engine_call(options.setTicks, include_ticks, float(tick_size), True)
+            engine_call(options.setTips, tips)
+            _coordinate_style(options, color, kwargs)
+        except BaseException:
+            options.free()
+            raise
+        handle = engine_call(
+            context.liveCreateCoordinates if context is not None else _create_coordinates,
+            options,
+        )
+        axes = [
+            _attach_three_d_axis(
+                object.__new__(NumberLine),
+                engine_call(handle.threeDAxesAxis, index),
+                engine_call(handle.threeDAxesTip, index),
+            )
+            for index in range(3)
+        ]
+        _family(self, handle, axes)
+
+    @property
+    def x_axis(self):
+        return self.submobjects[0]
+
+    @property
+    def y_axis(self):
+        return self.submobjects[1]
+
+    @property
+    def z_axis(self):
+        return self.submobjects[2]
+
+    def _coordinate_frame(self):
+        shafts = [self.x_axis.shaft, self.y_axis.shaft, self.z_axis.shaft]
+        context = _coordinate_context(shafts)
+        if context is not None:
+            return engine_call(context.queryThreeDAxesFrame, self._semantic_family_handle)
+        return engine_call(self._semantic_family_handle.threeDAxesFrame)
+
+    def coords_to_point(self, x, y, z):
+        with _owned(self._coordinate_frame()) as frame:
+            return tuple(float(value) for value in engine_call(
+                frame.coordsToPoint, float(x), float(y), float(z)))
+
+    c2p = coords_to_point
+
+    def point_to_coords(self, point):
+        try:
+            values = tuple(float(component) for component in point)
+        except TypeError as error:
+            raise TypeError("point must contain three numeric coordinates") from error
+        if len(values) != 3:
+            raise ValueError("point must contain three numeric coordinates")
+        with _owned(self._coordinate_frame()) as frame:
+            return tuple(float(value) for value in engine_call(
+                frame.pointToCoords, *values))
+
+    p2c = point_to_coords
 
 class BarChart(Axes):
     """Shared-Rust static bar chart with explicit, atomic value changes.

@@ -13,6 +13,8 @@ mod graph_endpoints;
 mod numeric_text;
 pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
 mod prepared_frame;
+mod spatial_composition;
+
 mod transient_animation;
 pub use transient_animation::PreparedTransientAnimation;
 mod reactive;
@@ -201,6 +203,8 @@ pub struct SceneInstance {
     last_patch_stats: RuntimePatchStats,
     changes: FrameChanges,
     spatial_changes: FrameChanges,
+    pending_fixed_orientation_anchor_groups: BTreeSet<u32>,
+    pending_fixed_orientation_anchor_rows: BTreeSet<usize>,
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
@@ -251,6 +255,12 @@ impl Clone for SceneInstance {
             last_patch_stats: self.last_patch_stats,
             changes: self.changes.clone(),
             spatial_changes: self.spatial_changes.clone(),
+            pending_fixed_orientation_anchor_groups: self
+                .pending_fixed_orientation_anchor_groups
+                .clone(),
+            pending_fixed_orientation_anchor_rows: self
+                .pending_fixed_orientation_anchor_rows
+                .clone(),
             reactive: self.reactive.clone(),
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
@@ -341,6 +351,8 @@ impl SceneInstance {
             last_patch_stats: RuntimePatchStats::default(),
             changes: FrameChanges::all(),
             spatial_changes: FrameChanges::all(),
+            pending_fixed_orientation_anchor_groups: BTreeSet::new(),
+            pending_fixed_orientation_anchor_rows: BTreeSet::new(),
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
@@ -465,6 +477,30 @@ impl SceneInstance {
     pub(crate) fn mark_changed(&mut self, object_index: usize) {
         self.changes.insert(object_index);
         self.spatial_changes.insert(object_index);
+        if let Ok(index) = u32::try_from(object_index) {
+            let groups = self.compiled.fixed_orientation_groups_for_row(index);
+            if !groups.is_empty() {
+                self.pending_fixed_orientation_anchor_groups
+                    .extend(groups.iter().copied());
+            }
+            // Bounds dependencies do not imply ownership of this row's center.
+            // A surviving row whose anchor was removed still derives its own
+            // center even while it contributes to another retained group.
+            if self
+                .compiled
+                .fixed_orientation_group_for_row(index)
+                .is_none()
+                && self.frame.objects.get(object_index).is_some_and(|object| {
+                    object.spatial.as_deref().is_some_and(|spatial| {
+                        spatial.composition_domain
+                            == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
+                    })
+                })
+            {
+                self.pending_fixed_orientation_anchor_rows
+                    .insert(object_index);
+            }
+        }
         self.refresh_graph_dependencies_for_changed_row(object_index);
     }
 
@@ -608,8 +644,31 @@ impl SceneInstance {
         patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {
         self.require_replay_writable()?;
+        let previous_anchor_groups = match patch {
+            ExecutionPatch::SetContent { object, .. }
+            | ExecutionPatch::SetTransform { object, .. }
+            | ExecutionPatch::SetSemanticTransform { object, .. }
+            | ExecutionPatch::SetSpatialState { object, .. }
+            | ExecutionPatch::SetStyle { object, .. }
+            | ExecutionPatch::RemoveObject(object) => {
+                self.compiled.object_index(*object).map(|index| {
+                    self.compiled
+                        .fixed_orientation_groups_for_row(index)
+                        .to_vec()
+                })
+            }
+            ExecutionPatch::SetFixedOrientationGroupBoundsMembers { anchor_family, .. } => self
+                .compiled
+                .fixed_orientation_group_for_anchor(*anchor_family)
+                .map(|group| vec![group]),
+            _ => None,
+        };
         let inverse = self.prepare_replay_change(patch);
         self.apply_patch_without_history(patch)?;
+        if let Some(groups) = previous_anchor_groups {
+            self.pending_fixed_orientation_anchor_groups.extend(groups);
+        }
+        self.flush_fixed_orientation_anchor_changes();
         match patch {
             ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track)
                 if matches!(track.property, Property::Morph | Property::Transform) =>
@@ -665,6 +724,7 @@ impl SceneInstance {
             ExecutionPatch::SetContent { .. }
                 | ExecutionPatch::SetTransform { .. }
                 | ExecutionPatch::SetSemanticTransform { .. }
+                | ExecutionPatch::SetSpatialState { .. }
                 | ExecutionPatch::SetStyle { .. }
         ) {
             self.apply_value_patch(patch)?;
@@ -672,6 +732,17 @@ impl SceneInstance {
         }
         if matches!(patch, ExecutionPatch::SetGraphDependencies { .. }) {
             self.apply_graph_dependency_patch(patch)?;
+            return Ok(&self.frame);
+        }
+        if let ExecutionPatch::SetFixedOrientationGroupBoundsMembers { anchor_family, .. } = patch {
+            self.compiled.apply_execution_patch(patch)?;
+            if let Some(group) = self
+                .compiled
+                .fixed_orientation_group_for_anchor(*anchor_family)
+            {
+                self.pending_fixed_orientation_anchor_groups.insert(group);
+            }
+            self.last_patch_stats = RuntimePatchStats::default();
             return Ok(&self.frame);
         }
         if matches!(
@@ -719,7 +790,21 @@ impl SceneInstance {
                     .compiled
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                Some((object_index, self.compiled.object_channels(*object)))
+                let mut channels = self.compiled.object_channels(*object);
+                let has_motions = self.compiled.objects()[object_index as usize]
+                    .spatial
+                    .as_deref()
+                    .and_then(|spatial| spatial.camera_motions.as_deref())
+                    .is_some_and(|motions| !motions.is_empty());
+                if has_motions {
+                    channels.push(CompiledChannelKey::new(
+                        object_index,
+                        Property::CameraProfile,
+                    ));
+                }
+                channels.sort_unstable();
+                channels.dedup();
+                Some((object_index, channels))
             }
             ExecutionPatch::CreateObject(_) => None,
             ExecutionPatch::ReorderObject { .. } | ExecutionPatch::SetZIndex { .. } => None,
@@ -930,6 +1015,12 @@ impl SceneInstance {
                         mapped,
                     });
             }
+            if channel.property == Property::CameraProfile {
+                let motion_stats = self.relower_camera_motion_channel(channel);
+                patch_stats.channels_relowered += motion_stats.groups_relowered;
+                patch_stats.scheduler_events_removed += motion_stats.events_removed;
+                patch_stats.scheduler_events_inserted += motion_stats.events_inserted;
+            }
         }
 
         let mut affected_objects = [None, None];
@@ -960,6 +1051,7 @@ impl SceneInstance {
             ExecutionPatch::SetContent { object, .. }
             | ExecutionPatch::SetTransform { object, .. }
             | ExecutionPatch::SetSemanticTransform { object, .. }
+            | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetStyle { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
@@ -997,11 +1089,20 @@ impl SceneInstance {
                     ],
                 );
             }
-            ExecutionPatch::SetSemanticTransform { .. } => {
+            ExecutionPatch::SetSemanticTransform { .. }
+            | ExecutionPatch::SetSpatialState { .. } => {
                 let compiled = &self.compiled.objects()[index];
                 self.frame.release_render_transform(index);
                 self.frame.objects[index].transform = compiled.base_transform;
-                self.frame.objects[index].spatial = compiled.spatial.clone();
+                if let Some(next) = compiled.spatial.as_deref() {
+                    if let Some(current) = self.frame.objects[index].spatial.as_deref_mut() {
+                        *current = next.clone();
+                    } else {
+                        self.frame.objects[index].spatial = Some(Box::new(next.clone()));
+                    }
+                } else {
+                    self.frame.objects[index].spatial = None;
+                }
                 self.reapply_properties(
                     index,
                     &[
@@ -1010,8 +1111,16 @@ impl SceneInstance {
                         Property::Rotation,
                         Property::Scale,
                         Property::WorldTransform,
+                        Property::CameraProfile,
                     ],
                 );
+                let motion_stats = self.relower_camera_motion_channel(CompiledChannelKey::new(
+                    index as u32,
+                    Property::CameraProfile,
+                ));
+                self.last_patch_stats.channels_relowered += motion_stats.groups_relowered;
+                self.last_patch_stats.scheduler_events_removed += motion_stats.events_removed;
+                self.last_patch_stats.scheduler_events_inserted += motion_stats.events_inserted;
             }
             ExecutionPatch::SetStyle { style, .. } => {
                 self.frame.objects[index].style = *style;
@@ -1034,6 +1143,32 @@ impl SceneInstance {
             self.mark_changed(index);
         }
         Ok(())
+    }
+
+    fn relower_camera_motion_channel(
+        &mut self,
+        channel: CompiledChannelKey,
+    ) -> TimelineRelowerStats {
+        let motions = self.compiled.objects()[channel.object_index as usize]
+            .spatial
+            .as_deref()
+            .and_then(|spatial| spatial.camera_motions.as_deref())
+            .unwrap_or(&[])
+            .to_vec();
+        let tracks = self.compiled.channel_tracks(channel).to_vec();
+        let stats = self
+            .timeline_scheduler
+            .relower_camera_motion_channel(channel, &motions, &tracks);
+        if !motions.is_empty() || !tracks.is_empty() {
+            self.groups.entry(channel).or_insert(TrackGroup {
+                channel,
+                cursor: tracks.partition_point(|track| track.timing.start_time <= self.frame.time),
+                mapped: tracks.iter().any(|track| !track.time_map.is_identity()),
+            });
+        } else {
+            self.groups.remove(&channel);
+        }
+        stats
     }
 
     /// A primitive timeline channel owns one property, not its entire frame row.
@@ -1079,6 +1214,10 @@ impl SceneInstance {
                     .translation
                 }
                 Property::WorldTransform => {
+                    self.frame.objects[object_index].spatial =
+                        spatial_base_at_time(&self.compiled, object_index, self.frame.time);
+                }
+                Property::CameraProfile => {
                     self.frame.objects[object_index].spatial =
                         spatial_base_at_time(&self.compiled, object_index, self.frame.time);
                 }
@@ -1280,6 +1419,7 @@ impl SceneInstance {
             }
         }
         self.refresh_all_graph_dependencies();
+        self.refresh_all_fixed_orientation_anchors();
         self.last_stats = stats;
     }
 
@@ -1329,6 +1469,8 @@ impl SceneInstance {
             stats.groups_evaluated += 1;
         }
         self.update_requested_family_animations(time);
+
+        self.flush_fixed_orientation_anchor_changes();
 
         self.last_stats = stats;
         if self.frame.time != previous_time {
@@ -1541,11 +1683,12 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 14] = [
+const PROPERTY_ORDER: [Property; 15] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
     Property::WorldTransform,
+    Property::CameraProfile,
     Property::Position,
     Property::Rotation,
     Property::Scale,
@@ -1573,6 +1716,21 @@ fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackG
                 mapped,
             },
         );
+    }
+    for (index, object) in compiled.objects().iter().enumerate() {
+        if object.spatial.as_deref().is_some_and(|spatial| {
+            spatial
+                .camera_motions
+                .as_ref()
+                .is_some_and(|motions| !motions.is_empty())
+        }) {
+            let channel = CompiledChannelKey::new(index as u32, Property::CameraProfile);
+            groups.entry(channel).or_insert(TrackGroup {
+                channel,
+                cursor: 0,
+                mapped: false,
+            });
+        }
     }
     groups
 }
@@ -1756,7 +1914,7 @@ fn spatial_base_at_time(
         .get(object_index)?
         .spatial
         .as_deref()
-        .copied()?;
+        .cloned()?;
     let channel = CompiledChannelKey::new(object_index as u32, Property::WorldTransform);
     let tracks = compiled.channel_tracks(channel);
     for track in tracks {
@@ -1779,7 +1937,119 @@ fn spatial_base_at_time(
             };
         }
     }
+    let channel = CompiledChannelKey::new(object_index as u32, Property::CameraProfile);
+    let first_profile_track = compiled.channel_tracks(channel).first();
+    let first_motion = spatial
+        .camera_motions
+        .as_deref()
+        .and_then(|motions| motions.first());
+    let initial = match (first_profile_track, first_motion) {
+        (Some(track), motion)
+            if motion.is_none_or(|motion| track.timing.start_time <= motion.start()) =>
+        {
+            let TrackValues::CameraProfile {
+                from, near, far, ..
+            } = track.values
+            else {
+                unreachable!("compiled CameraProfile track has typed endpoints")
+            };
+            Some((track.timing.start_time, from, near, far))
+        }
+        (_, Some(motion)) => {
+            let (near, far) = motion.clips();
+            Some((motion.start(), motion.source(), near, far))
+        }
+        _ => None,
+    };
+    // Stops reconcile the authored baseline to their endpoint. Restore the
+    // earliest captured source before the first occurrence, so an initial wait
+    // cannot expose a future finite-move or ambient-stop position.
+    if let Some((_, profile, near, far)) = initial.filter(|(start, ..)| time < *start) {
+        let camera = profile.camera(near, far)?;
+        spatial.world = noon_core::SemanticWorldTransform3D::new(
+            camera.position,
+            camera.orientation,
+            noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+        )?;
+        spatial.camera_projection = Some(camera.projection);
+        spatial.camera_profile = Some(profile);
+    }
+    let mut camera_owner_start = f64::NEG_INFINITY;
+    let released_ambient_start = spatial
+        .camera_motions
+        .as_deref()
+        .and_then(|motions| camera_base_release_start(motions, time));
+    for track in compiled.channel_tracks(channel) {
+        let TrackValues::CameraProfile {
+            from,
+            to,
+            near,
+            far,
+        } = track.values
+        else {
+            unreachable!("compiled CameraProfile track has typed endpoints")
+        };
+        // A closed final ambient interval has reconciled its endpoint into the
+        // authored baseline. Earlier finite tracks cannot reclaim that released
+        // channel and overwrite a subsequent ordinary camera edit.
+        if released_ambient_start.is_some_and(|start| track.timing.start_time <= start) {
+            continue;
+        }
+        if track.reconciled && time >= track.timing.start_time + track.timing.duration {
+            continue;
+        }
+        if let Some(progress) = world_track_progress(track, time) {
+            let (profile, camera) = sample_camera_profile(from, to, near, far, progress)?;
+            spatial.world = noon_core::SemanticWorldTransform3D::new(
+                camera.position,
+                camera.orientation,
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+            )?;
+            spatial.camera_projection = Some(camera.projection);
+            spatial.camera_profile = Some(profile);
+            camera_owner_start = track.timing.start_time;
+        }
+    }
+    if let Some(motions) = spatial.camera_motions.as_deref() {
+        if let Some(motion) = camera_motion_at_time(motions, time) {
+            if motion.start() < camera_owner_start {
+                return Some(Box::new(spatial));
+            }
+            let profile = motion.sample(time)?;
+            let (near, far) = motion.clips();
+            let camera = profile.camera(near, far)?;
+            spatial.world = noon_core::SemanticWorldTransform3D::new(
+                camera.position,
+                camera.orientation,
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+            )?;
+            spatial.camera_projection = Some(camera.projection);
+            spatial.camera_profile = Some(profile);
+        }
+    }
     Some(Box::new(spatial))
+}
+
+fn camera_motion_at_time(
+    motions: &[noon_core::CameraAngularMotion],
+    time: f64,
+) -> Option<noon_core::CameraAngularMotion> {
+    let index = motions
+        .partition_point(|motion| motion.start() <= time)
+        .checked_sub(1)?;
+    let motion = motions[index];
+    // A later occurrence makes this closed endpoint part of immutable authored
+    // history. Hold it across the intervening wait instead of reading the final
+    // camera baseline. After the last closed occurrence, ordinary base writes
+    // remain authoritative (including explicit orientation edits after stop).
+    (index + 1 < motions.len() || motion.end().is_none_or(|end| time < end)).then_some(motion)
+}
+
+fn camera_base_release_start(motions: &[noon_core::CameraAngularMotion], time: f64) -> Option<f64> {
+    motions
+        .last()
+        .filter(|motion| motion.end().is_some_and(|end| time >= end))
+        .map(|motion| motion.start())
 }
 
 fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> usize {
@@ -1827,6 +2097,65 @@ fn apply_group_to_row(
     base_transform: Transform2D,
     base_style: Style,
 ) -> bool {
+    if matches!(
+        group.channel.property,
+        Property::WorldTransform | Property::CameraProfile
+    ) {
+        let row_spatial = row.spatial.as_ref();
+        let motions = row_spatial.and_then(|spatial| spatial.camera_motions.as_deref());
+        let motion = motions.and_then(|motions| camera_motion_at_time(motions, time));
+        if group.channel.property == Property::CameraProfile {
+            let track_owner_start = tracks[..group.cursor]
+                .iter()
+                .rev()
+                .find_map(|track| {
+                    world_track_progress(track, time).map(|_| track.timing.start_time)
+                })
+                .unwrap_or(f64::NEG_INFINITY);
+            let sample =
+                if let Some(motion) = motion.filter(|motion| motion.start() >= track_owner_start) {
+                    motion.sample(time).map(|profile| {
+                        let (near, far) = motion.clips();
+                        (profile, near, far)
+                    })
+                } else if motions
+                    .and_then(|motions| camera_base_release_start(motions, time))
+                    .is_some_and(|start| start >= track_owner_start)
+                {
+                    // Publish the reconciled baseline at release, even if this
+                    // frame crosses the boundary without landing on the stop time.
+                    compiled.objects()[group.channel.object_index as usize]
+                        .spatial
+                        .as_deref()
+                        .and_then(|spatial| {
+                            match (spatial.camera_profile, spatial.camera_projection) {
+                                (
+                                    Some(profile),
+                                    Some(noon_core::SemanticProjection3D::Perspective {
+                                        near,
+                                        far,
+                                        ..
+                                    }),
+                                ) => Some((profile, near, far)),
+                                _ => None,
+                            }
+                        })
+                } else {
+                    None
+                };
+            if let Some((profile, near, far)) = sample {
+                let Some(camera) = profile.camera(near, far) else {
+                    return false;
+                };
+                return apply_evaluated_value(
+                    &mut row,
+                    Property::CameraProfile,
+                    EvaluatedValue::CameraProfile { profile, camera },
+                    false,
+                );
+            }
+        }
+    }
     if group.cursor == 0 {
         return false;
     }
@@ -1853,7 +2182,10 @@ fn apply_group_to_row(
         return changed;
     }
 
-    if group.channel.property == Property::WorldTransform {
+    if matches!(
+        group.channel.property,
+        Property::WorldTransform | Property::CameraProfile
+    ) {
         let latest = &tracks[group.cursor - 1];
         if latest.reconciled && time >= latest.timing.start_time + latest.timing.duration {
             return false;
@@ -1865,6 +2197,27 @@ fn apply_group_to_row(
         let Some((track, progress)) = selected else {
             return false;
         };
+        if group.channel.property == Property::CameraProfile {
+            let TrackValues::CameraProfile {
+                from,
+                to,
+                near,
+                far,
+            } = &track.values
+            else {
+                unreachable!("validated CameraProfile track has profile endpoints");
+            };
+            let Some((profile, camera)) = sample_camera_profile(*from, *to, *near, *far, progress)
+            else {
+                return false;
+            };
+            return apply_evaluated_value(
+                &mut row,
+                Property::CameraProfile,
+                EvaluatedValue::CameraProfile { profile, camera },
+                false,
+            );
+        }
         let TrackValues::WorldTransform { from, to } = &track.values else {
             unreachable!("validated WorldTransform track has world endpoints");
         };
@@ -1940,6 +2293,18 @@ fn apply_group_to_row(
                 .spatial
                 .as_ref()
                 .map(|spatial| EvaluatedValue::WorldTransform(spatial.world)),
+            Property::CameraProfile => row.spatial.as_ref().and_then(|spatial| {
+                let profile = spatial.camera_profile?;
+                let noon_core::SemanticProjection3D::Perspective { near, far, .. } =
+                    spatial.camera_projection?
+                else {
+                    return None;
+                };
+                Some(EvaluatedValue::CameraProfile {
+                    profile,
+                    camera: profile.camera(near, far)?,
+                })
+            }),
             Property::Presence | Property::ZIndex | Property::Transform => None,
         };
         return base.is_some_and(|value| {
@@ -2054,6 +2419,26 @@ fn apply_evaluated_value(
                 .expect("validated WorldTransform track has spatial state");
             let changed = spatial.world != value;
             spatial.world = value;
+            spatial.camera_profile = None;
+            changed
+        }
+        (Property::CameraProfile, EvaluatedValue::CameraProfile { profile, camera }) => {
+            let spatial = row
+                .spatial
+                .as_mut()
+                .expect("validated CameraProfile track has camera state");
+            let world = noon_core::SemanticWorldTransform3D::new(
+                camera.position,
+                camera.orientation,
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .expect("profile camera sample was validated");
+            let changed = spatial.camera_profile != Some(profile)
+                || spatial.world != world
+                || spatial.camera_projection != Some(camera.projection);
+            spatial.camera_profile = Some(profile);
+            spatial.world = world;
+            spatial.camera_projection = Some(camera.projection);
             changed
         }
         _ => unreachable!("compiled track value type must match its property"),
@@ -2066,6 +2451,10 @@ enum EvaluatedValue {
     Vec2(Vec2),
     Color(Option<Color>),
     WorldTransform(noon_core::SemanticWorldTransform3D),
+    CameraProfile {
+        profile: noon_core::ManimCamera3DProfile,
+        camera: noon_core::SemanticCamera3D,
+    },
 }
 
 // A prepared morph owns its fixed rendering frame alongside ordinary semantic
@@ -2547,6 +2936,17 @@ fn world_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
     mapped_continuous_progress_f64(track.timing, &track.time_map, time)
 }
 
+fn sample_camera_profile(
+    from: noon_core::ManimCamera3DProfile,
+    to: noon_core::ManimCamera3DProfile,
+    near: f64,
+    far: f64,
+    progress: f64,
+) -> Option<(noon_core::ManimCamera3DProfile, noon_core::SemanticCamera3D)> {
+    let profile = noon_core::ManimCamera3DProfile::interpolate(from, to, progress)?;
+    Some((profile, profile.camera(near, far)?))
+}
+
 fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {
     interpolate_track_values(&track.values, progress)
         .expect("compiled continuous track carries an interpolable value kind")
@@ -2575,6 +2975,16 @@ fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<Evalu
             from.world()?
                 .interpolate(to.world()?, f64::from(progress))?,
         )),
+        TrackValues::CameraProfile {
+            from,
+            to,
+            near,
+            far,
+        } => {
+            let (profile, camera) =
+                sample_camera_profile(*from, *to, *near, *far, f64::from(progress))?;
+            Some(EvaluatedValue::CameraProfile { profile, camera })
+        }
         TrackValues::Bool { .. }
         | TrackValues::ZIndex { .. }
         | TrackValues::Object { .. }

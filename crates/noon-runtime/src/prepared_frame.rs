@@ -695,6 +695,7 @@ impl SceneInstance {
                 changed = true;
             }
         }
+        self.flush_fixed_orientation_anchor_changes();
         self.effective_driver_rows = next_drivers;
         self.commit_numeric_text_updates(prepared.numeric_text, true);
         self.last_stats = prepared.stats;

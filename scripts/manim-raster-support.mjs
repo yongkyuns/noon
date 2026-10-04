@@ -112,6 +112,29 @@ export function browserArgs(backend, { gpuMode = "software" } = {}) {
   ];
 }
 
+// Infer the canvas background from the modal exact RGBA value across the image.
+// A border-only sample is unreliable when a grid or perimeter path covers it.
+export function dominantImageRgba({ data, width, height }) {
+  if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1
+      || !data || data.length !== width * height * 4) {
+    throw new Error("expected RGBA image data with positive integer dimensions");
+  }
+  const counts = new Map();
+  let selected = 0;
+  let maximumCount = 0;
+  for (let offset = 0; offset < data.length; offset += 4) {
+    const key = ((data[offset] << 24) | (data[offset + 1] << 16)
+      | (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
+    const count = (counts.get(key) ?? 0) + 1;
+    counts.set(key, count);
+    if (count > maximumCount) {
+      selected = key;
+      maximumCount = count;
+    }
+  }
+  return [selected >>> 24, (selected >>> 16) & 255, (selected >>> 8) & 255, selected & 255];
+}
+
 export function isIdentifiedGpuAdapter(info) {
   if (!info || typeof info !== "object") return false;
   return [info.vendor, info.architecture, info.device, info.description]

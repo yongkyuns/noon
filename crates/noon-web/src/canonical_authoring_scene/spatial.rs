@@ -109,6 +109,27 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    pub(crate) fn effective_world_center(
+        &mut self,
+        object: &noon::Mobject,
+    ) -> Result<noon_core::SemanticVec3, crate::authoring_error::AuthoringFailure> {
+        if !Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        object
+            .validate()
+            .map_err(crate::authoring_error::AuthoringFailure::from)?;
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => object.world_center().map_err(Into::into),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_effective_world_center(object),
+            PlayerOwnership::Transferred(_) => {
+                Err("effective world state is owned by the transferred execution session".into())
+            }
+        }
+    }
+
     pub(crate) fn set_world_transform(
         &mut self,
         object: &noon::Mobject,
@@ -267,6 +288,36 @@ mod tests {
             .borrow()
             .geometry_resources()
             .is_empty());
+    }
+
+    #[test]
+    fn world_center_queries_follow_scene_owner_and_authored_detached_fallback() {
+        let mut context = CanonicalAuthoringScene::default();
+        let object = context.create_mesh(mesh_at(2.0)).unwrap();
+        assert_eq!(
+            context.effective_world_center(&object).unwrap(),
+            SemanticVec3::new(2.0, 0.0, 0.0)
+        );
+        context.live_player(1.0).unwrap();
+        let mut pose = object.world_transform().unwrap();
+        pose.translation = SemanticVec3::new(4.0, 5.0, 6.0);
+        context.set_world_transform(&object, pose).unwrap();
+        assert_eq!(
+            context.effective_world_center(&object).unwrap(),
+            SemanticVec3::new(4.0, 5.0, 6.0)
+        );
+
+        let detached = context.create_mesh(mesh_at(7.0)).unwrap();
+        assert_eq!(
+            context.effective_world_center(&detached).unwrap(),
+            SemanticVec3::new(7.0, 0.0, 0.0)
+        );
+
+        let foreign = CanonicalAuthoringScene::default()
+            .scene
+            .circle(0.5)
+            .unwrap();
+        assert!(context.effective_world_center(&foreign).is_err());
     }
 
     #[test]

@@ -28,7 +28,7 @@ def literal_timeline(source):
         return (
             isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
-            and node.func.attr in {"play", "wait"}
+            and node.func.attr in {"play", "wait", "move_camera"}
         )
 
     direct = []
@@ -42,7 +42,7 @@ def literal_timeline(source):
         raise ValueError("nested timed calls need an explicit storyboard instead")
     clock, holds, transitions = Decimal(0), [], []
     for call in direct:
-        if call.func.attr == "play":
+        if call.func.attr in {"play", "move_camera"}:
             values = [kw.value for kw in call.keywords if kw.arg == "run_time"]
         else:
             values = call.args
@@ -73,12 +73,45 @@ class FeatureLessonStoryboards(unittest.TestCase):
                 duration, holds, transitions = literal_timeline(source)
                 self.assertEqual(duration, Decimal(str(entry["duration"])))
                 self.assertEqual(holds, [[Decimal(str(x)) for x in interval] for interval in entry["still_intervals"]])
-                self.assertGreaterEqual(len(transitions), 4)
+                required_transitions = 3 if entry["id"] == "showcase-spatial-scene" else 4
+                self.assertGreaterEqual(len(transitions), required_transitions)
                 self.assertGreaterEqual(holds[-1][1] - holds[-1][0], Decimal("1.0"))
                 self.assertTrue(any(start < Decimal(str(entry["thumbnail_time"])) <= end for start, end in holds)
                                 or any(Decimal(str(entry["thumbnail_time"])) == start for start, _ in holds))
                 for beat in entry["beats"]:
                     self.assertTrue(Decimal(0) < Decimal(str(beat["time"])) <= duration)
+
+    def test_spatial_showcase_models_camera_moves_as_timed_animation(self):
+        manifest = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
+        entry = next(item for item in manifest["entries"] if item["id"] == "showcase-spatial-scene")
+        source = (WEB / entry["path"]).read_text()
+        tree = ast.parse(source, filename=entry["path"])
+        scene = next(node for node in tree.body if isinstance(node, ast.ClassDef))
+        self.assertIn("ThreeDScene", [base.id for base in scene.bases if isinstance(base, ast.Name)])
+        duration, holds, transitions = literal_timeline(source)
+        self.assertEqual(duration, Decimal("8.0"))
+        requested_stills = [[Decimal(str(value)) for value in interval]
+                            for interval in entry["still_intervals"]]
+        self.assertEqual(requested_stills, [
+            [Decimal("1.85"), Decimal("2.2")],
+            [Decimal("3.8"), Decimal("4.1")],
+            [Decimal("6.0"), Decimal("8.0")],
+        ])
+        self.assertTrue(all(any(start <= still[0] <= still[1] <= end for start, end in holds)
+                            for still in requested_stills))
+        self.assertEqual(transitions, [
+            [Decimal("0"), Decimal("1.8")],
+            [Decimal("2.25"), Decimal("3.75")],
+            [Decimal("4.15"), Decimal("5.95")],
+        ])
+        camera_moves = [node for node in ast.walk(scene) if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute) and node.func.attr == "move_camera"]
+        self.assertEqual(len(camera_moves), 2)
+        self.assertTrue(all(any(keyword.arg == "run_time" for keyword in call.keywords)
+                            for call in camera_moves))
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                            and node.func.id == "WorldTransformTo" for node in ast.walk(scene)))
+        self.assertEqual(entry["thumbnail"], "thumbnails/showcase/showcase-spatial-scene.png")
 
     def test_reactive_lesson_removes_exact_registered_callbacks(self):
         source = (WEB / "python/examples/showcase_reactive_relationships.py").read_text()

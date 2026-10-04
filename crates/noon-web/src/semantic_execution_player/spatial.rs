@@ -6,11 +6,38 @@ use noon::MobjectFamily;
 use noon::{MeshOptions, Mobject, SemanticWorldTransform3D, WorldAffineEdit};
 
 impl super::SemanticExecutionPlayer {
+    pub(crate) fn live_add_spatial_membership(
+        &mut self,
+        targets: &[noon::MobjectTarget<'_>],
+        policy: crate::canonical_authoring_scene::SpatialMembershipPolicy,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            Ok(match policy {
+                crate::canonical_authoring_scene::SpatialMembershipPolicy::Assign(domain) => {
+                    live.add_all_in_spatial_composition_domain(targets, domain)
+                }
+                crate::canonical_authoring_scene::SpatialMembershipPolicy::DefaultWorld => {
+                    live.add_all_world_mobjects(targets)
+                }
+            })
+        })?
+        .map(|_| ())
+        .map_err(AuthoringFailure::from)
+    }
+
     pub(crate) fn live_create_mesh(
         &mut self,
         options: MeshOptions,
     ) -> Result<Mobject, AuthoringFailure> {
         self.with_live_session(|live| live.create_mesh(options))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_manim_arrow(
+        &mut self,
+        options: noon::ManimArrowOptions,
+    ) -> Result<noon::ManimArrow, AuthoringFailure> {
+        self.with_live_session(|live| live.create_manim_arrow(options))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -26,6 +53,13 @@ impl super::SemanticExecutionPlayer {
         object: &Mobject,
     ) -> Result<SemanticWorldTransform3D, AuthoringFailure> {
         self.with_live_session(|live| live.effective_world_transform(object))
+    }
+
+    pub(crate) fn live_effective_world_center(
+        &mut self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_world_center(object))
     }
 
     pub(crate) fn live_set_world_transform(
@@ -95,6 +129,16 @@ mod wasm {
         ) -> Result<Vec<f64>, JsValue> {
             self.live_effective_world_transform(object.semantic_mobject())
                 .map(crate::authoring_spatial::transform_values)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = effectiveWorldCenter)]
+        pub fn effective_world_center(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.live_effective_world_center(object.semantic_mobject())
+                .map(|center| vec![center.x, center.y, center.z])
                 .map_err(js_error)
         }
 

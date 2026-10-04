@@ -18,6 +18,7 @@ import initNoonWeb, {
   WasmMatrixOptions,
   WasmCompositeRows,
   WasmTableOptions,
+  noonLinearTransformationPathArc,
   resolveAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
@@ -339,6 +340,7 @@ async function initializePyodide() {
     };
   };
   self.noonMatrixOptions = WasmMatrixOptions;
+  self.noonLinearTransformationPathArc = noonLinearTransformationPathArc;
   self.noonMatrixFromFamily = (family) => family.asMatrix();
   self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");

@@ -550,6 +550,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .unwrap_or_else(|| self.store.scene_revision())
     }
 
+    /// Existing objects whose shared spatial anchor is cleared by the staged
+    /// structural removal. These rows require local spatial-state publication.
+    pub fn spatial_anchor_cleared_owners(&self) -> &[SemanticNodeId] {
+        &self.preflight.spatial_anchor_cleared
+    }
+
     /// Proposed presentation states, grouped in first changed-object order.
     ///
     /// This derived overlay applies object `SetZIndex`, `SetProperty`, `ReplaceStyle`,
@@ -566,12 +572,22 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::SetObjectTransform { object, .. }
                 | SemanticMutation::SetClickIndicate { object, .. }
+                | SemanticMutation::SetSpatialCompositionDomain { object, .. }
+                | SemanticMutation::SetCameraProfile { object, .. }
+                | SemanticMutation::SetCameraMotions { object, .. }
                 | SemanticMutation::ReplaceStyle { object, .. }
                 | SemanticMutation::ReplaceContent { object, .. }
                 | SemanticMutation::ReplaceDecimalNumber { object, .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { object, .. } => Some(*object),
                 _ => None,
             })
+            .chain(
+                self.preflight
+                    .spatial_anchor_cleared
+                    .iter()
+                    .copied()
+                    .map(SemanticTransactionNodeRef::Existing),
+            )
             .collect();
         self.preflight
             .staged_object_order
@@ -1213,9 +1229,58 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .node_mut(object)
                         .and_then(|node| node.semantic_object_state_mut())
                         .expect("preflighted semantic object")
-                        .transform = transform;
+                        .set_transform(transform);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectTransform { object });
+                }
+                SemanticMutation::SetCameraMotions { object, motions } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic camera")
+                        .set_camera_motions(motions)
+                        .expect("preflighted camera motion history");
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::CameraMotions { object });
+                }
+                SemanticMutation::SetCameraProfile {
+                    object,
+                    profile,
+                    near,
+                    far,
+                } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic object")
+                        .set_camera_profile(profile, near, far)
+                        .expect("preflighted camera profile");
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::CameraProfile { object });
+                }
+                SemanticMutation::SetSpatialCompositionDomain {
+                    object,
+                    domain,
+                    anchor_family,
+                } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store.unregister_semantic_references_for_owner(object);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic object")
+                        .set_spatial_composition_domain_with_anchor(domain, anchor_family)
+                        .expect("preflight validated spatial composition domain");
+                    store.register_semantic_references_for_owner(object);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::SpatialCompositionDomain { object });
+                    if anchor_family.is_some()
+                        || domain == crate::SemanticSpatialCompositionDomain::FixedOrientation
+                    {
+                        impacts.push(SemanticMutationImpact::SpatialAnchorChanged { object });
+                    }
                 }
                 SemanticMutation::SetClickIndicate { object, binding } => {
                     let object = resolve_node_ref(object, &committed_nodes);
@@ -1512,6 +1577,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                             SemanticRemoveNodeEffect::ObjectRoleReplaced(object) => {
                                 impacts
                                     .push(SemanticMutationImpact::ObjectRole { object: *object });
+                            }
+                            SemanticRemoveNodeEffect::SpatialAnchorCleared(object) => {
+                                impacts.push(SemanticMutationImpact::SpatialAnchorChanged {
+                                    object: *object,
+                                });
                             }
                         }
                     }

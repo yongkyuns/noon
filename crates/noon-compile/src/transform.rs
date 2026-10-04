@@ -176,6 +176,7 @@ pub(crate) fn compile_content_morph(
             | (GeometryRef::Circle { .. }, GeometryRef::Circle { .. })
             | (GeometryRef::Rectangle { .. }, GeometryRef::Rectangle { .. })
             | (GeometryRef::VectorPath(_), GeometryRef::VectorPath(_))
+            | (GeometryRef::Line { .. }, GeometryRef::Line { .. })
             | (
                 GeometryRef::VectorPath(_),
                 GeometryRef::Circle { .. }
@@ -196,11 +197,25 @@ pub(crate) fn compile_content_morph(
         .expect("supported source geometry must convert to a path");
     let target = noon_geometry::canonical_outline_path(to_geometry)
         .expect("supported target geometry must convert to a path");
+    let screen_line_width_morph = matches!(
+        (from_geometry, to_geometry),
+        (GeometryRef::Line { .. }, GeometryRef::Line { .. })
+    ) && screen_line_width_only_change(from_style, to_style);
+    // Stroke width is a runtime style channel for screen-space lines: it does
+    // not change the prepared centerline resource or its path topology.
+    let pair_from_style = if screen_line_width_morph {
+        Style {
+            stroke_width: to_style.stroke_width,
+            ..from_style
+        }
+    } else {
+        from_style
+    };
     let TransformGeometryPlan::PathPair {
         geometry,
         render_transform,
     } = compile_path_pair(
-        from_style,
+        pair_from_style,
         to_style,
         from_transform,
         to_transform,
@@ -304,6 +319,18 @@ fn compile_path_pair(
         geometry: Arc::new(GeometryRef::path(source.with_morph_target(target))),
         render_transform: None,
     })
+}
+
+fn screen_line_width_only_change(from: Style, to: Style) -> bool {
+    from.stroke_width_mode == StrokeWidthMode::ScreenSpace
+        && to.stroke_width_mode == StrokeWidthMode::ScreenSpace
+        && from.stroke.is_some()
+        && to.stroke.is_some()
+        && from.fill == to.fill
+        && from.stroke == to.stroke
+        && from.stroke_join == to.stroke_join
+        && from.stroke_cap == to.stroke_cap
+        && from.opacity == to.opacity
 }
 
 fn filled_morph_is_supported(source: &VectorPath, target: &VectorPath) -> bool {
@@ -631,6 +658,107 @@ mod tests {
         assert!(path
             .conservative_bounds()
             .is_some_and(|bounds| bounds.width() > 2.5 && bounds.height() > 2.5));
+    }
+
+    #[test]
+    fn screen_space_line_content_morph_keeps_rotated_endpoints_in_fixed_frame() {
+        let style = Style {
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.0375,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let (geometry, render_transform) = compile_content_morph(
+            &GeometryRef::line(Vec2::ZERO, Vec2::new(0.75, 0.0)),
+            &GeometryRef::line(Vec2::ZERO, Vec2::new(0.0, 0.75)),
+            style,
+            style,
+            Transform2D::IDENTITY,
+            Transform2D::IDENTITY,
+        )
+        .expect("line endpoints can rotate through the prepared path morph");
+
+        let GeometryRef::VectorPath(path) = geometry else {
+            panic!("line content morph must use the retained path pair")
+        };
+        let target = path.morph_target().expect("rotated line endpoint path");
+        assert_eq!(render_transform, Some(Transform2D::IDENTITY));
+        assert_eq!(path.commands().len(), 2);
+        assert_eq!(target.commands().len(), 2);
+        assert_eq!(
+            path.commands()[1],
+            PathCommand::LineTo {
+                to: Vec2::new(0.75, 0.0)
+            }
+        );
+        assert_eq!(
+            target.commands()[1],
+            PathCommand::LineTo {
+                to: Vec2::new(0.0, 0.75)
+            }
+        );
+    }
+
+    #[test]
+    fn screen_space_line_content_morph_allows_only_width_change_for_shared_topology() {
+        let source_style = Style {
+            fill: None,
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.025,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let target_style = Style {
+            stroke_width: 0.075,
+            ..source_style
+        };
+        let source = GeometryRef::line(Vec2::ZERO, Vec2::new(0.75, 0.0));
+        let target = GeometryRef::line(Vec2::ZERO, Vec2::new(0.0, 0.75));
+        let (geometry, render_transform) = compile_content_morph(
+            &source,
+            &target,
+            source_style,
+            target_style,
+            Transform2D::IDENTITY,
+            Transform2D::IDENTITY,
+        )
+        .expect("screen-space line width is a runtime style channel");
+        assert!(matches!(geometry, GeometryRef::VectorPath(_)));
+        assert_eq!(render_transform, Some(Transform2D::IDENTITY));
+
+        let scale_with_object = Style {
+            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+            ..source_style
+        };
+        assert_eq!(
+            compile_content_morph(
+                &source,
+                &target,
+                scale_with_object,
+                Style {
+                    stroke_width: 0.075,
+                    ..scale_with_object
+                },
+                Transform2D::IDENTITY,
+                Transform2D::IDENTITY,
+            ),
+            Err(TransformCompileFailure::RequiresRetessellation)
+        );
+
+        assert_eq!(
+            compile_content_morph(
+                &source,
+                &target,
+                source_style,
+                Style {
+                    stroke_cap: noon_core::StrokeCap::Butt,
+                    ..target_style
+                },
+                Transform2D::IDENTITY,
+                Transform2D::IDENTITY,
+            ),
+            Err(TransformCompileFailure::RequiresRetessellation)
+        );
     }
 
     #[test]

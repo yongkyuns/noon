@@ -27,6 +27,35 @@ fn bounds_json(bounds: Option<Rect>) -> Value {
     }
 }
 
+fn diagnostic_geometry_at_progress(
+    geometry: &GeometryRef,
+    morph: f32,
+    reveal: f32,
+) -> Option<GeometryRef> {
+    if let GeometryRef::VectorPath(path) = geometry {
+        if let Some(target) = path.morph_target() {
+            return noon_geometry::interpolate_revealed_path_preserving_order(
+                path, target, morph, reveal,
+            )
+            .ok()
+            .map(GeometryRef::VectorPath);
+        }
+        if morph != 0.0 {
+            return None;
+        }
+    } else if morph != 0.0 {
+        return None;
+    }
+
+    if reveal >= 1.0 {
+        return Some(geometry.clone());
+    }
+    let path = noon_geometry::canonical_outline_path(geometry)?;
+    Some(GeometryRef::VectorPath(
+        noon_geometry::authored_partial_path(&path, 0.0, reveal.clamp(0.0, 1.0)),
+    ))
+}
+
 /// Capture derived current-frame observations for debugging and test artifacts.
 ///
 /// This opt-in codec performs O(frame size) work and never advances or mutates execution.
@@ -54,6 +83,13 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                     }),
                 geometry => geometry.cloned(),
             };
+            let geometry = geometry.and_then(|geometry| {
+                diagnostic_geometry_at_progress(
+                    &geometry,
+                    frame.morph(index),
+                    frame.reveal(index),
+                )
+            });
             let bounds = geometry
                 .as_ref()
                 .and_then(|geometry| geometry.world_bounds(transform))
@@ -89,6 +125,9 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                     }
                 });
                 json!({
+                    "draw_kind": state.draw_kind,
+                    "composition_domain": state.composition_domain,
+                    "fixed_orientation_center": state.fixed_orientation_center.map(|v| [v.x, v.y, v.z]),
                     "translation": [world.translation.x, world.translation.y, world.translation.z],
                     "rotation_wxyz": world.rotation.components(),
                     "scale": [world.scale.x, world.scale.y, world.scale.z],
@@ -125,7 +164,10 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnimationOptions, LiveProgramStatus, RateFunction, RustHostCallbackTable, Scene};
+    use crate::{
+        AnimationOptions, LiveProgramStatus, ManimArrowOptions, MobjectTarget, RateFunction,
+        RustHostCallbackTable, Scene,
+    };
 
     #[test]
     fn spatial_capture_reads_exact_effective_pose_and_light_material() {
@@ -194,5 +236,60 @@ mod tests {
         assert_eq!(value["objects"][0]["center"], json!([1.0, -0.5]));
         assert_eq!(value["objects"][0]["bounds"]["width"], 2.0);
         assert!((value["objects"][0]["fill"]["alpha"].as_f64().unwrap() - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn debug_capture_bounds_follow_line_arrow_morph_at_begin_midpoint_and_end() {
+        let mut scene = Scene::new();
+        let mut horizontal = ManimArrowOptions::arrow(0.0, 0.0, 1.0, 0.0).unwrap();
+        horizontal.set_buff(0.0).unwrap();
+        horizontal.set_tip_length(0.25).unwrap();
+        let mut vertical = ManimArrowOptions::arrow(0.0, 0.0, 0.0, 1.0).unwrap();
+        vertical.set_buff(0.0).unwrap();
+        vertical.set_tip_length(0.25).unwrap();
+        let source = scene.manim_arrow(horizontal).unwrap();
+        let target = scene.manim_arrow(vertical).unwrap();
+        scene
+            .add_many(&[MobjectTarget::Family(source.family())])
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let shaft_id = session
+            .execution_object_id(source.shaft().node_id())
+            .unwrap()
+            .get();
+        let segment = {
+            let mut live = scene.live(&mut session);
+            live.declare_and_activate_family_transform_to(
+                source.family(),
+                target.family(),
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap()
+        };
+
+        for (time, progress) in [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)] {
+            {
+                let mut live = scene.live(&mut session);
+                live.advance_segment_to(segment, time).unwrap();
+            }
+            let capture = execution_frame_value(&session);
+            let row = capture["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| {
+                    row["id"] == shaft_id
+                        && row["stroke_width_mode"] == "screen_space"
+                        && row["stroke"]["alpha"] != Value::Null
+                })
+                .unwrap();
+            let expected_end = [0.75 * (1.0 - progress), 0.75 * progress];
+            let bounds = &row["bounds"];
+            assert_eq!(bounds["min"], json!([0.0, 0.0]));
+            assert!((bounds["max"][0].as_f64().unwrap() - expected_end[0]).abs() < 1e-6);
+            assert!((bounds["max"][1].as_f64().unwrap() - expected_end[1]).abs() < 1e-6);
+        }
     }
 }

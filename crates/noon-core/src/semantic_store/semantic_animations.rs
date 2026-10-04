@@ -11,6 +11,9 @@ pub enum SemanticObjectTrackProperty {
     ZIndex,
     Transform,
     WorldTransform,
+    /// Unwrapped finite Manim camera coordinates; compile to pose and lens as
+    /// one camera sample rather than interpolating derived quaternions.
+    CameraProfile,
     Position,
     Rotation,
     Scale,
@@ -53,6 +56,12 @@ pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
         from: crate::SemanticWorldTransform3D,
         to: crate::SemanticWorldTransform3D,
     },
+    CameraProfile {
+        from: crate::ManimCamera3DProfile,
+        to: crate::ManimCamera3DProfile,
+        near: f64,
+        far: f64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +72,7 @@ enum SemanticObjectTrackValueKind {
     Color,
     Object,
     WorldTransform,
+    CameraProfile,
 }
 
 impl SemanticObjectTrackProperty {
@@ -71,6 +81,7 @@ impl SemanticObjectTrackProperty {
             Self::Presence => SemanticObjectTrackValueKind::Bool,
             Self::Transform => SemanticObjectTrackValueKind::Object,
             Self::WorldTransform => SemanticObjectTrackValueKind::WorldTransform,
+            Self::CameraProfile => SemanticObjectTrackValueKind::CameraProfile,
             Self::Position | Self::Scale => SemanticObjectTrackValueKind::Vec3,
             Self::Fill | Self::Stroke => SemanticObjectTrackValueKind::Color,
             Self::ZIndex
@@ -97,6 +108,7 @@ impl<R> SemanticObjectTrackValues<R> {
             Self::Color { .. } => SemanticObjectTrackValueKind::Color,
             Self::Object { .. } => SemanticObjectTrackValueKind::Object,
             Self::WorldTransform { .. } => SemanticObjectTrackValueKind::WorldTransform,
+            Self::CameraProfile { .. } => SemanticObjectTrackValueKind::CameraProfile,
         }
     }
 }
@@ -305,6 +317,11 @@ pub enum SemanticAnimationIntent {
         target: SemanticNodeId,
         transform: crate::SemanticWorldTransform3D,
     },
+    /// Animate an authored unwrapped camera profile through the regular timeline.
+    CameraProfileTo {
+        target: SemanticNodeId,
+        profile: crate::ManimCamera3DProfile,
+    },
     /// Transform one semantic family toward another through compiler-derived visual
     /// correspondence. The two family identities remain authored scene state;
     /// unequal padding occurrences never receive semantic identities.
@@ -396,6 +413,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { target, .. }
             | Self::TransformTo { target, .. }
             | Self::WorldTransformTo { target, .. }
+            | Self::CameraProfileTo { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::PassingFlash { target, .. }
@@ -415,7 +433,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::TransformTo { target_state, .. }
             | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
-            Self::WorldTransformTo { .. } => None,
+            Self::WorldTransformTo { .. } | Self::CameraProfileTo { .. } => None,
             Self::ObjectPropertyTrack { .. }
             | Self::Rotate { .. }
             | Self::Indicate { .. }
@@ -458,6 +476,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::TransformTo { .. }
             | Self::WorldTransformTo { .. }
+            | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
@@ -480,6 +499,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::TransformTo { .. }
             | Self::WorldTransformTo { .. }
+            | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
@@ -692,7 +712,45 @@ pub(crate) fn validate_object_property_track<R>(
                 return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
             }
         }
+        SemanticObjectTrackValues::CameraProfile {
+            from,
+            to,
+            near,
+            far,
+        } => {
+            if from.camera(*near, *far).is_none() || to.camera(*near, *far).is_none() {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
         SemanticObjectTrackValues::Bool { .. } | SemanticObjectTrackValues::Object { .. } => {}
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_camera_profile_track_target<NodeId>(
+    state: &crate::SemanticObjectState,
+    property: SemanticObjectTrackProperty,
+    values: &SemanticObjectTrackValues<NodeId>,
+) -> Result<(), SemanticAnimationError> {
+    if property != SemanticObjectTrackProperty::CameraProfile {
+        return Ok(());
+    }
+    let clips_match = match state.camera_projection() {
+        Some(crate::SemanticProjection3D::Perspective { near, far, .. }) => matches!(
+            values,
+            SemanticObjectTrackValues::CameraProfile {
+                near: track_near,
+                far: track_far,
+                ..
+            } if near == *track_near && far == *track_far
+        ),
+        _ => false,
+    };
+    if state.role() != crate::SemanticObjectRole::Camera3D
+        || state.camera_profile().is_none()
+        || !clips_match
+    {
+        return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
     }
     Ok(())
 }
@@ -745,6 +803,11 @@ impl SemanticStore {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
         validate_object_property_track(property, &values, timing, &time_map)?;
+        validate_camera_profile_track_target(
+            self.semantic_object_state_checked(target)?,
+            property,
+            &values,
+        )?;
         if let SemanticObjectTrackValues::Object { from, to } = &values {
             for endpoint in [*from, *to] {
                 self.semantic_object_state_checked(endpoint)?;
@@ -898,6 +961,37 @@ impl SemanticStore {
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
                 SemanticAnimationIntent::WorldTransformTo { target, transform },
+                options,
+            )),
+        )
+    }
+
+    /// Insert a camera profile animation whose endpoint remains unwrapped and
+    /// whose perspective clips are inherited from the camera's authored lens.
+    pub fn insert_semantic_camera_profile_animation(
+        &mut self,
+        target: SemanticNodeId,
+        profile: crate::ManimCamera3DProfile,
+        near: f64,
+        far: f64,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        let state = self.semantic_object_state_checked(target)?;
+        if state.role() != crate::SemanticObjectRole::Camera3D
+            || state.camera_profile().is_none()
+            || state
+                .camera_motions()
+                .last()
+                .is_some_and(|motion| motion.end().is_none())
+            || profile.camera(near, far).is_none()
+        {
+            return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::CameraProfileTo { target, profile },
                 options,
             )),
         )

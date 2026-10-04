@@ -20,35 +20,136 @@ pub enum SemanticSpatialMaterial {
     PointLit,
 }
 
+/// How world-authored geometry is composed with the active camera.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticSpatialCompositionDomain {
+    /// Geometry follows its full world transform and camera projection.
+    #[default]
+    World,
+    /// Project the effective anchor center while preserving world point offsets.
+    FixedOrientation,
+    /// Geometry is interpreted in camera-frame coordinates.
+    FixedFrame,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticSpatialCompositionDomainError {
+    CameraOrLightMustRemainWorld,
+    AnchorRequiresFixedOrientation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticManimCameraProfileError {
+    AmbientMotionOwnsCamera,
+    RequiresCamera3D,
+    InvalidProfile,
+}
+
+impl std::fmt::Display for SemanticManimCameraProfileError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AmbientMotionOwnsCamera => {
+                formatter.write_str("stop ambient camera rotation before another camera edit")
+            }
+            Self::RequiresCamera3D => {
+                formatter.write_str("camera profile requires a Camera3D object")
+            }
+            Self::InvalidProfile => {
+                formatter.write_str("camera profile or clipping planes are invalid")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SemanticManimCameraProfileError {}
+
 /// Optional authored spatial metadata. Ordinary objects pay no per-row storage;
-/// cameras and explicitly shaded objects share this one immutable allocation.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// cameras and explicitly shaded or composed objects share this one immutable
+/// allocation. Removing a shared anchor root clears the root reference on each
+/// surviving dependent object; its `None` anchor then denotes self-anchoring.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SemanticSpatialProperties {
     camera_projection: Option<SemanticProjection3D>,
+    camera_profile: Option<crate::ManimCamera3DProfile>,
+    camera_motions: Option<std::sync::Arc<[crate::CameraAngularMotion]>>,
     material: SemanticSpatialMaterial,
+    composition_domain: SemanticSpatialCompositionDomain,
+    anchor_family: Option<crate::SemanticNodeId>,
 }
 
 impl SemanticSpatialProperties {
     pub(crate) const fn new(
         camera_projection: Option<SemanticProjection3D>,
+        camera_profile: Option<crate::ManimCamera3DProfile>,
         material: SemanticSpatialMaterial,
+        composition_domain: SemanticSpatialCompositionDomain,
+        anchor_family: Option<crate::SemanticNodeId>,
     ) -> Self {
         Self {
             camera_projection,
+            camera_profile,
+            camera_motions: None,
             material,
+            composition_domain,
+            anchor_family,
         }
     }
 
-    pub const fn camera_projection(self) -> Option<SemanticProjection3D> {
+    pub const fn camera_projection(&self) -> Option<SemanticProjection3D> {
         self.camera_projection
     }
 
-    pub const fn material(self) -> SemanticSpatialMaterial {
+    /// Canonical unwrapped Manim camera coordinates, if this camera was
+    /// declared or last moved through the profile representation.
+    pub const fn camera_profile(&self) -> Option<crate::ManimCamera3DProfile> {
+        self.camera_profile
+    }
+
+    pub const fn material(&self) -> SemanticSpatialMaterial {
         self.material
     }
 
-    pub const fn is_default(self) -> bool {
-        self.camera_projection.is_none() && matches!(self.material, SemanticSpatialMaterial::Unlit)
+    pub const fn composition_domain(&self) -> SemanticSpatialCompositionDomain {
+        self.composition_domain
+    }
+
+    /// Shared object/family whose effective bounds center anchors this
+    /// FixedOrientation composition. `None` uses the object's own center.
+    pub const fn anchor_family(&self) -> Option<crate::SemanticNodeId> {
+        self.anchor_family
+    }
+
+    pub fn camera_motions(&self) -> &[crate::CameraAngularMotion] {
+        self.camera_motions.as_deref().unwrap_or(&[])
+    }
+
+    pub(crate) fn camera_motions_arc(
+        &self,
+    ) -> Option<std::sync::Arc<[crate::CameraAngularMotion]>> {
+        self.camera_motions.clone()
+    }
+
+    pub(crate) fn with_camera_motions(
+        mut self,
+        motions: Option<std::sync::Arc<[crate::CameraAngularMotion]>>,
+    ) -> Self {
+        self.camera_motions = motions;
+        self
+    }
+
+    pub const fn is_default(&self) -> bool {
+        self.camera_projection.is_none()
+            && self.camera_profile.is_none()
+            && self.camera_motions.is_none()
+            && matches!(self.material, SemanticSpatialMaterial::Unlit)
+            && matches!(
+                self.composition_domain,
+                SemanticSpatialCompositionDomain::World
+            )
+            && self.anchor_family.is_none()
     }
 }
 

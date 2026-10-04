@@ -73,12 +73,11 @@ fn effective_track_interval(
         .expect("validated track has a valid composition time map")
 }
 
-#[derive(Clone, Copy)]
 enum ObjectOverlay {
     Present {
         index: u32,
         is_text: bool,
-        spatial: Option<crate::CompiledSpatialState>,
+        spatial: Option<Box<crate::CompiledSpatialState>>,
     },
     Removed {
         index: u32,
@@ -112,8 +111,8 @@ impl PreflightOverlay {
     }
 
     fn object_index(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<u32> {
-        match self.objects.get(&id).copied() {
-            Some(ObjectOverlay::Present { index, .. }) => Some(index),
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { index, .. }) => Some(*index),
             Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied();
@@ -130,13 +129,13 @@ impl PreflightOverlay {
         scene: &CompiledScene,
         id: ObjectId,
     ) -> Option<crate::CompiledSpatialState> {
-        match self.objects.get(&id).copied() {
-            Some(ObjectOverlay::Present { spatial, .. }) => spatial,
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { spatial, .. }) => spatial.as_deref().cloned(),
             Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied()?;
                 self.seen_objects.insert(id);
-                scene.objects[index as usize].spatial.as_deref().copied()
+                scene.objects[index as usize].spatial.as_deref().cloned()
             }
         }
     }
@@ -151,7 +150,7 @@ impl PreflightOverlay {
             spatial: current, ..
         }) = self.objects.get_mut(&id)
         {
-            *current = spatial;
+            *current = spatial.map(Box::new);
             return;
         }
         if let Some(index) = scene.object_indices.get(&id).copied() {
@@ -161,15 +160,15 @@ impl PreflightOverlay {
                 ObjectOverlay::Present {
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
-                    spatial,
+                    spatial: spatial.map(Box::new),
                 },
             );
         }
     }
 
     fn object_is_text(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<bool> {
-        match self.objects.get(&id).copied() {
-            Some(ObjectOverlay::Present { is_text, .. }) => Some(is_text),
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { is_text, .. }) => Some(*is_text),
             Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied()?;
@@ -304,8 +303,8 @@ pub(super) fn preflight_transaction_with_resources(
                     &object.content,
                     object.text_bounds,
                 )?;
-                let index = match overlay.objects.get(&object.id).copied() {
-                    Some(ObjectOverlay::Removed { index }) => index,
+                let index = match overlay.objects.get(&object.id) {
+                    Some(ObjectOverlay::Removed { index }) => *index,
                     _ => match scene.retired_object_indices.get(&object.id).copied() {
                         Some(index) => index,
                         None => {
@@ -322,7 +321,7 @@ pub(super) fn preflight_transaction_with_resources(
                     ObjectOverlay::Present {
                         index,
                         is_text: object.text().is_some(),
-                        spatial: object.spatial.as_deref().copied(),
+                        spatial: object.spatial.clone(),
                     },
                 );
             }
@@ -380,7 +379,7 @@ pub(super) fn preflight_transaction_with_resources(
                     ObjectOverlay::Present {
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
-                        spatial,
+                        spatial: spatial.map(Box::new),
                     },
                 );
             }
@@ -410,6 +409,67 @@ pub(super) fn preflight_transaction_with_resources(
                     });
                 };
                 overlay.set_spatial(scene, *object, next_spatial);
+            }
+            ExecutionPatch::SetSpatialState {
+                object,
+                base_transform,
+                spatial,
+            } => {
+                let index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                validate_transform(*object, *base_transform).map_err(map_object_state_error)?;
+                if !crate::valid_compiled_spatial(spatial.as_ref()) {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                }
+                let object_is_mesh = scene.compiled_object_is_mesh(index as usize);
+                if spatial.as_ref().is_some_and(|spatial| {
+                    (spatial.draw_kind == crate::CompiledSpatialDrawKind::Mesh) != object_is_mesh
+                }) || (object_is_mesh && spatial.is_none())
+                {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                }
+                const CHANNELS: [noon_core::Property; 15] = [
+                    noon_core::Property::Presence,
+                    noon_core::Property::ZIndex,
+                    noon_core::Property::Transform,
+                    noon_core::Property::WorldTransform,
+                    noon_core::Property::CameraProfile,
+                    noon_core::Property::Position,
+                    noon_core::Property::Rotation,
+                    noon_core::Property::Scale,
+                    noon_core::Property::Fill,
+                    noon_core::Property::Stroke,
+                    noon_core::Property::StrokeWidth,
+                    noon_core::Property::Opacity,
+                    noon_core::Property::Appearance,
+                    noon_core::Property::Reveal,
+                    noon_core::Property::Morph,
+                ];
+                if CHANNELS.into_iter().any(|property| {
+                    scene
+                        .channel_tracks(CompiledChannelKey::new(index, property))
+                        .iter()
+                        .any(|track| {
+                            !crate::valid_compiled_track_for_spatial(
+                                track.property,
+                                &track.values,
+                                spatial.as_ref(),
+                            )
+                        })
+                }) {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                }
+                overlay.set_spatial(scene, *object, spatial.clone());
             }
             ExecutionPatch::SetZIndex { object, value } => {
                 if overlay.object_index(scene, *object).is_none() {
@@ -462,6 +522,13 @@ pub(super) fn preflight_transaction_with_resources(
                     return Err(CompilePatchError::TooManyGraphDependencies(count));
                 }
             }
+            ExecutionPatch::SetFixedOrientationGroupBoundsMembers { members, .. } => {
+                for member in members {
+                    if overlay.object_index(scene, *member).is_none() {
+                        return Err(CompilePatchError::UnknownObject(*member));
+                    }
+                }
+            }
             ExecutionPatch::AddTrack(track) => {
                 if overlay.track(scene, track.id).is_some() {
                     return Err(CompilePatchError::DuplicateTrack(track.id));
@@ -479,6 +546,7 @@ pub(super) fn preflight_transaction_with_resources(
                 reject_geometry_track_on_text(scene, &mut overlay, track)?;
                 let shadow = TrackShadow::from_definition(track, object_index);
                 overlay.set_track(track.id, Some(shadow));
+                validate_camera_track_overlap(scene, &mut overlay, object_index)?;
                 if shadow.property == Property::Presence {
                     validate_presence_channel(scene, &mut overlay, object_index)?;
                 }
@@ -516,6 +584,7 @@ pub(super) fn preflight_transaction_with_resources(
                 reject_geometry_track_on_text(scene, &mut overlay, track)?;
                 let replacement = TrackShadow::from_definition(track, object_index);
                 overlay.set_track(track.id, Some(replacement));
+                validate_camera_track_overlap(scene, &mut overlay, object_index)?;
                 if old.property == Property::Presence {
                     validate_presence_channel(scene, &mut overlay, old.object_index)?;
                 }
@@ -571,6 +640,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Reveal
                             | Property::Morph
                             | Property::WorldTransform
+                            | Property::CameraProfile
                             | Property::ZIndex
                     )
                 {
@@ -602,6 +672,28 @@ pub(super) fn preflight_transaction_with_resources(
         mutations_preflighted: transaction.mutations().len(),
         staged_compiled_scene_clones: 0,
     })
+}
+
+fn validate_camera_track_overlap(
+    scene: &CompiledScene,
+    overlay: &mut PreflightOverlay,
+    object_index: u32,
+) -> Result<(), CompilePatchError> {
+    let profiles = overlay.channel(scene, object_index, Property::CameraProfile);
+    let worlds = overlay.channel(scene, object_index, Property::WorldTransform);
+    for profile in &profiles {
+        for world in &worlds {
+            if profile.start_time < world.start_time + world.duration
+                && world.start_time < profile.start_time + profile.duration
+            {
+                return Err(CompilePatchError::OverlappingTrackReconciliation {
+                    track: profile.id,
+                    other: world.id,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn reject_geometry_track_on_text(

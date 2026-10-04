@@ -134,6 +134,7 @@ pub enum AnimationOptionsError {
     InvalidPathArc(f64),
     UnsupportedPathArc(f64),
     UnsupportedReverseRateFunction,
+    UnsupportedLagRatio(f64),
 }
 
 impl std::fmt::Display for AnimationOptionsError {
@@ -155,6 +156,10 @@ impl std::fmt::Display for AnimationOptionsError {
             ),
             Self::UnsupportedReverseRateFunction => formatter.write_str(
                 "reverse_rate_function=True is not yet represented by Noon's deterministic timing semantics",
+            ),
+            Self::UnsupportedLagRatio(value) => write!(
+                formatter,
+                "lag_ratio={value} has no meaning for a single spatial animation target",
             ),
         }
     }

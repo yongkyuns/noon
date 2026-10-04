@@ -6,8 +6,8 @@ mod riemann;
 
 use noon::{
     AxesFrame, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimGeometryOptions, ManimNumberLine,
-    ManimNumberLineOptions, NumberLineFrame, PlotSamplingOptions, RiemannRectangleOptions,
-    RiemannSample,
+    ManimNumberLineOptions, ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions,
+    NumberLineFrame, PlotSamplingOptions, RiemannRectangleOptions, RiemannSample,
 };
 use wasm_bindgen::prelude::*;
 
@@ -29,6 +29,7 @@ pub(crate) enum CoordinateRequest {
     Axes(ManimAxesOptions),
     NumberPlane(noon::ManimNumberPlaneOptions),
     PolarPlane(noon::ManimPolarPlaneOptions),
+    ThreeDAxes(ManimThreeDAxesOptions),
 }
 
 fn range3(values: &[f64]) -> Result<[f64; 3], JsValue> {
@@ -53,6 +54,7 @@ impl WasmCoordinateOptions {
             CoordinateRequest::Axes(options) => &mut options.style,
             CoordinateRequest::NumberPlane(options) => &mut options.axis_style,
             CoordinateRequest::PolarPlane(options) => &mut options.axis_style,
+            CoordinateRequest::ThreeDAxes(options) => &mut options.style,
         }
     }
 }
@@ -91,6 +93,27 @@ impl WasmCoordinateOptions {
         })
     }
 
+    #[wasm_bindgen(js_name = threeDAxes)]
+    pub fn three_d_axes(
+        x_range: &[f64],
+        y_range: &[f64],
+        z_range: &[f64],
+        x_length: f64,
+        y_length: f64,
+        z_length: f64,
+    ) -> Result<Self, JsValue> {
+        Ok(Self {
+            request: CoordinateRequest::ThreeDAxes(ManimThreeDAxesOptions::new(
+                range3(x_range)?,
+                range3(y_range)?,
+                range3(z_range)?,
+                x_length,
+                y_length,
+                z_length,
+            )),
+        })
+    }
+
     #[wasm_bindgen(js_name = setTicks)]
     pub fn set_ticks(
         &mut self,
@@ -101,6 +124,7 @@ impl WasmCoordinateOptions {
         let ticks = match &mut self.request {
             CoordinateRequest::NumberLine(options) => &mut options.ticks,
             CoordinateRequest::Axes(options) => &mut options.ticks,
+            CoordinateRequest::ThreeDAxes(options) => &mut options.ticks,
             CoordinateRequest::NumberPlane(_) | CoordinateRequest::PolarPlane(_) => {
                 return Err(js_error("plane ticks are not supported"));
             }
@@ -111,6 +135,15 @@ impl WasmCoordinateOptions {
             exclude_origin,
             ..*ticks
         };
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setTips)]
+    pub fn set_tips(&mut self, enabled: bool) -> Result<(), JsValue> {
+        let CoordinateRequest::ThreeDAxes(options) = &mut self.request else {
+            return Err(js_error("tips are configurable only for ThreeDAxes"));
+        };
+        options.tips = enabled;
         Ok(())
     }
 
@@ -194,6 +227,10 @@ impl WasmAuthoringStore {
                 noon::ManimPolarPlane::create(Rc::clone(&self.semantics), &options)
                     .map(|plane| plane.family().clone())
             }
+            CoordinateRequest::ThreeDAxes(options) => {
+                ManimThreeDAxes::create(Rc::clone(&self.semantics), &options)
+                    .map(|axes| axes.family().clone())
+            }
         };
         family
             .map(WasmAuthoringFamilyHandle::from_semantic_family)
@@ -239,6 +276,42 @@ impl WasmNumberLineFrame {
 #[wasm_bindgen]
 pub struct WasmAxesFrame {
     pub(crate) frame: AxesFrame,
+}
+
+#[wasm_bindgen]
+pub struct WasmThreeDAxesFrame {
+    pub(crate) frame: ManimThreeDAxesFrame,
+}
+
+#[wasm_bindgen]
+impl WasmThreeDAxesFrame {
+    #[wasm_bindgen(js_name = coordsToPoint)]
+    pub fn coords_to_point(&self, x: f64, y: f64, z: f64) -> Result<Vec<f64>, JsValue> {
+        self.frame
+            .c2p(x, y, z)
+            .map(|point| vec![point.x, point.y, point.z])
+            .ok_or_else(|| {
+                js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "coordinate.point",
+                    "coordinates and result must be finite",
+                ))
+            })
+    }
+
+    #[wasm_bindgen(js_name = pointToCoords)]
+    pub fn point_to_coords(&self, x: f64, y: f64, z: f64) -> Result<Vec<f64>, JsValue> {
+        self.frame
+            .p2c(noon::SemanticVec3::new(x, y, z))
+            .map(|coordinates| vec![coordinates.x, coordinates.y, coordinates.z])
+            .ok_or_else(|| {
+                js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "coordinate.point",
+                    "point and result must be finite",
+                ))
+            })
+    }
 }
 
 #[wasm_bindgen]
@@ -350,6 +423,31 @@ impl WasmAuthoringFamilyHandle {
         Ok(Self::from_semantic_family(axis.family().clone()))
     }
 
+    #[wasm_bindgen(js_name = threeDAxesAxis)]
+    pub fn three_d_axes_axis(&self, index: u32) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let axes = ManimThreeDAxes::from_family(self.semantic_family()?)
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        axes.axis(index as usize)
+            .map(|axis| Self::from_semantic_family(axis.family().clone()))
+            .map_err(coordinate_failure)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = threeDAxesTip)]
+    pub fn three_d_axes_tip(
+        &self,
+        index: u32,
+    ) -> Result<Option<WasmAuthoringMobjectHandle>, JsValue> {
+        let axes = ManimThreeDAxes::from_family(self.semantic_family()?)
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        axes.tip(index as usize)
+            .map(|tip| tip.map(WasmAuthoringMobjectHandle::from_semantic_mobject))
+            .map_err(coordinate_failure)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = coordinateShaft)]
     pub fn coordinate_shaft(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
         ManimNumberLine::from_family(self.semantic_family()?)
@@ -409,6 +507,15 @@ impl WasmAuthoringFamilyHandle {
         ManimAxes::from_family(self.semantic_family()?)
             .and_then(|axes| axes.authored_frame())
             .map(|frame| WasmAxesFrame { frame })
+            .map_err(coordinate_failure)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = threeDAxesFrame)]
+    pub fn three_d_axes_frame(&self) -> Result<WasmThreeDAxesFrame, JsValue> {
+        ManimThreeDAxes::from_family(self.semantic_family()?)
+            .and_then(|axes| axes.authored_frame())
+            .map(|frame| WasmThreeDAxesFrame { frame })
             .map_err(coordinate_failure)
             .map_err(js_error)
     }
@@ -472,6 +579,35 @@ impl CanonicalAuthoringSceneContext {
         })
     }
 
+    #[wasm_bindgen(js_name = queryThreeDAxesFrame)]
+    pub fn query_three_d_axes_frame(
+        &mut self,
+        handle: &WasmAuthoringFamilyHandle,
+    ) -> Result<WasmThreeDAxesFrame, JsValue> {
+        let axes = ManimThreeDAxes::from_family(handle.semantic_family()?)
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        let shafts = axes
+            .axis_shafts()
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        let worlds = [
+            self.inner
+                .effective_world_transform(&shafts[0])
+                .map_err(js_error)?,
+            self.inner
+                .effective_world_transform(&shafts[1])
+                .map_err(js_error)?,
+            self.inner
+                .effective_world_transform(&shafts[2])
+                .map_err(js_error)?,
+        ];
+        axes.frame_with_world_transforms(worlds)
+            .map(|frame| WasmThreeDAxesFrame { frame })
+            .map_err(coordinate_failure)
+            .map_err(js_error)
+    }
+
     /// Capture the effective axes frame and graph path observations together in
     /// the active canonical context, then return the shared Rust area request.
     /// The language wrapper may apply presentation options before consuming it
@@ -520,7 +656,7 @@ impl CanonicalAuthoringSceneContext {
                     "invalid_input",
                     "area.range",
                     "area range requires two finite values",
-                )))
+                )));
             }
         };
         ManimGeometryOptions::axes_area(

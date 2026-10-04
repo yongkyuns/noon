@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use noon_compile::{
-    lower_semantic_execution_root_with_animation_root, ExecutionPatch, SemanticExecutionIndex,
+    lower_semantic_execution_root, lower_semantic_execution_root_with_animation_root,
+    ExecutionPatch, SemanticExecutionIndex,
 };
 use noon_core::{
-    AnimationOptions, CompositionTimeMap, CompositionTimeMapStep, GeometryResource,
-    GeometryResourceLookup, MeshResource, Property, RateFunction, SemanticAnimationCompositionKind,
+    AnimationOptions, CameraAngularMotion, CameraRotationAxis, CompositionTimeMap,
+    CompositionTimeMapStep, GeometryResource, GeometryResourceLookup, ManimCamera3DProfile,
+    MeshResource, Property, RateFunction, SemanticAnimationCompositionKind,
     SemanticMutationTransaction, SemanticObjectRole, SemanticObjectState,
     SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticProjection3D,
     SemanticRotation3D, SemanticSpatialMaterial, SemanticStore, SemanticTransform, SemanticVec3,
@@ -353,6 +355,521 @@ fn camera3d_projection_and_unique_camera_identity_are_enforced() {
         ),
         Err(noon_compile::SemanticExecutionLoweringError::MultipleCameraObjects { .. })
     ));
+}
+
+#[test]
+fn ambient_camera_motion_is_authored_time_driven_and_seek_equivalent() {
+    let source = ManimCamera3DProfile {
+        phi: 0.8,
+        theta: -1.2,
+        gamma: 0.3,
+        focal_distance: 20.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::ZERO,
+    };
+    let endpoint = ManimCamera3DProfile {
+        theta: 0.8,
+        ..source
+    };
+    let interval = CameraAngularMotion::new(
+        source,
+        CameraRotationAxis::Theta,
+        1.0,
+        0.0,
+        Some(2.0),
+        0.1,
+        100.0,
+    )
+    .unwrap();
+    assert!(CameraAngularMotion::new(
+        source,
+        CameraRotationAxis::Theta,
+        f64::MAX,
+        0.0,
+        Some(2.0),
+        0.1,
+        100.0,
+    )
+    .is_none());
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera.set_camera_profile(endpoint, 0.1, 100.0).unwrap();
+    camera.set_camera_motions(Arc::from([interval])).unwrap();
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let camera_id = store.insert_semantic_object(camera);
+    store.add_semantic_family_member(root, camera_id).unwrap();
+    let lowered = noon_compile::lower_semantic_execution_root(
+        &store,
+        root,
+        &mut SemanticExecutionIndex::new(),
+    )
+    .unwrap();
+    let mut forward = SceneInstance::from_semantic_execution(lowered.clone());
+    let mut seek = SceneInstance::from_semantic_execution(lowered);
+    let camera_sample =
+        |instance: &SceneInstance| instance.frame().objects[0].camera_profile().unwrap().0;
+
+    forward.advance_to(0.0).unwrap();
+    seek.seek(0.0).unwrap();
+    assert_eq!(camera_sample(&forward), source);
+    assert_eq!(forward.frame(), seek.frame());
+
+    forward.advance_to(0.5).unwrap();
+    seek.seek(0.5).unwrap();
+    let mid = camera_sample(&forward);
+    assert_eq!(mid.theta, -0.7);
+    assert_eq!(forward.frame(), seek.frame());
+    assert_eq!(forward.last_timeline_scheduler_stats().active_groups, 1);
+
+    forward.advance_to(2.0).unwrap();
+    seek.seek(2.0).unwrap();
+    assert_eq!(camera_sample(&forward), endpoint);
+    assert_eq!(forward.frame(), seek.frame());
+    forward.advance_to(2.25).unwrap();
+    seek.seek(2.25).unwrap();
+    assert_eq!(camera_sample(&forward), endpoint);
+    assert_eq!(forward.frame(), seek.frame());
+}
+
+#[test]
+fn closed_ambient_camera_intervals_hold_endpoints_across_wait_gaps_and_seek() {
+    let source = ManimCamera3DProfile {
+        phi: 0.8,
+        theta: -1.2,
+        gamma: 0.3,
+        focal_distance: 20.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::ZERO,
+    };
+    let first = CameraAngularMotion::new(
+        source,
+        CameraRotationAxis::Theta,
+        0.5,
+        0.0,
+        Some(1.0),
+        0.1,
+        100.0,
+    )
+    .unwrap();
+    let first_endpoint = first.sample(1.0).unwrap();
+    let second = CameraAngularMotion::new(
+        first_endpoint,
+        CameraRotationAxis::Theta,
+        -0.25,
+        2.0,
+        Some(3.0),
+        0.1,
+        100.0,
+    )
+    .unwrap();
+    let second_endpoint = second.sample(3.0).unwrap();
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    // Persistent authored state is the final stop value. Earlier closed intervals
+    // still carry the history needed to seek through the wait between them.
+    camera
+        .set_camera_profile(second_endpoint, 0.1, 100.0)
+        .unwrap();
+    camera
+        .set_camera_motions(Arc::from([first, second]))
+        .unwrap();
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let camera_id = store.insert_semantic_object(camera);
+    store.add_semantic_family_member(root, camera_id).unwrap();
+    let lowered = noon_compile::lower_semantic_execution_root(
+        &store,
+        root,
+        &mut SemanticExecutionIndex::new(),
+    )
+    .unwrap();
+    let mut forward = SceneInstance::from_semantic_execution(lowered.clone());
+    let mut seek = SceneInstance::from_semantic_execution(lowered);
+    let sample = |instance: &SceneInstance| instance.frame().objects[0].camera_profile().unwrap().0;
+
+    for (time, expected) in [
+        (0.0, source),
+        (1.0, first_endpoint),
+        (1.5, first_endpoint),
+        (2.0, first_endpoint),
+        (2.5, second.sample(2.5).unwrap()),
+        (3.0, second_endpoint),
+        (3.5, second_endpoint),
+    ] {
+        forward.advance_to(time).unwrap();
+        seek.seek(time).unwrap();
+        assert_eq!(sample(&forward), expected, "profile at t={time}");
+        assert_eq!(forward.frame(), seek.frame(), "seek parity at t={time}");
+    }
+}
+
+#[test]
+fn replay_budget_counts_saved_and_incoming_camera_motion_intervals() {
+    fn camera_state(
+        first_axis: CameraRotationAxis,
+        second_axis: CameraRotationAxis,
+    ) -> SemanticObjectState {
+        let source = ManimCamera3DProfile {
+            phi: 0.8,
+            theta: -1.2,
+            gamma: 0.3,
+            focal_distance: 20.0,
+            zoom: 1.0,
+            frame_height: 8.0,
+            frame_center: SemanticVec3::ZERO,
+        };
+        let first =
+            CameraAngularMotion::new(source, first_axis, 0.2, 0.0, Some(1.0), 0.1, 100.0).unwrap();
+        let middle = first.sample(1.0).unwrap();
+        let second =
+            CameraAngularMotion::new(middle, second_axis, 0.3, 2.0, Some(3.0), 0.1, 100.0).unwrap();
+        let endpoint = second.sample(3.0).unwrap();
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera.set_camera_profile(endpoint, 0.1, 100.0).unwrap();
+        camera
+            .set_camera_motions(Arc::from([first, second]))
+            .unwrap();
+        camera
+    }
+
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let camera = store.insert_semantic_object(camera_state(
+        CameraRotationAxis::Theta,
+        CameraRotationAxis::Theta,
+    ));
+    let ordinary = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.add_semantic_family_member(root, camera).unwrap();
+    store.add_semantic_family_member(root, ordinary).unwrap();
+    let lowered =
+        lower_semantic_execution_root(&store, root, &mut SemanticExecutionIndex::new()).unwrap();
+    let camera_id = lowered
+        .compiled()
+        .objects()
+        .iter()
+        .find(|object| {
+            object
+                .spatial
+                .as_ref()
+                .is_some_and(|spatial| spatial.camera_profile.is_some())
+        })
+        .unwrap()
+        .id;
+    let ordinary_id = lowered
+        .compiled()
+        .objects()
+        .iter()
+        .find(|object| object.spatial.is_none())
+        .unwrap()
+        .id;
+    let incoming = camera_state(CameraRotationAxis::Phi, CameraRotationAxis::Gamma);
+    let incoming_lowered = {
+        let mut incoming_store = SemanticStore::new();
+        let incoming_root = incoming_store.insert_family();
+        let incoming_object = incoming_store.insert_semantic_object(incoming);
+        incoming_store
+            .add_semantic_family_member(incoming_root, incoming_object)
+            .unwrap();
+        lower_semantic_execution_root(
+            &incoming_store,
+            incoming_root,
+            &mut SemanticExecutionIndex::new(),
+        )
+        .unwrap()
+    };
+    let incoming_base_transform = incoming_lowered.compiled().objects()[0].base_transform;
+    let incoming_spatial = incoming_lowered.compiled().objects()[0]
+        .spatial
+        .as_deref()
+        .unwrap()
+        .clone();
+    let mut instance = SceneInstance::from_semantic_execution(lowered);
+    instance
+        .begin_replay_retention(noon_runtime::ReplayLimits {
+            revisions: 8,
+            payloads: 5,
+        })
+        .unwrap();
+    // A normal object edit with no camera-motion history costs one row payload.
+    instance
+        .apply_execution_patch(&ExecutionPatch::SetTransform {
+            object: ordinary_id,
+            transform: noon_core::Transform2D {
+                translation: noon_core::Vec2::new(1.0, 0.0),
+                ..noon_core::Transform2D::IDENTITY
+            },
+        })
+        .unwrap();
+    assert_eq!(instance.replay_stats().payloads_retained, 1);
+
+    // This affects one camera row, but the inverse must retain two saved and
+    // two incoming interval payloads (cost 5 total), exceeding the four slots
+    // left after the ordinary edit.
+    instance
+        .apply_execution_patch(&ExecutionPatch::SetSpatialState {
+            object: camera_id,
+            base_transform: incoming_base_transform,
+            spatial: Some(incoming_spatial),
+        })
+        .unwrap();
+    assert_eq!(instance.replay_stats().payloads_retained, 0);
+    assert_eq!(
+        instance.seal_replay(),
+        Err(noon_runtime::ReplayError::RetentionLimit)
+    );
+}
+
+#[test]
+fn delayed_ambient_motion_holds_its_source_before_the_first_interval() {
+    let source = ManimCamera3DProfile {
+        phi: 0.8,
+        theta: -1.2,
+        gamma: 0.3,
+        focal_distance: 20.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::ZERO,
+    };
+    let motion = CameraAngularMotion::new(
+        source,
+        CameraRotationAxis::Theta,
+        0.6,
+        2.0,
+        Some(3.0),
+        0.1,
+        100.0,
+    )
+    .unwrap();
+    let endpoint = motion.sample(3.0).unwrap();
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera.set_camera_profile(endpoint, 0.1, 100.0).unwrap();
+    camera.set_camera_motions(Arc::from([motion])).unwrap();
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let camera_id = store.insert_semantic_object(camera);
+    store.add_semantic_family_member(root, camera_id).unwrap();
+    let lowered = noon_compile::lower_semantic_execution_root(
+        &store,
+        root,
+        &mut SemanticExecutionIndex::new(),
+    )
+    .unwrap();
+    let mut forward = SceneInstance::from_semantic_execution(lowered.clone());
+    let mut seek = SceneInstance::from_semantic_execution(lowered);
+    let sample = |instance: &SceneInstance| instance.frame().objects[0].camera_profile().unwrap().0;
+
+    for (time, expected) in [(0.0, source), (1.0, source), (2.0, source), (3.0, endpoint)] {
+        forward.advance_to(time).unwrap();
+        seek.seek(time).unwrap();
+        assert_eq!(sample(&forward), expected, "profile at t={time}");
+        assert_eq!(forward.frame(), seek.frame(), "seek parity at t={time}");
+    }
+}
+
+#[test]
+fn delayed_ambient_motion_follows_an_earlier_finite_camera_profile_track() {
+    let from = ManimCamera3DProfile {
+        phi: 0.8,
+        theta: -1.2,
+        gamma: 0.3,
+        focal_distance: 20.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::ZERO,
+    };
+    let finite_endpoint = ManimCamera3DProfile {
+        zoom: 1.75,
+        frame_center: SemanticVec3::new(1.0, -0.5, 0.0),
+        ..from
+    };
+    let motion = CameraAngularMotion::new(
+        finite_endpoint,
+        CameraRotationAxis::Theta,
+        0.6,
+        2.0,
+        Some(3.0),
+        0.1,
+        100.0,
+    )
+    .unwrap();
+    let ambient_endpoint = motion.sample(3.0).unwrap();
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_profile(ambient_endpoint, 0.1, 100.0)
+        .unwrap();
+    camera.set_camera_motions(Arc::from([motion])).unwrap();
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let camera_id = store.insert_semantic_object(camera);
+    store.add_semantic_family_member(root, camera_id).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    let track = transaction.create_object_property_track(
+        camera_id,
+        SemanticObjectTrackProperty::CameraProfile,
+        SemanticObjectTrackValues::CameraProfile {
+            from,
+            to: finite_endpoint,
+            near: 0.1,
+            far: 100.0,
+        },
+        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    let animation_root = transaction.create_animation_composition(
+        SemanticAnimationCompositionKind::Parallel,
+        [track],
+        AnimationOptions::new(),
+    );
+    let committed = transaction.apply(&mut store).unwrap();
+    let animation_root = committed.resolve(animation_root).unwrap();
+    let lowered = lower_semantic_execution_root_with_animation_root(
+        &store,
+        root,
+        &mut SemanticExecutionIndex::new(),
+        animation_root,
+    )
+    .unwrap();
+    let mut forward = SceneInstance::from_semantic_execution(lowered.clone());
+    let mut seek = SceneInstance::from_semantic_execution(lowered);
+    let sample = |instance: &SceneInstance| instance.frame().objects[0].camera_profile().unwrap().0;
+
+    for (time, expected) in [
+        (0.0, from),
+        (
+            0.5,
+            ManimCamera3DProfile::interpolate(from, finite_endpoint, 0.5).unwrap(),
+        ),
+        (1.0, finite_endpoint),
+        (1.5, finite_endpoint),
+        (2.0, finite_endpoint),
+        (3.0, ambient_endpoint),
+    ] {
+        forward.advance_to(time).unwrap();
+        seek.seek(time).unwrap();
+        assert_eq!(sample(&forward), expected, "profile at t={time}");
+        assert_eq!(forward.frame(), seek.frame(), "seek parity at t={time}");
+    }
+}
+
+#[test]
+fn ambient_motion_after_delayed_finite_track_preserves_track_boundaries() {
+    let from = ManimCamera3DProfile {
+        phi: 0.8,
+        theta: -1.2,
+        gamma: 0.3,
+        focal_distance: 20.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::ZERO,
+    };
+    let to = ManimCamera3DProfile {
+        zoom: 1.75,
+        frame_center: SemanticVec3::new(1.0, -0.5, 0.0),
+        ..from
+    };
+    let motion = CameraAngularMotion::new(
+        to,
+        CameraRotationAxis::Theta,
+        0.6,
+        3.0,
+        Some(4.0),
+        0.1,
+        100.0,
+    )
+    .unwrap();
+    let ambient_endpoint = motion.sample(4.0).unwrap();
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_profile(ambient_endpoint, 0.1, 100.0)
+        .unwrap();
+    camera.set_camera_motions(Arc::from([motion])).unwrap();
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let camera_id = store.insert_semantic_object(camera);
+    store.add_semantic_family_member(root, camera_id).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    let track = transaction.create_object_property_track(
+        camera_id,
+        SemanticObjectTrackProperty::CameraProfile,
+        SemanticObjectTrackValues::CameraProfile {
+            from,
+            to,
+            near: 0.1,
+            far: 100.0,
+        },
+        TrackTiming::new(1.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    let animation_root = transaction.create_animation_composition(
+        SemanticAnimationCompositionKind::Parallel,
+        [track],
+        AnimationOptions::new(),
+    );
+    let committed = transaction.apply(&mut store).unwrap();
+    let animation_root = committed.resolve(animation_root).unwrap();
+    let lowered = lower_semantic_execution_root_with_animation_root(
+        &store,
+        root,
+        &mut SemanticExecutionIndex::new(),
+        animation_root,
+    )
+    .unwrap();
+    let mut forward = SceneInstance::from_semantic_execution(lowered.clone());
+    let mut seek = SceneInstance::from_semantic_execution(lowered);
+    let sample = |instance: &SceneInstance| instance.frame().objects[0].camera_profile().unwrap().0;
+    let midpoint = ManimCamera3DProfile::interpolate(from, to, 0.5).unwrap();
+
+    for (time, expected) in [
+        (0.0, from),
+        (0.5, from),
+        (1.0, from),
+        (1.5, midpoint),
+        (2.0, to),
+        (2.5, to),
+        (3.0, to),
+        (4.0, ambient_endpoint),
+    ] {
+        forward.advance_to(time).unwrap();
+        seek.seek(time).unwrap();
+        assert_eq!(sample(&forward), expected, "profile at t={time}");
+        assert_eq!(forward.frame(), seek.frame(), "seek parity at t={time}");
+    }
+
+    // The closed interval reaches its endpoint at t=4, then releases to that
+    // authored baseline. It must remain stable beyond the close boundary in
+    // both incremental evaluation and direct seek.
+    for time in [4.0, 4.000_001, 5.0] {
+        forward.advance_to(time).unwrap();
+        seek.seek(time).unwrap();
+        assert_eq!(sample(&forward), ambient_endpoint, "profile at t={time}");
+        assert_eq!(forward.frame(), seek.frame(), "seek parity at t={time}");
+    }
+    let stopped_camera = ambient_endpoint.camera(0.1, 100.0).unwrap();
+    let stopped_row = &forward.frame().objects[0];
+    assert_eq!(
+        stopped_row.camera_projection(),
+        Some(stopped_camera.projection)
+    );
+    assert_eq!(
+        stopped_row.world_transform(),
+        Some(
+            SemanticWorldTransform3D::new(
+                stopped_camera.position,
+                stopped_camera.orientation,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap()
+        )
+    );
 }
 
 #[test]

@@ -2,9 +2,9 @@
 use crate::{
     path_editing::{world_path, PreparedPathEdits},
     semantic_mobject::{authoring_render_f64, authoring_xy_f64},
-    AuthoringError, Mobject, UnsupportedAuthoringOperation,
+    AuthoringError, Mobject, MobjectFamily, Scene, UnsupportedAuthoringOperation,
 };
-use noon_core::{PathCommand, Vec2, VectorPath};
+use noon_core::{PathCommand, SemanticObjectRole, Vec2, VectorPath};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PlanarMatrix {
@@ -47,8 +47,17 @@ impl PlanarMatrix {
     }
 
     fn transform_point(self, point: Vec2, about: (f64, f64)) -> Result<Vec2, AuthoringError> {
-        let dx = f64::from(point.x) - about.0;
-        let dy = f64::from(point.y) - about.1;
+        let (x, y) = self.transform_point_f64((f64::from(point.x), f64::from(point.y)), about)?;
+        Ok(Vec2::new(x as f32, y as f32))
+    }
+
+    fn transform_point_f64(
+        self,
+        point: (f64, f64),
+        about: (f64, f64),
+    ) -> Result<(f64, f64), AuthoringError> {
+        let dx = point.0 - about.0;
+        let dy = point.1 - about.1;
         let x = authoring_render_f64(
             "ApplyMatrix result.x",
             about.0 + self.xx * dx + self.xy * dy,
@@ -57,8 +66,21 @@ impl PlanarMatrix {
             "ApplyMatrix result.y",
             about.1 + self.yx * dx + self.yy * dy,
         )?;
-        Ok(Vec2::new(x as f32, y as f32))
+        Ok((x, y))
     }
+}
+
+pub(crate) fn transform_planar_point_about(
+    values: &[f64],
+    rows: usize,
+    columns: usize,
+    point: (f64, f64),
+    about: (f64, f64),
+) -> Result<(f64, f64), AuthoringError> {
+    let matrix = PlanarMatrix::parse(values, rows, columns)?;
+    let point = authoring_xy_f64(point.0, point.1)?;
+    let about = authoring_xy_f64(about.0, about.1)?;
+    matrix.transform_point_f64((point.x, point.y), (about.x, about.y))
 }
 
 fn transform_path(
@@ -118,6 +140,52 @@ pub(crate) fn prepare_apply_matrix(
     PreparedPathEdits::prepare(store, [(object, captured, transformed)]).map(Some)
 }
 
+/// Prepare a pointwise matrix for every unique leaf under one semantic family.
+/// Arrow component families are rejected: their typed authoring operation must
+/// transform public endpoints and rebuild the tip, rather than shear a triangle.
+pub(crate) fn prepare_apply_matrix_family(
+    store: &noon_core::SemanticStore,
+    family: &MobjectFamily,
+    values: &[f64],
+    rows: usize,
+    columns: usize,
+    about: (f64, f64),
+) -> Result<Option<PreparedPathEdits>, AuthoringError> {
+    // Validate through the borrowed store passed by the caller. Re-entering
+    // `MobjectFamily::validate` would borrow its RefCell again and panic when
+    // preparation is already inside a scene publication borrow.
+    store
+        .semantic_family_checked(family.node_id())
+        .map_err(AuthoringError::from)?;
+    let matrix = PlanarMatrix::parse(values, rows, columns)?;
+    let about = authoring_xy_f64(about.0, about.1)?;
+    let about = (about.x, about.y);
+    let leaves = store.ordered_leaf_nodes(family.node_id())?;
+    let mut replacements = Vec::with_capacity(leaves.len());
+    for node in leaves {
+        let captured = store.semantic_object_state_checked(node)?.clone();
+        if matches!(
+            captured.role(),
+            SemanticObjectRole::ArrowShaft(_)
+                | SemanticObjectRole::ArrowEndTip
+                | SemanticObjectRole::ArrowStartTip
+        ) {
+            return Err(AuthoringError::Unsupported(
+                UnsupportedAuthoringOperation::ApplyMatrixContent,
+            ));
+        }
+        let path = world_path(store, &captured).map_err(|error| match error {
+            AuthoringError::Unsupported(UnsupportedAuthoringOperation::PathQueryContent) => {
+                AuthoringError::Unsupported(UnsupportedAuthoringOperation::ApplyMatrixContent)
+            }
+            error => error,
+        })?;
+        replacements.push((node, captured, transform_path(&path, matrix, about)?));
+    }
+    let prepared = PreparedPathEdits::prepare(store, replacements)?;
+    Ok(prepared.has_changes().then_some(prepared))
+}
+
 impl Mobject {
     /// Apply a Manim-compatible pointwise matrix to this geometric object's world path.
     ///
@@ -160,11 +228,84 @@ impl Mobject {
     }
 }
 
+impl MobjectFamily {
+    /// Apply one pointwise matrix to every path-backed leaf through one
+    /// immutable-resource replacement scope. Arrow-containing families fail
+    /// closed; their semantic endpoints must be transformed through Arrow.
+    pub fn apply_matrix(
+        &self,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let store = std::rc::Rc::clone(self.integration_store());
+        let prepared = {
+            let borrowed = store.borrow();
+            prepare_apply_matrix_family(&borrowed, self, values, rows, columns, (about_x, about_y))?
+        };
+        if let Some(prepared) = prepared {
+            prepared.publish(&mut store.borrow_mut(), |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map(|_| ())
+                    .map_err(AuthoringError::from)
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl Scene {
+    /// Apply a pointwise matrix to all path-backed leaves of a family in one
+    /// authored or live publication. Arrow families are intentionally rejected;
+    /// transform their semantic endpoints and construct a fresh Arrow target.
+    pub fn apply_matrix_to_family(
+        &mut self,
+        family: &MobjectFamily,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), AuthoringError> {
+        if !std::rc::Rc::ptr_eq(family.integration_store(), self.integration_store()) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        family.validate()?;
+        self.with_semantic_publication(|store, publish| {
+            let Some(prepared) = prepare_apply_matrix_family(
+                store,
+                family,
+                values,
+                rows,
+                columns,
+                (about_x, about_y),
+            )?
+            else {
+                return Ok(());
+            };
+            prepared.publish(store, publish).map(|_| ())
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Scene;
     use noon_core::{AnimationOptions, GeometryResource, RateFunction, StoredGeometry};
+
+    #[test]
+    fn vector_matrix_queries_retain_semantic_precision_until_geometry_lowering() {
+        let x = 1.0 + 2.0_f64.powi(-30);
+        let transformed =
+            transform_planar_point_about(&[2.0, 0.0, 0.0, 3.0], 2, 2, (x, -x), (0.0, 0.0)).unwrap();
+        assert_eq!(transformed, (2.0 * x, -3.0 * x));
+        assert_ne!(transformed.0, 2.0);
+    }
 
     fn path_for(object: &Mobject) -> VectorPath {
         let state = object.state().unwrap();
@@ -367,6 +508,113 @@ mod tests {
             Err(AuthoringError::Unsupported(
                 UnsupportedAuthoringOperation::ApplyMatrixNonPlanar
             ))
+        );
+    }
+
+    #[test]
+    fn family_matrix_replaces_all_path_leaves_atomically() {
+        let mut scene = Scene::new();
+        let first = scene
+            .path(
+                VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(1.0, 0.0)),
+                Default::default(),
+            )
+            .unwrap();
+        let second = scene
+            .path(
+                VectorPath::new()
+                    .move_to(Vec2::new(0.0, 1.0))
+                    .line_to(Vec2::new(1.0, 1.0)),
+                Default::default(),
+            )
+            .unwrap();
+        let family = MobjectFamily::create(
+            std::rc::Rc::clone(scene.integration_store()),
+            &[(&first).into(), (&second).into()],
+        )
+        .unwrap();
+
+        scene
+            .apply_matrix_to_family(&family, &[1.0, 1.0, 0.0, 1.0], 2, 2, 0.0, 0.0)
+            .unwrap();
+        let first_path = path_for(&first);
+        let second_path = path_for(&second);
+        assert_eq!(
+            first_path.commands()[1],
+            PathCommand::LineTo {
+                to: Vec2::new(1.0, 0.0)
+            }
+        );
+        assert_eq!(
+            second_path.commands()[0],
+            PathCommand::MoveTo {
+                to: Vec2::new(1.0, 1.0)
+            }
+        );
+        assert_eq!(
+            second_path.commands()[1],
+            PathCommand::LineTo {
+                to: Vec2::new(2.0, 1.0)
+            }
+        );
+    }
+
+    #[test]
+    fn family_matrix_validation_and_arrow_policy_fail_before_resource_admission() {
+        let mut scene = Scene::new();
+        let line = scene
+            .path(
+                VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(1.0, 0.0)),
+                Default::default(),
+            )
+            .unwrap();
+        let family = MobjectFamily::create(
+            std::rc::Rc::clone(scene.integration_store()),
+            &[(&line).into()],
+        )
+        .unwrap();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
+        assert!(scene
+            .apply_matrix_to_family(&family, &[1.0, f64::NAN, 0.0, 1.0], 2, 2, 0.0, 0.0)
+            .is_err());
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
+            resources
+        );
+
+        let arrow = scene
+            .manim_arrow(crate::ManimArrowOptions::vector(2.0, 1.0).unwrap())
+            .unwrap();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
+        assert_eq!(
+            scene.apply_matrix_to_family(arrow.family(), &[1.0, 1.0, 0.0, 1.0], 2, 2, 0.0, 0.0),
+            Err(AuthoringError::Unsupported(
+                UnsupportedAuthoringOperation::ApplyMatrixContent
+            ))
+        );
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
+            resources
         );
     }
 }

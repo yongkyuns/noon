@@ -120,12 +120,15 @@ impl Scene {
         target: crate::MobjectTarget<'_>,
         edit: crate::WorldAffineEdit,
     ) -> Result<(), AuthoringError> {
+        if let crate::MobjectTarget::Object(object) = &target {
+            crate::camera_motion_authoring::ensure_camera_motion_closed(object)?;
+        }
         let transaction = if let Some(session) = self.running_execution() {
             crate::world_affine::prepare_world_affine_with(
                 self.integration_store(),
                 target,
                 edit,
-                |store, node| effective_world(session, store, node),
+                |store, node| effective_world_or_authored(session, store, node),
             )?
         } else {
             crate::world_affine::prepare_world_affine(self.integration_store(), target, edit)?
@@ -146,6 +149,28 @@ impl Scene {
             session,
             &self.integration_store().borrow(),
             object.node_id(),
+        )
+    }
+
+    /// Read the center of the object's effective world-space bounds. While cold,
+    /// the authored pose is the effective pose; detached live objects fall
+    /// back to their authored pose after session provenance has been checked.
+    pub fn effective_world_center(&self, object: &Mobject) -> Result<SemanticVec3, AuthoringError> {
+        self.require_object(object)?;
+        let state = object.state()?;
+        let world = match self.running_execution() {
+            Some(session) => effective_world_or_authored(
+                session,
+                &self.integration_store().borrow(),
+                object.node_id(),
+            )?,
+            None => object.world_transform()?,
+        };
+        crate::world_affine::world_bounds_center(
+            &self.integration_store().borrow(),
+            object.node_id(),
+            &state,
+            world,
         )
     }
 
@@ -224,7 +249,7 @@ impl Scene {
         self.create_spatial_role(state, false)
     }
 
-    fn create_spatial_role(
+    pub(crate) fn create_spatial_role(
         &mut self,
         state: SemanticObjectState,
         attach: bool,
@@ -249,6 +274,7 @@ impl Scene {
         world: SemanticWorldTransform3D,
     ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
+        crate::camera_motion_authoring::ensure_camera_motion_closed(object)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.set_object_transform(object.node_id(), world.into());
         self.apply_semantic_transaction(transaction).map(|_| ())
@@ -354,6 +380,18 @@ impl Mobject {
             .ok_or(AuthoringError::NonFiniteObjectState)
     }
 
+    /// Authored world-space bounds center, with the same semantics as default
+    /// world-affine pivots.
+    pub fn world_center(&self) -> Result<SemanticVec3, AuthoringError> {
+        let state = self.state()?;
+        crate::world_affine::world_bounds_center(
+            &self.integration_store().borrow(),
+            self.node_id(),
+            &state,
+            self.world_transform()?,
+        )
+    }
+
     /// Edit authored state/targets; use Scene::set_world_transform for live publication.
     pub fn set_world_transform(
         &mut self,
@@ -378,6 +416,22 @@ pub(crate) fn effective_world(
         .object
         .world_transform()
         .ok_or(AuthoringError::NonFiniteObjectState)
+}
+
+pub(crate) fn effective_world_or_authored(
+    session: &crate::ExecutionSession,
+    store: &noon_core::SemanticStore,
+    node: noon_core::SemanticNodeId,
+) -> Result<SemanticWorldTransform3D, AuthoringError> {
+    session.require_published_store(store)?;
+    if session.execution_object_id(node).is_none() {
+        return store
+            .semantic_object_state_checked(node)?
+            .transform
+            .world_transform()
+            .ok_or(AuthoringError::NonFiniteObjectState);
+    }
+    effective_world(session, store, node)
 }
 
 #[cfg(test)]

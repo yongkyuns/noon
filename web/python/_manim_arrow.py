@@ -213,15 +213,17 @@ def _create(
 ) -> None:
     if _create_arrow_handle is None:
         raise RuntimeError("Arrow construction requires the shared Rust authoring host")
-    if _shared._live_constructor_context("Arrow") is not None:
-        raise NotImplementedError(
-            "live Arrow construction requires shared retained-family publication support"
-        )
+    context = _shared._live_constructor_context("Arrow")
     _apply_constructor_options(options, kwargs)
     if color is not None:
         _shared._apply_constructor_color(options, _compat._as_color("color", color))
-    created = engine_call(_create_arrow_handle, options)
+    if context is None:
+        created = engine_call(_create_arrow_handle, options)
+    else:
+        created = engine_call(context.liveCreateManimArrow, options)
     _attach_arrow_family(self, created)
+    if context is not None:
+        self._canonical_live_target_context = context
 
 
 def _arrow_scalar(self: "Arrow", method: str) -> float:
@@ -361,6 +363,10 @@ class Arrow(_compat.Group):
 
     def get_tip(self):
         return self.tip
+
+    def get_stroke_width(self) -> float:
+        """Read the retained shaft width in Manim's public stroke units."""
+        return float(self._shaft.get_stroke_width())
 
     def has_tip(self) -> bool:
         return self.tip is not None

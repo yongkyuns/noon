@@ -8,7 +8,9 @@
 #![forbid(unsafe_code)]
 
 mod animation;
+mod camera_motion;
 mod graph_topology;
+mod manim_camera3d;
 mod numeric_format;
 mod object_state;
 mod publication;
@@ -18,7 +20,9 @@ mod semantic_store;
 mod spatial3d;
 
 pub use animation::*;
+pub use camera_motion::*;
 pub use graph_topology::*;
+pub use manim_camera3d::*;
 pub use numeric_format::*;
 pub use object_state::*;
 pub use publication::*;

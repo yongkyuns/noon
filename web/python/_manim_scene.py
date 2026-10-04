@@ -437,11 +437,14 @@ def _canonical_edit_membership(
     values: tuple[object, ...] = (),
     *,
     key: str | None = None,
+    spatial_domain: str | None = None,
 ) -> None:
     from _manim_updaters import active_callback_membership_context
 
     callback = active_callback_membership_context(scene)
     if callback is not None:
+        if spatial_domain is not None:
+            raise NotImplementedError("spatial membership requires an ordinary continuation boundary")
         _stage_callback_membership(scene, callback, kind, values, key=key)
         return
     if key is not None and (
@@ -453,6 +456,8 @@ def _canonical_edit_membership(
     key_binding = None if key is None else (_semantic_wrapper_key(values[0]), key)
     context = _context(scene)
     batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
+    if spatial_domain is not None:
+        engine_call(batch.setSpatialDomain, spatial_domain, operation="Scene.spatial_membership")
     next_object_id = scene._next_object_id
     reservations = []
     binding_reservations: dict[str, _TypedBindingReservation] = {}
@@ -2098,26 +2103,25 @@ def _canonical_subset_display_animation(scene: _base.Scene, animation: object):
     return family, leaves, animation.mode
 
 
-def _apply_matrix_target(target: _base.Mobject, animation: object) -> None:
+def _apply_matrix_target(target: object, animation: object) -> None:
     """Transport ApplyMatrix call shape; Rust owns matrix/path semantics."""
-    try:
-        raw_rows = list(animation.matrix)
-    except TypeError:
-        raw_rows = [animation.matrix]
-    rows: list[list[object]] = []
-    for raw_row in raw_rows:
-        try:
-            row = list(raw_row)
-        except TypeError:
-            row = [raw_row]
-        rows.append(row)
-    columns = len(rows[0]) if rows else 0
-    values = [float(value) for row in rows for value in row]
+    rows, columns, values = _animate._matrix_arguments(animation.matrix)
     about = _base._as_vec2(animation.about_point)
-    handle = getattr(target, "_semantic_handle", None)
+    is_family = isinstance(target, _compat.Group)
+    handle = getattr(
+        target,
+        "_semantic_family_handle" if is_family else "_semantic_handle",
+        None,
+    )
     if handle is None:
-        raise NotImplementedError("ApplyMatrix requires a typed semantic Mobject")
-    context = getattr(target, "_canonical_live_target_context", None)
+        raise NotImplementedError(
+            "ApplyMatrix requires a typed semantic Mobject or family"
+        )
+    context = (
+        _semantic_handles._group_target_context(target)
+        if is_family
+        else getattr(target, "_canonical_live_target_context", None)
+    )
     if context is None:
         engine_call(
             handle.applyMatrix,
@@ -2130,7 +2134,7 @@ def _apply_matrix_target(target: _base.Mobject, animation: object) -> None:
         )
     else:
         engine_call(
-            context.liveApplyMatrix,
+            context.liveApplyMatrixFamily if is_family else context.liveApplyMatrix,
             handle,
             values,
             len(rows),
@@ -2139,6 +2143,25 @@ def _apply_matrix_target(target: _base.Mobject, animation: object) -> None:
             float(about.y),
             operation="ApplyMatrix",
         )
+
+
+def _validate_apply_matrix_target(scene: _base.Scene, source: object) -> None:
+    """Check wrapper ownership without assuming Groups carry Mobject fields."""
+    if isinstance(source, _compat.Group):
+        if getattr(source, "_semantic_family_handle", None) is None:
+            raise NotImplementedError(
+                "ApplyMatrix family target requires a typed semantic family"
+            )
+        if any(
+            getattr(member, "_scene", None) not in (None, scene)
+            for member in _compat._leaf_mobjects(source)
+        ):
+            raise ValueError("ApplyMatrix target belongs to another Scene")
+        source_context = _semantic_handles._group_target_context(source)
+        if source_context is not None and source_context is not _context(scene):
+            raise ValueError("ApplyMatrix target belongs to another Scene")
+    elif getattr(source, "_scene", None) not in (None, scene):
+        raise ValueError("ApplyMatrix target belongs to another Scene")
 
 
 def _build_canonical_composition_candidate(
@@ -2200,18 +2223,18 @@ def _build_canonical_composition_candidate(
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
             return
-        from _noon_spatial import WorldTransformTo, _bulk
-        if isinstance(animation, WorldTransformTo):
+        from _noon_spatial import WorldTransformTo, CameraProfileTo, _bulk
+        if isinstance(animation, (WorldTransformTo, CameraProfileTo)):
             target = animation.mobject
             if target._scene is not self:
                 raise ValueError("WorldTransformTo target must belong to this Scene")
             child = _canonical_composition_child_options(animation, child_kwargs)
             if child.lag_ratio != 0 or child.path_arc != 0 or child.reverse_rate_function:
                 raise NotImplementedError("world endpoints support duration and rate function options")
-            builder.appendWorldTransform(
-                target._semantic_handle, _bulk(animation.endpoint),
-                float(child.run_time), str(child.rate_func),
-            )
+            append = (builder.appendCameraProfile if isinstance(animation, CameraProfileTo)
+                      else builder.appendWorldTransform)
+            append(target._semantic_handle, _bulk(animation.endpoint),
+                   float(child.run_time), str(child.rate_func))
             return
         cyclic_replace = _canonical_cyclic_replace_transform(self, animation, child_kwargs)
         if cyclic_replace is not None:
@@ -2222,8 +2245,7 @@ def _build_canonical_composition_candidate(
             # path_arc remains outside this first pointwise-matrix slice.
             _canonical_composition_child_options(animation, child_kwargs)
             source = animation.source
-            if source._scene not in (None, self):
-                raise ValueError("ApplyMatrix target belongs to another Scene")
+            _validate_apply_matrix_target(self, source)
             target = source._copy_for_animate_target()
             _apply_matrix_target(target, animation)
             transform = _base.Transform(source, target, **animation.anim_args)

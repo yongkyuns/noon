@@ -30,6 +30,7 @@ fn fixture() -> (
     context
         .edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Family(source.clone())],
             bindings: vec![(ObjectId::new(0), source_leaf.clone())],
         })
@@ -40,6 +41,7 @@ fn fixture() -> (
 fn binding_batch(bindings: Vec<(ObjectId, noon::Mobject)>) -> SceneMembershipBatch {
     SceneMembershipBatch {
         kind: SceneMembershipBatchKind::Add,
+        spatial_domain: None,
         members: vec![],
         bindings,
     }

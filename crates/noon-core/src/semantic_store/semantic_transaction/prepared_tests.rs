@@ -81,6 +81,42 @@ fn prepare_and_drop_leave_state_revision_and_work_counters_untouched() {
 }
 
 #[test]
+fn removal_preflights_cleared_spatial_anchor_owner_state_for_publication() {
+    let mut store = SemanticStore::new();
+    let family = store.insert_family();
+    let leaf = object(&mut store);
+    store.add_member(family, leaf).unwrap();
+    let mut set_anchor = SemanticMutationTransaction::new();
+    set_anchor.set_spatial_composition_domain_with_anchor(
+        leaf,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        Some(family),
+    );
+    set_anchor.apply(&mut store).unwrap();
+
+    let mut remove = SemanticMutationTransaction::new();
+    remove.remove_node(family);
+    let prepared = remove.prepare(&mut store).unwrap();
+    assert_eq!(prepared.spatial_anchor_cleared_owners(), &[leaf]);
+    let updates = prepared.object_updates().collect::<Vec<_>>();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].0, leaf);
+    assert_eq!(
+        updates[0].1.spatial_composition_domain(),
+        crate::SemanticSpatialCompositionDomain::FixedOrientation
+    );
+    assert_eq!(updates[0].1.spatial_anchor_family(), None);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(leaf)
+            .unwrap()
+            .spatial_anchor_family(),
+        Some(family),
+        "preparing removal must not publish the cleared authored state"
+    );
+}
+
+#[test]
 fn late_invalid_prepare_preserves_prior_state_and_stats() {
     let mut store = SemanticStore::new();
     let target = object(&mut store);
@@ -761,4 +797,131 @@ fn pending_path_budget_counts_nested_morph_payloads_and_bounds_depth() {
         Err(SemanticMutationTransactionError::PendingGeometryLimitExceeded)
     ));
     assert_eq!(transaction.pending_resource_count(), 0);
+}
+
+#[test]
+fn camera_motion_stop_publishes_history_and_profile_atomically() {
+    use crate::{CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile};
+    use std::sync::Arc;
+    let profile = ManimCamera3DProfile {
+        phi: 0.6,
+        theta: -1.2,
+        gamma: 0.0,
+        focal_distance: 20.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::ZERO,
+    };
+    let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    state.set_role(SemanticObjectRole::Camera3D);
+    state.set_camera_profile(profile, 0.1, 100.0).unwrap();
+    let mut store = SemanticStore::new();
+    let camera = store.insert_semantic_object(state);
+    let motion = CameraAngularMotion::new(
+        profile,
+        CameraRotationAxis::Theta,
+        0.5,
+        0.0,
+        None,
+        0.1,
+        100.0,
+    )
+    .unwrap();
+    let mut begin = SemanticMutationTransaction::new();
+    begin.set_camera_motions(camera, Arc::from([motion]));
+    begin.apply(&mut store).unwrap();
+    let before = store.semantic_object_state_checked(camera).unwrap().clone();
+    assert_eq!(before.camera_motions(), &[motion]);
+    let mut invalid_edit = SemanticMutationTransaction::new();
+    invalid_edit.set_camera_profile(camera, profile, 0.1, 100.0);
+    assert!(invalid_edit.prepare(&mut store).is_err());
+    assert_eq!(
+        store.semantic_object_state_checked(camera).unwrap(),
+        &before
+    );
+
+    let stopped = motion.close(2.0).unwrap();
+    let endpoint = stopped.sample(2.0).unwrap();
+    let mut stop = SemanticMutationTransaction::new();
+    stop.set_camera_motions(camera, Arc::from([stopped]));
+    stop.set_camera_profile(camera, endpoint, 0.1, 100.0);
+    let prepared = stop.prepare(&mut store).unwrap();
+    let updates = prepared.object_updates().collect::<Vec<_>>();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].1.camera_motions(), &[stopped]);
+    assert_eq!(updates[0].1.camera_profile(), Some(endpoint));
+    assert_eq!(
+        prepared
+            .store()
+            .semantic_object_state_checked(camera)
+            .unwrap(),
+        &before
+    );
+    prepared.commit();
+    let after = store.semantic_object_state_checked(camera).unwrap();
+    assert_eq!(after.camera_motions(), &[stopped]);
+    assert_eq!(after.camera_profile(), Some(endpoint));
+    assert!(after.spatial_declaration_is_valid());
+}
+
+#[test]
+fn duplicate_camera_motion_mutation_is_atomic_for_existing_and_pending_targets() {
+    use std::sync::Arc;
+
+    let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    state.set_role(SemanticObjectRole::Camera3D);
+    let profile = crate::ManimCamera3DProfile {
+        phi: 0.6,
+        theta: -1.2,
+        gamma: 0.0,
+        focal_distance: 20.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::ZERO,
+    };
+    state.set_camera_profile(profile, 0.1, 100.0).unwrap();
+    let mut store = SemanticStore::new();
+    let camera = store.insert_semantic_object(state);
+    let original = store.semantic_object_state_checked(camera).unwrap().clone();
+    let revision = store.scene_revision();
+
+    let mut existing = SemanticMutationTransaction::new();
+    existing
+        .set_camera_motions(camera, Arc::from([]))
+        .set_camera_motions(camera, Arc::from([]));
+    assert_eq!(
+        existing.apply(&mut store),
+        Err(SemanticMutationTransactionError::DuplicateTarget {
+            index: 1,
+            target: camera,
+        })
+    );
+    assert_eq!(
+        store.semantic_object_state_checked(camera).unwrap(),
+        &original
+    );
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+    let mut pending = SemanticMutationTransaction::new();
+    let token = pending.create_node(SemanticNodeCreation::object(original.clone()));
+    pending
+        .set_camera_motions(token, Arc::from([]))
+        .set_camera_motions(token, Arc::from([]));
+    match pending.prepare(&mut store) {
+        Err(error) => assert_eq!(
+            error,
+            SemanticMutationTransactionError::DuplicatePendingMutation {
+                index: 2,
+                node: token
+            }
+        ),
+        Ok(_) => panic!("duplicate pending camera-motion mutations must be rejected"),
+    }
+    assert_eq!(
+        store.semantic_object_state_checked(camera).unwrap(),
+        &original
+    );
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.last_mutation_stats().slots_written, 0);
 }

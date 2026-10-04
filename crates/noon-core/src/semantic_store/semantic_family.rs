@@ -46,6 +46,44 @@ impl std::fmt::Display for SemanticFamilyPairingError {
 impl std::error::Error for SemanticFamilyPairingError {}
 
 impl SemanticStore {
+    /// Test whether `ancestor` is a family containing `descendant`, directly or
+    /// through nested family membership. Traversal follows only authored parent
+    /// edges and is used at mutation preflight, never on the frame path.
+    pub(crate) fn is_family_ancestor(
+        &self,
+        ancestor: SemanticNodeId,
+        descendant: SemanticNodeId,
+    ) -> Result<bool, SemanticStoreError> {
+        let family = self
+            .node(ancestor)
+            .ok_or(SemanticStoreError::UnknownNode(ancestor))?;
+        if !matches!(family.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(ancestor));
+        }
+        if self.node(descendant).is_none() {
+            return Err(SemanticStoreError::UnknownNode(descendant));
+        }
+
+        let mut pending = vec![descendant];
+        let mut visited = HashSet::new();
+        while let Some(node) = pending.pop() {
+            if !visited.insert(node) {
+                continue;
+            }
+            for parent in self
+                .node(node)
+                .expect("validated family descendant")
+                .parents()
+            {
+                if *parent == ancestor {
+                    return Ok(true);
+                }
+                pending.push(*parent);
+            }
+        }
+        Ok(false)
+    }
+
     /// Pair ordinary leaves from two structurally equivalent semantic families.
     ///
     /// Families are traversed together in authoritative member order. Aliases

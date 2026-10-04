@@ -79,7 +79,13 @@ struct TimelineEventKey {
     time: EventTime,
     rank: u8,
     group: usize,
-    track: TrackId,
+    occurrence: EventOccurrence,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum EventOccurrence {
+    Track(TrackId),
+    CameraMotion(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,6 +165,20 @@ impl TimelineEventScheduler {
         let mut scheduler = Self::new(&[]);
         for channel in compiled.channels() {
             scheduler.relower_channel(channel, compiled.channel_tracks(channel));
+        }
+        for (index, object) in compiled.objects().iter().enumerate() {
+            if let Some(spatial) = object.spatial.as_deref() {
+                if let Some(motions) = spatial.camera_motions.as_deref() {
+                    scheduler.relower_camera_motion_channel(
+                        CompiledChannelKey::new(index as u32, noon_core::Property::CameraProfile),
+                        motions,
+                        compiled.channel_tracks(CompiledChannelKey::new(
+                            index as u32,
+                            noon_core::Property::CameraProfile,
+                        )),
+                    );
+                }
+            }
         }
         for (index, animation) in compiled.family_animations().iter().enumerate() {
             let timing = TrackTiming::new(
@@ -264,14 +284,22 @@ impl TimelineEventScheduler {
         let mut inserted = 0;
         for track in tracks {
             if track.timing.is_instant() {
-                inserted +=
-                    self.insert_event(group, track.id, track.timing.start_time, EventKind::Instant);
-            } else {
-                inserted +=
-                    self.insert_event(group, track.id, track.timing.start_time, EventKind::Start);
                 inserted += self.insert_event(
                     group,
-                    track.id,
+                    EventOccurrence::Track(track.id),
+                    track.timing.start_time,
+                    EventKind::Instant,
+                );
+            } else {
+                inserted += self.insert_event(
+                    group,
+                    EventOccurrence::Track(track.id),
+                    track.timing.start_time,
+                    EventKind::Start,
+                );
+                inserted += self.insert_event(
+                    group,
+                    EventOccurrence::Track(track.id),
                     track.timing.start_time + track.timing.duration,
                     EventKind::End,
                 );
@@ -279,6 +307,108 @@ impl TimelineEventScheduler {
         }
         self.group_events[group].sort_unstable();
         self.recompute_group_activity(group, tracks);
+        TimelineRelowerStats {
+            groups_relowered: 1,
+            events_removed,
+            events_inserted: inserted,
+        }
+    }
+
+    /// Add authored-time camera motion boundaries to the existing profile channel.
+    /// Nonzero rates keep that channel active for wake scheduling; zero-rate
+    /// intervals create only their exact begin/end boundary events.
+    pub(crate) fn relower_camera_motion_channel(
+        &mut self,
+        channel: CompiledChannelKey,
+        motions: &[noon_core::CameraAngularMotion],
+        tracks: &[CompiledTrack],
+    ) -> TimelineRelowerStats {
+        debug_assert_eq!(channel.property, noon_core::Property::CameraProfile);
+        let events_removed = self
+            .group_indices
+            .get(&channel)
+            .copied()
+            .map_or(0, |group| self.remove_group_motion_events(group));
+        if motions.is_empty() {
+            if tracks.is_empty() {
+                let mut stats = self.relower_channel(channel, &[]);
+                stats.events_removed += events_removed;
+                return stats;
+            }
+            if let Some(&group) = self.group_indices.get(&channel) {
+                self.recompute_group_activity(group, tracks);
+            }
+            return TimelineRelowerStats::default();
+        }
+        let group = self
+            .group_indices
+            .get(&channel)
+            .copied()
+            .unwrap_or_else(|| {
+                let group = self.allocate_group(ScheduledTimelineTarget::Track(channel));
+                self.group_indices.insert(channel, group);
+                group
+            });
+        let mut inserted = 0;
+        for (index, motion) in motions.iter().copied().enumerate() {
+            match motion.end() {
+                Some(end) if end == motion.start() => {
+                    inserted += self.insert_event(
+                        group,
+                        EventOccurrence::CameraMotion(index),
+                        end,
+                        EventKind::Instant,
+                    );
+                }
+                Some(end) if motion.rate() != 0.0 => {
+                    inserted += self.insert_event(
+                        group,
+                        EventOccurrence::CameraMotion(index),
+                        motion.start(),
+                        EventKind::Start,
+                    );
+                    inserted += self.insert_event(
+                        group,
+                        EventOccurrence::CameraMotion(index),
+                        end,
+                        EventKind::End,
+                    );
+                }
+                Some(end) => {
+                    inserted += self.insert_event(
+                        group,
+                        EventOccurrence::CameraMotion(index),
+                        motion.start(),
+                        EventKind::Instant,
+                    );
+                    inserted += self.insert_event(
+                        group,
+                        EventOccurrence::CameraMotion(index),
+                        end,
+                        EventKind::Instant,
+                    );
+                }
+                None if motion.rate() != 0.0 => {
+                    inserted += self.insert_event(
+                        group,
+                        EventOccurrence::CameraMotion(index),
+                        motion.start(),
+                        EventKind::Start,
+                    );
+                }
+                None => {
+                    inserted += self.insert_event(
+                        group,
+                        EventOccurrence::CameraMotion(index),
+                        motion.start(),
+                        EventKind::Instant,
+                    );
+                }
+            }
+        }
+        self.group_events[group].sort_unstable();
+        self.recompute_group_activity(group, tracks);
+        self.add_camera_motion_activity(group, motions);
         TimelineRelowerStats {
             groups_relowered: 1,
             events_removed,
@@ -298,10 +428,24 @@ impl TimelineEventScheduler {
         let group = self.allocate_group(ScheduledTimelineTarget::FamilyAnimation(animation_index));
         let track = TrackId::new(animation_index as u64);
         let events_inserted = if start_time == end_time {
-            self.insert_event(group, track, start_time, EventKind::Instant)
+            self.insert_event(
+                group,
+                EventOccurrence::Track(track),
+                start_time,
+                EventKind::Instant,
+            )
         } else {
-            self.insert_event(group, track, start_time, EventKind::Start)
-                + self.insert_event(group, track, end_time, EventKind::End)
+            self.insert_event(
+                group,
+                EventOccurrence::Track(track),
+                start_time,
+                EventKind::Start,
+            ) + self.insert_event(
+                group,
+                EventOccurrence::Track(track),
+                end_time,
+                EventKind::End,
+            )
         };
         self.recompute_interval_activity(group, start_time, end_time);
         TimelineRelowerStats {
@@ -488,12 +632,18 @@ impl TimelineEventScheduler {
         group
     }
 
-    fn insert_event(&mut self, group: usize, track: TrackId, time: f64, kind: EventKind) -> usize {
+    fn insert_event(
+        &mut self,
+        group: usize,
+        occurrence: EventOccurrence,
+        time: f64,
+        kind: EventKind,
+    ) -> usize {
         let key = TimelineEventKey {
             time: EventTime(time),
             rank: event_rank(kind),
             group,
-            track,
+            occurrence,
         };
         let previous = self.events.insert(key, kind);
         debug_assert!(previous.is_none());
@@ -508,6 +658,38 @@ impl TimelineEventScheduler {
             removed += usize::from(self.events.remove(&key).is_some());
         }
         removed
+    }
+
+    fn remove_group_motion_events(&mut self, group: usize) -> usize {
+        let mut removed = 0;
+        self.group_events[group].retain(|key| {
+            if matches!(key.occurrence, EventOccurrence::CameraMotion(_)) {
+                removed += usize::from(self.events.remove(key).is_some());
+                false
+            } else {
+                true
+            }
+        });
+        removed
+    }
+
+    fn add_camera_motion_activity(
+        &mut self,
+        group: usize,
+        motions: &[noon_core::CameraAngularMotion],
+    ) {
+        if self.time == f64::NEG_INFINITY {
+            return;
+        }
+        let active = motions.iter().any(|motion| {
+            motion.rate() != 0.0
+                && motion.start() <= self.time
+                && motion.end().is_none_or(|end| self.time < end)
+        });
+        if active {
+            self.active_counts[group] += 1;
+            self.activate(group);
+        }
     }
 
     fn recompute_group_activity(&mut self, group: usize, tracks: &[CompiledTrack]) {
@@ -626,7 +808,7 @@ fn time_upper_bound(time: f64) -> TimelineEventKey {
         time: EventTime(time),
         rank: u8::MAX,
         group: usize::MAX,
-        track: TrackId::new(u64::MAX),
+        occurrence: EventOccurrence::Track(TrackId::new(u64::MAX)),
     }
 }
 

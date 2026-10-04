@@ -129,6 +129,8 @@ pub enum Property {
     Transform,
     /// Full f64 world-space TRS animation for spatial execution rows.
     WorldTransform,
+    /// Unwrapped f64 camera profile sampled atomically into pose and lens.
+    CameraProfile,
     Position,
     Rotation,
     Scale,
@@ -150,6 +152,7 @@ pub enum ValueKind {
     Color,
     Object,
     WorldTransform,
+    CameraProfile,
 }
 
 impl Property {
@@ -159,6 +162,7 @@ impl Property {
             Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
             Self::WorldTransform => ValueKind::WorldTransform,
+            Self::CameraProfile => ValueKind::CameraProfile,
             Self::Fill | Self::Stroke => ValueKind::Color,
             Self::Position | Self::Scale => ValueKind::Vec2,
             Self::Rotation
@@ -294,6 +298,12 @@ pub enum TrackValues {
         from: WorldTransformTrackEndpoint,
         to: WorldTransformTrackEndpoint,
     },
+    CameraProfile {
+        from: crate::ManimCamera3DProfile,
+        to: crate::ManimCamera3DProfile,
+        near: f64,
+        far: f64,
+    },
 }
 
 impl TrackValues {
@@ -307,6 +317,7 @@ impl TrackValues {
             Self::PreparedMorph { .. } => ValueKind::Scalar,
             Self::Object { .. } => ValueKind::Object,
             Self::WorldTransform { .. } => ValueKind::WorldTransform,
+            Self::CameraProfile { .. } => ValueKind::CameraProfile,
         }
     }
 
@@ -404,6 +415,21 @@ impl TrackValues {
                     || to.world().is_none()
                 {
                     Err(TimelineError::InvalidWorldTransformValues)
+                } else {
+                    Ok(())
+                }
+            }
+            Self::CameraProfile {
+                from,
+                to,
+                near,
+                far,
+            } => {
+                if property != Property::CameraProfile
+                    || from.camera(*near, *far).is_none()
+                    || to.camera(*near, *far).is_none()
+                {
+                    Err(TimelineError::InvalidCameraProfileValues)
                 } else {
                     Ok(())
                 }
@@ -523,6 +549,7 @@ pub enum TimelineError {
         field: ObjectStateField,
     },
     InvalidWorldTransformValues,
+    InvalidCameraProfileValues,
     InvalidCompositionTimeMap(CompositionTimeMapError),
     InstantTrackCannotUseTimeMap(Property),
 }
@@ -586,6 +613,9 @@ impl std::fmt::Display for TimelineError {
             ),
             Self::InvalidWorldTransformValues => formatter.write_str(
                 "world transform track requires finite translation and scale and normalized quaternion endpoints",
+            ),
+            Self::InvalidCameraProfileValues => formatter.write_str(
+                "camera-profile track requires valid unwrapped camera profiles and clipping planes",
             ),
             Self::InvalidCompositionTimeMap(error) => error.fmt(formatter),
             Self::InstantTrackCannotUseTimeMap(property) => write!(

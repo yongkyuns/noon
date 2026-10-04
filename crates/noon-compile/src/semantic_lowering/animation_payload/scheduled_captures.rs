@@ -220,6 +220,24 @@ fn apply_effective_track_endpoint(
         (Property::WorldTransform, TrackValues::WorldTransform { from, to }) => {
             value.world_transform = Some((if at_end { *to } else { *from }).world()?);
         }
+        (
+            Property::CameraProfile,
+            TrackValues::CameraProfile {
+                from,
+                to,
+                near,
+                far,
+            },
+        ) => {
+            let profile = if at_end { *to } else { *from };
+            let camera = profile.camera(*near, *far)?;
+            value.camera_profile = Some((profile, *near, *far));
+            value.world_transform = Some(noon_core::SemanticWorldTransform3D::new(
+                camera.position,
+                camera.orientation,
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+            )?);
+        }
         (Property::Morph, TrackValues::PreparedMorph { .. }) | (Property::Presence, _) => {}
         (Property::Transform, _) => return None,
         _ => return None,

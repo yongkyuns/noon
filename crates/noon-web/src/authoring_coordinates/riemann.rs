@@ -32,7 +32,7 @@ impl WasmCoordinateOptions {
                     "invalid_input",
                     "riemann.range",
                     "Riemann range requires two finite values",
-                )))
+                )));
             }
         };
         let sample = match sample {
@@ -44,7 +44,7 @@ impl WasmCoordinateOptions {
                     "invalid_input",
                     "riemann.sample",
                     "sample must be left, right, or center",
-                )))
+                )));
             }
         };
         Ok(WasmRiemannRectangleOptions {

@@ -24,6 +24,13 @@ use crate::CompiledGraphArrowPolicy;
 #[derive(Clone, Debug, Default)]
 pub struct SemanticExecutionIndex {
     object_ids: HashMap<SemanticNodeId, ObjectId>,
+    /// Reverse family dependencies for FixedOrientation anchor groups. These
+    /// contain only family nodes below an anchor, so one membership impact
+    /// refreshes only affected group subtrees.
+    fixed_orientation_owner_anchors: HashMap<SemanticNodeId, SemanticNodeId>,
+    fixed_orientation_anchor_owners: HashMap<SemanticNodeId, HashSet<SemanticNodeId>>,
+    fixed_orientation_anchor_descendants: HashMap<SemanticNodeId, Vec<SemanticNodeId>>,
+    fixed_orientation_family_anchors: HashMap<SemanticNodeId, HashSet<SemanticNodeId>>,
 }
 
 impl SemanticExecutionIndex {
@@ -85,17 +92,22 @@ impl SemanticExecutionIndex {
         self.apply_impacts(store, result.impacts());
     }
 
-    pub fn apply_impacts(&mut self, _store: &SemanticStore, impacts: &[SemanticMutationImpact]) {
+    pub fn apply_impacts(&mut self, store: &SemanticStore, impacts: &[SemanticMutationImpact]) {
         for impact in impacts {
             match *impact {
-                SemanticMutationImpact::NodeAdded { .. } => {}
+                SemanticMutationImpact::NodeAdded { node } => {
+                    self.update_fixed_orientation_owner(store, node);
+                }
                 SemanticMutationImpact::NodeRemoved { node } => {
                     self.object_ids.remove(&node);
+                    self.update_fixed_orientation_owner(store, node);
                 }
                 SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectTransform { .. }
+                | SemanticMutationImpact::CameraProfile { .. }
+                | SemanticMutationImpact::CameraMotions { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::BarMetadata { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
@@ -109,10 +121,111 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::SignalScoped { .. }
                 | SemanticMutationImpact::ForegroundMembers { .. }
                 | SemanticMutationImpact::GraphDeclaration { .. }
-                | SemanticMutationImpact::FamilyMemberAdded { .. }
-                | SemanticMutationImpact::FamilyMemberRemoved { .. }
-                | SemanticMutationImpact::FamilyMemberReordered { .. }
                 | SemanticMutationImpact::AnimationAdded { .. } => {}
+                SemanticMutationImpact::SpatialCompositionDomain { object }
+                | SemanticMutationImpact::SpatialAnchorChanged { object } => {
+                    self.update_fixed_orientation_owner(store, object);
+                }
+                SemanticMutationImpact::FamilyMemberAdded { family, .. }
+                | SemanticMutationImpact::FamilyMemberRemoved { family, .. }
+                | SemanticMutationImpact::FamilyMemberReordered { family, .. } => {
+                    if let Some(anchors) =
+                        self.fixed_orientation_family_anchors.get(&family).cloned()
+                    {
+                        for anchor in anchors {
+                            self.refresh_fixed_orientation_anchor(store, anchor);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn fixed_orientation_anchors_for_family(
+        &self,
+        family: SemanticNodeId,
+    ) -> Vec<SemanticNodeId> {
+        let mut anchors = self
+            .fixed_orientation_family_anchors
+            .get(&family)
+            .into_iter()
+            .flat_map(|anchors| anchors.iter().copied())
+            .collect::<Vec<_>>();
+        anchors.sort_unstable();
+        anchors
+    }
+
+    fn update_fixed_orientation_owner(&mut self, store: &SemanticStore, owner: SemanticNodeId) {
+        if let Some(previous) = self.fixed_orientation_owner_anchors.remove(&owner) {
+            let empty =
+                if let Some(owners) = self.fixed_orientation_anchor_owners.get_mut(&previous) {
+                    owners.remove(&owner);
+                    owners.is_empty()
+                } else {
+                    false
+                };
+            if empty {
+                self.fixed_orientation_anchor_owners.remove(&previous);
+                self.remove_fixed_orientation_anchor(previous);
+            }
+        }
+        let next = store
+            .node(owner)
+            .and_then(|node| node.semantic_object_state())
+            .filter(|state| {
+                state.spatial_composition_domain()
+                    == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
+            })
+            .and_then(|state| state.spatial_anchor_family());
+        if let Some(anchor) = next {
+            self.fixed_orientation_owner_anchors.insert(owner, anchor);
+            self.fixed_orientation_anchor_owners
+                .entry(anchor)
+                .or_default()
+                .insert(owner);
+            self.refresh_fixed_orientation_anchor(store, anchor);
+        }
+    }
+
+    fn refresh_fixed_orientation_anchor(&mut self, store: &SemanticStore, anchor: SemanticNodeId) {
+        self.remove_fixed_orientation_anchor(anchor);
+        if !self.fixed_orientation_anchor_owners.contains_key(&anchor) {
+            return;
+        }
+        let Ok(nodes) = store.ordered_authoring_nodes(anchor) else {
+            return;
+        };
+        let descendants = nodes
+            .into_iter()
+            .filter(|node| {
+                store
+                    .node(*node)
+                    .is_some_and(|node| matches!(node.kind(), SemanticNodeKind::Family(_)))
+            })
+            .collect::<Vec<_>>();
+        for descendant in &descendants {
+            self.fixed_orientation_family_anchors
+                .entry(*descendant)
+                .or_default()
+                .insert(anchor);
+        }
+        self.fixed_orientation_anchor_descendants
+            .insert(anchor, descendants);
+    }
+
+    fn remove_fixed_orientation_anchor(&mut self, anchor: SemanticNodeId) {
+        if let Some(descendants) = self.fixed_orientation_anchor_descendants.remove(&anchor) {
+            for descendant in descendants {
+                let remove = self
+                    .fixed_orientation_family_anchors
+                    .get_mut(&descendant)
+                    .is_some_and(|anchors| {
+                        anchors.remove(&anchor);
+                        anchors.is_empty()
+                    });
+                if remove {
+                    self.fixed_orientation_family_anchors.remove(&descendant);
+                }
             }
         }
     }
@@ -188,6 +301,10 @@ impl SemanticExecutionIndex {
         // cannot partially mutate the execution index.
         let graph_roots = reachable_graph_roots(store, &roots)?;
         let pending_graph_edges = lower_graph_dependencies(store, &graph_roots, &seen)?;
+
+        for (semantic_id, _) in &pending {
+            self.update_fixed_orientation_owner(store, *semantic_id);
+        }
 
         let objects = pending
             .into_iter()
@@ -373,6 +490,9 @@ pub enum SemanticLoweringError {
     UnsupportedSpatialMaterial {
         node: SemanticNodeId,
     },
+    UnsupportedSpatialCompositionDomain {
+        node: SemanticNodeId,
+    },
     InvalidSemanticTransform {
         node: SemanticNodeId,
     },
@@ -449,6 +569,12 @@ impl std::fmt::Display for SemanticLoweringError {
             Self::UnsupportedSpatialMaterial { node } => write!(
                 formatter,
                 "semantic object {}:{} uses a spatial material without mesh content",
+                node.slot(),
+                node.generation()
+            ),
+            Self::UnsupportedSpatialCompositionDomain { node } => write!(
+                formatter,
+                "semantic object {}:{} uses a spatial composition domain that is unsupported for its geometry",
                 node.slot(),
                 node.generation()
             ),
@@ -694,6 +820,7 @@ pub(super) fn object_requires_spatial_lowering(
     state.role() == noon_core::SemanticObjectRole::Camera3D
         || state.role() == noon_core::SemanticObjectRole::PointLight3D
         || object_has_mesh_content(state, store)
+        || state.spatial_composition_domain() != noon_core::SemanticSpatialCompositionDomain::World
         || matches!(
             state.transform.orientation,
             noon_core::SemanticOrientation::Spatial(_)
@@ -708,6 +835,17 @@ pub(super) fn lower_object_state(
     let mesh_content = object_has_mesh_content(state, store);
     let is_camera_3d = state.role() == noon_core::SemanticObjectRole::Camera3D;
     let is_point_light = state.role() == noon_core::SemanticObjectRole::PointLight3D;
+    let domain = state.spatial_composition_domain();
+    if mesh_content && domain != noon_core::SemanticSpatialCompositionDomain::World {
+        return Err(SemanticLoweringError::UnsupportedSpatialCompositionDomain {
+            node: semantic_id,
+        });
+    }
+    if domain == noon_core::SemanticSpatialCompositionDomain::FixedFrame
+        && state.transform.planar_rotation().is_none()
+    {
+        return Err(SemanticLoweringError::UnsupportedSpatialOrientation { node: semantic_id });
+    }
     if state.spatial_material() == noon_core::SemanticSpatialMaterial::PointLit && !mesh_content {
         return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
     }
@@ -729,13 +867,28 @@ pub(super) fn lower_object_state(
         Some(crate::CompiledSpatialState {
             world,
             camera_projection: state.camera_projection(),
+            camera_profile: state.camera_profile(),
+            camera_motions: (!state.camera_motions().is_empty())
+                .then(|| std::sync::Arc::from(state.camera_motions())),
             material: state.spatial_material(),
             point_light: is_point_light,
+            composition_domain: domain,
+            draw_kind: if mesh_content {
+                crate::CompiledSpatialDrawKind::Mesh
+            } else {
+                crate::CompiledSpatialDrawKind::Planar
+            },
+            fixed_orientation_anchor_family: state.spatial_anchor_family(),
+            fixed_orientation_center: None,
         })
     } else {
         None
     };
-    let base_transform = if is_camera_3d || is_point_light || mesh_content {
+    let base_transform = if is_camera_3d
+        || is_point_light
+        || mesh_content
+        || (has_spatial && domain != noon_core::SemanticSpatialCompositionDomain::FixedFrame)
+    {
         Transform2D::IDENTITY
     } else if state.transform.planar_rotation().is_some() {
         lower_semantic_transform(semantic_id, state)?
@@ -1084,6 +1237,103 @@ mod tests {
         assert_eq!(object_state.base_style.opacity, 0.6);
         assert_eq!(object_state.presentation.z_index, 9.0);
         assert_eq!(object_state.presentation.insertion_order, 0);
+    }
+
+    #[test]
+    fn spatial_domains_lower_world_pose_and_keep_fixed_frame_on_planar_transform() {
+        use noon_core::{SemanticRotation3D, SemanticSpatialCompositionDomain as Domain};
+
+        let mut store = SemanticStore::new();
+        let ordinary = attach(&mut store, circle(1.0));
+        let ordinary_state = store.semantic_object_state_checked(ordinary).unwrap();
+        let lowered_ordinary = lower_object_state(ordinary, ordinary_state, &store).unwrap();
+        assert!(lowered_ordinary.spatial.is_none());
+
+        let mut fixed_state = circle(1.0);
+        fixed_state.transform.translation = SemanticVec3::new(5.0, -2.0, 0.0);
+        fixed_state.transform.orientation = noon_core::SemanticOrientation::Planar(0.375);
+        fixed_state
+            .set_spatial_composition_domain(Domain::FixedFrame)
+            .unwrap();
+        let fixed = attach(&mut store, fixed_state);
+        let fixed_state = store.semantic_object_state_checked(fixed).unwrap();
+        let lowered_fixed = lower_object_state(fixed, fixed_state, &store).unwrap();
+        assert_eq!(
+            lowered_fixed.base_transform.translation,
+            Vec2::new(5.0, -2.0)
+        );
+        assert_eq!(lowered_fixed.base_transform.rotation, 0.375);
+        let fixed_spatial = lowered_fixed.spatial.unwrap();
+        assert_eq!(fixed_spatial.composition_domain, Domain::FixedFrame);
+        assert_eq!(
+            fixed_spatial.world.translation,
+            SemanticVec3::new(5.0, -2.0, 0.0)
+        );
+
+        let mut billboard_state = circle(1.0);
+        billboard_state.transform.translation = SemanticVec3::new(4.0, 3.0, -2.0);
+        billboard_state.transform.scale = SemanticVec3::new(2.0, 0.5, 1.0);
+        billboard_state.transform.orientation = noon_core::SemanticOrientation::Planar(0.625);
+        billboard_state
+            .set_spatial_composition_domain(Domain::FixedOrientation)
+            .unwrap();
+        let billboard = attach(&mut store, billboard_state);
+        let billboard_state = store.semantic_object_state_checked(billboard).unwrap();
+        let lowered_billboard = lower_object_state(billboard, billboard_state, &store).unwrap();
+        assert_eq!(lowered_billboard.base_transform, Transform2D::IDENTITY);
+        let billboard_spatial = lowered_billboard.spatial.unwrap();
+        assert_eq!(
+            billboard_spatial.world.translation,
+            SemanticVec3::new(4.0, 3.0, -2.0)
+        );
+        assert_eq!(
+            billboard_spatial.world.scale,
+            SemanticVec3::new(2.0, 0.5, 1.0)
+        );
+        assert_eq!(
+            billboard_spatial.composition_domain,
+            Domain::FixedOrientation
+        );
+
+        let world = noon_core::SemanticWorldTransform3D::new(
+            SemanticVec3::new(1.0e12, -3.0e11, 17.0),
+            SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.7).unwrap(),
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+        let mut world_state = circle(1.0);
+        world_state.transform = world.into();
+        let world_id = attach(&mut store, world_state);
+        let world_state = store.semantic_object_state_checked(world_id).unwrap();
+        let lowered_world = lower_object_state(world_id, world_state, &store).unwrap();
+        assert_eq!(lowered_world.base_transform, Transform2D::IDENTITY);
+        let spatial = lowered_world.spatial.unwrap();
+        assert_eq!(spatial.world, world);
+        assert_eq!(spatial.composition_domain, Domain::World);
+        assert_eq!(spatial.draw_kind, crate::CompiledSpatialDrawKind::Planar);
+
+        let mut mesh_store = SemanticStore::new();
+        let mesh_resource = noon_core::MeshResource::new(
+            vec![
+                SemanticVec3::ZERO,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::new(0.0, 1.0, 0.0),
+            ],
+            None,
+            vec![0, 1, 2],
+        )
+        .unwrap();
+        let handle = mesh_store.insert_geometry_mesh(mesh_resource);
+        let mesh_id = attach(
+            &mut mesh_store,
+            SemanticObjectState::new(StoredGeometry::Resource(handle)),
+        );
+        let mesh_state = mesh_store.semantic_object_state_checked(mesh_id).unwrap();
+        let lowered_mesh = lower_object_state(mesh_id, mesh_state, &mesh_store).unwrap();
+        assert_eq!(
+            lowered_mesh.spatial.unwrap().draw_kind,
+            crate::CompiledSpatialDrawKind::Mesh
+        );
     }
 
     #[test]
