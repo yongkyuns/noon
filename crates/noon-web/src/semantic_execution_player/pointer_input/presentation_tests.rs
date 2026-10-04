@@ -415,6 +415,58 @@ fn registered_view_without_pointer_subscribers_preserves_quiet_presentation() {
 }
 
 #[test]
+fn dormant_callback_scene_rejects_pointer_sources_without_entering_callback_admission() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(1.0).unwrap();
+    scene.add(&circle).unwrap();
+    let mut transaction = noon_core::SemanticMutationTransaction::new();
+    transaction.add_updater(
+        circle.node_id(),
+        noon_core::HostCallbackId::new(1),
+        0.0,
+        None,
+    );
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut p =
+        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7).unwrap();
+    assert!(!p.session.has_native_pointer_subscribers());
+    register(&mut p, 1);
+    let r = receipt(&delta(&mut p), 1);
+    assert!(acknowledge(&mut p, r));
+    let frame = p.session.frame().clone();
+    let publication = p.session.publication_context();
+    // Orphan cancellation remains an error. Only a validated positional source
+    // can enter the ordinary rejected-source tail handling.
+    assert!(input(&mut p, "cancel", 1, None, 1, 400.0).is_err());
+    assert!(!input(&mut p, "move", 1, Some(r), 1, 400.0).unwrap());
+    for kind in ["press", "move", "release", "cancel"] {
+        assert!(!input(&mut p, kind, 1, Some(r), 1, 400.0).unwrap());
+    }
+    assert!(input(&mut p, "move", 1, Some(r), 2, 400.0).is_err());
+    assert!(p.browser_pointer_binding.is_none());
+    assert_eq!(p.next_native_event_sequence, 0);
+    assert_eq!(p.session.frame(), &frame);
+    assert_eq!(p.session.publication_context(), publication);
+    assert!(matches!(
+        p.session.configure_native_pointer_input(
+            noon_core::NativePointerId {
+                source: 1,
+                pointer: 7
+            },
+            1
+        ),
+        Err(noon::ExecutionSessionInputError::RequiredCallbacksConfigured)
+    ));
+    let phase = p.initial_callback_phase_json().unwrap().unwrap();
+    assert!(!input(&mut p, "press", 2, Some(r), 1, 400.0).unwrap());
+    p.commit_callback_phase_json(&serde_json::json!({
+        "token": serde_json::from_str::<serde_json::Value>(&phase).unwrap()["token"], "writes": []
+    }).to_string()).unwrap();
+}
+
+#[test]
 fn enabling_selection_after_quiet_samples_requires_fresh_presentation() {
     let mut p = player();
     p.set_pointer_fill_selection(None).unwrap();

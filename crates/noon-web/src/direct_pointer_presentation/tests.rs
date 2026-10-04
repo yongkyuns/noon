@@ -116,6 +116,34 @@ fn successful_receipt_authorizes_click_without_authored_changes() {
 }
 
 #[test]
+fn dormant_collector_does_not_configure_callback_input_or_request_redraw() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(1.0).unwrap();
+    scene.add(&circle).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(
+        circle.node_id(),
+        noon_core::HostCallbackId::new(1),
+        0.0,
+        None,
+    );
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut f = Fixture::new();
+    f.session = scene.execution_session().unwrap();
+    f.present();
+    let publication = f.session.publication_context();
+    assert!(f.send(input(BrowserPointerKind::Cancel)).is_err());
+    assert!(!f.send(input(BrowserPointerKind::Move)).unwrap());
+    assert!(f.binding.is_none());
+    assert_eq!(f.sequence, 0);
+    assert_eq!(f.session.publication_context(), publication);
+    assert!(!f.host.refresh_pending);
+    assert!(f.session.take_renderer_publication().changes().is_empty());
+}
+
+#[test]
 fn consumed_but_unpresented_round_trip_rejects_and_cancels_stationary_press() {
     let mut f = Fixture::new();
     f.present();

@@ -470,9 +470,17 @@ mod admission {
             }
             // A captured gesture cannot fall back to a newer camera mapping or
             // ordinary picking after its acquired mapping fails validation.
-            if let (false, Some(receipt), Some(issued)) =
-                (captured_continuation, receipt, self.issued.as_ref())
-            {
+            // A dormant collector must not configure a native input binding in
+            // callback-only scenes. Keep callback admission strict for actual
+            // subscribers and retire uninterested sources through the same
+            // bounded rejection path (including their asynchronous packet tail).
+            let interested = binding.is_some() || target.session().has_native_pointer_subscribers();
+            if let (true, false, Some(receipt), Some(issued)) = (
+                interested,
+                captured_continuation,
+                receipt,
+                self.issued.as_ref(),
+            ) {
                 if self.presented == Some(receipt)
                     && receipt.session == issued.session
                     && receipt.sequence == issued.sequence

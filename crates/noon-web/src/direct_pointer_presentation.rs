@@ -64,6 +64,12 @@ impl DirectPointerPresentation {
             browser_pointer_input::submit_browser_pointer_input(target, binding, sequence, input)?;
             return Ok(true);
         }
+        // A registered DOM view alone is not input interest. The explicit Rust
+        // input API retains its callback barrier; a dormant platform collector
+        // simply retires its unbound source without creating publication work.
+        if binding.is_none() && !target.session().has_native_pointer_subscribers() {
+            return Ok(false);
+        }
         if let Some(frame) = self.presented.as_ref() {
             match browser_pointer_input::submit_presented_browser_pointer_input(
                 target, binding, sequence, input, frame,
