@@ -2883,7 +2883,9 @@ impl SemanticExecutionPlayer {
                 .frame()
                 .objects
                 .iter()
-                .filter_map(|object| object.text()),
+                // Text resources travel with the immutable content regardless of
+                // whether the row is rendered by the ordinary 2D or spatial lane.
+                .filter_map(|object| object.content.text()),
             geometry_handles,
             session.text_resources(),
             session.geometry_resources(),
@@ -2946,7 +2948,7 @@ impl SemanticExecutionPlayer {
                 .collect::<Vec<_>>();
             let text_handles = indices
                 .iter()
-                .filter_map(|&index| frame.objects[index].text())
+                .filter_map(|&index| frame.objects[index].content.text())
                 .collect::<Vec<_>>();
             let mut delta = self
                 .encoder
@@ -2974,7 +2976,7 @@ impl SemanticExecutionPlayer {
             let text_handles = changes
                 .object_indices()
                 .iter()
-                .filter_map(|&index| frame.objects.get(index)?.text())
+                .filter_map(|&index| frame.objects.get(index)?.content.text())
                 .collect::<Vec<_>>();
             let Some(mut delta) = self
                 .encoder
@@ -3005,7 +3007,7 @@ impl SemanticExecutionPlayer {
             let text_handles = changes
                 .object_indices()
                 .iter()
-                .filter_map(|&index| frame.objects.get(index)?.text())
+                .filter_map(|&index| frame.objects.get(index)?.content.text())
                 .collect::<Vec<_>>();
             let Some(mut delta) = self
                 .encoder

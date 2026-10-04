@@ -48,6 +48,12 @@ pub fn scene() -> Result<
     let axes = scene
         .three_d_axes(&ManimThreeDAxesOptions::default())
         .map_err(|error| error.to_string())?;
+    scene
+        .add_in_spatial_composition_domain(
+            crate::MobjectTarget::Family(axes.family()),
+            SemanticSpatialCompositionDomain::World,
+        )
+        .map_err(|error| error.to_string())?;
     let mut point = scene.circle(0.16).map_err(|error| error.to_string())?;
     point
         .set_fill(
@@ -120,6 +126,10 @@ mod tests {
         assert_eq!(point_state.transform.translation, expected);
         assert!((0..3).all(|axis| axes.tip(axis).unwrap().is_some()));
         let mut session = session().unwrap();
+        assert!(
+            session.frame().objects.len() > 30,
+            "axes must be in the presented scene"
+        );
         for (time, expected_profile) in [(0.0, start_profile()), (1.0, end_profile())] {
             session.advance_to(time).unwrap();
             assert_eq!(

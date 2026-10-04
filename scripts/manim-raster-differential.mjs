@@ -485,11 +485,12 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
     assert.ok(Number.isInteger(fixture.expected_object_count), `${fixture.id}: explicit typed fixture object count`);
     assert.equal(completed.objectCount, fixture.expected_object_count, `${fixture.id}: canonical object count`);
     assert.equal(completed.presented, true, `${fixture.id}: endpoint not presented`);
-    const forwardMidpoint = captures.find(capture => Math.abs(capture.time - 0.5) < 1e-9);
+    const midpoint = fixture.expected_duration / 2;
+    const forwardMidpoint = captures.find(capture => Math.abs(capture.time - midpoint) < 1e-9);
     assert.ok(forwardMidpoint, `${fixture.id}: requires a forward midpoint capture`);
-    await page.evaluate(async () => {
+    await page.evaluate(async (midpoint) => {
       const renderer = window.noonSpatialMeshOracle;
-      renderer.seekDirect(0.5);
+      renderer.seekDirect(midpoint);
       let presented = false;
       for (let attempt = 0; attempt < 60; attempt += 1) {
         if (renderer.render()) { presented = true; break; }
@@ -497,7 +498,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
       }
       if (!presented) throw new Error("direct spatial mesh reseek was not presented");
       await new Promise(resolve => requestAnimationFrame(resolve));
-    });
+    }, midpoint);
     const reseekPath = path.join(fixtureDir, "reseek-midpoint.png");
     await page.locator("#scene").screenshot({ path: reseekPath });
     const forwardPixels = PNG.sync.read(await readFile(forwardMidpoint.noonPath)).data;

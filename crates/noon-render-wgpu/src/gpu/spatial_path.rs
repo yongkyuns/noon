@@ -919,11 +919,14 @@ fn path_key(
     style: Style,
     identity: u64,
 ) -> Result<PathKey, SpatialPathError> {
-    if style.stroke_width_mode != StrokeWidthMode::ScaleWithObject
-        || !style.stroke_width.is_finite()
-        || style.stroke_width < 0.0
+    if style.stroke.is_some()
+        && style.stroke_width > 0.0
+        && style.stroke_width_mode != StrokeWidthMode::ScaleWithObject
     {
         return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
+    }
+    if !style.stroke_width.is_finite() || style.stroke_width < 0.0 {
+        return Err(SpatialPathError::InvalidStyle);
     }
     let source = match geometry {
         GeometryRef::External(id) => {
@@ -1228,7 +1231,10 @@ pub(super) fn tessellate(
     object_alpha: f32,
     domain: Domain,
 ) -> Result<TessellatedSpatialPath, SpatialPathError> {
-    if style.stroke_width_mode != StrokeWidthMode::ScaleWithObject {
+    if style.stroke.is_some()
+        && style.stroke_width > 0.0
+        && style.stroke_width_mode != StrokeWidthMode::ScaleWithObject
+    {
         return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
     }
     if !style.stroke_width.is_finite()
@@ -1331,6 +1337,20 @@ mod tests {
             tessellate(&geometry, &resources, screen_stroke, 1.0, Domain::World).unwrap_err(),
             SpatialPathError::UnsupportedScreenSpaceStroke
         );
+        // A filled Dot has no stroke to expand. Its unused constructor width
+        // mode must not reject an otherwise supported World path.
+        let filled = Style {
+            stroke_width: 0.0,
+            ..screen_stroke
+        };
+        let filled_mesh = tessellate(&geometry, &resources, filled, 1.0, Domain::World).unwrap();
+        assert_eq!(filled_mesh.indices, mesh.indices);
+        assert!(filled_mesh
+            .vertices
+            .iter()
+            .zip(&mesh.vertices)
+            .all(|(left, right)| left.position == right.position && left.surface == right.surface));
+        assert!(path_key(&geometry, &resources, filled, 7).is_ok());
         assert_eq!(
             tessellate(&geometry, &resources, style, 0.5, Domain::World).unwrap_err(),
             SpatialPathError::NonOpaqueStyle

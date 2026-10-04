@@ -888,6 +888,7 @@
     },
     {
       "id": "vector-space-lts-direct",
+      "expected_object_count": 90,
       "scene": "VectorSpaceLTS",
       "source": "parity/manim-v0.21/vector_space.py",
       "direct_factory": "createDirectVectorSpaceSmokeRenderer",
@@ -897,6 +898,7 @@
     },
     {
       "id": "vector-space-lts-worker",
+      "expected_object_count": 90,
       "scene": "VectorSpaceLTS",
       "source": "parity/manim-v0.21/vector_space.py",
       "noon_source": "web/python/examples/noon_vector_space.py",
@@ -944,6 +946,7 @@
     },
     {
       "id": "spatial-three-d-axes-direct",
+      "expected_object_count": 35,
       "scene": "SpatialThreeDAxes",
       "source": "parity/manim-v0.21/spatial_three_d_axes.py",
       "direct_factory": "createDirectSpatialThreeDAxesSmokeRenderer",
@@ -958,6 +961,7 @@
     },
     {
       "id": "spatial-three-d-axes-worker",
+      "expected_object_count": 35,
       "scene": "SpatialThreeDAxes",
       "source": "parity/manim-v0.21/spatial_three_d_axes.py",
       "noon_source": "web/python/examples/noon_spatial_three_d_axes.py",

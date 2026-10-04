@@ -40,49 +40,21 @@ fn pose_with_scale(translation: SemanticVec3, scale: SemanticVec3) -> SemanticWo
         .expect("finite identity transform")
 }
 
-fn text_pose(
-    object: &crate::Mobject,
-    center: SemanticVec3,
-    width: f64,
-    height: f64,
-) -> Result<SemanticWorldTransform3D, String> {
-    let source_width = object.width().map_err(|error| error.to_string())?;
-    let source_height = object.height().map_err(|error| error.to_string())?;
-    let (source_x, source_y) = object.center().map_err(|error| error.to_string())?;
-    if source_width <= 0.0 || source_height <= 0.0 {
-        return Err("spatial camera-label text must have nonempty layout bounds".into());
-    }
-    let scale_x = width / source_width;
-    let scale_y = height / source_height;
-    Ok(pose_with_scale(
-        SemanticVec3::new(
-            center.x - source_x * scale_x,
-            center.y - source_y * scale_y,
-            center.z,
-        ),
-        SemanticVec3::new(scale_x, scale_y, 1.0),
-    ))
-}
-
 fn fit_frame_text(
     object: &mut crate::Mobject,
     center: SemanticVec3,
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let source_width = object.width().map_err(|error| error.to_string())?;
-    let source_height = object.height().map_err(|error| error.to_string())?;
-    let (source_x, source_y) = object.center().map_err(|error| error.to_string())?;
-    if source_width <= 0.0 || source_height <= 0.0 {
-        return Err("spatial camera-label text must have nonempty layout bounds".into());
-    }
-    let scale_x = width / source_width;
-    let scale_y = height / source_height;
-    object
-        .set_scale(scale_x, scale_y)
+    let anchor = crate::LayoutAnchor::from(&*object);
+    anchor
+        .rescale_to_fit(width, crate::LayoutDimension::Width, true)
+        .map_err(|error| error.to_string())?;
+    anchor
+        .rescale_to_fit(height, crate::LayoutDimension::Height, true)
         .map_err(|error| error.to_string())?;
     object
-        .set_translation(center.x - source_x * scale_x, center.y - source_y * scale_y)
+        .move_to(center.x, center.y)
         .map_err(|error| error.to_string())
 }
 
@@ -109,10 +81,10 @@ pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
             },
         )
         .map_err(|error| error.to_string())?;
-    let world_label = scene
+    let mut world_label = scene
         .typst(Typst::new("#text(fill: red)[World label]"))
         .map_err(|error| error.to_string())?;
-    let formula = scene
+    let mut formula = scene
         .math_typst(MathTypst::new("frac(x, 2)"))
         .map_err(|error| error.to_string())?;
     let mut left = scene
@@ -129,13 +101,23 @@ pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
         .set_world_transform(&background, pose(SemanticVec3::ZERO))
         .map_err(|error| error.to_string())?;
     for (object, center, width, height) in [
-        (&world_label, SemanticVec3::new(-3.2, 2.6, 0.1), 1.8, 0.28),
-        (&formula, SemanticVec3::new(2.2, 2.6, 0.1), 0.8, 0.55),
-        (&left, SemanticVec3::new(-1.0, -2.0, 0.3), 1.2, 0.24),
-        (&right, SemanticVec3::new(1.0, -2.0, -0.3), 1.2, 0.24),
+        (
+            &mut world_label,
+            SemanticVec3::new(-3.2, 2.6, 0.1),
+            1.8,
+            0.28,
+        ),
+        (&mut formula, SemanticVec3::new(2.2, 2.6, 0.1), 0.8, 0.55),
+        (&mut left, SemanticVec3::new(-1.0, -2.0, 0.3), 1.2, 0.24),
+        (&mut right, SemanticVec3::new(1.0, -2.0, -0.3), 1.2, 0.24),
     ] {
+        fit_frame_text(object, center, width, height)?;
+        let mut world = object
+            .world_transform()
+            .map_err(|error| error.to_string())?;
+        world.translation.z = center.z;
         scene
-            .set_world_transform(object, text_pose(object, center, width, height)?)
+            .set_world_transform(object, world)
             .map_err(|error| error.to_string())?;
     }
     fit_frame_text(&mut hud, SemanticVec3::new(-3.4, -3.4, 0.0), 1.1, 0.22)?;
@@ -201,6 +183,18 @@ pub fn session() -> Result<ExecutionSession, String> {
 mod tests {
     use super::*;
     use noon_core::SemanticSpatialCompositionDomain as Domain;
+
+    #[test]
+    fn fitting_retains_constructor_text_units_and_matches_authored_dimensions() {
+        let mut scene = Scene::new();
+        let mut text = scene.typst(Typst::new("Fixed frame")).unwrap();
+        fit_frame_text(&mut text, SemanticVec3::new(-3.4, -3.4, 0.0), 1.1, 0.22).unwrap();
+        assert!((text.width().unwrap() - 1.1).abs() < 1e-9);
+        assert!((text.height().unwrap() - 0.22).abs() < 1e-9);
+        let center = text.center().unwrap();
+        assert!((center.0 + 3.4).abs() < 1e-9);
+        assert!((center.1 + 3.4).abs() < 1e-9);
+    }
 
     #[test]
     fn camera_label_fixture_keeps_exact_family_center_and_moves_one_profile_track() {

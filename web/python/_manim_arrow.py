@@ -362,6 +362,10 @@ class Arrow(_compat.Group):
     def get_tip(self):
         return self.tip
 
+    def get_stroke_width(self) -> float:
+        """Read the retained shaft width in Manim's public stroke units."""
+        return float(self._shaft.get_stroke_width())
+
     def has_tip(self) -> bool:
         return self.tip is not None
 

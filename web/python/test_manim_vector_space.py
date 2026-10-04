@@ -63,9 +63,45 @@ class ManimVectorSpaceTests(unittest.TestCase):
 
             from noon import LinearTransformationScene
             import _manim_compat
+            import _manim_animate
+            import _manim_arrow
+
+            class Shaft:
+                def get_stroke_width(self):
+                    return 8.5
+
+            source_arrow_type = _manim_arrow.Arrow
+            source_arrow = object.__new__(source_arrow_type)
+            source_arrow._shaft = Shaft()
+            assert source_arrow.get_stroke_width() == 8.5
+
+            class Aggregate:
+                def matrixTransformedEndpoints(self, values, rows, columns, x, y):
+                    return (0.0, 0.0, 1.0, 1.0)
+
+            source_arrow._semantic_arrow_handle = Aggregate()
+            source_arrow.get_color = lambda: "yellow"
+
+            target_arrows = []
+            class TargetArrow:
+                def __init__(self, *args, **kwargs):
+                    self.args = args
+                    self.kwargs = kwargs
+                    target_arrows.append(self)
+
+            _manim_arrow.Arrow = TargetArrow
+
+            class Animation:
+                def __init__(self, *args, **kwargs):
+                    self.args = args
+                    self.anim_args = kwargs
+
+            _manim_animate.ApplyMatrix = Animation
+            _manim_animate.Transform = Animation
+
             scene = LinearTransformationScene()
             scene.foreground_plane = object.__new__(_manim_compat.Group)
-            scene.moving_vectors = []
+            scene.moving_vectors = [source_arrow]
             captured = {}
             scene.play = lambda *animations, **kwargs: captured.update(
                 animations=animations, kwargs=kwargs
@@ -73,8 +109,14 @@ class ManimVectorSpaceTests(unittest.TestCase):
             scene.apply_matrix([[0.0, 1.0], [1.0, 0.0]])
             assert calls == [([0.0, 1.0, 1.0, 0.0], 2, 2)]
             assert captured["kwargs"] == {"run_time": 3.0}
-            animation, = captured["animations"]
-            assert animation.anim_args == {"run_time": 3.0, "path_arc": 0.0}
+            plane_animation, vector_animation = captured["animations"]
+            assert plane_animation.anim_args["about_point"] == (0.0, 0.0)
+            assert plane_animation.anim_args["run_time"] == 3.0
+            assert plane_animation.anim_args["path_arc"] == 0.0
+            assert vector_animation.anim_args == {"run_time": 3.0, "path_arc": 0.0}
+            assert target_arrows[0].args == ((0.0, 0.0), (1.0, 1.0))
+            assert target_arrows[0].kwargs["stroke_width"] == 8.5
+            assert vector_animation.args == (source_arrow, target_arrows[0])
             # The flattened length is four, but these are not two valid rows.
             # Reject before querying Rust or preparing any target objects.
             try:

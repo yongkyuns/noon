@@ -3478,6 +3478,54 @@ fn shared_session_text_uses_the_mixed_resource_boundary() {
     ));
 }
 
+#[test]
+fn spatial_text_content_is_installed_even_when_the_2d_text_accessor_hides_it() {
+    let mut scene = noon::Scene::new();
+    let world = scene.text(noon::Text::new("world label")).unwrap();
+    let fixed_frame = scene.text(noon::Text::new("frame label")).unwrap();
+    let fixed_orientation = scene.text(noon::Text::new("oriented label")).unwrap();
+    scene
+        .add_all_world_mobjects(&[noon::MobjectTarget::Object(&world)])
+        .unwrap();
+    scene.add(&fixed_frame).unwrap();
+    scene.add(&fixed_orientation).unwrap();
+    scene
+        .set_spatial_composition_domain(
+            noon::MobjectTarget::Object(&fixed_frame),
+            noon_core::SemanticSpatialCompositionDomain::FixedFrame,
+        )
+        .unwrap();
+    scene
+        .set_spatial_composition_domain(
+            noon::MobjectTarget::Object(&fixed_orientation),
+            noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
+        )
+        .unwrap();
+
+    let mut player =
+        SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 1.0, 88).unwrap();
+    let bundle = RetainedResourceBundle::decode_binary(&player.resource_bundle_bytes()).unwrap();
+    assert_eq!(bundle.text_count(), 3);
+    let mut mirror =
+        crate::InstalledRetainedExecutionMirror::from_bundle_bytes(&player.resource_bundle_bytes())
+            .unwrap();
+    mirror
+        .apply_family(player.delta(true).unwrap().unwrap())
+        .unwrap();
+
+    let installed = mirror.frame().unwrap();
+    let rows = installed
+        .objects
+        .iter()
+        .filter_map(|row| row.content.text().map(|text| (row, text)))
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 3);
+    for (row, handle) in rows {
+        assert!(mirror.resources().texts().get(handle).is_some());
+        assert!(row.spatial.is_some());
+    }
+}
+
 #[cfg(test)]
 mod callback_provisional_stage_limit_regression {
     use super::*;
