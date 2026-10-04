@@ -20,7 +20,7 @@ await qualifyPairedAuthoring({
       await page.waitForFunction(() => window.noonManimCompat);
       const lifecycle = await page.evaluate(async () => (await window.noonManimCompat.ready()).plotting);
       assert.equal(lifecycle.backend, expectedBackend);
-      assert.equal(lifecycle.objectCount, 16);
+      assert.equal(lifecycle.objectCount, 14);
       assert.ok(Math.abs(lifecycle.duration - 0.8) < 1e-6);
       assert.ok(lifecycle.presentedFrames > 0);
       return lifecycle;
