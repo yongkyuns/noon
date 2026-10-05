@@ -75,6 +75,7 @@ export class FrameMetrics {
 export class SampleWindow {
   #capacity;
   #samples = [];
+  #next = 0;
 
   constructor(capacity = 180) {
     if (!Number.isSafeInteger(capacity) || capacity <= 0) {
@@ -87,14 +88,16 @@ export class SampleWindow {
     if (!Number.isFinite(value)) {
       throw new TypeError("sample window requires finite values");
     }
-    this.#samples.push(value);
-    if (this.#samples.length > this.#capacity) {
-      this.#samples.splice(0, this.#samples.length - this.#capacity);
-    }
+    // Order is immaterial to summary(). A ring keeps active-frame collection
+    // constant-time instead of shifting the entire window after every sample.
+    if (this.#samples.length < this.#capacity) this.#samples.push(value);
+    else this.#samples[this.#next] = value;
+    this.#next = (this.#next + 1) % this.#capacity;
   }
 
   reset() {
     this.#samples.length = 0;
+    this.#next = 0;
   }
 
   summary() {

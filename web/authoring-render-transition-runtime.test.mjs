@@ -7,7 +7,9 @@ const controllerSource = await readFile(
   new URL("./authoring-render-controller.js", import.meta.url),
   "utf8",
 );
-const executableSource = controllerSource
+const metricsSource = (await readFile(new URL("./frame-metrics.js", import.meta.url), "utf8"))
+  .replace(/^export\s+/gm, "");
+const executableSource = metricsSource + "\n" + controllerSource
   .replace(/^import\s+[\s\S]*?;\n/gm, "")
   .replace(/^export\s+/gm, "");
 const adapterSource = await readFile(
@@ -616,6 +618,82 @@ test("Rust wake directives admit one animation drive and one deadline without id
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
   assert.equal(harness.timers.size, 0);
   assert.equal(harness.animationFrames.length, 0);
+});
+
+test("live frame gaps include failed-present stalls but not metrics polls or no-op deltas", async () => {
+  const harness = await createManagedWakeHarness([true, true, true, false, true]);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  const present = (sequence, timestamp) => {
+    harness.setClock(timestamp);
+    vm.runInContext(`consumeDelta("frame", {session:12, sequence:${sequence}});`, harness.context);
+  };
+  present(1, 100);
+  present(2, 116);
+  present(3, 132); // Surface did not present; the elapsed stall still counts.
+  assert.equal(vm.runInContext("currentMetrics().presentationIntervalSamples", harness.context), 1);
+  harness.setClock(182);
+  assert.equal(vm.runInContext("tryPresent()", harness.context), true);
+  const summary = vm.runInContext("currentMetrics().presentationIntervalMs", harness.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(summary)), {
+    min: 16, p50: 16, p95: 66, p99: 66, max: 66, mean: 41,
+  });
+  harness.setClock(10_000);
+  harness.createdRenderer.applyDeltaJson = () => false;
+  vm.runInContext('consumeDelta("duplicate", {session:12, sequence:3});', harness.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext(
+    "currentMetrics().presentationIntervalMs", harness.context,
+  ))), JSON.parse(JSON.stringify(summary)), "observation cannot manufacture presentation gaps");
+});
+
+test("continuous frame-gap windows exclude holds and reset on session and surface replacement", async () => {
+  const harness = await createManagedWakeHarness();
+  const wake = (cadence) => vm.runInContext(
+    `handleEngineMessage({type:"execution_wake", cadence:"${cadence}", timerAfterMilliseconds:1000});`,
+    harness.context,
+  );
+  const present = (session, sequence, timestamp) => {
+    harness.setClock(timestamp);
+    vm.runInContext(`consumeDelta("frame", {session:${session}, sequence:${sequence}});`, harness.context);
+  };
+  for (const cadence of ["timer", "idle"]) {
+    wake("animation_frame");
+    present(12, 1, 100); present(12, 2, 116);
+    assert.equal(vm.runInContext("currentMetrics().presentationIntervalMs.max", harness.context), 16);
+    wake(cadence);
+    present(12, 3, 2000);
+    assert.equal(vm.runInContext("currentMetrics().presentationIntervalMs", harness.context), null);
+    wake("animation_frame");
+    present(12, 4, 3000); present(12, 5, 3017);
+    assert.equal(vm.runInContext("currentMetrics().presentationIntervalMs.max", harness.context), 17);
+    present(13, 0, 4000);
+    assert.equal(vm.runInContext("currentMetrics().presentationIntervalMs", harness.context), null);
+  }
+  present(13, 1, 4016);
+  assert.equal(vm.runInContext("currentMetrics().presentationIntervalSamples", harness.context), 1);
+  vm.runInContext('suspendForWebGlContextLoss({preventDefault(){}});', harness.context);
+  assert.equal(vm.runInContext("currentMetrics().presentationIntervalMs", harness.context), null);
+  vm.runInContext("detachRenderPort();", harness.context);
+  assert.equal(vm.runInContext("continuousPresentation", harness.context), false);
+});
+
+test("live frame-gap collection is bounded and adds no timer or engine drive", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  for (let sequence = 0; sequence <= 240; sequence += 1) {
+    harness.setClock(sequence === 0 ? 0 : 1000 + sequence * 16);
+    vm.runInContext(`consumeDelta("frame", {session:12, sequence:${sequence}});`, harness.context);
+  }
+  assert.equal(vm.runInContext("currentMetrics().presentationIntervalSamples", harness.context), 120);
+  assert.equal(vm.runInContext("currentMetrics().presentationIntervalMs.max", harness.context), 16,
+    "a spike older than the rolling window must retire");
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.nextPort.messages.filter(message => message.type === "tick").length, 0);
+  // This fake retains cancelled RAF callbacks. Tickets must still admit only
+  // the single existing Rust directive when every queued callback is delivered.
+  for (const callback of harness.animationFrames.splice(0)) callback(5000);
+  assert.equal(harness.nextPort.messages.filter(message => message.type === "tick").length, 1);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
+  assert.equal(harness.animationFrames.length, 0, "idle stays asleep");
 });
 
 test("renderer telemetry timestamps pending snapshots without inventing presentations", () => {

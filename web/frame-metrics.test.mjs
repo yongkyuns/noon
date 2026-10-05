@@ -123,6 +123,18 @@ test("bounded sample windows retain recent measurements", () => {
   assert.throws(() => samples.record(Number.NaN), /finite values/);
 });
 
+test("sample windows forget old spikes across repeated wrap and reset", () => {
+  const samples = new SampleWindow(3);
+  for (const value of [100, 1, 2, 3, 4, 5, 6, 7]) samples.record(value);
+  assert.equal(samples.size, 3);
+  assert.equal(samples.summary().max, 7);
+  assert.equal(samples.summary().mean, 6);
+  samples.reset();
+  for (const value of [20, 21, 22, 23]) samples.record(value);
+  assert.equal(samples.summary().min, 21);
+  assert.equal(samples.summary().max, 23);
+});
+
 test("rejects invalid frame-metric inputs", () => {
   const metrics = new FrameMetrics();
   assert.throws(() => metrics.record(Number.NaN, 1), /finite timestamps/);

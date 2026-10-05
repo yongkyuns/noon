@@ -28,7 +28,7 @@ test("catalog navigation preserves the served page path", () => {
 
 test("live renderer metrics, including labeled FPS, appear in both catalogs", () => {
   for (const showcase of [false, true]) {
-    const outputs = new Map(["metric-fps", "metric-objects", "metric-draws", "metric-upload", "metric-time"]
+    const outputs = new Map(["metric-fps", "metric-frame-gap", "metric-objects", "metric-draws", "metric-upload", "metric-time"]
       .map((id) => [id, { id, textContent: "—", replaceWith(label) { this.replacedBy = label; } }]));
     const metrics = {
       hidden: true,
@@ -48,6 +48,11 @@ test("live renderer metrics, including labeled FPS, appear in both catalogs", ()
     assert.equal(fps.textContent, "FPS · target 60");
     assert.match(fps.title, /presentations per second/);
     assert.match(fps.title, /Static holds can show 0/);
+    const frameGap = outputs.get("metric-frame-gap").replacedBy;
+    assert.equal(frameGap.textContent, "Frame gap · p95 / max");
+    assert.match(frameGap.title, /Renderer submission intervals during continuous animation/);
+    assert.match(frameGap.title, /16\.7 ms/);
+    assert.match(frameGap.title, /not physical display scanout/);
     assert.equal(metrics.hidden, false);
     assert.equal(metrics["aria-hidden"], "false");
     assert.ok(metrics.classList.values.has("catalog-live-metrics"));
