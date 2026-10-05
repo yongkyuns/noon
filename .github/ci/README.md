@@ -216,7 +216,12 @@ its following segment, authored seconds 3.7–6.9. Its existing 0.4-second hold
 exposes that endpoint before camera restoration and source completion at 9.8
 seconds; setup, restoration and holds are excluded from FPS. Both workloads
 reuse the same downloaded packages and three-pair protocol, with no extra build.
-The preview stays visible during measurement. FPS uses the render worker's sampling clock and
+The preview stays visible during measurement. The sampler sends read-only queries
+through the existing renderer metrics channel, consumes only its test-owned replies,
+and never adds aggregate source-owner queries to the callback lane. Replayable
+lessons seek to their fixed endpoint; the camera lesson must keep seeking disabled
+and reach its endpoint through normal source execution.
+FPS uses the render worker's sampling clock and
 presentation counter within one session/clock epoch; reply arrival and polling
 times remain diagnostic observations. Duplicate settled endpoint replies do not
 extend the window. A late start, missing endpoint, malformed clock, failed run,

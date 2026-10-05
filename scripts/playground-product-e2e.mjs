@@ -116,19 +116,9 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
       const sample = await page.evaluate(async () => {
         const gallery = window.__noonExampleGallery;
         const probe = window.__noonProductRenderProbe;
-        // Issue the existing aggregate metrics request without awaiting its
-        // source-continuation half. The passive Worker observer records the
-        // matching render reply, which is the real presentation counter.
-        if (
-          !probe.pending &&
-          gallery?.executionMode !== null &&
-          typeof gallery?.executionMetrics === "function"
-        ) {
-          probe.pending = true;
-          void gallery.executionMetrics().catch(() => {
-            probe.pending = false;
-          });
-        }
+        // Sample only the renderer. Aggregate metrics also query the source
+        // owner and would add work to the callback lane being measured.
+        probe.requestMetrics();
         return {
           phase: "source",
           ...probe.latest,
@@ -150,12 +140,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     if (captureFrames) {
       // This is the final observation for this exact run, after its renderer
       // has presented the authored endpoint and before any warm/edit rerun.
-      const endpoint = await page.evaluate(async () => {
-        const report = await window.__noonExampleGallery?.executionMetrics();
-        const metrics = report?.metrics;
-        return { phase: "endpoint", ...window.__noonProductRenderProbe.observation(metrics),
-          now: performance.now() };
-      });
+      const endpoint = { phase: "endpoint", ...await sampleRendererObservation(page) };
       frameSamples.push(endpoint);
     }
     const presentationSamples = await page.evaluate(() => window.__noonProductRenderProbe.presentationSamples);
@@ -169,6 +154,18 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
       evidence.finishedAtMs = Date.now();
     }
   }
+}
+
+async function sampleRendererObservation(page) {
+  const previousReplies = await page.evaluate(() => {
+    const probe = window.__noonProductRenderProbe;
+    const previous = probe.metricsReplies;
+    probe.requestMetrics();
+    return previous;
+  });
+  await page.waitForFunction(previous => window.__noonProductRenderProbe.metricsReplies > previous,
+    previousReplies, { timeout: 10_000 });
+  return page.evaluate(() => ({ ...window.__noonProductRenderProbe.latest, now: performance.now() }));
 }
 
 function changedPixelStats(buffer) {
@@ -192,21 +189,7 @@ async function waitForRenderedEndpoint(page, seconds) {
     () => window.__noonProductRenderProbe?.metricsReplies ?? 0,
   );
   while (performance.now() < deadline) {
-    await page.evaluate(() => {
-      const gallery = window.__noonExampleGallery;
-      if (typeof gallery?.executionMetrics !== "function") {
-        throw new Error("product E2E could not request renderer metrics");
-      }
-      const probe = window.__noonProductRenderProbe;
-      if (probe?.pending) return;
-      probe.pending = true;
-      // The renderer reply is observed passively below. Do not await the
-      // aggregate request: its source side may remain owned by an active
-      // authoring continuation.
-      void gallery.executionMetrics().catch(() => {
-        probe.pending = false;
-      });
-    });
+    await page.evaluate(() => window.__noonProductRenderProbe.requestMetrics());
     await page.waitForTimeout(50);
     const sample = await page.evaluate(() => {
       const probe = window.__noonProductRenderProbe;
@@ -242,13 +225,10 @@ async function synchronizeFinalFrame(page, seconds) {
   );
   const toggle = page.locator(".playback-controls .playback-toggle");
   const hasControls = (await toggle.count()) > 0;
-  assert.equal(
-    hasControls,
-    capability === "available",
-    "playback control DOM must match the execution ownership capability",
-  );
-  if (hasControls) {
+  if (capability === "available") {
+    assert.ok(hasControls, "replayable execution must expose playback controls");
     await toggle.waitFor({ state: "visible", timeout: 10_000 });
+    assert.equal(await toggle.isEnabled(), true, "completed replay controls must be enabled");
     if ((await toggle.getAttribute("aria-label")) === "Pause animation") {
       await toggle.click();
       await page.waitForFunction(
@@ -259,6 +239,10 @@ async function synchronizeFinalFrame(page, seconds) {
       input.value = String(target);
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }, seconds);
+  } else if (hasControls) {
+    assert.equal(await toggle.isDisabled(), true, "nonreplayable execution must disable playback");
+    assert.equal(await page.locator(".playback-scrubber").isDisabled(), true,
+      "nonreplayable execution must disable seeking");
   }
   const rendered = await waitForRenderedEndpoint(page, seconds);
   assert.ok(rendered.frames > 0, "authored endpoint was not presented by the render worker");
@@ -290,8 +274,18 @@ try {
   const page = await context.newPage();
   await page.addInitScript(profileStages => {
     const NativeWorker = window.Worker;
-    const probe = { pending: false, latest: null, metricsReplies: 0,
+    // The product client rejects this ID before issuing it (counter exhausted).
+    // Consume only this test-owned diagnostic reply before its normal listener.
+    const diagnosticRequestId = Number.MAX_SAFE_INTEGER;
+    const probe = { worker: null, pending: false, latest: null, metricsReplies: 0,
       profileStages, captureStages: false, presentationSamples: [], stageKeys: new Set(),
+      requestMetrics() {
+        if (probe.worker === null || probe.pending) return;
+        probe.pending = true;
+        probe.worker.postMessage({ channel: "noon.render", protocolVersion: 1,
+          type: "metrics", requestId: diagnosticRequestId,
+          profilePublicationStages: probe.captureStages });
+      },
       observation: (metrics) => ({
         frames: metrics?.presentedFrames,
         time: metrics?.time,
@@ -307,17 +301,24 @@ try {
     };
     window.__noonProductRenderProbe = probe;
 
-    // Test-only observer; the camera run enables the existing bounded optional
-    // profiling lane. IDs, semantic messages and scheduling remain unchanged.
+    // Test-only read-only metrics requests use the existing render control lane.
+    // Ordinary client replies and all semantic messages pass through untouched.
     class ObservedWorker extends NativeWorker {
       constructor(url, options) {
         super(url, options);
         if (!String(url).includes("execution-render-worker.js")) return;
+        probe.worker = this;
+        probe.pending = false;
         this.addEventListener("message", (event) => {
           const message = event.data;
+          if (message?.channel !== "noon.render" || message.requestId !== diagnosticRequestId) return;
+          event.stopImmediatePropagation();
+          if (probe.worker !== this) return;
+          probe.pending = false;
           const presentedFrames = Number(message?.metrics?.presentedFrames);
-          if (message?.channel !== "noon.render" || message?.type !== "metrics" ||
-              !Number.isFinite(presentedFrames)) return;
+          if (message?.type !== "metrics" || !Number.isFinite(presentedFrames)) {
+            throw new Error(`product renderer metrics failed: ${message.message ?? message.type}`);
+          }
           probe.metricsReplies += 1;
           probe.latest = probe.observation(message.metrics);
           if (probe.captureStages) {
@@ -330,14 +331,7 @@ try {
               probe.presentationSamples.push({ ...sample, clockOriginMs });
             }
           }
-          probe.pending = false;
         });
-      }
-      postMessage(message, ...options) {
-        if (probe.captureStages && message?.channel === "noon.render" && message?.type === "metrics") {
-          return super.postMessage({ ...message, profilePublicationStages: true }, ...options);
-        }
-        return super.postMessage(message, ...options);
       }
     }
     Object.defineProperty(window, "Worker", {
