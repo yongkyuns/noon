@@ -328,19 +328,25 @@ jobs:
         run: |
           # Fixed before measurement: B/C, C/B, B/C. Every run is retained;
           # a failed run fails the cohort rather than selecting another sample.
-          for noon_pair in 1 2 3; do
-            noon_order="baseline candidate"
-            if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
-            noon_position=0
-            for noon_side in $noon_order; do
-              noon_position=$((noon_position + 1))
-              NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
-              NOON_PRODUCT_PORT=4205 \
-              NOON_PRODUCT_LABEL="$noon_side" \
-              NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
-              NOON_PRODUCT_PAIR_POSITION="$noon_position" \
-              NOON_PRODUCT_ARTIFACT_DIR="browser-smoke-artifacts/product-gate/$noon_side/trial-$noon_pair" \
-                node scripts/playground-product-e2e.mjs
+          # Reuse the exact same two packages for both existing gallery lessons.
+          for noon_example in parity-square-and-circle showcase-camera-follows-path; do
+            noon_evidence="browser-smoke-artifacts/product-gate"
+            if [[ "$noon_example" == showcase-camera-follows-path ]]; then noon_evidence="$noon_evidence/camera"; fi
+            for noon_pair in 1 2 3; do
+              noon_order="baseline candidate"
+              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
+              noon_position=0
+              for noon_side in $noon_order; do
+                noon_position=$((noon_position + 1))
+                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
+                NOON_PRODUCT_PORT=4205 \
+                NOON_PRODUCT_EXAMPLE="$noon_example" \
+                NOON_PRODUCT_LABEL="$noon_side" \
+                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
+                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
+                  node scripts/playground-product-e2e.mjs
+              done
             done
           done
 
@@ -355,6 +361,9 @@ jobs:
           node scripts/playground-product-compare.mjs \
             browser-smoke-artifacts/product-gate/baseline \
             browser-smoke-artifacts/product-gate/candidate --pairs 3
+          node scripts/playground-product-compare.mjs \
+            browser-smoke-artifacts/product-gate/camera/baseline \
+            browser-smoke-artifacts/product-gate/camera/candidate --pairs 3
 
       - name: Upload product regression evidence
         if: always()

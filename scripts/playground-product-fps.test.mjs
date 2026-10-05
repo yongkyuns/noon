@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sampleRendererFps } from "./playground-product-fps.mjs";
+import { readFile } from "node:fs/promises";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps } from "./playground-product-fps.mjs";
 
 function sample({
   now = 0,
@@ -203,3 +204,83 @@ test("FPS is anchored to renderer timestamps rather than arrival and polling clo
   assert.equal(changed.measurementMs, baseline.measurementMs);
   assert.equal(changed.effectiveFps, baseline.effectiveFps);
 });
+
+test("camera measurement isolates following from setup, restoration, and endpoint holds", () => {
+  const protocol = productMeasurement("showcase-camera-follows-path");
+  assert.equal(protocol.windowStartSeconds, 3.7);
+  assert.equal(protocol.windowEndSeconds, 6.9);
+  assert.equal(protocol.sourceEndSeconds, 9.8);
+  const samples = [
+    ...observations({ endTime: 3.6, endAt: 4_600 }),
+    ...observations({ startFrames: 100, endFrames: 292, startTime: 3.7, endTime: 6.9,
+      startAt: 5_000, endAt: 8_200 }).map((entry, index) => ({ ...entry, metricAt: 100 + index })),
+    sample({ metricAt: 200, rendererAt: 8_300, frames: 292, time: 6.9 }),
+    sample({ metricAt: 201, rendererAt: 11_100, frames: 360, time: 9.8, phase: "endpoint" }),
+  ];
+  const fps = sampleRendererFps(samples, protocol.windowEndSeconds, { warmupSeconds: protocol.windowStartSeconds });
+  assert.equal(fps.effectiveFps, 60);
+  assert.equal(fps.startFrames, 100);
+  assert.equal(fps.endFrames, 292);
+  assert.equal(fps.endRendererAt, 8_200);
+  assert.throws(() => productMeasurement("unqualified-scene"), /unsupported product measurement/);
+});
+
+test("the camera measurement window follows the curated source's authored beats", async () => {
+  const source = await readFile(new URL("../web/python/examples/showcase_camera_follows_path.py", import.meta.url), "utf8");
+  const [setup, following] = source.split("camera_frame.add_updater(follow_point)");
+  assert.ok(following, "the measured camera lesson must use its required Python updater");
+  const duration = section => [...section.matchAll(/run_time=([0-9.]+)|await self\.wait\(([0-9.]+)\)/g)]
+    .reduce((total, match) => total + Number(match[1] ?? match[2]), 0);
+  const protocol = productMeasurement("showcase-camera-follows-path");
+  assert.ok(Math.abs(duration(setup) - protocol.windowStartSeconds) < 0.001);
+  assert.ok(Math.abs(duration(setup) + duration(following.split("camera_frame.remove_updater")[0]) -
+    protocol.windowEndSeconds) < 0.001);
+  assert.ok(Math.abs(duration(source) - protocol.sourceEndSeconds) < 0.001);
+});
+
+function gapFixture() {
+  const fps = sampleRendererFps(observations({ startFrames: 100, endFrames: 292,
+    startTime: 3.7, endTime: 6.9, startAt: 5_000, endAt: 8_200 }), 6.9, { warmupSeconds: 3.7 });
+  const samples = Array.from({ length: 193 }, (_, index) => ({ session: 1, clockOriginMs: 10_000,
+    sequence: 100 + index, presentedAtMs: 4_998 + index * 1000 / 60 }));
+  return { fps, samples };
+}
+
+test("publication gaps use complete worker presentation timestamps within the scored epoch", () => {
+  const { fps, samples } = gapFixture();
+  const gaps = samplePresentationGaps([
+    { session: 2, clockOriginMs: 10_000, sequence: 0, presentedAtMs: 0 },
+    ...samples,
+    { session: 1, clockOriginMs: 10_000, sequence: 400, presentedAtMs: 8_300 },
+  ], fps);
+  assert.equal(gaps.intervalCount, fps.endFrames - fps.startFrames);
+  assert.ok(Math.abs(gaps.intervalMs.mean - 1000 / 60) < 0.001);
+  assert.equal(gaps.cadence.longFrameRate, 0);
+});
+
+test("high average FPS still reports jagged per-frame submission intervals", () => {
+  const { fps, samples } = gapFixture();
+  for (let index = 1; index < samples.length; index += 1) {
+    samples[index].presentedAtMs = samples[index - 1].presentedAtMs + (index % 2 ? 2000 / 60 - 1 : 1);
+  }
+  const gaps = samplePresentationGaps(samples, fps);
+  assert.equal(fps.effectiveFps, 60);
+  assert.equal(gaps.cadence.longFrameRate, 0.5);
+  assert.ok(gaps.intervalMs.p95 > 32);
+});
+
+for (const [name, mutate, expected] of [
+  ["a lost frame", samples => samples.splice(20, 1), /cover every measured renderer frame/],
+  ["a missing start", samples => samples.shift(), /cover every measured renderer frame/],
+  ["a missing end", samples => samples.pop(), /cover every measured renderer frame/],
+  ["a wrong realm", samples => { samples[20].clockOriginMs = 20_000; }, /cover every measured renderer frame/],
+  ["a duplicate publication", samples => { samples[20].sequence = samples[19].sequence; }, /must advance/],
+  ["a backwards clock", samples => { samples[20].presentedAtMs = samples[19].presentedAtMs - 1; }, /must advance/],
+  ["a malformed timestamp", samples => { samples[20].presentedAtMs = Number.NaN; }, /must advance/],
+]) {
+  test(`publication gaps reject ${name}`, () => {
+    const { fps, samples } = gapFixture();
+    mutate(samples);
+    assert.throws(() => samplePresentationGaps(samples, fps), expected);
+  });
+}
