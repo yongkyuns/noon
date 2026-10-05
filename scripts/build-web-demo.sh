@@ -57,6 +57,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/playground-cold-start-memory.mjs
   node --check scripts/deterministic-replay-smoke.mjs
   node --check scripts/browser-test-server.mjs
+  node --test scripts/browser-test-server.test.mjs
   node --check scripts/cross-language-parity.mjs
   node --check scripts/typed-authoring-errors-smoke.mjs
   node --check scripts/manim-compat-smoke.mjs

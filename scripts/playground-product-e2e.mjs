@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import pngjs from "pngjs";
-import { sampleRendererFps } from "./playground-product-fps.mjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps } from "./playground-product-fps.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -20,11 +20,8 @@ const artifactDir = path.resolve(
 );
 const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
-const PRODUCT_FIRST_PASS_SECONDS = 4;
-const PRODUCT_ENDPOINT_HOLD_SECONDS = 0.5;
-const PRODUCT_SOURCE_END_SECONDS = PRODUCT_FIRST_PASS_SECONDS + PRODUCT_ENDPOINT_HOLD_SECONDS;
+const measurement = productMeasurement(exampleId);
 const MIN_PRODUCT_MEASUREMENT_MS = 1_000;
-const PRODUCT_WARMUP_SECONDS = 1;
 const startedAtMs = Date.now();
 const pair = process.env.NOON_PRODUCT_PAIR_INDEX === undefined ? null : {
   index: Number(process.env.NOON_PRODUCT_PAIR_INDEX),
@@ -103,6 +100,12 @@ async function waitForApplied(page) {
 const runEvidence = [];
 
 async function runAndMeasure(page, { captureFrames = false } = {}) {
+  await page.evaluate(capture => {
+    const probe = window.__noonProductRenderProbe;
+    probe.captureStages = capture && probe.profileStages;
+    probe.presentationSamples = [];
+    probe.stageKeys.clear();
+  }, captureFrames);
   const started = performance.now();
   let sampling = captureFrames;
   const frameSamples = [];
@@ -113,19 +116,9 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
       const sample = await page.evaluate(async () => {
         const gallery = window.__noonExampleGallery;
         const probe = window.__noonProductRenderProbe;
-        // Issue the existing aggregate metrics request without awaiting its
-        // source-continuation half. The passive Worker observer records the
-        // matching render reply, which is the real presentation counter.
-        if (
-          !probe.pending &&
-          gallery?.executionMode !== null &&
-          typeof gallery?.executionMetrics === "function"
-        ) {
-          probe.pending = true;
-          void gallery.executionMetrics().catch(() => {
-            probe.pending = false;
-          });
-        }
+        // Sample only the renderer. Aggregate metrics also query the source
+        // owner and would add work to the callback lane being measured.
+        probe.requestMetrics();
         return {
           phase: "source",
           ...probe.latest,
@@ -140,20 +133,19 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
   })();
   try {
     await page.locator("#replace-scene").click();
+    // Run may replace its canvas during startup; the preview frame is stable.
+    await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
     const state = await waitForApplied(page);
     const milliseconds = performance.now() - started;
     if (captureFrames) {
       // This is the final observation for this exact run, after its renderer
       // has presented the authored endpoint and before any warm/edit rerun.
-      const endpoint = await page.evaluate(async () => {
-        const report = await window.__noonExampleGallery?.executionMetrics();
-        const metrics = report?.metrics;
-        return { phase: "endpoint", ...window.__noonProductRenderProbe.observation(metrics),
-          now: performance.now() };
-      });
+      const endpoint = { phase: "endpoint", ...await sampleRendererObservation(page) };
       frameSamples.push(endpoint);
     }
-    return { milliseconds, state, frameSamples };
+    const presentationSamples = await page.evaluate(() => window.__noonProductRenderProbe.presentationSamples);
+    evidence.presentationSamples = presentationSamples;
+    return { milliseconds, state, frameSamples, presentationSamples };
   } finally {
     sampling = false;
     try {
@@ -162,6 +154,18 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
       evidence.finishedAtMs = Date.now();
     }
   }
+}
+
+async function sampleRendererObservation(page) {
+  const previousReplies = await page.evaluate(() => {
+    const probe = window.__noonProductRenderProbe;
+    const previous = probe.metricsReplies;
+    probe.requestMetrics();
+    return previous;
+  });
+  await page.waitForFunction(previous => window.__noonProductRenderProbe.metricsReplies > previous,
+    previousReplies, { timeout: 10_000 });
+  return page.evaluate(() => ({ ...window.__noonProductRenderProbe.latest, now: performance.now() }));
 }
 
 function changedPixelStats(buffer) {
@@ -185,21 +189,7 @@ async function waitForRenderedEndpoint(page, seconds) {
     () => window.__noonProductRenderProbe?.metricsReplies ?? 0,
   );
   while (performance.now() < deadline) {
-    await page.evaluate(() => {
-      const gallery = window.__noonExampleGallery;
-      if (typeof gallery?.executionMetrics !== "function") {
-        throw new Error("product E2E could not request renderer metrics");
-      }
-      const probe = window.__noonProductRenderProbe;
-      if (probe?.pending) return;
-      probe.pending = true;
-      // The renderer reply is observed passively below. Do not await the
-      // aggregate request: its source side may remain owned by an active
-      // authoring continuation.
-      void gallery.executionMetrics().catch(() => {
-        probe.pending = false;
-      });
-    });
+    await page.evaluate(() => window.__noonProductRenderProbe.requestMetrics());
     await page.waitForTimeout(50);
     const sample = await page.evaluate(() => {
       const probe = window.__noonProductRenderProbe;
@@ -235,13 +225,10 @@ async function synchronizeFinalFrame(page, seconds) {
   );
   const toggle = page.locator(".playback-controls .playback-toggle");
   const hasControls = (await toggle.count()) > 0;
-  assert.equal(
-    hasControls,
-    capability === "available",
-    "playback control DOM must match the execution ownership capability",
-  );
-  if (hasControls) {
+  if (capability === "available") {
+    assert.ok(hasControls, "replayable execution must expose playback controls");
     await toggle.waitFor({ state: "visible", timeout: 10_000 });
+    assert.equal(await toggle.isEnabled(), true, "completed replay controls must be enabled");
     if ((await toggle.getAttribute("aria-label")) === "Pause animation") {
       await toggle.click();
       await page.waitForFunction(
@@ -252,6 +239,10 @@ async function synchronizeFinalFrame(page, seconds) {
       input.value = String(target);
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }, seconds);
+  } else if (hasControls) {
+    assert.equal(await toggle.isDisabled(), true, "nonreplayable execution must disable playback");
+    assert.equal(await page.locator(".playback-scrubber").isDisabled(), true,
+      "nonreplayable execution must disable seeking");
   }
   const rendered = await waitForRenderedEndpoint(page, seconds);
   assert.ok(rendered.frames > 0, "authored endpoint was not presented by the render worker");
@@ -281,9 +272,20 @@ try {
     deviceScaleFactor: 1,
   });
   const page = await context.newPage();
-  await page.addInitScript(() => {
+  await page.addInitScript(profileStages => {
     const NativeWorker = window.Worker;
-    const probe = { pending: false, latest: null, metricsReplies: 0,
+    // The product client rejects this ID before issuing it (counter exhausted).
+    // Consume only this test-owned diagnostic reply before its normal listener.
+    const diagnosticRequestId = Number.MAX_SAFE_INTEGER;
+    const probe = { worker: null, pending: false, latest: null, metricsReplies: 0,
+      profileStages, captureStages: false, presentationSamples: [], stageKeys: new Set(),
+      requestMetrics() {
+        if (probe.worker === null || probe.pending) return;
+        probe.pending = true;
+        probe.worker.postMessage({ channel: "noon.render", protocolVersion: 1,
+          type: "metrics", requestId: diagnosticRequestId,
+          profilePublicationStages: probe.captureStages });
+      },
       observation: (metrics) => ({
         frames: metrics?.presentedFrames,
         time: metrics?.time,
@@ -299,20 +301,36 @@ try {
     };
     window.__noonProductRenderProbe = probe;
 
-    // This test-only observer sees actual render-worker metrics replies without
-    // changing their request IDs, contents, scheduling, or ownership.
+    // Test-only read-only metrics requests use the existing render control lane.
+    // Ordinary client replies and all semantic messages pass through untouched.
     class ObservedWorker extends NativeWorker {
       constructor(url, options) {
         super(url, options);
         if (!String(url).includes("execution-render-worker.js")) return;
+        probe.worker = this;
+        probe.pending = false;
         this.addEventListener("message", (event) => {
           const message = event.data;
+          if (message?.channel !== "noon.render" || message.requestId !== diagnosticRequestId) return;
+          event.stopImmediatePropagation();
+          if (probe.worker !== this) return;
+          probe.pending = false;
           const presentedFrames = Number(message?.metrics?.presentedFrames);
-          if (message?.channel !== "noon.render" || message?.type !== "metrics" ||
-              !Number.isFinite(presentedFrames)) return;
+          if (message?.type !== "metrics" || !Number.isFinite(presentedFrames)) {
+            throw new Error(`product renderer metrics failed: ${message.message ?? message.type}`);
+          }
           probe.metricsReplies += 1;
           probe.latest = probe.observation(message.metrics);
-          probe.pending = false;
+          if (probe.captureStages) {
+            for (const sample of message.metrics.publicationStageSamples ?? []) {
+              const clockOriginMs = message.metrics.performanceTimeOriginMs;
+              const key = `${clockOriginMs}:${sample.session}:${sample.sequence}`;
+              if (probe.stageKeys.has(key)) continue;
+              if (probe.stageKeys.size >= 2_000) throw new Error("product publication capture exceeded its bound");
+              probe.stageKeys.add(key);
+              probe.presentationSamples.push({ ...sample, clockOriginMs });
+            }
+          }
         });
       }
     }
@@ -321,7 +339,7 @@ try {
       writable: true,
       value: ObservedWorker,
     });
-  });
+  }, measurement.gapClock !== null);
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -346,29 +364,35 @@ try {
   assert.equal(shell.executionMode, null, "page shell entered an execution mode before Run");
   assert.equal(shell.controls, false, "page shell allocated playback controls before Run");
 
-  // Baseline and candidate run this exact authored source. It extends only the
-  // animation duration and adds a bounded static hold, exposing its endpoint
-  // before source completion hands presentation to a different session.
-  await page.evaluate(({ durationSeconds, holdSeconds }) => {
-    const editor = document.querySelector("#python-scene-source");
-    if (!(editor instanceof HTMLTextAreaElement)) throw new Error("scene editor is unavailable");
-    const updated = editor.value.replace(
-      "self.play(Create(circle), Create(square))",
-      `self.play(Create(circle), Create(square), run_time=${durationSeconds})\n        self.wait(${holdSeconds})`,
-    );
-    if (updated === editor.value) throw new Error("product first-pass fixture was not found");
-    editor.value = updated;
-  }, { durationSeconds: PRODUCT_FIRST_PASS_SECONDS, holdSeconds: PRODUCT_ENDPOINT_HOLD_SECONDS });
+  // Both packages execute the same authored fixture.
+  if (exampleId === "parity-square-and-circle") {
+    // Extend the animation and expose its endpoint before session handoff.
+    await page.evaluate(({ durationSeconds, holdSeconds }) => {
+      const editor = document.querySelector("#python-scene-source");
+      if (!(editor instanceof HTMLTextAreaElement)) throw new Error("scene editor is unavailable");
+      const updated = editor.value.replace(
+        "self.play(Create(circle), Create(square))",
+        `self.play(Create(circle), Create(square), run_time=${durationSeconds})\n        self.wait(${holdSeconds})`,
+      );
+      if (updated === editor.value) throw new Error("product first-pass fixture was not found");
+      editor.value = updated;
+    }, { durationSeconds: measurement.windowEndSeconds, holdSeconds: measurement.endpointHoldSeconds });
+  } else {
+    // Use the current curated lesson verbatim on both release packages.
+    const source = await readFile(path.join(repoRoot, "web/python/examples/showcase_camera_follows_path.py"), "utf8");
+    await page.locator("#python-scene-source").evaluate((editor, source) => { editor.value = source; }, source);
+  }
 
   const cold = await runAndMeasure(page);
   assert.equal(cold.state.backend, "WebGL2", `expected WebGL2 product path, got ${cold.state.backend}`);
-  // Complete a cold pass before scoring a warm run. Discard the declared first
-  // authored second of that run; cold/warm authoring latency stays separate.
+  // Complete a cold pass before scoring the declared warm authored window.
   const warm = await runAndMeasure(page, { captureFrames: true });
-  const fps = sampleRendererFps(warm.frameSamples, PRODUCT_FIRST_PASS_SECONDS, {
+  const fps = sampleRendererFps(warm.frameSamples, measurement.windowEndSeconds, {
     minMeasurementMs: MIN_PRODUCT_MEASUREMENT_MS,
-    warmupSeconds: PRODUCT_WARMUP_SECONDS,
+    warmupSeconds: measurement.windowStartSeconds,
   });
+  const presentationGaps = measurement.gapClock === null ? null
+    : samplePresentationGaps(warm.presentationSamples, fps);
 
   const marker = `# product gate ${label}`;
   await page.evaluate((text) => {
@@ -378,7 +402,7 @@ try {
   }, marker);
   const edited = await runAndMeasure(page);
 
-  const endpoint = await synchronizeFinalFrame(page, PRODUCT_SOURCE_END_SECONDS);
+  const endpoint = await synchronizeFinalFrame(page, measurement.sourceEndSeconds);
   const screenshotName = "frame-final.png";
   const screenshotPath = path.join(artifactDir, screenshotName);
   const canvas = page.locator("#scene");
@@ -405,9 +429,7 @@ try {
     startedAtMs,
     finishedAtMs: Date.now(),
     runtimeIdentity: JSON.parse(await readFile(path.join(siteRoot, "web/runtime-build-identity.json"), "utf8")),
-    measurement: { version: 1, clock: "renderer-sampled", preparation: "completed-cold-pass",
-      authoredSeconds: PRODUCT_FIRST_PASS_SECONDS, warmupSeconds: PRODUCT_WARMUP_SECONDS,
-      endpointHoldSeconds: PRODUCT_ENDPOINT_HOLD_SECONDS },
+    measurement,
     shellReadyMs,
     shell,
     coldRunMs: cold.milliseconds,
@@ -417,9 +439,11 @@ try {
     // Preserve the actual observations so a short-window regression can be
     // diagnosed without reconstructing telemetry from an aggregate FPS value.
     fpsSamples: warm.frameSamples,
+    presentationSamples: warm.presentationSamples,
+    presentationGaps,
     visual,
     fixedFrame: {
-      authoredEndpointSeconds: PRODUCT_SOURCE_END_SECONDS,
+      authoredEndpointSeconds: measurement.sourceEndSeconds,
       presentation: endpoint,
     },
     screenshot: screenshotName,
@@ -441,6 +465,12 @@ try {
       `warm ${warm.milliseconds.toFixed(0)} ms, edit ${edited.milliseconds.toFixed(0)} ms, ` +
       `${fps.effectiveFps.toFixed(1)} FPS, ${visual.changedPixels} visible pixels`,
   );
+  if (presentationGaps !== null) {
+    console.log(`Camera following ${measurement.windowStartSeconds}–${measurement.windowEndSeconds} s: ` +
+      `submission gaps p95 ${presentationGaps.intervalMs.p95.toFixed(1)} ms, ` +
+      `max ${presentationGaps.intervalMs.max.toFixed(1)} ms, ` +
+      `${presentationGaps.cadence.longFrames}/${presentationGaps.intervalCount} intervals ≥25 ms`);
+  }
 } catch (error) {
   await writeFile(path.join(artifactDir, "failure.json"), `${JSON.stringify({
     label, exampleId, siteRoot, pair, startedAtMs, finishedAtMs: Date.now(),

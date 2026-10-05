@@ -209,14 +209,31 @@ and runtime-file hashes using the shared WASM artifact contract. The candidate i
 GitHub's tested PR merge commit; the baseline is the event's base SHA.
 
 The comparison uses three serial pairs in a fixed B/C, C/B, B/C order. Each
-browser run completes a cold four-second animation with a half-second static
-endpoint hold, then measures a warm pass after its first authored second. The
-hold exposes the animation endpoint before source completion changes sessions;
-it is excluded from FPS. FPS uses the render worker's sampling clock and
+browser run completes a cold pass before measuring a warm pass. The existing
+square/circle fixture scores authored seconds 1–4 with a half-second endpoint
+hold. The curated camera lesson runs verbatim on both packages and scores only
+its following segment, authored seconds 3.7–6.9. Its existing 0.4-second hold
+exposes that endpoint before camera restoration and source completion at 9.8
+seconds; setup, restoration and holds are excluded from FPS. Both workloads
+reuse the same downloaded packages and three-pair protocol, with no extra build.
+The preview stays visible during measurement. The sampler sends read-only queries
+through the existing renderer metrics channel, consumes only its test-owned replies,
+and never adds aggregate source-owner queries to the callback lane. Replayable
+lessons seek to their fixed endpoint; the camera lesson must keep seeking disabled
+and reach its endpoint through normal source execution.
+FPS uses the render worker's sampling clock and
 presentation counter within one session/clock epoch; reply arrival and polling
 times remain diagnostic observations. Duplicate settled endpoint replies do not
 extend the window. A late start, missing endpoint, malformed clock, failed run,
 changed package/configuration, or reordered cohort fails qualification.
+
+Camera runs also enable the existing bounded, optional publication-stage metrics.
+The harness deduplicates worker-clock render-call timestamps and requires complete
+presentation-counter coverage in the scored window. It reports p50/p95/p99/max
+gaps and 60 Hz long-frame diagnostics; missing samples fail qualification. These
+are CPU renderer-submission intervals, not GPU completion or physical scanout.
+Shared software-GPU gap summaries remain diagnostic; no physical cadence budget
+is applied to them. The comparison recomputes camera FPS and gaps from raw samples.
 
 The existing latency/FPS thresholds apply to arithmetic means across all three
 runs. Every raw sample, per-run report and fixed-frame image is retained. The

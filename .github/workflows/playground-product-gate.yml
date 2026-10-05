@@ -25,6 +25,7 @@ on:
       - "scripts/playground-product-e2e.mjs"
       - "scripts/playground-product-fps.mjs"
       - "scripts/playground-product-fps.test.mjs"
+      - "scripts/python-host-perf*.mjs"
       - "scripts/playground-product-compare.mjs"
       - "scripts/renderer-init-failure-smoke.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
@@ -43,11 +44,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
+      baseline-sha: ${{ steps.comparison-base.outputs.base-sha }}
       baseline-artifact: ${{ steps.baseline-artifact.outputs.artifact-id }}
       candidate-artifact: ${{ steps.candidate-artifact.outputs.artifact-id }}
       candidate-fixture-artifact: ${{ steps.candidate-fixture-artifact.outputs.artifact-id }}
     env:
-      NOON_PRODUCT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      NOON_PRODUCT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       RUSTC_WRAPPER: sccache
@@ -66,11 +68,24 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: candidate
+          fetch-depth: 2
+
+      - name: Resolve the baseline actually included in the tested merge
+        id: comparison-base
+        env:
+          NOON_CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          node candidate/.github/ci/product-baseline.mjs candidate "$NOON_CANDIDATE_SHA" "$NOON_PRODUCT_HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Export the immutable comparison baseline
+        env:
+          NOON_MATCHED_BASE_SHA: ${{ steps.comparison-base.outputs.base-sha }}
+        run: echo "NOON_PRODUCT_BASE_SHA=$NOON_MATCHED_BASE_SHA" >> "$GITHUB_ENV"
 
       - name: Checkout PR base
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ steps.comparison-base.outputs.base-sha }}
           path: baseline
 
       - name: Test CI artifact contracts
@@ -215,9 +230,9 @@ jobs:
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
-      NOON_PRODUCT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "0"
       NOON_RENDERER_SMOKE: "0"
@@ -235,7 +250,7 @@ jobs:
       - name: Checkout PR base
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ needs.build.outputs.baseline-sha }}
           path: baseline
 
       - name: Download baseline production package
@@ -272,6 +287,10 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+
+      - name: Test fixed-work performance controls
+        working-directory: candidate
+        run: node --test scripts/python-host-perf*.test.mjs
 
       - name: Test product comparison with PNG controls
         working-directory: candidate
@@ -318,6 +337,7 @@ jobs:
           path: candidate/web
 
       - name: Reverify candidate production package
+        id: production-verified
         working-directory: candidate
         run: node .github/ci/product-artifact.mjs verify candidate .
 
@@ -328,19 +348,25 @@ jobs:
         run: |
           # Fixed before measurement: B/C, C/B, B/C. Every run is retained;
           # a failed run fails the cohort rather than selecting another sample.
-          for noon_pair in 1 2 3; do
-            noon_order="baseline candidate"
-            if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
-            noon_position=0
-            for noon_side in $noon_order; do
-              noon_position=$((noon_position + 1))
-              NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
-              NOON_PRODUCT_PORT=4205 \
-              NOON_PRODUCT_LABEL="$noon_side" \
-              NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
-              NOON_PRODUCT_PAIR_POSITION="$noon_position" \
-              NOON_PRODUCT_ARTIFACT_DIR="browser-smoke-artifacts/product-gate/$noon_side/trial-$noon_pair" \
-                node scripts/playground-product-e2e.mjs
+          # Reuse the exact same two packages for both existing gallery lessons.
+          for noon_example in parity-square-and-circle showcase-camera-follows-path; do
+            noon_evidence="browser-smoke-artifacts/product-gate"
+            if [[ "$noon_example" == showcase-camera-follows-path ]]; then noon_evidence="$noon_evidence/camera"; fi
+            for noon_pair in 1 2 3; do
+              noon_order="baseline candidate"
+              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
+              noon_position=0
+              for noon_side in $noon_order; do
+                noon_position=$((noon_position + 1))
+                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
+                NOON_PRODUCT_PORT=4205 \
+                NOON_PRODUCT_EXAMPLE="$noon_example" \
+                NOON_PRODUCT_LABEL="$noon_side" \
+                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
+                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
+                  node scripts/playground-product-e2e.mjs
+              done
             done
           done
 
@@ -355,6 +381,17 @@ jobs:
           node scripts/playground-product-compare.mjs \
             browser-smoke-artifacts/product-gate/baseline \
             browser-smoke-artifacts/product-gate/candidate --pairs 3
+          node scripts/playground-product-compare.mjs \
+            browser-smoke-artifacts/product-gate/camera/baseline \
+            browser-smoke-artifacts/product-gate/camera/candidate --pairs 3
+
+      - name: Measure fixed-work Python host overhead on matched packages
+        if: ${{ !cancelled() && steps.production-verified.outcome == 'success' }}
+        working-directory: candidate
+        env:
+          NOON_PERF_BASELINE_ROOT: ${{ github.workspace }}/baseline
+          NOON_PERF_CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+        run: node scripts/python-host-perf.mjs
 
       - name: Upload product regression evidence
         if: always()

@@ -275,6 +275,17 @@ test("product gate requires PNG comparison controls after dependency setup", asy
   assert.match(controlStep, /node --test web\/playground-product-compare-validation\.test\.mjs/);
 });
 
+test("product camera measurements reuse the restored packages and fixed alternating pairs", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const measurements = workflow.slice(workflow.indexOf("      - name: Measure three alternating product pairs"),
+    workflow.indexOf("      - name: Upload product regression evidence"));
+  assert.match(measurements, /for noon_example in parity-square-and-circle showcase-camera-follows-path/);
+  assert.match(measurements, /for noon_pair in 1 2 3/);
+  assert.match(measurements, /NOON_PRODUCT_EXAMPLE="\$noon_example"/);
+  assert.match(measurements, /product-gate\/camera\/candidate --pairs 3/);
+  assert.doesNotMatch(measurements, /build-web-demo|cargo |wasm-pack/);
+});
+
 test("Pages builds use the shared optimized production WASM configuration", async () => {
   const workflow = await readFile(new URL("../workflows/pages.yml", import.meta.url), "utf8");
   const buildJob = workflow.slice(workflow.indexOf("  build:"), workflow.indexOf("\n  deploy:"));

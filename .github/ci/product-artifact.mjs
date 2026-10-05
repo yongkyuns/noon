@@ -41,8 +41,8 @@ async function main() {
   const build = productConfig(role);
   assert.ok(checkout, "missing product checkout");
   const root = path.resolve(checkout);
-  // Both checkouts use immutable event SHAs. The candidate is the tested merge,
-  // never a substituted PR head; the baseline is the event's pinned base commit.
+  // The candidate is the immutable tested merge, never a substituted PR head.
+  // The baseline is that merge's verified first parent (the integrated master).
   const sha = role === "baseline" ? process.env.NOON_PRODUCT_BASE_SHA : process.env.GITHUB_SHA;
   assert.match(sha ?? "", /^[0-9a-f]{40}$/, "missing product source SHA");
   const env = { ...process.env, GITHUB_SHA: sha };
