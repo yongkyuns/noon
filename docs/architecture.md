@@ -12,7 +12,7 @@ Read this document in three modes:
 
 - **Normative architecture** defines ownership, interfaces, ordering, publication, locality, and lifetime rules.
 - **Current implementation** callouts describe where those responsibilities live today without creating a second target architecture.
-- **Roadmap status** is intentionally coarse; mutable task inventories and final qualification evidence live in GitHub issues, primarily the Phase A umbrella.
+- **Roadmap status** is intentionally coarse; mutable task inventories and final qualification evidence live in the owning phase and follow-up issues linked below.
 
 ---
 
@@ -1220,8 +1220,9 @@ The runtime retains only the sampled path and its declared parameter interval;
 queries do not resample the path or add frame work. Python `t_min`/`t_max` read
 that semantic interval through the typed handle. Copy carries the declaration;
 Manim `become` changes appearance while preserving the receiver's callable and
-interval. Retained-path inversion and default 2D axis tips remain outside
-this bounded graph-query profile.
+interval. Retained-path inversion remains outside this bounded graph-query
+profile. Default 2D Axes ranges, sizing and tips are supported separately through
+the shared coordinate constructors.
 The interval records whether the plot was mapped through Axes; standalone
 scene-coordinate graphs retain query metadata without widening the existing
 Axes-only area/partition profile.
@@ -1259,6 +1260,15 @@ The architecture above does not create a new roadmap phase or runtime owner. Exi
 ---
 
 ## Phase D — 3D and broader capability
+
+**Status: the bounded D1–D5 shared-engine milestone is complete; broader 3D
+usability, compatibility and qualification remain.**
+[#956](https://github.com/yongkyuns/noon/issues/956) records the completed
+world/camera/resource/depth, surface/solid/light, composition and vector-space
+profiles. [#1879](https://github.com/yongkyuns/noon/issues/1879) owns their
+remaining rendering/API work and coordinates the existing qualification owners.
+Do not reopen the completed substrate or interpret its completion as full Manim
+3D support or as “only D6 remains.”
 
 Extend the same architecture:
 
@@ -1359,6 +1369,51 @@ operations, and optional host-language APIs remain outside the qualified
 surface until their owning capability and paired qualification are added.
 The JS/TypeScript facade is an independent optional frontend track (D6); it is
 not a required Phase D 3D exit criterion.
+
+### Remaining capability and qualification
+
+The next work extends these profiles rather than replacing their architecture.
+Detailed batches, dependencies and evidence belong in
+[#1879](https://github.com/yongkyuns/noon/issues/1879) and its linked owners;
+this overview is not another implementation checklist.
+
+| Workstream | Remaining outcome and owner |
+| --- | --- |
+| Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE camera/3D examples. Qualify their exact source, effective state, timing/replay and raster/depth/compositing behavior; related Noon-profile Rust/Python pairs are not a full Manim pass. |
+| Common 3D rendering and defaults | #1879 owns common constructor-default usability, shading/material/per-face behavior, screen-space World strokes, default axes appearance and broader mixed composition. Native point lighting stays distinct from Cairo compatibility; existing Surface border extrusion does not qualify arbitrary World paths. Expand simple solid/surface translucency before separately specified general intersections. |
+| Geometry, axes and vector-space breadth | #1879 owns selected primitive orientations/ranges/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers. Compose shared semantic objects, resources and animations; do not implement feature engines in wrappers. |
+| Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
+
+Exact `FollowingGraphCamera` qualification can proceed beside shared
+World-stroke/axis work and physical-device pacing attribution. Independent
+geometry/vector-space batches need not wait for general transparency or all
+seven reference cases. Every promoted slice preserves the existing 2D output,
+atomic publication, authored/effective distinction, retained-resource locality,
+ordered callback/replay contract and one presentation surface. Unsupported
+defaults/options remain explicit until implemented; silently removing guards or
+substituting native appearance is not compatibility completion.
+
+Support records must distinguish **implemented profile**, **cross-frontend
+qualified**, and **Manim-qualified**. A class name, compilation, a showcase or
+matching Rust/Python pixels cannot substitute for pinned semantic/timing/raster
+evidence. Physical performance is a separate qualification dimension: retain
+exact package/device/backend identities, raw repeated samples and frame-gap
+measurements, not only mean FPS. A deferral needs a named owner and remains
+visible as unfinished work; it is not a parity pass or a reason to restart D1/D2.
+
+### Independent frontend and live-authoring tracks
+
+Optional D6 [#259](https://github.com/yongkyuns/noon/issues/259) owns high-level
+JS/TS authoring; existing WASM bindings do not imply that facade has shipped.
+[#1874](https://github.com/yongkyuns/noon/issues/1874) owns native CPython/Pyodide
+same-source semantics and real-binding conformance/performance, distinct from
+native Rust versus browser-Python evidence. Phase D APIs consume that shared
+Python path rather than introducing a native-only or browser-only 3D facade;
+eliminating async is not an acceptance criterion. Source hot reload and advanced
+live-authoring reconciliation remain [#64](https://github.com/yongkyuns/noon/issues/64),
+separate from the normal Python Run/restart contract. These owners remain
+independent of the completed bounded 3D milestone and do not create another
+scene/runtime authority.
 
 ---
 
