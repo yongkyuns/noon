@@ -199,7 +199,7 @@ Representative cold/warm Rust/frontend/mixed trials, end-to-end comparison acros
 all required workflows, seed eviction/freshness, build-once producer consolidation,
 and a measured tool-image decision remain separate #1265 acceptance work.
 
-### Product measurement retries
+### Product measurement protocol
 
 `playground-product-gate.yml` builds the baseline and candidate release packages
 in one producer, preserving the job-local compiler cache between fresh source
@@ -208,8 +208,28 @@ verifies each checkout SHA, release feature set, compiler pin, resolved lockfile
 and runtime-file hashes using the shared WASM artifact contract. The candidate is
 GitHub's tested PR merge commit; the baseline is the event's base SHA.
 
-After a measurement failure, rerun the failed measurement job to reuse those
-packages without rebuilding Rust. Re-running all jobs builds new packages. Keep
+The comparison uses three serial pairs in a fixed B/C, C/B, B/C order. Each
+browser run completes a cold four-second animation with a half-second static
+endpoint hold, then measures a warm pass after its first authored second. The
+hold exposes the animation endpoint before source completion changes sessions;
+it is excluded from FPS. FPS uses the render worker's sampling clock and
+presentation counter within one session/clock epoch; reply arrival and polling
+times remain diagnostic observations. Duplicate settled endpoint replies do not
+extend the window. A late start, missing endpoint, malformed clock, failed run,
+changed package/configuration, or reordered cohort fails qualification.
+
+The existing latency/FPS thresholds apply to arithmetic means across all three
+runs. Every raw sample, per-run report and fixed-frame image is retained. The
+comparison reports ranges and percentiles as dispersion, and checks every pair's
+image independently. Dependency-free preflight runs invalid-report/cohort controls;
+Product Gate explicitly enables the PNG/seeded-regression controls after its
+existing dependency setup. This is software-WebGL qualification, not physical-device
+60 FPS evidence. Pinned cumulative anchors and broader representative workloads
+remain owned by #1653.
+
+Any diagnostic rerun must repeat the entire declared cohort with those exact
+packages, without rebuilding Rust or selecting a passing observation. A passing
+rerun does not erase the earlier failure. Re-running all jobs builds new packages. Keep
 both package artifacts for the 14-day evidence window; after they expire, rerun
 the full workflow. Measurement artifacts include the attempt number, so a retry
 does not overwrite the original failure. All existing smokes, comparison
