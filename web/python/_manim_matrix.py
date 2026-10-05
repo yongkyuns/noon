@@ -10,11 +10,11 @@ from _manim_semantic_handles import (
 )
 
 try:
-    from js import noonCreateAuthoringMatrixHandle as _create_matrix
-    from js import noonCreateAuthoringIntegerMatrixHandle as _create_integer
-    from js import noonCreateAuthoringDecimalMatrixHandle as _create_decimal
-    from js import noonCreateAuthoringMobjectMatrixHandle as _create_mobject_matrix
-    from js import noonMatrixFromFamily as _matrix_from_family
+    from _noon_host import noonCreateAuthoringMatrixHandle as _create_matrix
+    from _noon_host import noonCreateAuthoringIntegerMatrixHandle as _create_integer
+    from _noon_host import noonCreateAuthoringDecimalMatrixHandle as _create_decimal
+    from _noon_host import noonCreateAuthoringMobjectMatrixHandle as _create_mobject_matrix
+    from _noon_host import noonMatrixFromFamily as _matrix_from_family
 except ImportError:
     _create_matrix = _create_integer = _create_decimal = _create_mobject_matrix = _matrix_from_family = None
 

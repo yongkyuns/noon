@@ -8,11 +8,11 @@ import _manim_compat as _compat
 import noon as _base
 
 try:
-    from js import noonCreateAuthoringDecimalNumberHandle as _create_decimal, noonNumericFromMobject as _from_mobject
+    from _noon_host import noonCreateAuthoringDecimalNumberHandle as _create_decimal, noonNumericFromMobject as _from_mobject
 except ImportError:
     _create_decimal = _from_mobject = None
 try:
-    from js import noonCreateAuthoringVariableHandle as _create_variable
+    from _noon_host import noonCreateAuthoringVariableHandle as _create_variable
 except ImportError:
     _create_variable = None
 

@@ -22,6 +22,7 @@ const exactFamilies = new Map([
   ["test-coverage.yml", "coverage"],
   ["platform-release.yml", "platform-release"],
   ["native-host-smoke.yml", "native-host"],
+  ["python-host-conformance.yml", "python-host"],
   ["pages.yml", "deployment"],
   ["fuzz.yml", "fuzz"],
   ["branch-cleanup-once.yml", "maintenance"],

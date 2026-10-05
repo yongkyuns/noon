@@ -4,10 +4,19 @@ on:
   pull_request:
     paths:
       - ".github/workflows/python-host-conformance.yml"
-      - "python/**"
       - "web/python/**"
+      - "web/python-compat-modules.js"
+      - "web/python-worker.source.js"
       - "crates/noon-python/**"
+      - "crates/noon/**"
+      - "crates/noon-core/**"
+      - "crates/noon-runtime/**"
+      - "crates/noon-compile/**"
+      - "crates/noon-web/**"
+      - "scripts/python-host-*.mjs"
       - "scripts/python_host_*.py"
+      - "scripts/build-native-python.py"
+      - "parity/python-host/**"
       - "Cargo.toml"
   workflow_dispatch:
 
@@ -19,26 +28,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  source-checks:
-    name: Python source checks (not runtime parity)
+  conformance:
+    name: Real CPython and Pyodide conformance
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      PYO3_PYTHON: python3
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Check Python continuation source
-        run: |
-          python -m py_compile web/python/_manim_source_execution.py web/python/_manim_scene.py
-          python -m unittest discover -s web/python -p 'test_manim_source_execution.py' -v
-      - name: Capture exact source for reproducible conformance investigation
-        run: |
-          mkdir -p python-host-evidence
-          git rev-parse HEAD > python-host-evidence/source-sha.txt
-          git archive --format=tar.gz --output=python-host-evidence/source.tar.gz HEAD
-      - uses: actions/upload-artifact@v7
+      - uses: actions/setup-python@v6
         with:
-          name: python-host-source-${{ github.sha }}
-          path: python-host-evidence/
-          retention-days: 7
+          python-version: "3.13"
+      - name: Build exact-source browser runtime
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: "false"
+          cache-ref: ${{ github.event.pull_request.base.sha }}
+      - name: Direct Rust semantic counterpart
+        run: cargo test -p noon --test python_host_contract
+      - name: Build real native CPython extension
+        run: python3 scripts/build-native-python.py --profile release
+      - name: Same-source native conformance and retirement
+        run: python3 scripts/python_host_conformance.py
+      - name: Native binding performance and interpreter locality
+        run: python3 scripts/python_host_performance.py
+      - name: Install browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Same-source Pyodide conformance on actual renderers
+        run: node scripts/python-host-browser.mjs
+      - name: Record exact tested source
+        if: always()
+        run: |
+          mkdir -p artifacts/python-host
+          git rev-parse HEAD > artifacts/python-host/source-sha.txt
+          rustc -Vv > artifacts/python-host/rust-version.txt
+      - name: Upload conformance and measured performance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-host-evidence-${{ github.sha }}
+          path: artifacts/python-host/
+          retention-days: 14
           if-no-files-found: error

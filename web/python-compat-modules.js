@@ -1,4 +1,6 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
+  { sourcePath: "python/_noon_source.py", runtimePath: "/tmp/_noon_source.py", label: "Noon shared Python source lifecycle" },
+  { sourcePath: "python/_noon_host.py", runtimePath: "/tmp/_noon_host.py", label: "Noon host binding selection" },
   { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },
   { sourcePath: "python/noon.py", runtimePath: "/tmp/noon.py", label: "Noon Python API" },
   { sourcePath: "python/_noon_spatial.py", runtimePath: "/tmp/_noon_spatial.py", label: "Noon typed spatial authoring" },

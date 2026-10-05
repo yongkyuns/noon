@@ -247,3 +247,9 @@ pub fn publish_family_align_to(
 ) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
     crate::family_layout::publish_align_family_to(store, root, execution, family, target, axis)
 }
+
+// Optional language adapters share argument/error projections, not another engine.
+pub use crate::binding_error::AuthoringFailure;
+pub use crate::binding_options::{
+    resolve_frontend_animation_options, resolve_frontend_transform_animation_options,
+};

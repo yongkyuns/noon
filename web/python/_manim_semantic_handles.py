@@ -37,17 +37,20 @@ def _alignment_is_mobject(value: object) -> bool:
 _ir = _base._ir
 
 try:
-    from js import noonAuthoringGeometryOptions as _geometry_options
-    from js import noonAuthoringVectorPath as _authoring_vector_path
-    from js import noonCreateAuthoringGeometryHandle as _create_geometry_handle
+    from _noon_host import noonAuthoringGeometryOptions as _geometry_options
+    from _noon_host import noonCreateAuthoringGeometryHandle as _create_geometry_handle
 except ImportError:  # Native CPython tests do not have the browser bridge.
     _geometry_options = None
-    _authoring_vector_path = None
     _create_geometry_handle = None
 
 try:
-    from js import noonCreateAuthoringFamilyHandle as _create_family_handle
-    from js import noonAuthoringMembershipBatch as _new_membership_batch
+    from _noon_host import noonAuthoringVectorPath as _authoring_vector_path
+except ImportError:
+    _authoring_vector_path = None
+
+try:
+    from _noon_host import noonCreateAuthoringFamilyHandle as _create_family_handle
+    from _noon_host import noonAuthoringMembershipBatch as _new_membership_batch
 except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _create_family_handle = None
     _new_membership_batch = None

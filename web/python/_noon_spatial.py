@@ -18,7 +18,7 @@ from _manim_semantic_handles import (
 )
 
 try:
-    from js import (
+    from _noon_host import (
         noonAuthoringMeshOptions as _mesh_options,
         noonSurfaceSamplingPlan as _surface_plan,
         noonAuthoringMeshFamilyOptions as _mesh_family_options,
