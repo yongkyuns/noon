@@ -397,7 +397,7 @@ fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringErro
     #[cfg(feature = "bundled-fonts")]
     {
         let mut fallback = None;
-        for data in typst_assets::fonts() {
+        for data in bundled_native_fonts() {
             let Some(font) = FontRef::from_index(data, 0) else {
                 continue;
             };
@@ -432,6 +432,38 @@ fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringErro
         }
     }
     Err(TextAuthoringError::FontUnavailable(Arc::from(family)))
+}
+
+// Share the same immutable assets across native regular/styled text and Typst.
+// The native-only configuration still needs no Typst compiler dependency.
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+#[inline(never)]
+fn bundled_native_fonts() -> impl Iterator<Item = &'static [u8]> {
+    #[cfg(feature = "typst")]
+    {
+        noon_typst::bundled_fonts()
+    }
+    #[cfg(not(feature = "typst"))]
+    {
+        typst_assets::fonts()
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "native-text",
+    feature = "bundled-fonts",
+    feature = "typst"
+))]
+#[test]
+fn native_and_typst_share_the_complete_immutable_font_set() {
+    let native: Vec<_> = bundled_native_fonts().collect();
+    let typst: Vec<_> = noon_typst::bundled_fonts().collect();
+    assert_eq!(native.len(), 17);
+    assert_eq!(native.len(), typst.len());
+    for (native, typst) in native.into_iter().zip(typst) {
+        assert!(std::ptr::eq(native, typst));
+    }
 }
 
 /// Parse ManimCE's supported `[start:end]` `t2c` selector form.
