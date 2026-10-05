@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { evaluateRasterTolerance, resolveRasterTolerance } from "./manim-raster-policy.mjs";
 
 export const FOLLOWING_SOURCE = "parity/manim-v0.21/following_graph_camera.py";
 export const FOLLOWING_UPSTREAM = "861cd4849b17db1db3515b531ffe80b297848f93";
@@ -101,7 +102,61 @@ export function assertFollowingState(actual, expected, label = "FollowingGraphCa
   return { maximumAbsoluteError, dotCount: dots.length };
 }
 
-export function assertFollowingReports(raster, semantic) {
+function assertFollowingRasterSample(sample, reference, tolerance, label) {
+  const pixels = reference.pixel_width * reference.pixel_height;
+  const finite = (value, name, min, max) => {
+    assert.ok(typeof value === "number" && Number.isFinite(value) && value >= min && value <= max,
+      `${label}: invalid ${name}`);
+  };
+  for (const host of ["reference", "noon"]) {
+    const image = sample[host];
+    assert.equal(image?.width, reference.pixel_width, `${label}: ${host} width`);
+    assert.equal(image?.height, reference.pixel_height, `${label}: ${host} height`);
+    assert.ok(Number.isInteger(image.changedPixels) && image.changedPixels > 0 && image.changedPixels <= pixels,
+      `${label}: ${host} must contain measured foreground`);
+    assert.ok(Array.isArray(image.background) && image.background.length === 4,
+      `${label}: missing ${host} background`);
+    for (const channel of image.background) {
+      finite(channel, `${host} background channel`, 0, 255);
+      assert.ok(Number.isInteger(channel), `${label}: background channel must be a byte`);
+    }
+    const bounds = image.bounds;
+    assert.ok(bounds, `${label}: missing ${host} foreground bounds`);
+    for (const [low, high, extent] of [["minX", "maxX", image.width], ["minY", "maxY", image.height]]) {
+      finite(bounds[low], `${host} ${low}`, 0, extent - 1);
+      finite(bounds[high], `${host} ${high}`, bounds[low], extent - 1);
+      assert.ok(Number.isInteger(bounds[low]) && Number.isInteger(bounds[high]),
+        `${label}: foreground bounds must be pixel indices`);
+    }
+  }
+  const expected = sample.reference.bounds;
+  const actual = sample.noon.bounds;
+  // Re-derive bounds deltas from measured endpoints: a stale zero summary
+  // must not conceal a displaced or incorrectly sized image.
+  const boundsDelta = {
+    centroidX: (actual.minX + actual.maxX - expected.minX - expected.maxX) / 2,
+    centroidY: (actual.minY + actual.maxY - expected.minY - expected.maxY) / 2,
+    width: actual.maxX - actual.minX - (expected.maxX - expected.minX),
+    height: actual.maxY - actual.minY - (expected.maxY - expected.minY),
+  };
+  assert.deepEqual(sample.boundsDelta, boundsDelta, `${label}: inconsistent bounds deltas`);
+  assert.ok(sample.diff, `${label}: missing raw raster metrics`);
+  finite(sample.diff.differingRatio, "differingRatio", 0, 1);
+  finite(sample.diff.meanAbsoluteChannelError, "meanAbsoluteChannelError", 0, 255);
+  finite(sample.diff.differingPixels, "differingPixels", 0, pixels);
+  assert.ok(Number.isInteger(sample.diff.differingPixels), `${label}: non-integer pixel count`);
+  assert.ok(Math.abs(sample.diff.differingRatio - sample.diff.differingPixels / pixels) <= 1e-12,
+    `${label}: inconsistent differing pixel ratio`);
+  const policy = evaluateRasterTolerance({ sample: { ...sample, boundsDelta }, timingDelta: 0, tolerance });
+  assert.equal(policy.passed, true, `${label}: raw raster policy failed: ${JSON.stringify(policy.failures)}`);
+  assert.deepEqual(sample.categories, policy.categories, `${label}: inconsistent raster classification`);
+}
+
+export function assertFollowingReports(raster, semantic, manifest) {
+  const focused = followingManifest(manifest);
+  assert.deepEqual(manifest.fixtures, focused.fixtures, "camera manifest must retain the complete unmodified fixture");
+  assert.deepEqual(raster.reference, manifest.reference, "raster source/configuration must match the requested oracle");
+  const tolerance = resolveRasterTolerance(manifest, manifest.fixtures[0]);
   assert.equal(semantic.manim_version, "0.21.0");
   assert.equal(semantic.frame_rate, 30);
   assert.equal(semantic.fixtures?.length, 1);
@@ -125,13 +180,15 @@ export function assertFollowingReports(raster, semantic) {
   const checks = [];
   for (const [backend, entry] of Object.entries(fixture.backends)) {
     assert.equal(entry.error, undefined, `${backend}: execution failure`);
+    assert.deepEqual(entry.tolerance, tolerance, `${backend}: raster tolerance drift`);
     assert.equal(entry.noonDuration, 3, `${backend}: exact source completion`);
     assert.equal(entry.durationDelta, 0, `${backend}: exact logical duration`);
     assert.equal(entry.samples.length, FOLLOWING_TIMES.length, `${backend}: incomplete sample set`);
     entry.samples.forEach((sample, index) => {
+      assert.ok(typeof sample.time === "number" && Number.isFinite(sample.time), `${backend}: invalid sample clock`);
       assert.ok(Math.abs(sample.time - FOLLOWING_TIMES[index]) < 1e-9, `${backend}: sample clock/order`);
       assert.equal(sample.frameIndex, Math.round(FOLLOWING_TIMES[index] * 30));
-      assert.deepEqual(sample.categories, [], `${backend}: raster policy failed`);
+      assertFollowingRasterSample(sample, manifest.reference, tolerance, `${backend}@${sample.time}`);
       checks.push({ backend, time: sample.time, ...assertFollowingState(sample.debugFrame,
         oracle.frames[sample.frameIndex], `${backend}@${sample.time}`) });
     });
@@ -174,18 +231,20 @@ async function followingOracle(qualifyPairedAuthoring) {
     });
     await writeFile(path.join(output, "raster-command.log"), `${run.stdout ?? ""}\n${run.stderr ?? ""}\n${run.error ?? ""}`);
     console.log((run.stdout ?? "").split("\n").slice(-12).join("\n"));
+    result.rasterExitStatus = run.status;
+    result.rasterSignal = run.signal;
+    result.rasterProcessError = run.error ? String(run.error) : null;
+    assert.equal(run.status, 0, `pinned raster failed; see ${output}/raster-command.log\n${run.stderr ?? run.error ?? ""}`);
     const raster = JSON.parse(await readFile(path.join(rasterOutput, "report.json"), "utf8"));
     const semantic = JSON.parse(await readFile(path.join(rasterOutput, "semantic/manim-all-frames.json"), "utf8"));
-    result.rasterExitStatus = run.status;
-    // Retain concise numeric diagnostics even when the raster policy rejects.
+    // Raw raster failures remain in the child report and command log.
     console.log(JSON.stringify(raster.fixtures.map(fixture => ({ id: fixture.id,
       backends: Object.fromEntries(Object.entries(fixture.backends).map(([backend, entry]) => [backend,
         entry.error ? { error: entry.error } : entry.samples.map(sample => ({
           time: sample.time, diff: sample.diff, camera: sample.debugFrame.camera,
           oracleCamera: semantic.fixtures[0].frames[sample.frameIndex].camera,
         }))])) })), null, 2));
-    assert.equal(run.status, 0, `pinned raster failed; see ${output}/raster-command.log\n${run.stderr ?? run.error ?? ""}`);
-    const { oracle, checks } = assertFollowingReports(raster, semantic);
+    const { oracle, checks } = assertFollowingReports(raster, semantic, manifest);
     result.semantic = checks;
     const { PNG } = await import("pngjs");
     const pairedOutput = path.join(output, "paired");
