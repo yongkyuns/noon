@@ -10,6 +10,7 @@ import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { profileSource, validateProfile } from "./python-host-profile.mjs";
 import { stringifyEvidence } from "./python-host-report.mjs";
 import { PERF_PROTOCOL as protocol, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
 
@@ -25,6 +26,7 @@ await mkdir(output, { recursive: true });
 let identities = [], changedBuildInputs = [];
 const cache = createPyodideResourceCache(await readFile(path.join(roots[1], "web/python-worker.source.js"), "utf8"));
 const servers = [], contexts = [], pages = [], reports = [[], []], warmups = [], rows = [], failures = [];
+const profiles = [[], []], diagnostics = [];
 let browser;
 try {
   const sources = [process.env.NOON_PRODUCT_BASE_SHA, process.env.GITHUB_SHA];
@@ -46,6 +48,7 @@ try {
     const page = await context.newPage(); pages.push(page);
     page.on("console", message => {
       if (message.text().startsWith("NOON_PERF_REPORT ")) reports[pages.indexOf(page)].push(JSON.parse(message.text().slice(17)));
+      if (message.text().startsWith("NOON_PERF_PROFILE ")) profiles[pages.indexOf(page)].push(JSON.parse(message.text().slice(18)));
     });
     page.on("pageerror", error => failures.push({ kind: "pageerror", message: String(error) }));
     await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
@@ -151,9 +154,39 @@ try {
       if (value.candidateMs > value.baselineMs * 1.03 + 20) failures.push({ kind: "product_latency", cohort, name, ...value });
     }
   }
+  // Profiles are a separate diagnostic experiment AFTER every prescribed pair.
+  // Their instrumented durations never enter rows/costs or acceptance ratios.
+  for (const workload of protocol.workloads) {
+    for (const side of [0, 1]) {
+      const count = profiles[side].length;
+      const source = profileSource(workload);
+      const observation = await measure(side, source, "async", workload);
+      assert.equal(profiles[side].length, count + 1, "missing diagnostic profile");
+      const profile = validateProfile(profiles[side].at(-1), workload);
+      diagnostics.push({ side, sourceSha: createHash("sha256").update(source).digest("hex"),
+        profile, observation });
+      await writeFile(path.join(output, "profiles.json"), stringifyEvidence(diagnostics) + "\n");
+    }
+  }
 } catch (error) {
   failures.push({ kind: "execution", message: String(error), stack: error.stack });
 } finally {
+  // Preserve the actual pinned interpreter bytes for offline reproduction.
+  // Hash-addressed filenames cannot turn resource URLs into arbitrary paths.
+  try {
+    const directory = path.join(output, "interpreter-inputs");
+    await mkdir(directory, { recursive: true });
+    const assets = [];
+    for (const { url, status, headers, body } of await cache.snapshot()) {
+      const sha256 = createHash("sha256").update(body).digest("hex");
+      const file = `${sha256}.bin`;
+      await writeFile(path.join(directory, file), body);
+      assets.push({ url, status, headers, file, sha256, bytes: body.length });
+    }
+    await writeFile(path.join(directory, "manifest.json"), JSON.stringify({ schema: 1, assets }, null, 2) + "\n");
+  } catch (error) {
+    failures.push({ kind: "diagnostic_inputs", message: String(error) });
+  }
   await writeFile(path.join(output, "comparison.json"), stringifyEvidence({ schema: 1, protocol, identities, changedBuildInputs,
     host: { cpu: os.cpus()[0]?.model, platform: os.platform(), arch: os.arch(), node: process.version },
     warmups, rows, failures, cache: cache.stats() }) + "\n");

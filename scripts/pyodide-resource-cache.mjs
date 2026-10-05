@@ -82,6 +82,18 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
         }
       });
     },
+    // Archive only already-fetched pinned interpreter inputs, after measurement.
+    // No network requests, retries, or caller mutation of the live cache.
+    async snapshot() {
+      const result = [];
+      for (const [url, pending] of entries) {
+        if (!url.startsWith(baseUrl)) continue;
+        const value = await pending;
+        if (value.status === 200) result.push({ url, status: value.status,
+          headers: { ...value.headers }, body: Buffer.from(value.body) });
+      }
+      return result;
+    },
     stats() {
       return {
         baseUrl,

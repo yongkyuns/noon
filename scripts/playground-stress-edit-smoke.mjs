@@ -43,8 +43,11 @@ async function waitForServer() {
   throw new Error(`Playground server did not start: ${lastError}\n${serverOutput}`);
 }
 
-async function snapshot(page) {
-  return page.evaluate(() => {
+async function snapshot(page, { reset = false } = {}) {
+  return page.evaluate((reset) => {
+    // Observe the reset handler before its asynchronous cancellation/rebuild
+    // can replace the transient restart status between Playwright commands.
+    if (reset) document.querySelector(".reset-example").click();
     const status = document.querySelector("#status");
     const patch = document.querySelector("#patch-status");
     const pane = document.querySelector(".editor-pane");
@@ -73,7 +76,7 @@ async function snapshot(page) {
       enhanced: document.querySelector("#scene-editor-panel .python-code-editor[data-editor-ready='true']") !== null,
       textareaHidden: document.querySelector("#python-scene-source")?.hidden ?? false,
     };
-  });
+  }, reset);
 }
 
 async function waitForPreloadedRuntime(page) {
@@ -315,9 +318,8 @@ try {
 
   // Reset stops the long continuation immediately. A subsequent edit replaces
   // its pending restart; only the newest source may become the preview.
-  await page.locator(".reset-example").click();
+  diagnostics.snapshots.resetDuringRows5 = await snapshot(page, { reset: true });
   assert.equal(await page.locator("#python-scene-source").inputValue(), source);
-  diagnostics.snapshots.resetDuringRows5 = await snapshot(page);
   assert.ok(diagnostics.snapshots.resetDuringRows5.runGeneration > sourceOwnedGeneration);
   assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /restarting/i);
 

@@ -1439,6 +1439,11 @@ def _phase_node_json(key: tuple[int, int]) -> dict[str, int]:
 
 
 def _canonical_phase_context(mobject: _base.Mobject) -> _CanonicalCallbackContext | None:
+    # The empty callable-invocation table proves that no overlay can apply. Do
+    # not inspect wrapper ownership on the ordinary deterministic authoring path.
+    # This is checked per invocation, never cached across a callback boundary.
+    if not _ACTIVE_CONTEXTS:
+        return None
     scene = getattr(mobject, "_scene", None)
     if scene is None or mobject._object is None:
         return None
@@ -1457,11 +1462,12 @@ def _canonical_provisional_context(
     the owning callback phase is active, so ordinary callback rows retain
     their batched effective-write path.
     """
+    active = _ACTIVE_CANONICAL_CONTEXT.get()
+    if not isinstance(active, _CanonicalCallbackContext):
+        return None
     context = getattr(mobject, "_callback_provisional_context", None)
     provisional = getattr(mobject, "_callback_provisional_handle", None)
-    active = _ACTIVE_CANONICAL_CONTEXT.get()
     if (not isinstance(context, _CanonicalCallbackContext)
-            or not isinstance(active, _CanonicalCallbackContext)
             or provisional is None
             or active._scene is not context._scene
             or active._authoring_context is not context._authoring_context
