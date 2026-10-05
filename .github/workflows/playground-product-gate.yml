@@ -315,23 +315,28 @@ jobs:
         working-directory: candidate
         run: node .github/ci/product-artifact.mjs verify candidate .
 
-      - name: Measure baseline playground
+      - name: Measure three alternating product pairs
         working-directory: candidate
         env:
-          NOON_PRODUCT_SITE_ROOT: ${{ github.workspace }}/baseline
-          NOON_PRODUCT_PORT: "4205"
-          NOON_PRODUCT_LABEL: baseline
-          NOON_PRODUCT_ARTIFACT_DIR: ${{ github.workspace }}/candidate/browser-smoke-artifacts/product-gate/baseline
-        run: node scripts/playground-product-e2e.mjs
-
-      - name: Measure candidate playground
-        working-directory: candidate
-        env:
-          NOON_PRODUCT_SITE_ROOT: ${{ github.workspace }}/candidate
-          NOON_PRODUCT_PORT: "4206"
-          NOON_PRODUCT_LABEL: candidate
-          NOON_PRODUCT_ARTIFACT_DIR: ${{ github.workspace }}/candidate/browser-smoke-artifacts/product-gate/candidate
-        run: node scripts/playground-product-e2e.mjs
+          NOON_PRODUCT_WORKSPACE: ${{ github.workspace }}
+        run: |
+          # Fixed before measurement: B/C, C/B, B/C. Every run is retained;
+          # a failed run fails the cohort rather than selecting another sample.
+          for noon_pair in 1 2 3; do
+            noon_order="baseline candidate"
+            if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
+            noon_position=0
+            for noon_side in $noon_order; do
+              noon_position=$((noon_position + 1))
+              NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
+              NOON_PRODUCT_PORT=4205 \
+              NOON_PRODUCT_LABEL="$noon_side" \
+              NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+              NOON_PRODUCT_PAIR_POSITION="$noon_position" \
+              NOON_PRODUCT_ARTIFACT_DIR="browser-smoke-artifacts/product-gate/$noon_side/trial-$noon_pair" \
+                node scripts/playground-product-e2e.mjs
+            done
+          done
 
       - name: Compare product behavior
         working-directory: candidate
@@ -343,7 +348,7 @@ jobs:
         run: |
           node scripts/playground-product-compare.mjs \
             browser-smoke-artifacts/product-gate/baseline \
-            browser-smoke-artifacts/product-gate/candidate
+            browser-smoke-artifacts/product-gate/candidate --pairs 3
 
       - name: Upload product regression evidence
         if: always()

@@ -12,6 +12,16 @@ function productObservations(samples) {
     if (!owned ||
       !Number.isFinite(sample.metricAt) || !Number.isFinite(sample.frames) ||
       !Number.isFinite(sample.time) || sample.metricAt <= latestMetricAt) continue;
+    assert.ok(Number.isSafeInteger(sample.frames) && sample.frames >= 0,
+      "renderer frame counter must be a nonnegative safe integer");
+    if (sample.ready === true && sample.frames > 0) {
+      assert.ok(Number.isSafeInteger(sample.session) && sample.session >= 0,
+        "renderer session must be a nonnegative safe integer");
+      assert.ok(Number.isFinite(sample.clockOriginMs) && sample.clockOriginMs > 0,
+        "renderer clock origin must be finite and positive");
+      assert.ok(Number.isFinite(sample.rendererAt) && sample.rendererAt >= 0,
+        "renderer timestamp must be finite and nonnegative");
+    }
     latestMetricAt = sample.metricAt;
     observations.push(sample);
   }
@@ -22,7 +32,9 @@ function presentationEpochs(observations) {
   const epochs = [];
   for (const observation of observations) {
     const current = epochs.at(-1);
-    if (current === undefined || observation.frames < current.at(-1).frames ||
+    if (current === undefined || observation.session !== current.at(-1).session ||
+      observation.clockOriginMs !== current.at(-1).clockOriginMs ||
+      observation.frames < current.at(-1).frames ||
       observation.time + TIME_EPSILON_SECONDS < current.at(-1).time) {
       epochs.push([observation]);
     } else {
@@ -32,23 +44,39 @@ function presentationEpochs(observations) {
   return epochs;
 }
 
-// A source-continuation handoff can rebuild the render engine, resetting both
-// its frame counter and its authored clock. Score only one settled epoch that
-// ends at the authored endpoint; retain every raw sample and observed start
-// time rather than claiming that polling observes the exact first frame.
-export function sampleRendererFps(frameSamples, authoredSeconds, { minMeasurementMs = 1_000 } = {}) {
+// Score a bounded warm authored window in one renderer/session clock. Polling
+// and the aggregate source-metrics reply may arrive late; neither is the
+// renderer's sampling clock. Retain raw observations, including idle duplicates.
+export function sampleRendererFps(frameSamples, authoredSeconds, {
+  minMeasurementMs = 1_000, warmupSeconds = 0, maxStartDelaySeconds = 0.5,
+} = {}) {
   assert.ok(Number.isFinite(authoredSeconds) && authoredSeconds > 0,
     "authored product measurement duration must be finite and positive");
+  assert.ok(Number.isFinite(minMeasurementMs) && minMeasurementMs > 0,
+    "minimum measurement duration must be finite and positive");
+  assert.ok(Number.isFinite(warmupSeconds) && warmupSeconds >= 0 && warmupSeconds < authoredSeconds,
+    "warmupSeconds must be finite, nonnegative, and before the endpoint");
+  assert.ok(Number.isFinite(maxStartDelaySeconds) && maxStartDelaySeconds >= 0,
+    "maxStartDelaySeconds must be finite and nonnegative");
   const observations = productObservations(frameSamples);
   assert.ok(observations.length >= 10,
     "product run did not expose enough renderer observations");
   const epochs = presentationEpochs(observations);
-  const eligible = epochs.map((epoch) => epoch.filter((sample) =>
-    sample.ready === true && sample.needsPresent === false && sample.bufferedDeltas === 0,
-  )).filter((epoch) => {
+  const eligible = epochs.map((epoch) => {
+    const settled = epoch.filter((sample) => sample.ready === true &&
+      sample.needsPresent === false && sample.bufferedDeltas === 0 && sample.frames > 0 &&
+      sample.time + TIME_EPSILON_SECONDS >= warmupSeconds &&
+      sample.time <= authoredSeconds + END_TOLERANCE_SECONDS);
+    // Keep the earliest settled observation for each counter/time pair. A later
+    // idle endpoint reply cannot extend the measured animation interval.
+    return settled.filter((sample, index) => index === 0 ||
+      sample.frames !== settled[index - 1].frames ||
+      Math.abs(sample.time - settled[index - 1].time) > TIME_EPSILON_SECONDS);
+  }).filter((epoch) => {
     const start = epoch[0];
     const end = epoch.at(-1);
     return epoch.length >= 10 && start !== undefined && end !== undefined &&
+      start.time <= warmupSeconds + maxStartDelaySeconds + TIME_EPSILON_SECONDS &&
       Math.abs(end.time - authoredSeconds) <= END_TOLERANCE_SECONDS && end.frames > start.frames;
   });
   assert.ok(eligible.length > 0,
@@ -61,10 +89,18 @@ export function sampleRendererFps(frameSamples, authoredSeconds, { minMeasuremen
   const epoch = eligible.at(-1);
   const start = epoch[0];
   const end = epoch.at(-1);
-  const elapsedMs = end.now - start.now;
+  assert.ok(epoch.every((sample, index) => index === 0 ||
+    sample.rendererAt > epoch[index - 1].rendererAt),
+  "renderer timestamps must advance within one measurement epoch");
+  const elapsedMs = end.rendererAt - start.rendererAt;
   assert.ok(elapsedMs >= minMeasurementMs,
     `settled renderer epoch was too short (${elapsedMs.toFixed(0)} ms)`);
   return {
+    session: end.session,
+    clockOriginMs: end.clockOriginMs,
+    startRendererAt: start.rendererAt,
+    endRendererAt: end.rendererAt,
+    warmupSeconds,
     startFrames: start.frames,
     endFrames: end.frames,
     startTime: start.time,
@@ -74,6 +110,6 @@ export function sampleRendererFps(frameSamples, authoredSeconds, { minMeasuremen
     epochCount: epochs.length,
     measurementMs: elapsedMs,
     elapsedMs,
-    effectiveFps: (end.frames - start.frames) / Math.max(elapsedMs / 1000, 0.001),
+    effectiveFps: (end.frames - start.frames) * 1000 / elapsedMs,
   };
 }

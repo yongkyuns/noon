@@ -2,58 +2,85 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sampleRendererFps } from "./playground-product-fps.mjs";
 
-function sample({ now, metricAt = now, frames, time, ...state }) {
-  return { now, metricAt, frames, time, phase: "source", ready: true, needsPresent: false,
-    bufferedDeltas: 0, runInFlight: true, playbackControls: "unavailable", ...state };
+function sample({
+  now = 0,
+  metricAt = now,
+  rendererAt = 1_000 + now,
+  frames,
+  time,
+  session = 1,
+  clockOriginMs = 10_000,
+  ...state
+}) {
+  return {
+    now, metricAt, rendererAt, frames, time, session, clockOriginMs,
+    phase: "source", ready: true, needsPresent: false,
+    bufferedDeltas: 0, runInFlight: true, playbackControls: "unavailable", ...state,
+  };
 }
 
-test("product FPS ignores a cold setup epoch reset before the full authored pass", () => {
-  const samples = [
-    sample({ now: 0, frames: 6, time: 0 }), sample({ now: 400, frames: 12, time: 0.4 }),
-    sample({ now: 900, frames: 20, time: 0.9 }), sample({ now: 1200, frames: 6, time: 0 }),
-    sample({ now: 1400, frames: 10, time: 0.2 }), sample({ now: 1700, frames: 16, time: 0.5 }),
-    sample({ now: 2000, frames: 22, time: 0.8 }), sample({ now: 2300, frames: 28, time: 1.1 }),
-    sample({ now: 2700, frames: 36, time: 1.5 }), sample({ now: 3000, frames: 42, time: 1.8 }),
-    sample({ now: 3300, frames: 48, time: 2.1 }), sample({ now: 3700, frames: 56, time: 2.5 }),
-    sample({ now: 4000, frames: 62, time: 2.8 }),
-    sample({ now: 4200, frames: 66, time: 3, phase: "endpoint" }),
-  ];
-  const fps = sampleRendererFps(samples, 3, { minMeasurementMs: 1_000 });
-  assert.deepEqual({ startFrames: fps.startFrames, endFrames: fps.endFrames, epochCount: fps.epochCount },
-    { startFrames: 6, endFrames: 66, epochCount: 2 });
+function observations({ count = 13, startFrames = 10, endFrames = 70, startTime = 0,
+  endTime = 3, startAt = 2_000, endAt = 5_000, ...overrides } = {}) {
+  return Array.from({ length: count }, (_, index) => {
+    const progress = index / (count - 1);
+    const now = index * 100;
+    return sample({
+      now,
+      metricAt: 20 + index,
+      rendererAt: startAt + progress * (endAt - startAt),
+      frames: Math.round(startFrames + progress * (endFrames - startFrames)),
+      time: startTime + progress * (endTime - startTime),
+      ...overrides,
+    });
+  });
+}
+
+test("product FPS ignores a cold setup session and measures a complete authored pass", () => {
+  const cold = observations({ count: 10, startFrames: 0, endFrames: 16,
+    endTime: 0.9, startAt: 1_000, endAt: 1_900, session: 1 });
+  const measured = observations({ count: 13, startFrames: 6, endFrames: 66,
+    startAt: 2_000, endAt: 5_000, session: 2 }).map((entry, index) => ({
+      ...entry, now: 1_000 + index * 100, metricAt: 40 + index,
+    }));
+  const fps = sampleRendererFps([...cold, ...measured], 3, { minMeasurementMs: 1_000 });
+  assert.equal(fps.startFrames, 6);
+  assert.equal(fps.endFrames, 66);
+  assert.equal(fps.startTime, 0);
+  assert.equal(fps.epochCount, 2);
   assert.equal(fps.effectiveFps, 20);
 });
 
-test("product FPS rejects a cold epoch that never completes the authored pass", () => {
-  const samples = Array.from({ length: 10 }, (_, index) => sample({ now: index * 100, frames: index + 1, time: index / 10 }));
-  assert.throws(() => sampleRendererFps(samples, 3), /no settled renderer epoch covered/);
+test("product FPS rejects a session that never completes the authored pass", () => {
+  assert.throws(() => sampleRendererFps(observations({ endTime: 0.9 }), 3),
+    /no settled renderer epoch covered/);
 });
 
 test("product FPS discards stale and unsettled metric replies", () => {
-  const samples = [sample({ now: 0, frames: 1, time: 0, ready: false }),
-    ...Array.from({ length: 10 }, (_, index) => sample({
-      now: 100 + index * 120,
-      metricAt: 10 + index,
-      frames: index + 1,
-      time: index / 3,
+  const samples = [
+    sample({ now: 0, metricAt: 1, rendererAt: 1_000, frames: 1, time: 0, ready: false }),
+    ...observations({ count: 12, startFrames: 1, endFrames: 20, endTime: 2.75,
+      startAt: 2_000, endAt: 4_750 }).map((entry, index) => ({
+      ...entry, now: 100 + index * 120, metricAt: 10 + index,
     })),
-    sample({ now: 200, frames: 2, time: 1, metricAt: 10 }),
-    sample({ now: 1200, frames: 22, time: 3, metricAt: 21, phase: "endpoint" })];
+    sample({ now: 200, metricAt: 10, rendererAt: 4_000, frames: 2, time: 1 }),
+    sample({ now: 1_200, metricAt: 22, rendererAt: 5_000, frames: 22, time: 3,
+      phase: "endpoint" }),
+  ];
   const fps = sampleRendererFps(samples, 3, { minMeasurementMs: 1_000 });
   assert.equal(fps.startFrames, 1);
   assert.equal(fps.endFrames, 22);
 });
 
 test("an unsettled reset still separates renderer counters", () => {
-  const samples = [
-    ...Array.from({ length: 10 }, (_, index) => sample({
-      now: index * 100, frames: 100 + index, time: index / 10,
-    })),
-    sample({ now: 1000, frames: 0, time: 0, ready: false }),
-    ...Array.from({ length: 10 }, (_, index) => sample({
-      now: 2000 + index * 150, frames: 200 + index, time: 0.9 + index * 2.1 / 9,
-    })),
-  ];
+  const first = observations({ count: 10, startFrames: 100, endFrames: 109,
+    endTime: 0.9, startAt: 1_000, endAt: 1_900, session: 1 });
+  const second = observations({ count: 13, startFrames: 200, endFrames: 209,
+    startTime: 0, endTime: 3, startAt: 2_000, endAt: 5_000, session: 2 })
+    .map((entry, index) => ({ ...entry, now: 2_000 + index * 150, metricAt: 41 + index }));
+  const samples = [...first,
+    sample({ now: 1_000, metricAt: 40, rendererAt: 1_950, frames: 0, time: 0,
+      session: 2, ready: false }),
+    ...second];
   const fps = sampleRendererFps(samples, 3);
   assert.equal(fps.epochCount, 2);
   assert.equal(fps.startFrames, 200);
@@ -61,8 +88,118 @@ test("an unsettled reset still separates renderer counters", () => {
 });
 
 test("product FPS rejects telemetry beyond the authored endpoint", () => {
-  const samples = Array.from({ length: 10 }, (_, index) => sample({
-    now: index * 150, frames: index + 1, time: index * 3.5 / 9,
+  assert.throws(() => sampleRendererFps(observations({ endTime: 3.5 }), 3),
+    /no settled renderer epoch covered/);
+});
+
+test("polling delay and an idle endpoint do not extend the renderer measurement", () => {
+  const base = observations({ startFrames: 12, endFrames: 72 });
+  const delayedPolls = base.map((entry, index) => ({
+    ...entry, now: 10_000 + index * 7_000, metricAt: 50 + index,
   }));
-  assert.throws(() => sampleRendererFps(samples, 3), /no settled renderer epoch covered/);
+  const endpoint = base.at(-1);
+  const duplicateIdleEndpoint = {
+    ...endpoint, now: 999_999, metricAt: 99, rendererAt: 9_000,
+    phase: "endpoint", runInFlight: false, playbackControls: "available",
+  };
+  const baselineFps = sampleRendererFps(base, 3).effectiveFps;
+  const delayedFps = sampleRendererFps([...delayedPolls, duplicateIdleEndpoint], 3).effectiveFps;
+  assert.equal(baselineFps, 20);
+  assert.equal(delayedFps, baselineFps);
+});
+
+test("a static hold and completion handoff stay outside the scored animation window", () => {
+  const samples = observations({ endTime: 4 });
+  const fps = sampleRendererFps(samples, 4, { warmupSeconds: 1 });
+  const withHold = sampleRendererFps([...samples,
+    sample({ metricAt: 50, rendererAt: 5_100, frames: 70, time: 4 }),
+    sample({ metricAt: 51, rendererAt: 5_500, frames: 71, time: 4.5 }),
+    sample({ metricAt: 52, rendererAt: 5_600, frames: 72, time: 4.5,
+      phase: "endpoint", session: 2 }),
+  ], 4, { warmupSeconds: 1 });
+  assert.equal(withHold.effectiveFps, fps.effectiveFps);
+  assert.equal(withHold.endTime, 4);
+  assert.equal(withHold.session, 1);
+});
+
+test("a new session cannot extend an earlier session's monotonic counter", () => {
+  const first = observations({ count: 10, startFrames: 10, endFrames: 30,
+    endTime: 1.5, endAt: 3_500, session: 1 });
+  const second = observations({ startFrames: 31, endFrames: 110,
+    startAt: 4_000, endAt: 7_000, session: 2 })
+    .map((entry, index) => ({ ...entry, metricAt: 40 + index }));
+  const fps = sampleRendererFps([...first, ...second], 3);
+  assert.equal(fps.epochCount, 2);
+  assert.equal(fps.startFrames, 31);
+  assert.equal(fps.endFrames, 110);
+  assert.equal(fps.measurementMs, 3_000);
+});
+
+test("a renderer clock realm change splits otherwise monotonic observations", () => {
+  const first = observations({ count: 10, startFrames: 10, endFrames: 30,
+    endTime: 1.5, endAt: 3_500, clockOriginMs: 10_000 });
+  const second = observations({ startFrames: 31, endFrames: 60,
+    startAt: 4_000, endAt: 7_000, clockOriginMs: 20_000 })
+    .map((entry, index) => ({ ...entry, metricAt: 40 + index }));
+  const fps = sampleRendererFps([...first, ...second], 3);
+  assert.equal(fps.epochCount, 2);
+  assert.equal(fps.startFrames, 31);
+  assert.equal(fps.endFrames, 60);
+});
+
+test("measurement options reject invalid values", () => {
+  const samples = observations();
+  for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => sampleRendererFps(samples, 3, { minMeasurementMs: value }),
+      /minMeasurementMs|measurement duration/i);
+  }
+  assert.throws(() => sampleRendererFps(samples, 3, { warmupSeconds: -1 }), /warmupSeconds/i);
+  assert.throws(() => sampleRendererFps(samples, 3, { maxStartDelaySeconds: -1 }),
+    /maxStartDelaySeconds/i);
+});
+
+for (const [label, mutate] of [
+  ["missing session", (entry) => { delete entry.session; }],
+  ["invalid session", (entry) => { entry.session = -1; }],
+  ["missing clock origin", (entry) => { delete entry.clockOriginMs; }],
+  ["invalid clock origin", (entry) => { entry.clockOriginMs = 0; }],
+  ["missing renderer time", (entry) => { delete entry.rendererAt; }],
+  ["invalid renderer time", (entry) => { entry.rendererAt = Number.NaN; }],
+  ["non-safe frame counter", (entry) => { entry.frames = Number.MAX_SAFE_INTEGER + 1; }],
+]) {
+  test(`renderer metadata ${label} rejects`, () => {
+    const samples = observations();
+    samples.forEach(mutate);
+    assert.throws(() => sampleRendererFps(samples, 3), /renderer.*must/i);
+  });
+}
+
+test("the first eligible start must fall within the bounded post-warmup window", () => {
+  const samples = observations({ count: 10, startTime: 1.6, endTime: 4,
+    startAt: 2_600, endAt: 5_000 });
+  assert.throws(() => sampleRendererFps(samples, 4, {
+    warmupSeconds: 1, maxStartDelaySeconds: 0.5,
+  }), /start|warmup|covered/i);
+});
+
+test("one session and clock epoch must cover both the start window and endpoint", () => {
+  const first = observations({ count: 10, startTime: 0, endTime: 1.4,
+    startAt: 1_000, endAt: 2_400, session: 1 });
+  const second = observations({ startTime: 1.6, endTime: 3,
+    startAt: 2_500, endAt: 4_000, session: 2 })
+    .map((entry, index) => ({ ...entry, metricAt: 40 + index }));
+  assert.throws(() => sampleRendererFps([...first, ...second], 3, {
+    warmupSeconds: 1, maxStartDelaySeconds: 0.5,
+  }), /no settled renderer epoch covered/);
+});
+
+test("FPS is anchored to renderer timestamps rather than arrival and polling clocks", () => {
+  const samples = observations({ startFrames: 10, endFrames: 70 });
+  const baseline = sampleRendererFps(samples, 3);
+  const distortedDiagnostics = samples.map((entry, index) => ({
+    ...entry, now: 100_000 + index * 9_000, metricAt: 500_000 + index * 3_000,
+  }));
+  const changed = sampleRendererFps(distortedDiagnostics, 3);
+  assert.equal(changed.measurementMs, baseline.measurementMs);
+  assert.equal(changed.effectiveFps, baseline.effectiveFps);
 });

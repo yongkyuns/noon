@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,27 +20,51 @@ const artifactDir = path.resolve(
 );
 const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
-const PRODUCT_FIRST_PASS_SECONDS = 3;
+const PRODUCT_FIRST_PASS_SECONDS = 4;
+const PRODUCT_ENDPOINT_HOLD_SECONDS = 0.5;
+const PRODUCT_SOURCE_END_SECONDS = PRODUCT_FIRST_PASS_SECONDS + PRODUCT_ENDPOINT_HOLD_SECONDS;
 const MIN_PRODUCT_MEASUREMENT_MS = 1_000;
+const PRODUCT_WARMUP_SECONDS = 1;
+const startedAtMs = Date.now();
+const pair = process.env.NOON_PRODUCT_PAIR_INDEX === undefined ? null : {
+  index: Number(process.env.NOON_PRODUCT_PAIR_INDEX),
+  position: Number(process.env.NOON_PRODUCT_PAIR_POSITION),
+};
+if (pair !== null) {
+  assert.ok(Number.isSafeInteger(pair.index) && pair.index >= 1 && pair.index <= 3,
+    "product pair index must be between one and three");
+  assert.ok(pair.position === 1 || pair.position === 2, "product pair position must be one or two");
+}
 
 await mkdir(artifactDir, { recursive: true });
 
 let serverOutput = "";
 const server = spawn(
   "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", siteRoot],
+  ["-u", "-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", siteRoot],
   { cwd: siteRoot, stdio: ["ignore", "pipe", "pipe"] },
 );
 server.stdout.on("data", (chunk) => (serverOutput += chunk));
 server.stderr.on("data", (chunk) => (serverOutput += chunk));
+let serverStartError = null;
+const serverClosed = new Promise((resolve) => {
+  server.once("error", (error) => { serverStartError = error; resolve(); });
+  server.once("close", resolve);
+});
 
 async function waitForServer() {
   let lastError = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (serverStartError !== null || server.exitCode !== null) {
+      throw new Error(`product E2E server failed: ${serverStartError ?? server.exitCode}\n${serverOutput}`);
+    }
     try {
-      const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
+      // A pre-existing server on this port must not masquerade as our checkout.
+      if (serverOutput.includes("Serving HTTP on")) {
+        const response = await fetch(`${baseUrl}/web/index.html`);
+        if (response.ok) return;
+        lastError = new Error(`HTTP ${response.status}`);
+      }
     } catch (error) {
       lastError = error;
     }
@@ -76,10 +100,14 @@ async function waitForApplied(page) {
   return state;
 }
 
+const runEvidence = [];
+
 async function runAndMeasure(page, { captureFrames = false } = {}) {
   const started = performance.now();
   let sampling = captureFrames;
   const frameSamples = [];
+  const evidence = { startedAtMs: Date.now(), captureFrames, frameSamples };
+  runEvidence.push(evidence);
   const sampleFrames = (async () => {
     while (sampling) {
       const sample = await page.evaluate(async () => {
@@ -100,13 +128,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
         }
         return {
           phase: "source",
-          frames: Number(probe.latest?.frames ?? 0),
-          time: Number(probe.latest?.time ?? Number.NaN),
-          ready: probe.latest?.ready === true,
-          needsPresent: probe.latest?.needsPresent === true,
-          bufferedDeltas: Number(probe.latest?.bufferedDeltas ?? Number.NaN),
-          metricAt: Number(probe.latest?.at ?? Number.NaN),
-          metricReply: Number(probe.latest?.reply ?? Number.NaN),
+          ...probe.latest,
           now: performance.now(),
           runInFlight: gallery?.runInFlight ?? false,
           playbackControls: document.querySelector("#status")?.dataset.playbackControls ?? "",
@@ -126,24 +148,19 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
       const endpoint = await page.evaluate(async () => {
         const report = await window.__noonExampleGallery?.executionMetrics();
         const metrics = report?.metrics;
-        return {
-          phase: "endpoint",
-          frames: Number(metrics?.presentedFrames ?? Number.NaN),
-          time: Number(metrics?.time ?? Number.NaN),
-          ready: metrics?.ready === true,
-          needsPresent: metrics?.needsPresent === true,
-          bufferedDeltas: Number(metrics?.bufferedDeltas ?? Number.NaN),
-          metricAt: performance.now(),
-          metricReply: Number(window.__noonProductRenderProbe?.metricsReplies ?? Number.NaN),
-          now: performance.now(),
-        };
+        return { phase: "endpoint", ...window.__noonProductRenderProbe.observation(metrics),
+          now: performance.now() };
       });
       frameSamples.push(endpoint);
     }
     return { milliseconds, state, frameSamples };
   } finally {
     sampling = false;
-    await sampleFrames;
+    try {
+      await sampleFrames;
+    } finally {
+      evidence.finishedAtMs = Date.now();
+    }
   }
 }
 
@@ -266,7 +283,20 @@ try {
   const page = await context.newPage();
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
-    const probe = { pending: false, latest: null, metricsReplies: 0 };
+    const probe = { pending: false, latest: null, metricsReplies: 0,
+      observation: (metrics) => ({
+        frames: metrics?.presentedFrames,
+        time: metrics?.time,
+        session: metrics?.presentedSession,
+        clockOriginMs: metrics?.performanceTimeOriginMs,
+        rendererAt: metrics?.sampledAtMs,
+        ready: metrics?.ready === true,
+        needsPresent: metrics?.needsPresent === true,
+        bufferedDeltas: metrics?.bufferedDeltas,
+        metricAt: performance.now(),
+        metricReply: probe.metricsReplies,
+      }),
+    };
     window.__noonProductRenderProbe = probe;
 
     // This test-only observer sees actual render-worker metrics replies without
@@ -280,16 +310,8 @@ try {
           const presentedFrames = Number(message?.metrics?.presentedFrames);
           if (message?.channel !== "noon.render" || message?.type !== "metrics" ||
               !Number.isFinite(presentedFrames)) return;
-          probe.latest = {
-            frames: presentedFrames,
-            time: Number(message.metrics.time),
-            ready: message.metrics.ready === true,
-            needsPresent: message.metrics.needsPresent === true,
-            bufferedDeltas: Number(message.metrics.bufferedDeltas),
-            at: performance.now(),
-            reply: probe.metricsReplies + 1,
-          };
           probe.metricsReplies += 1;
+          probe.latest = probe.observation(message.metrics);
           probe.pending = false;
         });
       }
@@ -325,26 +347,28 @@ try {
   assert.equal(shell.controls, false, "page shell allocated playback controls before Run");
 
   // Baseline and candidate run this exact authored source. It extends only the
-  // visible first-pass duration, giving the real renderer enough time to report
-  // multiple presented frames without changing final scene semantics.
-  await page.evaluate((durationSeconds) => {
+  // animation duration and adds a bounded static hold, exposing its endpoint
+  // before source completion hands presentation to a different session.
+  await page.evaluate(({ durationSeconds, holdSeconds }) => {
     const editor = document.querySelector("#python-scene-source");
     if (!(editor instanceof HTMLTextAreaElement)) throw new Error("scene editor is unavailable");
     const updated = editor.value.replace(
       "self.play(Create(circle), Create(square))",
-      `self.play(Create(circle), Create(square), run_time=${durationSeconds})`,
+      `self.play(Create(circle), Create(square), run_time=${durationSeconds})\n        self.wait(${holdSeconds})`,
     );
     if (updated === editor.value) throw new Error("product first-pass fixture was not found");
     editor.value = updated;
-  }, PRODUCT_FIRST_PASS_SECONDS);
+  }, { durationSeconds: PRODUCT_FIRST_PASS_SECONDS, holdSeconds: PRODUCT_ENDPOINT_HOLD_SECONDS });
 
-  const cold = await runAndMeasure(page, { captureFrames: true });
+  const cold = await runAndMeasure(page);
   assert.equal(cold.state.backend, "WebGL2", `expected WebGL2 product path, got ${cold.state.backend}`);
-  const fps = sampleRendererFps(cold.frameSamples, PRODUCT_FIRST_PASS_SECONDS, {
+  // Complete a cold pass before scoring a warm run. Discard the declared first
+  // authored second of that run; cold/warm authoring latency stays separate.
+  const warm = await runAndMeasure(page, { captureFrames: true });
+  const fps = sampleRendererFps(warm.frameSamples, PRODUCT_FIRST_PASS_SECONDS, {
     minMeasurementMs: MIN_PRODUCT_MEASUREMENT_MS,
+    warmupSeconds: PRODUCT_WARMUP_SECONDS,
   });
-
-  const warm = await runAndMeasure(page);
 
   const marker = `# product gate ${label}`;
   await page.evaluate((text) => {
@@ -354,7 +378,7 @@ try {
   }, marker);
   const edited = await runAndMeasure(page);
 
-  const endpoint = await synchronizeFinalFrame(page, PRODUCT_FIRST_PASS_SECONDS);
+  const endpoint = await synchronizeFinalFrame(page, PRODUCT_SOURCE_END_SECONDS);
   const screenshotName = "frame-final.png";
   const screenshotPath = path.join(artifactDir, screenshotName);
   const canvas = page.locator("#scene");
@@ -373,10 +397,17 @@ try {
   assert.deepEqual(consoleErrors, [], `product E2E console errors:\n${consoleErrors.join("\n")}`);
 
   const report = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     label,
     exampleId,
     siteRoot,
+    pair,
+    startedAtMs,
+    finishedAtMs: Date.now(),
+    runtimeIdentity: JSON.parse(await readFile(path.join(siteRoot, "web/runtime-build-identity.json"), "utf8")),
+    measurement: { version: 1, clock: "renderer-sampled", preparation: "completed-cold-pass",
+      authoredSeconds: PRODUCT_FIRST_PASS_SECONDS, warmupSeconds: PRODUCT_WARMUP_SECONDS,
+      endpointHoldSeconds: PRODUCT_ENDPOINT_HOLD_SECONDS },
     shellReadyMs,
     shell,
     coldRunMs: cold.milliseconds,
@@ -385,10 +416,10 @@ try {
     fps,
     // Preserve the actual observations so a short-window regression can be
     // diagnosed without reconstructing telemetry from an aggregate FPS value.
-    fpsSamples: cold.frameSamples,
+    fpsSamples: warm.frameSamples,
     visual,
     fixedFrame: {
-      authoredEndpointSeconds: PRODUCT_FIRST_PASS_SECONDS,
+      authoredEndpointSeconds: PRODUCT_SOURCE_END_SECONDS,
       presentation: endpoint,
     },
     screenshot: screenshotName,
@@ -396,6 +427,10 @@ try {
     runtime: {
       backend: cold.state.backend,
       executionMode: cold.state.executionMode,
+      browserVersion: browser.version(),
+      viewport: { width: 1280, height: 800 },
+      deviceScaleFactor: 1,
+      gpuMode: "software-WebGL",
     },
     pageErrors,
     consoleErrors,
@@ -406,7 +441,14 @@ try {
       `warm ${warm.milliseconds.toFixed(0)} ms, edit ${edited.milliseconds.toFixed(0)} ms, ` +
       `${fps.effectiveFps.toFixed(1)} FPS, ${visual.changedPixels} visible pixels`,
   );
+} catch (error) {
+  await writeFile(path.join(artifactDir, "failure.json"), `${JSON.stringify({
+    label, exampleId, siteRoot, pair, startedAtMs, finishedAtMs: Date.now(),
+    error: error?.stack ?? String(error), runEvidence, pageErrors, consoleErrors, serverOutput,
+  }, null, 2)}\n`, "utf8");
+  throw error;
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
+  await serverClosed;
 }
