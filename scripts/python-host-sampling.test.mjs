@@ -32,3 +32,17 @@ test("concurrent source and sample rejection retain the source failure", async (
     Promise.resolve(failure));
   assert.deepEqual(result.terminal, failure);
 });
+
+test("initial callback failure waits for the Python source to unwind", async () => {
+  let finishSource;
+  const terminal = new Promise(resolve => { finishSource = resolve; });
+  let settled = false;
+  const attached = Promise.reject(new Error("callback prevented initial attachment"));
+  const pending = sampleOrSourceFailure(attached, terminal);
+  pending.then(() => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false, "attachment failure bypassed Python teardown");
+  const failure = { ok: false, message: "NoonCallbackError: intentional callback abort" };
+  finishSource(failure);
+  assert.deepEqual((await pending).terminal, failure);
+});

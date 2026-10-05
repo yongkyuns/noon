@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
-import { assertRenderedOutput, assertSingleReport, stringifyEvidence } from "./python-host-report.mjs";
+import { assertCompletedSample, assertRenderedOutput, assertSingleReport, stringifyEvidence } from "./python-host-report.mjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
@@ -42,7 +42,7 @@ function compare(actual, expected, where = "report") {
 async function runCase(browser, backend, noJspi, expected) {
   const context = await browser.newContext({ viewport: { width: 640, height: 360 } });
   await cache.install(context);
-  if (noJspi) await disableAuthoringJspi(context);
+  if (noJspi) await disableAuthoringJspi(context, { crossOriginIsolated: true });
   const page = await context.newPage();
   const output = [], pageErrors = [];
   page.on("console", message => {
@@ -65,7 +65,7 @@ async function runCase(browser, backend, noJspi, expected) {
         const terminal = new Promise(resolve => { settleRun = resolve; });
         const attached = new Promise((resolve, reject) => { attachedResolve = resolve; attachedReject = reject; });
         attached.catch(() => {});
-        const asynchronousErrors = [];
+        const asynchronousErrors = [], attachmentErrors = [];
         const execution = new AuthoringExecutionClient(document.querySelector("#scene"), {
           onError(error) { asynchronousErrors.push(String(error)); attachedReject(error); },
         });
@@ -84,19 +84,22 @@ async function runCase(browser, backend, noJspi, expected) {
               authoringClient: authoring, transportMode: "transferable", pacing: "external_samples",
             });
             try { attachedResolve(await attachment); }
-            catch (error) { attachedReject(error); throw error; }
+            catch (error) {
+              // A required callback can fail during initial attachment. Let the
+              // Python stack report its typed error after tear_down, rather
+              // than replacing it with a registration-callback rejection.
+              attachmentErrors.push(String(error));
+              attachedReject(error);
+            }
           },
         });
         authored.then(value => settleRun({ ok: true, value }), error => settleRun({ ok: false, message: String(error) }));
         const samples = [];
         let ready = null, metrics = null;
         try {
-          const first = await Promise.race([
-            attached.then(value => ({ attached: true, value })),
-            terminal.then(value => ({ attached: false, value })),
-          ]);
-          if (first.attached) {
-            ready = first.value;
+          const first = await sampleOrSourceFailure(attached, terminal);
+          if (first.sample) {
+            ready = first.sample;
             // Exact external input samples match the native finite 4 Hz profile.
             for (const time of [0, 0.25, 0.5, 0.75, 1]) {
               const begun = performance.now();
@@ -110,7 +113,7 @@ async function runCase(browser, backend, noJspi, expected) {
           }
           const finished = await terminal;
           if (finished.ok) metrics = (await execution.metrics()).metrics;
-          return { terminal: finished, ready, samples, metrics, asynchronousErrors,
+          return { terminal: finished, ready, samples, metrics, asynchronousErrors, attachmentErrors,
             elapsedMs: performance.now() - started, expectFailure };
         } catch (error) {
           await window.noonHostCaseCleanup();
@@ -130,9 +133,9 @@ async function runCase(browser, backend, noJspi, expected) {
     if (expected.terminal !== null) assert.match(result.terminal.message, new RegExp(expected.terminal));
     else {
       assert.deepEqual(result.asynchronousErrors, []);
+      assert.deepEqual(result.attachmentErrors, []);
       assertRenderedOutput(result.metrics, backend);
-      assert.ok(Math.abs(result.metrics.time - result.terminal.value.duration) <= 2e-5,
-        "final semantic completion was observed before its rendered endpoint");
+      assertCompletedSample(result.samples, result.terminal.value.duration);
     }
     assert.deepEqual(pageErrors, [], "unhandled page errors");
     const screenshot = `${backend}-${noJspi ? "no-jspi-" : ""}${expected.case}.png`;
