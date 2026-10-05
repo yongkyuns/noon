@@ -31,6 +31,7 @@ const metricDraws = document.querySelector("#metric-draws");
 const metricUpload = document.querySelector("#metric-upload");
 const metricTime = document.querySelector("#metric-time");
 const metricFps = document.querySelector("#metric-fps");
+const metricFrameGap = document.querySelector("#metric-frame-gap");
 const presentationRate = new PresentationRate();
 const workspace = document.querySelector(".workspace");
 const toolbarActions = document.querySelector(".actions");
@@ -1446,6 +1447,13 @@ async function updateRendererMetrics(observation) {
     status.dataset.presentedFrames = String(metrics.presentedFrames);
     if (metrics.ready && status.dataset.playbackPlaying === "true" &&
         patchStatus.dataset.state !== "error") {
+      const frameGap = metrics.presentationIntervalMs;
+      const frameGapText = frameGap === null || frameGap === undefined
+        ? "—"
+        : `${frameGap.p95.toFixed(1)} / ${frameGap.max.toFixed(1)} ms`;
+      if (metricFrameGap.value !== frameGapText) {
+        metricFrameGap.value = frameGapText;
+      }
       const session = `${observation.runGeneration}:${metrics.mode}:${metrics.rendererRebuilds}:${metrics.gpuGeneration}`;
       const fps = presentationRate.observe(metrics, session);
       const text = fps === null ? "—" : fps.toFixed(1);
@@ -1463,6 +1471,7 @@ async function updateRendererMetrics(observation) {
 function resetPresentationRate() {
   presentationRate.reset();
   if (metricFps.value !== "—") metricFps.value = "—";
+  if (metricFrameGap.value !== "—") metricFrameGap.value = "—";
 }
 
 function stopMetricsPolling() {

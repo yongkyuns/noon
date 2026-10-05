@@ -204,7 +204,13 @@ try {
             assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
             assert.equal(state.metricsError, undefined);
             const metric = state.metrics?.metrics;
-            if (metric && result.samples.at(-1)?.time !== metric.time) result.samples.push({ time: metric.time, objects: metric.objectCount, frames: metric.presentedFrames });
+            if (metric && result.samples.at(-1)?.time !== metric.time) result.samples.push({
+              time: metric.time, objects: metric.objectCount, frames: metric.presentedFrames,
+              ...(entry.id === 'showcase-camera-follows-path' ? {
+                intervalMs: metric.presentationIntervalMs,
+                intervalSamples: metric.presentationIntervalSamples,
+              } : {}),
+            });
             if (state.patch.state === 'applied' && !state.inFlight) { completed = true; break; }
             await page.waitForTimeout(100);
           }
@@ -218,6 +224,21 @@ try {
               'no-JSPI smoke did not wrap the production authoring worker');
           }
           if (entry.id === 'showcase-camera-follows-path') {
+            // Normal live playback, including no-JSPI WebKit, must expose
+            // bounded actual submission gaps during the following segment.
+            // This is a correctness check, not a hardware cadence budget.
+            const following = result.samples.filter(sample => sample.time > 3.8 &&
+              sample.time < 6.8 && sample.intervalMs !== null);
+            assert.ok(following.length > 0, 'camera follow did not report live frame gaps');
+            for (const sample of following) {
+              assert.ok(Number.isSafeInteger(sample.intervalSamples) &&
+                sample.intervalSamples > 0 && sample.intervalSamples <= 120);
+              const interval = sample.intervalMs;
+              assert.ok([interval.min, interval.p50, interval.p95, interval.p99, interval.max, interval.mean]
+                .every(value => Number.isFinite(value) && value >= 0));
+              assert.ok(interval.min <= interval.p50 && interval.p50 <= interval.p95 &&
+                interval.p95 <= interval.p99 && interval.p99 <= interval.max);
+            }
             // Exercise DOM normalization through the real Rust worker. Observe
             // every delivery so a late recoverable input error cannot pass as
             // a successful autoplay. These are injected events, not hardware.
@@ -261,6 +282,11 @@ try {
           const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
           result.finalMetrics = metrics;
           assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
+          if (entry.id === 'showcase-camera-follows-path') {
+            assert.equal(metrics.metrics.presentationIntervalMs, null,
+              'completed camera source must not report its static endpoint as a hitch');
+            assert.equal(metrics.metrics.presentationIntervalSamples, 0);
+          }
           const authoring = await page.evaluate(() => ({
             results: window.__galleryAuthoringResults, error: window.__galleryAuthoringCaptureError,
           }));

@@ -5,6 +5,7 @@ import {
   drainRendererGpuDiagnostics,
   formatGpuDiagnostic,
 } from "./render-gpu-diagnostics.js";
+import { SampleWindow } from "./frame-metrics.js";
 import {
   EXECUTION_TRANSPORT_SHARED,
   EXECUTION_TRANSPORT_TRANSFERABLE,
@@ -83,6 +84,11 @@ export function createAuthoringRenderController(host) {
   let lastRendererCallMs = null;
   let presentedSession = null;
   let firstPresentedSessionAtMs = null;
+  // Observe successful submissions only. Rust's continuous wake scopes the
+  // window, so authored holds and paused/replaced sessions are not hitches.
+  const presentationIntervals = new SampleWindow(120);
+  let lastContinuousPresentationAtMs = null;
+  let continuousPresentation = false;
   let rendererReadyAtMs = null;
   let modeSwitches = 0;
   let rendererRebuilds = 0;
@@ -202,6 +208,7 @@ export function createAuthoringRenderController(host) {
   function suspendForWebGlContextLoss(event) {
     event.preventDefault();
     webglContextLost = true;
+    resetPresentationIntervals();
     invalidatePointerReceipt();
     cancelScheduledFrame();
   }
@@ -407,6 +414,8 @@ export function createAuthoringRenderController(host) {
   function detachRenderPort() {
     cancelScheduledFrame();
     engineWake = null;
+    continuousPresentation = false;
+    resetPresentationIntervals();
     renderPort?.close?.();
     renderPort = null;
   }
@@ -440,6 +449,8 @@ export function createAuthoringRenderController(host) {
           cadence,
           deadline: cadence === "timer" ? performance.now() + timerAfterMilliseconds : null,
         };
+        continuousPresentation = cadence === "animation_frame";
+        if (!continuousPresentation) resetPresentationIntervals();
         scheduleFrame();
       } catch (error) {
         fail(error, null);
@@ -717,6 +728,15 @@ export function createAuthoringRenderController(host) {
     presentedFrames += 1;
     firstPresentedAtMs ??= presentedAtMs;
     const publication = pendingPresentationPublication;
+    if (publication !== null && presentedSession !== publication.session) {
+      resetPresentationIntervals();
+    }
+    if (continuousPresentation) {
+      if (lastContinuousPresentationAtMs !== null) {
+        presentationIntervals.record(presentedAtMs - lastContinuousPresentationAtMs);
+      }
+      lastContinuousPresentationAtMs = presentedAtMs;
+    }
     const candidateStageSample = pendingPublicationStageSample;
     const stageSample = samePublication(candidateStageSample, publication)
       ? candidateStageSample
@@ -1002,6 +1022,8 @@ export function createAuthoringRenderController(host) {
       ...modeFlags(),
       transportMode,
       presentedFrames,
+      presentationIntervalMs: presentationIntervals.summary(),
+      presentationIntervalSamples: presentationIntervals.size,
       lastDeltaApplyMs,
       lastRendererCallMs,
       modeSwitches,
@@ -1051,6 +1073,11 @@ export function createAuthoringRenderController(host) {
       metrics.preloadBytesUploaded = renderer.preloadBytesUploaded();
     }
     return metrics;
+  }
+
+  function resetPresentationIntervals() {
+    lastContinuousPresentationAtMs = null;
+    presentationIntervals.reset();
   }
 
   function disposeRenderer() {

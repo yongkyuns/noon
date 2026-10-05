@@ -64,6 +64,7 @@ export function installShowcasePresentation(documentLike, showcase) {
   if (!metrics) return true;
   for (const [id, text, title] of [
     ["metric-fps", "FPS · target 60", "Approximate renderer presentations per second over about one second. Static holds can show 0. This is not physical display refresh or GPU timing."],
+    ["metric-frame-gap", "Frame gap · p95 / max", "Renderer submission intervals during continuous animation. The 60 FPS target is 16.7 ms. This is not physical display scanout."],
     ["metric-objects", "Visible objects"], ["metric-draws", "Draw calls"], ["metric-upload", "Uploaded bytes"], ["metric-time", "Scene time"],
   ]) {
     const output = documentLike.getElementById(id);
