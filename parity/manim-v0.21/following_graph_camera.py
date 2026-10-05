@@ -1,6 +1,12 @@
+"""ManimCE v0.21.0 gallery source; construct is unchanged.
+
+Upstream: ManimCommunity/manim@861cd4849b17db1db3515b531ffe80b297848f93
+          docs/source/examples.rst, FollowingGraphCamera (MIT).
+Only import/bootstrap adaptation is permitted for the Noon execution.
+"""
 import numpy as np
 
-from noon import *
+from manim import *
 
 
 class FollowingGraphCamera(MovingCameraScene):
