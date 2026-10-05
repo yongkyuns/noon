@@ -1,0 +1,51 @@
+# Temporary investigation workbench owned by #1874. Remove from #1875 after
+# native binding qualification; this is not a product architecture or parity gate.
+name: Python host build workbench
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/python-host-workbench.yml"
+permissions:
+  contents: read
+jobs:
+  build-inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install repository Rust toolchain
+        run: rustup install
+      - name: Vendor the geometry-only native binding dependencies
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-host-deps" workbench
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'native-host-deps'
+          (root / 'src').mkdir()
+          (root / 'src/lib.rs').write_text('')
+          manifest = ('[package]\nname="noon-host-build-inputs"\nversion="0.0.0"\nedition="2021"\n'
+                      '[dependencies]\npyo3="=0.29.2"\n'
+                      'noon={path="' + os.environ['WORKSPACE'] + '/crates/noon",default-features=false}\n')
+          (root / 'Cargo.toml').write_text(manifest)
+          PY
+          cargo vendor --versioned-dirs --manifest-path "$RUNNER_TEMP/native-host-deps/Cargo.toml" workbench/vendor > workbench/vendor-config.toml
+          cp "$RUNNER_TEMP/native-host-deps/Cargo.lock" workbench/dependencies.lock
+          SYSROOT="$(rustc --print sysroot)"
+          tar -czf workbench/rust-toolchain.tar.gz -C "$SYSROOT" .
+          tar -czf workbench/vendor.tar.gz -C workbench vendor vendor-config.toml dependencies.lock
+          rustc -Vv > workbench/rust-version.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-host-build-inputs
+          path: |
+            workbench/rust-toolchain.tar.gz
+            workbench/vendor.tar.gz
+            workbench/rust-version.txt
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
