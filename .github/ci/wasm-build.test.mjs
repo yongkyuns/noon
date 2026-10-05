@@ -265,6 +265,16 @@ test("product gate resolves the installer and verifies the downloaded package la
   assert.match(restoration, /artifact-ids: \$\{\{ needs\.build\.outputs\.candidate-artifact \}\}[\s\S]*?path: candidate\/web/);
 });
 
+test("product gate requires PNG comparison controls after dependency setup", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const compareJob = workflow.slice(workflow.indexOf("  compare:"));
+  const controls = compareJob.indexOf("      - name: Test product comparison with PNG controls");
+  assert.ok(controls > compareJob.indexOf("npm install --no-save --ignore-scripts"));
+  const controlStep = compareJob.slice(controls, compareJob.indexOf("      - name:", controls + 10));
+  assert.match(controlStep, /NOON_PRODUCT_IMAGE_TESTS: "1"/);
+  assert.match(controlStep, /node --test web\/playground-product-compare-validation\.test\.mjs/);
+});
+
 test("Pages builds use the shared optimized production WASM configuration", async () => {
   const workflow = await readFile(new URL("../workflows/pages.yml", import.meta.url), "utf8");
   const buildJob = workflow.slice(workflow.indexOf("  build:"), workflow.indexOf("\n  deploy:"));

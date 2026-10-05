@@ -273,6 +273,12 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
 
+      - name: Test product comparison with PNG controls
+        working-directory: candidate
+        env:
+          NOON_PRODUCT_IMAGE_TESTS: "1"
+        run: node --test web/playground-product-compare-validation.test.mjs
+
       - name: Recheck executable tutorial corpus
         working-directory: candidate
         run: node scripts/manim-tutorial-smoke.mjs

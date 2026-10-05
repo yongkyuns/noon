@@ -221,7 +221,9 @@ changed package/configuration, or reordered cohort fails qualification.
 The existing latency/FPS thresholds apply to arithmetic means across all three
 runs. Every raw sample, per-run report and fixed-frame image is retained. The
 comparison reports ranges and percentiles as dispersion, and checks every pair's
-image independently. This is software-WebGL qualification, not physical-device
+image independently. Dependency-free preflight runs invalid-report/cohort controls;
+Product Gate explicitly enables the PNG/seeded-regression controls after its
+existing dependency setup. This is software-WebGL qualification, not physical-device
 60 FPS evidence. Pinned cumulative anchors and broader representative workloads
 remain owned by #1653.
 

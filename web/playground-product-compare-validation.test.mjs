@@ -7,6 +7,8 @@ import test from "node:test";
 
 const command = new URL("../scripts/playground-product-compare.mjs", import.meta.url);
 const pairCountArgs = ["--pairs", "3"];
+const imageTestOptions = { skip: process.env.NOON_PRODUCT_IMAGE_TESTS === "1"
+  ? false : "PNG controls run in Product Gate after dependency setup" };
 const report = () => ({
   schemaVersion: 2,
   exampleId: "validation-fixture",
@@ -81,6 +83,7 @@ async function createCohort(root, {
   baselineFps = [59, 62, 60],
   candidateFps = [59, 61, 63],
   visualRegressionPair = null,
+  withImages = false,
   mutateReport = () => {},
 } = {}) {
   const sequence = [
@@ -103,7 +106,7 @@ async function createCohort(root, {
       await writeFile(path.join(trialDirectory, "report.json"), JSON.stringify(input));
       const color = visualRegressionPair === index && side === "candidate"
         ? [255, 0, 0] : [0, 0, 0];
-      await writeScreenshot(trialDirectory, color);
+      if (withImages) await writeScreenshot(trialDirectory, color);
     }
   }
 }
@@ -124,9 +127,9 @@ async function withTempDirectory(prefix, callback) {
   }
 }
 
-test("three noisy alternating pairs pass and retain every report and dispersion", async () => {
+test("three noisy alternating pairs pass and retain every report and dispersion", imageTestOptions, async () => {
   await withTempDirectory("noon-product-cohort-pass-", async directory => {
-    await createCohort(directory);
+    await createCohort(directory, { withImages: true });
     const result = await runCohort(directory);
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
@@ -142,9 +145,10 @@ test("three noisy alternating pairs pass and retain every report and dispersion"
   });
 });
 
-test("a seeded FPS regression across all candidate runs fails the unchanged floor", async () => {
+test("a seeded FPS regression across all candidate runs fails the unchanged floor", imageTestOptions, async () => {
   await withTempDirectory("noon-product-cohort-fps-", async directory => {
-    await createCohort(directory, { baselineFps: [60, 61, 59], candidateFps: [42, 44, 43] });
+    await createCohort(directory, { withImages: true,
+      baselineFps: [60, 61, 59], candidateFps: [42, 44, 43] });
     const result = await runCohort(directory);
     assert.ifError(result.error);
     assert.equal(result.status, 2);
@@ -190,9 +194,9 @@ for (const [name, mutateReport, removeReport, expected] of [
   });
 }
 
-test("a visual regression in pair two fails even when pair one matches", async () => {
+test("a visual regression in pair two fails even when pair one matches", imageTestOptions, async () => {
   await withTempDirectory("noon-product-cohort-visual-", async directory => {
-    await createCohort(directory, { visualRegressionPair: 2 });
+    await createCohort(directory, { withImages: true, visualRegressionPair: 2 });
     const result = await runCohort(directory);
     assert.ifError(result.error);
     assert.equal(result.status, 2);
