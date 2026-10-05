@@ -620,6 +620,89 @@ test("Rust wake directives admit one animation drive and one deadline without id
   assert.equal(harness.animationFrames.length, 0);
 });
 
+test("an animation wake arriving before the queued RAF callback keeps that opportunity", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  assert.equal(harness.animationFrames.length, 1);
+  const browserSnapshotCallback = harness.animationFrames[0];
+
+  // Model a message delivered after the browser snapshots RAF callbacks but
+  // before it invokes the captured callback. Replacing the RAF loses this
+  // presentation opportunity for the current refresh.
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  harness.animationFrames.shift();
+  browserSnapshotCallback(16);
+
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.nextPort.messages.find((m) => m.type === "tick").timestamp, 16);
+  assert.equal(harness.animationFrames.length, 0, "one wake authorizes exactly one engine drive");
+});
+
+test("an applied delta reuses a pending RAF opportunity for the engine tick", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  const browserSnapshotCallback = harness.animationFrames[0];
+
+  vm.runInContext('consumeDelta("updated frame", {session:14, sequence:1});', harness.context);
+  assert.equal(harness.animationFrames.length, 1);
+  browserSnapshotCallback(24);
+
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.nextPort.messages.find((m) => m.type === "tick").timestamp, 24);
+});
+
+test("a no-op delta leaves the pending RAF opportunity intact", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  const browserSnapshotCallback = harness.animationFrames[0];
+  harness.createdRenderer.applyDeltaJson = () => false;
+
+  vm.runInContext('consumeDelta("duplicate frame", {session:14, sequence:1});', harness.context);
+  browserSnapshotCallback(32);
+
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.nextPort.messages.find((m) => m.type === "tick").timestamp, 32);
+});
+
+test("an idle wake retires a queued RAF when no presentation is pending", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  const obsoleteCallback = harness.animationFrames[0];
+
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
+  obsoleteCallback(16);
+
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 0);
+  assert.equal(vm.runInContext("scheduledFrame", harness.context), null,
+    "idle leaves no live scheduled frame even though the fake host retains canceled callbacks");
+});
+
+test("a timer wake replaces a queued RAF and honors its refreshed deadline", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  const obsoleteCallback = harness.animationFrames[0];
+
+  harness.setClock(100);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"timer", timerAfterMilliseconds:50});', harness.context);
+  obsoleteCallback(110);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 0);
+  assert.equal(harness.timers.size, 1);
+  const [timerId, timer] = [...harness.timers][0];
+  assert.equal(timer.delay, 50);
+
+  harness.setClock(149);
+  harness.timers.delete(timerId);
+  timer.callback();
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 0);
+  assert.equal(harness.timers.size, 1, "the still-future deadline is rescheduled");
+  const [deadlineId, deadline] = [...harness.timers][0];
+  assert.equal(deadline.delay, 1);
+  harness.setClock(150);
+  harness.timers.delete(deadlineId);
+  deadline.callback();
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+});
+
 test("live frame gaps include failed-present stalls but not metrics polls or no-op deltas", async () => {
   const harness = await createManagedWakeHarness([true, true, true, false, true]);
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);

@@ -937,15 +937,24 @@ export function createAuthoringRenderController(host) {
   }
 
   function scheduleFrame(generation = frameLoopGeneration) {
-    cancelScheduledFrame();
-    if (!running || webglContextLost || webglRecoveryPromise !== null) return;
+    if (!running || webglContextLost || webglRecoveryPromise !== null) {
+      cancelScheduledFrame();
+      return;
+    }
     const needsAnimationFrame = needsPresent || engineWake === null ||
       engineWake.cadence === "animation_frame";
+    // Keep an already-requested refresh opportunity when a wake or delta still
+    // needs it. Canceling after the browser snapshots callbacks can defer the
+    // replacement to the following refresh. Only lifecycle/cadence changes retire it.
+    if (needsAnimationFrame && scheduledFrame?.kind === "animation" &&
+        scheduledFrame.generation === generation) return;
+    cancelScheduledFrame();
     if (!needsAnimationFrame && engineWake.cadence === "idle") return;
     const ticket = scheduleTicket;
     if (needsAnimationFrame && typeof host?.requestAnimationFrame === "function") {
       scheduledFrame = {
         kind: "animation",
+        generation,
         handle: host.requestAnimationFrame((timestamp) => frame(timestamp, generation, ticket)),
       };
     } else {
