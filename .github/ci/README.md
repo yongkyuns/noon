@@ -235,6 +235,19 @@ are CPU renderer-submission intervals, not GPU completion or physical scanout.
 Shared software-GPU gap summaries remain diagnostic; no physical cadence budget
 is applied to them. The comparison recomputes camera FPS and gaps from raw samples.
 
+Protocol version 4 also reports camera delta-apply, render-call and acknowledgment
+CPU wall times over those same completely covered publications. It summarizes
+existing draw/upload/cache/object counters from distinct renderer observations as
+**sampled last-frame values**, not totals across frames missed between polls.
+Renderer rebuild and mode-switch counts are lifetime-counter differences across
+the window. No GPU timestamp queries or source-owner work are added. Reports retain
+raw observations and the comparison recomputes these costs before image decoding.
+Each run hashes the locally derived generated artifact inventory against its
+producer manifest and reports uncompressed file bytes, excluding the dependency
+lockfile. This is package size, not compressed HTTP transfer size. All three trials
+must retain the same package inventory and sizes. These costs are descriptive;
+the existing latency/FPS/visual thresholds remain unchanged.
+
 The existing latency/FPS thresholds apply to arithmetic means across all three
 runs. Every raw sample, per-run report and fixed-frame image is retained. The
 comparison reports ranges and percentiles as dispersion, and checks every pair's

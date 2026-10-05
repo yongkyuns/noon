@@ -4,7 +4,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { productMeasurement, sampleRendererFps, samplePresentationGaps } from "../scripts/playground-product-fps.mjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "../scripts/playground-product-fps.mjs";
+import { summarizePackageSizes } from "../.github/ci/wasm-build.mjs";
 
 const command = new URL("../scripts/playground-product-compare.mjs", import.meta.url);
 const pairCountArgs = ["--pairs", "3"];
@@ -22,6 +23,10 @@ const report = () => ({
   measurement: productMeasurement("parity-square-and-circle"),
   runtimeIdentity: { sourceRevision: "a".repeat(40), buildId: "b".repeat(64) },
   screenshot: "intentionally-not-loaded.png",
+  packageSizes: summarizePackageSizes(Object.fromEntries([
+    "web/pkg/noon_web.js", "web/pkg/noon_web_bg.wasm", "web/pkg/package.json", "web/python-worker.js",
+    `web/python/compat-bundle.${"a".repeat(64)}.json`,
+  ].map(name => [name, { sha256: "a".repeat(64), bytes: 100 }]))),
 });
 
 function cameraReport() {
@@ -33,12 +38,16 @@ function cameraReport() {
     time: 3.7 + index * 3.2 / 12, session: 1, clockOriginMs: 10_000,
     phase: "source", ready: true, needsPresent: false, bufferedDeltas: 0,
     runInFlight: true, playbackControls: "unavailable",
+    counters: { drawCalls: 2, instancesDrawn: 3, bytesUploaded: 64, geometryCacheMisses: 0,
+      objectCount: 3, rendererRebuilds: 1, modeSwitches: 0 },
   }));
   input.fps = sampleRendererFps(input.fpsSamples, 6.9, { warmupSeconds: 3.7 });
   input.presentationSamples = Array.from({ length: 193 }, (_, index) => ({
     session: 1, clockOriginMs: 10_000, sequence: index, presentedAtMs: 4_998 + index * 1000 / 60,
+    applyMs: 0.1, renderMs: 1.2, ackPostMs: 0.01,
   }));
   input.presentationGaps = samplePresentationGaps(input.presentationSamples, input.fps);
+  input.rendererCosts = sampleRendererCosts(input.presentationSamples, input.fpsSamples, input.fps);
   return input;
 }
 
@@ -53,6 +62,10 @@ test("camera reports compare raw window observations and retain gap diagnostics"
     const comparison = JSON.parse(await readFile(path.join(directory, "candidate", "comparison.json")));
     assert.equal(comparison.presentationGaps.length, 3);
     assert.equal(comparison.presentationGaps[2].candidate.intervalCount, 192);
+    assert.equal(comparison.rendererCosts[2].candidate.frameCount, 192);
+    assert.equal(comparison.rendererCosts[0].candidate.sampledLastFrame.fields.bytesUploaded.mean, 64);
+    assert.equal(comparison.packageSizes.candidate.totalBytes, 500);
+    assert.ok(Math.abs(comparison.costStatistics.candidate.cpuWallMs.renderMs.mean - 1.2) < 1e-12);
   });
 });
 
@@ -66,6 +79,11 @@ for (const [name, mutate, expected] of [
   ["missing renderer endpoint", input => { input.fpsSamples.pop(); }, /no settled renderer epoch covered/],
   ["invented FPS", input => { input.fps.effectiveFps = 80; }, /does not match raw renderer observations/],
   ["lost presentation", input => { input.presentationSamples.splice(20, 1); }, /cover every measured renderer frame/],
+  ["missing CPU cost", input => { delete input.presentationSamples[20].applyMs; }, /publication CPU wall time/],
+  ["negative CPU cost", input => { input.presentationSamples[20].renderMs = -1; }, /publication CPU wall time/],
+  ["unsafe upload snapshot", input => { input.fpsSamples[4].counters.bytesUploaded = 2 ** 53; }, /renderer counter/],
+  ["counter reset", input => { input.fpsSamples[4].counters.rendererRebuilds = 0; }, /must not decrease/],
+  ["invented costs", input => { input.rendererCosts.cpuWallMs.renderMs.mean = 0; }, /costs do not match/],
   ["invented frame gaps", input => { input.presentationGaps.intervalMs.p95 = 0; }, /do not match raw presentation/],
 ]) {
   test(`camera ${name} fails before decoding images`, async () => {
@@ -73,6 +91,20 @@ for (const [name, mutate, expected] of [
     const candidate = cameraReport();
     mutate(candidate);
     await rejectsReport(baseline, candidate, expected);
+  });
+}
+
+for (const [name, mutate, expected] of [
+  ["missing inventory", input => { delete input.packageSizes; }, /package size files are missing/],
+  ["invented total", input => { input.packageSizes.totalBytes += 1; }, /do not match the generated file inventory/],
+  ["unsafe byte count", input => { input.packageSizes.files["web/pkg/noon_web_bg.wasm"].bytes = 2 ** 53; }, /invalid package bytes/],
+  ["missing hash", input => { delete input.packageSizes.files["web/pkg/noon_web_bg.wasm"].sha256; }, /invalid package size hash/],
+  ["traversal file", input => { input.packageSizes.files["web/pkg/../outside"] = { sha256: "a".repeat(64), bytes: 1 }; }, /invalid generated package size inventory/],
+]) {
+  test(`package ${name} fails before decoding images`, async () => {
+    const candidate = report();
+    mutate(candidate);
+    await rejectsReport(report(), candidate, expected);
   });
 }
 
@@ -221,6 +253,13 @@ for (const [name, mutateReport, removeReport, expected] of [
   ["changed package identity", (input, { side, index }) => {
     if (side === "candidate" && index === 2) input.runtimeIdentity.buildId = "e".repeat(64);
   }, null, /product package changed between trials/],
+  ["changed package byte inventory", (input, { side, index }) => {
+    if (side === "candidate" && index === 2) {
+      const files = structuredClone(input.packageSizes.files);
+      files["web/pkg/noon_web_bg.wasm"].bytes += 1;
+      input.packageSizes = summarizePackageSizes(files);
+    }
+  }, null, /product package sizes changed between trials/],
   ["overlapping run intervals", (input, { side, index }) => {
     if (side === "candidate" && index === 1) input.startedAtMs = 100;
   }, null, /paired runs must be serial/],
