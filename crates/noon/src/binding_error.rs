@@ -516,10 +516,13 @@ impl From<crate::TextAuthoringError> for AuthoringFailure {
         match error {
             E::InvalidFontSize(_) => Self::new("invalid_input", "text.invalid_font_size", message),
             E::InvalidOpacity(_) => Self::new("invalid_input", "text.invalid_opacity", message),
+            #[cfg(feature = "native-text")]
             E::TextSourceStyle(_) => Self::new("invalid_input", "text.source_style", message),
+            #[cfg(feature = "native-text")]
             E::InvalidTextColorSelector(_) => {
                 Self::new("invalid_input", "text.invalid_color_selector", message)
             }
+            #[cfg(feature = "native-text")]
             E::TextColorUnsupportedSourceKind(_) => {
                 Self::new("unsupported_operation", "text.color_source_kind", message)
             }
