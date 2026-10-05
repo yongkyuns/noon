@@ -1,0 +1,57 @@
+# Temporary source transfer for #1874. Does not update any branch or PR.
+name: Stage Python binding source
+on:
+  push:
+    branches: [agent/1874-bindings-transfer]
+    paths: [.github/workflows/python-host-transfer.yml, .github/1874-upload/**]
+permissions:
+  contents: write
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify patch and create immutable source blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, subprocess, urllib.request
+          compressed = ''.join(pathlib.Path(f'.github/1874-upload/{i}.txt').read_text() for i in range(5))
+          patch = lzma.decompress(base64.b64decode(compressed, validate=True))
+          digest = hashlib.sha256(patch).hexdigest()
+          assert digest == '1ed21d9aea6b3145dcf6ca92e73ab91b720862558b944eb3a267d2f392cb112a', digest
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          subprocess.run(['git', 'add', '-A'], check=True)
+          paths = subprocess.check_output(['git', 'diff', '--cached', '--name-only', '-z']).decode().strip('\0').split('\0')
+          assert len(paths) == 60, (len(paths), paths)
+          entries = []
+          for name in paths:
+              path = pathlib.Path(name)
+              if not path.exists():
+                  entries.append(dict(path=name, mode='100644', type='blob', sha=None))
+                  continue
+              content = path.read_bytes()
+              expected = hashlib.sha1(f'blob {len(content)}\0'.encode() + content).hexdigest()
+              payload = json.dumps(dict(content=base64.b64encode(content).decode(), encoding='base64')).encode()
+              request = urllib.request.Request('https://api.github.com/repos/' + os.environ['REPOSITORY'] + '/git/blobs', data=payload, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28'})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  actual = json.load(response)['sha']
+              assert actual == expected, name
+              mode = subprocess.check_output(['git', 'ls-files', '--stage', '--', name]).decode().split()[0]
+              entries.append(dict(path=name, mode=mode, type='blob', sha=actual))
+              print(name, actual)
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'python-host-blob-map.json'
+          out.write_text(json.dumps(dict(patch_sha256=digest, entries=entries), indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-host-blob-map
+          path: ${{ runner.temp }}/python-host-blob-map.json
+          retention-days: 1
+          if-no-files-found: error
