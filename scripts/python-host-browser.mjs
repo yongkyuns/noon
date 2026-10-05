@@ -58,6 +58,7 @@ async function runCase(browser, backend, noJspi, expected) {
       page.evaluate(async ({ source, expectFailure }) => {
         const { PythonAuthoringClient } = await import("./authoring-client.js");
         const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+        const { sampleOrSourceFailure } = await import("../scripts/python-host-sampling.mjs");
         const authoring = new PythonAuthoringClient();
         let settleRun, attachedResolve, attachedReject;
         const terminal = new Promise(resolve => { settleRun = resolve; });
@@ -68,6 +69,13 @@ async function runCase(browser, backend, noJspi, expected) {
           onError(error) { asynchronousErrors.push(String(error)); attachedReject(error); },
         });
         let attachment;
+        // Keep the rendered frame alive until Node captures it. Cleanup runs
+        // after the observation, not when the Python source merely returns.
+        window.noonHostCaseCleanup = async () => {
+          await attachment?.catch(() => {});
+          execution.terminate();
+          authoring.terminate();
+        };
         const started = performance.now();
         const authored = authoring.run(source, {}, {
           async onSemanticContinuation(registration) {
@@ -91,10 +99,9 @@ async function runCase(browser, backend, noJspi, expected) {
             // Exact external input samples match the native finite 4 Hz profile.
             for (const time of [0, 0.25, 0.5, 0.75, 1]) {
               const begun = performance.now();
-              const sample = await Promise.race([
-                execution.sampleToAuthoredTime(time, { stopAtSourceCompletion: true }).then(value => ({ sample: value })),
-                terminal.then(value => ({ terminal: value })),
-              ]);
+              const sample = await sampleOrSourceFailure(
+                execution.sampleToAuthoredTime(time, { stopAtSourceCompletion: true }), terminal,
+              );
               if (sample.terminal) break;
               samples.push({ requested: time, elapsedMs: performance.now() - begun, ...sample.sample });
               if (sample.sample.sourceCompleted) break;
@@ -104,11 +111,9 @@ async function runCase(browser, backend, noJspi, expected) {
           if (finished.ok) metrics = (await execution.metrics()).metrics;
           return { terminal: finished, ready, samples, metrics, asynchronousErrors,
             elapsedMs: performance.now() - started, expectFailure };
-        } finally {
-          // Wait for a racing startup to settle before retiring its ownership.
-          await attachment?.catch(() => {});
-          execution.terminate();
-          authoring.terminate();
+        } catch (error) {
+          await window.noonHostCaseCleanup();
+          throw error;
         }
       }, { source, expectFailure: expected.terminal !== null }),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${backend}/${expected.case} timed out`)), 120000); }),
@@ -125,6 +130,8 @@ async function runCase(browser, backend, noJspi, expected) {
     else {
       assert.deepEqual(result.asynchronousErrors, []);
       assertRenderedOutput(result.metrics, backend);
+      assert.ok(Math.abs(result.metrics.time - result.terminal.value.duration) <= 2e-5,
+        "final semantic completion was observed before its rendered endpoint");
     }
     assert.deepEqual(pageErrors, [], "unhandled page errors");
     const screenshot = `${backend}-${noJspi ? "no-jspi-" : ""}${expected.case}.png`;
@@ -132,7 +139,11 @@ async function runCase(browser, backend, noJspi, expected) {
     console.log(`PASS ${backend}/${noJspi ? "no-jspi/" : ""}${expected.case}: same source, same observations`);
     return { case: expected.case, backend, noJspi, source_sha256: expected.source_sha256,
       report: output[0], screenshot, ...result };
-  } finally { clearTimeout(timer); await context.close(); }
+  } finally {
+    clearTimeout(timer);
+    try { await page.evaluate(() => window.noonHostCaseCleanup?.()); }
+    finally { await context.close(); }
+  }
 }
 
 await mkdir(evidence, { recursive: true });

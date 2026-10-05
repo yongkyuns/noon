@@ -57,7 +57,7 @@ jobs:
       - name: Install repository-pinned Rust
         run: rustup install
       - name: Test conformance evidence diagnostics
-        run: node --test scripts/python-host-report.test.mjs
+        run: node --test scripts/python-host-*.test.mjs
       - name: Direct Rust semantic counterpart
         run: cargo test -p noon --no-default-features --test python_host_contract
       - name: Build real native CPython extension
