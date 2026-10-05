@@ -1,0 +1,44 @@
+name: Python host conformance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/python-host-conformance.yml"
+      - "python/**"
+      - "web/python/**"
+      - "crates/noon-python/**"
+      - "scripts/python_host_*.py"
+      - "Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-host-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-checks:
+    name: Python source checks (not runtime parity)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check Python continuation source
+        run: |
+          python -m py_compile web/python/_manim_source_execution.py web/python/_manim_scene.py
+          python -m unittest discover -s web/python -p 'test_manim_source_execution.py' -v
+      - name: Capture exact source for reproducible conformance investigation
+        run: |
+          mkdir -p python-host-evidence
+          git rev-parse HEAD > python-host-evidence/source-sha.txt
+          git archive --format=tar.gz --output=python-host-evidence/source.tar.gz HEAD
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-host-source-${{ github.sha }}
+          path: python-host-evidence/
+          retention-days: 7
+          if-no-files-found: error
