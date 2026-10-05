@@ -22,6 +22,7 @@ assert.equal(native.cases.length, 8);
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 const server = await serveRepository(root, 0, { crossOriginIsolated: true });
 const results = [];
+const failures = [];
 
 function compare(actual, expected, where = "report") {
   if (typeof expected === "number") {
@@ -146,23 +147,36 @@ async function runCase(browser, backend, noJspi, expected) {
   }
 }
 
+// Cases have independent Python/engine/render contexts. Finish the entire
+// matrix once so one defect cannot hide unrelated failures; never retry a case.
+async function qualifyCase(browser, backend, noJspi, expected) {
+  try {
+    results.push(await runCase(browser, backend, noJspi, expected));
+  } catch (error) {
+    failures.push({ case: expected.case, backend, noJspi,
+      source_sha256: expected.source_sha256, message: String(error), stack: error?.stack ?? null });
+    console.error(`FAIL ${backend}/${noJspi ? "no-jspi/" : ""}${expected.case}: ${error}`);
+  }
+}
+
 await mkdir(evidence, { recursive: true });
 try {
   for (const backend of ["webgpu", "webgl"]) {
     const browser = await playwright.chromium.launch({ headless: true, args: browserArgs(backend) });
     try {
-      for (const expected of native.cases) results.push(await runCase(browser, backend, false, expected));
+      for (const expected of native.cases) await qualifyCase(browser, backend, false, expected);
       // Prove fallback portability separately; do not pretend synchronous helpers
       // use JSPI when the source compiler actually inserted await statements.
       if (backend === "webgl") {
         for (const name of ["sequential", "callbacks", "portable"]) {
-          results.push(await runCase(browser, backend, true, native.cases.find(c => c.case === name)));
+          await qualifyCase(browser, backend, true, native.cases.find(c => c.case === name));
         }
       }
     } finally { await browser.close(); }
   }
 } finally {
-  await writeFile(path.join(evidence, "browser.json"), stringifyEvidence({ schema: 1, results, cache: cache.stats() }) + "\n");
+  await writeFile(path.join(evidence, "browser.json"), stringifyEvidence({ schema: 1, results, failures, cache: cache.stats() }) + "\n");
   await server.close();
 }
+assert.deepEqual(failures, [], "Python host conformance failures");
 assert.equal(results.length, 19);
