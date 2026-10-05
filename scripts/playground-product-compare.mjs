@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { summarizeSamples } from "../web/frame-metrics.js";
-import { productMeasurement, sampleRendererFps, samplePresentationGaps } from "./playground-product-fps.mjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
+import { summarizePackageSizes } from "../.github/ci/wasm-build.mjs";
 
 const [baselineDirArg, candidateDirArg, mode, count] = process.argv.slice(2);
 assert.ok(baselineDirArg && candidateDirArg &&
@@ -41,7 +42,11 @@ for (let index = 1; index <= pairCount; index += 1) {
       assert.deepEqual(report.fps, fps, `${name} camera FPS does not match raw renderer observations`);
       assert.deepEqual(report.presentationGaps, samplePresentationGaps(report.presentationSamples, fps),
         `${name} camera frame gaps do not match raw presentation observations`);
+      assert.deepEqual(report.rendererCosts, sampleRendererCosts(report.presentationSamples, report.fpsSamples, fps),
+        `${name} renderer costs do not match raw renderer observations`);
     }
+    assert.deepEqual(report.packageSizes, summarizePackageSizes(report.packageSizes?.files),
+      `${name} package sizes do not match the generated file inventory`);
     assert.match(report.runtimeIdentity?.sourceRevision ?? "", /^[0-9a-f]{40}$/,
       `${name} product source identity is missing`);
     assert.match(report.runtimeIdentity?.buildId ?? "", /^[0-9a-f]{64}$/,
@@ -55,6 +60,8 @@ for (let index = 1; index <= pairCount; index += 1) {
       if (index > 1) {
         assert.deepEqual(report.runtimeIdentity, pairs[0].reports[side].runtimeIdentity,
           `${name} product package changed between trials`);
+        assert.deepEqual(report.packageSizes, pairs[0].reports[side].packageSizes,
+          `${name} product package sizes changed between trials`);
         assert.equal(report.exampleId, pairs[0].reports[side].exampleId,
           "product example changed between trials");
         assert.deepEqual(report.runtime, pairs[0].reports[side].runtime,
@@ -161,6 +168,14 @@ for (const [index, { directories, reports }] of pairs.entries()) {
 }
 const visualDiffRatio = Math.max(...visualPairs.map(pair => pair.diffRatio));
 
+const costStatistics = pairs[0].reports[0].measurement.gapClock === null ? null
+  : Object.fromEntries(["baseline", "candidate"].map((side, index) => [side, {
+    cpuWallMs: Object.fromEntries(["applyMs", "renderMs", "ackPostMs"].map(key =>
+      [key, summarizeSamples(pairs.map(({ reports }) => reports[index].rendererCosts.cpuWallMs[key].mean))])),
+    sampledBytesUploaded: summarizeSamples(pairs.map(({ reports }) =>
+      reports[index].rendererCosts.sampledLastFrame.fields.bytesUploaded.mean)),
+  }]));
+
 const comparison = {
   schemaVersion: 2,
   protocol: { pairs: pairCount, aggregate: "arithmetic-mean", order: pairs.map((_, index) =>
@@ -178,6 +193,11 @@ const comparison = {
   // display budget. Every run is retained beside the unchanged FPS floor.
   presentationGaps: pairs.map(({ reports }, index) => ({ pair: index + 1,
     baseline: reports[0].presentationGaps ?? null, candidate: reports[1].presentationGaps ?? null })),
+  // Descriptive costs retain all runs; they do not invent additional noisy thresholds.
+  rendererCosts: pairs.map(({ reports }, index) => ({ pair: index + 1,
+    baseline: reports[0].rendererCosts ?? null, candidate: reports[1].rendererCosts ?? null })),
+  costStatistics,
+  packageSizes: { baseline: baseline.packageSizes, candidate: candidate.packageSizes },
   visual: { pairs: visualPairs, worstDiffRatio: visualDiffRatio },
   failures,
 };
@@ -196,6 +216,16 @@ for (const [name, before, after] of latency) {
   console.log(`| ${name} | ${before.toFixed(0)} ms | ${after.toFixed(0)} ms |`);
 }
 console.log(`| Effective FPS | ${baselineFps.toFixed(1)} | ${candidateFps.toFixed(1)} |`);
+if (costStatistics !== null) {
+  for (const [key, label] of [["applyMs", "Delta apply CPU wall"], ["renderMs", "Render call CPU wall"],
+    ["ackPostMs", "Acknowledgment post CPU wall"]]) {
+    console.log(`| ${label} (mean) | ${costStatistics.baseline.cpuWallMs[key].mean.toFixed(3)} ms | ` +
+      `${costStatistics.candidate.cpuWallMs[key].mean.toFixed(3)} ms |`);
+  }
+  console.log(`| Sampled last-frame upload (mean) | ${costStatistics.baseline.sampledBytesUploaded.mean.toFixed(0)} bytes | ` +
+    `${costStatistics.candidate.sampledBytesUploaded.mean.toFixed(0)} bytes |`);
+}
+console.log(`| Generated package (uncompressed) | ${baseline.packageSizes.totalBytes} bytes | ${candidate.packageSizes.totalBytes} bytes |`);
 console.log(`| Fixed-frame pixel diff | — | ${(visualDiffRatio * 100).toFixed(2)}% |`);
 
 if (failures.length > 0) {

@@ -150,6 +150,43 @@ async function packageFiles(root) {
   return [...files, "web/python-worker.js", `web/python/${references[0]}`, lockPath].sort();
 }
 
+// Report the uncompressed generated package inventory, not HTTP transfer size.
+// Lock resolution remains provenance; it is not part of the runtime package.
+export function summarizePackageSizes(files) {
+  assert.ok(files && typeof files === "object" && !Array.isArray(files), "package size files are missing");
+  const names = Object.keys(files).sort();
+  assert.ok(names.length > 0 && names.every(name =>
+    (name.startsWith("web/pkg/") && name.split("/").every(part => part.length > 0 && !part.startsWith(".") && !part.includes("\\"))) ||
+    name === "web/python-worker.js" || /^web\/python\/compat-bundle\.[0-9a-f]{64}\.json$/.test(name)),
+  "invalid generated package size inventory");
+  for (const name of ["web/pkg/noon_web.js", "web/pkg/noon_web_bg.wasm", "web/pkg/package.json", "web/python-worker.js"]) {
+    assert.ok(files[name], `missing package size file: ${name}`);
+  }
+  assert.equal(names.filter(name => name.startsWith("web/python/")).length, 1, "package size bundle is missing or duplicated");
+  let totalBytes = 0;
+  for (const name of names) {
+    assert.match(files[name]?.sha256 ?? "", /^[0-9a-f]{64}$/, `invalid package size hash: ${name}`);
+    assert.ok(Number.isSafeInteger(files[name]?.bytes) && files[name].bytes > 0, `invalid package bytes: ${name}`);
+    totalBytes += files[name].bytes;
+    assert.ok(Number.isSafeInteger(totalBytes), "package byte total exceeded safe integer range");
+  }
+  return { unit: "bytes", compression: "none", scope: "generated-package-excluding-lockfile", files, totalBytes };
+}
+
+export async function packageSizes(root) {
+  const manifest = JSON.parse(await readFile(path.join(root, manifestPath), "utf8"));
+  assert.equal(manifest.schema, 1, "unsupported artifact schema");
+  const names = await packageFiles(root);
+  assert.deepEqual(Object.keys(manifest.files).sort(), names, "artifact inventory mismatch");
+  const files = {};
+  for (const name of names) {
+    const sha256 = await fileDigest(root, name);
+    assert.equal(sha256, manifest.files[name], `artifact content mismatch: ${name}`);
+    if (name !== lockPath) files[name] = { sha256, bytes: (await lstat(path.join(root, name))).size };
+  }
+  return summarizePackageSizes(files);
+}
+
 export async function stamp(root, prepared, env = process.env, buildConfig = config) {
   assert.equal(prepared.source, sourceSha(root, env), "source changed during build");
   assert.deepEqual(prepared.build, await configuration(root, buildConfig), "configuration changed during build");
