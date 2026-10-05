@@ -143,7 +143,7 @@ async def run_source(source, context=None, *, sample_hz=60.0, portable=False, fi
     settings_token = _settings.set(float(sample_hz))
     selected = []
     def remember(scene):
-        if not selected:
+        if not any(existing is scene for existing in selected):
             selected.append(scene)
     try:
         return await execute_source(source, context, portable=portable,

@@ -110,6 +110,42 @@ def lifecycle_guards() -> dict:
             "retired_write_rejected": True, "callback_tables_restored": True}
 
 
+def module_failure_guards() -> dict:
+    """A module abort must retire contexts acquired before source selection."""
+    import _manim_updaters
+    from noon_native import run_source
+    before = (len(_manim_updaters._CANONICAL_SESSIONS),
+              len(_manim_updaters._TRACKED_MOBJECTS))
+    source = """from noon import *
+result = Scene()
+alias = result
+marker = Circle(0.5)
+result.add(marker)
+marker.add_updater(lambda m, dt: m.shift(dt * RIGHT))
+result.wait(0.25)
+"""
+    failures = (
+        ('raise ValueError("intentional module abort")', ValueError, "intentional module abort"),
+        ("result = None", TypeError, "Python authoring result must be a noon.Scene"),
+    )
+    for portable in (False, True):
+        for suffix, kind, message in failures:
+            for _ in range(4):
+                try:
+                    asyncio.run(run_source(source + suffix, sample_hz=4, portable=portable))
+                except kind as error:
+                    assert str(error) == message, error
+                else:
+                    raise AssertionError("module exception was swallowed")
+                gc.collect()
+                actual = (len(_manim_updaters._CANONICAL_SESSIONS),
+                          len(_manim_updaters._TRACKED_MOBJECTS))
+                assert actual == before, ("module failure leaked callbacks", actual, before)
+    return {"iterations": 16, "original_and_portable_source": True,
+            "module_exception_preserved": True, "invalid_result_cleanup": True,
+            "callback_tables_restored": True}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python-path", type=Path, default=ROOT / "build/python")
@@ -120,7 +156,8 @@ def main() -> None:
     assert Path(_noon_native.__file__).suffix in {".so", ".pyd"}
     report = {"schema": 1, "host": "native-cpython", "python": sys.version,
               "platform": platform.platform(), "sample_hz": 4,
-              "cases": [run_case(name) for name in CASES], "lifecycle": lifecycle_guards()}
+              "cases": [run_case(name) for name in CASES], "lifecycle": lifecycle_guards(),
+              "module_failure": module_failure_guards()}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     print(f"Native CPython: {len(report['cases'])} unchanged-source cases; lifecycle guards passed")
