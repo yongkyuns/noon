@@ -6,6 +6,33 @@ export const PERF_PROTOCOL = Object.freeze({ pairs: 7, warmups: 2, objects: 600,
   modes: ["async", "portable", "jspi"], workloads: ["deterministic", "segments", "callbacks"],
   maxPointRatio: 1.03, maxUpperRatio: 1.05 });
 
+// A source fingerprint is provenance, not a compiler setting. Verify each
+// artifact against its own checkout before this comparison. Cargo manifests may
+// legitimately change with the code under test (e.g. adding an optional native
+// crate). Compiler/tool options and out-of-manifest build recipes must still match.
+export function assertComparableArtifacts(identities) {
+  assert.equal(identities.length, 2, "expected baseline and candidate artifacts");
+  const builds = identities.map(identity => {
+    assert.equal(identity.schema, 1, "unsupported artifact schema");
+    assert.match(identity.source ?? "", /^[0-9a-f]{40}$/, "missing artifact source");
+    const { inputs, ...settings } = identity.build;
+    assert.ok(inputs && Object.keys(inputs).length > 0, "missing source build inputs");
+    for (const hash of Object.values(inputs)) {
+      assert.match(hash, /^[0-9a-f]{64}$/, "invalid source build fingerprint");
+    }
+    const recipes = Object.fromEntries(Object.entries(inputs)
+      .filter(([name]) => name !== "Cargo.toml" && !name.endsWith("/Cargo.toml")));
+    return { settings, recipes };
+  });
+  assert.deepEqual(builds[0], builds[1], "different build configuration or recipe");
+  assert.equal(typeof identities[0].compiler, "string", "missing compiler identity");
+  assert.ok(identities[0].compiler.length > 0, "missing compiler identity");
+  assert.equal(identities[0].compiler, identities[1].compiler, "different compiler identity");
+  const names = new Set(identities.flatMap(identity => Object.keys(identity.build.inputs)));
+  return [...names].sort().filter(name =>
+    identities[0].build.inputs[name] !== identities[1].build.inputs[name]);
+}
+
 export function performanceSource(mode, workload) {
   assert.ok(PERF_PROTOCOL.modes.includes(mode), "unknown source mode");
   assert.ok(PERF_PROTOCOL.workloads.includes(workload), "unknown workload");

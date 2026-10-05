@@ -11,7 +11,10 @@ import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { stringifyEvidence } from "./python-host-report.mjs";
-import { PERF_PROTOCOL as protocol, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
+import { PERF_PROTOCOL as protocol, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
+
+import { productConfig, validateProductEnvironment } from "../.github/ci/product-artifact.mjs";
+import { verify } from "../.github/ci/wasm-build.mjs";
 
 const roots = ["BASELINE", "CANDIDATE"].map(side => {
   assert.ok(process.env[`NOON_PERF_${side}_ROOT`], `missing ${side} source`);
@@ -19,14 +22,22 @@ const roots = ["BASELINE", "CANDIDATE"].map(side => {
 });
 const output = path.join(roots[1], "browser-smoke-artifacts/product-gate/host-cost");
 await mkdir(output, { recursive: true });
-const identities = await Promise.all(roots.map(async root => JSON.parse(await readFile(path.join(root, "web/ci-artifact.json"), "utf8"))));
-assert.equal(identities[0].source, process.env.NOON_PRODUCT_BASE_SHA, "unmatched baseline package");
-assert.equal(identities[1].source, process.env.GITHUB_SHA, "unmatched candidate package");
-assert.deepEqual(identities[0].build, identities[1].build, "different build configuration");
+let identities = [], changedBuildInputs = [];
 const cache = createPyodideResourceCache(await readFile(path.join(roots[1], "web/python-worker.source.js"), "utf8"));
 const servers = [], contexts = [], pages = [], reports = [[], []], warmups = [], rows = [], failures = [];
 let browser;
 try {
+  const sources = [process.env.NOON_PRODUCT_BASE_SHA, process.env.GITHUB_SHA];
+  for (const [side, root] of roots.entries()) {
+    const role = side === 0 ? "baseline" : "candidate";
+    assert.match(sources[side] ?? "", /^[0-9a-f]{40}$/, `missing ${role} source SHA`);
+    const env = { ...process.env, GITHUB_SHA: sources[side] };
+    validateProductEnvironment(env, role);
+    // Revalidate bytes, inventory, lockfile, source and recipe here as well as in
+    // CI: standalone invocation must not trust the artifact's claimed identity.
+    identities.push(await verify(root, env, productConfig(role)));
+  }
+  changedBuildInputs = assertComparableArtifacts(identities);
   browser = await playwright.chromium.launch({ headless: true, args: browserArgs("webgl") });
   for (const root of roots) {
     const server = await serveRepository(root, 0, { crossOriginIsolated: true }); servers.push(server);
@@ -143,7 +154,7 @@ try {
 } catch (error) {
   failures.push({ kind: "execution", message: String(error), stack: error.stack });
 } finally {
-  await writeFile(path.join(output, "comparison.json"), stringifyEvidence({ schema: 1, protocol, identities,
+  await writeFile(path.join(output, "comparison.json"), stringifyEvidence({ schema: 1, protocol, identities, changedBuildInputs,
     host: { cpu: os.cpus()[0]?.model, platform: os.platform(), arch: os.arch(), node: process.version },
     warmups, rows, failures, cache: cache.stats() }) + "\n");
   for (const context of contexts) await context.close();

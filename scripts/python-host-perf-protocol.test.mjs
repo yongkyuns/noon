@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PERF_PROTOCOL, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
+import { PERF_PROTOCOL, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
 
 test("cost comparison retains all pairs and rejects a regression below the old 20% FPS allowance", () => {
   const base = [100, 103, 96, 99, 105, 102, 97];
@@ -28,4 +28,43 @@ test("all source modes use identical work, with helper calls forcing actual JSPI
     assert.match(sources[2], /assert coroutine == False/);
   }
   assert.throws(() => performanceSource("unknown", "segments"));
+});
+
+function artifact(source) {
+  return { schema: 1, source: source.repeat(40), compiler: "rustc test\nrelease: 1.98.1",
+    build: { target: "wasm32-unknown-unknown", profile: "release", features: "default",
+      debug: "0", incremental: "0", skipOpt: "0", toolchain: "1.98.1", binaryen: "132",
+      inputs: { "Cargo.toml": "a".repeat(64), "crates/noon-web/Cargo.toml": "b".repeat(64),
+        "rust-toolchain.toml": "c".repeat(64), "scripts/build-web-demo.sh": "d".repeat(64) } } };
+}
+
+test("distinct verified source inputs are not mistaken for different compiler settings", () => {
+  const before = artifact("a"), after = artifact("b");
+  after.build.inputs["Cargo.toml"] = "e".repeat(64);
+  after.build.inputs["crates/noon-python/Cargo.toml"] = "f".repeat(64);
+  assert.deepEqual(assertComparableArtifacts([before, after]),
+    ["Cargo.toml", "crates/noon-python/Cargo.toml"]);
+});
+
+test("different optimization, target, feature, recipe or compiler identity still fails closed", () => {
+  for (const field of ["target", "profile", "features", "debug", "incremental", "skipOpt", "toolchain", "binaryen"]) {
+    const after = artifact("b"); after.build[field] = "changed";
+    assert.throws(() => assertComparableArtifacts([artifact("a"), after]), /different build/);
+  }
+  for (const name of ["scripts/build-web-demo.sh", ".cargo/config.toml", "rust-toolchain.toml"]) {
+    const after = artifact("b"); after.build.inputs[name] = "f".repeat(64);
+    assert.throws(() => assertComparableArtifacts([artifact("a"), after]), /recipe/);
+  }
+  const after = artifact("b"); after.compiler += "\nchanged";
+  assert.throws(() => assertComparableArtifacts([artifact("a"), after]), /compiler/);
+});
+
+test("missing or malformed provenance is not a comparable build", () => {
+  for (const change of [a => { a.source = ""; }, a => { a.build.inputs = {}; },
+    a => { a.build.inputs["Cargo.toml"] = ""; }, a => { a.compiler = ""; },
+    a => { a.schema = 2; }]) {
+    const before = artifact("a"); change(before);
+    assert.throws(() => assertComparableArtifacts([before, artifact("b")]));
+  }
+  assert.throws(() => assertComparableArtifacts([artifact("a")]));
 });
