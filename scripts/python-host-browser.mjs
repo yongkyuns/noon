@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
+import { assertSingleReport, stringifyEvidence } from "./python-host-report.mjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
@@ -112,9 +113,14 @@ async function runCase(browser, backend, noJspi, expected) {
       }, { source, expectFailure: expected.terminal !== null }),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${backend}/${expected.case} timed out`)), 120000); }),
     ]);
-    assert.equal(output.length, 1, `${expected.case}: expected exactly one Python report; ${JSON.stringify(result)}`);
+    // Persist the complete observation before assertions so a failing case is
+    // reproducible too. Runtime u64 counters are BigInt in the JS binding.
+    const caseName = `${backend}-${noJspi ? "no-jspi-" : ""}${expected.case}`;
+    await writeFile(path.join(evidence, `${caseName}.json`),
+      stringifyEvidence({ source_sha256: expected.source_sha256, output, pageErrors, result }) + "\n");
+    assertSingleReport(output, expected.case, result);
     compare(output[0], expected.report, `${backend}/${expected.case}`);
-    assert.equal(result.terminal.ok, expected.terminal === null, `${expected.case}: ${JSON.stringify(result.terminal)}`);
+    assert.equal(result.terminal.ok, expected.terminal === null, `${expected.case}: ${stringifyEvidence(result.terminal)}`);
     if (expected.terminal !== null) assert.match(result.terminal.message, new RegExp(expected.terminal));
     else {
       assert.deepEqual(result.asynchronousErrors, []);
@@ -146,8 +152,7 @@ try {
     } finally { await browser.close(); }
   }
 } finally {
-  await writeFile(path.join(evidence, "browser.json"), JSON.stringify({ schema: 1, results, cache: cache.stats() },
-    (_key, value) => typeof value === "bigint" ? value.toString() : value, 2) + "\n");
+  await writeFile(path.join(evidence, "browser.json"), stringifyEvidence({ schema: 1, results, cache: cache.stats() }) + "\n");
   await server.close();
 }
 assert.equal(results.length, 19);
