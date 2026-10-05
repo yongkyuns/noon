@@ -172,6 +172,9 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
       - name: Qualify pinned FollowingGraphCamera
+        id: following_graph_camera
+        # Collect existing regressions even on failure; the final step keeps this blocking.
+        continue-on-error: true
         timeout-minutes: 15
         env:
           NOON_CAMERA_MANIM_ORACLE: "1"
@@ -269,8 +272,8 @@ jobs:
           path: manim-raster-artifacts
           if-no-files-found: error
           retention-days: 14
-      - name: Report retained Typst raster failure
-        if: ${{ always() && steps.typst_ratchet.outcome == 'failure' }}
+      - name: Report deferred qualification failures
+        if: ${{ always() && (steps.following_graph_camera.outcome == 'failure' || steps.typst_ratchet.outcome == 'failure') }}
         run: |
-          echo "Retained Typst raster ratchets failed; see the earlier enforcement output."
+          echo "Camera qualification or retained Typst ratchets failed; see the earlier enforcement output."
           exit 1
