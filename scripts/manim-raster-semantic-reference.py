@@ -178,6 +178,14 @@ def _scene_state(
         "present_object_count": len(objects),
         "objects": objects,
     }
+    if isinstance(scene, MovingCameraScene):
+        # Observe the effective frame without modifying the pinned source or
+        # confusing the final materialized PNG with logical completion.
+        center = np.asarray(scene.camera.frame.get_center(), dtype=float)
+        state["camera"] = {
+            "center": [float(center[0]), float(center[1])],
+            "height": float(scene.camera.frame.height),
+        }
     oracle_state = getattr(scene, "noon_oracle_state", None)
     if callable(oracle_state):
         state["oracle"] = oracle_state()
@@ -213,6 +221,7 @@ def _render_fixture(
     scene.setup()
     try:
         scene.construct()
+        terminal_state = _scene_state(scene, len(renderer.frames), renderer.logical_time, 0.0)
     finally:
         scene.tear_down()
 
@@ -240,6 +249,7 @@ def _render_fixture(
         "logical_duration": renderer.logical_time,
         "frame_rate": frame_rate,
         "frames": renderer.frames,
+        "terminal_state": terminal_state,
     }
 
 
