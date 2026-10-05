@@ -21,6 +21,8 @@
 //! rather than overwriting its publication revision or treating old frames as new.
 //!
 
+mod svg_failure;
+
 /// Conversion from Manim Cairo pixel stroke widths to Noon scene units.
 pub const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
 
@@ -75,7 +77,7 @@ pub use noon_runtime::{
 };
 
 /// Construct one detached family through an explicitly supplied live execution
-/// authority. This is for platform integrations that intentionally own the
+/// authority. This is for platform integrations that intentionally own a
 /// store/root/session pairing outside [`Scene`](crate::Scene); ordinary Rust
 /// authoring uses [`Scene::family_with_z_index`](crate::Scene::family_with_z_index).
 pub fn publish_family_creation(
