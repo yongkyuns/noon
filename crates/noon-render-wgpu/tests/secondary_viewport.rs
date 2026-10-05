@@ -286,7 +286,7 @@ fn composed_secondary_views_keep_camera_state_isolated_overlay_last_and_rejectio
 }
 
 #[test]
-fn butt_line_gpu_coverage_is_stable_at_pixel_phases_and_clips_at_caps() {
+fn line_gpu_coverage_is_stable_at_pixel_phases_and_preserves_caps() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();
         let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
@@ -425,5 +425,98 @@ fn butt_line_gpu_coverage_is_stable_at_pixel_phases_and_clips_at_caps() {
             0,
             "butt cap must not extend past end"
         );
+
+        // Retain the same line while only the camera changes. Round and butt
+        // bodies have the same pixel-box integral; rounded endpoints must not
+        // make a subpixel-width body pulse in brightness while panning.
+        for cap in [noon_core::StrokeCap::Butt, noon_core::StrokeCap::Round] {
+            for vertical in [false, true] {
+                for width_px in [0.25_f32, 0.64, 1.3518, 2.5] {
+                    let (start, end) = if vertical {
+                        (Vec2::new(0.0, -0.35), Vec2::new(0.0, 0.35))
+                    } else {
+                        (Vec2::new(-0.65, 0.0), Vec2::new(0.65, 0.0))
+                    };
+                    let scene = scene_with_geometry(
+                        GeometryRef::line(start, end),
+                        Style {
+                            stroke_width: width_px / 64.0,
+                            stroke_cap: cap,
+                            ..style
+                        },
+                    );
+                    let prepared = preparer.prepare(scene.frame());
+                    renderer.upload(&device, &queue, &prepared);
+                    for phase in [0.0_f32, 0.125, 0.25, 0.4375, 0.5, 0.75, 0.875] {
+                        let center = if vertical {
+                            Vec2::new(-phase / 64.0, 0.0)
+                        } else {
+                            Vec2::new(0.0, phase / 64.0)
+                        };
+                        renderer.set_camera(
+                            &queue,
+                            Camera2D::new(center, Vec2::new(2.0, 1.0)).unwrap(),
+                        );
+                        let mut encoder = device.create_command_encoder(&Default::default());
+                        renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
+                        let pixels = submit_and_read(&device, &queue, encoder, &target, &readback);
+                        let fixed = if vertical { WIDTH / 2 } else { HEIGHT / 2 };
+                        let total = cross_sum(&pixels, vertical, fixed);
+                        // cairo_source_color maps opaque 0.5 gray to 128/255.
+                        let expected = 128.0 * width_px;
+                        assert!(
+                            (total as f32 - expected).abs() <= 2.0,
+                            "{cap:?}/{vertical}: width={width_px}, phase={phase}, energy={total}"
+                        );
+                        let pixel_center = fixed as f32 + phase;
+                        for offset in -3_i32..=3 {
+                            let coordinate = (fixed as i32 + offset) as u32;
+                            let lower = (pixel_center - width_px * 0.5).max(coordinate as f32);
+                            let upper =
+                                (pixel_center + width_px * 0.5).min(coordinate as f32 + 1.0);
+                            let coverage = (upper - lower).clamp(0.0, 1.0);
+                            let actual = if vertical {
+                                rgba(&pixels, coordinate, HEIGHT / 2)[0]
+                            } else {
+                                rgba(&pixels, WIDTH / 2, coordinate)[0]
+                            };
+                            assert!(
+                                (f32::from(actual) - 128.0 * coverage).abs() <= 1.0,
+                                "{cap:?}/{vertical}: w={width_px}, phase={phase}, pixel={coordinate}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // The body specialization must not turn a round end into a butt cap.
+        let round_scene = scene_with_geometry(
+            GeometryRef::line(Vec2::new(-0.25, 0.0), Vec2::new(0.25, 0.0)),
+            Style {
+                stroke_width: 4.0 / 64.0,
+                stroke_cap: noon_core::StrokeCap::Round,
+                ..style
+            },
+        );
+        let prepared = preparer.prepare(round_scene.frame());
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(Vec2::ZERO, Vec2::new(2.0, 1.0)).unwrap(),
+        );
+        renderer.upload(&device, &queue, &prepared);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
+        let rounded = submit_and_read(&device, &queue, encoder, &target, &readback);
+        assert!(
+            rgba(&rounded, 47, 31)[0] > 0,
+            "round start extends beyond its endpoint"
+        );
+        assert!(
+            rgba(&rounded, 80, 31)[0] > 0,
+            "round end extends beyond its endpoint"
+        );
+        assert_eq!(rgba(&rounded, 44, 31)[0], 0, "round start has bounded extent");
+        assert_eq!(rgba(&rounded, 83, 31)[0], 0, "round end has bounded extent");
     });
 }
