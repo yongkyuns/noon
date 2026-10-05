@@ -15,15 +15,14 @@ jobs:
         with:
           ref: f29c8c9dfb9356075993afe42b8bceec04de55a5
           persist-credentials: false
-      - name: Verify patch and create immutable source blobs
+      - run: rustup install
+      - name: Verify source edits and create immutable blobs
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
           python3 - <<'PY'
-          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
-          encoded = 'H4sIAJe3w2oC/7VX+2/bNhD+XX/FIQUGe5Tt+JWH0gbd0mTLtjZFlXUDisKgKdpRK4mGROWxwP/7jqJkS5bkyk0qBFFC3n13PN7jk+POZtDpzF0JtMdCKnnUC4QIOnd82otC1qOxvBGhG8wnPAxF2A0jmDYUNNzA4fcwdNgRPRx2u/vO4YCOD6C/v38wGhmdTqexTYMQ0tzu69fQGQ/N/hgIvo4B/1/E01ai3YZZAF8iLdxKflvg+gsPLgMpXv6SoV1Q14tDftqGzinc0cifTPE4cx5Y1h/RR2rAi09sNm+hO7L92QBfOKD+juDRAPXEEYcoXvDQsn4+MTrZknLdsh71gnpWBs1cENp/7PJBnAn3jaqFGQC+vAXP7UYSvM+p5U8q+ltUL2x84db4F9T6eei6jOWf+cm95uplXXp4YZOPEW87ZEBtBIQ86YSLklmVznwbSZe+Ewy+djVCnMrl4Z+JvY5kYuw5pEFGWs5tJ2IwH/ApvkFZtSgTeduQN7yrAcseJpGNZOhetbE/vvviksuqz4TSv0+h23qRKtVhao84h648P+t0u2z8ajAb9XWo0BWpSoamoqs9jc4jleWz291V5roIQMsv6wPD4aqVYdouQe7HDk3oCLZBYW13vRifA9azOTdis62V6bf+gidye73oPv9PA8bhZ3Horpl84k5V7SS6Y+vpLPqxd+D5TGrbKnko5MDpJ77oIhf9SV5p9Oy/W2inMRFgKAKRBw244Q+WsE9ZgJF3Q5t4HWBs1cENp/7PJBnAn3jaqFGQC+vAXP7UYSvM+p5U8q+ltUL2x84db4F9T6eei6jOWf+cm95uplXXp4YZOPEW87ZEBtBIQ86YSLklmVznwbSZe+Ewy+djVCnMrl4Z+JvY5kYuw5pEFGWs5tJ2IwH/ApvkFZtSgTeduQN7yrAcseJpGNZOhetbE/vvviksuqz4TSv0+h23qRKtVhao84h648P+t0u2z8ajAb9XWo0BWpSoamoqs9jc4jleWz291V5roIQMsv6wPD4aqVYdouQe7HDk3oCLZBYW13vRifA9azOTdis62V6bf+gidye73oPv9PA8bhZ3Horpl84k5V7SS6Y+vpLPqxd+D5TGrbKnko5MDpJ77oIhf9SV5p9Oy/W2inMRFgKAKRBw244Q+WsE9ZgJF3Q5t4IhQ=='
-          # Apply auditable source edits below; the complete diff is verified.
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
           p = pathlib.Path('crates/noon-web/src/authoring_svg.rs')
           s = p.read_text(); start = s.index('impl From<noon::SvgAuthoringError>'); end = s.index('#[wasm_bindgen]', start)
           conversion = s[start:end].replace('noon::SvgAuthoringError', 'crate::SvgAuthoringError')
@@ -37,8 +36,7 @@ jobs:
           p = pathlib.Path('crates/noon-web/src/authoring_error.rs')
           s = p.read_text().replace('    use noon::{\n        AuthoringError, ExecutionSegmentCompletionError, ExecutionSegmentError,\n        ExecutionSessionCallbackError, ExecutionSessionCallbackReadError,\n        ExecutionSessionPublicationError, LiveSessionError,\n    };', '    use noon::{AuthoringError, ExecutionSessionPublicationError, LiveSessionError};').replace('    use noon_core::{\n        SemanticMutationTransactionError, SemanticSceneOperationError, SemanticStoreError,\n    };', '    use noon_core::SemanticSceneOperationError;')
           p.write_text(s)
-          # rustfmt changes only remove the terminal blank line added above.
-          p = pathlib.Path('crates/noon/src/binding_error.rs'); p.write_text(p.read_text().rstrip() + '\n')
+          subprocess.run(['cargo', 'fmt', '--all'], check=True)
           expected_blobs = {'crates/noon-web/src/authoring_error.rs': '0d72a567788d8ca224f3b7ba40accec2ca8ba4d2', 'crates/noon-web/src/authoring_svg.rs': 'c08242198550584903ef70623554bcddec2df2b8', 'crates/noon/src/binding_error.rs': '2d6eabbb8063761b0fa7b7a2600b050d621d1c8d'}
           paths = subprocess.check_output(['git', 'diff', '--name-only']).decode().splitlines()
           assert set(paths) == set(expected_blobs)
