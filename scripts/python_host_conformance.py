@@ -146,6 +146,77 @@ result.wait(0.25)
             "callback_tables_restored": True}
 
 
+def hidden_failure_guards() -> dict:
+    """Unreturned constructors and helper locals must not escape host cleanup."""
+    import _manim_updaters
+    from noon import Scene, Circle, RIGHT
+    from noon_native import run_source, run_scene, close_scene
+    class Survivor(Scene):
+        async def construct(self):
+            self.marker = Circle(0.5)
+            self.add(self.marker)
+            self.marker.add_updater(lambda m, dt: None)
+            await self.wait(0.25)
+    survivor = asyncio.run(run_scene(Survivor, sample_hz=4))
+    before = (len(_manim_updaters._CANONICAL_SESSIONS),
+              len(_manim_updaters._TRACKED_MOBJECTS))
+    constructor = """from noon import Scene, Circle
+import weakref
+class Broken(Scene):
+    def __init__(self):
+        super().__init__()
+        context["refs"].append(weakref.ref(self))
+        marker = Circle(0.5)
+        self.add(marker)
+        marker.add_updater(lambda m, dt: None)
+        self.wait(0.25)
+        raise ValueError("unreturned constructor")
+result = Broken()
+"""
+    helper = """from noon import Scene, Circle
+import weakref
+import asyncio
+def hidden_scene():
+    scene = Scene()
+    context["refs"].append(weakref.ref(scene))
+    marker = Circle(0.5)
+    scene.add(marker)
+    marker.add_updater(lambda m, dt: None)
+    scene.wait(0.25)
+hidden_scene()
+raise asyncio.CancelledError("lost helper scene")
+"""
+    cases = ((constructor, ValueError, "unreturned constructor"),
+             (constructor.replace("        self.wait(0.25)\n", ""), ValueError,
+              "unreturned constructor"),
+             (helper, asyncio.CancelledError, "lost helper scene"))
+    try:
+        for portable in (False, True):
+            for source, kind, message in cases:
+                for _ in range(4):
+                    refs = []
+                    try:
+                        asyncio.run(run_source(source, {"refs": refs}, sample_hz=4,
+                                               portable=portable))
+                    except kind as error:
+                        assert str(error) == message, error
+                    else:
+                        raise AssertionError("hidden source failure was swallowed")
+                    gc.collect()
+                    assert refs and all(ref() is None for ref in refs), "hidden Scene retained"
+                    actual = (len(_manim_updaters._CANONICAL_SESSIONS),
+                              len(_manim_updaters._TRACKED_MOBJECTS))
+                    assert actual == before, ("hidden failure leaked callbacks", actual, before)
+                    # A failed new source cannot retire an existing caller-owned host.
+                    survivor.marker.shift(0.01 * RIGHT)
+    finally:
+        close_scene(survivor)
+    return {"iterations": 24, "constructor_exception_preserved": True,
+            "pre_barrier_registration_cleanup": True,
+            "helper_cancellation_preserved": True, "retained_hidden_scenes": 0,
+            "unrelated_owner_preserved": True, "callback_tables_restored": True}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python-path", type=Path, default=ROOT / "build/python")
@@ -157,7 +228,8 @@ def main() -> None:
     report = {"schema": 1, "host": "native-cpython", "python": sys.version,
               "platform": platform.platform(), "sample_hz": 4,
               "cases": [run_case(name) for name in CASES], "lifecycle": lifecycle_guards(),
-              "module_failure": module_failure_guards()}
+              "module_failure": module_failure_guards(),
+              "hidden_failure": hidden_failure_guards()}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     print(f"Native CPython: {len(report['cases'])} unchanged-source cases; lifecycle guards passed")

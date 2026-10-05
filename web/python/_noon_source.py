@@ -16,7 +16,7 @@ from noon import Scene
 
 
 async def execute_source(source: str, context=None, *, portable: bool = True,
-                         filename: str = "<noon>", on_scene=None) -> Scene:
+                         filename: str = "<noon>") -> Scene:
     if not isinstance(source, str) or not source.strip():
         raise TypeError("Python authoring source must be non-empty")
     namespace = {"context": {} if context is None else context, "__name__": "__main__"}
@@ -25,36 +25,22 @@ async def execute_source(source: str, context=None, *, portable: bool = True,
         namespace[BARRIER_GLOBAL] = await_source_barrier
     if MODULE_BARRIER_GLOBAL in code.co_names:
         namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
-    try:
-        with authoring_source_scope():
-            await execute_authoring_module(code, namespace)
-        if "result" in namespace:
-            result = namespace["result"]
-        else:
-            classes = [value for value in namespace.values()
-                       if isinstance(value, type) and issubclass(value, Scene)
-                       and value is not Scene and getattr(value, "__module__", None) == "__main__"]
-            if not classes:
-                raise RuntimeError("Python authoring source must either assign result or define one Scene subclass")
-            if len(classes) != 1:
-                names = ", ".join(cls.__name__ for cls in classes)
-                raise RuntimeError("Python authoring source defines multiple Scene subclasses; "
-                                   f"select one explicitly via result = SceneClass(): {names}")
-            result = classes[0]()
-            if on_scene is not None:
-                on_scene(result)
-            await execute_construct(result, portable_constructs=portable_constructs)
-        if not isinstance(result, Scene):
-            raise TypeError("Python authoring result must be a noon.Scene")
-        if on_scene is not None:
-            on_scene(result)
-        return result
-    except BaseException:
-        # Module-level authoring can acquire a real context before returning a
-        # result. Report its existing wrapper roots to the host for failure
-        # cleanup; do not replay source or inspect/traverse scene contents.
-        if on_scene is not None:
-            for value in tuple(namespace.values()):
-                if isinstance(value, Scene):
-                    on_scene(value)
-        raise
+    with authoring_source_scope():
+        await execute_authoring_module(code, namespace)
+    if "result" in namespace:
+        result = namespace["result"]
+    else:
+        classes = [value for value in namespace.values()
+                   if isinstance(value, type) and issubclass(value, Scene)
+                   and value is not Scene and getattr(value, "__module__", None) == "__main__"]
+        if not classes:
+            raise RuntimeError("Python authoring source must either assign result or define one Scene subclass")
+        if len(classes) != 1:
+            names = ", ".join(cls.__name__ for cls in classes)
+            raise RuntimeError("Python authoring source defines multiple Scene subclasses; "
+                               f"select one explicitly via result = SceneClass(): {names}")
+        result = classes[0]()
+        await execute_construct(result, portable_constructs=portable_constructs)
+    if not isinstance(result, Scene):
+        raise TypeError("Python authoring result must be a noon.Scene")
+    return result

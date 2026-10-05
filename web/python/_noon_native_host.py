@@ -10,6 +10,31 @@ import _noon_native as _native
 
 _store = ContextVar("noon_native_store", default=None)
 _settings = ContextVar("noon_native_settings", default=60.0)
+_resources = ContextVar("noon_native_resources", default=None)
+
+
+class _NativeRunResources:
+    """Failure cleanup for acquired native handles, not another scene registry.
+
+    The existing callable-table watermark bounds cleanup to registrations made
+    during this invocation. Context identity excludes nested/concurrent owners.
+    No object traversal, callback-table copy or per-frame hook is introduced.
+    """
+    def __init__(self):
+        import _manim_updaters
+        self.callbacks = _manim_updaters
+        self.first_session = _manim_updaters._NEXT_SESSION_ID
+        self.contexts = []
+
+    def close(self):
+        owned = {id(context) for context in self.contexts}
+        for context in reversed(self.contexts):
+            context.retire()
+        for session_id in range(self.first_session, self.callbacks._NEXT_SESSION_ID):
+            session = self.callbacks._CANONICAL_SESSIONS.get(session_id)
+            if session is not None and id(session.context) in owned:
+                self.callbacks.release_session(session_id)
+        self.contexts.clear()
 
 
 def _arena():
@@ -31,6 +56,9 @@ def noonCreateAuthoringGeometryHandle(options):
 def noonCreateCanonicalAuthoringSceneContext():
     context = _arena().context()
     context.configure(_settings.get())
+    resources = _resources.get()
+    if resources is not None:
+        resources.contexts.append(context)
     return context
 
 
@@ -116,6 +144,8 @@ def close_scene(scene):
 
 async def run_scene(scene_class, *, sample_hz=60.0):
     from _manim_scene import execute_construct
+    resources = _NativeRunResources()
+    resource_token = _resources.set(resources)
     store_token = _store.set(_native.Store())
     settings_token = _settings.set(float(sample_hz))
     scene = None
@@ -124,10 +154,10 @@ async def run_scene(scene_class, *, sample_hz=60.0):
         await execute_construct(scene)
         return scene
     except BaseException:
-        if scene is not None:
-            close_scene(scene)
+        resources.close()
         raise
     finally:
+        _resources.reset(resource_token)
         _settings.reset(settings_token)
         _store.reset(store_token)
 
@@ -139,19 +169,17 @@ async def run_source(source, context=None, *, sample_hz=60.0, portable=False, fi
     exercises exactly the bounded compiler used by the browser source host.
     """
     from _noon_source import execute_source
+    resources = _NativeRunResources()
+    resource_token = _resources.set(resources)
     store_token = _store.set(_native.Store())
     settings_token = _settings.set(float(sample_hz))
-    selected = []
-    def remember(scene):
-        if not any(existing is scene for existing in selected):
-            selected.append(scene)
     try:
         return await execute_source(source, context, portable=portable,
-                                    filename=filename, on_scene=remember)
+                                    filename=filename)
     except BaseException:
-        for scene in selected:
-            close_scene(scene)
+        resources.close()
         raise
     finally:
+        _resources.reset(resource_token)
         _settings.reset(settings_token)
         _store.reset(store_token)
