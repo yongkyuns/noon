@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from functools import partial
 
 
 def _backend():
@@ -51,3 +52,31 @@ def wait_sync(value):
     if not isinstance(value, _NativeCompletion):
         raise TypeError("native synchronous wait accepts only Noon host completions")
     return value.run_sync()
+
+
+# A real browser worker has one immutable binding module for its lifetime.
+# Resolve each host symbol only on its first use; caching a function retains no
+# Scene/context and never bypasses the Rust generation/retirement checks. Missing
+# optional symbols are not cached, so lazy resource preparation remains possible.
+# Native import-only tools may install a temporary js fixture: keep their lazy
+# resolution above rather than retaining fixture functions across tool invocations.
+if sys.platform == "emscripten":
+    _browser = importlib.import_module("js")
+    from pyodide.ffi import can_run_sync as can_wait_sync, run_sync as wait_sync
+
+    def __getattr__(name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        try:
+            value = getattr(_browser, name)
+        except AttributeError:
+            raise AttributeError(f"Noon host does not provide {name}") from None
+        globals()[name] = value
+        return value
+
+    # The browser codec and wait primitive are selected at import, not for every
+    # local edit or callback. Native values still take the typed path above.
+    encode_callback = partial(json.dumps, separators=(",", ":"), allow_nan=False)
+
+    def decode_callback(value):
+        return json.loads(str(value))
