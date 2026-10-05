@@ -1043,6 +1043,11 @@ function retireSemanticContext(token, entry) {
 }
 
 async function runAuthoringSource(pyodide, source, context) {
+  // Resolve only imports requested by this source before executing any module
+  // or scene effects. Pyodide owns discovery and its package cache; no packages
+  // are eagerly loaded at worker startup or requested on the callback/frame path.
+  await pyodide.loadPackagesFromImports(source);
+
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
   dictConstructor.destroy();
