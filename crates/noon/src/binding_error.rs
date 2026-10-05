@@ -87,6 +87,7 @@ impl From<crate::TableAuthoringError> for AuthoringFailure {
             InvalidOption { .. } => Self::new("input", "table.invalid_option", error),
             InvalidStructure => Self::new("semantic", "table.invalid_structure", error),
             Text(error) => error.into(),
+            #[cfg(feature = "latex")]
             Numeric(error) => error.into(),
             Semantic(error) => error.into(),
             LiveSession(error) => Self::unclassified("table.live_session", &error),
