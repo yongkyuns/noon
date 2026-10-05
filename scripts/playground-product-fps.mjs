@@ -7,7 +7,8 @@ const END_TOLERANCE_SECONDS = 0.001;
 // Explicit workloads, using the same source and window on both packages. These
 // are test protocols, not an alternative runtime clock or benchmark registry.
 export function productMeasurement(exampleId) {
-  const common = { version: 2, clock: "renderer-sampled", preparation: "completed-cold-pass" };
+  const common = { version: 3, clock: "renderer-sampled", sampler: "renderer-only",
+    preparation: "completed-cold-pass" };
   switch (exampleId) {
     case "parity-square-and-circle":
       return { ...common, windowStartSeconds: 1, windowEndSeconds: 4,
