@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps } from "../scripts/playground-product-fps.mjs";
 
 const command = new URL("../scripts/playground-product-compare.mjs", import.meta.url);
 const pairCountArgs = ["--pairs", "3"];
@@ -11,18 +12,68 @@ const imageTestOptions = { skip: process.env.NOON_PRODUCT_IMAGE_TESTS === "1"
   ? false : "PNG controls run in Product Gate after dependency setup" };
 const report = () => ({
   schemaVersion: 2,
-  exampleId: "validation-fixture",
+  exampleId: "parity-square-and-circle",
   runtime: { backend: "webgpu" },
   shellReadyMs: 100,
   coldRunMs: 200,
   warmRunMs: 50,
   editRunMs: 60,
   fps: { effectiveFps: 60 },
-  measurement: { version: 1, clock: "renderer-sampled", preparation: "completed-cold-pass",
-    authoredSeconds: 4, warmupSeconds: 1, endpointHoldSeconds: 0.5 },
+  measurement: productMeasurement("parity-square-and-circle"),
   runtimeIdentity: { sourceRevision: "a".repeat(40), buildId: "b".repeat(64) },
   screenshot: "intentionally-not-loaded.png",
 });
+
+function cameraReport() {
+  const input = report();
+  input.exampleId = "showcase-camera-follows-path";
+  input.measurement = productMeasurement(input.exampleId);
+  input.fpsSamples = Array.from({ length: 13 }, (_, index) => ({
+    metricAt: index, rendererAt: 5_000 + index * 3200 / 12, frames: 100 + index * 16,
+    time: 3.7 + index * 3.2 / 12, session: 1, clockOriginMs: 10_000,
+    phase: "source", ready: true, needsPresent: false, bufferedDeltas: 0,
+    runInFlight: true, playbackControls: "unavailable",
+  }));
+  input.fps = sampleRendererFps(input.fpsSamples, 6.9, { warmupSeconds: 3.7 });
+  input.presentationSamples = Array.from({ length: 193 }, (_, index) => ({
+    session: 1, clockOriginMs: 10_000, sequence: index, presentedAtMs: 4_998 + index * 1000 / 60,
+  }));
+  input.presentationGaps = samplePresentationGaps(input.presentationSamples, input.fps);
+  return input;
+}
+
+test("camera reports compare raw window observations and retain gap diagnostics", imageTestOptions, async () => {
+  await withTempDirectory("noon-product-camera-", async directory => {
+    await createCohort(directory, { withImages: true, mutateReport: input => {
+      Object.assign(input, cameraReport(), { screenshot: input.screenshot, runtimeIdentity: input.runtimeIdentity });
+    } });
+    const result = await runCohort(directory);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    const comparison = JSON.parse(await readFile(path.join(directory, "candidate", "comparison.json")));
+    assert.equal(comparison.presentationGaps.length, 3);
+    assert.equal(comparison.presentationGaps[2].candidate.intervalCount, 192);
+  });
+});
+
+for (const [name, mutate, expected] of [
+  ["unknown workload", input => { input.exampleId = "unknown"; }, /unsupported product measurement/],
+  ["missing window", input => { delete input.measurement.windowEndSeconds; }, /measurement protocol changed/],
+  ["reversed window", input => { input.measurement.windowStartSeconds = 7; }, /measurement protocol changed/],
+  ["invalid window", input => { input.measurement.windowEndSeconds = null; }, /measurement protocol changed/],
+  ["changed source endpoint", input => { input.measurement.sourceEndSeconds = 6; }, /measurement protocol changed/],
+  ["missing renderer endpoint", input => { input.fpsSamples.pop(); }, /no settled renderer epoch covered/],
+  ["invented FPS", input => { input.fps.effectiveFps = 80; }, /does not match raw renderer observations/],
+  ["lost presentation", input => { input.presentationSamples.splice(20, 1); }, /cover every measured renderer frame/],
+  ["invented frame gaps", input => { input.presentationGaps.intervalMs.p95 = 0; }, /do not match raw presentation/],
+]) {
+  test(`camera ${name} fails before decoding images`, async () => {
+    const baseline = cameraReport();
+    const candidate = cameraReport();
+    mutate(candidate);
+    await rejectsReport(baseline, candidate, expected);
+  });
+}
 
 // Exercise the real CLI. Malformed measurements must fail before PNG loading,
 // so these input-contract tests need neither a renderer nor image dependencies.
@@ -176,7 +227,7 @@ for (const [name, mutateReport, removeReport, expected] of [
     if (side === "candidate" && index === 2) input.runtime.deviceScaleFactor = 2;
   }, null, /browser\/runtime configuration changed/],
   ["changed warmup protocol", (input, { side, index }) => {
-    if (side === "baseline" && index === 2) input.measurement.warmupSeconds = 0;
+    if (side === "baseline" && index === 2) input.measurement.windowStartSeconds = 0;
   }, null, /product measurement protocol changed/],
   ["missing trial report", () => {}, (root) => path.join(root, "candidate", "trial-2", "report.json"), /ENOENT|no such file/i],
 ]) {

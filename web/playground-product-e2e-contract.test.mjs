@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../scripts/playground-product-e2e.mjs", import.meta.url), "utf8");
 
-assert.match(source, /const PRODUCT_FIRST_PASS_SECONDS = 4;/);
+assert.match(source, /const measurement = productMeasurement\(exampleId\);/);
 assert.match(source, /gallery\?\.executionMode !== null/);
 assert.match(source, /void gallery\.executionMetrics\(\)\.catch\(\(\) => \{/);
 assert.match(source, /class ObservedWorker extends NativeWorker/);
@@ -16,17 +16,20 @@ assert.match(source, /Math\.abs\(rendered\.time - seconds\) <= 0\.001/);
 assert.match(source, /rendered\?\.ready === true/);
 assert.match(source, /rendered\.needsPresent === false/);
 assert.match(source, /rendered\.bufferedDeltas === 0/);
-assert.match(source, /void gallery\.executionMetrics\(\)\.catch\(\(\) => \{/);
-assert.match(source, /await synchronizeFinalFrame\(page, PRODUCT_SOURCE_END_SECONDS\)/);
+assert.match(source, /await synchronizeFinalFrame\(page, measurement\.sourceEndSeconds\)/);
 assert.match(source, /const screenshotName = "frame-final\.png"/);
-assert.match(source, /authoredEndpointSeconds: PRODUCT_SOURCE_END_SECONDS/);
+assert.match(source, /authoredEndpointSeconds: measurement\.sourceEndSeconds/);
 assert.doesNotMatch(source, /frame-0\.5\.png/);
 // Counter/clock reset behavior is exercised by playground-product-fps.test.mjs;
 // this contract only checks that the real browser harness uses that scorer.
-assert.match(source, /sampleRendererFps\(warm\.frameSamples, PRODUCT_FIRST_PASS_SECONDS/);
+assert.match(source, /sampleRendererFps\(warm\.frameSamples, measurement\.windowEndSeconds/);
 assert.match(source, /rendererAt: metrics\?\.sampledAtMs/);
 assert.match(source, /clockOriginMs: metrics\?\.performanceTimeOriginMs/);
-assert.match(source, /warmupSeconds: PRODUCT_WARMUP_SECONDS/);
+assert.match(source, /warmupSeconds: measurement\.windowStartSeconds/);
+assert.match(source, /samplePresentationGaps\(warm\.presentationSamples, fps\)/);
+assert.match(source, /profilePublicationStages: true/);
+assert.match(source, /probe\.stageKeys\.size >= 2_000/);
+assert.match(source, /locator\("\.canvas-frame"\)\.scrollIntoViewIfNeeded\(\)/);
 assert.match(source, /minMeasurementMs: MIN_PRODUCT_MEASUREMENT_MS/);
 assert.doesNotMatch(source, /editor\.dispatchEvent/);
 

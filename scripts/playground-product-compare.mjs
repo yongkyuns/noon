@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { summarizeSamples } from "../web/frame-metrics.js";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps } from "./playground-product-fps.mjs";
 
 const [baselineDirArg, candidateDirArg, mode, count] = process.argv.slice(2);
 assert.ok(baselineDirArg && candidateDirArg &&
@@ -30,10 +31,17 @@ for (let index = 1; index <= pairCount; index += 1) {
     }
     assert.ok(Number.isFinite(report.fps?.effectiveFps) && report.fps.effectiveFps > 0,
       "effective FPS must be a finite positive number");
-    assert.deepEqual(report.measurement, { version: 1, clock: "renderer-sampled",
-      preparation: "completed-cold-pass", authoredSeconds: 4, warmupSeconds: 1,
-      endpointHoldSeconds: 0.5 },
+    const measurement = productMeasurement(report.exampleId);
+    assert.deepEqual(report.measurement, measurement,
     `${name} product measurement protocol changed`);
+    if (measurement.gapClock !== null) {
+      const fps = sampleRendererFps(report.fpsSamples, measurement.windowEndSeconds, {
+        warmupSeconds: measurement.windowStartSeconds,
+      });
+      assert.deepEqual(report.fps, fps, `${name} camera FPS does not match raw renderer observations`);
+      assert.deepEqual(report.presentationGaps, samplePresentationGaps(report.presentationSamples, fps),
+        `${name} camera frame gaps do not match raw presentation observations`);
+    }
     assert.match(report.runtimeIdentity?.sourceRevision ?? "", /^[0-9a-f]{40}$/,
       `${name} product source identity is missing`);
     assert.match(report.runtimeIdentity?.buildId ?? "", /^[0-9a-f]{64}$/,
@@ -166,6 +174,10 @@ const comparison = {
     latency.map(([name, before, after]) => [name, { baselineMs: before, candidateMs: after }]),
   ),
   fps: { baseline: baselineFps, candidate: candidateFps, floor: fpsFloor },
+  // Shared software-GPU frame gaps are attribution evidence, not a physical
+  // display budget. Every run is retained beside the unchanged FPS floor.
+  presentationGaps: pairs.map(({ reports }, index) => ({ pair: index + 1,
+    baseline: reports[0].presentationGaps ?? null, candidate: reports[1].presentationGaps ?? null })),
   visual: { pairs: visualPairs, worstDiffRatio: visualDiffRatio },
   failures,
 };
