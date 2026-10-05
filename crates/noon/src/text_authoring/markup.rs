@@ -148,7 +148,7 @@ fn styled_font(
     italic: bool,
 ) -> Result<NativeFontFace, TextAuthoringError> {
     #[cfg(feature = "bundled-fonts")]
-    for data in typst_assets::fonts() {
+    for data in bundled_native_fonts() {
         let Some(font) = FontRef::from_index(data, 0) else {
             continue;
         };
