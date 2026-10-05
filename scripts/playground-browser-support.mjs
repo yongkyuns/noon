@@ -90,7 +90,9 @@ export async function collectWebKitCrashReports({ directories, pids, startedAtMs
     try { names = await readdir(directory); }
     catch (error) { errors.push({ directory, code: error.code }); continue; }
     const candidates = [];
-    for (const name of names.filter(name => /^(?:com\.apple\.WebKit|Playwright).*\.ips$/.test(name)).sort().slice(-64)) {
+    // macOS can name a report after the process rather than its bundle ID.
+    // The observed PID/time window below proves ownership, not the filename.
+    for (const name of names.filter(name => name.endsWith(".ips")).sort().slice(-64)) {
       const file = path.join(directory, name);
       try {
         const info = await lstat(file);

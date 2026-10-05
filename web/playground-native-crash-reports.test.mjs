@@ -27,7 +27,7 @@ async function fixture(t) {
 
 test("native crash evidence retains only observed processes within the failed case", async t => {
   const f = await fixture(t);
-  const bytes = await f.put("com.apple.WebKit.WebContent-valid.ips", {
+  const bytes = await f.put("WebContent.Development-valid.ips", {
     exception: { type: "EXC_BAD_ACCESS" }, termination: { namespace: "SIGNAL", code: 11 },
   });
   await f.put("com.apple.WebKit.WebContent-other.ips", { pid: 456 });
