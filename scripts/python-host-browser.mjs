@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
-import { assertSingleReport, stringifyEvidence } from "./python-host-report.mjs";
+import { assertRenderedOutput, assertSingleReport, stringifyEvidence } from "./python-host-report.mjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
@@ -124,8 +124,7 @@ async function runCase(browser, backend, noJspi, expected) {
     if (expected.terminal !== null) assert.match(result.terminal.message, new RegExp(expected.terminal));
     else {
       assert.deepEqual(result.asynchronousErrors, []);
-      assert.ok(result.metrics.presentedFrames > 0 && result.metrics.drawCalls > 0, "no actual rendered output");
-      assert.equal(result.metrics.backend, backend);
+      assertRenderedOutput(result.metrics, backend);
     }
     assert.deepEqual(pageErrors, [], "unhandled page errors");
     const screenshot = `${backend}-${noJspi ? "no-jspi-" : ""}${expected.case}.png`;

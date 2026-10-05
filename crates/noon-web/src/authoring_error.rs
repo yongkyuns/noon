@@ -53,15 +53,8 @@ pub(crate) fn js_error(error: impl Into<AuthoringFailure>) -> wasm_bindgen::JsVa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon::{
-        AuthoringError, ExecutionSegmentCompletionError, ExecutionSegmentError,
-        ExecutionSessionCallbackError, ExecutionSessionCallbackReadError,
-        ExecutionSessionPublicationError, LiveSessionError,
-    };
-    use noon_core::SemanticNodeId;
-    use noon_core::{
-        SemanticMutationTransactionError, SemanticSceneOperationError, SemanticStoreError,
-    };
+    use noon::{AuthoringError, ExecutionSessionPublicationError, LiveSessionError};
+    use noon_core::{SemanticNodeId, SemanticSceneOperationError};
     use std::error::Error;
 
     #[test]

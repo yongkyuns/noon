@@ -11,3 +11,10 @@ export function assertSingleReport(output, name, result) {
   assert.equal(output.length, 1,
     `${name}: expected exactly one Python report; ${stringifyEvidence(result)}`);
 }
+
+export function assertRenderedOutput(metrics, requestedBackend) {
+  const name = { webgpu: "WebGPU", webgl: "WebGL2" }[requestedBackend];
+  assert.ok(name, `unknown renderer selection: ${requestedBackend}`);
+  assert.ok(metrics.presentedFrames > 0 && metrics.drawCalls > 0, "no actual rendered output");
+  assert.equal(metrics.backend, name, "renderer did not honor requested backend");
+}
