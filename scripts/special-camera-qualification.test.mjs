@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { FOLLOWING_SOURCE, FOLLOWING_TIMES, followingManifest,
-  assertFollowingSources, assertFollowingState, assertFollowingReports } from "./special-camera-qualification.mjs";
+  assertFollowingSources, assertFollowingState, assertFollowingReports, assertFollowingPythonLifecycle } from "./special-camera-qualification.mjs";
 
 const paint = (red, green, blue) => ({ red, green, blue, alpha: 1 });
 const white = paint(1, 1, 1);
@@ -199,4 +199,56 @@ test("camera failure preserves later regressions but still fails the job", () =>
   assert.match(final, /\n          exit 1\n/);
   assert.ok(workflow.indexOf(canonical) > workflow.indexOf(camera));
   assert.ok(workflow.indexOf(final) > workflow.indexOf(step("Verify shared sparse and dense playback at Manim frame times")));
+});
+
+function pythonLifecycle() {
+  const oracle = reports().semantic.fixtures[0];
+  oracle.frames[0].camera = { center: [0, 0], height: 8 };
+  oracle.frames[45].camera = { center: [0, -0.5], height: 4 };
+  oracle.terminal_state.camera = { center: [0, 0], height: 8 };
+  const makeRun = () => {
+    const frame = noonFrame(oracle.terminal_state);
+    frame.publication = { scene_revision: 4, execution_revision: 8, frame_epoch: 12 };
+    const before = { state: { time: 3, playing: false, replaySupported: false,
+      replayUnavailable: "opaque host callbacks cannot be replayed" }, frame };
+    return { duration: 3, backend: "WebGPU", presentedFrames: 1,
+      samples: [noonFrame(oracle.frames[0]), noonFrame(oracle.frames[45]), noonFrame(oracle.terminal_state)],
+      before, controls: ["seek", "restartPlayback", "resume"].map(operation => ({ operation,
+        denial: "Replay unavailable: opaque host callbacks cannot be replayed", after: structuredClone(before) })) };
+  };
+  return { observation: { runs: [makeRun(), makeRun()] }, oracle };
+}
+
+test("Python lifecycle requires completed-source denial and a fresh Run", () => {
+  const { observation, oracle } = pythonLifecycle();
+  assert.deepEqual(assertFollowingPythonLifecycle(observation, oracle, "WebGPU"),
+    { completedRuns: 2, replay: "denied", failureAtomic: true, freshRun: true });
+});
+
+for (const [name, mutate] of [
+  ["execution failure", data => { data.error = "worker crashed"; }],
+  ["no fresh Run", data => { data.runs.pop(); }],
+  ["unfinished source", data => { data.runs[0].duration = null; }],
+  ["wrong backend", data => { data.runs[0].backend = "WebGL2"; }],
+  ["no presentation", data => { data.runs[0].presentedFrames = 0; }],
+  ["missing follow sample", data => { data.runs[0].samples.splice(1, 1); }],
+  ["stale fresh-run camera", data => { data.runs[1].samples[0].camera.height = 4; }],
+  ["changed following state", data => { data.runs[0].samples[1].camera.center[0] += 0.01; }],
+  ["missing replay admission", data => { delete data.runs[0].before.state.replaySupported; }],
+  ["replay falsely allowed", data => { data.runs[0].before.state.replaySupported = true; }],
+  ["unrelated denial reason", data => { data.runs[0].before.state.replayUnavailable = "source still running"; }],
+  ["clock still playing", data => { data.runs[0].before.state.playing = true; }],
+  ["handoff changed time", data => { data.runs[0].before.state.time = 0; }],
+  ["missing publication identity", data => { delete data.runs[0].before.frame.publication; }],
+  ["handoff changed camera", data => { data.runs[0].before.frame.camera.height = 4; }],
+  ["missing loop control", data => { data.runs[0].controls.splice(1, 1); }],
+  ["accepted rewind", data => { data.runs[0].controls[0].denial = null; }],
+  ["busy continuation instead of replay denial", data => { data.runs[0].controls[0].denial = "playback controls are unavailable while a Python source continuation owns execution"; }],
+  ["failed control changed effective state", data => { data.runs[0].controls[0].after.frame.camera.height = 4; }],
+  ["failed control changed revision", data => { data.runs[0].controls[0].after.frame.publication.frame_epoch++; }],
+  ["failed control changed playback", data => { data.runs[0].controls[2].after.state.playing = true; }],
+]) test(`Python lifecycle rejects ${name}`, () => {
+  const { observation, oracle } = pythonLifecycle();
+  mutate(observation);
+  assert.throws(() => assertFollowingPythonLifecycle(observation, oracle, "WebGPU"));
 });
