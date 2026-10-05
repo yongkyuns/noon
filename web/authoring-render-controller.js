@@ -445,6 +445,9 @@ export function createAuthoringRenderController(host) {
              (!Number.isFinite(timerAfterMilliseconds) || timerAfterMilliseconds < 0))) {
           throw new Error("invalid semantic execution wake directive");
         }
+        // This directive replaces the in-flight drive's reserved refresh.
+        // Animation reuses the RAF; idle/timer retires it through scheduleFrame.
+        if (scheduledFrame !== null) scheduledFrame.reservedRefresh = false;
         engineWake = {
           cadence,
           deadline: cadence === "timer" ? performance.now() + timerAfterMilliseconds : null,
@@ -936,12 +939,13 @@ export function createAuthoringRenderController(host) {
     }
   }
 
-  function scheduleFrame(generation = frameLoopGeneration) {
+  function scheduleFrame(generation = frameLoopGeneration, reserveRefresh = false) {
     if (!running || webglContextLost || webglRecoveryPromise !== null) {
       cancelScheduledFrame();
       return;
     }
-    const needsAnimationFrame = needsPresent || engineWake === null ||
+    const needsAnimationFrame = reserveRefresh || scheduledFrame?.reservedRefresh === true ||
+      needsPresent || engineWake === null ||
       engineWake.cadence === "animation_frame";
     // Keep an already-requested refresh opportunity when a wake or delta still
     // needs it. Canceling after the browser snapshots callbacks can defer the
@@ -955,6 +959,7 @@ export function createAuthoringRenderController(host) {
       scheduledFrame = {
         kind: "animation",
         generation,
+        reservedRefresh: reserveRefresh,
         handle: host.requestAnimationFrame((timestamp) => frame(timestamp, generation, ticket)),
       };
     } else {
@@ -980,6 +985,11 @@ export function createAuthoringRenderController(host) {
       drainTransport();
     }
     if (!running || !drainGpuDiagnostics()) return;
+    // Reserve one browser refresh before the source response arrives. It may
+    // present that response or service its next Rust directive; without one it
+    // sends no tick and settles. This never polls a blocked required callback.
+    const reserveRefresh = engineWake?.cadence === "animation_frame" &&
+      typeof host?.requestAnimationFrame === "function";
     const tickDue = engineWake === null || engineWake.cadence === "animation_frame" ||
       (engineWake.cadence === "timer" && performance.now() >= engineWake.deadline);
     if (tickDue) {
@@ -988,7 +998,7 @@ export function createAuthoringRenderController(host) {
       if (engineWake !== null) engineWake = { cadence: "idle", deadline: null };
       renderPort?.postMessage({ type: "tick", timestamp });
     }
-    scheduleFrame(generation);
+    scheduleFrame(generation, tickDue && reserveRefresh);
   }
 
   async function flushGpuDiagnostics() {

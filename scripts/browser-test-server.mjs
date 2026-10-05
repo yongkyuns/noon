@@ -21,7 +21,9 @@ export async function serveRepository(repoRoot, port, { crossOriginIsolated = fa
         response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
       }
       response.setHeader("Content-Type", contentTypes[path.extname(resolved)] ?? "application/octet-stream");
-      createReadStream(resolved).on("error", () => response.destroy()).pipe(response);
+      const stream = createReadStream(resolved);
+      response.on("close", () => stream.destroy());
+      stream.on("error", () => response.destroy()).pipe(response);
     } catch (error) {
       response.writeHead(error.code === "ENOENT" ? 404 : 500).end(String(error));
     }
@@ -32,7 +34,9 @@ export async function serveRepository(repoRoot, port, { crossOriginIsolated = fa
     server.listen(port, "127.0.0.1", resolve);
   });
   return { baseUrl: `http://127.0.0.1:${server.address().port}`, async close() {
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => {
+      server.close(resolve);
+      server.closeAllConnections();
+    });
   } };
 }

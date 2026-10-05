@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -15,7 +15,6 @@ const denseShowcase = showcaseManifest.entries.find(entry => entry.id === "showc
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? "chromium";
 const profileName = process.env.NOON_PLAYGROUND_PROFILE ?? "desktop-dpr1";
 const port = Number(process.env.NOON_PLAYGROUND_MATRIX_PORT ?? "4175");
-const baseUrl = `http://127.0.0.1:${port}`;
 const artifactDir = path.resolve(
   repoRoot,
   process.env.NOON_PLAYGROUND_MATRIX_ARTIFACTS ??
@@ -39,34 +38,8 @@ const browserType = playwright[browserName];
 const profile = profiles[profileName];
 await mkdir(artifactDir, { recursive: true });
 
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-server.stderr.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Playground matrix server did not start: ${lastError}\n${serverOutput}`);
-}
-
+const server = await serveRepository(repoRoot, port);
+const baseUrl = server.baseUrl;
 
 async function baselineCapabilities(page) {
   return page.evaluate(() => ({
@@ -462,7 +435,6 @@ let runtimeSupported = null;
 let finalRuntime = null;
 
 try {
-  await waitForServer();
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
   const context = await browser.newContext({
     viewport: profile.viewport,
@@ -616,10 +588,10 @@ ${consoleErrors.join("\n")}`,
     pageErrors,
     consoleErrors,
     error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
-    serverOutput,
+    testServer: { baseUrl, host: "shared-node-file-server" },
   });
   throw error;
 } finally {
   if (browser !== null) await browser.close();
-  server.kill("SIGTERM");
+  await server.close();
 }

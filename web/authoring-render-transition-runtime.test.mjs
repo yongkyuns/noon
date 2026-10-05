@@ -601,10 +601,14 @@ test("Rust wake directives admit one animation drive and one deadline without id
   assert.equal(harness.animationFrames.length, 1);
   harness.animationFrames.shift()(10);
   assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
-  assert.equal(harness.animationFrames.length, 0, "next engine response owns the next wake");
+  assert.equal(harness.animationFrames.length, 1, "reserve the next refresh while awaiting the engine response");
 
+  const canceledReservation = harness.animationFrames.shift();
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"timer", timerAfterMilliseconds:1000});', harness.context);
   assert.equal(harness.animationFrames.length, 0);
+  canceledReservation(900);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1,
+    "a browser-snapshotted reservation cannot outrun the authoritative timer wake");
   assert.equal(harness.timers.size, 1);
   const [timerId, timer] = [...harness.timers][0];
   assert.equal(timer.delay, 1000);
@@ -635,7 +639,58 @@ test("an animation wake arriving before the queued RAF callback keeps that oppor
 
   assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
   assert.equal(harness.nextPort.messages.find((m) => m.type === "tick").timestamp, 16);
-  assert.equal(harness.animationFrames.length, 0, "one wake authorizes exactly one engine drive");
+  assert.equal(harness.animationFrames.length, 1, "the admitted tick reserves the following refresh");
+});
+
+test("a fast animation response reuses a RAF already snapshotted by the browser", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  harness.animationFrames.shift()(8);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.animationFrames.length, 1, "one refresh was reserved after the tick");
+  const snapshottedCallback = harness.animationFrames[0];
+
+  // The browser has already captured this callback for its next refresh. A
+  // fast worker response must keep that exact opportunity instead of replacing it.
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  harness.animationFrames.shift();
+  snapshottedCallback(16);
+
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 2);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").at(-1).timestamp, 16);
+  assert.equal(harness.animationFrames.length, 1, "the next admitted tick reserves one refresh");
+});
+
+test("a reserved RAF survives delta delivery before the next animation wake", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  harness.animationFrames.shift()(8);
+  const reservedCallback = harness.animationFrames[0];
+
+  vm.runInContext('consumeDelta("callback publication", {session:14, sequence:1});', harness.context);
+  assert.equal(harness.animationFrames.length, 1, "delta presentation preserves the reservation");
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  harness.animationFrames.shift();
+  reservedCallback(16);
+
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 2);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").at(-1).timestamp, 16);
+});
+
+test("a reserved RAF firing during a blocked callback sends no tick and does not poll", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  harness.animationFrames.shift()(8);
+  assert.equal(harness.animationFrames.length, 1);
+
+  harness.animationFrames.shift()(16);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.animationFrames.length, 0, "an unanswered tick does not start an RAF polling loop");
+
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  assert.equal(harness.animationFrames.length, 1, "the response re-arms the next admitted drive");
+  harness.animationFrames.shift()(32);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 2);
 });
 
 test("an applied delta reuses a pending RAF opportunity for the engine tick", async () => {
@@ -667,14 +722,48 @@ test("a no-op delta leaves the pending RAF opportunity intact", async () => {
 test("an idle wake retires a queued RAF when no presentation is pending", async () => {
   const harness = await createManagedWakeHarness();
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  harness.animationFrames.shift()(8);
   const obsoleteCallback = harness.animationFrames[0];
 
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
   obsoleteCallback(16);
 
-  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 0);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1,
+    "idle retires the reservation without admitting another drive");
   assert.equal(vm.runInContext("scheduledFrame", harness.context), null,
     "idle leaves no live scheduled frame even though the fake host retains canceled callbacks");
+});
+
+test("stop retires an awaiting-response RAF generation", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  harness.animationFrames.shift()(8);
+  const obsoleteCallback = harness.animationFrames[0];
+  vm.runInContext('stop();', harness.context);
+  harness.animationFrames.splice(0, 1);
+  obsoleteCallback(16);
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(vm.runInContext("scheduledFrame", harness.context), null);
+});
+
+test("reconnect retires an awaiting-response RAF generation", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  harness.animationFrames.shift()(8);
+  const obsoleteCallback = harness.animationFrames[0];
+  const replacement = new FakePort();
+  harness.context.replacementPort = replacement;
+
+  harness.animationFrames.splice(0, 1);
+  vm.runInContext(`attachEngine({port:replacementPort, transportMode, requestId:9, mode:MODE_RETAINED});
+    handleRetainedResources({bytes:new Uint8Array([1])});
+    consumeDelta("reconnected", {session:15, sequence:0});`, harness.context);
+  const reconnectCallback = harness.animationFrames.at(-1);
+  obsoleteCallback(24);
+  assert.equal(replacement.messages.filter((m) => m.type === "tick").length, 0,
+    "a stale callback from the old frame-loop generation cannot tick the replacement port");
+  reconnectCallback(32);
+  assert.equal(replacement.messages.filter((m) => m.type === "tick").length, 1);
 });
 
 test("a timer wake replaces a queued RAF and honors its refreshed deadline", async () => {
@@ -701,6 +790,20 @@ test("a timer wake replaces a queued RAF and honors its refreshed deadline", asy
   harness.timers.delete(deadlineId);
   deadline.callback();
   assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+});
+
+test("animation wake without RAF uses one drive timer and creates no response reservation timer", async () => {
+  const harness = await createManagedWakeHarness();
+  vm.runInContext('host.requestAnimationFrame = null;', harness.context);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  assert.equal(harness.timers.size, 1, "the fallback timer admits the requested initial drive");
+  const [timerId, timer] = [...harness.timers][0];
+  harness.setClock(16);
+  harness.timers.delete(timerId);
+  timer.callback();
+  assert.equal(harness.nextPort.messages.filter((m) => m.type === "tick").length, 1);
+  assert.equal(harness.timers.size, 0,
+    "without RAF, awaiting the engine response does not reserve a timer polling callback");
 });
 
 test("live frame gaps include failed-present stalls but not metrics polls or no-op deltas", async () => {
@@ -776,7 +879,8 @@ test("live frame-gap collection is bounded and adds no timer or engine drive", a
   for (const callback of harness.animationFrames.splice(0)) callback(5000);
   assert.equal(harness.nextPort.messages.filter(message => message.type === "tick").length, 1);
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
-  assert.equal(harness.animationFrames.length, 0, "idle stays asleep");
+  for (const callback of harness.animationFrames.splice(0)) callback(6000);
+  assert.equal(vm.runInContext("scheduledFrame", harness.context), null, "idle stays asleep");
 });
 
 test("renderer telemetry timestamps pending snapshots without inventing presentations", () => {
@@ -962,11 +1066,8 @@ test("paused semantic wake presents exact samples without leaving an animation-f
   assert.equal(harness.animationFrames.length, 1, "resume cadence schedules one engine drive");
   harness.animationFrames.shift()(25);
   assert.equal(harness.nextPort.messages.filter((message) => message.type === "tick").length, 1);
-  assert.equal(
-    harness.animationFrames.length,
-    0,
-    "the engine response must authorize any later animation-frame drive",
-  );
+  assert.equal(harness.animationFrames.length, 1,
+    "the admitted tick reserves one refresh while its response is pending");
 });
 
 test("replacement cancels an obsolete continuation deadline before it can tick the next engine", async () => {
