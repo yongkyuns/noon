@@ -993,7 +993,11 @@ def __getattr__(name: str):
     module = _PUBLIC_EXPORTS.get(name)
     if module is not None:
         from importlib import import_module
-        return getattr(import_module(module), name)
+        value = getattr(import_module(module), name)
+        # Publish the lazily imported definition once, like a normal import.
+        # Cache facade definitions only, never Scene instances or runtime state.
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
