@@ -196,6 +196,39 @@ export function assertFollowingReports(raster, semantic, manifest) {
   return { oracle, checks };
 }
 
+// A completed Python source must reach replay admission, not merely hit the
+// active-continuation control barrier. Fresh Run uses new production clients.
+export function assertFollowingPythonLifecycle(observation, oracle, backend) {
+  assert.equal(observation.error, undefined, "Python lifecycle execution failed");
+  assert.equal(observation.runs?.length, 2, "require first execution and a fresh Run");
+  for (const [index, run] of observation.runs.entries()) {
+    const label = `${backend}/python-run-${index + 1}`;
+    assert.equal(run.duration, 3, `${label}: source did not complete`);
+    assert.equal(run.backend, backend, `${label}: backend drift`);
+    assert.ok(Number.isInteger(run.presentedFrames) && run.presentedFrames > 0,
+      `${label}: no rendered publication`);
+    assert.deepEqual(run.samples?.map(frame => frame.time), [0, 1.5, 3], `${label}: sample coverage`);
+    for (const frame of run.samples) {
+      const expected = frame.time === 3 ? oracle.terminal_state : oracle.frames[Math.round(frame.time * 30)];
+      assertFollowingState(frame, expected, label);
+    }
+    assert.equal(run.before?.state?.replaySupported, false, `${label}: must reach final replay admission`);
+    assert.match(run.before.state.replayUnavailable ?? "", /callback|host/i, `${label}: opaque-callback reason`);
+    assert.equal(run.before.state.playing, false, `${label}: denied replay must remain paused`);
+    assert.equal(run.before.state.time, 3, `${label}: handoff changed authored time`);
+    assert.ok(run.before.frame?.publication && typeof run.before.frame.publication === "object"
+      && Object.keys(run.before.frame.publication).length > 0, `${label}: missing publication identity`);
+    assertFollowingState(run.before.frame, oracle.terminal_state, label);
+    assert.deepEqual(run.controls?.map(control => control.operation), ["seek", "restartPlayback", "resume"],
+      `${label}: missing replay controls`);
+    for (const control of run.controls) {
+      assert.match(control.denial ?? "", /replay unavailable/i, `${label}/${control.operation}: not a replay denial`);
+      assert.deepEqual(control.after, run.before, `${label}/${control.operation}: rejected control changed publication`);
+    }
+  }
+  return { completedRuns: 2, replay: "denied", failureAtomic: true, freshRun: true };
+}
+
 async function followingOracle(qualifyPairedAuthoring) {
   assert.equal(process.env.NOON_PAIRED_CASES, undefined, "full oracle qualification cannot select a passing subset");
   const output = path.resolve(root, process.env.NOON_CAMERA_ARTIFACTS ?? "browser-smoke-artifacts/following-graph-camera");
@@ -247,6 +280,7 @@ async function followingOracle(qualifyPairedAuthoring) {
     const { oracle, checks } = assertFollowingReports(raster, semantic, manifest);
     result.semantic = checks;
     const { PNG } = await import("pngjs");
+    const { rasterFixtureSource } = await import("./manim-raster-support.mjs");
     const pairedOutput = path.join(output, "paired");
     const cases = [...FOLLOWING_TIMES, 3].map(sampleTime => ({
       id: `following_graph_camera-${sampleTime}`, sourcePath: FOLLOWING_SOURCE,
@@ -254,8 +288,10 @@ async function followingOracle(qualifyPairedAuthoring) {
       duration: 3, sampleTime, playback: "live", boundaries: [1, 2],
     }));
     result.paired = await qualifyPairedAuthoring({ cases, artifactDirectory: pairedOutput,
-      qualifyLifecycle: async (context, baseUrl) => {
+      qualifyLifecycle: async (context, baseUrl, backend) => {
+        let direct;
         const page = await context.newPage();
+        page.setDefaultTimeout(90_000);
         try {
           await page.goto(`${baseUrl}/web/manim-raster-host.html`);
           const observation = await page.evaluate(async () => {
@@ -277,8 +313,96 @@ async function followingOracle(qualifyPairedAuthoring) {
           assert.match(observation.denial ?? "", /replay|callback|continuation/i,
             "opaque callbacks must reject rewind through the shared engine");
           assert.deepEqual(observation.after, observation.before, "rejected rewind must preserve the complete effective publication");
-          return { replay: "denied", failureAtomic: true, reason: observation.denial };
+          direct = { replay: "denied", failureAtomic: true, reason: observation.denial };
         } finally { await page.close(); }
+        const pythonPage = await context.newPage();
+        pythonPage.setDefaultTimeout(90_000);
+        let deadline;
+        try {
+          await pythonPage.goto(`${baseUrl}/web/manim-raster-host.html`);
+          const observation = await Promise.race([pythonPage.evaluate(async source => {
+            const { PythonAuthoringClient } = await import("./authoring-client.js");
+            const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+            const runs = [];
+            try {
+              // Reuse the page but not the previous source, workers or runtime.
+              for (let index = 0; index < 2; index++) {
+                const authoring = new PythonAuthoringClient();
+                const execution = new AuthoringExecutionClient(document.querySelector("#scene"));
+                try {
+                  await authoring.ready();
+                  let resolveAttached, rejectAttached;
+                  const attached = new Promise((resolve, reject) => { resolveAttached = resolve; rejectAttached = reject; });
+                  let registered = false;
+                  const completed = authoring.run(source, {}, {
+                    onSemanticContinuation: async registration => {
+                      try {
+                        if (registered) throw new Error("duplicate source continuation");
+                        registered = true;
+                        await execution.prepare({ transportMode: "transferable" });
+                        await execution.startSemanticExecution(registration.semanticExecution, {
+                          authoringClient: authoring, loopDurationSeconds: 4,
+                          transportMode: "transferable", pacing: "external_samples",
+                        });
+                        resolveAttached();
+                      } catch (error) { rejectAttached(error); throw error; }
+                    },
+                  });
+                  void completed.then(() => {
+                    if (!registered) rejectAttached(new Error("source did not register a continuation"));
+                  }, rejectAttached);
+                  await attached;
+                  const run = { samples: [], controls: [] };
+                  runs.push(run);
+                  for (const time of [0, 1, 1.5, 2, 3]) {
+                    await execution.sampleToAuthoredTime(time);
+                    if ([0, 1.5, 3].includes(time)) run.samples.push(await execution.debugFrame());
+                  }
+                  const result = await completed;
+                  run.duration = result.duration;
+                  // Use the ordinary completed-source handoff before testing
+                  // controls. A still-active continuation denial is not proof.
+                  await execution.reconcileSemanticExecution(result.semanticExecution, {
+                    authoringClient: authoring, loopDurationSeconds: 4,
+                  });
+                  await execution.advanceTo(3);
+                  let metrics;
+                  for (let attempt = 0; attempt < 100; attempt++) {
+                    metrics = (await execution.metrics()).metrics;
+                    if (metrics.ready && metrics.retained && metrics.presentedFrames > 0) break;
+                    await new Promise(resolve => setTimeout(resolve, 20));
+                  }
+                  run.backend = metrics.backend;
+                  run.presentedFrames = metrics.presentedFrames;
+                  const snapshot = async () => {
+                    // Request/acknowledgement IDs may change on every read;
+                    // compare playback observables and the full published frame.
+                    const { time, playing, replaySupported, replayUnavailable } = await execution.state();
+                    return { state: { time, playing, replaySupported, replayUnavailable },
+                      frame: await execution.debugFrame() };
+                  };
+                  run.before = await snapshot();
+                  for (const operation of ["seek", "restartPlayback", "resume"]) {
+                    let denial = null;
+                    try {
+                      if (operation === "seek") await execution.seek(1.5);
+                      else if (operation === "restartPlayback") await execution.restartPlayback();
+                      else await execution.resume();
+                    } catch (error) { denial = String(error); }
+                    run.controls.push({ operation, denial, after: await snapshot() });
+                  }
+                } finally {
+                  try { execution.terminate(); } finally { authoring.terminate(); }
+                }
+              }
+              return { runs };
+            } catch (error) { return { runs, error: error.stack ?? String(error) }; }
+          }, rasterFixtureSource(reference, "FollowingGraphCamera")), new Promise((_, reject) => {
+            deadline = setTimeout(() => reject(new Error("Python replay lifecycle exceeded 120 seconds")), 120_000);
+          })]);
+          await writeFile(path.join(pairedOutput, `python-lifecycle-${backend}.json`), `${JSON.stringify(observation, null, 2)}\n`);
+          return { direct, python: assertFollowingPythonLifecycle(observation, oracle, backend) };
+        } finally { clearTimeout(deadline); await pythonPage.close(); }
       },
       qualifyPixels: async ({ fixture, backend, rust, python }) => {
         const expected = fixture.sampleTime === 3 ? oracle.terminal_state
