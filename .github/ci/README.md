@@ -206,7 +206,12 @@ in one producer, preserving the job-local compiler cache between fresh source
 builds. Its measurement job downloads the producer's immutable artifact IDs and
 verifies each checkout SHA, release feature set, compiler pin, resolved lockfile,
 and runtime-file hashes using the shared WASM artifact contract. The candidate is
-GitHub's tested PR merge commit; the baseline is the event's base SHA.
+GitHub's exact tested PR merge commit; the baseline is that merge's actual first
+parent. The producer checks its second parent against the requested PR head and
+records all three commits plus the event base in each product manifest. An older
+event base remains provenance and is never substituted for the actual baseline.
+Comparison retries check out the producer's pinned commits and verify the recorded
+pair alongside package contents, so a moving PR ref cannot change the comparison.
 
 The comparison uses three serial pairs in a fixed B/C, C/B, B/C order. Each
 browser run completes a cold pass before measuring a warm pass. The existing
