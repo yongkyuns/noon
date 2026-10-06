@@ -12,6 +12,7 @@ import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { profileSource, validateProfile, localEditProfileSource, validateLocalEditProfile } from "./python-host-profile.mjs";
 import { qualifyProductMetrics } from "./paired-product-metrics.mjs";
+import { diagnoseWorkerHistory } from "./python-host-perf-history.mjs";
 import { stringifyEvidence } from "./python-host-report.mjs";
 import { PERF_PROTOCOL as protocol, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
 
@@ -62,8 +63,10 @@ try {
       await window.perfAuthoring.ready();
     });
   }
-  const measure = async (side, source, mode, workload) => {
-    const page = pages[side], count = reports[side].length;
+  const measure = async (side, source, mode, workload, participant = null) => {
+    const page = participant?.page ?? pages[side];
+    const observations = participant?.reports ?? reports[side];
+    const count = observations.length;
     let timer;
     const operation = page.evaluate(async ({ source, samples, sampleHz }) => {
       const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
@@ -109,8 +112,8 @@ try {
         timer = setTimeout(() => reject(new Error(`timed out: ${side}/${workload}/${mode}`)), 120000);
       })]);
     } finally { clearTimeout(timer); }
-    assert.equal(reports[side].length, count + 1, "missing Python timing observation");
-    const report = reports[side].at(-1);
+    assert.equal(observations.length, count + 1, "missing Python timing observation");
+    const report = observations.at(-1);
     assert.equal(report.mode, mode); assert.equal(report.workload, workload);
     assert.equal(report.coroutine, mode !== "jspi", "wrong source execution path");
     assert.equal(result.duration, 1.25, "changed authored extent");
@@ -194,6 +197,41 @@ try {
       localDiagnostics.push({ side, sourceSha, profile, observation });
       await writeFile(path.join(output, "local-edit-profiles.json"), stringifyEvidence(localDiagnostics) + "\n");
     }
+  }
+  // Same-package history control AFTER every acceptance measurement and profile.
+  // The original worker retains the preceding runs; its fresh peer loads the
+  // exact same verified package/server. No forced GC, profiling or threshold
+  // adjustment. A timing difference here cannot erase an earlier failed row.
+  for (const side of [0, 1]) {
+    await diagnoseWorkerHistory({ identity: identities[side],
+      retained: { page: pages[side], reports: reports[side] },
+      openFresh: async () => {
+        const context = await browser.newContext({ viewport: { width: 320, height: 180 } });
+        try {
+          await cache.install(context);
+          const page = await context.newPage();
+          const observations = [];
+          page.on("console", message => {
+            if (message.text().startsWith("NOON_PERF_REPORT ")) {
+              observations.push(JSON.parse(message.text().slice(17)));
+            }
+          });
+          page.on("pageerror", error => failures.push({ kind: "history_control_pageerror", side, message: String(error) }));
+          await page.goto(`${servers[side].baseUrl}/web/execution-worker-smoke.html`);
+          await page.evaluate(async () => {
+            const { PythonAuthoringClient } = await import("./authoring-client.js");
+            window.perfAuthoring = new PythonAuthoringClient();
+            await window.perfAuthoring.ready();
+          });
+          return { page, reports: observations, close: () => context.close() };
+        } catch (error) {
+          await context.close();
+          throw error;
+        }
+      },
+      measure: (participant, source) => measure(side, source, "jspi", "deterministic", participant),
+      record: evidence => writeFile(path.join(output, `worker-history-${side}.json`), stringifyEvidence(evidence) + "\n"),
+    });
   }
 } catch (error) {
   failures.push({ kind: "execution", message: String(error), stack: error.stack });
