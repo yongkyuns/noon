@@ -31,6 +31,7 @@ pub(super) struct SpatialPathVertex {
     /// for ordinary local tessellation; screen strokes expand after projection.
     pub tangent: [f32; 2],
     pub extrusion: [f32; 2],
+    pub stroke_metadata: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -146,8 +147,9 @@ impl PathGpuState {
         format: wgpu::TextureFormat,
         sample_count: u32,
     ) -> Self {
-        const VERTEX: [wgpu::VertexAttribute; 4] =
-            wgpu::vertex_attr_array![0 => Float32x2, 1 => Uint32, 11 => Float32x2, 12 => Float32x2];
+        const VERTEX: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+            0 => Float32x2, 1 => Uint32, 11 => Float32x2, 12 => Float32x2, 14 => Float32x3
+        ];
         const INSTANCE: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
             2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
             6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3, 13 => Float32
@@ -928,7 +930,6 @@ pub enum SpatialPathError {
     MissingPathResource,
     UnsupportedGeometry,
     UnsupportedImage,
-    UnsupportedScreenSpaceStroke,
     UnsupportedMorph,
     UnsupportedAnimation,
     UnsupportedMaterial,
@@ -949,14 +950,6 @@ fn path_key(
     identity: u64,
 ) -> Result<PathKey, SpatialPathError> {
     let style = visible_path_style(style);
-    if screen_stroke(style)
-        && !matches!(
-            geometry,
-            GeometryRef::Line { .. } | GeometryRef::Circle { .. }
-        )
-    {
-        return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
-    }
     if !style.stroke_width.is_finite() || style.stroke_width < 0.0 {
         return Err(SpatialPathError::InvalidStyle);
     }
@@ -1277,14 +1270,6 @@ pub(super) fn tessellate(
     validate_style(style, object_alpha * style.opacity, domain)?;
     let style = visible_path_style(style);
     if screen_stroke(style)
-        && !matches!(
-            geometry,
-            GeometryRef::Line { .. } | GeometryRef::Circle { .. }
-        )
-    {
-        return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
-    }
-    if screen_stroke(style)
         && matches!(geometry, GeometryRef::Circle { radius } if !radius.is_finite() || *radius <= 0.0)
     {
         return Err(SpatialPathError::UnrepresentableVertex);
@@ -1328,11 +1313,22 @@ pub(super) fn tessellate(
         fill,
     )
     .map_err(|_| SpatialPathError::Tessellation)?;
-    let circle_frames = if screen_stroke(style) && matches!(geometry, GeometryRef::Circle { .. }) {
-        Some(
-            noon_geometry::tessellate_screen_stroke(&path, style.stroke_join, style.stroke_cap)
+    let path_stroke_frames = if screen_stroke(style) {
+        match geometry {
+            GeometryRef::Line { .. } => None,
+            GeometryRef::Circle { .. } => Some(
+                noon_geometry::tessellate_screen_stroke(&path, style.stroke_join, style.stroke_cap)
+                    .map_err(|_| SpatialPathError::Tessellation)?,
+            ),
+            _ => Some(
+                noon_geometry::tessellate_projected_screen_stroke(
+                    &path,
+                    style.stroke_join,
+                    style.stroke_cap,
+                )
                 .map_err(|_| SpatialPathError::Tessellation)?,
-        )
+            ),
+        }
     } else {
         None
     };
@@ -1358,6 +1354,7 @@ pub(super) fn tessellate(
                 surface: crate::pack_path_surface(vertex.surface, 1.0),
                 tangent: [0.0; 2],
                 extrusion: [0.0; 2],
+                stroke_metadata: [0.0; 3],
             };
             if let Some((start, tangent, length)) =
                 line.filter(|_| vertex.surface == noon_geometry::PathSurface::Stroke)
@@ -1378,13 +1375,14 @@ pub(super) fn tessellate(
         })
         .collect();
     let mut indices = mesh.indices;
-    if let Some(frames) = circle_frames {
+    if let Some(frames) = path_stroke_frames {
         let offset = u32::try_from(vertices.len()).map_err(|_| SpatialPathError::BufferLimit)?;
         vertices.extend(frames.vertices.into_iter().map(|vertex| SpatialPathVertex {
             position: [vertex.position.x, vertex.position.y],
             surface: crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0),
             tangent: [vertex.tangent.x, vertex.tangent.y],
             extrusion: [vertex.extrusion.x, vertex.extrusion.y],
+            stroke_metadata: vertex.metadata,
         }));
         indices.extend(
             frames
@@ -1404,6 +1402,7 @@ pub(super) fn tessellate(
             .iter()
             .chain(vertex.tangent.iter())
             .chain(vertex.extrusion.iter())
+            .chain(vertex.stroke_metadata.iter())
             .any(|value| !value.is_finite())
     }) {
         return Err(SpatialPathError::UnrepresentableVertex);
@@ -1433,6 +1432,30 @@ mod tests {
     }
 
     #[test]
+    fn fixed_orientation_join_tangent_uses_physical_pixel_axes_for_nonsquare_viewport() {
+        // Fixed-orientation geometry is mapped through independent X/Y clip
+        // scales. Converting the mapped displacement back to pixels must
+        // recover the world-plane tangent, even for a nonsquare viewport.
+        let viewport = [320.0_f32, 180.0_f32];
+        let clip_scale = [2.0 / viewport[0], 2.0 / viewport[1]];
+        let tangent = [1.0_f32, 0.6_f32];
+        let clip_delta = [tangent[0] * clip_scale[0], tangent[1] * clip_scale[1]];
+        let pixel_delta = [
+            clip_delta[0] * viewport[0] * 0.5,
+            clip_delta[1] * viewport[1] * 0.5,
+        ];
+        let length = pixel_delta[0].hypot(pixel_delta[1]);
+        let direction = [pixel_delta[0] / length, pixel_delta[1] / length];
+        assert!((direction[0] - 1.0 / 1.36_f32.sqrt()).abs() < 1.0e-6);
+        assert!((direction[1] - 0.6 / 1.36_f32.sqrt()).abs() < 1.0e-6);
+
+        // Keep the shader branch paired with that numeric contract: dividing
+        // by clip_scale would make the normal aspect-ratio dependent.
+        let shader = include_str!("spatial_path.wgsl");
+        assert!(shader.contains("return (world * vec4<f32>(tangent, 0.0, 0.0)).xy;"));
+    }
+
+    #[test]
     fn tessellation_stays_local_and_rejects_unsupported_styles() {
         let resources = GeometryResourceArena::default();
         let geometry = GeometryRef::rectangle(2.0, 1.0);
@@ -1454,10 +1477,13 @@ mod tests {
             stroke: Some(noon_core::Color::BLACK),
             ..style
         };
-        assert_eq!(
-            tessellate(&geometry, &resources, screen_stroke, 1.0, Domain::World).unwrap_err(),
-            SpatialPathError::UnsupportedScreenSpaceStroke
-        );
+        let screen_mesh =
+            tessellate(&geometry, &resources, screen_stroke, 1.0, Domain::World).unwrap();
+        assert!(screen_mesh.indices.len() > mesh.indices.len());
+        assert!(screen_mesh.vertices.iter().any(|vertex| {
+            vertex.surface == crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0)
+                && vertex.tangent != [0.0; 2]
+        }));
         // A filled Dot has no stroke to expand. Its unused constructor width
         // mode must not reject an otherwise supported World path.
         let filled = Style {
@@ -1571,11 +1597,16 @@ mod tests {
             .vertices
             .iter()
             .any(|vertex| vertex.surface == stroke_surface));
-        for vertex in mesh
+        let stroke_vertices: Vec<_> = mesh
             .vertices
             .iter()
             .filter(|vertex| vertex.surface == stroke_surface)
-        {
+            .collect();
+        assert!(
+            stroke_vertices.len() >= 4,
+            "screen-space Circle stroke must retain its extrusion ring"
+        );
+        for vertex in stroke_vertices {
             let tangent = Vec2::new(vertex.tangent[0], vertex.tangent[1]);
             assert!((tangent.length() - 1.0).abs() < 1e-4);
             assert!(vertex.position.iter().all(|value| value.is_finite()));
@@ -1607,16 +1638,89 @@ mod tests {
             .unwrap_err(),
             SpatialPathError::UnrepresentableVertex
         );
-        assert_eq!(
-            tessellate(
-                &GeometryRef::rectangle(1.0, 1.0),
-                &resources,
-                style,
-                1.0,
-                Domain::World
-            )
-            .unwrap_err(),
-            SpatialPathError::UnsupportedScreenSpaceStroke
+    }
+
+    #[test]
+    fn projected_screen_paths_retain_curve_and_corner_join_metadata() {
+        let mut resources = GeometryResourceArena::default();
+        let curved_open = noon_core::VectorPath::new()
+            .move_to(Vec2::new(-1.0, -0.5))
+            .cubic_to(
+                Vec2::new(-0.4, 1.0),
+                Vec2::new(0.3, -1.0),
+                Vec2::new(1.0, -0.5),
+            );
+        let handle = resources.insert_path(curved_open.clone());
+        let style = Style {
+            fill: None,
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.2,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            stroke_join: noon_core::StrokeJoin::Bevel,
+            stroke_cap: noon_core::StrokeCap::Square,
+            ..Style::default()
+        };
+        let external = GeometryRef::External(handle.id);
+        let inline = GeometryRef::VectorPath(curved_open);
+        for geometry in [&inline, &external] {
+            let mesh = tessellate(geometry, &resources, style, 1.0, Domain::World).unwrap();
+            let stroke = crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0);
+            let vertices: Vec<_> = mesh
+                .vertices
+                .iter()
+                .filter(|vertex| vertex.surface == stroke)
+                .collect();
+            assert!(!vertices.is_empty());
+            assert!(vertices.iter().all(|vertex| {
+                let tangent = Vec2::new(vertex.tangent[0], vertex.tangent[1]);
+                (tangent.length() - 1.0).abs() < 1e-4
+                    && vertex.extrusion.iter().all(|value| value.is_finite())
+            }));
+            assert!(
+                vertices
+                    .windows(2)
+                    .any(|pair| pair[0].tangent != pair[1].tangent),
+                "curve/join retains changing local tangent frames"
+            );
+            assert!(path_key(geometry, &resources, style, 12).is_ok());
+        }
+
+        let closed = GeometryRef::rectangle(2.0, 1.0);
+        let closed_mesh = tessellate(&closed, &resources, style, 1.0, Domain::World).unwrap();
+        assert!(closed_mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.stroke_metadata[0] == 3.0));
+        let corner = GeometryRef::VectorPath(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::new(-1.0, 0.0))
+                .line_to(Vec2::ZERO)
+                .line_to(Vec2::new(0.0, 1.0)),
+        );
+        let corner_mesh = tessellate(&corner, &resources, style, 1.0, Domain::World).unwrap();
+        assert!(corner_mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.stroke_metadata[0] == 3.0));
+        let rounded = tessellate(
+            &inline,
+            &resources,
+            Style {
+                stroke_join: noon_core::StrokeJoin::Round,
+                stroke_cap: noon_core::StrokeCap::Round,
+                ..style
+            },
+            1.0,
+            Domain::World,
+        )
+        .unwrap();
+        assert_ne!(
+            rounded.indices.len(),
+            tessellate(&inline, &resources, style, 1.0, Domain::World,)
+                .unwrap()
+                .indices
+                .len(),
+            "join and cap choices specialize retained topology"
         );
     }
 

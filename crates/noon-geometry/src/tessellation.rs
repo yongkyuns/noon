@@ -55,6 +55,9 @@ pub struct ScreenStrokeVertex {
     pub position: Vec2,
     pub tangent: Vec2,
     pub extrusion: Vec2,
+    /// `(kind, side, progress)` for projection-time join and cap reconstruction.
+    /// When nonzero, `tangent` and `extrusion` carry the incoming/outgoing frames.
+    pub metadata: [f32; 3],
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -203,8 +206,8 @@ pub fn tessellate_styled_with_fill(
 }
 
 /// Tessellate a unit-width stroke while retaining Lyon's centerline and local
-/// extrusion frame. Intended for smooth closed contours such as canonical
-/// circles; corner-join screen strokes remain unsupported by the renderer.
+/// extrusion frame. Use `tessellate_projected_screen_stroke` when a World path
+/// needs camera-correct corner joins or caps.
 pub fn tessellate_screen_stroke(
     path: &VectorPath,
     stroke_join: StrokeJoin,
@@ -256,6 +259,7 @@ pub fn tessellate_screen_stroke(
             position: vec2(vertex.position_on_path().x, vertex.position_on_path().y),
             tangent,
             extrusion,
+            metadata: [0.0; 3],
         }
     });
     // Keep the Path endpoint identities used by the smooth-join prepass.
@@ -397,6 +401,275 @@ fn screen_stroke_smooth_anchors(path: &Path) -> HashSet<EndpointId> {
         }
     }
     anchors
+}
+
+/// Build a screen-space stroke with fixed topology and projection-time joins.
+/// The shared path flattener runs only during resource preparation; the renderer
+/// projects retained segment and join frames when camera/object transforms change.
+pub fn tessellate_projected_screen_stroke(
+    path: &VectorPath,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+) -> Result<TessellatedScreenStroke, GeometryError> {
+    const FAN_SEGMENTS: usize = 8;
+    let contours = crate::flatten::flatten_path(path, PATH_TESSELLATION_TOLERANCE)?;
+    let mut output = TessellatedScreenStroke::default();
+
+    fn push_vertex(
+        output: &mut TessellatedScreenStroke,
+        position: Vec2,
+        tangent: Vec2,
+        other: Vec2,
+        extrusion: Vec2,
+        metadata: [f32; 3],
+    ) -> Result<u32, GeometryError> {
+        let index = u32::try_from(output.vertices.len()).map_err(|_| {
+            GeometryError::Tessellation("screen stroke vertex limit exceeded".to_owned())
+        })?;
+        output.vertices.push(ScreenStrokeVertex {
+            position,
+            tangent,
+            extrusion: if metadata[0] == 0.0 { extrusion } else { other },
+            metadata,
+        });
+        Ok(index)
+    }
+
+    fn add_triangle(output: &mut TessellatedScreenStroke, a: u32, b: u32, c: u32) {
+        output.indices.extend([a, b, c]);
+    }
+
+    for contour in contours {
+        let points = contour.points;
+        if points.len() < 2 {
+            continue;
+        }
+        let segment_count = if contour.closed {
+            points.len()
+        } else {
+            points.len() - 1
+        };
+        let mut tangents = Vec::with_capacity(segment_count);
+        for segment in 0..segment_count {
+            let delta = points[(segment + 1) % points.len()] - points[segment];
+            tangents.push(delta.normalized().ok_or_else(|| {
+                GeometryError::Tessellation("screen stroke contains a collapsed segment".into())
+            })?);
+        }
+
+        for segment in 0..segment_count {
+            let start = points[segment];
+            let end = points[(segment + 1) % points.len()];
+            let tangent = tangents[segment];
+            let start_extension =
+                if !contour.closed && segment == 0 && stroke_cap == StrokeCap::Square {
+                    -0.5
+                } else {
+                    0.0
+                };
+            let end_extension = if !contour.closed
+                && segment + 1 == segment_count
+                && stroke_cap == StrokeCap::Square
+            {
+                0.5
+            } else {
+                0.0
+            };
+            let start_left = push_vertex(
+                &mut output,
+                start,
+                tangent,
+                Vec2::ZERO,
+                Vec2::new(start_extension, 0.5),
+                [0.0; 3],
+            )?;
+            let start_right = push_vertex(
+                &mut output,
+                start,
+                tangent,
+                Vec2::ZERO,
+                Vec2::new(start_extension, -0.5),
+                [0.0; 3],
+            )?;
+            let end_right = push_vertex(
+                &mut output,
+                end,
+                tangent,
+                Vec2::ZERO,
+                Vec2::new(end_extension, -0.5),
+                [0.0; 3],
+            )?;
+            let end_left = push_vertex(
+                &mut output,
+                end,
+                tangent,
+                Vec2::ZERO,
+                Vec2::new(end_extension, 0.5),
+                [0.0; 3],
+            )?;
+            add_triangle(&mut output, start_left, start_right, end_right);
+            add_triangle(&mut output, start_left, end_right, end_left);
+        }
+
+        let first_join = usize::from(!contour.closed);
+        let end_join = if contour.closed {
+            points.len()
+        } else {
+            points.len() - 1
+        };
+        let mut feature_cursor = 0;
+        for point_index in first_join..end_join {
+            let previous = tangents[(point_index + segment_count - 1) % segment_count];
+            let next = tangents[point_index % segment_count];
+            let turn = previous.x * next.y - previous.y * next.x;
+            if turn.abs() <= 1.0e-6 && previous.dot(next) > 0.0 {
+                continue;
+            }
+            if turn.abs() <= 1.0e-6 {
+                return Err(GeometryError::Tessellation(
+                    "screen stroke contains an unrepresentable reversal join".to_owned(),
+                ));
+            }
+            let center = push_vertex(
+                &mut output,
+                points[point_index],
+                previous,
+                next,
+                Vec2::ZERO,
+                [2.0, 0.0, 0.0],
+            )?;
+            while contour
+                .feature_indices
+                .get(feature_cursor)
+                .is_some_and(|feature| *feature < point_index)
+            {
+                feature_cursor += 1;
+            }
+            let authored_feature =
+                contour.feature_indices.get(feature_cursor) == Some(&point_index);
+            let join = if authored_feature {
+                stroke_join
+            } else {
+                StrokeJoin::Bevel
+            };
+            let previous_edge = push_vertex(
+                &mut output,
+                points[point_index],
+                previous,
+                next,
+                Vec2::ZERO,
+                [1.0, 0.0, 0.0],
+            )?;
+            match join {
+                StrokeJoin::Bevel => {
+                    let next_edge = push_vertex(
+                        &mut output,
+                        points[point_index],
+                        previous,
+                        next,
+                        Vec2::ZERO,
+                        [1.0, 0.0, 1.0],
+                    )?;
+                    add_triangle(&mut output, center, previous_edge, next_edge);
+                }
+                StrokeJoin::Miter => {
+                    let miter = push_vertex(
+                        &mut output,
+                        points[point_index],
+                        previous,
+                        next,
+                        Vec2::ZERO,
+                        [3.0, 0.0, 0.0],
+                    )?;
+                    let next_edge = push_vertex(
+                        &mut output,
+                        points[point_index],
+                        previous,
+                        next,
+                        Vec2::ZERO,
+                        [1.0, 0.0, 1.0],
+                    )?;
+                    add_triangle(&mut output, center, previous_edge, miter);
+                    add_triangle(&mut output, center, miter, next_edge);
+                }
+                StrokeJoin::Round => {
+                    let mut previous_arc = previous_edge;
+                    for step in 1..=FAN_SEGMENTS {
+                        let next_arc = push_vertex(
+                            &mut output,
+                            points[point_index],
+                            previous,
+                            next,
+                            Vec2::ZERO,
+                            [4.0, 0.0, step as f32 / FAN_SEGMENTS as f32],
+                        )?;
+                        add_triangle(&mut output, center, previous_arc, next_arc);
+                        previous_arc = next_arc;
+                    }
+                }
+            }
+        }
+
+        if !contour.closed && stroke_cap == StrokeCap::Round {
+            for (point_index, tangent, sign) in [
+                (0, tangents[0], -1.0),
+                (points.len() - 1, tangents[segment_count - 1], 1.0),
+            ] {
+                let center = push_vertex(
+                    &mut output,
+                    points[point_index],
+                    tangent,
+                    tangent,
+                    Vec2::ZERO,
+                    [2.0, 0.0, 0.0],
+                )?;
+                let mut previous_arc = push_vertex(
+                    &mut output,
+                    points[point_index],
+                    tangent,
+                    tangent,
+                    Vec2::ZERO,
+                    [5.0, sign, 0.0],
+                )?;
+                for step in 1..=FAN_SEGMENTS {
+                    let next_arc = push_vertex(
+                        &mut output,
+                        points[point_index],
+                        tangent,
+                        tangent,
+                        Vec2::ZERO,
+                        [5.0, sign, step as f32 / FAN_SEGMENTS as f32],
+                    )?;
+                    add_triangle(&mut output, center, previous_arc, next_arc);
+                    previous_arc = next_arc;
+                }
+            }
+        }
+    }
+
+    if output.vertices.is_empty() || output.indices.is_empty() {
+        return Err(GeometryError::Tessellation(
+            "screen stroke produced no triangles".to_owned(),
+        ));
+    }
+    if output.vertices.iter().any(|vertex| {
+        [
+            vertex.position.x,
+            vertex.position.y,
+            vertex.tangent.x,
+            vertex.tangent.y,
+            vertex.extrusion.x,
+            vertex.extrusion.y,
+        ]
+        .iter()
+        .chain(vertex.metadata.iter())
+        .any(|value| !value.is_finite())
+    }) {
+        return Err(GeometryError::Tessellation(
+            "screen stroke produced an unrepresentable vertex".to_owned(),
+        ));
+    }
+    Ok(output)
 }
 
 /// Tessellate a morph while retaining source/target contour point order.
@@ -1862,6 +2135,97 @@ mod tests {
         let anchors = screen_stroke_smooth_anchors(&lyon_path);
         assert!(anchors.contains(&coincident_endpoints[0]));
         assert!(!anchors.contains(&coincident_endpoints[1]));
+    }
+
+    #[test]
+    fn projected_screen_stroke_retains_incident_frames_and_fixed_join_topology() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::ZERO)
+            .line_to(Vec2::new(0.0, 1.0));
+        let bevel =
+            tessellate_projected_screen_stroke(&path, StrokeJoin::Bevel, StrokeCap::Butt).unwrap();
+        let miter =
+            tessellate_projected_screen_stroke(&path, StrokeJoin::Miter, StrokeCap::Butt).unwrap();
+        let round =
+            tessellate_projected_screen_stroke(&path, StrokeJoin::Round, StrokeCap::Round).unwrap();
+        assert!(bevel
+            .vertices
+            .iter()
+            .all(|vertex| vertex.metadata.iter().all(|v| v.is_finite())));
+        let miter_vertex = miter
+            .vertices
+            .iter()
+            .find(|vertex| vertex.metadata[0] == 3.0)
+            .expect("miter join vertex");
+        assert_eq!(miter_vertex.tangent, Vec2::new(1.0, 0.0));
+        assert_eq!(miter_vertex.extrusion, Vec2::new(0.0, 1.0));
+        assert!(round
+            .vertices
+            .iter()
+            .any(|vertex| vertex.metadata[0] == 4.0));
+        assert!(round
+            .vertices
+            .iter()
+            .any(|vertex| vertex.metadata[0] == 5.0));
+        assert_ne!(bevel.indices.len(), miter.indices.len());
+        assert_ne!(miter.indices.len(), round.indices.len());
+
+        // A nonuniformly scaled, Y-tilted path under an oblique perspective
+        // changes the projected right-angle tangents. The miter must remain
+        // half a screen unit from both incident edges and obey the 4x limit.
+        let yaw = 0.63_f32;
+        let scale_x = 2.0_f32;
+        let scale_y = 0.45_f32;
+        let camera_tilt = 0.31_f32;
+        let position = [1.1_f32, -0.7_f32, 0.3_f32];
+        let depth = 5.0 + camera_tilt.sin() * position[1] - camera_tilt.cos() * position[2];
+        let camera_y = camera_tilt.cos() * position[1] + camera_tilt.sin() * position[2];
+        let project_derivative = |direction: [f32; 3]| {
+            let depth_derivative =
+                camera_tilt.sin() * direction[1] - camera_tilt.cos() * direction[2];
+            let y_derivative = camera_tilt.cos() * direction[1] + camera_tilt.sin() * direction[2];
+            Vec2::new(
+                (direction[0] * depth - position[0] * depth_derivative) / depth.powi(2),
+                (y_derivative * depth - camera_y * depth_derivative) / depth.powi(2),
+            )
+        };
+        let previous = project_derivative([scale_x * yaw.cos(), 0.0, -scale_x * yaw.sin()]);
+        let next = project_derivative([0.0, scale_y, 0.0]);
+        let previous = previous.normalized().unwrap();
+        let next = next.normalized().unwrap();
+        let turn = previous.x * next.y - previous.y * next.x;
+        let outer_sign = if turn > 0.0 { -1.0 } else { 1.0 };
+        let previous_normal = Vec2::new(-previous.y, previous.x) * outer_sign;
+        let next_normal = Vec2::new(-next.y, next.x) * outer_sign;
+        let miter_direction = (previous_normal + next_normal).normalized().unwrap();
+        let miter_offset = miter_direction * (0.5 / miter_direction.dot(previous_normal));
+        assert!((miter_offset.dot(previous_normal).abs() - 0.5).abs() < 1.0e-5);
+        assert!((miter_offset.dot(next_normal).abs() - 0.5).abs() < 1.0e-5);
+        assert!(
+            miter_offset.length() <= 2.0,
+            "miter remains within the 4x width limit"
+        );
+        for bevel_offset in [previous_normal * 0.5, next_normal * 0.5] {
+            assert!((bevel_offset.length() - 0.5).abs() < 1.0e-5);
+        }
+        for progress in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+            let angle = (previous_normal.x * next_normal.y - previous_normal.y * next_normal.x)
+                .atan2(previous_normal.dot(next_normal))
+                * progress;
+            let round_offset = Vec2::new(
+                previous_normal.x * angle.cos() - previous_normal.y * angle.sin(),
+                previous_normal.x * angle.sin() + previous_normal.y * angle.cos(),
+            ) * 0.5;
+            assert!((round_offset.length() - 0.5).abs() < 1.0e-5);
+        }
+        for (progress, sign) in [(0.0_f32, -1.0_f32), (0.5, -1.0), (1.0, -1.0)] {
+            let theta = std::f32::consts::PI * progress;
+            let cap = (Vec2::new(-previous.y, previous.x) * theta.cos()
+                + previous * (sign * theta.sin()))
+                * 0.5;
+            assert!((cap.length() - 0.5).abs() < 1.0e-5);
+        }
     }
 
     fn curved_shape() -> VectorPath {

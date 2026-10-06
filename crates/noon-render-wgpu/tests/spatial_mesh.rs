@@ -757,6 +757,63 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
         .unwrap()
         .into();
         let circle_id = attach(&mut store, circle);
+        let path_handle = store
+            .insert_geometry_path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-1.0, -0.5))
+                    .cubic_to(
+                        noon_core::Vec2::new(-0.4, 1.0),
+                        noon_core::Vec2::new(0.3, -1.0),
+                        noon_core::Vec2::new(1.0, -0.5),
+                    ),
+            )
+            .unwrap();
+        let mut path = SemanticObjectState::new(StoredGeometry::Resource(path_handle));
+        path.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.25,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            stroke_join: noon_core::StrokeJoin::Bevel,
+            stroke_cap: noon_core::StrokeCap::Square,
+            ..SemanticStyle::default()
+        };
+        path.transform = SemanticWorldTransform3D::new(
+            SemanticVec3::new(1.25, -1.2, 0.0),
+            noon_core::SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.35)
+                .unwrap(),
+            SemanticVec3::new(1.1, 0.7, 1.0),
+        )
+        .unwrap()
+        .into();
+        let path_id = attach(&mut store, path);
+        let corner_handle = store
+            .insert_geometry_path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-0.55, -0.4))
+                    .line_to(noon_core::Vec2::new(0.0, -0.4))
+                    .line_to(noon_core::Vec2::new(0.0, 0.55)),
+            )
+            .unwrap();
+        let mut corner = SemanticObjectState::new(StoredGeometry::Resource(corner_handle));
+        corner.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.25,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            stroke_join: noon_core::StrokeJoin::Miter,
+            stroke_cap: noon_core::StrokeCap::Square,
+            ..SemanticStyle::default()
+        };
+        corner.transform = SemanticWorldTransform3D::new(
+            SemanticVec3::new(-1.6, -1.2, 0.0),
+            noon_core::SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.7)
+                .unwrap(),
+            SemanticVec3::new(1.5, 0.7, 1.0),
+        )
+        .unwrap()
+        .into();
+        let corner_id = attach(&mut store, corner);
         let mut index = SemanticExecutionIndex::new();
         let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
             .unwrap()
@@ -801,6 +858,9 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
         let mut circle_widths = Vec::new();
         let mut circle_pixel_counts = Vec::new();
         let mut circle_rasters = Vec::new();
+        let mut path_pixel_counts = Vec::new();
+        let mut corner_pixel_counts = Vec::new();
+        let mut corner_rasters = Vec::new();
         for (index, time) in [0.0, 0.5, 1.0, 0.0].into_iter().enumerate() {
             runtime.seek(time).unwrap();
             let (uploads, pixels) = render(
@@ -824,6 +884,43 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
                 circle_pixels.len() > 30,
                 "tilted Circle stroke disappeared at {time}"
             );
+            let path_pixels = (72..108)
+                .flat_map(|y| (58..104).map(move |x| (x, y)))
+                .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+                .count();
+            assert!(
+                path_pixels > 12,
+                "curved World path stroke disappeared at {time}"
+            );
+            path_pixel_counts.push(path_pixels);
+            let corner_pixels = (65..94)
+                .flat_map(|y| (28..60).map(move |x| (x, y)))
+                .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+                .count();
+            assert!(
+                corner_pixels > 16,
+                "projected miter path vanished at {time}"
+            );
+            corner_pixel_counts.push(corner_pixels);
+            corner_rasters.push(pixels.clone());
+            if index == 0 {
+                let horizontal_width = (38..48)
+                    .map(|x| (76..90).filter(|&y| pixel(&pixels, x, y)[0] > 128).count())
+                    .max()
+                    .unwrap();
+                let vertical_width = (72..79)
+                    .map(|y| (42..56).filter(|&x| pixel(&pixels, x, y)[0] > 128).count())
+                    .max()
+                    .unwrap();
+                assert!(
+                    (3..=5).contains(&horizontal_width),
+                    "projected horizontal segment width {horizontal_width}px"
+                );
+                assert!(
+                    (3..=5).contains(&vertical_width),
+                    "projected vertical segment width {vertical_width}px"
+                );
+            }
             let min_x = circle_pixels.iter().map(|(x, _)| *x).min().unwrap();
             let max_x = circle_pixels.iter().map(|(x, _)| *x).max().unwrap();
             let min_y = circle_pixels.iter().map(|(_, y)| *y).min().unwrap();
@@ -904,6 +1001,12 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
             circle_rasters[0], circle_rasters[3],
             "Circle raster exactly replays after backward seek"
         );
+        assert_eq!(
+            corner_rasters[0], corner_rasters[3],
+            "projected corner joins exactly replay after backward seek"
+        );
+        assert_eq!(corner_pixel_counts[0], corner_pixel_counts[3]);
+        assert!(index.execution_object_id(corner_id).is_some());
         let line_object = index.execution_object_id(line_id).unwrap();
         let circle_object = index.execution_object_id(circle_id).unwrap();
         let style = noon_core::Style {
@@ -986,6 +1089,50 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
             widened > circle_pixel_counts[3] + 20,
             "Circle width edit visibly thickens the retained stroke: {widened} vs {}",
             circle_pixel_counts[3]
+        );
+
+        let path_object = index.execution_object_id(path_id).unwrap();
+        let path_style = noon_core::Style {
+            stroke_width: 0.5,
+            ..runtime
+                .frame()
+                .objects
+                .iter()
+                .find(|object| object.id == path_object)
+                .unwrap()
+                .style
+        };
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: path_object,
+                style: path_style,
+            })
+            .unwrap();
+        let (uploads, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut runtime,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            uploads.geometry_bytes, 0,
+            "path width edits reuse retained curve/join topology"
+        );
+        assert!(
+            uploads.instance_bytes > 0,
+            "path width edits update the instance"
+        );
+        let widened_path = (72..108)
+            .flat_map(|y| (58..104).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+            .count();
+        assert!(
+            widened_path > path_pixel_counts[3],
+            "screen width edit thickens the retained path: {widened_path} vs {}",
+            path_pixel_counts[3]
         );
     });
 }
