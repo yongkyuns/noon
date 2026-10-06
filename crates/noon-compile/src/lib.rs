@@ -2600,8 +2600,8 @@ pub(crate) fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> 
                     .cairo_path_appearance
                     .as_deref()
                     .is_some_and(CompiledCairoPathAppearance::is_valid)))
-        && (spatial.material != noon_core::SemanticSpatialMaterial::CairoPath
-            || spatial.cairo_path_appearance.is_some())
+        && ((spatial.material == noon_core::SemanticSpatialMaterial::CairoPath)
+            == spatial.cairo_path_appearance.is_some())
         && ((spatial.composition_domain
             == noon_core::SemanticSpatialCompositionDomain::FixedOrientation)
             || (spatial.fixed_orientation_center.is_none()
@@ -4350,6 +4350,44 @@ mod tests {
                 noon_core::TimelineError::InvalidWorldTransformValues
             ))
         ));
+    }
+
+    #[test]
+    fn cairo_path_material_and_appearance_are_admitted_together() {
+        let state = CompiledSpatialState {
+            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            camera_projection: None,
+            camera_profile: None,
+            camera_motions: None,
+            material: noon_core::SemanticSpatialMaterial::CairoPath,
+            point_light: false,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            draw_kind: CompiledSpatialDrawKind::Planar,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            cairo_path_appearance: Some(Box::new(CompiledCairoPathAppearance {
+                sheen_factor: 0.2,
+                gradient_direction: None,
+                world_family_bounds: None,
+            })),
+        };
+        assert!(valid_compiled_spatial(Some(&state)));
+        let mut orphaned = state.clone();
+        orphaned.material = noon_core::SemanticSpatialMaterial::Unlit;
+        assert!(!valid_compiled_spatial(Some(&orphaned)));
+        let mut missing = state.clone();
+        missing.cairo_path_appearance = None;
+        assert!(!valid_compiled_spatial(Some(&missing)));
+        let mut invalid = state.clone();
+        invalid
+            .cairo_path_appearance
+            .as_deref_mut()
+            .unwrap()
+            .sheen_factor = f64::NAN;
+        assert!(!valid_compiled_spatial(Some(&invalid)));
+        let mut mesh = state;
+        mesh.draw_kind = CompiledSpatialDrawKind::Mesh;
+        assert!(!valid_compiled_spatial(Some(&mesh)));
     }
 
     #[test]

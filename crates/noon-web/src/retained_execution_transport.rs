@@ -2221,6 +2221,7 @@ mod tests {
             .unwrap()
             .world_family_bounds = None;
         assert!(!invalid.is_valid());
+        snapshot.sequence = 1;
         snapshot.objects[0].spatial = Some(invalid);
         assert!(matches!(
             mirror.apply(snapshot),

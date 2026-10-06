@@ -1,24 +1,13 @@
 from manim import *
 
 
-class UnshadedThreeDAxes(ThreeDAxes):
-    # Cairo's segmented pieces and directional sheen are not in this native
-    # renderer slice. Keep the pinned default axes/ticks/tips, omitting only
-    # those renderer-specific decorations for the representative geometry oracle.
-    def _add_3d_pieces(self):
-        pass
-
-    def _set_axis_shading(self):
-        pass
-
-
 class SpatialThreeDAxes(ThreeDScene):
     def construct(self):
         self.set_camera_orientation(
             phi=0.6, theta=-1.2, gamma=0, focal_distance=5, zoom=1,
             frame_center=(0, 0, 0),
         )
-        axes = UnshadedThreeDAxes(
+        axes = ThreeDAxes(
             x_axis_config={"color": RED, "include_tip": False, "stroke_width": 4},
             y_axis_config={"color": GREEN, "tick_size": 0.15},
             z_axis_config={"color": BLUE},
