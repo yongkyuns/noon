@@ -878,6 +878,90 @@ fn cairo_path_world_up_shading_and_sheen_reuse_geometry_across_light_camera_and_
 }
 
 #[test]
+fn fixed_orientation_miter_preserves_frame_geometry_with_anisotropic_clip_scale() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping fixed-orientation stroke qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let mut store = SemanticStore::new();
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera
+            .set_camera_projection(Some(projection(true)))
+            .unwrap();
+        camera.transform.translation.z = 5.0;
+        attach(&mut store, camera);
+        let handle = store
+            .insert_geometry_path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-1.0, -0.25))
+                    .line_to(noon_core::Vec2::new(0.0, 0.25))
+                    .line_to(noon_core::Vec2::new(1.0, -0.25)),
+            )
+            .unwrap();
+        let mut path = SemanticObjectState::new(StoredGeometry::Resource(handle));
+        path.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 1.0,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            stroke_join: noon_core::StrokeJoin::Miter,
+            stroke_cap: noon_core::StrokeCap::Butt,
+            ..SemanticStyle::default()
+        };
+        path.set_spatial_composition_domain(
+            noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
+        )
+        .unwrap();
+        attach(&mut store, path);
+        let (compiled, _) = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
+            .unwrap()
+            .into_parts();
+        let mut runtime = SceneInstance::new(compiled);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        // Unequal logical scales expose an erroneous second aspect correction
+        // of the world XY tangent. The retained miter must be constructed in
+        // frame coordinates before those coordinates are projected to pixels.
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(8.0, 2.0)).unwrap(),
+        );
+        let target = Target::new(&device);
+        let mut preparer = FramePreparer::new();
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut runtime,
+            &target,
+        )
+        .unwrap();
+        // The two incident unit directions have Y components +/-1/sqrt(5).
+        // Their outer miter rises sqrt(5)/4 frame units above y=0.25.
+        let top = (0..HEIGHT)
+            .find(|&y| (60..68).any(|x| pixel(&pixels, x, y)[0] > 128))
+            .expect("the miter must remain visible");
+        let expected = ((1.0 - (0.25 + 5.0_f64.sqrt() / 4.0)) * HEIGHT as f64 / 2.0).floor() as u32;
+        assert!(
+            top.abs_diff(expected) <= 1,
+            "frame-space miter top {top}, expected {expected}"
+        );
+        assert!(
+            pixel(&pixels, WIDTH / 2, 14)[0] > 128,
+            "the correct miter reaches the independently computed outer wedge"
+        );
+    });
+}
+
+#[test]
 fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();
