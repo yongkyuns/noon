@@ -13,6 +13,7 @@ class Candidate:
 
     def setColor(self, *values): self.calls.append(("color", values))
     def setPointLit(self, enabled): self.calls.append(("lit", enabled))
+    def setAxialPose(self, direction, offset): self.calls.append(("axis", (direction, offset)))
     def free(self): self.freed += 1
 
 
@@ -117,6 +118,51 @@ class SpatialFacadeTests(unittest.TestCase):
              patch.object(spatial, "_create_mesh", return_value=object()):
             spatial.Mesh3D.line3d((1, 2, 3), (4, 5, 6), thickness=0.1, segments=8)
         factory.line3D.assert_called_once_with((1, 2, 3), (4, 5, 6), 0.1, 8)
+
+    def test_axial_pose_is_rust_configured_before_cold_and_live_admission(self):
+        for kind, offset in (("cylinder", -1), ("cone", -2)):
+            for live in (False, True):
+                with self.subTest(kind=kind, live=live):
+                    candidate = Candidate()
+                    factory = Mock()
+                    getattr(factory, kind).return_value = candidate
+                    context = Mock() if live else None
+                    admit = context.createMesh if live else Mock()
+                    handle = object()
+                    def create(inert):
+                        self.assertEqual(inert.calls[0], ("axis", ((-2.0, 3.0, -1.0), float(offset))))
+                        return handle
+                    admit.side_effect = create
+                    with patch.object(spatial, "_mesh_options", factory), \
+                         patch.object(spatial, "_bulk", side_effect=tuple), \
+                         patch.object(spatial, "_live_constructor_context", return_value=context), \
+                         patch.object(spatial, "_create_mesh", admit if not live else Mock()):
+                        mesh = getattr(spatial.Mesh3D, kind)(
+                            height=2, direction=(-2, 3, -1), axial_offset=offset,
+                        )
+                    self.assertIs(mesh._semantic_handle, handle)
+                    admit.assert_called_once_with(candidate)
+                    self.assertEqual(candidate.freed, 0)
+
+    def test_failed_axial_pose_frees_candidate_and_never_admits(self):
+        candidate = Candidate()
+        candidate.setAxialPose = Mock(side_effect=ValueError("invalid direction"))
+        factory = Mock()
+        factory.cylinder.return_value = candidate
+        with patch.object(spatial, "_mesh_options", factory), \
+             patch.object(spatial, "_bulk", side_effect=tuple), \
+             patch.object(spatial, "_create_mesh") as admit:
+            with self.assertRaisesRegex(ValueError, "invalid direction"):
+                spatial.Mesh3D.cylinder(direction=(0, 0, 0))
+        self.assertEqual(candidate.freed, 1)
+        admit.assert_not_called()
+
+    def test_malformed_axial_direction_never_allocates(self):
+        with patch.object(spatial, "_mesh_options") as factory:
+            for direction in ((1, 2), (1, 2, 3, 4), (1, None, 3)):
+                with self.subTest(direction=direction), self.assertRaises((TypeError, ValueError)):
+                    spatial.Mesh3D.cone(direction=direction)
+            factory.cone.assert_not_called()
 
     def test_spatial_animate_rejects_planar_capture_before_mutation(self):
         mesh = object.__new__(spatial.Mesh3D)

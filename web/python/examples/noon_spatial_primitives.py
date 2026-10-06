@@ -21,7 +21,16 @@ class SpatialPrimitives(ThreeDScene):
             [(0.45, -1.0, 0.0), (2.25, -1.0, 0.0), (1.35, 1.0, 0.25)],
             [(0, 1, 2)], color=BLUE,
         )
-        self.add(line, triangle)
+        cylinder = Cylinder(
+            radius=0.2, height=1.1, direction=(1, 2, 1), resolution=16,
+            fill_color=GREEN, checkerboard_colors=False, stroke_width=0,
+            shade_in_3d=False,
+        ).shift((-1.2, 0.8, 0))
+        cone = Cone(
+            base_radius=0.25, height=0.9, direction=(-2, 1, -1), show_base=True,
+            resolution=16, fill_color=YELLOW, stroke_width=0, shade_in_3d=False,
+        ).shift((1.2, 0.8, 0))
+        self.add(line, triangle, cylinder, cone)
         await self.play(
             WorldTransformTo(line, translation=(0, 0, 0.25)),
             WorldTransformTo(

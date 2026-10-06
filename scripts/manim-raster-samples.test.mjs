@@ -120,8 +120,8 @@ test("Line3D and explicit triangular mesh fixtures use the existing paired raste
   assert.equal(direct.source, "parity/manim-v0.21/spatial_primitives.py");
   assert.equal(worker.source, direct.source);
   assert.equal(worker.noon_source, "web/python/examples/noon_spatial_primitives.py");
-  assert.equal(direct.expected_object_count, 3);
-  assert.equal(worker.expected_object_count, 3);
+  assert.equal(direct.expected_object_count, 5);
+  assert.equal(worker.expected_object_count, 5);
 
   const workerSource = await readFile(path.join(repoRoot, worker.noon_source), "utf8");
   assert.match(workerSource, /\bLine3D\(/);
