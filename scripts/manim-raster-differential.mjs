@@ -11,6 +11,7 @@ import pngjs from "pngjs";
 import {
   browserArgs,
   dominantImageRgba,
+  directStaticObservation,
   rasterFixtureSource,
   resolveRasterReferenceSamples,
   selectDirectReplayCapture,
@@ -502,7 +503,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
         const renderer = window.noonSpatialMeshOracle;
         const priorTime = renderer.time();
         let presented = initialPresented;
-        let observationMode = "forward";
+        const observationMode = "forward";
         let wake = null;
         if (time > 0) {
           renderer.advanceDirectRealtime(time * 1000);
@@ -513,33 +514,28 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
           }
           if (!presented) {
             wake = JSON.parse(renderer.directWakeDirectiveJson(time * 1000));
-            const currentTime = renderer.time();
-            const staticTimerStall = wake.cadence === "timer"
-              && wake.presentNow === false
-              && Number.isFinite(wake.delayMs) && wake.delayMs > 0
-              && currentTime < time - 1e-9;
-            if (staticTimerStall) {
-              const seek = renderer.seekDirect(time);
-              // A successful seek can leave the retained canvas clean. Its
-              // authoritative return value says whether presentation is pending.
-              presented = !seek;
-              if (seek) {
-                presented = false;
-                for (let attempt = 0; attempt < 60; attempt += 1) {
-                  if (renderer.render()) { presented = true; break; }
-                  await new Promise(resolve => setTimeout(resolve, 10));
-                }
-              }
-              if (!presented) {
-                throw new Error("authoritative static timer seek did not produce a presentation");
-              }
-              observationMode = "static-hold-seek";
-            }
           }
         }
         return { error: null, presented, time: renderer.time(), objectCount: renderer.objectCount(),
           observationMode, runtimeTimeBeforeObservation: priorTime, wake };
       }, { time: sample.requestedTime, initialPresented: loaded.presented });
+      const staticObservation = directStaticObservation(metrics, sample.requestedTime, sample.referenceKind);
+      if (staticObservation === "retained") {
+        metrics.presented = true;
+        metrics.presentationMode = "retained-clean";
+      } else if (staticObservation === "seek") {
+        const held = await page.evaluate(async (time) => {
+          const renderer = window.noonSpatialMeshOracle;
+          const pending = renderer.seekDirect(time);
+          let presented = !pending;
+          for (let attempt = 0; pending && attempt < 60; attempt += 1) {
+            if (renderer.render()) { presented = true; break; }
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          return { time: renderer.time(), presented };
+        }, sample.requestedTime);
+        Object.assign(metrics, held, { observationMode: "static-hold-seek" });
+      }
       assert.equal(metrics.error, null, `${fixture.id}: direct render error at ${sample.time}`);
       assert.equal(metrics.presented, true, `${fixture.id}: direct frame not presented at ${sample.time}`);
       assert.ok(Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
@@ -556,6 +552,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
       if (fixture.id === "spatial-camera-labels-direct") {
         assertSpatialCameraLabelsFrame(debugFrame, sample.time);
       }
+      await writeFile(path.join(fixtureDir, `${sample.label}-frame.json`), `${JSON.stringify(debugFrame, null, 2)}\n`);
       captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame,
         observationMode: metrics.observationMode });
       if (metrics.observationMode === "static-hold-seek") {

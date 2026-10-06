@@ -1087,16 +1087,14 @@
     {
       "scene": "CairoSpatialSurface",
       "source": "parity/manim-v0.21/spatial_surface.py",
-      "expected_duration": 1.0,
+      "expected_duration": 0.0,
       "expected_object_count": 65,
       "sample_times": [
-        0.0,
-        0.5,
-        0.9666666666666667
+        0.0
       ],
       "id": "spatial-surface-cairo-direct",
       "direct_factory": "createDirectSpatialSurfaceCairoSmokeRenderer",
-      "notes": "Bounded executable Cairo Surface capability case: default checkerboard, opaque fill, 0.5-pixel border, and shade_in_3d=True for F(u,v)=(u,v,0.35*(u\u00b2+v\u00b2)) over [-1,1]\u00b2 at 8\u00d78 resolution. Static 1s comparison at the first and last 30fps samples; this case does not qualify broader Cairo shading behavior.",
+      "notes": "Static Cairo Surface appearance case: default checkerboard, opaque fill, 0.5-pixel border and shade_in_3d=True for F(u,v)=(u,v,0.35*(u\u00b2+v\u00b2)) over [-1,1]\u00b2 at 8\u00d78 resolution. Zero authored duration, compared against an independently captured terminal Cairo PNG; motion and broader Cairo behavior require separate qualification.",
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
@@ -1106,16 +1104,14 @@
     {
       "scene": "CairoSpatialSurface",
       "source": "parity/manim-v0.21/spatial_surface.py",
-      "expected_duration": 1.0,
+      "expected_duration": 0.0,
       "expected_object_count": 65,
       "sample_times": [
-        0.0,
-        0.5,
-        0.9666666666666667
+        0.0
       ],
       "id": "spatial-surface-cairo-worker",
       "noon_source": "web/python/examples/noon_spatial_surface.py",
-      "notes": "The same default Cairo Surface constructor and static geometry through the Python authoring worker and retained renderer. It exercises one bounded Surface configuration and is not a general Cairo qualification.",
+      "notes": "Static Cairo Surface appearance case: default checkerboard, opaque fill, 0.5-pixel border and shade_in_3d=True for F(u,v)=(u,v,0.35*(u\u00b2+v\u00b2)) over [-1,1]\u00b2 at 8\u00d78 resolution. Zero authored duration, compared against an independently captured terminal Cairo PNG; motion and broader Cairo behavior require separate qualification.",
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,

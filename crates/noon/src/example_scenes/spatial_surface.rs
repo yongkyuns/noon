@@ -167,11 +167,10 @@ pub fn cairo_scene() -> Result<(Scene, crate::SurfaceFamily), String> {
     scene
         .add_many(&[crate::MobjectTarget::Family(surface.family())])
         .map_err(|error| error.to_string())?;
-    scene.wait(1.0)?;
     Ok((scene, surface))
 }
 
-/// One-second static execution session for the Cairo Surface raster case.
+/// Static execution session for the Cairo Surface appearance case.
 pub fn cairo_session() -> Result<ExecutionSession, String> {
     let (scene, _) = cairo_scene()?;
     scene.execution_session().map_err(|error| error.to_string())
@@ -349,8 +348,12 @@ mod tests {
     }
 
     #[test]
-    fn cairo_surface_session_is_static_at_first_and_last_30_fps_samples() {
+    fn cairo_surface_snapshot_has_no_timeline_work_and_stays_identical_on_seek() {
         let mut session = cairo_session().unwrap();
+        assert_eq!(
+            session.wake_state().timeline(),
+            TimelineWakeState::Quiescent
+        );
         session.advance_to(0.0).unwrap();
         let mut first = session.frame().clone();
         assert_eq!(first.objects.len(), 65);

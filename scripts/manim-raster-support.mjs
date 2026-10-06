@@ -163,6 +163,20 @@ export function resolveRasterReferenceSamples(frameTimes, sampleTimes, {
   });
 }
 
+// A clean retained canvas needs no new draw. An idle snapshot may be sampled by
+// seek only when the independent reference proves a frozen hold at that time.
+// Continuous animation and unexplained stalls must remain qualification failures.
+export function directStaticObservation(metrics, requestedTime, referenceKind) {
+  if (metrics.presented || !Number.isFinite(metrics.time) || !Number.isFinite(requestedTime)
+      || requestedTime < 0 || metrics.time < 0 || metrics.wake?.presentNow !== false) return null;
+  const { cadence, delayMs } = metrics.wake;
+  const timer = cadence === "timer" && Number.isFinite(delayMs) && delayMs > 0;
+  if (!timer && cadence !== "idle") return null;
+  if (Math.abs(metrics.time - requestedTime) <= 1e-9) return "retained";
+  if (metrics.time < requestedTime && (timer || referenceKind === "frozen-hold")) return "seek";
+  return null;
+}
+
 export function selectDirectReplayCapture(captures, duration) {
   if (!Array.isArray(captures) || !Number.isFinite(duration) || duration <= 0) return null;
   const interior = captures.filter(capture => Number.isFinite(capture.time)

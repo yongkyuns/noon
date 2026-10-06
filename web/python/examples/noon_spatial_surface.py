@@ -27,7 +27,7 @@ class CairoSpatialSurface(SpatialScene):
     def __init__(self):
         super().__init__(far=30)
 
-    async def construct(self):
+    def construct(self):
         surface = Surface(
             lambda u, v: (u, v, 0.35 * (u * u + v * v)),
             u_range=(-1, 1),
@@ -35,4 +35,3 @@ class CairoSpatialSurface(SpatialScene):
             resolution=(8, 8),
         )
         self.add(surface)
-        await self.wait(1)

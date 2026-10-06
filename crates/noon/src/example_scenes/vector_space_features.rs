@@ -50,7 +50,7 @@ pub fn session() -> Result<ExecutionSession, String> {
     // The square exercises generic ApplyMatrix; the tracked Arrow follows the
     // endpoint-aware vector path and is the only family that receives ghosts.
     let vector = lts
-        .add_vector(&mut scene, 0.5, 0.25, Color::from_hex(0xFFFF00))
+        .add_vector(&mut scene, 0.5, 0.25, Color::from_hex(0xF7D96F))
         .map_err(|error| error.to_string())?
         .clone();
     let vector_family = scene

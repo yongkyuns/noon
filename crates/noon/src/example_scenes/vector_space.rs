@@ -17,7 +17,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         .linear_transformation_setup(&LinearTransformationOptions::default())
         .map_err(|error| error.to_string())?;
     let vector = lts
-        .add_animated_vector(&mut scene, 2.0, 1.0, Color::from_hex(0xFFFF00))
+        .add_animated_vector(&mut scene, 2.0, 1.0, Color::from_hex(0xF7D96F))
         .map_err(|error| error.to_string())?;
 
     let source_plane = lts
@@ -105,6 +105,15 @@ mod tests {
             TimelineWakeState::Continuous
         );
         let initial = forward.frame().clone();
+        let yellow = Color::from_hex(0xF7D96F); // ManimCE 0.21 YELLOW_C.
+        assert_eq!(
+            initial
+                .objects
+                .iter()
+                .filter(|row| row.style.fill == Some(yellow) || row.style.stroke == Some(yellow))
+                .count(),
+            2,
+        );
         forward.advance_to(0.5).unwrap();
         let grow_midpoint = forward.frame().clone();
         assert_ne!(grow_midpoint, initial);

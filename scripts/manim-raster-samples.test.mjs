@@ -3,13 +3,30 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { resolveRasterReferenceSamples, sampleRasterFrames, selectDirectReplayCapture } from "./manim-raster-support.mjs";
+import { resolveRasterReferenceSamples, sampleRasterFrames, selectDirectReplayCapture, directStaticObservation } from "./manim-raster-support.mjs";
 import { resolveRasterTolerance } from "./manim-raster-policy.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const referenceTimes = Array.from({ length: 66 }, (_, index) => index / 30);
 const fractions = [0, 0.25, 0.5, 0.75, 1];
+
+test("static observations reject unexplained stalls and continuous animation", () => {
+  const idle = { presented: false, time: 0, wake: { cadence: "idle", presentNow: false } };
+  assert.equal(directStaticObservation(idle, 0.5, "frozen-hold"), "seek");
+  assert.equal(directStaticObservation(idle, 0.5, "sequence"), null);
+  assert.equal(directStaticObservation({ ...idle, time: 0.5 }, 0.5, "sequence"), "retained");
+  assert.equal(directStaticObservation({ ...idle, time: 1 }, 0.5, "frozen-hold"), null);
+  const timer = { ...idle, wake: { cadence: "timer", presentNow: false, delayMs: 500 } };
+  assert.equal(directStaticObservation(timer, 0.5, "sequence"), "seek");
+  for (const wake of [
+    { cadence: "animation-frame", presentNow: false },
+    { cadence: "timer", presentNow: false, delayMs: 0 },
+    { cadence: "timer", presentNow: false, delayMs: NaN },
+    { cadence: "idle", presentNow: true },
+  ]) assert.equal(directStaticObservation({ ...idle, wake }, 0.5, "frozen-hold"), null);
+  assert.equal(directStaticObservation({ ...idle, time: NaN }, 0.5, "frozen-hold"), null);
+});
 
 test("direct replay prefers a true forward interior and labels static-only repeats", () => {
   const staticA = { time: 0.5, observationMode: "static-hold-seek" };
@@ -219,9 +236,9 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
   assert.equal(cairoWorker.noon_source, worker.noon_source);
   assert.equal(cairoDirect.scene, "CairoSpatialSurface");
   assert.equal(cairoWorker.scene, cairoDirect.scene);
-  assert.equal(cairoDirect.expected_duration, 1);
-  assert.equal(cairoWorker.expected_duration, 1);
-  assert.deepEqual(cairoDirect.sample_times, [0, 0.5, 29 / 30]);
+  assert.equal(cairoDirect.expected_duration, 0);
+  assert.equal(cairoWorker.expected_duration, 0);
+  assert.deepEqual(cairoDirect.sample_times, [0]);
   assert.deepEqual(cairoWorker.sample_times, cairoDirect.sample_times);
   assert.equal(cairoDirect.expected_object_count, 65);
   assert.equal(cairoWorker.expected_object_count, 65);
@@ -237,7 +254,7 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
   assert.match(nativeSource, /material: SemanticSpatialMaterial::CairoSurface/,
     "direct Rust selects the distinct Cairo Surface material");
   for (const [label, source] of [["reference", cairoReference], ["worker", cairoWorkerSource]]) {
-    const fixture = source.split("class CairoSpatialSurface", 2)[1];
+    const fixture = source.split("class CairoSpatialSurface", 2)[1]?.split(/\nclass\s/)[0];
     assert.ok(fixture, `${label}: missing CairoSpatialSurface`);
     assert.match(fixture, /Surface\([\s\S]*?u_range=\(-1, 1\)[\s\S]*?v_range=\(-1, 1\)[\s\S]*?resolution=\(8, 8\)/,
       `${label}: bounded Surface dimensions match the direct Rust case`);
@@ -245,8 +262,8 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
       `${label}: callback matches the nonlinear capability fixture`);
     assert.doesNotMatch(fixture, /shade_in_3d\s*=\s*False|checkerboard_colors\s*=|stroke_width\s*=/,
       `${label}: uses pinned Surface defaults for shading, checkerboard, and border`);
-    assert.match(fixture, /wait\(1(?:, frozen_frame=False)?\)/,
-      `${label}: holds the static scene for the one-second fixture duration`);
+    assert.doesNotMatch(fixture, /self\.(?:play|wait)\(/,
+      `${label}: the static appearance case has zero authored duration`);
   }
 
   const selectedPaths = [
