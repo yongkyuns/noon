@@ -24,12 +24,12 @@ class SpatialPrimitives(ThreeDScene):
             fill_color=BLUE, fill_opacity=1, stroke_width=0, shade_in_3d=False,
         )
         cylinder = Cylinder(
-            radius=0.2, height=1.1, direction=(1, 2, 1), resolution=16,
+            radius=0.2, height=1.1, direction=np.array([1, 2, 1]), resolution=16,
             fill_color=GREEN, checkerboard_colors=False, stroke_width=0,
             shade_in_3d=False,
         ).shift((-1.2, 0.8, 0))
         cone = Cone(
-            base_radius=0.25, height=0.9, direction=(-2, 1, -1), show_base=True,
+            base_radius=0.25, height=0.9, direction=np.array([-2, 1, -1]), show_base=True,
             resolution=16, fill_color=YELLOW, stroke_width=0, shade_in_3d=False,
         ).shift((1.2, 0.8, 0))
         self.add(line, triangle, cylinder, cone)
