@@ -232,16 +232,18 @@ pub fn tessellate_screen_stroke(
             offset.x * normal_axis.x + offset.y * normal_axis.y,
         );
         // Lyon's curve flattener connects neighboring samples with an internal
-        // miter, even when the authored join is Round or Bevel. That miter is a
-        // local approximation artifact, not a wider screen-space stroke. Keep
-        // its extrusion within the unit stroke radius while retaining the
-        // radial direction. Explicit Miter joins keep Lyon's real miter length.
+        // miter, even when the authored join is Round or Bevel. Those samples
+        // are almost purely transverse and only slightly exceed the half-width.
+        // Correct just that small transverse overshoot; longer authored join
+        // and cap extensions retain their full geometry.
         let extrusion_length = extrusion.length();
         if stroke_join != StrokeJoin::Miter
             && extrusion_length.is_finite()
             && extrusion_length > 0.5
+            && extrusion_length <= 0.51
+            && extrusion.x.abs() <= 1.0e-4
         {
-            extrusion = extrusion * (0.5 / extrusion_length);
+            extrusion.y = extrusion.y.signum() * 0.5;
         }
         ScreenStrokeVertex {
             position: vec2(vertex.position_on_path().x, vertex.position_on_path().y),
@@ -1690,6 +1692,31 @@ mod tests {
             .line_to(Vec2::new(2.1, 2.0));
         let miter = tessellate_screen_stroke(&corner, StrokeJoin::Miter, StrokeCap::Butt).unwrap();
         assert!(miter.vertices.iter().any(|v| v.extrusion.length() > 0.6));
+    }
+
+    #[test]
+    fn screen_stroke_preserves_square_cap_corner_extension() {
+        let line = VectorPath::new()
+            .move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(2.0, 0.0));
+        let mesh = tessellate_screen_stroke(&line, StrokeJoin::Round, StrokeCap::Square).unwrap();
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.extrusion.length() >= 0.7070));
+
+        let closed_corner = VectorPath::new()
+            .move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(2.0, 0.0))
+            .line_to(Vec2::new(2.0, 2.0))
+            .line_to(Vec2::new(0.0, 2.0))
+            .close();
+        let joined =
+            tessellate_screen_stroke(&closed_corner, StrokeJoin::Round, StrokeCap::Square).unwrap();
+        assert!(joined
+            .vertices
+            .iter()
+            .all(|vertex| vertex.extrusion.length() <= 0.7072));
     }
 
     fn curved_shape() -> VectorPath {
