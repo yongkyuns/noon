@@ -475,8 +475,8 @@ test("ThreeDAxes direct and worker fixtures enroll source, timing, and Rust coor
   assert.equal(direct?.direct_factory, "createDirectSpatialThreeDAxesSmokeRenderer");
   assert.equal(worker?.noon_source, "web/python/examples/noon_spatial_three_d_axes.py");
   assert.equal(direct.source, "parity/manim-v0.21/spatial_three_d_axes.py");
-  assert.equal(direct.expected_object_count, 38);
-  assert.equal(worker.expected_object_count, 38);
+  assert.equal(direct.expected_object_count, 98);
+  assert.equal(worker.expected_object_count, 98);
   assert.deepEqual(direct.sample_times, [0, 0.5, 0.9666666666666667]);
   assert.deepEqual(worker.sample_times, direct.sample_times);
   assert.deepEqual(worker.raster_tolerance, direct.raster_tolerance);

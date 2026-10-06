@@ -373,7 +373,7 @@ fn materialize_semantic_projection(
         spatial_anchor_bounds_row_groups: HashMap::new(),
         spatial_anchor_local_bounds: HashMap::new(),
         cairo_path_control_points: HashMap::new(),
-        cairo_path_points_by_resource: HashMap::new(),
+        cairo_path_points_by_resource: Default::default(),
         resources,
     };
     compiled.rebuild_spatial_anchor_groups();

@@ -432,7 +432,7 @@ impl CompiledScene {
             .map_or(&[], |group| group.cairo_path_member_indices.as_slice())
     }
 
-    pub(crate) fn cairo_path_points(&self, row: u32) -> Option<&[SemanticVec3]> {
+    pub fn cairo_path_points(&self, row: u32) -> Option<&[SemanticVec3]> {
         self.cairo_path_control_points.get(&row).map(AsRef::as_ref)
     }
 

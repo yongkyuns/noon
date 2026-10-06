@@ -654,9 +654,12 @@ fn fixed_orientation_anchor_can_reference_a_family_created_in_the_same_transacti
     let family_id = result.resolve(family).unwrap();
     let alias_id = result.resolve(alias).unwrap();
     let child_id = result.resolve(child).unwrap();
+    assert_eq!(
+        store.node(family_id).unwrap().first_member(),
+        Some(alias_id)
+    );
+    assert_eq!(store.node(alias_id).unwrap().first_member(), Some(child_id));
     assert_eq!(store.len(), before_len + 3);
-    assert!(store.is_family_ancestor(family_id, child_id).unwrap());
-    assert!(store.is_family_ancestor(alias_id, child_id).unwrap());
     assert_eq!(
         store
             .semantic_object_state_checked(child_id)

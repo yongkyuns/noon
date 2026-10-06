@@ -697,7 +697,7 @@ fn prepare_three_d_axes(
             ));
         }
         noon_geometry::validate_coordinate_range(range)?;
-        if !length.is_finite() || length <= 0.0 {
+        if !length.is_finite() || length <= 0.0 || (tips && tip_length >= length) {
             return Err(CoordinateError::InvalidLength.into());
         }
         let frame = NumberLineFrame::centered(range, length, 0.0)?;
@@ -718,7 +718,12 @@ fn prepare_three_d_axes(
             }
         }
         let start = frame.start();
-        let end = frame.end();
+        let mut end = frame.end();
+        // Manim's path stops at the triangular tip base. The hidden NumberLine
+        // shaft remains full-length so shared coordinate queries keep their range.
+        if tips {
+            end[0] -= tip_length;
+        }
         let pieces = (0..options.num_axis_pieces)
             .map(|piece| {
                 let t0 = piece as f64 / options.num_axis_pieces as f64;
@@ -903,6 +908,7 @@ fn tip_style(style: &SemanticStyle) -> Result<SemanticStyle, CoordinateAuthoring
 fn three_d_axis_style() -> SemanticStyle {
     let mut style = default_axis_style();
     style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
+    style.stroke_cap = noon_core::StrokeCap::Butt;
     style
 }
 
@@ -1108,6 +1114,22 @@ mod tests {
                 piece = piece_family.next_member(piece_id);
             }
             assert_eq!(piece_count, options.num_axis_pieces);
+            let last_piece = borrowed
+                .semantic_object_state_checked(piece_family.last_member().unwrap())
+                .unwrap();
+            let Some(StoredGeometry::Line { end, .. }) = last_piece.content.geometry() else {
+                panic!("axis piece is not a line")
+            };
+            let shaft = borrowed.semantic_object_state_checked(shaft).unwrap();
+            let Some(StoredGeometry::Line {
+                end: coordinate_end,
+                ..
+            }) = shaft.content.geometry()
+            else {
+                panic!("coordinate shaft is not a line")
+            };
+            assert!((f64::from(coordinate_end.x - end.x) - options.tip_length).abs() < 1e-5);
+            assert_eq!(last_piece.style.stroke_cap, noon_core::StrokeCap::Butt);
 
             let tick_family = borrowed.node(ticks).unwrap();
             let mut tick = tick_family.first_member();

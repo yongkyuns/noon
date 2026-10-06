@@ -522,7 +522,7 @@ pub fn tessellate_projected_screen_stroke(
             let previous = tangents[(point_index + segment_count - 1) % segment_count];
             let next = tangents[point_index % segment_count];
             let turn = previous.x * next.y - previous.y * next.x;
-            if turn.abs() <= 1.0e-6 && previous.dot(next) > 0.0 {
+            if turn.abs() <= 1.0e-6 && (previous.x * next.x + previous.y * next.y) > 0.0 {
                 continue;
             }
             if turn.abs() <= 1.0e-6 {

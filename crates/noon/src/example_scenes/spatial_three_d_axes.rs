@@ -223,7 +223,7 @@ mod tests {
             .len();
         assert_eq!(x_tick_count, 12, "tipless X axis keeps both endpoint ticks");
         let mut session = session().unwrap();
-        assert_eq!(session.frame().objects.len(), 38);
+        assert_eq!(session.frame().objects.len(), 98);
         for (time, expected_profile) in [(0.0, start_profile()), (1.0, end_profile())] {
             session.advance_to(time).unwrap();
             assert_eq!(

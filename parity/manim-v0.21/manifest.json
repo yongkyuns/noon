@@ -1012,7 +1012,7 @@
     },
     {
       "id": "spatial-three-d-axes-direct",
-      "expected_object_count": 38,
+      "expected_object_count": 98,
       "scene": "SpatialThreeDAxes",
       "source": "parity/manim-v0.21/spatial_three_d_axes.py",
       "direct_factory": "createDirectSpatialThreeDAxesSmokeRenderer",
@@ -1027,11 +1027,11 @@
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       },
-      "notes": "Pinned linear ThreeDAxes ranges/lengths with per-axis X/Y/Z color, tick, and tip overrides, retained DejaVu Sans Mono labels supplied as ordinary Text, an f64 Rust-c2p point, and a finite camera-profile track. X omits its tip while retaining the endpoint tick; Y keeps its adjusted ticks; Z keeps its default tip. Cairo pieces/shading and camera-edge label correction remain outside this subset."
+      "notes": "Pinned default Cairo ThreeDAxes with 20 retained shaft pieces per axis, directional sheen and per-axis X/Y/Z color, tick and tip overrides. Retained DejaVu Sans Mono labels, a shared Rust c2p coordinate point and a finite camera-profile track exercise the direct Rust/WASM and Python worker paths. The oracle uses unmodified Manim ThreeDAxes; X has no tip, while Y and Z retain the tip-base shaft endpoint."
     },
     {
       "id": "spatial-three-d-axes-worker",
-      "expected_object_count": 38,
+      "expected_object_count": 98,
       "scene": "SpatialThreeDAxes",
       "source": "parity/manim-v0.21/spatial_three_d_axes.py",
       "noon_source": "web/python/examples/noon_spatial_three_d_axes.py",
@@ -1046,7 +1046,7 @@
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       },
-      "notes": "The same pinned linear ThreeDAxes ranges/lengths and per-axis X/Y/Z color, tick, and tip overrides, coordinate point, and camera track through the async Python worker. Numeric placement is queried from Rust; no frontend projection or coordinate math is used. Cairo axis pieces/shading and labels remain outside the supported subset."
+      "notes": "Pinned default Cairo ThreeDAxes with 20 retained shaft pieces per axis, directional sheen and per-axis X/Y/Z color, tick and tip overrides. Retained DejaVu Sans Mono labels, a shared Rust c2p coordinate point and a finite camera-profile track exercise the direct Rust/WASM and Python worker paths. The oracle uses unmodified Manim ThreeDAxes; X has no tip, while Y and Z retain the tip-base shaft endpoint."
     },
     {
       "id": "spatial-circle-screen-stroke-direct",
@@ -1202,7 +1202,9 @@
       "source": "parity/manim-v0.21/spatial_surface.py",
       "expected_duration": 0.0,
       "expected_object_count": 2049,
-      "sample_times": [0.0],
+      "sample_times": [
+        0.0
+      ],
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
@@ -1218,7 +1220,9 @@
       "noon_source": "web/python/examples/noon_spatial_surface.py",
       "expected_duration": 0.0,
       "expected_object_count": 2049,
-      "sample_times": [0.0],
+      "sample_times": [
+        0.0
+      ],
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
