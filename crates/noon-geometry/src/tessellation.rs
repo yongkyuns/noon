@@ -258,8 +258,10 @@ pub fn tessellate_screen_stroke(
             extrusion,
         }
     });
+    // Keep the Path endpoint identities used by the smooth-join prepass.
+    // The attribute-free tessellate_path shortcut generates different IDs.
     StrokeTessellator::new()
-        .tessellate_path(&lyon_path, &options, &mut output)
+        .tessellate_with_ids(lyon_path.id_iter(), &lyon_path, None, &options, &mut output)
         .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
     if buffers.vertices.is_empty() || buffers.indices.is_empty() {
         return Err(GeometryError::Tessellation(
