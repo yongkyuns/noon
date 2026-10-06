@@ -7,7 +7,7 @@ const END_TOLERANCE_SECONDS = 0.001;
 // Explicit workloads, using the same source and window on both packages. These
 // are test protocols, not an alternative runtime clock or benchmark registry.
 export function productMeasurement(exampleId) {
-  const common = { version: 3, clock: "renderer-sampled", sampler: "renderer-only",
+  const common = { version: 4, clock: "renderer-sampled", sampler: "renderer-only",
     preparation: "completed-cold-pass" };
   switch (exampleId) {
     case "parity-square-and-circle":
@@ -25,7 +25,7 @@ export function productMeasurement(exampleId) {
 // Optional existing publication-stage diagnostics supply actual render-call
 // timestamps. Never infer per-frame gaps from the 50 ms metrics polling timer.
 // Counter coverage fails closed if the bounded worker ring lost any frame.
-export function samplePresentationGaps(presentationSamples, fps) {
+function presentationWindow(presentationSamples, fps) {
   assert.ok(Array.isArray(presentationSamples), "presentation samples must be an array");
   const epoch = presentationSamples.filter(sample => sample.session === fps.session &&
     sample.clockOriginMs === fps.clockOriginMs);
@@ -40,10 +40,53 @@ export function samplePresentationGaps(presentationSamples, fps) {
   assert.ok(Number.isSafeInteger(fps.endFrames - fps.startFrames) && fps.endFrames > fps.startFrames &&
     before !== undefined && window.length === fps.endFrames - fps.startFrames + 1,
   "publication presentation samples must cover every measured renderer frame");
+  return window;
+}
+
+export function samplePresentationGaps(presentationSamples, fps) {
+  const window = presentationWindow(presentationSamples, fps);
   const intervals = window.slice(1).map((sample, index) => sample.presentedAtMs - window[index].presentedAtMs);
   return { clock: "renderer-publication-submission", frameCount: window.length,
     intervalCount: intervals.length, intervalMs: summarizeSamples(intervals),
     cadence: summarizeCadence(intervals, 60) };
+}
+
+// CPU wall times cover every scored publication. Renderer counters describe the
+// last frame at each diagnostic poll: summarize those snapshots, never sum them
+// as though polling captured every upload/draw. No GPU execution time is implied.
+export function sampleRendererCosts(presentationSamples, frameSamples, fps) {
+  const window = presentationWindow(presentationSamples, fps).slice(1);
+  const cpuWallMs = Object.fromEntries(["applyMs", "renderMs", "ackPostMs"].map(key => {
+    const values = window.map(sample => sample[key]);
+    assert.ok(values.every(value => Number.isFinite(value) && value >= 0),
+      `${key}: publication CPU wall time must be finite and nonnegative`);
+    return [key, summarizeSamples(values)];
+  }));
+  const observations = productObservations(frameSamples).filter(sample =>
+    sample.session === fps.session && sample.clockOriginMs === fps.clockOriginMs &&
+    sample.rendererAt >= fps.startRendererAt && sample.rendererAt <= fps.endRendererAt &&
+    sample.ready === true && sample.needsPresent === false && sample.bufferedDeltas === 0);
+  const snapshots = observations.filter((sample, index) => index === 0 ||
+    sample.frames !== observations[index - 1].frames);
+  assert.ok(snapshots.length >= 10 && snapshots[0].frames === fps.startFrames &&
+    snapshots.at(-1).frames === fps.endFrames,
+  "renderer cost snapshots must cover the scored FPS observation endpoints");
+  const fields = ["drawCalls", "instancesDrawn", "bytesUploaded", "geometryCacheMisses",
+    "objectCount", "rendererRebuilds", "modeSwitches"];
+  for (const key of fields) {
+    assert.ok(snapshots.every(sample => Number.isSafeInteger(sample.counters?.[key]) &&
+      sample.counters[key] >= 0), `${key}: renderer counter must be a nonnegative safe integer`);
+  }
+  const lifecycle = Object.fromEntries(["rendererRebuilds", "modeSwitches"].map(key => {
+    assert.ok(snapshots.every((sample, index) => index === 0 ||
+      sample.counters[key] >= snapshots[index - 1].counters[key]),
+    `${key}: renderer lifetime counter must not decrease within one epoch`);
+    return [key, snapshots.at(-1).counters[key] - snapshots[0].counters[key]];
+  }));
+  return { clock: "renderer-publication-submission", frameCount: window.length, cpuWallMs,
+    sampledLastFrame: { sampleCount: snapshots.length, fields: Object.fromEntries(
+      fields.slice(0, 5).map(key => [key, summarizeSamples(snapshots.map(sample => sample.counters[key]))])) },
+    lifecycle };
 }
 
 function productObservations(samples) {

@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { productConfig, validateProductEnvironment } from "./product-artifact.mjs";
 import { measure, prepare, prepareArtifact, sourceSha, stamp, trustedWriter,
-  validateEnvironment, verify } from "./wasm-build.mjs";
+  validateEnvironment, verify, packageSizes, summarizePackageSizes } from "./wasm-build.mjs";
 
 const env = { RUNNER_OS: "Linux", RUNNER_ARCH: "X64" };
 const compiler = "rustc 1.98.0\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.0";
@@ -306,4 +306,33 @@ test("Pages builds use the shared optimized production WASM configuration", asyn
 
 test("unknown product roles cannot select a default build", () => {
   assert.throws(() => productConfig("other"), /invalid product artifact role/);
+});
+
+test("package bytes derive from the hash-verified inventory and exclude lock provenance", async t => {
+  const { root, manifest, put } = await stamped(t);
+  const sizes = await packageSizes(root);
+  assert.equal(sizes.compression, "none");
+  assert.equal(sizes.files["web/pkg/noon_web_bg.wasm"].bytes, 4);
+  assert.equal(sizes.files["web/pkg/noon_web_bg.wasm"].sha256, manifest.files["web/pkg/noon_web_bg.wasm"]);
+  assert.equal(sizes.files["web/ci-Cargo.lock"], undefined);
+  assert.equal(sizes.totalBytes, Object.values(sizes.files).reduce((total, file) => total + file.bytes, 0));
+  assert.deepEqual(summarizePackageSizes(sizes.files), sizes);
+  await put("web/pkg/noon_web_bg.wasm", "altered");
+  await assert.rejects(packageSizes(root), /content mismatch/);
+});
+
+test("package size aggregation rejects impossible bytes and a forged file inventory", async t => {
+  const { root } = await stamped(t);
+  const { files } = await packageSizes(root);
+  for (const bytes of [-1, null, Number.NaN, 2 ** 53]) {
+    assert.throws(() => summarizePackageSizes({ ...files, "web/pkg/noon_web_bg.wasm": {
+      ...files["web/pkg/noon_web_bg.wasm"], bytes,
+    } }), /invalid package bytes/);
+  }
+  const oversized = Object.fromEntries(Object.entries(files).map(([name, file]) =>
+    [name, { ...file, bytes: Number.MAX_SAFE_INTEGER - 1 }]));
+  assert.throws(() => summarizePackageSizes(oversized), /total exceeded safe integer/);
+  assert.throws(() => summarizePackageSizes({ ...files, "web/pkg/../outside": {
+    sha256: "a".repeat(64), bytes: 1,
+  } }), /invalid generated package size inventory/);
 });

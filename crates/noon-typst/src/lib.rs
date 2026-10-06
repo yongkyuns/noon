@@ -273,7 +273,13 @@ where
     })
 }
 
-fn bundled_fonts() -> impl Iterator<Item = &'static [u8]> {
+/// Immutable bundled font buffers, in the compiler's deterministic fallback order.
+///
+/// Native text and Typst share this source when both backends are enabled. Keep
+/// the asset access out of line so cross-crate callers do not embed another copy
+/// of the full font set in WASM. This does not parse or allocate font data.
+#[inline(never)]
+pub fn bundled_fonts() -> impl Iterator<Item = &'static [u8]> {
     #[cfg(feature = "bundled-fonts")]
     {
         typst_assets::fonts()

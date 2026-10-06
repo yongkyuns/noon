@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
-import { productMeasurement, sampleRendererFps, samplePresentationGaps } from "./playground-product-fps.mjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
 
 function sample({
   now = 0,
@@ -282,5 +282,46 @@ for (const [name, mutate, expected] of [
     const { fps, samples } = gapFixture();
     mutate(samples);
     assert.throws(() => samplePresentationGaps(samples, fps), expected);
+  });
+}
+
+function costFixture() {
+  const frameSamples = observations({ startFrames: 100, endFrames: 292,
+    startTime: 3.7, endTime: 6.9, startAt: 5_000, endAt: 8_200 }).map((sample, index) => ({
+    ...sample, counters: { drawCalls: 2, instancesDrawn: 3, bytesUploaded: 64,
+      geometryCacheMisses: 0, objectCount: 3, rendererRebuilds: index < 6 ? 1 : 2, modeSwitches: 0 },
+  }));
+  const { fps, samples } = gapFixture();
+  for (const sample of samples) Object.assign(sample, { applyMs: 0.25, renderMs: 2, ackPostMs: 0.01 });
+  // The boundary frame belongs to the prior interval, not this cost window.
+  samples[0].renderMs = 999;
+  return { fps, samples, frameSamples };
+}
+
+test("CPU costs cover scored frames and renderer counter snapshots are not upload totals", () => {
+  const { fps, samples, frameSamples } = costFixture();
+  const costs = sampleRendererCosts(samples, frameSamples, fps);
+  assert.equal(costs.frameCount, 192);
+  assert.equal(costs.cpuWallMs.renderMs.mean, 2);
+  assert.equal(costs.sampledLastFrame.sampleCount, 13);
+  assert.equal(costs.sampledLastFrame.fields.bytesUploaded.mean, 64);
+  assert.equal(costs.sampledLastFrame.fields.bytesUploaded.total, undefined);
+  assert.deepEqual(costs.lifecycle, { rendererRebuilds: 1, modeSwitches: 0 });
+});
+
+for (const [name, mutate, expected] of [
+  ["lost publication", data => data.samples.splice(20, 1), /cover every measured renderer frame/],
+  ["missing cost", data => { delete data.samples[20].applyMs; }, /publication CPU wall time/],
+  ["nonfinite cost", data => { data.samples[20].renderMs = Infinity; }, /publication CPU wall time/],
+  ["negative cost", data => { data.samples[20].ackPostMs = -1; }, /publication CPU wall time/],
+  ["missing endpoint snapshot", data => data.frameSamples.pop(), /cover the scored FPS observation endpoints/],
+  ["missing counter", data => { delete data.frameSamples[4].counters.bytesUploaded; }, /renderer counter/],
+  ["unsafe counter", data => { data.frameSamples[4].counters.bytesUploaded = 2 ** 53; }, /renderer counter/],
+  ["counter reset", data => { data.frameSamples[7].counters.rendererRebuilds = 0; }, /must not decrease/],
+]) {
+  test(`renderer costs reject ${name}`, () => {
+    const data = costFixture();
+    mutate(data);
+    assert.throws(() => sampleRendererCosts(data.samples, data.frameSamples, data.fps), expected);
   });
 }

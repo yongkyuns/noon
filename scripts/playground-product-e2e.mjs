@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import pngjs from "pngjs";
-import { productMeasurement, sampleRendererFps, samplePresentationGaps } from "./playground-product-fps.mjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
+import { packageSizes } from "../.github/ci/wasm-build.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -297,6 +298,8 @@ try {
         bufferedDeltas: metrics?.bufferedDeltas,
         metricAt: performance.now(),
         metricReply: probe.metricsReplies,
+        counters: Object.fromEntries(["drawCalls", "instancesDrawn", "bytesUploaded", "geometryCacheMisses",
+          "objectCount", "rendererRebuilds", "modeSwitches"].map(key => [key, metrics?.[key]])),
       }),
     };
     window.__noonProductRenderProbe = probe;
@@ -441,6 +444,9 @@ try {
     fpsSamples: warm.frameSamples,
     presentationSamples: warm.presentationSamples,
     presentationGaps,
+    rendererCosts: measurement.gapClock === null ? null
+      : sampleRendererCosts(warm.presentationSamples, warm.frameSamples, fps),
+    packageSizes: await packageSizes(siteRoot),
     visual,
     fixedFrame: {
       authoredEndpointSeconds: measurement.sourceEndSeconds,

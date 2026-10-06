@@ -124,6 +124,27 @@ function requestMessage(worker, type) {
   return entry.message ?? entry;
 }
 
+test("forward advance timings are explicitly opted in and invalid flags send no request", async () => {
+  const { client, engine } = await startClient();
+  try {
+    const before = engine.messages.length;
+    await assert.rejects(client.advanceTo(0.5, { collectTimings: "true" }), /must be a boolean/);
+    assert.equal(engine.messages.length, before);
+    for (const collectTimings of [false, true]) {
+      const pending = client.advanceTo(0.5, { collectTimings });
+      const message = await waitForRequest(engine, "advance_to", collectTimings ? 2 : 1);
+      assert.equal(message.time, 0.5);
+      assert.equal(message.collectTimings, collectTimings ? true : undefined);
+      const sampleTiming = collectTimings ? { endpointMs: 3 } : undefined;
+      engine.emitMessage(engineMessage("advance_to", {
+        requestId: message.requestId, time: 0.5, playing: false,
+        ...(collectTimings ? { sampleTiming } : {}),
+      }));
+      assert.equal((await pending).sampleTiming, sampleTiming);
+    }
+  } finally { client.terminate(); }
+});
+
 async function waitForRequest(worker, type, occurrence = 1) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const entries = worker.messages.filter(entry => (entry.message ?? entry).type === type);

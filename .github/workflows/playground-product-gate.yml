@@ -1,146 +1,375 @@
-name: PR 1882 original-package performance control
-# Diagnostic only, owned by #1653. Do not merge into the qualified #1882 branch.
-# Original ZIPs and source checkouts are immutable; no compiler or rebuild runs.
+name: Playground Product Gate
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/playground-product-gate.yml'
+      - ".github/workflows/playground-product-gate.yml"
+      - ".github/ci/**"
+      - ".github/actions/install-wasm-opt/action.yml"
+      - "skills/noon-authoring/**"
+      - "scripts/noon-capabilities.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/noon/**"
+      - "crates/noon-core/**"
+      - "crates/noon-compile/**"
+      - "crates/noon-runtime/**"
+      - "crates/noon-web/**"
+      - "crates/noon-render-wgpu/**"
+      - "crates/noon-text/**"
+      - "scripts/build-web-demo.sh"
+      - "scripts/build-python-worker.mjs"
+      - "scripts/build-runtime-identity.mjs"
+      - "scripts/manim-tutorial-smoke.mjs"
+      - "scripts/playground-layout-smoke.mjs"
+      - "scripts/playground-product-e2e.mjs"
+      - "scripts/playground-product-fps.mjs"
+      - "scripts/playground-product-fps.test.mjs"
+      - "scripts/playground-product-compare.mjs"
+      - "scripts/renderer-init-failure-smoke.mjs"
+      - "scripts/retained-text-animation-smoke.mjs"
+      - "web/**"
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
-  group: pr1882-original-packages-${{ github.event.pull_request.number }}
+  group: playground-product-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  original-packages:
-    name: Diagnostic original-binary AB and AA controls
-    if: github.repository == 'yongkyuns/noon' && github.event.pull_request.number == 1888 && github.event.pull_request.head.repo.full_name == github.repository
+  build:
+    name: Build product comparison packages
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
+    outputs:
+      baseline-artifact: ${{ steps.baseline-artifact.outputs.artifact-id }}
+      candidate-artifact: ${{ steps.candidate-artifact.outputs.artifact-id }}
+      candidate-fixture-artifact: ${{ steps.candidate-fixture-artifact.outputs.artifact-id }}
     env:
-      NOON_WASM_PROFILE: 'release'
-      NOON_WASM_SKIP_OPT: '0'
-      NOON_RENDERER_SMOKE: '0'
-      NOON_PRODUCT_BASE_SHA: dd99c9bca78880f63cb40d45ea2d20be50c3a30b
+      NOON_PRODUCT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      # Reuse dependency compilations between three fresh builds at one stable path.
+      # The cache lives only in this job; no executable or cross-PR seed is restored.
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.product-sccache
+      SCCACHE_CACHE_SIZE: "1G"
+      SCCACHE_LOCAL_RW_MODE: "READ_WRITE"
+      NOON_SKIP_WEB_PREFLIGHT: "1"
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
     steps:
-      - name: Checkout diagnostic coordinator
+      - name: Checkout candidate
         uses: actions/checkout@v7
         with:
-          path: coordinator
-      - name: Checkout original baseline source
-        uses: actions/checkout@v7
-        with:
-          ref: dd99c9bca78880f63cb40d45ea2d20be50c3a30b
-          path: baseline
-      - name: Checkout original tested candidate source
-        uses: actions/checkout@v7
-        with:
-          ref: c9e3a30453a11a8e43d9c0c778870c709d27554f
           path: candidate
-      - name: Restore exact original production ZIPs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+
+      - name: Checkout PR base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+
+      - name: Test CI artifact contracts
+        working-directory: candidate
+        run: node --test .github/ci/*.test.mjs
+
+      - name: Use each checkout's pinned Rust and WASM target
         run: |
-          set -euo pipefail
-          mkdir -p original-zips evidence/provenance
-          gh api repos/yongkyuns/noon/actions/artifacts/11383925910 > evidence/provenance/baseline-artifact.json
-          gh api repos/yongkyuns/noon/actions/artifacts/11384225814 > evidence/provenance/candidate-artifact.json
-          gh api repos/yongkyuns/noon/actions/artifacts/11383925910/zip > original-zips/baseline.zip
-          gh api repos/yongkyuns/noon/actions/artifacts/11384225814/zip > original-zips/candidate.zip
-          printf '%s  %s\n' \
-            cb35639f009c877fa2b47959ebc977c665e8b91de77e18e814e2c6e011003376 original-zips/baseline.zip \
-            416dfa22b5f2f534524d9fc86c93006b4559c34b52e9c9712ba2c42f72fed228 original-zips/candidate.zip \
-            | tee evidence/provenance/zip-sha256.txt | sha256sum --check --strict
-          unzip -q original-zips/baseline.zip -d baseline/web
-          unzip -q original-zips/candidate.zip -d candidate/web
-      - name: Verify historical sources and immutable package inventories
-        shell: bash
-        run: |
-          set -euo pipefail
-          node coordinator/.github/ci/product-artifact.mjs verify baseline baseline | tee evidence/provenance/baseline-verification.txt
-          GITHUB_SHA=c9e3a30453a11a8e43d9c0c778870c709d27554f \
-            node coordinator/.github/ci/product-artifact.mjs verify candidate candidate | tee evidence/provenance/candidate-verification.txt
-          cmp baseline/web/ci-Cargo.lock candidate/web/ci-Cargo.lock
-          for file in scripts/playground-product-e2e.mjs scripts/playground-product-fps.mjs scripts/playground-product-compare.mjs web/frame-metrics.js; do
-            cmp "coordinator/$file" "baseline/$file"
-            cmp "coordinator/$file" "candidate/$file"
+          for noon_checkout in baseline candidate; do
+            (
+              cd "$noon_checkout"
+              rustup install
+              rustup show active-toolchain
+              rustup target add wasm32-unknown-unknown
+            )
           done
-          for side in baseline candidate; do
-            cp "$side/web/ci-artifact.json" "evidence/provenance/$side-build.json"
-            cp "$side/web/runtime-build-identity.json" "evidence/provenance/$side-runtime.json"
-            sha256sum "$side/web/pkg/noon_web_bg.wasm" "$side/web/pkg/noon_web.js" "$side/web/python-worker.js"
-          done | tee evidence/provenance/runtime-sha256.txt
-      - name: Install pinned browser measurement dependencies
-        working-directory: coordinator
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('candidate/Cargo.toml', 'candidate/crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use pinned sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Install pinned wasm-opt
+        uses: ./candidate/.github/actions/install-wasm-opt
+
+      - name: Build baseline production package
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
+        run: |
+          # Rust cache keys include cwd and CARGO_TARGET_DIR. Keep both stable,
+          # but discard all Cargo fingerprints/artifacts before each source build.
+          (cd baseline && cargo generate-lockfile)
+          node candidate/.github/ci/product-artifact.mjs prepare baseline baseline
+          mv baseline .product-source
+          trap 'mv .product-source baseline' EXIT
+          rm -rf .product-target
+          sccache --zero-stats
+          noon_build_started=$SECONDS
+          (cd .product-source && bash scripts/build-web-demo.sh)
+          printf 'Baseline release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
+          sccache --show-stats
+          node candidate/.github/ci/product-artifact.mjs stamp baseline .product-source
+
+      - name: Build candidate renderer-smoke fixture package
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
+          NOON_RENDERER_SMOKE: "1"
+        run: |
+          (cd candidate && cargo generate-lockfile)
+          node candidate/.github/ci/product-artifact.mjs prepare candidate-fixture candidate
+          mv candidate .product-source
+          trap 'mv .product-source candidate' EXIT
+          rm -rf .product-target
+          sccache --zero-stats
+          noon_build_started=$SECONDS
+          (cd .product-source && bash scripts/build-web-demo.sh)
+          printf 'Candidate renderer-smoke release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
+          sccache --show-stats
+          node .product-source/.github/ci/product-artifact.mjs stamp candidate-fixture .product-source
+
+      - name: Upload candidate renderer-smoke package
+        id: candidate-fixture-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-candidate-fixture-${{ github.run_attempt }}
+          path: |
+            candidate/web/pkg
+            candidate/web/python-worker.js
+            candidate/web/runtime-build-identity.json
+            candidate/web/python/compat-bundle.*.json
+            candidate/web/ci-artifact.json
+            candidate/web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build candidate production package
+        env:
+          # Compiler results are content-keyed; Cargo outputs are never reused.
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
+        run: |
+          node candidate/.github/ci/product-artifact.mjs prepare candidate candidate
+          mv candidate .product-source
+          trap 'mv .product-source candidate' EXIT
+          rm -rf .product-target
+          sccache --zero-stats
+          noon_build_started=$SECONDS
+          (cd .product-source && bash scripts/build-web-demo.sh)
+          printf 'Candidate release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
+          sccache --show-stats
+          node .product-source/.github/ci/product-artifact.mjs stamp candidate .product-source
+
+      - name: Upload candidate production package
+        id: candidate-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-candidate-${{ github.run_attempt }}
+          path: |
+            candidate/web/pkg
+            candidate/web/python-worker.js
+            candidate/web/runtime-build-identity.json
+            candidate/web/python/compat-bundle.*.json
+            candidate/web/ci-artifact.json
+            candidate/web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload baseline production package
+        id: baseline-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-baseline-${{ github.run_attempt }}
+          path: |
+            baseline/web/pkg
+            baseline/web/python-worker.js
+            baseline/web/runtime-build-identity.json
+            baseline/web/python/compat-bundle.*.json
+            baseline/web/ci-artifact.json
+            baseline/web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+  compare:
+    # Preserve the required check name. Retrying this job reuses the successful
+    # producer's exact artifact IDs, including when its run attempt is older.
+    name: Runtime, visual, latency, and FPS regression
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NOON_PRODUCT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
+    steps:
+      - name: Require successful production builds
+        env:
+          NOON_PRODUCT_BUILD_RESULT: ${{ needs.build.result }}
+        run: test "$NOON_PRODUCT_BUILD_RESULT" = success
+
+      - name: Checkout candidate
+        uses: actions/checkout@v7
+        with:
+          path: candidate
+
+      - name: Checkout PR base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+
+      - name: Download baseline production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.baseline-artifact }}
+          path: baseline/web
+
+      - name: Download candidate production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          path: candidate/web
+
+      - name: Download candidate renderer-smoke fixture package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.candidate-fixture-artifact }}
+          path: candidate-fixture
+
+      - name: Verify source, configuration and package contents
+        run: |
+          node candidate/.github/ci/product-artifact.mjs verify baseline baseline
+          node candidate/.github/ci/product-artifact.mjs verify candidate candidate
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install browser measurement dependencies
+        working-directory: candidate
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Test unchanged comparison and seeded regression controls
-        working-directory: coordinator
+
+      - name: Test product comparison with PNG controls
+        working-directory: candidate
         env:
-          NOON_PRODUCT_IMAGE_TESTS: '1'
+          NOON_PRODUCT_IMAGE_TESTS: "1"
         run: node --test web/playground-product-compare-validation.test.mjs
-      - name: Measure predeclared interleaved original-binary cohorts
-        shell: bash
+
+      - name: Recheck executable tutorial corpus
+        working-directory: candidate
+        run: node scripts/manim-tutorial-smoke.mjs
+
+      - name: Recheck retained Text animation
+        working-directory: candidate
+        run: node scripts/retained-text-animation-smoke.mjs
+
+      - name: Recheck playground layout and Reset
+        working-directory: candidate
+        run: node scripts/playground-layout-smoke.mjs
+
+      - name: Recheck release renderer initialization
+        working-directory: candidate
+        env:
+          NOON_RENDERER_SMOKE: "1"
+          NOON_RENDERER_FAILURE_ARTIFACTS: browser-smoke-artifacts/product-gate/renderer-init
         run: |
-          set -euo pipefail
-          # Each cohort uses B/C, C/B, B/C. Rotate cohort order to expose drift.
-          # AB compares original baseline/candidate; BB and CC reuse exactly one
-          # checkout/package in both arms. All 18 runs are mandatory, serial and
-          # use the original cold-pass, warm-up, 2D window and endpoint protocol.
-          for pair in 1 2 3; do
-            case "$pair" in
-              1) cohorts='ab bb cc' ;;
-              2) cohorts='cc ab bb' ;;
-              3) cohorts='bb cc ab' ;;
-            esac
-            order='baseline candidate'
-            if [[ "$pair" == 2 ]]; then order='candidate baseline'; fi
-            for cohort in $cohorts; do
-              position=0
-              for role in $order; do
-                position=$((position + 1))
-                case "$cohort" in
-                  ab) site="$role" ;;
-                  bb) site=baseline ;;
-                  cc) site=candidate ;;
-                esac
-                printf '%s pair=%s position=%s role=%s source=%s\n' "$cohort" "$pair" "$position" "$role" "$site" | tee -a evidence/order.txt
-                NOON_PRODUCT_SITE_ROOT="$GITHUB_WORKSPACE/$site" \
+          rm -rf web/pkg
+          rm -f web/python-worker.js web/runtime-build-identity.json web/ci-artifact.json web/ci-Cargo.lock
+          rm -f web/python/compat-bundle.*.json
+          cp -a ../candidate-fixture/. web/
+          node .github/ci/product-artifact.mjs verify candidate-fixture .
+          node scripts/renderer-init-failure-smoke.mjs
+
+      - name: Clear renderer-smoke package before restoring production
+        working-directory: candidate
+        run: |
+          rm -rf web/pkg
+          rm -f web/python-worker.js web/runtime-build-identity.json web/ci-artifact.json web/ci-Cargo.lock
+          rm -f web/python/compat-bundle.*.json
+
+      - name: Restore candidate production package for benchmark
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          path: candidate/web
+
+      - name: Reverify candidate production package
+        working-directory: candidate
+        run: node .github/ci/product-artifact.mjs verify candidate .
+
+      - name: Measure three alternating product pairs
+        working-directory: candidate
+        env:
+          NOON_PRODUCT_WORKSPACE: ${{ github.workspace }}
+        run: |
+          # Fixed before measurement: B/C, C/B, B/C. Every run is retained;
+          # a failed run fails the cohort rather than selecting another sample.
+          # Reuse the exact same two packages for both existing gallery lessons.
+          for noon_example in parity-square-and-circle showcase-camera-follows-path; do
+            noon_evidence="browser-smoke-artifacts/product-gate"
+            if [[ "$noon_example" == showcase-camera-follows-path ]]; then noon_evidence="$noon_evidence/camera"; fi
+            for noon_pair in 1 2 3; do
+              noon_order="baseline candidate"
+              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
+              noon_position=0
+              for noon_side in $noon_order; do
+                noon_position=$((noon_position + 1))
+                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
                 NOON_PRODUCT_PORT=4205 \
-                NOON_PRODUCT_EXAMPLE=parity-square-and-circle \
-                NOON_PRODUCT_LABEL="$role" \
-                NOON_PRODUCT_PAIR_INDEX="$pair" \
-                NOON_PRODUCT_PAIR_POSITION="$position" \
-                NOON_PRODUCT_ARTIFACT_DIR="$GITHUB_WORKSPACE/evidence/$cohort/$role/trial-$pair" \
-                  node coordinator/scripts/playground-product-e2e.mjs
+                NOON_PRODUCT_EXAMPLE="$noon_example" \
+                NOON_PRODUCT_LABEL="$noon_side" \
+                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
+                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
+                  node scripts/playground-product-e2e.mjs
               done
             done
           done
-      - name: Compare every cohort under unchanged policy
-        if: ${{ !cancelled() }}
+
+      - name: Compare product behavior
+        working-directory: candidate
         env:
-          NOON_PRODUCT_MAX_LATENCY_RATIO: '1.25'
-          NOON_PRODUCT_LATENCY_SLACK_MS: '350'
-          NOON_PRODUCT_MIN_FPS_RATIO: '0.80'
-          NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO: '0.015'
-        shell: bash
+          NOON_PRODUCT_MAX_LATENCY_RATIO: "1.25"
+          NOON_PRODUCT_LATENCY_SLACK_MS: "350"
+          NOON_PRODUCT_MIN_FPS_RATIO: "0.80"
+          NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO: "0.015"
         run: |
-          status=0
-          for cohort in ab bb cc; do
-            node coordinator/scripts/playground-product-compare.mjs "evidence/$cohort/baseline" "evidence/$cohort/candidate" --pairs 3 || status=1
-          done
-          exit "$status"
-      - name: Retain all original-binary control evidence
+          node scripts/playground-product-compare.mjs \
+            browser-smoke-artifacts/product-gate/baseline \
+            browser-smoke-artifacts/product-gate/candidate --pairs 3
+          node scripts/playground-product-compare.mjs \
+            browser-smoke-artifacts/product-gate/camera/baseline \
+            browser-smoke-artifacts/product-gate/camera/candidate --pairs 3
+
+      - name: Upload product regression evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: pr1882-original-binary-controls-${{ github.run_attempt }}
-          path: evidence
+          name: playground-product-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          path: candidate/browser-smoke-artifacts/product-gate
           if-no-files-found: error
           retention-days: 14

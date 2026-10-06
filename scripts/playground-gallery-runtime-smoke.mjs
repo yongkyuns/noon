@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import playwright from 'playwright';
-import { disableAuthoringJspi, playgroundLaunchOptions } from './playground-browser-support.mjs';
+import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
@@ -25,19 +26,25 @@ await mkdir(artifacts, { recursive: true });
 let server, browser, runtimeCache;
 const startedAt = performance.now();
 const results = [];
-async function captureWebKitFailure(name) {
-  if (browserName !== 'webkit' || process.platform !== 'darwin' || !process.env.CI) return null;
-  // macOS launches WebContent/GPU XPC services under launchd, outside Node's
-  // process tree. On the isolated CI host, restrict sampling to this Playwright
-  // installation; never sample the system Safari or another installed WebKit.
+const nativeFailureDiagnostics = browserName === 'webkit' && process.platform === 'darwin' &&
+  process.env.GITHUB_ACTIONS === 'true';
+async function webKitProcesses() {
+  if (!nativeFailureDiagnostics) return [];
   const exec = promisify(execFile);
   const installation = `${path.dirname(playwright.webkit.executablePath())}${path.sep}`;
+  const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5000, maxBuffer: 1024 * 1024 });
+  return stdout.split('\n').flatMap(line => {
+    const match = line.trim().match(/^(\d+)\s+(.+)$/);
+    return match?.[2].startsWith(installation) ? [{ pid: match[1], executable: match[2] }] : [];
+  });
+}
+async function captureWebKitFailure(name) {
+  if (!nativeFailureDiagnostics) return null;
+  // macOS launches WebContent/GPU XPC services under launchd, outside Node's
+  // process tree. Restrict evidence to this Playwright installation on CI.
+  const exec = promisify(execFile);
   try {
-    const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5000, maxBuffer: 1024 * 1024 });
-    const processes = stdout.split('\n').flatMap(line => {
-      const match = line.trim().match(/^(\d+)\s+(.+)$/);
-      return match?.[2].startsWith(installation) ? [{ pid: match[1], executable: match[2] }] : [];
-    }).slice(0, 4);
+    const processes = (await webKitProcesses()).slice(0, 4);
     return await Promise.all(processes.map(async entry => {
       const file = `${name}-process-${entry.pid}.txt`;
       try {
@@ -109,6 +116,8 @@ try {
   let next = 0;
   async function runCase(caseBrowser, { entry, noJspi }) {
     const caseStartedAt = performance.now();
+    const caseStartedWallMs = Date.now();
+    let nativeProcesses = [];
     const context = await caseBrowser.newContext({ ...options });
     await runtimeCache.install(context);
     if (noJspi) await disableAuthoringJspi(context);
@@ -174,6 +183,9 @@ try {
         (async () => {
           await page.goto(new URL(`index.html?example=${encodeURIComponent(entry.id)}`, base).href,
             { waitUntil: 'domcontentloaded', timeout: 30000 });
+          // Remember the content process while alive; post-crash sampling cannot
+          // find it. This Node-side observation does not query scene/runtime state.
+          try { nativeProcesses = await webKitProcesses(); } catch { /* Evidence unavailable. */ }
           await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
           let completed = false;
           // Longer authored examples can run materially slower than real time in Firefox CI.
@@ -322,6 +334,13 @@ try {
       // Capture outside the browser protocol: even page.evaluate can be stuck.
       // Failure remains a failure regardless of whether stack collection works.
       result.failureDiagnostics.nativeSamples = await captureWebKitFailure(name);
+      if (nativeFailureDiagnostics) {
+        result.failureDiagnostics.nativeCrashReports = await collectWebKitCrashReports({
+          directories: [path.join(homedir(), 'Library/Logs/DiagnosticReports'), '/Library/Logs/DiagnosticReports'],
+          pids: nativeProcesses.map(entry => Number(entry.pid)), startedAtMs: caseStartedWallMs,
+          endedAtMs: Date.now(), artifacts, prefix: name,
+        });
+      }
     } finally {
       clearTimeout(caseTimer);
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});
