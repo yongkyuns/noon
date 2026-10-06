@@ -350,6 +350,23 @@ impl WasmMeshFamilyOptions {
     pub fn len(&self) -> usize {
         self.options.len()
     }
+    /// Stage one shared local-+Z axial pose on every family member before
+    /// semantic publication. Direction and offset validation is Rust-owned.
+    #[wasm_bindgen(js_name = setAxialPose)]
+    pub fn set_axial_pose(&mut self, direction: &[f64], offset: f64) -> Result<(), JsValue> {
+        let transform =
+            SemanticWorldTransform3D::from_axial_direction(vec3(direction, "direction")?, offset)
+                .ok_or_else(|| {
+                invalid(
+                    "spatial.invalid_direction",
+                    "axial pose requires a finite nonzero direction and finite offset",
+                )
+            })?;
+        for options in &mut self.options {
+            options.transform = transform;
+        }
+        Ok(())
+    }
     pub(crate) fn retain_surface_roles(&mut self) -> Result<(), JsValue> {
         if self.options.len() != self.cells.len() {
             return Err(invalid(

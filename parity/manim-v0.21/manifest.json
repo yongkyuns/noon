@@ -1197,6 +1197,36 @@
       "notes": "The same default Sphere/Torus constructors and camera profile run through the Python worker; both shapes retain Manim Surface default shading, checkerboard, and stroke."
     },
     {
+      "id": "spatial-surface-cone-bodies-direct",
+      "scene": "CairoConeBodies",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 0.0,
+      "expected_object_count": 2049,
+      "sample_times": [0.0],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "direct_factory": "createDirectSpatialSurfaceConeBodiesSmokeRenderer",
+      "notes": "Static paired Cairo Surface-family Cone bodies: pinned 32x32 default Cone plus a tilted u_min=0.2 partial body, both with the default opaque fill, Surface border and Cairo shading."
+    },
+    {
+      "id": "spatial-surface-cone-bodies-worker",
+      "scene": "CairoConeBodies",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "noon_source": "web/python/examples/noon_spatial_surface.py",
+      "expected_duration": 0.0,
+      "expected_object_count": 2049,
+      "sample_times": [0.0],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Python worker counterpart of the static default and tilted partial Cairo-shaded Cone body families."
+    },
+    {
       "id": "spatial-primitives-direct",
       "scene": "SpatialPrimitives",
       "source": "parity/manim-v0.21/spatial_primitives.py",

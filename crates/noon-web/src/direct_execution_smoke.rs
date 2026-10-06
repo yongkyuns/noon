@@ -223,6 +223,16 @@ pub async fn create_direct_spatial_surface_sphere_torus_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Paired default and tilted partial Cairo-shaded Cone Surface families.
+#[wasm_bindgen(js_name = createDirectSpatialSurfaceConeBodiesSmokeRenderer)]
+pub async fn create_direct_spatial_surface_cone_bodies_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::spatial_surface::cairo_cone_bodies_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Point-lit surface and light-only world track through the direct retained renderer.
 #[wasm_bindgen(js_name = createDirectSpatialSurfaceLightingSmokeRenderer)]
 pub async fn create_direct_spatial_surface_lighting_smoke_renderer(
