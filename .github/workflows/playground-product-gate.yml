@@ -45,12 +45,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
-      baseline-sha: ${{ steps.comparison-base.outputs.base-sha }}
       baseline-artifact: ${{ steps.baseline-artifact.outputs.artifact-id }}
       candidate-artifact: ${{ steps.candidate-artifact.outputs.artifact-id }}
       candidate-fixture-artifact: ${{ steps.candidate-fixture-artifact.outputs.artifact-id }}
+      baseline-sha: ${{ steps.sources.outputs.baseline-sha }}
+      candidate-sha: ${{ steps.sources.outputs.candidate-sha }}
+      head-sha: ${{ steps.sources.outputs.head-sha }}
+      event-base-sha: ${{ steps.sources.outputs.event-base-sha }}
     env:
-      NOON_PRODUCT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       RUSTC_WRAPPER: sccache
@@ -68,25 +70,21 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@v7
         with:
-          path: candidate
+          ref: ${{ github.sha }}
           fetch-depth: 2
+          path: candidate
 
-      - name: Resolve the baseline actually included in the tested merge
-        id: comparison-base
+      - name: Pin tested merge and actual baseline
+        id: sources
         env:
-          NOON_CANDIDATE_SHA: ${{ github.sha }}
-        run: |
-          node candidate/.github/ci/product-baseline.mjs candidate "$NOON_CANDIDATE_SHA" "$NOON_PRODUCT_HEAD_SHA" >> "$GITHUB_OUTPUT"
+          NOON_PRODUCT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          NOON_PRODUCT_EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node candidate/.github/ci/product-artifact.mjs sources candidate
 
-      - name: Export the immutable comparison baseline
-        env:
-          NOON_MATCHED_BASE_SHA: ${{ steps.comparison-base.outputs.base-sha }}
-        run: echo "NOON_PRODUCT_BASE_SHA=$NOON_MATCHED_BASE_SHA" >> "$GITHUB_ENV"
-
-      - name: Checkout PR base
+      - name: Checkout tested merge first parent
         uses: actions/checkout@v7
         with:
-          ref: ${{ steps.comparison-base.outputs.base-sha }}
+          ref: ${{ steps.sources.outputs.baseline-sha }}
           path: baseline
 
       - name: Test CI artifact contracts
@@ -234,6 +232,9 @@ jobs:
     timeout-minutes: 30
     env:
       NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
+      NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
+      NOON_PRODUCT_HEAD_SHA: ${{ needs.build.outputs.head-sha }}
+      NOON_PRODUCT_EVENT_BASE_SHA: ${{ needs.build.outputs.event-base-sha }}
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "0"
       NOON_RENDERER_SMOKE: "0"
@@ -243,12 +244,14 @@ jobs:
           NOON_PRODUCT_BUILD_RESULT: ${{ needs.build.result }}
         run: test "$NOON_PRODUCT_BUILD_RESULT" = success
 
-      - name: Checkout candidate
+      - name: Checkout producer candidate
         uses: actions/checkout@v7
         with:
+          ref: ${{ needs.build.outputs.candidate-sha }}
+          fetch-depth: 2
           path: candidate
 
-      - name: Checkout PR base
+      - name: Checkout producer baseline
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.build.outputs.baseline-sha }}

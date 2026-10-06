@@ -14,7 +14,7 @@ const DURATION: f64 = 1.0;
 const NEAR: f64 = 0.1;
 const FAR: f64 = 30.0;
 
-/// One explicit capped Line3D tube and one wound triangular indexed mesh.
+/// A capped Line3D tube, a triangular mesh, and oriented Cylinder/Cone poses.
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
     scene
@@ -57,6 +57,37 @@ pub fn session() -> Result<ExecutionSession, String> {
         .mesh(MeshOptions::new(triangle_geometry).with_style(opaque(Color::BLUE)))
         .map_err(|error| error.to_string())?;
     scene.add(&triangle).map_err(|error| error.to_string())?;
+
+    for (geometry, direction, offset, placement, color) in [
+        (
+            crate::cylinder_mesh(0.2, 1.1, 16),
+            SemanticVec3::new(1.0, 2.0, 1.0),
+            -0.55,
+            SemanticVec3::new(-1.2, 0.8, 0.0),
+            Color::GREEN,
+        ),
+        (
+            crate::cone_mesh(0.25, 0.9, 16),
+            SemanticVec3::new(-2.0, 1.0, -1.0),
+            -0.9,
+            SemanticVec3::new(1.2, 0.8, 0.0),
+            Color::YELLOW,
+        ),
+    ] {
+        let mut pose = SemanticWorldTransform3D::from_axial_direction(direction, offset)
+            .ok_or("invalid axial primitive pose")?;
+        pose.translation.x += placement.x;
+        pose.translation.y += placement.y;
+        pose.translation.z += placement.z;
+        let object = scene
+            .mesh(
+                MeshOptions::new(geometry.map_err(|error| error.to_string())?)
+                    .with_transform(pose)
+                    .with_style(opaque(color)),
+            )
+            .map_err(|error| error.to_string())?;
+        scene.add(&object).map_err(|error| error.to_string())?;
+    }
 
     let triangle_rotation =
         SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.4)
@@ -135,7 +166,7 @@ mod tests {
     #[test]
     fn public_line_and_explicit_triangle_share_the_native_execution_timeline() {
         let mut session = session().unwrap();
-        assert_eq!(session.frame().objects.len(), 3);
+        assert_eq!(session.frame().objects.len(), 5);
         assert_eq!(
             session.wake_state().timeline(),
             noon_runtime::TimelineWakeState::Continuous
@@ -165,5 +196,9 @@ mod tests {
         session.advance_to(DURATION).unwrap();
         assert_eq!(rows(&session).0.translation.z, 0.25);
         assert!((rows(&session).1.rotation.components()[2] - 0.2_f64.sin()).abs() < 1.0e-12);
+        let forward = session.frame().clone();
+        session.seek(0.5).unwrap();
+        session.seek(DURATION).unwrap();
+        assert_eq!(session.frame(), &forward);
     }
 }

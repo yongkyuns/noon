@@ -1,4 +1,4 @@
-"""Pinned Manim counterpart to Noon's retained Line3D/polyhedron scene."""
+"""Pinned Manim counterpart to Noon's retained spatial primitives scene."""
 
 import math
 import numpy as np
@@ -23,7 +23,16 @@ class SpatialPrimitives(ThreeDScene):
             np.array([1.35, 1.0, 0.25]),
             fill_color=BLUE, fill_opacity=1, stroke_width=0, shade_in_3d=False,
         )
-        self.add(line, triangle)
+        cylinder = Cylinder(
+            radius=0.2, height=1.1, direction=np.array([1, 2, 1]), resolution=16,
+            fill_color=GREEN, checkerboard_colors=False, stroke_width=0,
+            shade_in_3d=False,
+        ).shift((-1.2, 0.8, 0))
+        cone = Cone(
+            base_radius=0.25, height=0.9, direction=np.array([-2, 1, -1]), show_base=True,
+            resolution=16, fill_color=YELLOW, stroke_width=0, shade_in_3d=False,
+        ).shift((1.2, 0.8, 0))
+        self.add(line, triangle, cylinder, cone)
         self.play(
             line.animate.shift(0.25 * OUT),
             triangle.animate.rotate(0.4, axis=UP, about_point=ORIGIN),

@@ -316,13 +316,15 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         scene.add_world_mobjects.assert_called_with(replacement)
         scene._edit_membership.assert_called_once_with("remove", (light,))
 
-    def test_cylinder_requires_closed_z_profile_and_centers_native_mesh(self):
+    def test_cylinder_centers_and_orients_inert_native_mesh_before_admission(self):
         with patch.object(Mesh3D, "cylinder", return_value=self.mesh) as factory:
-            cylinder = spatial.Cylinder(height=4, resolution=(16, 16),
+            cylinder = spatial.Cylinder(height=4, direction=(1, -2, 3), resolution=(16, 16),
                                         checkerboard_colors=False, stroke_width=0,
                                         shade_in_3d=False)
         factory.assert_called_once()
-        self.mesh.shift.assert_called_once_with((0, 0, -2.0))
+        self.assertEqual(factory.call_args.kwargs["direction"], (1, -2, 3))
+        self.assertEqual(factory.call_args.kwargs["axial_offset"], -2.0)
+        self.mesh.shift.assert_not_called()
         self.assertIs(cylinder._semantic_handle, self.mesh._semantic_handle)
 
     def test_cairo_decorations_and_non_native_options_fail_explicitly(self):
@@ -339,8 +341,6 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
 
     def test_axial_direction_caps_opacity_and_strokes_are_not_silently_approximated(self):
         with patch.object(Mesh3D, "cylinder") as factory:
-            with self.assertRaises(NotImplementedError):
-                spatial.Cylinder(direction=(0, 1, 0))
             with self.assertRaises(NotImplementedError):
                 spatial.Cylinder(show_ends=False)
             with self.assertRaises(NotImplementedError):
@@ -370,11 +370,13 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
 
     def test_capped_cone_profile_is_explicit_and_uses_native_mesh(self):
         with patch.object(Mesh3D, "cone", return_value=self.mesh) as factory:
-            cone = spatial.Cone(show_base=True, height=2, resolution=12,
+            cone = spatial.Cone(show_base=True, height=2, direction=(-1, 2, -3), resolution=12,
                                 stroke_width=0, shade_in_3d=False)
         factory.assert_called_once()
         self.assertEqual(factory.call_args.args[:3], (1.0, 2.0, 12))
-        self.mesh.shift.assert_called_once_with((0, 0, -2.0))
+        self.assertEqual(factory.call_args.kwargs["direction"], (-1, 2, -3))
+        self.assertEqual(factory.call_args.kwargs["axial_offset"], -2.0)
+        self.mesh.shift.assert_not_called()
         self.assertIs(cone._semantic_handle, self.mesh._semantic_handle)
 
 

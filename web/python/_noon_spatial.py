@@ -1,7 +1,7 @@
 """Typed indexed-mesh authoring on Noon's ordinary Scene and Runtime.
 
 These native mesh conventions are explicit: opaque fills, quaternion poses,
-z-axis cylinders/cones from zero to height, and UV cell resolution. Python
+local +Z cylinders/cones from zero to height, and UV cell resolution. Python
 evaluates an explicitly supplied sampling callback at construction; Rust owns
 sampling coordinates, topology, normals, transforms, and playback.
 """
@@ -150,11 +150,21 @@ class Mesh3D(_WorldMobject):
             self._canonical_live_target_context = context
 
     @classmethod
-    def _solid(cls, kind, values, options):
+    def _solid(cls, kind, values, options, *, axial_pose=None):
         _mesh_arguments(options)
+        if axial_pose is not None:
+            direction, offset = axial_pose
+            direction, offset = _vector(direction), float(offset)
         if _mesh_options is None:
             raise RuntimeError("mesh construction requires the shared Rust authoring host")
-        return cls(engine_call(getattr(_mesh_options, kind), *values), **options)
+        candidate = engine_call(getattr(_mesh_options, kind), *values)
+        if axial_pose is not None:
+            try:
+                engine_call(candidate.setAxialPose, _bulk(direction), offset)
+            except BaseException:
+                candidate.free()
+                raise
+        return cls(candidate, **options)
 
     @classmethod
     def sphere(cls, radius=1, resolution=(32, 16), **options):
@@ -187,12 +197,18 @@ class Mesh3D(_WorldMobject):
         return cls._solid("prism", _vector(dimensions), options)
 
     @classmethod
-    def cylinder(cls, radius=1, height=2, segments=32, **options):
-        return cls._solid("cylinder", (float(radius), float(height), _count(segments)), options)
+    def cylinder(cls, radius=1, height=2, segments=32, *, direction=(0, 0, 1),
+                 axial_offset=0, **options):
+        """Orient the retained local +Z cylinder after applying a local Z offset."""
+        return cls._solid("cylinder", (float(radius), float(height), _count(segments)),
+                          options, axial_pose=(direction, axial_offset))
 
     @classmethod
-    def cone(cls, radius=1, height=2, segments=32, **options):
-        return cls._solid("cone", (float(radius), float(height), _count(segments)), options)
+    def cone(cls, radius=1, height=2, segments=32, *, direction=(0, 0, 1),
+             axial_offset=0, **options):
+        """Orient the retained local +Z cone after applying a local Z offset."""
+        return cls._solid("cone", (float(radius), float(height), _count(segments)),
+                          options, axial_pose=(direction, axial_offset))
 
     @classmethod
     def torus(cls, major_radius=3, minor_radius=1, resolution=(32, 16), **options):

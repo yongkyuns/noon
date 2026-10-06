@@ -206,16 +206,21 @@ in one producer, preserving the job-local compiler cache between fresh source
 builds. Its measurement job downloads the producer's immutable artifact IDs and
 verifies each checkout SHA, release feature set, compiler pin, resolved lockfile,
 and runtime-file hashes using the shared WASM artifact contract. The candidate is
-GitHub's tested PR merge commit; the baseline is the event's base SHA.
+GitHub's exact tested PR merge commit; the baseline is that merge's actual first
+parent. The producer checks its second parent against the requested PR head and
+records all three commits plus the event base in each product manifest. An older
+event base remains provenance and is never substituted for the actual baseline.
+Comparison retries check out the producer's pinned commits and verify the recorded
+pair alongside package contents, so a moving PR ref cannot change the comparison.
 
-The comparison uses three serial pairs in a fixed B/C, C/B, B/C order. Each
+The comparison uses seven serial pairs with fixed alternating B/C, C/B order. Each
 browser run completes a cold pass before measuring a warm pass. The existing
 square/circle fixture scores authored seconds 1–4 with a half-second endpoint
 hold. The curated camera lesson runs verbatim on both packages and scores only
 its following segment, authored seconds 3.7–6.9. Its existing 0.4-second hold
 exposes that endpoint before camera restoration and source completion at 9.8
 seconds; setup, restoration and holds are excluded from FPS. Both workloads
-reuse the same downloaded packages and three-pair protocol, with no extra build.
+reuse the same downloaded packages and seven-pair protocol, with no extra build.
 The preview stays visible during measurement. The sampler sends read-only queries
 through the existing renderer metrics channel, consumes only its test-owned replies,
 and never adds aggregate source-owner queries to the callback lane. Replayable
@@ -244,14 +249,22 @@ the window. No GPU timestamp queries or source-owner work are added. Reports ret
 raw observations and the comparison recomputes these costs before image decoding.
 Each run hashes the locally derived generated artifact inventory against its
 producer manifest and reports uncompressed file bytes, excluding the dependency
-lockfile. This is package size, not compressed HTTP transfer size. All three trials
+lockfile. This is package size, not compressed HTTP transfer size. All seven trials
 must retain the same package inventory and sizes. These costs are descriptive;
-the existing latency/FPS/visual thresholds remain unchanged.
+the strict host qualification separately evaluates paired render-call CPU cost.
+It is not a measurement of total GPU or system cost.
 
-The existing latency/FPS thresholds apply to arithmetic means across all three
-runs. Every raw sample, per-run report and fixed-frame image is retained. The
-comparison reports ranges and percentiles as dispersion, and checks every pair's
-image independently. Dependency-free preflight runs invalid-report/cohort controls;
+The broad product latency/FPS thresholds apply to arithmetic means across all
+seven runs. The strict host qualification additionally requires the paired 95%
+FPS ratio interval to have a lower bound of at least 0.97. An interval wholly
+below 0.97 demonstrates a regression; overlap is inconclusive and still blocks
+sign-off. Render-call CPU cost is independent: a passing CPU result cannot clear
+inconclusive FPS. Fixed-work host comparisons retain their 1.03 point-ratio and
+1.05 upper-confidence limits. Diagnostic profiles and same-package worker-history
+controls run after the prescribed timings and cannot replace their verdicts.
+Every raw sample, per-run report and fixed-frame image is retained. The comparison
+reports ranges and percentiles as dispersion, and checks every pair's image
+independently. Dependency-free preflight runs invalid-report/cohort controls;
 Product Gate explicitly enables the PNG/seeded-regression controls after its
 existing dependency setup. This is software-WebGL qualification, not physical-device
 60 FPS evidence. Pinned cumulative anchors and broader representative workloads

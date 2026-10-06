@@ -1034,14 +1034,14 @@
       "source": "parity/manim-v0.21/spatial_primitives.py",
       "direct_factory": "createDirectSpatialPrimitivesSmokeRenderer",
       "expected_duration": 1.0,
-      "expected_object_count": 3,
+      "expected_object_count": 5,
       "sample_times": [0.0, 0.5, 0.9666666666666667],
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       },
-      "notes": "Native and direct-WASM ordinary Scene publication of the bounded opaque Line3D tube and explicit one-face triangular mesh, matched to the pinned Manim source using the existing spatial mesh raster tolerance."
+      "notes": "Native and direct-WASM ordinary Scene publication of the bounded opaque Line3D tube, explicit one-face triangular mesh, and oriented Cylinder/Cone, matched to the pinned Manim source using the existing spatial mesh raster tolerance."
     },
     {
       "id": "spatial-primitives-worker",
@@ -1049,14 +1049,14 @@
       "source": "parity/manim-v0.21/spatial_primitives.py",
       "noon_source": "web/python/examples/noon_spatial_primitives.py",
       "expected_duration": 1.0,
-      "expected_object_count": 3,
+      "expected_object_count": 5,
       "sample_times": [0.0, 0.5, 0.9666666666666667],
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       },
-      "notes": "The same Line3D and explicit Mesh3D.polyhedron scene through the actual async Python worker, retained geometry bridge, and existing renderer; all line mesh defaults that affect geometry/material are set explicitly."
+      "notes": "The same Line3D, Mesh3D.polyhedron, and oriented Cylinder/Cone scene through the actual async Python worker, retained geometry bridge, and existing renderer; all line mesh defaults that affect geometry/material are set explicitly."
     },
     {
       "id": "mathtex-substrings",

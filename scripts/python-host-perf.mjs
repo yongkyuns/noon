@@ -16,8 +16,7 @@ import { diagnoseWorkerHistory } from "./python-host-perf-history.mjs";
 import { stringifyEvidence } from "./python-host-report.mjs";
 import { PERF_PROTOCOL as protocol, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
 
-import { productConfig, validateProductEnvironment } from "../.github/ci/product-artifact.mjs";
-import { verify } from "../.github/ci/wasm-build.mjs";
+import { verifyProductArtifact } from "../.github/ci/product-artifact.mjs";
 
 const roots = ["BASELINE", "CANDIDATE"].map(side => {
   assert.ok(process.env[`NOON_PERF_${side}_ROOT`], `missing ${side} source`);
@@ -32,15 +31,12 @@ const profiles = [[], []], diagnostics = [];
 const localProfiles = [[], []], localDiagnostics = [];
 let browser;
 try {
-  const sources = [process.env.NOON_PRODUCT_BASE_SHA, process.env.GITHUB_SHA];
   for (const [side, root] of roots.entries()) {
     const role = side === 0 ? "baseline" : "candidate";
-    assert.match(sources[side] ?? "", /^[0-9a-f]{40}$/, `missing ${role} source SHA`);
-    const env = { ...process.env, GITHUB_SHA: sources[side] };
-    validateProductEnvironment(env, role);
-    // Revalidate bytes, inventory, lockfile, source and recipe here as well as in
-    // CI: standalone invocation must not trust the artifact's claimed identity.
-    identities.push(await verify(root, env, productConfig(role)));
+    // The producer pair is immutable even on retries with a newer event/ref.
+    // Revalidate the pair, bytes, inventory, lockfile, source and build recipe;
+    // standalone invocation cannot trust an artifact's claimed identity.
+    identities.push(await verifyProductArtifact(root, process.env, role));
   }
   changedBuildInputs = assertComparableArtifacts(identities);
   browser = await playwright.chromium.launch({ headless: true, args: browserArgs("webgl") });

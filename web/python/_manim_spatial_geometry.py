@@ -83,15 +83,6 @@ def _take_mesh(self, mesh):
         self._canonical_live_target_context = context
 
 
-def _axis_z(direction, name):
-    try:
-        direction = tuple(float(value) for value in direction)
-    except (TypeError, ValueError) as error:
-        raise TypeError(f"{name} direction must be a numeric 3-vector") from error
-    if len(direction) != 3 or direction != (0.0, 0.0, 1.0):
-        raise NotImplementedError(f"{name} currently supports only the +Z direction")
-
-
 class Sphere(_Mesh3D):
     """Full opaque sphere mesh profile.
 
@@ -192,10 +183,10 @@ class Torus(_Mesh3D):
 
 
 class Cylinder(_Mesh3D):
-    """Closed +Z cylinder; Surface checkerboard/stroke/shading defaults are rejected.
+    """Closed oriented cylinder; Surface checkerboard/stroke/shading defaults are rejected.
 
-    Native caps and centered placement are retained; partial sweeps and arbitrary
-    directions are unsupported.
+    Rust owns the finite nonzero direction and centered placement. Partial
+    sweeps and open ends remain unsupported.
     """
 
     def __init__(self, radius=1, height=2, direction=(0, 0, 1),
@@ -204,7 +195,6 @@ class Cylinder(_Mesh3D):
                  checkerboard_colors=_DEFAULT_CHECKERBOARD, stroke_width=0.5,
                  shade_in_3d=True, **kwargs):
         _reject(kwargs, ())
-        _axis_z(direction, "Cylinder")
         if show_ends is not True:
             raise NotImplementedError("the retained cylinder mesh is closed at both ends")
         if tuple(v_range) != (0, 2 * math.pi):
@@ -222,13 +212,13 @@ class Cylinder(_Mesh3D):
                 raise NotImplementedError("Cylinder requires equal UV resolution counts")
             segments = _sample_count(resolution[0], "Cylinder")
         mesh = _Mesh3D.cylinder(float(radius), float(height), segments,
+                                direction=direction, axial_offset=-float(height) / 2,
                                 color=_color(fill_color))
-        mesh.shift((0, 0, -float(height) / 2))
         _take_mesh(self, mesh)
 
 
 class Cone(_Mesh3D):
-    """Capped +Z cone profile; the pinned open-base default is explicitly rejected."""
+    """Capped oriented cone; the pinned open-base default is explicitly rejected."""
 
     def __init__(self, base_radius=1, height=1, direction=(0, 0, 1),
                  show_base=False, v_range=(0, 2 * math.pi), u_min=0,
@@ -236,7 +226,6 @@ class Cone(_Mesh3D):
                  fill_color=_base.BLUE_D, fill_opacity=1, stroke_width=0.5,
                  shade_in_3d=True, **kwargs):
         _reject(kwargs, ())
-        _axis_z(direction, "Cone")
         if show_base is not True:
             raise NotImplementedError("the pinned open-base Cone profile is not supported; pass show_base=True for a capped mesh")
         if tuple(v_range) != (0, 2 * math.pi) or float(u_min) != 0.0:
@@ -254,9 +243,8 @@ class Cone(_Mesh3D):
                 raise NotImplementedError("Cone requires equal UV resolution counts")
             segments = pair[0]
         mesh = _Mesh3D.cone(float(base_radius), float(height), segments,
+                            direction=direction, axial_offset=-float(height),
                             color=_color(fill_color))
-        # Manim's +Z cone has its apex at z=0 and base at z=-height.
-        mesh.shift((0, 0, -float(height)))
         _take_mesh(self, mesh)
 
 
