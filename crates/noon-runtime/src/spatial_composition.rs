@@ -144,9 +144,7 @@ impl SceneInstance {
                 continue;
             };
             for point in points {
-                let Some(p) = world.transform_point(*point) else {
-                    return None;
-                };
+                let p = world.transform_point(*point)?;
                 min.x = min.x.min(p.x);
                 min.y = min.y.min(p.y);
                 min.z = min.z.min(p.z);
