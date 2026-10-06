@@ -236,12 +236,13 @@ DJ must not:
 
 This is an evidence index, not a change to #254's required case list or its
 acceptance bar. A source fixture or passing unit test does not constitute
-ManimCE semantic/raster/timing parity. No case below is recorded as parity-
-qualified here; browser and cross-backend gates must be recorded separately.
+ManimCE semantic/raster/timing parity. FollowingGraphCamera is qualified by
+#1882; the remaining six cases still require their own browser and cross-backend
+evidence.
 
 | Required pinned case | Current representative implementation/evidence | Owner and status |
 |---|---|---|
-| `FollowingGraphCamera` | Executable Rust/native, direct-WASM, and Python counterparts now use default 2D Axes, callable graph queries, smoothed plotting, MoveAlongPath, and a camera updater. `special-camera-qualification.mjs` compares intermediate and final frames through the shared runtime. | #254 follow-up, B6/#89 owner; the source pairing is a capability candidate. Exact pinned ManimCE semantic/raster qualification remains deferred; default Axes is no longer a missing dependency. Opaque callbacks require a fresh authoring run for replay. |
+| `FollowingGraphCamera` | #1882 qualified the untouched pinned source with intermediate camera/object state, exact timing and reviewed WebGPU/WebGL raster comparisons. Merge `886ede3e2243d621cda5823b30a7911f4e382417` is published. | #254, B6/#89 owner; exact source/state/raster qualification passed. Opaque callbacks require a fresh authoring run; callback replay is explicitly denied. Software-GPU results do not establish physical-device pacing. |
 | `MovingZoomedSceneAround` | Executable Rust/direct-WASM and Python counterparts compose the retained inset relation, grayscale image, native text, live scaling, reverse Restore, and finite UpdateFromFunc intervals. The camera gate includes both pop-out phases. | #254 follow-up, B6/#89 owner; exact pinned raster qualification remains deferred for Cairo text/font and inset-compositing equivalence. Native Mono text is an explicit profile. Opaque callbacks require a fresh authoring run for replay. |
 | `FixedInFrameMObjectTest` | `spatial-camera-labels-direct`/`worker` qualify fixed-frame and fixed-orientation composition during camera motion on WebGPU/WebGL. The supplementary camera pair uses the bounded ThreeDAxes profile and native text. | #254 follow-up, D4 owner; exact default Cairo axes/shading and font appearance remain explicitly deferred. Mixed composition itself uses the qualified shared lane. |
 | `ThreeDLightSourcePosition` | Shared Surface UV cell families support atomic checkerboard paint and retained exterior borders. The supplementary camera pair exercises point-lit cells; `noon_spatial_surface_lighting.py` and the spatial showcase retain the existing moving-light/resource-locality evidence. | #254 follow-up, D3 owner; Cairo light-source/shading parity remains explicitly deferred. Native point-lit material is a separate supported profile, not Cairo emulation. |

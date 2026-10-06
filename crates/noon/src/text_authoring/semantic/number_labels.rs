@@ -145,18 +145,15 @@ fn publish(
 fn add_coordinate_families(
     store: Rc<RefCell<SemanticStore>>,
     frame: crate::AxesFrame,
-    x_parent: SemanticNodeId,
-    y_parent: SemanticNodeId,
-    x_numbers: Option<&[f64]>,
-    y_numbers: Option<&[f64]>,
-    x_options: &NumberLabelOptions,
-    y_options: &NumberLabelOptions,
+    parents: [SemanticNodeId; 2],
+    numbers: [Option<&[f64]>; 2],
+    options: [&NumberLabelOptions; 2],
 ) -> Result<[MobjectFamily; 2], Error> {
-    let x_labels = prepare(frame.x(), x_numbers, x_options)?;
-    let y_labels = prepare(frame.y(), y_numbers, y_options)?;
+    let x_labels = prepare(frame.x(), numbers[0], options[0])?;
+    let y_labels = prepare(frame.y(), numbers[1], options[1])?;
     let mut families = publish(
         store,
-        vec![(Some(x_parent), x_labels), (Some(y_parent), y_labels)],
+        vec![(Some(parents[0]), x_labels), (Some(parents[1]), y_labels)],
     )?;
     let y = families.pop().expect("Y label family");
     let x = families.pop().expect("X label family");
@@ -215,12 +212,9 @@ impl ManimAxes {
         add_coordinate_families(
             Rc::clone(self.family().integration_store()),
             frame,
-            x.family().node_id(),
-            y.family().node_id(),
-            x_numbers,
-            y_numbers,
-            x_options,
-            y_options,
+            [x.family().node_id(), y.family().node_id()],
+            [x_numbers, y_numbers],
+            [x_options, y_options],
         )
     }
 }
@@ -241,12 +235,9 @@ impl ManimNumberPlane {
         add_coordinate_families(
             Rc::clone(self.family().integration_store()),
             frame,
-            x_axis.family().node_id(),
-            y_axis.family().node_id(),
-            x_numbers,
-            y_numbers,
-            x_options,
-            y_options,
+            [x_axis.family().node_id(), y_axis.family().node_id()],
+            [x_numbers, y_numbers],
+            [x_options, y_options],
         )
     }
 }
