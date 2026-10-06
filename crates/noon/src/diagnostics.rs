@@ -153,9 +153,21 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
             })
         })
         .collect::<Vec<_>>();
+    // Observe the same effective camera consumed by rendering, not the authored
+    // frame or a frontend mirror. This remains an opt-in diagnostic read.
+    let camera = session
+        .camera()
+        .map(|camera| {
+            json!({
+                "center": [camera.center.x, camera.center.y],
+                "height": camera.height,
+            })
+        })
+        .unwrap_or(Value::Null);
     json!({
         "engine": "noon", "time": frame.time,
         "publication": session.publication_context(),
+        "camera": camera,
         "present_object_count": objects.iter().filter(|object| object["present"] == true).count(),
         "objects": objects,
     })
@@ -168,6 +180,29 @@ mod tests {
         AnimationOptions, LiveProgramStatus, ManimArrowOptions, MobjectTarget, RateFunction,
         RustHostCallbackTable, Scene,
     };
+
+    #[test]
+    fn debug_capture_observes_effective_camera_without_mutating_publication() {
+        let (mut program, mut callbacks) =
+            crate::example_scenes::following_graph_camera::program().unwrap();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        program.drive_to(&mut callbacks, 0.5).unwrap();
+        let session = program.session();
+        let before = session.publication_context();
+        let expected = session.camera().unwrap();
+        let capture = execution_frame_value(session);
+        assert_eq!(capture["time"], 0.5);
+        assert_eq!(
+            capture["camera"]["center"],
+            json!([expected.center.x, expected.center.y])
+        );
+        assert_eq!(capture["camera"]["height"], json!(expected.height));
+        assert!(expected.height > 4.0 && expected.height < 8.0);
+        assert_eq!(session.publication_context(), before);
+    }
 
     #[test]
     fn spatial_capture_reads_exact_effective_pose_and_light_material() {
