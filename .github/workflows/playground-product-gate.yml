@@ -26,6 +26,7 @@ on:
       - "scripts/playground-product-fps.mjs"
       - "scripts/playground-product-fps.test.mjs"
       - "scripts/python-host-perf*.mjs"
+      - "scripts/paired-product-metrics*.mjs"
       - "scripts/playground-product-compare.mjs"
       - "scripts/renderer-init-failure-smoke.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
