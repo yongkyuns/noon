@@ -157,7 +157,7 @@ pub fn circle_screen_stroke_session() -> Result<ExecutionSession, String> {
         .set_fill(1.0, 1.0, 1.0, 0.0)
         .map_err(|error| error.to_string())?;
     circle
-        .set_stroke(1.0, 1.0, 1.0, 1.0)
+        .set_stroke_color(1.0, 1.0, 1.0, 1.0)
         .map_err(|error| error.to_string())?;
     circle
         .set_stroke_width(0.04)
