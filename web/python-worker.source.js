@@ -1141,68 +1141,32 @@ json.dumps(
 }
 
 async function runCanonicalCallbackPhase(pyodide, sessionId, frame, player) {
-  const dictConstructor = pyodide.globals.get("dict");
-  const globals = dictConstructor();
-  dictConstructor.destroy();
-  globals.set("__noon_callback_session", sessionId);
-  globals.set("__noon_callback_frame_json", JSON.stringify(frame));
-  globals.set("__noon_callback_player", player);
-  try {
-    return await pyodide.runPythonAsync(
-      `
-import json
-import _manim_updaters
-_manim_updaters.run_canonical_callback_phase(
-    int(__noon_callback_session),
-    json.loads(__noon_callback_frame_json),
-    callback_player=__noon_callback_player,
-)
-`,
-      { globals },
-    );
-  } finally {
-    globals.destroy();
-  }
+  return invokeCanonicalCallback(
+    pyodide, "_run_canonical_callback_phase_json", sessionId, JSON.stringify(frame), player,
+  );
 }
 
 async function finishCanonicalCallbackPhase(pyodide, sessionId, frame, committed) {
-  const dictConstructor = pyodide.globals.get("dict");
-  const globals = dictConstructor();
-  dictConstructor.destroy();
-  globals.set("__noon_callback_session", sessionId);
-  globals.set("__noon_callback_frame_json", JSON.stringify(frame));
-  try {
-    await pyodide.runPythonAsync(
-      `
-import json
-import _manim_updaters
-_manim_updaters.${committed ? "complete_canonical_callback_phase" : "discard_canonical_callback_phase"}(
-    int(__noon_callback_session),
-    json.loads(__noon_callback_frame_json),
-)
-`,
-      { globals },
-    );
-  } finally {
-    globals.destroy();
-  }
+  // Wrapper finalization needs phase identity, never the callback read rows.
+  return invokeCanonicalCallback(
+    pyodide, "_finish_canonical_callback_phase_json", sessionId,
+    JSON.stringify({ token: frame.token, region: frame.region }), committed,
+  );
 }
 
 async function releaseCanonicalCallbackSession(pyodide, sessionId) {
-  const dictConstructor = pyodide.globals.get("dict");
-  const globals = dictConstructor();
-  dictConstructor.destroy();
-  globals.set("__noon_callback_session", sessionId);
+  return invokeCanonicalCallback(pyodide, "release_session", sessionId);
+}
+
+async function invokeCanonicalCallback(pyodide, name, ...args) {
+  const callable = pyodide.pyimport(`_manim_updaters.${name}`);
   try {
-    await pyodide.runPythonAsync(
-      `
-import _manim_updaters
-_manim_updaters.release_session(int(__noon_callback_session))
-`,
-      { globals },
-    );
+    // Awaiting the coroutine uses Pyodide's normal event loop, including JSPI
+    // suspension where supported. Pyodide releases the scheduled awaitable;
+    // this scope owns only the callable proxy, with no cross-run cache.
+    return await callable(...args);
   } finally {
-    globals.destroy();
+    callable.destroy();
   }
 }
 

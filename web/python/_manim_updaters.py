@@ -1888,6 +1888,19 @@ def discard_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> 
         session.pending_callback_context = None
 
 
+async def _run_canonical_callback_phase_json(session_id, frame_json, callback_player):
+    """Enter the Pyodide event loop without compiling a script for each phase."""
+    return run_canonical_callback_phase(
+        int(session_id), json.loads(frame_json), callback_player=callback_player
+    )
+
+
+async def _finish_canonical_callback_phase_json(session_id, identity_json, committed):
+    """Finalize the same pinned phase after Rust commit, or discard its wrappers."""
+    finish = complete_canonical_callback_phase if committed else discard_canonical_callback_phase
+    finish(int(session_id), json.loads(identity_json))
+
+
 def _json_phase(value: object) -> str:
     # This is the explicit Pyodide callback boundary. It is never an in-process
     # Rust engine boundary: the semantic store, compiler plan, session and
