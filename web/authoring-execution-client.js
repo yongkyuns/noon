@@ -264,8 +264,8 @@ export class AuthoringExecutionClient {
     return this.#withStablePlayer((player) => player.seek(timeSeconds));
   }
 
-  async advanceTo(timeSeconds) {
-    return this.#withStablePlayer((player) => player.advanceTo(timeSeconds));
+  async advanceTo(timeSeconds, options = {}) {
+    return this.#withStablePlayer((player) => player.advanceTo(timeSeconds, options));
   }
 
   async debugFrame() {

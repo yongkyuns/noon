@@ -5,6 +5,80 @@ import test from "node:test";
 const sharedSource = await readFile(new URL("./python/_noon_source.py", import.meta.url), "utf8");
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
+const callbackEntry = new Function(`${source.slice(
+  source.indexOf("async function runCanonicalCallbackPhase"),
+  source.indexOf("function validateRequest"),
+)}; return { runCanonicalCallbackPhase, finishCanonicalCallbackPhase,
+  releaseCanonicalCallbackSession };`)();
+
+test("callback callable stays owned until suspension settles, then releases", async () => {
+  let resolve;
+  const pending = new Promise(done => { resolve = done; });
+  const calls = [];
+  let destroyed = 0;
+  const callable = (...args) => { calls.push(args); return pending; };
+  callable.destroy = () => { destroyed += 1; };
+  const pyodide = { pyimport(name) {
+    assert.equal(name, "_manim_updaters._run_canonical_callback_phase_json");
+    return callable;
+  } };
+  const frame = { token: { sequence: 2 }, invocations: [{ callback_id: "7" }] };
+  const player = {};
+  const result = callbackEntry.runCanonicalCallbackPhase(pyodide, 3, frame, player);
+  assert.deepEqual(calls, [[3, JSON.stringify(frame), player]]);
+  assert.equal(destroyed, 0);
+  resolve("effective batch");
+  assert.equal(await result, "effective batch");
+  assert.equal(destroyed, 1);
+});
+
+for (const asynchronous of [false, true]) {
+  test(`callback failure releases callable (${asynchronous ? "await" : "invoke"})`, async () => {
+    const failure = new Error("callback failed");
+    let destroyed = 0;
+    const callable = () => {
+      if (asynchronous) return Promise.reject(failure);
+      throw failure;
+    };
+    callable.destroy = () => { destroyed += 1; };
+    await assert.rejects(callbackEntry.runCanonicalCallbackPhase(
+      { pyimport: () => callable }, 3, { token: {} }, {},
+    ), error => error === failure);
+    assert.equal(destroyed, 1);
+  });
+}
+
+test("completion crosses only phase identity and keeps commit/discard distinct", async () => {
+  const calls = [];
+  let destroyed = 0;
+  const callable = (...args) => { calls.push(args); };
+  callable.destroy = () => { destroyed += 1; };
+  const pyodide = { pyimport(name) {
+    assert.equal(name, "_manim_updaters._finish_canonical_callback_phase_json");
+    return callable;
+  } };
+  const frame = { token: { sequence: 2 }, region: 4,
+    get objects() { assert.fail("completion must not traverse callback rows"); } };
+  for (const committed of [true, false]) {
+    await callbackEntry.finishCanonicalCallbackPhase(pyodide, 3, frame, committed);
+  }
+  assert.deepEqual(calls, [true, false].map(committed => [
+    3, JSON.stringify({ token: frame.token, region: 4 }), committed,
+  ]));
+  assert.equal(destroyed, 2);
+});
+
+test("session release invokes Python once and does not retain its callable", async () => {
+  const calls = [];
+  const callable = id => { calls.push(id); };
+  callable.destroy = () => { calls.push("destroy"); };
+  await callbackEntry.releaseCanonicalCallbackSession({ pyimport(name) {
+    assert.equal(name, "_manim_updaters.release_session");
+    return callable;
+  } }, 3);
+  assert.deepEqual(calls, [3, "destroy"]);
+});
+
 test("authoring startup exposes readiness and first semantic Scene context timestamps", () => {
   assert.match(source, /performanceTimeOriginMs:\s*performance\.timeOrigin/);
   assert.match(source, /authoringMilestones\.authoringWorkerReadyAtMs\s*=\s*performance\.now\(\)/);
