@@ -207,7 +207,7 @@ impl TransportSpatialState {
                 })
     }
 
-    fn into_compiled(&self) -> Option<noon_compile::CompiledSpatialState> {
+    fn to_compiled(&self) -> Option<noon_compile::CompiledSpatialState> {
         if !self.is_valid() {
             return None;
         }
@@ -1840,7 +1840,7 @@ fn frame_object(
     content: ObjectContentRef,
 ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
     let spatial = match object.spatial.as_ref() {
-        Some(spatial) => Some(spatial.into_compiled().ok_or(
+        Some(spatial) => Some(spatial.to_compiled().ok_or(
             RetainedExecutionTransportError::InvalidSpatialState(object.slot),
         )?),
         None => None,
@@ -2081,7 +2081,7 @@ mod tests {
         let wire = serde_json::to_vec(&valid).unwrap();
         let decoded: TransportSpatialState = serde_json::from_slice(&wire).unwrap();
         assert_eq!(decoded, valid);
-        let compiled = decoded.into_compiled().unwrap();
+        let compiled = decoded.to_compiled().unwrap();
         assert_eq!(compiled.composition_domain, Domain::FixedOrientation);
         assert_eq!(compiled.spatial_anchor_family, None);
         assert_eq!(compiled.camera_profile, None);
@@ -2096,7 +2096,7 @@ mod tests {
             ..valid.clone()
         };
         assert!(cairo_surface.is_valid());
-        let compiled = cairo_surface.into_compiled().unwrap();
+        let compiled = cairo_surface.to_compiled().unwrap();
         assert_eq!(
             compiled.material,
             noon_core::SemanticSpatialMaterial::CairoSurface
@@ -2165,7 +2165,7 @@ mod tests {
         ];
         for row in invalid {
             assert!(!row.is_valid(), "invalid role/domain combination: {row:?}");
-            assert!(row.into_compiled().is_none());
+            assert!(row.to_compiled().is_none());
         }
     }
 
@@ -2198,7 +2198,7 @@ mod tests {
         let decoded: TransportSpatialState =
             serde_json::from_slice(&serde_json::to_vec(&row).unwrap()).unwrap();
         assert_eq!(decoded, row);
-        let compiled = decoded.into_compiled().unwrap();
+        let compiled = decoded.to_compiled().unwrap();
         assert_eq!(compiled.material, SemanticSpatialMaterial::CairoPath);
         assert_eq!(TransportSpatialState::from_compiled(&compiled), row);
 
