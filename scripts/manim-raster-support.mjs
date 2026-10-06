@@ -163,6 +163,39 @@ export function resolveRasterReferenceSamples(frameTimes, sampleTimes, {
   });
 }
 
+// Sparse playback compares logical checkpoints against the same canonical
+// sequence/hold/terminal resolution used by the pixel qualification runner.
+// The raster report's frame index is a materialized reference index, not a
+// sparse playback-step index, and its time may differ from the requested time
+// by harmless clock rounding.
+export function resolveSharedPlaybackSamples({ fixture, denseSamples, semanticFixture,
+  pngFrameCount, sampleFractions }) {
+  const frameTimes = (semanticFixture.frames ?? []).map(frame => Number(frame.time));
+  const samples = resolveRasterReferenceSamples(frameTimes, fixture.sample_times, {
+    logicalDuration: Number(fixture.expected_duration),
+    terminalState: semanticFixture.terminal_state,
+    terminalPng: semanticFixture.terminal_png,
+    frozenIntervals: semanticFixture.frozen_intervals ?? [],
+    pngFrameCount,
+    semanticFrames: semanticFixture.frames,
+    sampleFractions,
+  });
+  if (!Array.isArray(denseSamples) || denseSamples.length !== samples.length) {
+    throw new Error(`${fixture.id}: dense and canonical sample counts differ`);
+  }
+  for (const [index, dense] of denseSamples.entries()) {
+    const resolved = samples[index];
+    if (!Number.isFinite(dense.time) || !Number.isFinite(dense.materializedTime)
+        || Math.abs(dense.time - resolved.time) > 1e-9
+        || dense.referenceKind !== resolved.referenceKind
+        || dense.frameIndex !== resolved.frameIndex
+        || Math.abs(dense.materializedTime - resolved.materializedTime) > 1e-9) {
+      throw new Error(`${fixture.id}: dense sample ${index} disagrees with canonical ${resolved.referenceKind} resolution`);
+    }
+  }
+  return samples;
+}
+
 // A clean retained canvas needs no new draw. An idle snapshot may be sampled by
 // seek only when the independent reference proves a frozen hold at that time.
 // Continuous animation and unexplained stalls must remain qualification failures.
