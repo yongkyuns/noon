@@ -268,7 +268,12 @@ pub(super) fn preflight_add_node(
                 return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
             }
             validate_object_content_resource(store, state.content, index)?;
-            validate_cairo_surface_resource(store, state.spatial_material(), state.content, index)?;
+            validate_spatial_material_resource(
+                store,
+                state.spatial_material(),
+                state.content,
+                index,
+            )?;
 
             if let SemanticObjectRole::Inset2DView(view) = state.role() {
                 if !matches!(
@@ -321,23 +326,29 @@ pub(super) fn preflight_add_node(
     Ok(())
 }
 
-pub(super) fn validate_cairo_surface_resource(
+pub(super) fn validate_spatial_material_resource(
     store: &SemanticStore,
     material: SemanticSpatialMaterial,
     content: SemanticObjectContent,
     index: usize,
 ) -> Result<(), SemanticMutationTransactionError> {
-    if material != SemanticSpatialMaterial::CairoSurface {
-        return Ok(());
-    }
-    let Some(StoredGeometry::Resource(handle)) = content.geometry() else {
-        return Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index });
+    let valid = match material {
+        SemanticSpatialMaterial::CairoSurface => content
+            .geometry()
+            .and_then(StoredGeometry::resource_handle)
+            .is_some_and(|handle| matches!(
+                store.geometry_resources().get(handle),
+                Some(GeometryResource::Mesh(mesh)) if mesh.is_single_face() && mesh.cairo_appearance().is_some()
+            )),
+        SemanticSpatialMaterial::CairoPath => content.geometry().is_some_and(|geometry| {
+            geometry.resource_handle().is_none_or(|handle| matches!(
+                store.geometry_resources().get(handle),
+                Some(GeometryResource::VectorPath(_))
+            ))
+        }),
+        _ => return Ok(()),
     };
-    let has_appearance = matches!(
-        store.geometry_resources().get(handle),
-        Some(GeometryResource::Mesh(mesh)) if mesh.is_single_face() && mesh.cairo_appearance().is_some()
-    );
-    if has_appearance {
+    if valid {
         Ok(())
     } else {
         Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index })

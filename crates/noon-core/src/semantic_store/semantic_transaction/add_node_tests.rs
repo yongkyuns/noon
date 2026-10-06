@@ -166,6 +166,47 @@ fn cairo_surface_material_requires_its_retained_mesh_appearance() {
 }
 
 #[test]
+fn cairo_path_material_checks_creation_and_content_replacement_atomically() {
+    let mut store = SemanticStore::new();
+    let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    state.set_spatial_material(SemanticSpatialMaterial::CairoPath);
+    let mut transaction = SemanticMutationTransaction::new();
+    let token = transaction.create_node(SemanticNodeCreation::object(state.clone()));
+    let result = transaction.apply(&mut store).unwrap();
+    let object = result.resolve(token).unwrap();
+    let mesh = MeshResource::new(
+        vec![
+            SemanticVec3::ZERO,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ],
+        None,
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    let handle = store.geometry_resources.insert_mesh(mesh);
+    let revision = store.scene_revision();
+    let before = store.semantic_object_state(object).unwrap().clone();
+    let mut replacement = SemanticMutationTransaction::new();
+    replacement.replace_content(object, StoredGeometry::Resource(handle));
+    assert_eq!(
+        replacement.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index: 0 })
+    );
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(store.semantic_object_state(object).unwrap(), &before);
+
+    state.content = StoredGeometry::Resource(handle).into();
+    let mut creation = SemanticMutationTransaction::new();
+    creation.add_node(SemanticNodeCreation::object(state));
+    assert_eq!(
+        creation.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index: 0 })
+    );
+    assert_eq!(store.len(), 1);
+}
+
+#[test]
 fn cairo_face_material_uses_geometry_appearance_without_checkerboard_uv_roles() {
     let mut store = SemanticStore::new();
     let appearance = crate::CairoSurfaceAppearance {

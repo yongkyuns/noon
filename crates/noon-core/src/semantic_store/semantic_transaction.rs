@@ -42,7 +42,7 @@ use family_edges::FamilyEdgePreflight;
 mod node_addition;
 pub use node_addition::SemanticNodeCreation;
 use node_addition::SemanticPendingPathObject;
-use node_addition::{commit_add_node, preflight_add_node, validate_cairo_surface_resource};
+use node_addition::{commit_add_node, preflight_add_node, validate_spatial_material_resource};
 
 mod provisional;
 use provisional::{
@@ -2378,7 +2378,7 @@ impl SemanticMutationTransaction {
                         index,
                     )?;
                     validate_object_content_resource(store, *content, index)?;
-                    validate_cairo_surface_resource(
+                    validate_spatial_material_resource(
                         store,
                         state.spatial_material(),
                         *content,

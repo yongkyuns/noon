@@ -22,6 +22,34 @@ pub enum SemanticSpatialMaterial {
     Unlit,
     PointLit,
     CairoSurface,
+    /// Cairo endpoint lighting for retained planar vector paths. This shares
+    /// the world camera and light; it never projects geometry in a frontend.
+    CairoPath,
+}
+
+/// Optional Cairo path appearance. A gradient direction binds its endpoints
+/// to the effective bounds of the declared spatial anchor family (or the path
+/// itself). With no direction, retained Cairo corners supply the endpoints.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SemanticCairoPathAppearance {
+    pub sheen_factor: f64,
+    pub gradient_direction: Option<SemanticVec3>,
+}
+
+impl SemanticCairoPathAppearance {
+    pub fn is_valid(self) -> bool {
+        self.sheen_factor.is_finite()
+            && (0.0..=1.0).contains(&self.sheen_factor)
+            && self.gradient_direction.is_none_or(|direction| {
+                direction.is_finite()
+                    && direction
+                        .x
+                        .abs()
+                        .max(direction.y.abs())
+                        .max(direction.z.abs())
+                        > 0.0
+            })
+    }
 }
 
 /// How world-authored geometry is composed with the active camera.
@@ -43,6 +71,7 @@ pub enum SemanticSpatialCompositionDomain {
 pub enum SemanticSpatialCompositionDomainError {
     CameraOrLightMustRemainWorld,
     AnchorRequiresFixedOrientation,
+    InvalidCairoPathAppearance,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,10 +112,11 @@ pub struct SemanticSpatialProperties {
     composition_domain: SemanticSpatialCompositionDomain,
     anchor_family: Option<crate::SemanticNodeId>,
     surface_uv_cell: Option<[usize; 2]>,
+    cairo_path_appearance: Option<Box<SemanticCairoPathAppearance>>,
 }
 
 impl SemanticSpatialProperties {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         camera_projection: Option<SemanticProjection3D>,
         camera_profile: Option<crate::ManimCamera3DProfile>,
         material: SemanticSpatialMaterial,
@@ -101,6 +131,8 @@ impl SemanticSpatialProperties {
             composition_domain,
             anchor_family,
             surface_uv_cell: None,
+            cairo_path_appearance: (material == SemanticSpatialMaterial::CairoPath)
+                .then(|| Box::new(SemanticCairoPathAppearance::default())),
         }
     }
 
@@ -122,14 +154,27 @@ impl SemanticSpatialProperties {
         self.composition_domain
     }
 
-    /// Shared object/family whose effective bounds center anchors this
-    /// FixedOrientation composition. `None` uses the object's own center.
+    /// Shared object/family whose effective bounds anchor FixedOrientation
+    /// composition or a Cairo path gradient. `None` uses the object's bounds.
     pub const fn anchor_family(&self) -> Option<crate::SemanticNodeId> {
         self.anchor_family
     }
 
     pub const fn surface_uv_cell(&self) -> Option<[usize; 2]> {
         self.surface_uv_cell
+    }
+
+    pub fn cairo_path_appearance(&self) -> Option<SemanticCairoPathAppearance> {
+        self.cairo_path_appearance.as_deref().copied()
+    }
+
+    pub(crate) fn with_cairo_path_appearance(
+        mut self,
+        appearance: Option<SemanticCairoPathAppearance>,
+    ) -> Self {
+        self.cairo_path_appearance = (self.material == SemanticSpatialMaterial::CairoPath)
+            .then(|| Box::new(appearance.unwrap_or_default()));
+        self
     }
 
     pub(crate) fn with_surface_uv_cell(mut self, cell: Option<[usize; 2]>) -> Self {
@@ -166,6 +211,7 @@ impl SemanticSpatialProperties {
             )
             && self.anchor_family.is_none()
             && self.surface_uv_cell.is_none()
+            && self.cairo_path_appearance.is_none()
     }
 }
 

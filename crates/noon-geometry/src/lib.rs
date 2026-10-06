@@ -5,6 +5,8 @@
 mod arrow;
 pub use arrow::{arrow_tip_vertices, ArrowGeometry};
 mod boolean;
+mod cairo_path;
+pub use cairo_path::{cairo_path_control_points, cairo_path_geometry, CairoPathGeometry};
 mod coordinates;
 mod flatten;
 pub use boolean::{boolean_paths, BooleanOperation, BooleanPathError, BOOLEAN_FLATTEN_TOLERANCE};

@@ -619,6 +619,11 @@ impl SemanticObjectState {
             self.spatial_properties
                 .as_deref()
                 .and_then(|properties| properties.surface_uv_cell()),
+        )
+        .with_cairo_path_appearance(
+            self.spatial_properties
+                .as_deref()
+                .and_then(|properties| properties.cairo_path_appearance()),
         );
         self.spatial_properties = (!properties.is_default()).then(|| Arc::new(properties));
     }
@@ -631,6 +636,29 @@ impl SemanticObjectState {
             self.spatial_composition_domain(),
             self.spatial_anchor_family(),
         );
+    }
+
+    pub fn cairo_path_appearance(&self) -> Option<crate::SemanticCairoPathAppearance> {
+        self.spatial_properties
+            .as_deref()
+            .and_then(|properties| properties.cairo_path_appearance())
+    }
+
+    /// Configure path sheen and optional bounds-derived gradient anchors before
+    /// the ordinary object transaction publishes this appearance.
+    pub fn set_cairo_path_appearance(
+        &mut self,
+        appearance: crate::SemanticCairoPathAppearance,
+    ) -> Result<(), SemanticSpatialCompositionDomainError> {
+        if self.spatial_material() != SemanticSpatialMaterial::CairoPath || !appearance.is_valid() {
+            return Err(SemanticSpatialCompositionDomainError::InvalidCairoPathAppearance);
+        }
+        let properties = self
+            .spatial_properties()
+            .expect("CairoPath has spatial properties")
+            .with_cairo_path_appearance(Some(appearance));
+        self.spatial_properties = Some(Arc::new(properties));
+        Ok(())
     }
 
     /// Set the projection for a Camera3D declaration. The role is authored
@@ -725,7 +753,11 @@ impl SemanticObjectState {
         {
             return Err(SemanticSpatialCompositionDomainError::CameraOrLightMustRemainWorld);
         }
-        if anchor_family.is_some() && domain != SemanticSpatialCompositionDomain::FixedOrientation {
+        if anchor_family.is_some()
+            && domain != SemanticSpatialCompositionDomain::FixedOrientation
+            && !(domain == SemanticSpatialCompositionDomain::World
+                && self.spatial_material() == SemanticSpatialMaterial::CairoPath)
+        {
             return Err(SemanticSpatialCompositionDomainError::AnchorRequiresFixedOrientation);
         }
         self.update_spatial_properties(
@@ -792,7 +824,15 @@ impl SemanticObjectState {
             ) || self.spatial_composition_domain() == SemanticSpatialCompositionDomain::World)
             && (self.spatial_anchor_family().is_none()
                 || self.spatial_composition_domain()
-                    == SemanticSpatialCompositionDomain::FixedOrientation)
+                    == SemanticSpatialCompositionDomain::FixedOrientation
+                || (self.spatial_material() == SemanticSpatialMaterial::CairoPath
+                    && self.spatial_composition_domain()
+                        == SemanticSpatialCompositionDomain::World))
+            && (self.spatial_material() != SemanticSpatialMaterial::CairoPath
+                || (self.spatial_composition_domain() == SemanticSpatialCompositionDomain::World
+                    && self
+                        .cairo_path_appearance()
+                        .is_some_and(|appearance| appearance.is_valid())))
             && (self.role != SemanticObjectRole::PointLight3D
                 || (self.transform.world_transform().is_some()
                     && self.transform.scale == SemanticVec3::new(1.0, 1.0, 1.0)))
