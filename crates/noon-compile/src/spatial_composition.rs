@@ -346,33 +346,25 @@ impl CompiledScene {
                     .insert(object_index, group_index);
             }
         }
-        if previous_anchor == next_anchor {
-            if previous_fixed && !next_fixed {
-                self.spatial_anchor_groups
-                    .iter_mut()
-                    .for_each(|g| g.member_indices.retain(|m| *m != object_index));
-            }
-            if previous_cairo && !next_cairo {
-                self.spatial_anchor_groups
-                    .iter_mut()
-                    .for_each(|g| g.cairo_path_member_indices.retain(|m| *m != object_index));
-            }
-            if next_fixed && next_anchor.is_some() {
-                if let Some(g) = self.spatial_anchor_group_for_anchor(next_anchor.unwrap()) {
-                    let v = &mut self.spatial_anchor_groups[g as usize].member_indices;
-                    if !v.contains(&object_index) {
-                        v.push(object_index);
-                        v.sort_unstable();
-                    }
+        if let Some(group_index) = next_anchor
+            .filter(|_| previous_anchor == next_anchor)
+            .and_then(|anchor| self.spatial_anchor_group_for_anchor(anchor))
+        {
+            let group = &mut self.spatial_anchor_groups[group_index as usize];
+            for (was_member, is_member, members) in [
+                (previous_fixed, next_fixed, &mut group.member_indices),
+                (
+                    previous_cairo,
+                    next_cairo,
+                    &mut group.cairo_path_member_indices,
+                ),
+            ] {
+                if was_member && !is_member {
+                    members.retain(|member| *member != object_index);
                 }
-            }
-            if next_cairo && next_anchor.is_some() {
-                if let Some(g) = self.spatial_anchor_group_for_anchor(next_anchor.unwrap()) {
-                    let v = &mut self.spatial_anchor_groups[g as usize].cairo_path_member_indices;
-                    if !v.contains(&object_index) {
-                        v.push(object_index);
-                        v.sort_unstable();
-                    }
+                if is_member && !members.contains(&object_index) {
+                    members.push(object_index);
+                    members.sort_unstable();
                 }
             }
         }
@@ -543,7 +535,7 @@ impl CompiledScene {
                 Some(noon_geometry::cairo_path_control_points(path))
             }
             GeometryRef::VectorPath(path) => Some(noon_geometry::cairo_path_control_points(path)),
-            _ => noon_geometry::canonical_outline_path(&geometry)
+            _ => noon_geometry::canonical_outline_path(geometry)
                 .map(|path| noon_geometry::cairo_path_control_points(&path)),
         };
         let Some(points) = points.filter(|p| !p.is_empty()) else {

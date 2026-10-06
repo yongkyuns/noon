@@ -348,7 +348,7 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
     assert.ok(source, `${label}: missing Cone body scene`);
     assert.match(source, /Cone\(\)\.shift\(\(-1\.25, 0, 0\)\)/,
       `${label}: includes the pinned default-resolution default Cone`);
-    assert.match(source, /Cone\([\s\S]*?base_radius=0\.8, height=1\.4, direction=\(1, 2, 2\), u_min=0\.2/,
+    assert.match(source, /Cone\([\s\S]*?base_radius=0\.8, height=1\.4, direction=(?:np\.array\(\[1, 2, 2\]\)|\(1, 2, 2\)), u_min=0\.2/,
       `${label}: includes the tilted partial radial Cone`);
     assert.doesNotMatch(source, /resolution\s*=|checkerboard_colors\s*=|stroke_width\s*=|shade_in_3d\s*=/,
       `${label}: preserves pinned Cone/Surface resolution and appearance defaults`);
