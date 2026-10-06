@@ -5,9 +5,10 @@ use lyon_path::{
 };
 use lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineCap, LineJoin, StrokeOptions,
-    StrokeTessellator, StrokeVertex, VertexBuffers,
+    StrokeTessellator, StrokeVertex, VertexBuffers, VertexSource,
 };
 use noon_core::{PathCommand, Rect, StrokeCap, StrokeJoin, Vec2, VectorPath};
+use std::collections::HashSet;
 
 const PATH_TESSELLATION_TOLERANCE: f32 = 0.002;
 const MORPH_MITER_LIMIT: f32 = 4.0;
@@ -216,8 +217,16 @@ pub fn tessellate_screen_stroke(
         .with_miter_limit(MORPH_MITER_LIMIT)
         .with_line_cap(lyon_line_cap(stroke_cap))
         .with_line_join(lyon_line_join(stroke_join));
+    let smooth_anchors = screen_stroke_smooth_anchors(path);
     let mut buffers = VertexBuffers::<ScreenStrokeVertex, u32>::new();
     let mut output = BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex<'_, '_>| {
+        let smooth_endpoint = match vertex.source() {
+            VertexSource::Endpoint { .. } => smooth_anchors.contains(&point_key(Vec2::new(
+                vertex.position_on_path().x,
+                vertex.position_on_path().y,
+            ))),
+            VertexSource::Edge { .. } => true,
+        };
         let normal = vertex.normal();
         let normal_length = normal.length();
         let tangent = if normal_length.is_finite() && normal_length > f32::EPSILON {
@@ -232,12 +241,13 @@ pub fn tessellate_screen_stroke(
             offset.x * normal_axis.x + offset.y * normal_axis.y,
         );
         // Lyon's curve flattener connects neighboring samples with an internal
-        // miter, even when the authored join is Round or Bevel. Those samples
-        // are almost purely transverse and only slightly exceed the half-width.
-        // Correct just that small transverse overshoot; longer authored join
-        // and cap extensions retain their full geometry.
+        // miter, even when the authored join is Round or Bevel. Its Edge-source
+        // vertices, plus endpoints at smooth authored curve joins, are nearly
+        // pure transverse samples. Correct their small overshoot while leaving
+        // authored corners and line caps alone.
         let extrusion_length = extrusion.length();
-        if stroke_join != StrokeJoin::Miter
+        if smooth_endpoint
+            && stroke_join != StrokeJoin::Miter
             && extrusion_length.is_finite()
             && extrusion_length > 0.5
             && extrusion_length <= 0.51
@@ -279,6 +289,162 @@ pub fn tessellate_screen_stroke(
         vertices: buffers.vertices,
         indices: buffers.indices,
     })
+}
+
+fn point_key(point: Vec2) -> (u32, u32) {
+    let bits = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
+    (bits(point.x), bits(point.y))
+}
+
+fn screen_stroke_smooth_anchors(path: &VectorPath) -> HashSet<(u32, u32)> {
+    #[derive(Clone, Copy)]
+    struct Segment {
+        start: Vec2,
+        end: Vec2,
+        start_tangent: Vec2,
+        end_tangent: Vec2,
+    }
+
+    fn tangent(vector: Vec2, chord: Vec2) -> Vec2 {
+        let value = if vector.x.hypot(vector.y) > f32::EPSILON {
+            vector
+        } else {
+            chord
+        };
+        normalized(value)
+    }
+
+    fn add_join(anchors: &mut HashSet<(u32, u32)>, previous: Segment, next: Segment) {
+        let incoming = normalized(previous.end_tangent);
+        let outgoing = normalized(next.start_tangent);
+        if previous.end == next.start
+            && incoming.x * outgoing.x + incoming.y * outgoing.y >= 0.99999
+        {
+            anchors.insert(point_key(previous.end));
+        }
+    }
+
+    let mut anchors = HashSet::new();
+    let mut current = None;
+    let mut contour_start = None;
+    let mut first_segment = None;
+    let mut previous_segment = None;
+
+    let push_segment = |segment: Segment,
+                        first: &mut Option<Segment>,
+                        previous: &mut Option<Segment>,
+                        anchors: &mut HashSet<(u32, u32)>| {
+        if let Some(previous) = *previous {
+            add_join(anchors, previous, segment);
+        } else {
+            *first = Some(segment);
+        }
+        *previous = Some(segment);
+    };
+
+    for command in path.commands() {
+        match *command {
+            PathCommand::MoveTo { to } => {
+                current = Some(to);
+                contour_start = Some(to);
+                first_segment = None;
+                previous_segment = None;
+            }
+            PathCommand::LineTo { to } => {
+                if let Some(from) = current {
+                    let chord = Vec2::new(to.x - from.x, to.y - from.y);
+                    push_segment(
+                        Segment {
+                            start: from,
+                            end: to,
+                            start_tangent: tangent(chord, chord),
+                            end_tangent: tangent(chord, chord),
+                        },
+                        &mut first_segment,
+                        &mut previous_segment,
+                        &mut anchors,
+                    );
+                    current = Some(to);
+                }
+            }
+            PathCommand::QuadraticTo { control, to } => {
+                if let Some(from) = current {
+                    let chord = Vec2::new(to.x - from.x, to.y - from.y);
+                    push_segment(
+                        Segment {
+                            start: from,
+                            end: to,
+                            start_tangent: tangent(
+                                Vec2::new(control.x - from.x, control.y - from.y),
+                                chord,
+                            ),
+                            end_tangent: tangent(
+                                Vec2::new(to.x - control.x, to.y - control.y),
+                                chord,
+                            ),
+                        },
+                        &mut first_segment,
+                        &mut previous_segment,
+                        &mut anchors,
+                    );
+                    current = Some(to);
+                }
+            }
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => {
+                if let Some(from) = current {
+                    let chord = Vec2::new(to.x - from.x, to.y - from.y);
+                    push_segment(
+                        Segment {
+                            start: from,
+                            end: to,
+                            start_tangent: tangent(
+                                Vec2::new(control1.x - from.x, control1.y - from.y),
+                                chord,
+                            ),
+                            end_tangent: tangent(
+                                Vec2::new(to.x - control2.x, to.y - control2.y),
+                                chord,
+                            ),
+                        },
+                        &mut first_segment,
+                        &mut previous_segment,
+                        &mut anchors,
+                    );
+                    current = Some(to);
+                }
+            }
+            PathCommand::Close => {
+                if let (Some(from), Some(to)) = (current, contour_start) {
+                    if from != to {
+                        let chord = Vec2::new(to.x - from.x, to.y - from.y);
+                        push_segment(
+                            Segment {
+                                start: from,
+                                end: to,
+                                start_tangent: tangent(chord, chord),
+                                end_tangent: tangent(chord, chord),
+                            },
+                            &mut first_segment,
+                            &mut previous_segment,
+                            &mut anchors,
+                        );
+                    }
+                    if let (Some(last), Some(first)) = (previous_segment, first_segment) {
+                        add_join(&mut anchors, last, first);
+                    }
+                }
+                current = None;
+                contour_start = None;
+                first_segment = None;
+                previous_segment = None;
+            }
+        }
+    }
+    anchors
 }
 
 /// Tessellate a morph while retaining source/target contour point order.
@@ -1717,6 +1883,10 @@ mod tests {
             .vertices
             .iter()
             .all(|vertex| vertex.extrusion.length() <= 0.7072));
+        assert!(joined
+            .vertices
+            .iter()
+            .any(|vertex| vertex.extrusion.length() > 0.6));
     }
 
     fn curved_shape() -> VectorPath {
