@@ -637,7 +637,6 @@ impl SpatialGpuState {
                 &gpu.camera_layout,
                 &gpu.camera_group,
                 format,
-                super::PATH_SAMPLE_COUNT,
                 path_plan,
             )
         } else {

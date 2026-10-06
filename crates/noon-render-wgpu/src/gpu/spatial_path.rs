@@ -767,7 +767,6 @@ impl SpatialPathGpuState {
         camera_layout: &wgpu::BindGroupLayout,
         camera_group: &wgpu::BindGroup,
         format: wgpu::TextureFormat,
-        sample_count: u32,
         plan: PathPlan,
     ) -> PathUploadStats {
         let mut stats = PathUploadStats::default();
@@ -807,7 +806,7 @@ impl SpatialPathGpuState {
                 camera_layout,
                 camera_group,
                 format,
-                sample_count,
+                super::PATH_SAMPLE_COUNT,
             ));
         }
         if !plan.new_cairo_geometry.is_empty()
@@ -823,7 +822,7 @@ impl SpatialPathGpuState {
                     device,
                     self.gpu.as_ref().expect("spatial path GPU state"),
                     format,
-                    sample_count,
+                    super::PATH_SAMPLE_COUNT,
                 ));
             }
         }
