@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { FOLLOWING_SOURCE, FOLLOWING_TIMES, followingManifest,
   assertFollowingSources, assertFollowingState, assertFollowingReports, assertFollowingPythonLifecycle, assertFollowingDirectLifecycle } from "./special-camera-qualification.mjs";
 
@@ -289,4 +290,86 @@ for (const [name, mutate] of [
   const { observation, oracle } = directLifecycle();
   mutate(observation);
   assert.throws(() => assertFollowingDirectLifecycle(observation, oracle, "WebGPU"));
+});
+
+
+// Execute the harness's actual browser handoff, not a copied implementation.
+// The interpreter/renderer stay mocked here; real two-backend lifecycle runs
+// remain required and their replay/state assertions are deliberately unchanged.
+const harness = readFileSync(new URL("./special-camera-qualification.mjs", import.meta.url), "utf8");
+const handoffStart = harness.indexOf("                  const result = await completed;");
+const handoffEnd = harness.indexOf("                  let metrics;", handoffStart);
+assert.ok(handoffStart >= 0 && handoffEnd > handoffStart, "camera lifecycle handoff must exist");
+const completeCameraSource = vm.runInNewContext(
+  `(async ({ completed, registered, run, execution, authoring }) => {
+    ${harness.slice(handoffStart, handoffEnd)}
+  })`,
+);
+
+function sourceHandoff() {
+  const registered = { contextId: 17, callbackSessionId: 31, continuationGeneration: 43 };
+  const result = { duration: 3, semanticExecution: { ...registered } };
+  const calls = [];
+  const authoring = {};
+  const execution = {
+    async reconcileSemanticExecution(descriptor, options) {
+      // Reattaching a completed non-null generation reproduces the worker's
+      // stale-attachment guard; it is not a successful callback replay denial.
+      assert.equal(descriptor.continuationGeneration, null, "stale semantic continuation attachment");
+      assert.equal(options.authoringClient, authoring);
+      calls.push({ descriptor: { ...descriptor }, loopDurationSeconds: options.loopDurationSeconds });
+    },
+    async advanceTo() { assert.fail("handoff must preserve the endpoint without repairing authored time"); },
+  };
+  return { registered, result, calls, authoring, execution, run: {} };
+}
+
+test("Python source handoff waits for completion and retires only the continuation token", async () => {
+  const state = sourceHandoff();
+  const original = structuredClone(state.result);
+  let release;
+  const completed = new Promise(resolve => { release = resolve; });
+  const pending = completeCameraSource({ ...state, completed });
+  await Promise.resolve();
+  assert.deepEqual(state.calls, []);
+  assert.deepEqual(state.run, {});
+  release(state.result);
+  await pending;
+  assert.equal(state.run.duration, 3);
+  assert.deepEqual(state.calls, [{ descriptor: {
+    contextId: 17, callbackSessionId: 31, continuationGeneration: null,
+  }, loopDurationSeconds: 4 }]);
+  assert.deepEqual(state.result, original, "the source result retains its original identity evidence");
+  assert.equal(state.registered.continuationGeneration, 43);
+});
+
+for (const [name, mutate] of [
+  ["missing completed descriptor", state => { delete state.result.semanticExecution; }],
+  ["different context", state => { state.result.semanticExecution.contextId++; }],
+  ["different generation", state => { state.result.semanticExecution.continuationGeneration++; }],
+  ["prematurely cleared generation", state => { state.result.semanticExecution.continuationGeneration = null; }],
+  ["missing registered source", state => { state.registered = null; }],
+]) test(`Python source handoff rejects ${name} before reattachment`, async () => {
+  const state = sourceHandoff();
+  mutate(state);
+  await assert.rejects(completeCameraSource({ ...state, completed: Promise.resolve(state.result) }),
+    /completed semantic source replaced its first-play continuation/);
+  assert.deepEqual(state.calls, []);
+});
+
+test("Python source handoff preserves completion errors without reattachment", async () => {
+  const state = sourceHandoff();
+  const failure = new Error("source completion failed");
+  await assert.rejects(completeCameraSource({ ...state, completed: Promise.reject(failure) }),
+    error => error === failure);
+  assert.deepEqual(state.calls, []);
+  assert.deepEqual(state.run, {});
+});
+
+test("Python source handoff propagates reattachment failure without advancing the scene", async () => {
+  const state = sourceHandoff();
+  const failure = new Error("renderer handoff failed");
+  state.execution.reconcileSemanticExecution = async () => { throw failure; };
+  await assert.rejects(completeCameraSource({ ...state, completed: Promise.resolve(state.result) }),
+    error => error === failure);
 });
