@@ -1,0 +1,31 @@
+name: Task 1653 feature-set compile repair (do not merge)
+on:
+  push:
+    branches: [task/1653-renderer-source-audit]
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: {fetch-depth: 2}
+      - run: |
+          git fetch --no-tags --depth=1 origin 909472a7055f12948ab306855dc6b7bb86301865
+          git checkout --detach 909472a7055f12948ab306855dc6b7bb86301865
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('crates/noon-render-wgpu/src/gpu/mod.rs')
+          s=p.read_text()
+          old='CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedDerivedDisplay,\n    PreparedFrame, RectangleInstance, RenderPrimitive,'
+          new='CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathInstance, PathVertex,\n    PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,'
+          assert s.count(old)==1
+          p.write_text(s.replace(old,new))
+          PY
+          cargo fmt --all
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/noon-render-wgpu/src/gpu/mod.rs
+          git commit -m 'Import ordered batch type for default renderer builds'
+          git push origin HEAD:refs/heads/task/1653-feature-repair
