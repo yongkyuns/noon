@@ -15,6 +15,7 @@ impl FramePreparer {
         self.mega_path_vertex_instances.clear();
         self.mega_path_batches.clear();
         self.mega_path_segments.clear();
+        self.mega_path_offsets.clear();
         self.mega_path_detached.clear();
         self.mega_path_instance_dirty_ranges.clear();
         self.mega_path_index_dirty_ranges.clear();
@@ -78,7 +79,16 @@ impl FramePreparer {
                 .extend_from_slice(&self.path_indices[index_range]);
             let packed_end = u32::try_from(self.mega_path_indices.len())
                 .expect("mega path index count exceeds renderer limits");
-            self.mega_path_segments[path_batch_index] = Some(packed_start..packed_end);
+            let segment = packed_start..packed_end;
+            self.mega_path_segments[path_batch_index] = Some(segment.clone());
+            self.mega_path_offsets.push(packed_start);
+            // The painter traversal borrows render_batches; update disjoint cache fields.
+            self.zero_contribution[4].set(
+                segment,
+                !self.paths[path_batch.instance_range.start as usize]
+                    .style
+                    .may_contribute_color(),
+            );
         }
 
         self.rebuild_mega_render_batches();
@@ -139,6 +149,8 @@ impl FramePreparer {
             .expect("mega path index count exceeds renderer limits");
         let segment = segment_start..segment_end;
         self.mega_path_segments[path_batch_index] = Some(segment.clone());
+        self.mega_path_offsets.push(segment_start);
+        self.set_mega_zero_contribution(segment.clone(), packed.style);
         self.mega_path_detached[path_batch_index] = false;
         push_dirty_range(
             &mut self.mega_path_index_dirty_ranges,
@@ -282,6 +294,10 @@ impl FramePreparer {
         {
             return;
         }
+        let segment = self.mega_path_segments[path_batch_index]
+            .clone()
+            .expect("checked mega segment");
+        self.set_mega_zero_contribution(segment, packed.style);
         let Some(vertex_range) = self.path_batch_vertex_ranges.get(path_batch_index) else {
             return;
         };
