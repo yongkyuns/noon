@@ -17,45 +17,22 @@ jobs:
       SCCACHE_GHA_RW_MODE: READ_ONLY
       TASK_ASSETS: /tmp/task-1653-assets
       BASE_SHA: 886ede3e2243d621cda5823b30a7911f4e382417
-      CANDIDATE_SHA: f2d7fb9e5b7c161d6ac1723f1497a814d30c229b
+      CANDIDATE_SHA: 1eeba8dc549ba373b1b12e5274b1c015d3e8e2a8
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 2
-      - name: Repair test-module placement on the exact candidate
+      - name: Apply submission-only revision on the exact candidate
         shell: bash
         run: |
           set -euo pipefail
           cp -R .github/task-1653-assets "$TASK_ASSETS"
-          git fetch --no-tags --depth=2 origin "$CANDIDATE_SHA"
+          cp .github/task-1653-apply-v2.py /tmp/task-1653-apply-v2.py
+          git fetch --no-tags --depth=3 origin "$CANDIDATE_SHA"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
           git checkout --detach "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          python - <<'PY'
-          from pathlib import Path
-          module = '#[cfg(test)]\nmod tests {\n'
-          p = Path('crates/noon-render-wgpu/src/render_order.rs')
-          s = p.read_text()
-          marker = '    #[test]\n    fn zero_contribution_keeps_camera_resident_and_updates_only_one_partition()'
-          assert s.count(marker) == 1 and s.count(module) == 1
-          start = s.index(marker)
-          tail = s[start:].rstrip()
-          assert tail.endswith('}')
-          tests = tail[:-1]
-          s = s[:start].rstrip() + '\n}\n'
-          s = s.replace(module, module + tests + '\n', 1)
-          p.write_text(s)
-          p = Path('crates/noon-render-wgpu/src/gpu/retained_text.rs')
-          s = p.read_text()
-          marker = 'impl std::error::Error for InteractiveDrawError {'
-          assert s.count(marker) == 1 and s.count(module) == 1
-          head, tail = s.split(marker)
-          tail = tail.rstrip()
-          assert tail.endswith('}') and tail.count('#[test]') == 1
-          tests = tail[:-1]
-          s = head + marker + '}\n'
-          s = s.replace(module, module + tests + '\n', 1)
-          p.write_text(s)
-          PY
+          python /tmp/task-1653-apply-v2.py
       - name: Use repository-pinned Rust
         run: rustup install
       - uses: actions/cache@v6
@@ -68,7 +45,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Format and stage clean repaired candidate for connector publication
+      - name: Format and stage clean revision for connector publication
         id: publish
         run: |
           set -euo pipefail
@@ -76,59 +53,76 @@ jobs:
           git diff --check
           python - <<'PY'
           import subprocess
-          expected = {'crates/noon-render-wgpu/src/render_order.rs', 'crates/noon-render-wgpu/src/gpu/retained_text.rs'}
+          expected = {'crates/noon-render-wgpu/src/lib.rs', 'crates/noon-render-wgpu/src/render_order.rs', 'crates/noon-render-wgpu/src/path_residency.rs', 'crates/noon-render-wgpu/src/mega_mesh.rs', 'crates/noon-render-wgpu/src/gpu/mod.rs', 'crates/noon-render-wgpu/src/gpu/retained_text.rs', 'crates/noon-render-wgpu/src/gpu/derived_display.rs', 'docs/architecture.md'}
           changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
           assert changed == expected, changed
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/noon-render-wgpu/src
-          git commit -m 'Place zero-contribution regression functions in their owning test modules'
-          git push origin HEAD:refs/heads/task/1653-repaired-candidate
+          git add crates/noon-render-wgpu/src docs/architecture.md
+          git commit -m 'Preserve invisible painter anchors and suppress only GPU submission with dirty-row indexes'
+          git push origin HEAD:refs/heads/task/1653-submission-candidate
           git rev-parse HEAD | tee /tmp/task-1653-head.txt
           git diff "$BASE_SHA" HEAD > /tmp/task-1653-candidate.patch
       - name: Focused zero-contribution regressions
         id: focused
         if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         run: cargo test -p noon-render-wgpu --all-features --lib zero_contribution -- --nocapture 2>&1 | tee /tmp/task-1653-focused.log
-      - name: Verify regression fails on original renderer
-        id: baseline
+      - name: Verify prior candidate fails new transient-anchor regression
+        id: anchor_control
         if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
           trap 'git restore --source=HEAD -- crates/noon-render-wgpu/src' EXIT
-          git restore --source="$BASE_SHA" -- crates/noon-render-wgpu/src
+          git restore --source="$CANDIDATE_SHA" -- crates/noon-render-wgpu/src
           python - <<'PY'
           from pathlib import Path
           import os
-          tests = (Path(os.environ['TASK_ASSETS']) / 'order-tests.rs').read_text()
-          first = tests.split('    #[test]', 2)[1]
-          p = Path('crates/noon-render-wgpu/src/render_order.rs')
+          test = (Path(os.environ['TASK_ASSETS']) / 'transient-test.rs').read_text()
+          p = Path('crates/noon-render-wgpu/src/gpu/derived_display.rs')
           s = p.read_text()
           marker = '#[cfg(test)]\nmod tests {\n'
           assert s.count(marker) == 1
-          p.write_text(s.replace(marker, marker + '\n    #[test]' + first + '\n', 1))
+          p.write_text(s.replace(marker, marker + test + '\n', 1))
           PY
           set +e
-          cargo test -p noon-render-wgpu --all-features --lib zero_contribution_keeps_camera_resident_and_updates_only_one_partition -- --nocapture > /tmp/task-1653-baseline-regression.log 2>&1
+          cargo test -p noon-render-wgpu --all-features --lib zero_contribution_hidden_transient_anchor -- --nocapture > /tmp/task-1653-anchor-control.log 2>&1
           status=$?
           set -e
-          cat /tmp/task-1653-baseline-regression.log
+          cat /tmp/task-1653-anchor-control.log
           test "$status" = 101
-          grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/task-1653-baseline-regression.log
-          grep -F 'Some(true)' /tmp/task-1653-baseline-regression.log
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/task-1653-anchor-control.log
+          grep -F 'transient presentation anchor could not be located in retained painter batches' /tmp/task-1653-anchor-control.log
       - name: Renderer unit and integration suite
         id: renderer
         if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         run: cargo test -p noon-render-wgpu --all-features --no-fail-fast 2>&1 | tee /tmp/task-1653-renderer.log
       - name: Install software Vulkan
+        id: vulkan
         if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
       - name: Real software Vulkan pixel equality and restoration
         id: raster
         if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         run: cargo test -p noon-render-wgpu --all-features --test secondary_viewport zero_contribution -- --include-ignored --nocapture --test-threads=1 2>&1 | tee /tmp/task-1653-raster.log
+      - name: Verify original renderer submits the invisible camera
+        id: baseline_control
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'git restore --source=HEAD -- crates/noon-render-wgpu/src' EXIT
+          git restore --source="$BASE_SHA" -- crates/noon-render-wgpu/src
+          set +e
+          cargo test -p noon-render-wgpu --all-features --test secondary_viewport zero_contribution -- --include-ignored --nocapture --test-threads=1 > /tmp/task-1653-baseline-control.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/task-1653-baseline-control.log
+          test "$status" = 101
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/task-1653-baseline-control.log
+          grep -F 'left: 2' /tmp/task-1653-baseline-control.log
+          grep -F 'right: 1' /tmp/task-1653-baseline-control.log
       - name: Renderer lint
         id: lint
         if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
@@ -144,7 +138,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: task-1653-implementation-evidence
+          name: task-1653-submission-evidence
           path: |
             /tmp/task-1653-head.txt
             /tmp/task-1653-candidate.patch
