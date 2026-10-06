@@ -232,6 +232,7 @@ pub(crate) fn compiled_render_geometry_preparations(
             let noon_compile::TransformGeometryPlan::PathPair {
                 geometry,
                 render_transform,
+                ..
             } = track.transform_geometry_plan.as_ref()?
             else {
                 return None;
@@ -265,6 +266,7 @@ pub(crate) fn compiled_render_geometries(
             let noon_compile::TransformGeometryPlan::PathPair {
                 geometry,
                 render_transform,
+                ..
             } = track.transform_geometry_plan.as_ref()?
             else {
                 return None;

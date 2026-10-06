@@ -26,6 +26,9 @@ pub enum TransformGeometryPlan {
         geometry: Arc<GeometryRef>,
         /// Fixed coordinate frame for renderer-only endpoints; semantic TRS stays separate.
         render_transform: Option<Transform2D>,
+        /// Prepared once in source semantic coordinates for earlier playback.
+        /// Only fixed-frame PreparedMorph plans need this additional geometry.
+        prestart_geometry: Option<Arc<GeometryRef>>,
     },
 }
 
@@ -51,6 +54,7 @@ pub(crate) fn compile_transform_geometry_values(
             TrackValues::PreparedMorph {
                 geometry,
                 render_transform,
+                source_transform,
                 ..
             } => {
                 let GeometryRef::VectorPath(source) = geometry else {
@@ -71,6 +75,13 @@ pub(crate) fn compile_transform_geometry_values(
                 Ok(Some(TransformGeometryPlan::PathPair {
                     geometry: Arc::new(geometry.clone()),
                     render_transform: *render_transform,
+                    prestart_geometry: render_transform
+                        .filter(|render| *render != *source_transform)
+                        .map(|render| {
+                            prepared_pair_in_source_frame(source, render, *source_transform)
+                        })
+                        .transpose()?
+                        .map(Arc::new),
                 }))
             }
             _ => Ok(None),
@@ -214,6 +225,7 @@ pub(crate) fn compile_content_morph(
     let TransformGeometryPlan::PathPair {
         geometry,
         render_transform,
+        ..
     } = compile_path_pair(
         pair_from_style,
         to_style,
@@ -312,13 +324,42 @@ fn compile_path_pair(
                     frame_source.with_morph_target(frame_target),
                 )),
                 render_transform: Some(render_transform),
+                prestart_geometry: None,
             });
         }
     }
     Ok(TransformGeometryPlan::PathPair {
         geometry: Arc::new(GeometryRef::path(source.with_morph_target(target))),
         render_transform: None,
+        prestart_geometry: None,
     })
+}
+
+fn prepared_pair_in_source_frame(
+    path: &VectorPath,
+    render: Transform2D,
+    source: Transform2D,
+) -> Result<GeometryRef, TransformCompileFailure> {
+    if source.scale.x.abs() <= 1.0e-7 || source.scale.y.abs() <= 1.0e-7 {
+        return Err(TransformCompileFailure::RequiresRetessellation);
+    }
+    // Inverse nonuniform TRS requires rotation before reciprocal scale. This
+    // cold preparation keeps pre-activation frames on the ordinary affine lane.
+    let path = path
+        .transformed(render)
+        .transformed(Transform2D {
+            translation: (-source.translation).rotate(-source.rotation),
+            rotation: -source.rotation,
+            ..Transform2D::IDENTITY
+        })
+        .transformed(Transform2D {
+            scale: noon_core::Vec2::new(1.0 / source.scale.x, 1.0 / source.scale.y),
+            ..Transform2D::IDENTITY
+        });
+    if !path.is_finite() {
+        return Err(TransformCompileFailure::RequiresRetessellation);
+    }
+    Ok(GeometryRef::path(path))
 }
 
 fn screen_line_width_only_change(from: Style, to: Style) -> bool {
@@ -471,6 +512,7 @@ mod tests {
             let TransformGeometryPlan::PathPair {
                 geometry,
                 render_transform,
+                ..
             } = plan
             else {
                 panic!("pair");
@@ -518,6 +560,7 @@ mod tests {
         let TransformGeometryPlan::PathPair {
             geometry,
             render_transform: Some(render_transform),
+            ..
         } = compile_path_pair(style, style, from, to, source.clone(), target.clone()).unwrap()
         else {
             panic!("screen-space path pair must use a fixed frame")
@@ -525,6 +568,7 @@ mod tests {
         let TransformGeometryPlan::PathPair {
             geometry: translated_geometry,
             render_transform: Some(translated_render_transform),
+            ..
         } = compile_path_pair(
             style,
             style,

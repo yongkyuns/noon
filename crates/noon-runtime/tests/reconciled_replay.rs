@@ -71,6 +71,7 @@ fn completed_round_trip() -> SceneInstance {
                     to: 1.0,
                     geometry: GeometryRef::path(from_path.with_morph_target(to_path)),
                     render_transform: Some(Transform2D::IDENTITY),
+                    source_transform: Transform2D::IDENTITY,
                 },
             ),
         ] {

@@ -2245,7 +2245,7 @@ fn apply_group_to_row(
             if group.channel.property == Property::Morph
                 && matches!(first.values, TrackValues::PreparedMorph { .. })
             {
-                return apply_prepared_morph_track(&mut row, first, 0.0);
+                return apply_prestart_morph_track(&mut row, first);
             }
         }
         return false;
@@ -2585,6 +2585,30 @@ fn apply_prepared_morph_track(
         .expect("prepared Morph track must contain matching scalar endpoints and path plan")
 }
 
+fn apply_prestart_morph_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack) -> bool {
+    let TrackValues::PreparedMorph { from, .. } = track.values else {
+        unreachable!("prepared Morph track has scalar endpoints");
+    };
+    let Some(TransformGeometryPlan::PathPair {
+        geometry,
+        prestart_geometry,
+        ..
+    }) = track.transform_geometry_plan.as_ref()
+    else {
+        unreachable!("prepared Morph track has endpoint geometry");
+    };
+    let morph = from.clamp(0.0, 1.0);
+    let changed = *row.morph != morph || row.render_transform.is_some();
+    *row.morph = morph;
+    *row.render_transform = None;
+    changed
+        | set_optional_geometry_if_changed(
+            row.render_geometry,
+            Some(prestart_geometry.as_ref().unwrap_or(geometry)),
+            true,
+        )
+}
+
 fn apply_prepared_morph_values(
     row: &mut FrameRowMut<'_>,
     values: &TrackValues,
@@ -2597,6 +2621,7 @@ fn apply_prepared_morph_values(
     let TransformGeometryPlan::PathPair {
         geometry,
         render_transform,
+        ..
     } = plan
     else {
         return None;
@@ -2639,6 +2664,7 @@ fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progr
         TransformGeometryPlan::PathPair {
             geometry: prepared,
             render_transform: None,
+            ..
         } if from.style.stroke_width_mode == StrokeWidthMode::ScreenSpace
             && to.style.stroke_width_mode == StrokeWidthMode::ScreenSpace =>
         {
@@ -3320,6 +3346,7 @@ mod tests {
                 to: 1.0,
                 geometry: pair.clone(),
                 render_transform: Some(Transform2D::IDENTITY),
+                source_transform: Transform2D::IDENTITY,
             },
             timing: TrackTiming::new(0.25, 0.5, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
@@ -3340,7 +3367,105 @@ mod tests {
             let frame = instance.seek(time).unwrap();
             assert_eq!(frame.morph(0), 0.0);
             assert_eq!(frame.render_geometries[0].as_deref(), Some(&pair));
-            assert_eq!(frame.render_transforms[0], Some(Transform2D::IDENTITY));
+            assert_eq!(
+                frame.render_transforms[0],
+                (time >= 0.25).then_some(Transform2D::IDENTITY)
+            );
+        }
+    }
+
+    #[test]
+    fn future_fixed_morph_keeps_an_earlier_collapsed_scale_driver_and_shared_geometry() {
+        let object = ObjectId::new(0);
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0));
+        let source_transform = Transform2D {
+            translation: Vec2::new(2.0, 3.0),
+            rotation: 0.3,
+            scale: Vec2::new(2.0, 3.0),
+        };
+        let pair = GeometryRef::path(
+            source
+                .transformed(source_transform)
+                .with_morph_target(target.transformed(source_transform)),
+        );
+        let tracks = [
+            TrackDefinition {
+                id: TrackId::new(0),
+                object,
+                property: Property::Scale,
+                values: TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: source_transform.scale,
+                },
+                timing: TrackTiming::new(0.0, 0.5, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            },
+            TrackDefinition {
+                id: TrackId::new(1),
+                object,
+                property: Property::Morph,
+                values: TrackValues::PreparedMorph {
+                    from: 0.0,
+                    to: 1.0,
+                    geometry: pair,
+                    render_transform: Some(Transform2D::IDENTITY),
+                    source_transform,
+                },
+                timing: TrackTiming::new(0.75, 0.5, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            },
+        ];
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                GeometryRef::path(target),
+                source_transform,
+                Style::default(),
+            )],
+            &tracks,
+        )
+        .unwrap();
+        let mut instance = SceneInstance::new(compiled);
+        let mut retained = None;
+        for time in [0.0, 0.25, 0.5, 1.0, 0.0, 0.25] {
+            let frame = instance.seek(time).unwrap();
+            if time >= 0.75 {
+                assert_eq!(frame.render_transforms[0], Some(Transform2D::IDENTITY));
+                continue;
+            }
+            assert_eq!(frame.render_transforms[0], None);
+            assert_eq!(frame.morph(0), 0.0);
+            assert_eq!(
+                frame.objects[0].transform.scale,
+                source_transform.scale * (time / 0.5) as f32,
+            );
+            let geometry = frame.render_geometries[0].as_ref().unwrap();
+            if let Some(previous) = &retained {
+                assert!(Arc::ptr_eq(geometry, previous));
+            } else {
+                retained = Some(Arc::clone(geometry));
+            }
+            let GeometryRef::VectorPath(path) = geometry.as_ref() else {
+                panic!("source frame retains a path");
+            };
+            for (actual, expected) in path.commands().iter().zip(source.commands()) {
+                let (PathCommand::MoveTo { to: actual } | PathCommand::LineTo { to: actual }) =
+                    actual
+                else {
+                    panic!("source frame contains the original line");
+                };
+                let (PathCommand::MoveTo { to: expected } | PathCommand::LineTo { to: expected }) =
+                    expected
+                else {
+                    unreachable!();
+                };
+                assert!((*actual - *expected).length() < 1.0e-6);
+            }
         }
     }
 
