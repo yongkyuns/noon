@@ -831,7 +831,10 @@ mod tests {
         );
 
         assert_eq!(grid.grid().positions().len(), 9 * 7);
-        assert_eq!(grid.grid().to_mesh_resource().unwrap().indices().len(), 8 * 6 * 6);
+        assert_eq!(
+            grid.grid().to_mesh_resource().unwrap().indices().len(),
+            8 * 6 * 6
+        );
         assert!(grid.grid().normals().contains(&SemanticVec3::ZERO));
         assert!(grid
             .grid()
