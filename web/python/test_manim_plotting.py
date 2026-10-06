@@ -99,17 +99,20 @@ class PlottingAdapterTests(unittest.TestCase):
                 plotting.ThreeDAxes(
                     tips=False,
                     axis_config={"include_tip": True, "include_ticks": False,
-                                 "tick_size": 0.2, "color": plotting._base.RED},
+                                 "tick_size": 0.2, "color": plotting._base.RED,
+                                 "stroke_width": 4},
                     x_axis_config={"include_tip": False, "tick_size": 0.3,
-                                   "stroke_width": 2},
+                                   "stroke_width": 2, "stroke_opacity": 0.25},
                     y_axis_config={"exclude_origin_tick": False, "opacity": 0.5},
                     z_axis_config={"color": plotting._base.BLUE},
                 )
         options.setTips.assert_called_once_with(True)
         options.setTicks.assert_called_once_with(False, 0.2, True)
+        options.setStrokeWidth.assert_called_once_with(0.04)
         options.setAxisTips.assert_called_once_with(0, False)
         options.setAxisTickSize.assert_called_once_with(0, 0.3)
-        options.setAxisStrokeWidth.assert_called_once_with(0, 2.0)
+        options.setAxisStrokeWidth.assert_called_once_with(0, 0.02)
+        options.setAxisStrokeOpacity.assert_called_once_with(0, 0.25)
         options.setAxisExcludeOriginTick.assert_called_once_with(1, False)
         options.setAxisOpacity.assert_called_once_with(1, 0.5)
         options.setAxisColor.assert_called_once_with(2, plotting._base.BLUE.red,
@@ -123,6 +126,7 @@ class PlottingAdapterTests(unittest.TestCase):
             ({"axis_config": {"scaling": object()}}, NotImplementedError),
             ({"z_axis_config": {"include_tip": 1}}, TypeError),
             ({"x_axis_config": {"stroke_width": -1}}, ValueError),
+            ({"x_axis_config": {"stroke_width": True}}, TypeError),
         ):
             with self.subTest(kwargs=kwargs), \
                  patch.object(plotting, "_coordinate_constructor_context", return_value=None), \

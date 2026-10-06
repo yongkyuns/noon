@@ -220,8 +220,9 @@ def _apply_three_d_axis_config(options, index, config):
                         ("stroke_opacity", "setAxisStrokeOpacity"),
                         ("opacity", "setAxisOpacity")):
         if key in config:
-            engine_call(getattr(options, method), index,
-                        _finite_axis_option(config[key], key, nonnegative=key == "stroke_width"))
+            value = (_compat._manim_stroke_width(config[key]) if key == "stroke_width"
+                     else _finite_axis_option(config[key], key))
+            engine_call(getattr(options, method), index, value)
 
 
 def _three_d_axis_label_object(label):
