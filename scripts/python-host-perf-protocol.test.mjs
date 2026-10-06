@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PERF_PROTOCOL, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
 
+test("fixed-work qualification uses independent worker observations", () => {
+  assert.equal(PERF_PROTOCOL.workerLifetime, "fresh-per-observation");
+  assert.equal(PERF_PROTOCOL.pairs, 7);
+  assert.equal(PERF_PROTOCOL.maxPointRatio, 1.03);
+  assert.equal(PERF_PROTOCOL.maxUpperRatio, 1.05);
+});
+
 test("cost comparison retains all pairs and rejects a regression below the old 20% FPS allowance", () => {
   const base = [100, 103, 96, 99, 105, 102, 97];
   assert.equal(pairedCost(base, base).status, "pass");

@@ -59,6 +59,33 @@ try {
       await window.perfAuthoring.ready();
     });
   }
+  const openScoredParticipant = async (side, label) => {
+    const context = await browser.newContext({ viewport: { width: 320, height: 180 } });
+    try {
+      await cache.install(context);
+      const page = await context.newPage();
+      const observations = [];
+      page.on("console", message => {
+        if (message.text().startsWith("NOON_PERF_REPORT ")) {
+          observations.push(JSON.parse(message.text().slice(17)));
+        }
+      });
+      page.on("pageerror", error => failures.push({
+        kind: "scored_worker_pageerror", side, label, message: String(error),
+      }));
+      await page.goto(`${servers[side].baseUrl}/web/execution-worker-smoke.html`);
+      await page.evaluate(async () => {
+        const { PythonAuthoringClient } = await import("./authoring-client.js");
+        window.perfAuthoring = new PythonAuthoringClient();
+        await window.perfAuthoring.ready();
+      });
+      return { page, reports: observations, close: () => context.close() };
+    } catch (error) {
+      await context.close();
+      throw error;
+    }
+  };
+
   const measure = async (side, source, mode, workload, participant = null) => {
     const page = participant?.page ?? pages[side];
     const observations = participant?.reports ?? reports[side];
@@ -124,20 +151,42 @@ try {
       const source = performanceSource(mode, workload);
       const sourceSha = createHash("sha256").update(source).digest("hex");
       await writeFile(path.join(output, `${workload}-${mode}.py`), source);
+      // Every scored observation uses a new worker. The paired t interval assumes
+      // independent pair ratios; reusing one aging worker across all seven pairs
+      // violates that assumption and was empirically shown to shift local-edit cost
+      // on both baseline and candidate. Browser/package startup stays outside the
+      // Python-reported timings, and pair order remains fixed/alternating.
       for (let warm = 0; warm < protocol.warmups; ++warm) {
-        for (const side of warm % 2 ? [1, 0] : [0, 1]) warmups.push({ side, workload, mode,
-          result: await measure(side, source, mode, workload) });
+        const participants = await Promise.all([0, 1].map(side =>
+          openScoredParticipant(side, `warmup-${workload}-${mode}-${warm + 1}`)));
+        try {
+          for (const side of warm % 2 ? [1, 0] : [0, 1]) {
+            warmups.push({ side, workload, mode, workerLifetime: "fresh-per-observation",
+              result: await measure(side, source, mode, workload, participants[side]) });
+          }
+        } finally {
+          await Promise.all(participants.map(participant => participant.close()));
+        }
       }
       const pairs = [];
       for (let pair = 0; pair < protocol.pairs; ++pair) {
+        const participants = await Promise.all([0, 1].map(side =>
+          openScoredParticipant(side, `pair-${workload}-${mode}-${pair + 1}`)));
         const values = [];
-        for (const side of pair % 2 ? [1, 0] : [0, 1]) values[side] = await measure(side, source, mode, workload);
+        try {
+          for (const side of pair % 2 ? [1, 0] : [0, 1]) {
+            values[side] = await measure(side, source, mode, workload, participants[side]);
+          }
+        } finally {
+          await Promise.all(participants.map(participant => participant.close()));
+        }
         assert.equal(values[1].callback_calls, values[0].callback_calls, "different Python callback work");
         assert.ok(values[0].center.every((v, i) => Math.abs(v - values[1].center[i]) < 2e-5), "different semantic result");
         assert.equal(values[0].metrics.presentedFrames, values[1].metrics.presentedFrames, "different frame work");
         pairs.push(values);
         // Persist immediately; retain every fixed pair and all failed evidence.
-        await writeFile(path.join(output, `${workload}-${mode}.json`), stringifyEvidence({ sourceSha, pairs }) + "\n");
+        await writeFile(path.join(output, `${workload}-${mode}.json`),
+          stringifyEvidence({ sourceSha, workerLifetime: "fresh-per-observation", pairs }) + "\n");
       }
       const costs = Object.fromEntries(["creation_ms", "local_ms", "execution_ms"].map(key => [key,
         pairedCost(pairs.map(pair => pair[0][key]), pairs.map(pair => pair[1][key]))]));
