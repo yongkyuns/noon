@@ -301,7 +301,7 @@ pub use source_reconciliation::{
     SourceCandidate, SourceCandidateError, SourceGeneration, SourceObjectDeclaration,
     SourceReconciler, SourceReconciliationError, SourceReconciliationResult,
 };
-pub use spatial_authoring::{MeshOptions, SurfaceFamily, SurfaceOptions};
+pub use spatial_authoring::{MeshOptions, SpatialPathOptions, SurfaceFamily, SurfaceOptions};
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
 #[cfg(feature = "latex")]

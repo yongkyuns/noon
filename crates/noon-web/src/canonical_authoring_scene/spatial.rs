@@ -61,12 +61,16 @@ impl CanonicalAuthoringScene {
     pub(crate) fn create_mesh_family(
         &mut self,
         options: Vec<noon::MeshOptions>,
+        paths: Vec<noon::SpatialPathOptions>,
     ) -> Result<noon::MobjectFamily, crate::authoring_error::AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self.scene.mesh_family(options).map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_mesh_family(options)
-            }
+            PlayerOwnership::Unstarted => self
+                .scene
+                .mesh_family_with_paths(options, paths)
+                .map_err(Into::into),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_create_mesh_family_with_paths(options, paths),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }

@@ -1,6 +1,8 @@
 use super::*;
-use crate::spatial_authoring::{publish_mesh_creation, publish_mesh_family};
-use crate::{AuthoringError, MeshOptions};
+use crate::spatial_authoring::{
+    publish_mesh_creation, publish_mesh_family, publish_meshes_and_paths_family,
+};
+use crate::{AuthoringError, MeshOptions, SpatialPathOptions};
 
 impl LiveSession<'_> {
     /// Atomically recolor one sampled surface through this session's publication owner.
@@ -93,6 +95,17 @@ impl LiveSession<'_> {
     ) -> Result<MobjectFamily, LiveSessionError> {
         let node = self.with_semantic_publication(|store, publish| {
             publish_mesh_family(store, options, publish)
+        })?;
+        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
+    }
+
+    pub fn create_mesh_family_with_paths(
+        &mut self,
+        meshes: Vec<MeshOptions>,
+        paths: Vec<SpatialPathOptions>,
+    ) -> Result<MobjectFamily, LiveSessionError> {
+        let node = self.with_semantic_publication(|store, publish| {
+            publish_meshes_and_paths_family(store, meshes, paths, publish)
         })?;
         MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
     }

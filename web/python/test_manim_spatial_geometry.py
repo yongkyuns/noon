@@ -371,19 +371,26 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         scene.add_world_mobjects.assert_called_with(replacement)
         scene._edit_membership.assert_called_once_with("remove", (light,))
 
-    def test_cylinder_centers_and_orients_inert_native_mesh_before_admission(self):
-        with patch.object(Mesh3D, "cylinder", return_value=self.mesh) as factory:
-            cylinder = spatial.Cylinder(height=4, direction=(1, -2, 3), resolution=(16, 16),
-                                        v_range=(math.pi / 4, math.pi),
-                                        checkerboard_colors=False, stroke_width=0,
-                                        shade_in_3d=False)
-        factory.assert_called_once()
-        self.assertIs(factory.call_args.kwargs["show_ends"], True)
-        self.assertEqual(factory.call_args.kwargs["direction"], (1, -2, 3))
-        self.assertEqual(factory.call_args.kwargs["axial_offset"], -2.0)
-        self.assertEqual(factory.call_args.kwargs["v_range"], (math.pi / 4, math.pi))
-        self.mesh.shift.assert_not_called()
-        self.assertIs(cylinder._semantic_handle, self.mesh._semantic_handle)
+    def test_cylinder_uses_shared_cairo_surface_and_atomic_circle_caps(self):
+        fill = noon.RED
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as initialize:
+            cylinder = spatial.Cylinder(
+                height=4, direction=(1, -2, 3), resolution=(16, 16),
+                v_range=(math.pi / 4, math.pi), fill_color=fill,
+                checkerboard_colors=(noon.GREEN, noon.YELLOW),
+            )
+        kwargs = initialize.call_args.kwargs
+        self.assertIsInstance(cylinder, spatial.Surface)
+        self.assertEqual(kwargs["u_range"], (-2.0, 2.0))
+        self.assertEqual(kwargs["v_range"], (math.pi / 4, math.pi))
+        self.assertEqual(kwargs["resolution"], (16, 16))
+        self.assertEqual(kwargs["_axial_pose"], ((1.0, -2.0, 3.0), 0.0))
+        self.assertEqual(kwargs["_cairo_circle_caps"], (
+            (1.0, -2.0, fill, True), (1.0, 2.0, fill, True),
+        ))
+        point = initialize.call_args.args[1]
+        self.assertEqual(point(1.0, 0.0), (1.0, 0.0, 1.0))
 
     def test_cairo_decorations_and_non_native_options_fail_explicitly(self):
         with self.assertRaises(TypeError):
@@ -433,6 +440,44 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         candidate.setPointLit.assert_called_once_with(False)
         candidate.setCairoSurface.assert_called_once_with(True)
         self.assertIs(surface._semantic_family_handle, family)
+
+    def test_surface_cap_request_reaches_shared_candidate_before_atomic_publication(self):
+        import _noon_spatial as native
+
+        candidate = Mock()
+        events = []
+        candidate.addCircleCap.side_effect = lambda *args: events.append("cap")
+        family = _family_handle((SimpleNamespace(semanticSlot=17, semanticGeneration=2),))
+        candidate.setAxialPose.side_effect = lambda *args: events.append("pose")
+
+        class Plan:
+            def cairoParameters(self):
+                return tuple(value for _ in range(16) for value in (0.25, 0.5))
+
+            def finishCairoCells(self, points):
+                return candidate
+
+            def free(self):
+                pass
+
+        color = noon.RED
+        with patch.object(native, "_surface_plan", return_value=Plan()), \
+             patch.object(native, "_mesh_family_options", object()), \
+             patch.object(native, "_bulk", side_effect=tuple), \
+             patch.object(native, "_create_mesh_family",
+                          side_effect=lambda value: events.append("publish") or family), \
+             patch.object(spatial, "_live_constructor_context", return_value=None):
+            spatial.Surface(
+                lambda u, v: (u, v, 0), resolution=(1, 1),
+                _axial_pose=((0, 0, 1), 0),
+                _cairo_circle_caps=((1.0, -1.0, color, True),),
+            )
+
+        self.assertEqual(events, ["pose", "cap", "publish"])
+        cap_args = candidate.addCircleCap.call_args.args
+        self.assertEqual(cap_args[:7], (1.0, -1.0, color.red, color.green,
+                                         color.blue, color.alpha, True))
+        self.assertEqual(cap_args[7], (-7.0, -9.0, 10.0))
 
     def test_default_cone_uses_manim_surface_cells_and_rust_axial_family_pose(self):
         import _noon_spatial as native
@@ -712,11 +757,12 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
     def test_axial_direction_caps_opacity_and_strokes_are_not_silently_approximated(self):
         import _noon_spatial as native
 
-        with patch.object(Mesh3D, "cylinder") as factory:
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as factory:
             open_cylinder = spatial.Cylinder(show_ends=False, checkerboard_colors=False,
                                              stroke_width=0, shade_in_3d=False)
             self.assertIsNotNone(open_cylinder)
-            self.assertIs(factory.call_args.kwargs["show_ends"], False)
+            self.assertEqual(factory.call_args.kwargs["_cairo_circle_caps"], ())
             with self.assertRaises(TypeError):
                 spatial.Cylinder(show_ends=0)
             with self.assertRaises(NotImplementedError):
@@ -777,25 +823,25 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         family.worldFamilyCenter.assert_called_once_with()
         family.shiftWorld.assert_called_with(-9.0, 5.0, 1.0)
 
-    def test_capped_cone_profile_is_explicit_and_uses_native_mesh(self):
-        with patch.object(Mesh3D, "cone", return_value=self.mesh) as factory:
-            cone = spatial.Cone(show_base=True, height=2, direction=(-1, 2, -3), resolution=12,
-                                v_range=(math.pi / 3, math.pi),
-                                stroke_width=0, shade_in_3d=False)
-        factory.assert_called_once()
-        self.assertEqual(factory.call_args.args[:3], (1.0, 2.0, 12))
-        self.assertEqual(factory.call_args.kwargs["direction"], (-1, 2, -3))
-        self.assertEqual(factory.call_args.kwargs["axial_offset"], -2.0)
-        self.assertEqual(factory.call_args.kwargs["v_range"], (math.pi / 3, math.pi))
-        self.mesh.shift.assert_not_called()
-        self.assertIs(cone._semantic_handle, self.mesh._semantic_handle)
+    def test_capped_cone_adds_ordinary_base_to_shared_surface_family(self):
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as initialize:
+            cone = spatial.Cone(show_base=True, base_radius=2, height=3,
+                                direction=(-1, 2, -3), resolution=(12, 12),
+                                v_range=(math.pi / 3, math.pi))
+        kwargs = initialize.call_args.kwargs
+        self.assertIsInstance(cone, spatial.Surface)
+        self.assertEqual(kwargs["_cairo_circle_caps"], ((2.0, -3.0, noon.BLUE_D, False),))
+        self.assertTrue(kwargs["_force_surface_family"])
+        with self.assertRaisesRegex(NotImplementedError, "truncated radial range"):
+            spatial.Cone(show_base=True, u_min=0.1)
 
     def test_cone_uses_the_pinned_open_base_default_and_accepts_only_boolean_options(self):
-        with patch.object(Mesh3D, "cone", return_value=self.mesh) as factory:
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as factory:
             cone = spatial.Cone(stroke_width=0, shade_in_3d=False)
-        factory.assert_called_once()
-        self.assertIs(factory.call_args.kwargs["show_base"], False)
-        self.assertIs(cone._semantic_handle, self.mesh._semantic_handle)
+        self.assertEqual(factory.call_args.kwargs["_cairo_circle_caps"], ())
+        self.assertIsInstance(cone, spatial.Surface)
         with self.assertRaises(TypeError):
             spatial.Cone(show_base=1, stroke_width=0, shade_in_3d=False)
 
@@ -804,7 +850,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             for v_range in ((-0.1, 1), (1, 1), (2, 1),
                             (0, 2 * math.pi + 0.1), (0, float("inf"))):
                 with self.subTest(shape=shape.__name__, v_range=v_range), \
-                     patch.object(Mesh3D, "cylinder" if shape is spatial.Cylinder else "cone") as factory:
+                     patch.object(spatial.Surface, "__init__", autospec=True,
+                                  return_value=None) as factory:
                     with self.assertRaises((TypeError, ValueError)):
                         shape(v_range=v_range, stroke_width=0, shade_in_3d=False)
                     factory.assert_not_called()
@@ -839,8 +886,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
                 spatial.Cone(base_radius=1.7e308, height=1.7e308)
             initialize.assert_not_called()
 
-        with self.assertRaisesRegex(NotImplementedError, "Cairo-shaded Cone bases"):
-            spatial.Cone(show_base=True)
+        with self.assertRaisesRegex(NotImplementedError, "opaque fills"):
+            spatial.Cone(show_base=True, fill_opacity=0.5)
 
 
 if __name__ == "__main__":

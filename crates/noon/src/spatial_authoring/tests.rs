@@ -40,6 +40,174 @@ fn flat_grid() -> SurfaceGrid {
 }
 
 #[test]
+fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells() {
+    let grid = UvSurfacePlan::new([0.0, 1.0], [0.0, std::f64::consts::TAU], [1, 1])
+        .unwrap()
+        .sample_cairo(|u, v| SemanticVec3::new(u * v.cos(), u * v.sin(), 0.0))
+        .unwrap();
+    let cap = SpatialPathOptions::circle(
+        1.0,
+        SemanticWorldTransform3D::from_axial_direction(SemanticVec3::new(0.0, 0.0, 1.0), -1.0)
+            .unwrap(),
+        Color::RED,
+        true,
+        SemanticVec3::new(-7.0, -9.0, 10.0),
+    )
+    .unwrap();
+    let mut scene = Scene::new();
+    let family = scene
+        .surface_cairo_family_with_paths(
+            grid,
+            SurfaceOptions {
+                material: SemanticSpatialMaterial::CairoSurface,
+                ..SurfaceOptions::default()
+            },
+            vec![cap],
+        )
+        .unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    let leaves = store
+        .borrow()
+        .ordered_leaf_nodes(family.family().node_id())
+        .unwrap();
+    assert_eq!(leaves.len(), 2);
+    let (cell, cap, cap_geometry) = {
+        let borrowed = store.borrow();
+        let cell = leaves
+            .iter()
+            .copied()
+            .find(|node| {
+                borrowed
+                    .semantic_object_state_checked(*node)
+                    .unwrap()
+                    .surface_uv_cell()
+                    .is_some()
+            })
+            .unwrap();
+        let cap = leaves.iter().copied().find(|node| *node != cell).unwrap();
+        let cap_state = borrowed.semantic_object_state_checked(cap).unwrap();
+        assert_eq!(cap_state.surface_uv_cell(), None);
+        assert_eq!(
+            cap_state.spatial_material(),
+            SemanticSpatialMaterial::CairoPath
+        );
+        assert_eq!(
+            cap_state.cairo_path_appearance(),
+            Some(SemanticCairoPathAppearance {
+                sheen_factor: 0.2,
+                gradient_direction: Some(SemanticVec3::new(-7.0, -9.0, 10.0)),
+            })
+        );
+        assert_eq!(
+            cap_state.spatial_composition_domain(),
+            noon_core::SemanticSpatialCompositionDomain::World
+        );
+        let StoredGeometry::Resource(handle) = cap_state.content.geometry().unwrap() else {
+            panic!("cap is a retained path resource");
+        };
+        let GeometryResource::VectorPath(path) = borrowed.geometry_resources().get(handle).unwrap()
+        else {
+            panic!("cap resource is a vector path");
+        };
+        (cell, cap, std::sync::Arc::clone(path))
+    };
+    let cap_style_before = store
+        .borrow()
+        .semantic_object_state_checked(cap)
+        .unwrap()
+        .style
+        .clone();
+
+    family
+        .set_fill_by_checkerboard([Color::GREEN, Color::YELLOW], 0.25)
+        .unwrap();
+    let borrowed = store.borrow();
+    assert_eq!(
+        borrowed.semantic_object_state_checked(cap).unwrap().style,
+        cap_style_before
+    );
+    assert_eq!(
+        borrowed
+            .semantic_object_state_checked(cell)
+            .unwrap()
+            .style
+            .fill_opacity,
+        0.25
+    );
+    let cap_state = borrowed.semantic_object_state_checked(cap).unwrap();
+    let StoredGeometry::Resource(handle) = cap_state.content.geometry().unwrap() else {
+        unreachable!()
+    };
+    let GeometryResource::VectorPath(after) = borrowed.geometry_resources().get(handle).unwrap()
+    else {
+        unreachable!()
+    };
+    assert!(std::sync::Arc::ptr_eq(&cap_geometry, after));
+}
+
+#[test]
+fn malformed_surface_cell_rolls_back_mixed_family_resources_and_nodes() {
+    let store = std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
+    let before_resources = store.borrow().geometry_resources().len();
+    let before_nodes = store.borrow().len();
+    assert!(matches!(
+        SpatialPathOptions::circle(
+            1.0,
+            SemanticWorldTransform3D::IDENTITY,
+            Color::rgba(1.0, 0.0, 0.0, 0.5),
+            false,
+            SemanticVec3::ZERO,
+        ),
+        Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::SpatialPathOpacity
+        ))
+    ));
+    let invalid_cell = MeshOptions::new(
+        MeshResource::new(
+            vec![
+                SemanticVec3::ZERO,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::new(0.0, 1.0, 0.0),
+            ],
+            None,
+            vec![0, 1, 2],
+        )
+        .unwrap(),
+    )
+    .with_surface_uv_cell([0, 0]);
+    let cap = SpatialPathOptions::circle(
+        1.0,
+        SemanticWorldTransform3D::IDENTITY,
+        Color::RED,
+        false,
+        SemanticVec3::ZERO,
+    )
+    .unwrap();
+    assert!(
+        MobjectFamily::from_meshes_and_paths(store.clone(), vec![invalid_cell], vec![cap]).is_err()
+    );
+    assert_eq!(store.borrow().geometry_resources().len(), before_resources);
+    assert_eq!(store.borrow().len(), before_nodes);
+
+    let valid_mesh = MeshOptions::new(noon_geometry::cube_mesh(1.0).unwrap());
+    let invalid_cap = SpatialPathOptions {
+        path: noon_core::VectorPath::new().move_to(noon_core::Vec2::new(f32::NAN, 0.0)),
+        transform: SemanticWorldTransform3D::IDENTITY,
+        style: SemanticStyle::default(),
+        material: SemanticSpatialMaterial::Unlit,
+        cairo_appearance: None,
+    };
+    assert!(MobjectFamily::from_meshes_and_paths(
+        store.clone(),
+        vec![valid_mesh],
+        vec![invalid_cap],
+    )
+    .is_err());
+    assert_eq!(store.borrow().geometry_resources().len(), before_resources);
+    assert_eq!(store.borrow().len(), before_nodes);
+}
+
+#[test]
 fn cairo_surface_family_publishes_appearance_metadata_with_distinct_material() {
     let cairo_grid = UvSurfacePlan::new([0.0, 1.0], [0.0, 1.0], [1, 1])
         .unwrap()
@@ -295,39 +463,25 @@ fn surface_family_unlit_is_explicit_and_invalid_members_fail_atomically() {
     }));
     assert!(SurfaceFamily::from_family(surface.family().clone()).is_ok());
 
-    // The wrapper carries no shadow membership list: a later family edit is
-    // observed and checked against each current leaf before any style changes.
+    // The wrapper carries no shadow membership list: later non-cell members
+    // remain part of the same semantic family without receiving checkerboard.
     let ordinary = scene.circle(0.25).unwrap();
     surface.family().add((&ordinary).into()).unwrap();
-    let before = leaves
-        .iter()
-        .map(|leaf| {
-            scene
-                .integration_store()
-                .borrow()
-                .semantic_object_state_checked(*leaf)
-                .unwrap()
-                .clone()
-        })
-        .collect::<Vec<_>>();
-    let revision = scene.revision();
-    assert_eq!(
-        scene.set_surface_checkerboard(&surface, [Color::RED, Color::GREEN], 0.5),
-        Err(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::SurfaceCellRole
-        ))
-    );
-    assert_eq!(scene.revision(), revision);
-    for (leaf, expected) in leaves.iter().zip(before) {
-        assert_eq!(
-            scene
-                .integration_store()
-                .borrow()
-                .semantic_object_state_checked(*leaf)
-                .unwrap(),
-            &expected
-        );
-    }
+    let ordinary_before = ordinary.state().unwrap();
+    scene
+        .set_surface_checkerboard(&surface, [Color::RED, Color::GREEN], 0.5)
+        .unwrap();
+    assert_eq!(ordinary.state().unwrap(), ordinary_before);
+    assert!(leaves.iter().all(|leaf| {
+        scene
+            .integration_store()
+            .borrow()
+            .semantic_object_state_checked(*leaf)
+            .unwrap()
+            .style
+            .fill_opacity
+            == 0.5
+    }));
 
     let impostor = scene.mesh(cube().with_surface_uv_cell([0, 0])).unwrap();
     let impostor_family = scene.family(&[(&impostor).into()]).unwrap();

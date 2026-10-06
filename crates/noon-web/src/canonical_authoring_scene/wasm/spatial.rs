@@ -64,15 +64,13 @@ impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = createMeshFamily)]
     pub fn create_mesh_family(
         &mut self,
-        mut candidate: WasmMeshFamilyOptions,
+        candidate: WasmMeshFamilyOptions,
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
         let surface = candidate.has_surface_roles();
-        if surface {
-            candidate.retain_surface_roles()?;
-        }
+        let (meshes, paths) = candidate.into_parts()?;
         let family = self
             .inner
-            .create_mesh_family(candidate.options)
+            .create_mesh_family(meshes, paths)
             .map_err(js_error)?;
         if surface {
             noon::SurfaceFamily::from_family(family)
