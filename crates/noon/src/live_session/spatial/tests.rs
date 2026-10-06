@@ -83,7 +83,7 @@ fn execution_mesh(
 
 #[test]
 fn mixed_live_family_rolls_back_valid_body_when_cap_path_preparation_fails() {
-    let mut scene = Scene::new();
+    let scene = Scene::new();
     let store = std::rc::Rc::clone(scene.integration_store());
     let mut execution = scene.execution_session().unwrap();
     let before_resources = store.borrow().geometry_resources().len();

@@ -1197,7 +1197,7 @@ mod tests {
             },
         ];
         let mut scene = Scene::new();
-        let store = scene.integration_store();
+        let store = Rc::clone(scene.integration_store());
         for options in invalid {
             let before_revision = store.borrow().scene_revision();
             let before_resources = store.borrow().geometry_resources().stats();
