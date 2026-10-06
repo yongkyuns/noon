@@ -186,7 +186,7 @@ fn cairo_path_material_checks_creation_and_content_replacement_atomically() {
     .unwrap();
     let handle = store.geometry_resources.insert_mesh(mesh);
     let revision = store.scene_revision();
-    let before = store.semantic_object_state(object).unwrap().clone();
+    let before = store.semantic_object_state_checked(object).unwrap().clone();
     let mut replacement = SemanticMutationTransaction::new();
     replacement.replace_content(object, StoredGeometry::Resource(handle));
     assert_eq!(
@@ -194,7 +194,10 @@ fn cairo_path_material_checks_creation_and_content_replacement_atomically() {
         Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index: 0 })
     );
     assert_eq!(store.scene_revision(), revision);
-    assert_eq!(store.semantic_object_state(object).unwrap(), &before);
+    assert_eq!(
+        store.semantic_object_state_checked(object).unwrap(),
+        &before
+    );
 
     state.content = StoredGeometry::Resource(handle).into();
     let mut creation = SemanticMutationTransaction::new();

@@ -667,7 +667,10 @@ fn fixed_orientation_anchor_can_reference_a_family_created_in_the_same_transacti
             .spatial_anchor_family(),
         Some(family_id)
     );
-    assert_eq!(store.scene_revision(), before_revision + 1);
+    assert_eq!(
+        store.scene_revision(),
+        before_revision.checked_next().unwrap()
+    );
 }
 
 #[test]
@@ -812,7 +815,10 @@ fn invalid_pending_spatial_anchors_reject_without_publishing_any_nodes() {
     assert!(result.resolve(owner_anchor).is_some());
 
     assert_eq!(store.len(), before_len + 1);
-    assert_eq!(store.scene_revision(), before_revision + 1);
+    assert_eq!(
+        store.scene_revision(),
+        before_revision.checked_next().unwrap()
+    );
     assert_eq!(
         store.semantic_object_state_checked(target).unwrap(),
         &before_state

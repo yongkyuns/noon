@@ -204,6 +204,8 @@ fn mixed_live_family_rolls_back_valid_body_when_cap_path_preparation_fails() {
     let mut execution = scene.execution_session().unwrap();
     let before_resources = store.borrow().geometry_resources().len();
     let before_nodes = store.borrow().len();
+    let before_frame = execution.frame().clone();
+    let before_context = execution.publication_context();
     let invalid_cap = SpatialPathOptions {
         path: noon_core::VectorPath::new().move_to(noon_core::Vec2::new(f32::NAN, 0.0)),
         transform: SemanticWorldTransform3D::IDENTITY,
@@ -218,6 +220,8 @@ fn mixed_live_family_rolls_back_valid_body_when_cap_path_preparation_fails() {
         .is_err());
     assert_eq!(store.borrow().geometry_resources().len(), before_resources);
     assert_eq!(store.borrow().len(), before_nodes);
+    assert_eq!(execution.frame(), &before_frame);
+    assert_eq!(execution.publication_context(), before_context);
 }
 
 #[test]
