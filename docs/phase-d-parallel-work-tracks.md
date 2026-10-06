@@ -19,6 +19,21 @@ require capabilities outside these profiles remain explicit follow-ups in #254;
 the inventory below distinguishes them from the qualified representative scenes.
 The foundation tracks and handoffs below are not a queue to restart D1–D5.
 
+The current implementation branch adds partial angular ranges for Sphere,
+Cylinder, and Cone; arbitrary finite nonzero Cylinder/Cone directions and open
+ends; translucent unshaded Cube/Prism face families; configurable
+ThreeDAxes with retained text-label placement, straight-Line World screen
+strokes, family bounds-center queries, animated vector addition and related
+linear-transformation helpers, and an optional Cairo Surface endpoint-gradient
+resource material. These additions are pending paired/backend qualification;
+they are not recorded as merged, published, or supported by new passing raster
+evidence. Cairo axis pieces/shading remain absent. Performance work adds a
+cumulative anchor and five workload instrumentation cases, but no new measured
+performance or physical-device 60 FPS result. The existing #254 inventory below
+still retains all seven required cases. FollowingGraphCamera's exact source,
+state and raster qualification was merged in #1882; the remaining six cases
+remain unresolved. No parity claim follows from these branch implementations.
+
 ## Current follow-up scheduling
 
 Use #1879 and its linked owners for detailed scope, acceptance and current
@@ -26,10 +41,10 @@ claims; this table only identifies work that can proceed beside other work.
 
 | Parallel lane | Owner and scheduling boundary |
 | --- | --- |
-| Exact reference qualification | #254: start with FollowingGraphCamera over its existing shared prerequisites; retain all seven pinned cases and separate semantic failures from appearance differences. |
-| Rendering/default behavior | #1879: shared World-stroke/axis work can proceed beside reference qualification; give shading and staged transparency their own bounded contracts before promotion. |
-| Geometry/vector-space breadth | #1879: independent constructor, axes and composition batches consume the established substrate rather than waiting for general intersections or every reference case. |
-| Performance and pacing | #1653: physical-device attribution, cumulative anchors and representative 3D workloads run continuously beside promoted slices, reusing the existing Product Gate and diagnostics. |
+| Exact reference qualification | #254: FollowingGraphCamera was qualified in #1882 with callback replay explicitly denied. Continue the remaining six exact cases, separating semantic failures from appearance differences. |
+| Rendering/default behavior | #1879: qualify the implemented straight-Line World strokes, unshaded translucent faces and optional Surface endpoint-gradient material beside reference qualification; Cairo axis pieces/shading and general intersections remain separate. |
+| Geometry/vector-space breadth | #1879: qualify the implemented bounded primitive ranges, axes configuration/labels, family center queries, animated vector addition and linear-transformation helpers; do not infer parity from implementation alone. |
+| Performance and pacing | #1653: physical-device attribution and measured cumulative-anchor/representative-workload results run continuously beside promoted slices, reusing the existing Product Gate and diagnostics. Current branch instrumentation does not itself supply performance evidence. |
 
 Optional D6/#259 remains independent. Native CPython/Pyodide same-source
 conformance belongs to #1874, not to the native-Rust/browser-Python comparison;
