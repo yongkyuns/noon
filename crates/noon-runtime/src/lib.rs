@@ -204,8 +204,8 @@ pub struct SceneInstance {
     last_patch_stats: RuntimePatchStats,
     changes: FrameChanges,
     spatial_changes: FrameChanges,
-    pending_fixed_orientation_anchor_groups: BTreeSet<u32>,
-    pending_fixed_orientation_anchor_rows: BTreeSet<usize>,
+    pending_spatial_anchor_groups: BTreeSet<u32>,
+    pending_spatial_anchor_rows: BTreeSet<usize>,
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
@@ -257,12 +257,8 @@ impl Clone for SceneInstance {
             last_patch_stats: self.last_patch_stats,
             changes: self.changes.clone(),
             spatial_changes: self.spatial_changes.clone(),
-            pending_fixed_orientation_anchor_groups: self
-                .pending_fixed_orientation_anchor_groups
-                .clone(),
-            pending_fixed_orientation_anchor_rows: self
-                .pending_fixed_orientation_anchor_rows
-                .clone(),
+            pending_spatial_anchor_groups: self.pending_spatial_anchor_groups.clone(),
+            pending_spatial_anchor_rows: self.pending_spatial_anchor_rows.clone(),
             reactive: self.reactive.clone(),
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
@@ -355,8 +351,8 @@ impl SceneInstance {
             last_patch_stats: RuntimePatchStats::default(),
             changes: FrameChanges::all(),
             spatial_changes: FrameChanges::all(),
-            pending_fixed_orientation_anchor_groups: BTreeSet::new(),
-            pending_fixed_orientation_anchor_rows: BTreeSet::new(),
+            pending_spatial_anchor_groups: BTreeSet::new(),
+            pending_spatial_anchor_rows: BTreeSet::new(),
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
@@ -510,18 +506,23 @@ impl SceneInstance {
         self.changes.insert(object_index);
         self.spatial_changes.insert(object_index);
         if let Ok(index) = u32::try_from(object_index) {
-            let groups = self.compiled.fixed_orientation_groups_for_row(index);
-            if !groups.is_empty() {
-                self.pending_fixed_orientation_anchor_groups
-                    .extend(groups.iter().copied());
+            let contributes_spatial_geometry = self
+                .frame
+                .objects
+                .get(object_index)
+                .and_then(|object| object.spatial.as_deref())
+                .is_none_or(|spatial| spatial.camera_projection.is_none() && !spatial.point_light);
+            if contributes_spatial_geometry {
+                let groups = self.compiled.spatial_anchor_groups_for_row(index);
+                if !groups.is_empty() {
+                    self.pending_spatial_anchor_groups
+                        .extend(groups.iter().copied());
+                }
             }
             // Bounds dependencies do not imply ownership of this row's center.
             // A surviving row whose anchor was removed still derives its own
             // center even while it contributes to another retained group.
-            if self
-                .compiled
-                .fixed_orientation_group_for_row(index)
-                .is_none()
+            if self.compiled.spatial_anchor_group_for_row(index).is_none()
                 && self.frame.objects.get(object_index).is_some_and(|object| {
                     object.spatial.as_deref().is_some_and(|spatial| {
                         spatial.composition_domain
@@ -529,8 +530,18 @@ impl SceneInstance {
                     })
                 })
             {
-                self.pending_fixed_orientation_anchor_rows
-                    .insert(object_index);
+                self.pending_spatial_anchor_rows.insert(object_index);
+            }
+            if self.frame.objects.get(object_index).is_some_and(|object| {
+                object.spatial.as_deref().is_some_and(|spatial| {
+                    spatial.material == noon_core::SemanticSpatialMaterial::CairoPath
+                        && spatial
+                            .cairo_path_appearance
+                            .as_deref()
+                            .is_some_and(|a| a.gradient_direction.is_some())
+                })
+            }) {
+                self.pending_spatial_anchor_rows.insert(object_index);
             }
         }
         self.refresh_graph_dependencies_for_changed_row(object_index);
@@ -682,16 +693,13 @@ impl SceneInstance {
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::RemoveObject(object) => {
-                self.compiled.object_index(*object).map(|index| {
-                    self.compiled
-                        .fixed_orientation_groups_for_row(index)
-                        .to_vec()
-                })
-            }
-            ExecutionPatch::SetFixedOrientationGroupBoundsMembers { anchor_family, .. } => self
+            | ExecutionPatch::RemoveObject(object) => self
                 .compiled
-                .fixed_orientation_group_for_anchor(*anchor_family)
+                .object_index(*object)
+                .map(|index| self.compiled.spatial_anchor_groups_for_row(index).to_vec()),
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { anchor_family, .. } => self
+                .compiled
+                .spatial_anchor_group_for_anchor(*anchor_family)
                 .map(|group| vec![group]),
             _ => None,
         };
@@ -719,9 +727,9 @@ impl SceneInstance {
             }
         }
         if let Some(groups) = previous_anchor_groups {
-            self.pending_fixed_orientation_anchor_groups.extend(groups);
+            self.pending_spatial_anchor_groups.extend(groups);
         }
-        self.flush_fixed_orientation_anchor_changes();
+        self.flush_spatial_anchor_changes();
         match patch {
             ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track)
                 if matches!(track.property, Property::Morph | Property::Transform) =>
@@ -787,13 +795,13 @@ impl SceneInstance {
             self.apply_graph_dependency_patch(patch)?;
             return Ok(&self.frame);
         }
-        if let ExecutionPatch::SetFixedOrientationGroupBoundsMembers { anchor_family, .. } = patch {
+        if let ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { anchor_family, .. } = patch {
             self.compiled.apply_execution_patch(patch)?;
             if let Some(group) = self
                 .compiled
-                .fixed_orientation_group_for_anchor(*anchor_family)
+                .spatial_anchor_group_for_anchor(*anchor_family)
             {
-                self.pending_fixed_orientation_anchor_groups.insert(group);
+                self.pending_spatial_anchor_groups.insert(group);
             }
             self.last_patch_stats = RuntimePatchStats::default();
             return Ok(&self.frame);
@@ -1490,7 +1498,7 @@ impl SceneInstance {
             }
         }
         self.refresh_all_graph_dependencies();
-        self.refresh_all_fixed_orientation_anchors();
+        self.refresh_all_spatial_anchors();
         self.last_stats = stats;
     }
 
@@ -1542,7 +1550,7 @@ impl SceneInstance {
         }
         self.update_requested_family_animations(time);
 
-        self.flush_fixed_orientation_anchor_changes();
+        self.flush_spatial_anchor_changes();
 
         self.last_stats = stats;
         if self.frame.time != previous_time {

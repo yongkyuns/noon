@@ -120,7 +120,7 @@ impl CompiledScene {
                 // before publication. No row or channel payload is replaced.
             }
             ExecutionPatch::SetGraphDependencies { .. }
-            | ExecutionPatch::SetFixedOrientationGroupBoundsMembers { .. } => return None,
+            | ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { .. } => return None,
         }
         let saved_motion_payloads: usize = rows
             .iter()

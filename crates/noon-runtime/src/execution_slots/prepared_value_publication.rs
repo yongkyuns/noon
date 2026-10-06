@@ -226,13 +226,10 @@ impl SceneInstance {
             if let Some(anchor_family) = self.frame.objects[object_index]
                 .spatial
                 .as_deref()
-                .and_then(|spatial| spatial.fixed_orientation_anchor_family)
+                .and_then(|spatial| spatial.spatial_anchor_family)
             {
-                if let Some(group) = self
-                    .compiled
-                    .fixed_orientation_group_for_anchor(anchor_family)
-                {
-                    self.pending_fixed_orientation_anchor_groups.insert(group);
+                if let Some(group) = self.compiled.spatial_anchor_group_for_anchor(anchor_family) {
+                    self.pending_spatial_anchor_groups.insert(group);
                 }
             }
             match write {
@@ -320,7 +317,7 @@ impl SceneInstance {
             }
         }
 
-        self.flush_fixed_orientation_anchor_changes();
+        self.flush_spatial_anchor_changes();
 
         self.publication = PublicationContext::new(
             prepared.scene_revision,

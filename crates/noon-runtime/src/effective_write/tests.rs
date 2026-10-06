@@ -562,8 +562,9 @@ fn effective_world_transform_updates_only_frame_epoch_and_rejects_bad_camera_sca
         point_light: false,
         composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
         draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
-        fixed_orientation_anchor_family: None,
+        spatial_anchor_family: None,
         fixed_orientation_center: None,
+        cairo_path_appearance: None,
     }));
     let mut instance = SceneInstance::new(CompiledScene::compile_objects(vec![mesh], &[]).unwrap());
     instance.take_frame_changes();
@@ -618,8 +619,9 @@ fn effective_world_transform_updates_only_frame_epoch_and_rejects_bad_camera_sca
         point_light: false,
         composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
         draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
-        fixed_orientation_anchor_family: None,
+        spatial_anchor_family: None,
         fixed_orientation_center: None,
+        cairo_path_appearance: None,
     }));
     let camera_instance =
         SceneInstance::new(CompiledScene::compile_objects(vec![camera], &[]).unwrap());
@@ -659,8 +661,9 @@ fn presence_effective_write_is_valid_on_spatial_mesh_rows() {
         point_light: false,
         composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
         draw_kind: noon_compile::CompiledSpatialDrawKind::Mesh,
-        fixed_orientation_anchor_family: None,
+        spatial_anchor_family: None,
         fixed_orientation_center: None,
+        cairo_path_appearance: None,
     }));
     let mut instance = SceneInstance::new(CompiledScene::compile_objects(vec![mesh], &[]).unwrap());
     let phase = instance.prepare_advance_to(0.0).unwrap();
@@ -765,6 +768,113 @@ fn fixed_orientation_family_rows_share_and_locally_refresh_world_bounds_center()
 }
 
 #[test]
+fn cairo_path_family_gradient_uses_transformed_path_controls_and_refreshes_locally() {
+    let mut store = SemanticStore::new();
+    let anchor = store.insert_family();
+    let make_path = |path: noon_core::VectorPath, x: f64, y: f64| {
+        let mut state = SemanticObjectState::new(StoredGeometry::VectorPath(path));
+        state.set_spatial_material(noon_core::SemanticSpatialMaterial::CairoPath);
+        state
+            .set_cairo_path_appearance(noon_core::SemanticCairoPathAppearance {
+                sheen_factor: 0.2,
+                gradient_direction: Some(SemanticVec3::new(0.0, 1.0, 0.0)),
+            })
+            .unwrap();
+        state.transform = SemanticTransform {
+            translation: SemanticVec3::new(x, y, 0.0),
+            scale: SemanticVec3::new(1.0, 1.0, 1.0),
+            orientation: SemanticOrientation::Spatial(noon_core::SemanticRotation3D::IDENTITY),
+        };
+        store.insert_semantic_object(state)
+    };
+    let owner = make_path(
+        noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(0.0, 0.0))
+            .line_to(noon_core::Vec2::new(1.0, 0.0)),
+        0.0,
+        0.0,
+    );
+    let shaft = make_path(
+        noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(-2.0, 0.0))
+            .line_to(noon_core::Vec2::new(2.0, 0.0)),
+        0.0,
+        1.0,
+    );
+    let tip = make_path(
+        noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(1.0, 1.0))
+            .line_to(noon_core::Vec2::new(2.0, 1.0))
+            .line_to(noon_core::Vec2::new(1.5, 2.0))
+            .close(),
+        0.0,
+        0.0,
+    );
+    for child in [owner, shaft, tip] {
+        store.add_semantic_family_member(anchor, child).unwrap();
+    }
+    let mut declaration = SemanticMutationTransaction::new();
+    declaration.set_spatial_composition_domain_with_anchor(
+        owner,
+        SemanticSpatialCompositionDomain::World,
+        Some(anchor),
+    );
+    declaration.apply(&mut store).unwrap();
+
+    let mut index = SemanticExecutionIndex::new();
+    let lowered = lower_semantic_execution_root(&store, anchor, &mut index).unwrap();
+    let owner_id = index.execution_object_id(owner).unwrap();
+    let mut instance = SceneInstance::from_semantic_execution(lowered);
+    let bounds = instance.frame().objects[0]
+        .spatial
+        .as_deref()
+        .unwrap()
+        .cairo_path_appearance
+        .as_deref()
+        .unwrap()
+        .world_family_bounds
+        .unwrap();
+    assert_eq!(bounds.min, SemanticVec3::new(-2.0, 0.0, 0.0));
+    assert_eq!(bounds.max, SemanticVec3::new(2.0, 2.0, 0.0));
+    instance.take_frame_changes();
+
+    let moved = noon_core::SemanticWorldTransform3D::new(
+        SemanticVec3::new(0.0, 0.0, 3.0),
+        noon_core::SemanticRotation3D::IDENTITY,
+        SemanticVec3::new(1.0, 1.0, 1.0),
+    )
+    .unwrap();
+    commit(
+        &mut instance,
+        0.0,
+        &[EffectivePropertyWrite::WorldTransform {
+            object: index.execution_object_id(shaft).unwrap(),
+            world: moved,
+        }],
+    );
+    let bounds = instance.frame().objects[0]
+        .spatial
+        .as_deref()
+        .unwrap()
+        .cairo_path_appearance
+        .as_deref()
+        .unwrap()
+        .world_family_bounds
+        .unwrap();
+    assert_eq!(bounds.min.z, 0.0);
+    assert_eq!(bounds.max.z, 3.0);
+    assert_eq!(instance.take_frame_changes().object_indices(), &[0, 1]);
+    assert_eq!(
+        instance.frame().objects[0]
+            .world_transform()
+            .unwrap()
+            .translation
+            .z,
+        0.0
+    );
+}
+
+#[test]
 fn prepared_spatial_state_promotes_one_row_and_preserves_2d_payload() {
     let id = object();
     let mut instance = SceneInstance::new(scene(2, &[]));
@@ -781,8 +891,9 @@ fn prepared_spatial_state_promotes_one_row_and_preserves_2d_payload() {
         point_light: false,
         composition_domain: noon_core::SemanticSpatialCompositionDomain::FixedFrame,
         draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
-        fixed_orientation_anchor_family: None,
+        spatial_anchor_family: None,
         fixed_orientation_center: None,
+        cairo_path_appearance: None,
     };
     instance
         .apply_execution_patch(&noon_compile::ExecutionPatch::SetSpatialState {
