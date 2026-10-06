@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { summarizeSamples } from "../web/frame-metrics.js";
 import { serveRepository } from "./browser-test-server.mjs";
+import { createRuntimeBuildIdentity } from "./build-runtime-identity.mjs";
 
 const { chromium } = playwright;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,6 +16,10 @@ const frames = positiveInteger(process.env.NOON_HOST_CALLBACK_FRAMES ?? "300", "
 const warmup = positiveInteger(process.env.NOON_HOST_CALLBACK_WARMUP ?? "30", "warmup");
 const port = positiveInteger(process.env.NOON_HOST_CALLBACK_PORT ?? "4184", "port");
 const artifactPath = path.resolve(repoRoot, process.env.NOON_HOST_CALLBACK_ARTIFACT ?? "perf-artifacts/host-callback-perf.json");
+const runtimeIdentity = JSON.parse(await readFile(path.join(repoRoot, "web/runtime-build-identity.json"), "utf8"));
+assert.deepEqual(await createRuntimeBuildIdentity(repoRoot), runtimeIdentity,
+  "callback profile requires a clean source snapshot and matching runtime package");
+assert.match(runtimeIdentity.sourceRevision ?? "", /^[0-9a-f]{40}$/, "callback profile requires a source revision");
 const server = await serveRepository(repoRoot, port);
 const { baseUrl } = server;
 
@@ -92,14 +96,17 @@ try {
     );
     await page.close();
   }
-  const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
+  assert.deepEqual(await createRuntimeBuildIdentity(repoRoot), runtimeIdentity,
+    "callback profile source/package changed during measurement");
   const artifact = {
     schemaVersion: 4,
     benchmark: "Noon canonical Python callback active-set matrix",
     generatedAt: new Date().toISOString(),
-    commit: commit.status === 0 ? commit.stdout.trim() : null,
+    commit: runtimeIdentity.sourceRevision,
+    runtimeIdentity,
+    browserVersion: browser.version(),
     host: { platform: os.platform(), release: os.release(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? null },
-    configuration: { cases, frames, warmup, rendererBackend: "WebGL2 (SwiftShader)" },
+    configuration: { cases, frames, warmup, collectTimings: true, rendererBackend: "WebGL2 (SwiftShader)" },
     results,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
