@@ -74,6 +74,16 @@ These are explicit iteration commands, not change-based task selection. Use
 feature, browser, parity, golden, differential, performance and platform workflows
 remain qualification requirements; focused passes do not replace them.
 
+The `rust`, `test`, and `full` entrypoints run workspace unit/integration/binary
+tests with `--lib --tests --bins`, followed by a separate `--doc` test command.
+This avoids linking non-test example programs into test builds; Cargo's `--tests`
+selection also includes examples configured with `test = true`. A tiny isolated
+Cargo fixture confirms that such an example runs alongside library, binary, and
+integration tests. Current workspace metadata has 144 examples and none marked
+`test = true` or `doctest = true`; workspace `check` and Clippy still use
+`--all-targets` and compile every example. Doc tests remain an explicit separate
+step.
+
 Each architecture guard reports wall time. Run the regression suites with:
 
 ```sh
