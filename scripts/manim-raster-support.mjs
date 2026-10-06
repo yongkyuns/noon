@@ -314,6 +314,76 @@ export function isSoftwareGpuAdapter(info) {
     .some((needle) => description.includes(needle));
 }
 
+export function classifyBrowserGpuDiagnostics(diagnostics) {
+  if (diagnostics?.api === "webgpu") {
+    const adapter = diagnostics.adapter;
+    if (!adapter || !isIdentifiedGpuAdapter(adapter)) return "unknown";
+    return isSoftwareGpuAdapter(adapter) ? "software" : "hardware-like-unverified";
+  }
+  const rendererInfo = {
+    vendor: String(diagnostics?.vendor ?? ""),
+    device: String(diagnostics?.renderer ?? ""),
+  };
+  if (![rendererInfo.vendor, rendererInfo.device].some((value) => value.trim() !== "")) return "unknown";
+  return isSoftwareGpuAdapter(rendererInfo) ? "software" : "hardware-like-unverified";
+}
+
+// Classify only identity read from the renderer's actual WGPU device. The
+// descriptor can distinguish known software paths from an identified adapter,
+// but it cannot certify a physical display or prove hardware provenance.
+export function classifyRendererGpuIdentity(info, expectedBackend) {
+  if (!info || typeof info !== "object" || !["webgpu", "webgl"].includes(expectedBackend)) {
+    return "unknown";
+  }
+  const expected = expectedBackend === "webgpu" ? "BrowserWebGpu" : "Gl";
+  if (info.backend !== expected) return "unknown";
+  const descriptor = {
+    vendor: Number(info.vendor) > 0 ? String(info.vendor) : "",
+    device: Number(info.device) > 0 ? String(info.device) : "",
+    description: [info.name, info.driver, info.driverInfo]
+      .filter((value) => typeof value === "string").join(" "),
+    architecture: String(info.deviceType ?? ""),
+    driver: String(info.driver ?? ""),
+    driverInfo: String(info.driverInfo ?? ""),
+  };
+  const hasIdentity = [descriptor.vendor, descriptor.device, descriptor.description]
+    .some((value) => value.trim() !== "");
+  if (String(info.deviceType ?? "").toLowerCase() === "cpu") return "software";
+  if (!hasIdentity) return "unknown";
+  if (isSoftwareGpuAdapter(descriptor)) {
+    return "software";
+  }
+  return "hardware-like-unverified";
+}
+
+export function validateRendererGpuMode(mode, identity, expectedBackend) {
+  if (mode === null || mode === undefined) return null;
+  if (!["software", "hardware"].includes(mode)) {
+    throw new Error(`NOON_CORPUS_GPU_MODE must be hardware or software`);
+  }
+  const classification = classifyRendererGpuIdentity(identity, expectedBackend);
+  if (classification === "unknown") {
+    throw new Error(`renderer GPU identity is unknown for explicit ${mode} qualification`);
+  }
+  if (mode === "hardware" && classification !== "hardware-like-unverified") {
+    throw new Error("renderer selected a known software adapter for hardware qualification");
+  }
+  if (mode === "software" && classification !== "software") {
+    throw new Error("renderer did not select an identified software adapter for software qualification");
+  }
+  return classification;
+}
+
+export function rendererGpuQualification(mode, identity, expectedBackend) {
+  const classification = classifyRendererGpuIdentity(identity, expectedBackend);
+  try {
+    validateRendererGpuMode(mode, identity, expectedBackend);
+    return { mode, passed: true, classification, error: null };
+  } catch (error) {
+    return { mode, passed: false, classification, error: String(error?.message ?? error) };
+  }
+}
+
 // Runtime geometry uses f32. Absolute shared-property callbacks can round by a
 // fraction of a micro-unit as sample cadence changes. Identities, shape, order
 // and scalar values beyond this fixed numerical bound must still agree.

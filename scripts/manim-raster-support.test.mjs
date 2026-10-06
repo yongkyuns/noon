@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   compareEffectiveFrames,
+  classifyBrowserGpuDiagnostics,
+  classifyRendererGpuIdentity,
   dominantImageRgba,
   rasterFixtureSource,
   resolveQualifiedBackend,
+  rendererGpuQualification,
+  validateRendererGpuMode,
 } from "./manim-raster-support.mjs";
 
 const frame = { objects: [{ id: 7, present: true, transform: { y: 3.9542133808135986 }, opacity: 0.5 }] };
@@ -19,6 +23,43 @@ test("explicit paired qualification retains strict backend matching", () => {
   assert.throws(() => resolveQualifiedBackend("WebGL2", "WebGPU"), /expected WebGL2/);
   assert.throws(() => resolveQualifiedBackend("automatic", "Other"), /unsupported backend/);
   assert.throws(() => resolveQualifiedBackend("Other", "WebGPU"), /unsupported expected/);
+});
+
+test("renderer GPU qualification rejects unknown, mismatched, and software identity", () => {
+  const hardware = { backend: "BrowserWebGpu", vendor: 1452, device: 1,
+    name: "Apple M4", deviceType: "IntegratedGpu", driver: "Metal", driverInfo: "" };
+  const software = { ...hardware, name: "SwiftShader Device (Subzero)" };
+  const unknown = { backend: "BrowserWebGpu", vendor: 0, device: 0,
+    name: "", deviceType: "Unknown", driver: "", driverInfo: "" };
+  const emptyOtherType = { ...unknown, deviceType: "Other" };
+  assert.equal(classifyRendererGpuIdentity(hardware, "webgpu"), "hardware-like-unverified");
+  assert.equal(validateRendererGpuMode("hardware", hardware, "webgpu"), "hardware-like-unverified");
+  assert.equal(classifyRendererGpuIdentity(software, "webgpu"), "software");
+  assert.equal(validateRendererGpuMode("software", software, "webgpu"), "software");
+  assert.throws(() => validateRendererGpuMode("hardware", software, "webgpu"), /known software/);
+  assert.throws(() => validateRendererGpuMode("hardware", unknown, "webgpu"), /identity is unknown/);
+  assert.equal(classifyRendererGpuIdentity(emptyOtherType, "webgpu"), "unknown");
+  assert.throws(() => validateRendererGpuMode("hardware", emptyOtherType, "webgpu"), /identity is unknown/);
+  assert.throws(() => validateRendererGpuMode("software", hardware, "webgpu"), /did not select/);
+  assert.throws(() => validateRendererGpuMode("hardware", hardware, "webgl"), /identity is unknown/);
+  assert.deepEqual(rendererGpuQualification("hardware", software, "webgpu"), {
+    mode: "hardware", passed: false, classification: "software",
+    error: "renderer selected a known software adapter for hardware qualification",
+  });
+  assert.deepEqual(rendererGpuQualification("hardware", unknown, "webgpu"), {
+    mode: "hardware", passed: false, classification: "unknown",
+    error: "renderer GPU identity is unknown for explicit hardware qualification",
+  });
+});
+
+test("default corpus browser diagnostics retain their standalone classifier path", () => {
+  assert.equal(classifyBrowserGpuDiagnostics({ api: "webgpu", adapter: {
+    vendor: "Apple", architecture: "Apple GPU", device: "M4", description: "Apple M4",
+  } }), "hardware-like-unverified");
+  assert.equal(classifyBrowserGpuDiagnostics({ api: "webgpu", adapter: {
+    vendor: "Google", architecture: "SwiftShader", device: "", description: "SwiftShader Device",
+  } }), "software");
+  assert.equal(classifyBrowserGpuDiagnostics({ api: "webgl2", vendor: null, renderer: null }), "unknown");
 });
 
 test("full-image background estimate ignores a colored perimeter", () => {

@@ -20,6 +20,7 @@ const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
 const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
 const rendererMetricsSampling = parameters.get("rendererMetricsSampling") ?? "dense";
+const includeRendererGpuIdentity = parameters.get("includeRendererGpuIdentity") === "1";
 if (!["dense", "sparse"].includes(rendererMetricsSampling)) {
   throw new Error("unsupported renderer metrics sampling mode");
 }
@@ -121,6 +122,7 @@ try {
   const before = (await execution.metrics({
     profilePublicationStages: rendererSamples !== null,
     profileRenderSubstages: rendererSamples !== null,
+    includeGpuIdentity: includeRendererGpuIdentity,
   })).metrics;
   const cadence = new FrameMetrics({ targetHz });
   jank = new BrowserJankMonitor();
@@ -255,6 +257,7 @@ try {
     environment: {
       userAgent: navigator.userAgent,
       rendererBackend: execution.rendererBackend,
+      ...(includeRendererGpuIdentity ? { rendererGpuIdentity: before.rendererGpuIdentity } : {}),
       devicePixelRatio: window.devicePixelRatio || 1,
       viewportCssPixels: [canvas.clientWidth, canvas.clientHeight],
       targetHz,

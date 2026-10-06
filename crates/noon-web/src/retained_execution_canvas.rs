@@ -998,6 +998,23 @@ mod wasm {
             }
         }
 
+        /// Return identity reported by the adapter backing this renderer's device.
+        /// This is intentionally an explicit diagnostics call; it is not read per frame.
+        #[wasm_bindgen(js_name = rendererAdapterInfo)]
+        pub fn renderer_adapter_info(&self) -> Result<String, JsValue> {
+            let info = self.device.adapter_info();
+            serde_json::to_string(&serde_json::json!({
+                "backend": format!("{:?}", info.backend),
+                "vendor": info.vendor,
+                "device": info.device,
+                "name": info.name,
+                "deviceType": format!("{:?}", info.device_type),
+                "driver": info.driver,
+                "driverInfo": info.driver_info,
+            }))
+            .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = gpuGeneration)]
         pub fn gpu_generation(&self) -> u32 {
             self.gpu_generation
