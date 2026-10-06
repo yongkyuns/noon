@@ -4,7 +4,7 @@ import path from "node:path";
 import { summarizeSamples } from "../web/frame-metrics.js";
 import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
 import { summarizePackageSizes } from "../.github/ci/wasm-build.mjs";
-import { pairedCostConfidence, pairedThroughput } from "./paired-product-metrics.mjs";
+import { pairedCostConfidence, pairedThroughput, productPairOrder } from "./paired-product-metrics.mjs";
 
 const [baselineDirArg, candidateDirArg, mode, count] = process.argv.slice(2);
 const pairCount = mode === undefined ? 1 : Number(count);
@@ -54,7 +54,7 @@ for (let index = 1; index <= pairCount; index += 1) {
       `${name} product package identity is missing`);
     if (pairCount > 1) {
       assert.equal(report.label, name, "product pair role changed");
-      assert.deepEqual(report.pair, { index, position: index % 2 === 0 ? 2 - side : side + 1 },
+      assert.deepEqual(report.pair, { index, position: productPairOrder(index).indexOf(name) + 1 },
         "product pairs must use the declared alternating order");
       assert.ok(Number.isFinite(report.startedAtMs) && Number.isFinite(report.finishedAtMs) &&
         report.finishedAtMs > report.startedAtMs, "product run interval is invalid");
@@ -192,7 +192,7 @@ const renderCostPaired = pairCount > 1 && costStatistics !== null ? pairedCostCo
 const comparison = {
   schemaVersion: 2,
   protocol: { pairs: pairCount, aggregate: "arithmetic-mean", order: pairs.map((_, index) =>
-    index === 1 ? ["candidate", "baseline"] : ["baseline", "candidate"]) },
+    productPairOrder(index + 1)) },
   measurements: pairs.map(({ directories, reports }) => ({ directories,
     baseline: reports[0], candidate: reports[1] })),
   statistics: { baseline: statistics[0], candidate: statistics[1] },

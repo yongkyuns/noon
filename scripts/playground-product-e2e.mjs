@@ -8,6 +8,7 @@ import playwright from "playwright";
 import pngjs from "pngjs";
 import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
+import { readProductPair } from "./paired-product-metrics.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -24,15 +25,7 @@ const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle"
 const measurement = productMeasurement(exampleId);
 const MIN_PRODUCT_MEASUREMENT_MS = 1_000;
 const startedAtMs = Date.now();
-const pair = process.env.NOON_PRODUCT_PAIR_INDEX === undefined ? null : {
-  index: Number(process.env.NOON_PRODUCT_PAIR_INDEX),
-  position: Number(process.env.NOON_PRODUCT_PAIR_POSITION),
-};
-if (pair !== null) {
-  assert.ok(Number.isSafeInteger(pair.index) && pair.index >= 1 && pair.index <= 3,
-    "product pair index must be between one and three");
-  assert.ok(pair.position === 1 || pair.position === 2, "product pair position must be one or two");
-}
+const pair = readProductPair(process.env);
 
 await mkdir(artifactDir, { recursive: true });
 

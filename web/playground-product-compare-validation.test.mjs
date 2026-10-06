@@ -6,9 +6,9 @@ import path from "node:path";
 import test from "node:test";
 import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "../scripts/playground-product-fps.mjs";
 import { summarizePackageSizes } from "../.github/ci/wasm-build.mjs";
+import { qualifyProductMetrics } from "../scripts/paired-product-metrics.mjs";
 
 const command = new URL("../scripts/playground-product-compare.mjs", import.meta.url);
-const pairCountArgs = ["--pairs", "3"];
 const imageTestOptions = { skip: process.env.NOON_PRODUCT_IMAGE_TESTS === "1"
   ? false : "PNG controls run in Product Gate after dependency setup" };
 const report = () => ({
@@ -164,27 +164,27 @@ function cohortReport(side, index, position, startedAtMs, fps = 60) {
 }
 
 async function createCohort(root, {
+  pairCount = 3,
   baselineFps = [59, 62, 60],
   candidateFps = [59, 61, 63],
   visualRegressionPair = null,
   withImages = false,
   mutateReport = () => {},
 } = {}) {
-  const sequence = [
-    [1, "baseline"], [1, "candidate"],
-    [2, "candidate"], [2, "baseline"],
-    [3, "baseline"], [3, "candidate"],
-  ];
+  const sequence = Array.from({ length: pairCount }, (_, i) => i % 2 === 1
+    ? [[i + 1, "candidate"], [i + 1, "baseline"]]
+    : [[i + 1, "baseline"], [i + 1, "candidate"]]).flat();
   const schedule = new Map(sequence.map((item, index) => [item.join(":"), index]));
-  for (let index = 1; index <= 3; index += 1) {
+  for (let index = 1; index <= pairCount; index += 1) {
     for (const side of ["baseline", "candidate"]) {
       const trialDirectory = path.join(root, side, `trial-${index}`);
       await mkdir(trialDirectory, { recursive: true });
-      const position = index === 2
+      const position = index % 2 === 0
         ? (side === "candidate" ? 1 : 2)
         : (side === "baseline" ? 1 : 2);
       const scheduleIndex = schedule.get(`${index}:${side}`);
-      const value = side === "baseline" ? baselineFps[index - 1] : candidateFps[index - 1];
+      const samples = side === "baseline" ? baselineFps : candidateFps;
+      const value = samples[(index - 1) % samples.length];
       const input = cohortReport(side, index, position, scheduleIndex * 1_000, value);
       mutateReport(input, { side, index });
       await writeFile(path.join(trialDirectory, "report.json"), JSON.stringify(input));
@@ -195,9 +195,9 @@ async function createCohort(root, {
   }
 }
 
-async function runCohort(root, overrides = {}) {
+async function runCohort(root, overrides = {}, pairCount = 3) {
   return spawnSync(process.execPath, [command.pathname,
-    path.join(root, "baseline"), path.join(root, "candidate"), ...pairCountArgs], {
+    path.join(root, "baseline"), path.join(root, "candidate"), "--pairs", String(pairCount)], {
     encoding: "utf8", timeout: 10_000, env: cleanEnvironment(overrides),
   });
 }
@@ -340,3 +340,53 @@ for (const [name, mutate, expected] of [
     await rejectsReport(baseline, candidate, expected);
   });
 }
+
+
+for (const camera of [false, true]) {
+  test(`seven ${camera ? "camera" : "square"} pairs reach comparison with correct order and qualifications`, imageTestOptions, async () => {
+    await withTempDirectory("noon-product-seven-", async directory => {
+      await createCohort(directory, { pairCount: 7, withImages: true,
+        baselineFps: Array(7).fill(60), candidateFps: Array(7).fill(60),
+        mutateReport: input => {
+          if (camera) Object.assign(input, cameraReport(), {
+            screenshot: input.screenshot, runtimeIdentity: input.runtimeIdentity });
+        } });
+      const result = await runCohort(directory, {}, 7);
+      assert.equal(result.status, 0, result.stderr);
+      const comparison = JSON.parse(await readFile(path.join(directory, "candidate", "comparison.json")));
+      assert.equal(comparison.measurements.length, 7);
+      assert.equal(comparison.visual.pairs.length, 7);
+      assert.deepEqual(comparison.protocol.order, [
+        ["baseline", "candidate"], ["candidate", "baseline"], ["baseline", "candidate"],
+        ["candidate", "baseline"], ["baseline", "candidate"], ["candidate", "baseline"],
+        ["baseline", "candidate"],
+      ]);
+      const q = qualifyProductMetrics(comparison);
+      assert.equal(q.status, "pass");
+      assert.equal(q.render?.status ?? null, camera ? "pass" : null);
+    });
+  });
+}
+
+test("pair seven visual failure is not hidden by six matching pairs", imageTestOptions, async () => {
+  await withTempDirectory("noon-product-seven-visual-", async directory => {
+    await createCohort(directory, { pairCount: 7, withImages: true, visualRegressionPair: 7 });
+    const result = await runCohort(directory, {}, 7);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /pair 7 deterministic frame visual diff/);
+    const c = JSON.parse(await readFile(path.join(directory, "candidate", "comparison.json")));
+    assert.ok(c.visual.pairs.slice(0, 6).every(pair => pair.diffRatio === 0));
+    assert.equal(c.visual.pairs[6].diffRatio, 1);
+  });
+});
+
+test("pair six ordering error is rejected before image decoding", async () => {
+  await withTempDirectory("noon-product-six-order-", async directory => {
+    await createCohort(directory, { pairCount: 7, mutateReport: (input, { side, index }) => {
+      if (index === 6 && side === "candidate") input.pair.position = 2;
+    } });
+    const result = await runCohort(directory, {}, 7);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /declared alternating order/);
+  });
+});
