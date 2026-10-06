@@ -260,6 +260,12 @@ impl Context {
         self.available()?;
         self.with_live(|live| live.add(&target.handle).map(|_| ()))
     }
+    /// Match the browser value-only projection of the same shared observation.
+    #[pyo3(name = "queryMobjectCenter")]
+    fn center(&mut self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
+        let layout = self.layout(target)?;
+        Ok(layout.center)
+    }
     #[pyo3(name = "queryMobjectLayout")]
     fn layout(&mut self, target: &MobjectHandle) -> PyResult<LayoutObservation> {
         self.require_active()?;

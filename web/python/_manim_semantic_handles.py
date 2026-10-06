@@ -196,7 +196,7 @@ def _layout_center(value: _base.Mobject) -> _base.Vec2:
     return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
 
-def _bound_layout_observation(value: _base.Mobject):
+def _bound_layout_observation(value: _base.Mobject, query_name="queryMobjectLayout"):
     """Ask the owning Rust context for one coherent ordinary live observation."""
 
     if (
@@ -208,7 +208,7 @@ def _bound_layout_observation(value: _base.Mobject):
     if handle is None:
         return None
     context = getattr(value._scene, "_canonical_authoring_context", None)
-    query = getattr(context, "queryMobjectLayout", None)
+    query = getattr(context, query_name, None)
     return None if query is None else engine_call(query, handle)
 
 
@@ -657,13 +657,15 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))
-    observed = _bound_layout_observation(self)
-    if observed is not None:
-        return _base.Vec2(float(observed.centerX), float(observed.centerY))
-    handle = _handle_for(self)
-    if handle is not None:
-        return _layout_center(self)
-    raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
+    # A value-only projection keeps the same coherent Rust observation without
+    # owning a WASM layout object and making two extra WASM property calls.
+    coordinates = _bound_layout_observation(self, "queryMobjectCenter")
+    if coordinates is None:
+        handle = _handle_for(self)
+        if handle is None:
+            raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
+        coordinates = engine_call(handle.centerCoordinates)
+    return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
 
 
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:

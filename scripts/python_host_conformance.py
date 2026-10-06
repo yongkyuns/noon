@@ -73,12 +73,14 @@ def lifecycle_guards() -> dict:
     # A same numeric slot/generation in another arena is still foreign.
     handle = a.geometry(GeometryOptions.circle(0.5))
     foreign_context = b.context()
-    try:
-        engine_call(foreign_context.containsMobject, handle)
-    except NoonForeignHandleError:
-        pass
-    else:
-        raise AssertionError("foreign store provenance was not checked")
+    assert handle.centerCoordinates() == (0.0, 0.0)
+    for query in (foreign_context.containsMobject, foreign_context.queryMobjectCenter):
+        try:
+            engine_call(query, handle)
+        except NoonForeignHandleError:
+            pass
+        else:
+            raise AssertionError("foreign store provenance was not checked")
     refs = []
     before = len(_manim_updaters._CANONICAL_SESSIONS)
     before_tracked = len(_manim_updaters._TRACKED_MOBJECTS)
@@ -92,22 +94,24 @@ def lifecycle_guards() -> dict:
         for _ in range(32):
             scene = await run_scene(Repeated, sample_hz=4)
             obj = scene.obj
+            assert obj.get_center() == (0.25, 0.0)
             refs.append(weakref.ref(scene))
             close_scene(scene)
             close_scene(scene)  # idempotent
-            try:
-                obj.shift(RIGHT)
-            except NoonOwnershipError:
-                pass
-            else:
-                raise AssertionError("retired scene accepted a persistent write")
+            for operation in (lambda: obj.shift(RIGHT), obj.get_center):
+                try:
+                    operation()
+                except NoonOwnershipError:
+                    pass
+                else:
+                    raise AssertionError("retired scene accepted a persistent read or write")
     asyncio.run(loop())
     gc.collect()
     assert all(ref() is None for ref in refs), "retired native scene retained by Python"
     assert len(_manim_updaters._CANONICAL_SESSIONS) == before
     assert len(_manim_updaters._TRACKED_MOBJECTS) == before_tracked
     return {"iterations": len(refs), "retained_scenes": 0, "foreign_handle_rejected": True,
-            "retired_write_rejected": True, "callback_tables_restored": True}
+            "retired_write_rejected": True, "retired_read_rejected": True, "callback_tables_restored": True}
 
 
 def module_failure_guards() -> dict:

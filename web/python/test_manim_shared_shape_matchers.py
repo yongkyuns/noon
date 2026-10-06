@@ -95,6 +95,9 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                 def snapshotJson(self):
                     return json.dumps(self.snapshot, separators=(",", ":"))
 
+                def centerCoordinates(self):
+                    return (self.centerX, self.centerY)
+
                 @property
                 def centerX(self):
                     return self.wireTranslationX
@@ -193,6 +196,9 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     min_y = min(member.criticalY(0.0, -1.0) for member in self.members)
                     max_y = max(member.criticalY(0.0, 1.0) for member in self.members)
                     return min_x, min_y, max_x, max_y
+
+                def centerCoordinates(self):
+                    return (self.centerX, self.centerY)
 
                 @property
                 def centerX(self):

@@ -33,6 +33,10 @@ impl MobjectHandle {
     pub fn target_editor(&self) -> Result<MobjectHandle, PyErr> {
         self.clone_handle()
     }
+    #[pyo3(name = "centerCoordinates")]
+    pub fn center_coordinates(&self) -> Result<(f64, f64), PyErr> {
+        self.handle.center().map_err(engine_error)
+    }
     #[getter(centerX)]
     pub fn center_x(&self) -> Result<f64, PyErr> {
         Ok(self.handle.center().map_err(engine_error)?.0)
