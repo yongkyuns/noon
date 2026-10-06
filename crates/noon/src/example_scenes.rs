@@ -55,6 +55,7 @@ pub mod spatial_camera_labels;
 pub mod spatial_mesh;
 pub mod spatial_primitives;
 pub mod spatial_surface;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod spatial_three_d_axes;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod special_camera_settings;
@@ -78,6 +79,7 @@ pub mod timed_composition;
 #[cfg(feature = "latex")]
 pub mod variable;
 pub mod vector_space;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod vector_space_features;
 pub mod zoomed_scene;
 

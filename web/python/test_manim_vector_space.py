@@ -296,13 +296,21 @@ class ManimVectorSpaceTests(unittest.TestCase):
             fake_js.noonResolveAnimationOptions = lambda *args: None
             sys.modules["js"] = fake_js
 
-            import _manim_animate, _manim_arrow, _manim_compat, _manim_scene
+            import _manim_animate, _manim_arrow, _manim_compat, _manim_composition, _manim_scene
             from noon import LinearTransformationScene
 
             class Animation:
                 def __init__(self, *args, **kwargs): self.args, self.kwargs = args, kwargs
             _manim_animate.ApplyMatrix = Animation
             _manim_animate.Transform = Animation
+            class Add:
+                def __init__(self, mobject, run_time=0.0):
+                    self.mobject, self.run_time = mobject, run_time
+            class AnimationGroup:
+                def __init__(self, *animations, **kwargs):
+                    self.animations, self.kwargs = animations, kwargs
+            _manim_composition.Add = Add
+            _manim_composition.AnimationGroup = AnimationGroup
             class Arrow: pass
             _manim_arrow.Arrow = Arrow
 
@@ -313,11 +321,14 @@ class ManimVectorSpaceTests(unittest.TestCase):
 
             class Family:
                 def __init__(self, *members): self.members = members
-                def copy(self): return Ghost(self.members)
+                def copy(self): return Ghost(tuple(GhostLeaf(member) for member in self.members))
+            class GhostLeaf:
+                def __init__(self, source): self.source = source
             class Ghost:
                 def __init__(self, members): self.members, self.opacity = members, 1.0
                 def fade(self, darkness): self.opacity *= 1.0 - darkness; return self
             _manim_compat.Group = Family
+            _manim_compat._leaf_mobjects = lambda value: list(value.members)
 
             class Transformable:
                 def _copy_for_animate_target(self): return object()
@@ -345,10 +356,17 @@ class ManimVectorSpaceTests(unittest.TestCase):
 
             scene.apply_matrix([[0, 1], [1, 0]])
             assert edits[0][1].args[1] is mobject
-            assert len(additions) == 1 and abs(additions[0].opacity - 0.3) < 1e-9
-            assert additions[0].members == (vector,), "only pinned vector piece movement ghosts"
+            assert additions == [], "ghosts must not be added before play validates the composition"
             assert len(plays) == 1 and len(plays[0][0]) == 1
-            source, target = plays[0][0][0].args[:2]
+            assert plays[0][1] == {"run_time": 3.0}
+            composition, = plays[0][0]
+            assert isinstance(composition, AnimationGroup)
+            assert len(composition.animations) == 2
+            ghost_add, transform = composition.animations
+            assert isinstance(ghost_add, Add) and ghost_add.mobject.source is vector
+            assert ghost_add.run_time == 0.0, "ghost introduction is an instantaneous boundary"
+            assert isinstance(transform, Animation)
+            source, target = transform.args[:2]
             assert source.members[0] is mobject and source.members[1].members == (vector,)
             assert len(target.members) == 2
 
@@ -361,9 +379,11 @@ class ManimVectorSpaceTests(unittest.TestCase):
             generic_only.transformable_mobjects = [mobject]
             generic_only.moving_vectors = []
             generic_only.add = lambda *items: additions.extend(items)
-            generic_only.play = lambda *animations, **kwargs: None
+            generic_plays = []
+            generic_only.play = lambda *animations, **kwargs: generic_plays.append((animations, kwargs))
             generic_only.apply_matrix([[0, 1], [1, 0]])
-            assert len(additions) == 1, "generic ApplyMatrix objects do not use get_piece_movement ghosts"
+            assert additions == [], "generic ApplyMatrix objects do not use get_piece_movement ghosts"
+            assert isinstance(generic_plays[0][0][0], Animation)
 
             def reject_target(target, animation): raise RuntimeError("unsupported target")
             _manim_scene._apply_matrix_target = reject_target
@@ -373,7 +393,18 @@ class ManimVectorSpaceTests(unittest.TestCase):
                 assert "unsupported target" in str(error)
             else:
                 raise AssertionError("unsupported transformable was accepted")
-            assert len(additions) == 1, "failed target preparation must not add a ghost"
+            assert additions == [], "failed target preparation must not add a ghost"
+            _manim_scene._apply_matrix_target = apply_target
+            def reject_play(*animations, **kwargs):
+                raise ValueError("unsupported play option")
+            scene.play = reject_play
+            try:
+                scene.apply_matrix([[0, 1], [1, 0]])
+            except ValueError as error:
+                assert "unsupported play option" in str(error)
+            else:
+                raise AssertionError("unsupported play was accepted")
+            assert additions == [], "rejected composition must not leave visible ghosts"
             """
         )
         completed = subprocess.run(

@@ -297,7 +297,14 @@ class LinearTransformationScene(VectorScene):
         )
         kwargs.setdefault("run_time", 3.0)
         if ghost is not None:
-            self.add(ghost)
+            from _manim_composition import Add, AnimationGroup
+
+            ghost_additions = [
+                Add(leaf, run_time=0.0)
+                for leaf in _compat._leaf_mobjects(ghost)
+            ]
+            transform = Transform(source, target, path_arc=path_arc, run_time=run_time)
+            return self.play(AnimationGroup(*ghost_additions, transform), **kwargs)
         return self.play(
             Transform(source, target, path_arc=path_arc, run_time=run_time),
             **kwargs,

@@ -153,10 +153,19 @@ class PlottingAdapterTests(unittest.TestCase):
              patch.object(plotting._shared, "_family_wrapper_key", side_effect=["10:1", "11:1", "12:1"]):
             group = axes.get_axis_labels(*labels, buff=0.2, fixed_orientation=True)
         axes._semantic_family_handle.threeDAxesLabelFamilies.assert_called_once_with(
-            *handles, 0.2, True,
+            *handles, 7, 0.2, True,
         )
         self.assertIs(group._semantic_family_handle, result)
         self.assertEqual(list(group._semantic_member_wrappers.values()), labels)
+
+        axes._semantic_family_handle.threeDAxesLabelFamilies.reset_mock()
+        with patch.object(plotting._base, "Mobject", RetainedMobject), \
+             patch.object(plotting, "_three_d_axis_label_object", return_value=labels[1]), \
+             patch.object(plotting._shared, "_family_wrapper_key", return_value="11:1"):
+            axes.get_y_axis_label(labels[1])
+        axes._semantic_family_handle.threeDAxesLabelFamilies.assert_called_once_with(
+            handles[1], handles[1], handles[1], 2, 0.1, False,
+        )
 
     def test_three_d_axes_labels_reject_unretained_inputs_before_rust_call(self):
         class RetainedMobject:

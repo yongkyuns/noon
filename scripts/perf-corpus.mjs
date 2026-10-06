@@ -6,11 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import playwright from "playwright";
 import { evaluateBudget } from "./perf-corpus-budget.mjs";
 import { isIdentifiedGpuAdapter, isSoftwareGpuAdapter } from "./manim-raster-support.mjs";
 
-const { chromium } = playwright;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(
   await readFile(path.join(repoRoot, "benchmarks/performance-scenes.json"), "utf8"),
@@ -37,6 +35,9 @@ const artifactPath = path.resolve(
   repoRoot,
   process.env.NOON_CORPUS_ARTIFACT ?? `perf-artifacts/performance-corpus-${backend}.json`,
 );
+
+// Validate configuration before loading the optional browser dependency.
+const { chromium } = (await import("playwright")).default;
 
 const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
 const workingTree = await workingTreeIdentity();

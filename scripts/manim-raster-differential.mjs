@@ -12,7 +12,7 @@ import {
   browserArgs,
   dominantImageRgba,
   rasterFixtureSource,
-  sampleRasterFrames,
+  resolveRasterReferenceSamples,
 } from "./manim-raster-support.mjs";
 import { evaluateRasterTolerance, formatRasterPolicyFailure, resolveRasterTolerance } from "./manim-raster-policy.mjs";
 import { compareForegroundCoverage } from "./browser-visual-parity-lib.mjs";
@@ -148,8 +148,14 @@ async function findPngFrames(root, scene) {
   return frames;
 }
 
-function sampleFrames(frameTimes, fixture) {
-  return sampleRasterFrames(frameTimes, manifest.sample_fractions, fixture?.sample_times);
+function sampleFrames(frameTimes, fixture, semanticFixture, pngFrameCount) {
+  return resolveRasterReferenceSamples(frameTimes, fixture.sample_times, {
+    logicalDuration: Number(fixture.expected_duration),
+    terminalState: semanticFixture.terminal_state,
+    pngFrameCount,
+    semanticFrames: semanticFixture.frames,
+    sampleFractions: manifest.sample_fractions,
+  });
 }
 
 async function assertSpatialMeshOracle(semantic, samples) {
@@ -387,15 +393,14 @@ async function renderManimReferences() {
     const frameFiles = await findPngFrames(mediaDir, fixture.scene);
     const semanticFixture = semanticByFixture.get(fixture.id);
     assert.ok(semanticFixture, `${fixture.id}: missing semantic reference fixture`);
-    assert.equal(
-      semanticFixture.frame_count,
-      frameFiles.length,
-      `${fixture.id}: semantic/PNG Manim frame count`,
-    );
-    const frameTimes = semanticFixture.frames.map((frame) => Number(frame.time));
-    const firstFrame = PNG.sync.read(await readFile(frameFiles[0]));
     const logicalDuration = Number(fixture.expected_duration);
     assert.ok(Number.isFinite(logicalDuration) && logicalDuration >= 0, `${fixture.id}: logical duration`);
+    const emptyZeroDuration = semanticFixture.frame_count === 0 && frameFiles.length === 1
+      && logicalDuration === 0 && semanticFixture.terminal_state;
+    assert.ok(semanticFixture.frame_count === frameFiles.length || emptyZeroDuration,
+      `${fixture.id}: semantic/PNG Manim frame count (empty semantics require one zero-duration PNG and terminal state)`);
+    const frameTimes = semanticFixture.frames.map((frame) => Number(frame.time));
+    const firstFrame = PNG.sync.read(await readFile(frameFiles[0]));
     const frames = {
       frameCount: frameFiles.length,
       frameRate: reference.frame_rate,
@@ -408,7 +413,7 @@ async function renderManimReferences() {
     assert.equal(frames.width, reference.pixel_width, `${fixture.id}: Manim reference width`);
     assert.equal(frames.height, reference.pixel_height, `${fixture.id}: Manim reference height`);
 
-    const samples = sampleFrames(frameTimes, fixture);
+    const samples = sampleFrames(frameTimes, fixture, semanticFixture, frameFiles.length);
     for (const sample of samples) {
       const outputPath = path.join(frameDir, `${sample.label}.png`);
       const image = await readFile(frameFiles[sample.frameIndex]);
@@ -480,7 +485,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
           }
         }
         return { error: null, presented, time: renderer.time(), objectCount: renderer.objectCount() };
-      }, { time: sample.time, initialPresented: loaded.presented });
+      }, { time: sample.requestedTime, initialPresented: loaded.presented });
       assert.equal(metrics.error, null, `${fixture.id}: direct render error at ${sample.time}`);
       assert.equal(metrics.presented, true, `${fixture.id}: direct frame not presented at ${sample.time}`);
       assert.ok(Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
@@ -552,13 +557,16 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
   const frameTimes = [...referenceResult.frameTimes, fixture.expected_duration];
   const captures = [];
   for (const sample of referenceResult.samples) {
+    const captureFrameIndex = sample.terminalState
+      ? frameTimes.length - 1
+      : sample.frameIndex;
     const metrics = await page.evaluate(
       ({ frameIndex, frameTimes }) => window.noonHostRaster.renderThrough(frameIndex, frameTimes),
-      { frameIndex: sample.frameIndex, frameTimes },
+      { frameIndex: captureFrameIndex, frameTimes },
     );
     assert.equal(metrics.error, null, `${fixture.id}: host render error at frame ${sample.frameIndex}`);
     assert.equal(metrics.presented, true, `${fixture.id}: host frame ${sample.frameIndex} not presented`);
-    assert.equal(metrics.frameIndex, sample.frameIndex, `${fixture.id}: host frame index`);
+    assert.equal(metrics.frameIndex, captureFrameIndex, `${fixture.id}: host materialized capture index`);
     assert.ok(Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
       `${fixture.id}: host logical time mismatch at frame ${sample.frameIndex}`);
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
@@ -772,6 +780,9 @@ async function compareAll(references, backendResults) {
         const sample = {
           frameIndex: capture.frameIndex,
           time: capture.time,
+          requestedTime: capture.requestedTime,
+          materializedTime: capture.materializedTime,
+          terminalState: capture.terminalState,
           reference: referenceStats,
           noon: noonStats,
           debugFrame: capture.debugFrame,

@@ -275,9 +275,18 @@ impl UvSurfacePlan {
                 actual: expected + 1,
             });
         }
-        let grid = self.finish_samples(positions.into_iter().map(|position| {
-            SurfaceSample::position(position.expect("all grid vertices belong to a cell"))
-        }))?;
+        let positions = positions
+            .into_iter()
+            .map(|position| position.expect("all grid vertices belong to a cell"))
+            .collect::<Vec<_>>();
+        let indices = grid_indices(self.resolution)?;
+        let normals = derive_normals_allow_degenerate(&positions, &indices)?;
+        let grid = SurfaceGrid {
+            plan: self,
+            positions,
+            normals,
+            indices,
+        };
         Ok(CairoSurfaceGrid { grid, appearances })
     }
 
@@ -595,6 +604,21 @@ pub(crate) fn derive_normals(
     positions: &[SemanticVec3],
     indices: &[u32],
 ) -> Result<Vec<SemanticVec3>, SurfaceError> {
+    derive_normals_with_policy(positions, indices, false)
+}
+
+fn derive_normals_allow_degenerate(
+    positions: &[SemanticVec3],
+    indices: &[u32],
+) -> Result<Vec<SemanticVec3>, SurfaceError> {
+    derive_normals_with_policy(positions, indices, true)
+}
+
+fn derive_normals_with_policy(
+    positions: &[SemanticVec3],
+    indices: &[u32],
+    allow_degenerate_vertices: bool,
+) -> Result<Vec<SemanticVec3>, SurfaceError> {
     let mut sums = vec![SemanticVec3::ZERO; positions.len()];
     for triangle in indices.as_chunks::<3>().0 {
         let a = positions[triangle[0] as usize];
@@ -614,9 +638,22 @@ pub(crate) fn derive_normals(
             }
         }
     }
-    sums.into_iter()
-        .map(|sum| normalize(sum).ok_or(SurfaceError::DegenerateNormal))
-        .collect()
+    let mut has_usable_normal = false;
+    let normals = sums
+        .into_iter()
+        .map(|sum| match normalize(sum) {
+            Some(normal) => {
+                has_usable_normal = true;
+                Ok(normal)
+            }
+            None if allow_degenerate_vertices => Ok(SemanticVec3::ZERO),
+            None => Err(SurfaceError::DegenerateNormal),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if allow_degenerate_vertices && !has_usable_normal {
+        return Err(SurfaceError::DegenerateNormal);
+    }
+    Ok(normals)
 }
 
 fn lerp(range: [f64; 2], index: usize, steps: usize) -> f64 {
@@ -766,13 +803,61 @@ mod tests {
             plan.sample_cairo(|u, _| SemanticVec3::new(u, 0.0, 0.0)),
             Err(SurfaceError::DegenerateNormal)
         );
+        assert_eq!(
+            plan.sample(|u, _| SurfaceSample::position(SemanticVec3::new(u, 0.0, 0.0))),
+            Err(SurfaceError::DegenerateNormal),
+            "ordinary Surface sampling retains its strict vertex-normal contract"
+        );
+    }
+
+    #[test]
+    fn cairo_sampling_accepts_spherical_poles_and_retains_fallback_spans() {
+        let plan = UvSurfacePlan::new(
+            [0.0, std::f64::consts::TAU],
+            [0.0, std::f64::consts::PI],
+            [8, 6],
+        )
+        .unwrap();
+        let sphere = |u: f64, v: f64| {
+            let (sin_v, cos_v) = v.sin_cos();
+            let (sin_u, cos_u) = u.sin_cos();
+            SemanticVec3::new(cos_u * sin_v, sin_u * sin_v, -cos_v)
+        };
+        let grid = plan.sample_cairo(sphere).unwrap();
+        assert_eq!(
+            plan.sample(|u, v| SurfaceSample::position(sphere(u, v))),
+            Err(SurfaceError::DegenerateNormal),
+            "Cairo's span-derived material does not relax ordinary mesh normals"
+        );
+
+        assert_eq!(grid.grid().positions().len(), 9 * 7);
+        assert_eq!(grid.grid().indices().len(), 8 * 6 * 6);
+        assert!(grid.grid().normals().contains(&SemanticVec3::ZERO));
+        assert!(grid
+            .grid()
+            .normals()
+            .iter()
+            .any(|normal| *normal != SemanticVec3::ZERO));
+        assert_eq!(grid.appearances().len(), 8 * 6);
+        assert_eq!(grid.appearances()[0].span_p3_p0, SemanticVec3::ZERO);
+        assert_ne!(grid.appearances()[0].span_p12_p0, SemanticVec3::ZERO);
+        assert!(grid
+            .appearances()
+            .iter()
+            .all(CairoSurfaceAppearance::is_finite));
+        assert!(grid.appearances().iter().any(|appearance| {
+            appearance.span_p3_p0 != SemanticVec3::ZERO
+                || appearance.span_p12_p0 != SemanticVec3::ZERO
+                || appearance.span_p9_p6 != SemanticVec3::ZERO
+                || appearance.span_p3_p6 != SemanticVec3::ZERO
+        }));
     }
 
     #[test]
     fn cairo_external_samples_are_bounded_finite_and_coherent_at_shared_uvs() {
         let plan = UvSurfacePlan::new([0.0, 1.0], [0.0, 1.0], [1, 1]).unwrap();
         assert_eq!(
-            plan.finish_cairo_samples(std::iter::repeat(SemanticVec3::ZERO).take(15)),
+            plan.finish_cairo_samples(std::iter::repeat_n(SemanticVec3::ZERO, 15)),
             Err(SurfaceError::SampleCountMismatch {
                 expected: 16,
                 actual: 15,

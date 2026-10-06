@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { sampleRasterFrames } from "./manim-raster-support.mjs";
+import { resolveRasterReferenceSamples, sampleRasterFrames } from "./manim-raster-support.mjs";
 import { resolveRasterTolerance } from "./manim-raster-policy.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -30,6 +30,75 @@ test("one frozen hold cannot supply a fabricated post-cleanup frame", () => {
   const materialized = [...Array.from({ length: 60 }, (_, i) => i / 30), 2];
   assert.throws(() => sampleRasterFrames(materialized, fractions, [2, 2.1]),
     /no reference frame at requested logical time 2.1/);
+});
+
+test("zero-duration terminal state resolves only against one independently observed PNG", () => {
+  const terminal = { time: 0, frame_index: 0, animation_time: 0, objects: [{ type: "Sphere" }] };
+  const samples = resolveRasterReferenceSamples([], [0], {
+    logicalDuration: 0, terminalState: terminal, pngFrameCount: 1, semanticFrames: [],
+  });
+  assert.deepEqual(samples, [{ frameIndex: 0, time: 0, requestedTime: 0, materializedTime: 0,
+    terminalState: true, label: "frame-0000" }]);
+  assert.deepEqual(resolveRasterReferenceSamples([], undefined, {
+    logicalDuration: 0, terminalState: terminal, pngFrameCount: 1,
+    semanticFrames: [], sampleFractions: fractions,
+  }), samples, "fraction sampling of a single static PNG collapses to t=0");
+  for (const options of [
+    { logicalDuration: 0, terminalState: terminal, pngFrameCount: 0, semanticFrames: [] },
+    { logicalDuration: 0, terminalState: terminal, pngFrameCount: 2, semanticFrames: [] },
+    { logicalDuration: 1, terminalState: terminal, pngFrameCount: 1, semanticFrames: [] },
+  ]) assert.throws(() => resolveRasterReferenceSamples([], [0], options));
+});
+
+test("fraction sampling remains the default and records requested and materialized times", () => {
+  const samples = resolveRasterReferenceSamples(referenceTimes, undefined, {
+    logicalDuration: 65 / 30, terminalState: { time: 65 / 30 },
+    pngFrameCount: referenceTimes.length, semanticFrames: [], sampleFractions: fractions,
+  });
+  assert.deepEqual(samples.map(({ frameIndex, time, requestedTime, materializedTime }) =>
+    [frameIndex, time, requestedTime, materializedTime]), [
+    [0, 0, 0, 0], [16, 16 / 30, 16 / 30, 16 / 30],
+    [33, 33 / 30, 33 / 30, 33 / 30], [49, 49 / 30, 49 / 30, 49 / 30],
+    [65, 65 / 30, 65 / 30, 65 / 30],
+  ]);
+  assert.throws(() => resolveRasterReferenceSamples([0, 1.1], undefined, {
+    logicalDuration: 1, terminalState: { time: 1 }, pngFrameCount: 2,
+    semanticFrames: [], sampleFractions: fractions,
+  }), /out-of-range/);
+});
+
+test("logical endpoint reuses the last PNG only when terminal visuals match exactly", () => {
+  const frames = [{ time: 0, frame_index: 0, animation_time: 0, objects: [{ center: [0, 0] }] },
+    { time: 1, frame_index: 1, animation_time: 1, objects: [{ center: [1, 0] }] }];
+  const terminal = { time: 2, frame_index: 2, animation_time: 0, objects: [{ center: [1, 0] }] };
+  const samples = resolveRasterReferenceSamples([0, 1], [2], {
+    logicalDuration: 2, terminalState: terminal, pngFrameCount: 2, semanticFrames: frames,
+  });
+  assert.deepEqual(samples, [{ frameIndex: 1, time: 2, requestedTime: 2, materializedTime: 1,
+    terminalState: true, label: "frame-0001-terminal" }]);
+  const endpointPair = resolveRasterReferenceSamples([0, 1], [1, 2], {
+    logicalDuration: 2, terminalState: terminal, pngFrameCount: 2, semanticFrames: frames,
+  });
+  assert.deepEqual(endpointPair.map(({ frameIndex, time, label }) => [frameIndex, time, label]), [
+    [1, 1, "frame-0001"], [1, 2, "frame-0001-terminal"],
+  ]);
+  assert.equal(new Set(endpointPair.map(sample => sample.label)).size, endpointPair.length,
+    "terminal and materialized observations cannot overwrite the same PNG artifact");
+  assert.throws(() => resolveRasterReferenceSamples([0, 1], [2.5], {
+    logicalDuration: 3, terminalState: { ...terminal, time: 3 },
+    pngFrameCount: 2, semanticFrames: frames,
+  }), /no reference frame at requested logical time 2.5/);
+  assert.throws(() => resolveRasterReferenceSamples([0, 1], [2], {
+    logicalDuration: 2, terminalState: { ...terminal, objects: [{ center: [1.01, 0] }] },
+    pngFrameCount: 2, semanticFrames: frames,
+  }), /no reference frame at requested logical time 2/);
+  const nested = [{ time: 0, frame_index: 0, payload: { time: 0, value: 1 } },
+    { time: 1, frame_index: 1, payload: { time: 1, value: 1 } }];
+  assert.throws(() => resolveRasterReferenceSamples([0, 1], [2], {
+    logicalDuration: 2, terminalState: { time: 2, payload: { time: 0, value: 1 } },
+    pngFrameCount: 2, semanticFrames: nested,
+  }), /no reference frame at requested logical time 2/,
+  "nested time fields remain part of visible semantic state");
 });
 
 test("a missing contract boundary fails instead of selecting a nearby frame", () => {
@@ -121,7 +190,7 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
       `${label}: callback matches the nonlinear capability fixture`);
     assert.doesNotMatch(fixture, /shade_in_3d\s*=\s*False|checkerboard_colors\s*=|stroke_width\s*=/,
       `${label}: uses pinned Surface defaults for shading, checkerboard, and border`);
-    assert.match(fixture, /wait\(1\)/,
+    assert.match(fixture, /wait\(1(?:, frozen_frame=False)?\)/,
       `${label}: holds the static scene for the one-second fixture duration`);
   }
 
@@ -324,6 +393,8 @@ test("focused LTS feature slice pairs native and Python coordinate and ghost beh
   assert.equal(direct.source, "parity/manim-v0.21/vector_space_features.py");
   assert.equal(worker.source, direct.source);
   assert.equal(direct.expected_duration, 1.5);
+  assert.deepEqual(direct.sample_times,
+    [0, 0.25, 0.25 + 8 / 30, 0.75, 1, 1 + 8 / 30, 44 / 30]);
   assert.deepEqual(worker.sample_times, direct.sample_times);
   for (const relativePath of [
     direct.source,

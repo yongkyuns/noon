@@ -27,4 +27,6 @@ class CairoSpatialSurface(ThreeDScene):
             u_range=(-1, 1), v_range=(-1, 1), resolution=(8, 8),
         )
         self.add(surface)
-        self.wait(1)
+        # Materialize the static reference at every requested 30fps sample.
+        # This controls Cairo output, without changing the authored scene state.
+        self.wait(1, frozen_frame=False)

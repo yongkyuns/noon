@@ -1075,7 +1075,6 @@ mod tests {
         };
         let y_family = label_family();
         let z_family = label_family();
-        drop(label_family);
         let expected_centers = [(1usize, &y_family), (2usize, &z_family)].map(|(index, family)| {
             let (direction, edge) = if index == 1 {
                 ((1.0, 1.0), SemanticVec3::new(1.0, 1.0, 0.0))

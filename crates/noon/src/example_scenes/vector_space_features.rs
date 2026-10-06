@@ -224,7 +224,9 @@ mod tests {
             TimelineWakeState::Quiescent
         );
 
-        let mut sought = session().unwrap();
+        // Seek the same execution/resource owner. Independently authored
+        // sessions deliberately have distinct retained text arena identities.
+        let mut sought = forward;
         for (time, expected) in [
             (0.0, initial),
             (0.25, after_first_ghost),

@@ -707,9 +707,12 @@ class ThreeDAxes(_compat.Group):
             handles[index] = handle
         if not selected:
             raise ValueError("at least one ThreeDAxes label is required")
+        selected_axes = sum(1 << index for index, handle in enumerate(handles) if handle is not None)
+        active_handle = next(handle for handle in handles if handle is not None)
         family = engine_call(
             self._semantic_family_handle.threeDAxesLabelFamilies,
-            *handles, buff, fixed_orientation,
+            *(active_handle if handle is None else handle for handle in handles),
+            selected_axes, buff, fixed_orientation,
         )
         wrapper = object.__new__(_compat.Group)
         return _family(wrapper, family, selected)

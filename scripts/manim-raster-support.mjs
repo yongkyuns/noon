@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 // Select actual reference frames, never fabricated timestamps. Explicit times
 // are for contract boundaries; fraction-based sampling remains the default.
 export function sampleRasterFrames(frameTimes, sampleFractions, sampleTimes) {
@@ -48,6 +50,79 @@ export function sampleRasterFrames(frameTimes, sampleFractions, sampleTimes) {
     time: frameTimes[frameIndex],
     label: `frame-${String(frameIndex).padStart(4, "0")}`,
   }));
+}
+
+function visualState(state) {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return state;
+  return Object.fromEntries(Object.entries(state)
+    .filter(([key]) => !["frame_index", "time", "animation_time"].includes(key)));
+}
+
+// Resolve requested logical samples to existing Cairo PNGs. An authored
+// endpoint may reuse the final PNG only when the terminal visual state is
+// exactly the state of that materialized frame. An empty semantic timeline is
+// accepted only for a zero-duration scene with exactly one independently
+// observed Cairo PNG; its terminal state describes that sole static output.
+export function resolveRasterReferenceSamples(frameTimes, sampleTimes, {
+  logicalDuration, terminalState, pngFrameCount, semanticFrames, sampleFractions,
+}) {
+  if (!Array.isArray(frameTimes) || !Number.isFinite(logicalDuration) || logicalDuration < 0
+      || !Number.isInteger(pngFrameCount) || pngFrameCount < 1) {
+    throw new Error("invalid logical duration or independently observed PNG count");
+  }
+  if (frameTimes.length > pngFrameCount) {
+    throw new Error("semantic and independently observed PNG frame counts differ");
+  }
+  let previousFrameTime = -Infinity;
+  for (const [index, time] of frameTimes.entries()) {
+    if (!Number.isFinite(time) || time < 0 || time + 1e-12 < previousFrameTime
+        || time > logicalDuration + 1e-9) {
+      throw new Error(`invalid or out-of-range logical time for reference frame ${index}`);
+    }
+    previousFrameTime = time;
+  }
+  if (sampleTimes !== undefined && (!Array.isArray(sampleTimes) || sampleTimes.length === 0
+      || sampleTimes.some((time, index) => !Number.isFinite(time) || time < 0
+        || (index > 0 && time <= sampleTimes[index - 1])))) {
+    throw new Error("sample_times must be finite, non-negative and strictly increasing");
+  }
+  if (frameTimes.length === 0) {
+    if (pngFrameCount !== 1 || logicalDuration !== 0 || !terminalState
+        || terminalState.time !== 0) {
+      throw new Error("empty semantic timeline requires one PNG and a zero-duration terminal state");
+    }
+    const selected = sampleTimes === undefined
+      ? sampleRasterFrames([0], sampleFractions)
+      : sampleRasterFrames([0], [], sampleTimes);
+    return selected.map(sample => ({ ...sample, requestedTime: sample.time,
+      materializedTime: 0, terminalState: true }));
+  }
+  if (frameTimes.length !== pngFrameCount) {
+    throw new Error("semantic and independently observed PNG frame counts differ");
+  }
+  if (sampleTimes === undefined) {
+    return sampleRasterFrames(frameTimes, sampleFractions).map(sample => ({ ...sample,
+      requestedTime: sample.time, materializedTime: sample.time, terminalState: false }));
+  }
+  return sampleTimes.map(requestedTime => {
+    const exact = frameTimes.findIndex(time => Math.abs(time - requestedTime) <= 1e-9);
+    if (exact >= 0) return { frameIndex: exact, time: requestedTime, requestedTime,
+      materializedTime: frameTimes[exact], terminalState: false,
+      label: `frame-${String(exact).padStart(4, "0")}` };
+    if (Math.abs(requestedTime - logicalDuration) <= 1e-9
+        && terminalState && typeof terminalState.time === "number"
+        && Math.abs(terminalState.time - logicalDuration) <= 1e-9) {
+      const lastIndex = frameTimes.length - 1;
+      // The terminal comparison uses observed scene state, not time alone.
+      if (Array.isArray(semanticFrames) && semanticFrames[lastIndex]
+          && isDeepStrictEqual(visualState(semanticFrames[lastIndex]), visualState(terminalState))) {
+        return { frameIndex: lastIndex, time: requestedTime, requestedTime,
+          materializedTime: frameTimes[lastIndex], terminalState: true,
+          label: `frame-${String(lastIndex).padStart(4, "0")}-terminal` };
+      }
+    }
+    throw new Error(`no reference frame at requested logical time ${requestedTime}`);
+  });
 }
 
 export function rasterFixtureSource(source, scene, { requires_latex = false } = {}) {
