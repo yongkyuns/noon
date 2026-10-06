@@ -349,12 +349,12 @@ async function followingOracle(qualifyPairedAuthoring) {
                   await authoring.ready();
                   let resolveAttached, rejectAttached;
                   const attached = new Promise((resolve, reject) => { resolveAttached = resolve; rejectAttached = reject; });
-                  let registered = false;
+                  let registered = null;
                   const completed = authoring.run(source, {}, {
                     onSemanticContinuation: async registration => {
                       try {
-                        if (registered) throw new Error("duplicate source continuation");
-                        registered = true;
+                        if (registered !== null) throw new Error("duplicate source continuation");
+                        registered = registration.semanticExecution;
                         await execution.prepare({ transportMode: "transferable" });
                         await execution.startSemanticExecution(registration.semanticExecution, {
                           authoringClient: authoring, loopDurationSeconds: 4,
@@ -365,7 +365,7 @@ async function followingOracle(qualifyPairedAuthoring) {
                     },
                   });
                   void completed.then(() => {
-                    if (!registered) rejectAttached(new Error("source did not register a continuation"));
+                    if (registered === null) rejectAttached(new Error("source did not register a continuation"));
                   }, rejectAttached);
                   await attached;
                   const run = { samples: [], controls: [] };
@@ -376,12 +376,19 @@ async function followingOracle(qualifyPairedAuthoring) {
                   }
                   const result = await completed;
                   run.duration = result.duration;
-                  // Use the ordinary completed-source handoff before testing
-                  // controls. A still-active continuation denial is not proof.
-                  await execution.reconcileSemanticExecution(result.semanticExecution, {
-                    authoringClient: authoring, loopDurationSeconds: 4,
-                  });
-                  await execution.advanceTo(3);
+                  const semantic = result.semanticExecution;
+                  if (registered === null || !semantic || semantic.contextId !== registered.contextId ||
+                      semantic.continuationGeneration !== registered.continuationGeneration) {
+                    throw new Error("completed semantic source replaced its first-play continuation");
+                  }
+                  // Match the Playground's completed-source handoff: retain the
+                  // context/callback owner, not the now-finished continuation.
+                  // Do not advance afterward to repair a changed endpoint.
+                  await execution.reconcileSemanticExecution({
+                    contextId: semantic.contextId,
+                    callbackSessionId: semantic.callbackSessionId,
+                    continuationGeneration: null,
+                  }, { authoringClient: authoring, loopDurationSeconds: 4 });
                   let metrics;
                   for (let attempt = 0; attempt < 100; attempt++) {
                     metrics = (await execution.metrics()).metrics;
