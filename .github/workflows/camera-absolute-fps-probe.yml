@@ -1,0 +1,86 @@
+# Temporary #1653 diagnostic branch. DO NOT MERGE into master.
+name: Camera absolute FPS investigation
+on:
+  push:
+    branches: [codex/camera-absolute-fps-1882]
+    paths: [.github/workflows/camera-absolute-fps-probe.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  investigate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Checkout diagnostic tools
+        uses: actions/checkout@v7
+        with:
+          path: probe
+      - name: Checkout exact published source
+        uses: actions/checkout@v7
+        with:
+          ref: 886ede3e2243d621cda5823b30a7911f4e382417
+          path: source
+      - name: Download exact published site
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37496512820
+          artifact-ids: 11428082914
+          path: published
+      - name: Install pinned browser dependencies
+        working-directory: source
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Run every predeclared diagnostic condition
+        shell: bash
+        run: |
+          mkdir -p results
+          overall=0
+          for item in control-before:control normal-1:normal small-1:small timer-1:timer timer-2:timer small-2:small normal-2:normal control-after:control; do
+            label=${item%:*}
+            mode=${item#*:}
+            mkdir -p "results/$label"
+            rm -rf site
+            mkdir -p site/web
+            tar -xf published/artifact.tar -C site/web
+            set +e
+            python probe/.github/ci/camera-absolute-fps-prepare.py source site "results/$label" "$mode" > "results/$label/prepare.log" 2>&1
+            code=$?
+            if [[ "$code" == 0 ]]; then
+              NOON_PRODUCT_SITE_ROOT="$PWD/site" \
+              NOON_PRODUCT_ARTIFACT_DIR="$PWD/results/$label" \
+              NOON_PRODUCT_EXAMPLE=showcase-camera-follows-path \
+              NOON_PRODUCT_LABEL="$label" \
+              NOON_CAMERA_MODE="$mode" \
+                node source/scripts/camera-diagnostic-run.mjs > "results/$label/run.log" 2>&1
+              code=$?
+            fi
+            set -e
+            printf '%s\n' "$code" > "results/$label/exit-status.txt"
+            echo "=== $label: exit $code ==="
+            tail -20 "results/$label/prepare.log"
+            test ! -f "results/$label/run.log" || tail -25 "results/$label/run.log"
+            if [[ "$code" != 0 ]]; then overall=1; fi
+          done
+          python - <<'PY'
+          import json, pathlib
+          rows = []
+          for directory in pathlib.Path('results').iterdir():
+              report = directory / 'report.json'
+              if report.exists():
+                  r = json.loads(report.read_text())
+                  rows.append({'label':r['label'], 'mode':r['cameraDiagnosticMode'], 'fps':r['fps']['effectiveFps'], 'gaps':r['presentationGaps']['intervalMs'], 'canvas':r['captureBounds'], 'rendererCosts':r['rendererCosts'], 'browser':r['runtime']['browserVersion']})
+          pathlib.Path('results/summary.json').write_text(json.dumps(rows, indent=2))
+          print(json.dumps(rows, indent=2))
+          PY
+          exit "$overall"
+      - name: Preserve all diagnostic evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: camera-absolute-fps-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results
+          if-no-files-found: error
+          retention-days: 14
