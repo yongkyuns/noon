@@ -40,3 +40,56 @@ export function validateProfile(value, workload) {
   }
   return value;
 }
+
+// Profile only the uninterrupted local-edit block. In particular, no Python
+// tracing is left active while a genuine JSPI stack is suspended. These runs
+// are diagnostics after every timing pair; their durations are never accepted.
+export function localEditProfileSource(mode) {
+  const source = performanceSource(mode, "deterministic");
+  const start = "        started = perf_counter()\n        for _ in range(";
+  const end = "        local_ms = (perf_counter() - started) * 1000\n";
+  assert.equal(source.split(start).length, 2, "local-edit start boundary changed");
+  assert.equal(source.split(end).length, 2, "local-edit end boundary changed");
+  return source.replace("import json\n", "import json\nimport cProfile\nimport gc\n")
+    .replace(start, `        _local_profile = cProfile.Profile()
+        _local_gc_before = gc.get_count()
+        _local_collections_before = [row["collections"] for row in gc.get_stats()]
+        _local_profile.enable()
+` + start)
+    .replace(end, end + `        _local_profile.disable()
+        _local_gc_after = gc.get_count()
+        _local_collections_after = [row["collections"] for row in gc.get_stats()]
+`)
+    + `        _local_rows = []
+        for _entry in _local_profile.getstats():
+            _code = _entry.code
+            _local_rows.append({"file": getattr(_code, "co_filename", "<builtin>"),
+                "line": getattr(_code, "co_firstlineno", 0),
+                "name": getattr(_code, "co_name", str(_code)),
+                "calls": _entry.callcount, "recursive_calls": _entry.reccallcount,
+                "self_seconds": _entry.inlinetime, "cumulative_seconds": _entry.totaltime})
+        print("NOON_PERF_LOCAL_PROFILE " + json.dumps({"workload": "deterministic",
+            "mode": "${mode}", "scope": "local_edit_only", "timing_evidence": False,
+            "gc_counts_before": _local_gc_before, "gc_counts_after": _local_gc_after,
+            "gc_collections_before": _local_collections_before,
+            "gc_collections_after": _local_collections_after, "rows": _local_rows}))
+`;
+}
+
+export function validateLocalEditProfile(value, mode) {
+  // Validate the requested mode as well as the received one.
+  performanceSource(mode, "deterministic");
+  validateProfile(value, "deterministic");
+  assert.equal(value.mode, mode, "local-edit profile mode mismatch");
+  assert.equal(value.scope, "local_edit_only", "local-edit profile scope mismatch");
+  for (const key of ["gc_counts_before", "gc_counts_after",
+    "gc_collections_before", "gc_collections_after"]) {
+    const collectionCounter = key.startsWith("gc_collections_");
+    assert.ok(Array.isArray(value[key]) && value[key].length === 3 &&
+      value[key].every(count => Number.isSafeInteger(count) && (!collectionCounter || count >= 0)),
+    `invalid local-edit profile ${key}`);
+  }
+  assert.ok(value.gc_collections_after.every((count, index) =>
+    count >= value.gc_collections_before[index]), "GC collection counters moved backwards");
+  return value;
+}

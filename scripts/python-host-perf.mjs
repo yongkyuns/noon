@@ -10,7 +10,7 @@ import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
-import { profileSource, validateProfile } from "./python-host-profile.mjs";
+import { profileSource, validateProfile, localEditProfileSource, validateLocalEditProfile } from "./python-host-profile.mjs";
 import { qualifyProductMetrics } from "./paired-product-metrics.mjs";
 import { stringifyEvidence } from "./python-host-report.mjs";
 import { PERF_PROTOCOL as protocol, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
@@ -28,6 +28,7 @@ let identities = [], changedBuildInputs = [];
 const cache = createPyodideResourceCache(await readFile(path.join(roots[1], "web/python-worker.source.js"), "utf8"));
 const servers = [], contexts = [], pages = [], reports = [[], []], warmups = [], rows = [], failures = [];
 const profiles = [[], []], diagnostics = [];
+const localProfiles = [[], []], localDiagnostics = [];
 let browser;
 try {
   const sources = [process.env.NOON_PRODUCT_BASE_SHA, process.env.GITHUB_SHA];
@@ -50,6 +51,8 @@ try {
     page.on("console", message => {
       if (message.text().startsWith("NOON_PERF_REPORT ")) reports[pages.indexOf(page)].push(JSON.parse(message.text().slice(17)));
       if (message.text().startsWith("NOON_PERF_PROFILE ")) profiles[pages.indexOf(page)].push(JSON.parse(message.text().slice(18)));
+      if (message.text().startsWith("NOON_PERF_LOCAL_PROFILE ")) localProfiles[pages.indexOf(page)]
+        .push(JSON.parse(message.text().slice("NOON_PERF_LOCAL_PROFILE ".length)));
     });
     page.on("pageerror", error => failures.push({ kind: "pageerror", message: String(error) }));
     await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
@@ -173,6 +176,23 @@ try {
       diagnostics.push({ side, sourceSha: createHash("sha256").update(source).digest("hex"),
         profile, observation });
       await writeFile(path.join(output, "profiles.json"), stringifyEvidence(diagnostics) + "\n");
+    }
+  }
+  // The retained whole-scene profiles cover async only. Diagnose local edits
+  // in all three actual source modes without profiling across their barriers.
+  // All original trials/qualifications above have already completed; do not
+  // feed these instrumented observations into timing rows or acceptance.
+  for (const mode of protocol.modes) {
+    const source = localEditProfileSource(mode);
+    const sourceSha = createHash("sha256").update(source).digest("hex");
+    await writeFile(path.join(output, `local-edit-profile-${mode}.py`), source);
+    for (const side of [0, 1]) {
+      const count = localProfiles[side].length;
+      const observation = await measure(side, source, mode, "deterministic");
+      assert.equal(localProfiles[side].length, count + 1, "missing local-edit profile");
+      const profile = validateLocalEditProfile(localProfiles[side].at(-1), mode);
+      localDiagnostics.push({ side, sourceSha, profile, observation });
+      await writeFile(path.join(output, "local-edit-profiles.json"), stringifyEvidence(localDiagnostics) + "\n");
     }
   }
 } catch (error) {
