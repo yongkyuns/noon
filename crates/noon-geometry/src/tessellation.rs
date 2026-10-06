@@ -1,7 +1,7 @@
 use lyon_path::{
     builder::{Build, PathBuilder},
     math::point,
-    Event, Path,
+    EndpointId, Event, IdEvent, Path,
 };
 use lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineCap, LineJoin, StrokeOptions,
@@ -217,14 +217,11 @@ pub fn tessellate_screen_stroke(
         .with_miter_limit(MORPH_MITER_LIMIT)
         .with_line_cap(lyon_line_cap(stroke_cap))
         .with_line_join(lyon_line_join(stroke_join));
-    let smooth_anchors = screen_stroke_smooth_anchors(path);
+    let smooth_anchors = screen_stroke_smooth_anchors(&lyon_path);
     let mut buffers = VertexBuffers::<ScreenStrokeVertex, u32>::new();
     let mut output = BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex<'_, '_>| {
         let smooth_endpoint = match vertex.source() {
-            VertexSource::Endpoint { .. } => smooth_anchors.contains(&point_key(Vec2::new(
-                vertex.position_on_path().x,
-                vertex.position_on_path().y,
-            ))),
+            VertexSource::Endpoint { id } => smooth_anchors.contains(&id),
             VertexSource::Edge { .. } => true,
         };
         let normal = vertex.normal();
@@ -291,156 +288,109 @@ pub fn tessellate_screen_stroke(
     })
 }
 
-fn point_key(point: Vec2) -> (u32, u32) {
-    let bits = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
-    (bits(point.x), bits(point.y))
-}
-
-fn screen_stroke_smooth_anchors(path: &VectorPath) -> HashSet<(u32, u32)> {
-    #[derive(Clone, Copy)]
-    struct Segment {
-        start: Vec2,
-        end: Vec2,
-        start_tangent: Vec2,
-        end_tangent: Vec2,
-    }
-
-    fn tangent(vector: Vec2, chord: Vec2) -> Vec2 {
-        let value = if vector.x.hypot(vector.y) > f32::EPSILON {
-            vector
+fn screen_stroke_smooth_anchors(path: &Path) -> HashSet<EndpointId> {
+    fn tangent(direction: Vec2, chord: Vec2) -> Vec2 {
+        if direction.x.hypot(direction.y) > f32::EPSILON {
+            normalized(direction)
         } else {
-            chord
-        };
-        normalized(value)
+            normalized(chord)
+        }
     }
 
-    fn add_join(anchors: &mut HashSet<(u32, u32)>, previous: Segment, next: Segment) {
-        let incoming = normalized(previous.end_tangent);
-        let outgoing = normalized(next.start_tangent);
-        if previous.end == next.start
-            && incoming.x * outgoing.x + incoming.y * outgoing.y >= 0.99999
-        {
-            anchors.insert(point_key(previous.end));
+    fn add_smooth_join(
+        anchors: &mut HashSet<EndpointId>,
+        point: EndpointId,
+        incoming: Vec2,
+        outgoing: Vec2,
+    ) {
+        if incoming.x * outgoing.x + incoming.y * outgoing.y >= 0.99999 {
+            anchors.insert(point);
         }
     }
 
     let mut anchors = HashSet::new();
-    let mut current = None;
-    let mut contour_start = None;
-    let mut first_segment = None;
-    let mut previous_segment = None;
-
-    let push_segment = |segment: Segment,
-                        first: &mut Option<Segment>,
-                        previous: &mut Option<Segment>,
-                        anchors: &mut HashSet<(u32, u32)>| {
-        if let Some(previous) = *previous {
-            add_join(anchors, previous, segment);
-        } else {
-            *first = Some(segment);
-        }
-        *previous = Some(segment);
-    };
-
-    for command in path.commands() {
-        match *command {
-            PathCommand::MoveTo { to } => {
-                current = Some(to);
-                contour_start = Some(to);
-                first_segment = None;
-                previous_segment = None;
+    let mut first: Option<(EndpointId, Vec2)> = None;
+    let mut previous: Option<(EndpointId, Vec2)> = None;
+    for event in path.id_iter() {
+        match event {
+            IdEvent::Begin { .. } => {
+                first = None;
+                previous = None;
             }
-            PathCommand::LineTo { to } => {
-                if let Some(from) = current {
-                    let chord = Vec2::new(to.x - from.x, to.y - from.y);
-                    push_segment(
-                        Segment {
-                            start: from,
-                            end: to,
-                            start_tangent: tangent(chord, chord),
-                            end_tangent: tangent(chord, chord),
-                        },
-                        &mut first_segment,
-                        &mut previous_segment,
-                        &mut anchors,
-                    );
-                    current = Some(to);
+            IdEvent::Line { from, to } => {
+                let start = path[from];
+                let end = path[to];
+                let direction = normalized(Vec2::new(end.x - start.x, end.y - start.y));
+                if let Some((endpoint, incoming)) = previous {
+                    add_smooth_join(&mut anchors, endpoint, incoming, direction);
+                } else {
+                    first = Some((from, direction));
                 }
+                previous = Some((to, direction));
             }
-            PathCommand::QuadraticTo { control, to } => {
-                if let Some(from) = current {
-                    let chord = Vec2::new(to.x - from.x, to.y - from.y);
-                    push_segment(
-                        Segment {
-                            start: from,
-                            end: to,
-                            start_tangent: tangent(
-                                Vec2::new(control.x - from.x, control.y - from.y),
-                                chord,
-                            ),
-                            end_tangent: tangent(
-                                Vec2::new(to.x - control.x, to.y - control.y),
-                                chord,
-                            ),
-                        },
-                        &mut first_segment,
-                        &mut previous_segment,
-                        &mut anchors,
-                    );
-                    current = Some(to);
+            IdEvent::Quadratic { from, ctrl, to } => {
+                let start = path[from];
+                let control = path[ctrl];
+                let end = path[to];
+                let chord = Vec2::new(end.x - start.x, end.y - start.y);
+                let outgoing = tangent(Vec2::new(control.x - start.x, control.y - start.y), chord);
+                let incoming = tangent(Vec2::new(end.x - control.x, end.y - control.y), chord);
+                if let Some((endpoint, direction)) = previous {
+                    add_smooth_join(&mut anchors, endpoint, direction, outgoing);
+                } else {
+                    first = Some((from, outgoing));
                 }
+                previous = Some((to, incoming));
             }
-            PathCommand::CubicTo {
-                control1,
-                control2,
+            IdEvent::Cubic {
+                from,
+                ctrl1,
+                ctrl2,
                 to,
             } => {
-                if let Some(from) = current {
-                    let chord = Vec2::new(to.x - from.x, to.y - from.y);
-                    push_segment(
-                        Segment {
-                            start: from,
-                            end: to,
-                            start_tangent: tangent(
-                                Vec2::new(control1.x - from.x, control1.y - from.y),
-                                chord,
-                            ),
-                            end_tangent: tangent(
-                                Vec2::new(to.x - control2.x, to.y - control2.y),
-                                chord,
-                            ),
-                        },
-                        &mut first_segment,
-                        &mut previous_segment,
-                        &mut anchors,
-                    );
-                    current = Some(to);
+                let start = path[from];
+                let control1 = path[ctrl1];
+                let control2 = path[ctrl2];
+                let end = path[to];
+                let chord = Vec2::new(end.x - start.x, end.y - start.y);
+                let outgoing =
+                    tangent(Vec2::new(control1.x - start.x, control1.y - start.y), chord);
+                let incoming = tangent(Vec2::new(end.x - control2.x, end.y - control2.y), chord);
+                if let Some((endpoint, direction)) = previous {
+                    add_smooth_join(&mut anchors, endpoint, direction, outgoing);
+                } else {
+                    first = Some((from, outgoing));
                 }
+                previous = Some((to, incoming));
             }
-            PathCommand::Close => {
-                if let (Some(from), Some(to)) = (current, contour_start) {
+            IdEvent::End {
+                last,
+                first: start,
+                close,
+            } => {
+                if close {
+                    let from = path[last];
+                    let to = path[start];
                     if from != to {
-                        let chord = Vec2::new(to.x - from.x, to.y - from.y);
-                        push_segment(
-                            Segment {
-                                start: from,
-                                end: to,
-                                start_tangent: tangent(chord, chord),
-                                end_tangent: tangent(chord, chord),
-                            },
-                            &mut first_segment,
-                            &mut previous_segment,
-                            &mut anchors,
-                        );
+                        let direction = normalized(Vec2::new(to.x - from.x, to.y - from.y));
+                        if let Some((endpoint, incoming)) = previous {
+                            add_smooth_join(&mut anchors, endpoint, incoming, direction);
+                        }
+                        previous = Some((start, direction));
                     }
-                    if let (Some(last), Some(first)) = (previous_segment, first_segment) {
-                        add_join(&mut anchors, last, first);
+                    if let (Some((endpoint, incoming)), Some((first_endpoint, outgoing))) =
+                        (previous, first)
+                    {
+                        if endpoint == first_endpoint {
+                            add_smooth_join(&mut anchors, endpoint, incoming, outgoing);
+                        } else if path[endpoint] == path[first_endpoint] {
+                            add_smooth_join(&mut anchors, endpoint, incoming, outgoing);
+                            add_smooth_join(&mut anchors, first_endpoint, incoming, outgoing);
+                        }
                     }
                 }
-                current = None;
-                contour_start = None;
-                first_segment = None;
-                previous_segment = None;
+                first = None;
+                previous = None;
             }
         }
     }
@@ -1887,6 +1837,29 @@ mod tests {
             .vertices
             .iter()
             .any(|vertex| vertex.extrusion.length() > 0.6));
+    }
+
+    #[test]
+    fn screen_stroke_smooth_join_anchors_are_keyed_by_path_endpoint_id() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0))
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 1.0));
+        let lyon_path = build_lyon_path(&path).unwrap();
+        let coincident_endpoints: Vec<_> = lyon_path
+            .id_iter()
+            .filter_map(|event| match event {
+                IdEvent::Line { to, .. } if lyon_path[to] == point(0.0, 0.0) => Some(to),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(coincident_endpoints.len(), 2);
+        let anchors = screen_stroke_smooth_anchors(&lyon_path);
+        assert!(anchors.contains(&coincident_endpoints[0]));
+        assert!(!anchors.contains(&coincident_endpoints[1]));
     }
 
     fn curved_shape() -> VectorPath {
