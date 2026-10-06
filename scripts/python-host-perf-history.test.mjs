@@ -9,7 +9,11 @@ function fixture() {
   const retained = { name: "retained" };
   const fresh = { name: "fresh", close: async () => { lifecycle.push("close"); } };
   return { observations, records, lifecycle, retained, fresh,
-    arguments: { identity: { source: "a".repeat(40) }, retained,
+    arguments: {
+      // The collector has its own real-CDP and transport tests. No browser is
+      // constructed by these history-order unit tests.
+      sampleWorker: async ({ record }) => record({ diagnosticOnly: true, complete: true }),
+      identity: { source: "a".repeat(40) }, retained,
       openFresh: async () => { lifecycle.push("open"); return fresh; },
       record: async value => { records.push(structuredClone(value)); },
       measure: async (participant, source) => {
@@ -91,4 +95,38 @@ test("history diagnostics run after all accepted pairs and never alter their res
   assert.match(block, /browser\.newContext\(/);
   assert.match(block, /worker-history-\$\{side\}\.json/);
   assert.doesNotMatch(block, /rows\.push|pairedCost\(|warmups\.push|failures\.length\s*=|failures\.splice/);
+});
+
+
+test("CPU sampling follows every history pair, reuses exact source, and cannot rescore it", async () => {
+  const f = fixture(); const measured = [];
+  f.arguments.sampleWorker = async ({ run, record }) => {
+    const previous = f.records.at(-1);
+    assert.equal(previous.complete, true);
+    assert.equal(previous.pairs.length, PERF_PROTOCOL.pairs);
+    const originalPairs = structuredClone(previous.pairs);
+    const result = await run(); measured.push(result);
+    await record({ diagnosticOnly: true, complete: true, observation: result });
+    assert.deepEqual(f.records.at(-1).pairs, originalPairs);
+  };
+  const result = await diagnoseWorkerHistory(f.arguments);
+  assert.equal(measured.length, 2);
+  assert.equal(f.observations.length, 2 * (PERF_PROTOCOL.warmups + PERF_PROTOCOL.pairs) + 2);
+  assert.equal(result.workerProfilesComplete, true);
+  assert.deepEqual(Object.keys(result.workerProfiles), ["retained", "fresh"]);
+  assert.deepEqual(f.lifecycle, ["open", "close"]);
+});
+
+test("sampling failure retains complete history evidence and closes the fresh worker", async () => {
+  const f = fixture(); const failure = new Error("sampling unavailable");
+  f.arguments.sampleWorker = async ({ record }) => {
+    assert.equal(f.records.at(-1).complete, true);
+    assert.equal(f.records.at(-1).pairs.length, 7);
+    await record({ diagnosticOnly: true, complete: false, error: String(failure) });
+    throw failure;
+  };
+  await assert.rejects(diagnoseWorkerHistory(f.arguments), error => error === failure);
+  assert.deepEqual(f.lifecycle, ["open", "close"]);
+  assert.equal(f.records.at(-1).pairs.length, 7);
+  assert.equal(f.records.at(-1).workerProfilesComplete, false);
 });

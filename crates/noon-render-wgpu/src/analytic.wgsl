@@ -561,7 +561,14 @@ fn fs_line(input: VertexOutput) -> @location(0) vec4<f32> {
     // so fragment derivatives remain valid across non-uniform control flow.
     let sdf_coverage = inside_coverage(signed_distance);
     let butt_coverage = butt_line_coverage(input.local, half_length, radius);
-    let coverage = select(sdf_coverage, butt_coverage, cap_mode == 1u);
+    // A round cap changes the endpoints, not the straight body's cross section.
+    // Smoothstep on that body modulates narrow-stroke energy as the camera moves
+    // across pixel phases. Reuse the already evaluated box coverage where the
+    // entire pixel footprint lies between the endpoints. Keep the capsule SDF
+    // for pixels touching either cap (including short/zero-length segments).
+    let inside_body = abs(input.local.x) + 0.5 * fwidth(input.local.x) <= half_length;
+    let use_box_coverage = cap_mode == 1u || (cap_mode == 0u && inside_body);
+    let coverage = select(sdf_coverage, butt_coverage, use_box_coverage);
     let visible = select(0.0, 1.0, input.geometry.y > 0.0);
     return styled_line_color(input, coverage) * visible;
 }

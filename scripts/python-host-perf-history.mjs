@@ -4,8 +4,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { PERF_PROTOCOL, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
+import { openAuthoringInspector, collectWorkerProfile } from "./python-host-perf-worker-profile.mjs";
 
-export async function diagnoseWorkerHistory({ identity, retained, openFresh, measure, record }) {
+export async function diagnoseWorkerHistory({ identity, retained, openFresh, measure, record, sampleWorker = collectWorkerProfile }) {
   assert.match(identity?.source ?? "", /^[0-9a-f]{40}$/, "missing verified control source");
   const source = performanceSource("jspi", "deterministic");
   const evidence = { schema: 1, diagnosticOnly: true,
@@ -49,6 +50,23 @@ export async function diagnoseWorkerHistory({ identity, retained, openFresh, mea
     evidence.costs = Object.fromEntries(["creation_ms", "local_ms", "execution_ms"].map(key => [key,
       pairedCost(evidence.pairs.map(p => p[0][key]), evidence.pairs.map(p => p[1][key]))]));
     evidence.complete = true;
+    await record(evidence);
+    // Sample only after every uninstrumented history pair (and the scored
+    // matrix in the caller). These raw profiles never enter costs/pairs above.
+    // Keep fresh-worker ownership here so a failed inspector still tears down.
+    evidence.workerProfiles = {};
+    evidence.workerProfilesComplete = false;
+    for (const [name, participant] of [["retained", retained], ["fresh", fresh]]) {
+      await sampleWorker({
+        open: () => openAuthoringInspector(participant.page.context().browser(), participant.page),
+        run: () => measure(participant, source),
+        record: async profile => {
+          evidence.workerProfiles[name] = profile;
+          await record(evidence);
+        },
+      });
+    }
+    evidence.workerProfilesComplete = true;
     await record(evidence);
     return evidence;
   } finally {
