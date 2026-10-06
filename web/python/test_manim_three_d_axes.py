@@ -76,8 +76,8 @@ class ThreeDAxesAdapterTests(TestCase):
         with patch.object(plotting, "_coordinate_style", self.real_coordinate_style):
             with self.assertRaises(TypeError):
                 self.construct(num_axis_pieces=5)
-        self.factory.assert_called_once()
-        self.options.free.assert_called_once_with()
+        self.factory.assert_not_called()
+        self.options.free.assert_not_called()
         self.context.liveCreateCoordinates.assert_not_called()
 
     def test_coordinate_math_is_a_rust_frame_call(self):
