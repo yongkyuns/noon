@@ -697,6 +697,47 @@ fn prepared_object_updates_resolve_pending_spatial_anchor_before_publication() {
 }
 
 #[test]
+fn prepared_anchor_updates_follow_clear_and_reassign_last_write() {
+    let mut store = SemanticStore::new();
+    let child = object(&mut store, 1.0);
+    let mut transaction = SemanticMutationTransaction::new();
+    let first_family = transaction.create_node(SemanticNodeCreation::family());
+    let final_family = transaction.create_node(SemanticNodeCreation::family());
+    transaction
+        .add_member(first_family, child)
+        .add_member(final_family, child)
+        .set_spatial_composition_domain_with_anchor_ref(
+            child,
+            crate::SemanticSpatialCompositionDomain::FixedOrientation,
+            Some(first_family.into()),
+        )
+        .set_spatial_composition_domain_with_anchor_ref(
+            child,
+            crate::SemanticSpatialCompositionDomain::FixedOrientation,
+            None,
+        )
+        .set_spatial_composition_domain_with_anchor_ref(
+            child,
+            crate::SemanticSpatialCompositionDomain::FixedOrientation,
+            Some(final_family.into()),
+        );
+
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let updates = prepared.object_updates().collect::<Vec<_>>();
+    assert_eq!(updates.len(), 1);
+    let proposed_anchor = updates[0].1.spatial_anchor_family().unwrap();
+    let result = prepared.commit();
+    assert_eq!(result.resolve(final_family), Some(proposed_anchor));
+    assert_eq!(
+        store
+            .semantic_object_state_checked(child)
+            .unwrap()
+            .spatial_anchor_family(),
+        Some(proposed_anchor)
+    );
+}
+
+#[test]
 fn invalid_pending_spatial_anchors_reject_without_publishing_any_nodes() {
     let mut store = SemanticStore::new();
     let target = object(&mut store, 1.0);
@@ -743,9 +784,32 @@ fn invalid_pending_spatial_anchors_reject_without_publishing_any_nodes() {
         )
         .remove_node(removed_family);
     assert!(removed.apply(&mut store).is_err());
-
     assert_eq!(store.len(), before_len);
     assert_eq!(store.scene_revision(), before_revision);
+    assert_eq!(
+        store.semantic_object_state_checked(target).unwrap(),
+        &before_state
+    );
+
+    let mut removed_owner = SemanticMutationTransaction::new();
+    let owner = removed_owner.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 2.0 },
+    )));
+    let owner_anchor = removed_owner.create_node(SemanticNodeCreation::family());
+    removed_owner
+        .add_member(owner_anchor, owner)
+        .set_spatial_composition_domain_with_anchor_ref(
+            owner,
+            crate::SemanticSpatialCompositionDomain::FixedOrientation,
+            Some(owner_anchor.into()),
+        )
+        .remove_node(owner);
+    let result = removed_owner.apply(&mut store).unwrap();
+    assert!(result.resolve(owner).is_none());
+    assert!(result.resolve(owner_anchor).is_some());
+
+    assert_eq!(store.len(), before_len + 1);
+    assert_eq!(store.scene_revision(), before_revision + 1);
     assert_eq!(
         store.semantic_object_state_checked(target).unwrap(),
         &before_state

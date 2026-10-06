@@ -600,26 +600,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     return None;
                 }
                 let mut state = self.preflight.staged_objects[node].clone();
-                if let Some((domain, Some(anchor))) = self
-                    .transaction
-                    .mutations
-                    .iter()
-                    .rev()
-                    .find_map(|mutation| match mutation {
-                        SemanticMutation::SetSpatialCompositionDomain {
-                            object: SemanticTransactionNodeRef::Existing(object),
-                            domain,
-                            anchor_family: Some(anchor),
-                        } if object == node_id => Some((*domain, Some(*anchor))),
-                        SemanticMutation::SetSpatialCompositionDomain {
-                            object: SemanticTransactionNodeRef::Existing(object),
-                            domain,
-                            anchor_family: None,
-                        } if object == node_id => Some((*domain, None)),
-                        _ => None,
-                    })
-                {
-                    let anchor = resolve_node_ref(anchor, &self.planned_nodes);
+                if let Some(anchor) = self.preflight.staged_spatial_anchors.get(node) {
+                    let anchor = resolve_node_ref(*anchor, &self.planned_nodes);
+                    let domain = state.spatial_composition_domain();
                     state
                         .set_spatial_composition_domain_with_anchor(domain, Some(anchor))
                         .expect("preflight validated resolved spatial anchor");

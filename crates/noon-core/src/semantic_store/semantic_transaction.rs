@@ -557,6 +557,7 @@ pub(super) struct SemanticTransactionPreflight {
     changed: Vec<bool>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
+    staged_spatial_anchors: HashMap<SemanticTransactionNodeRef, SemanticTransactionNodeRef>,
     /// Final constructor fields for transaction-only retained paths. This is a
     /// narrow creation overlay, never a durable object-state substitute.
     staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject>,
@@ -1988,7 +1989,8 @@ impl SemanticMutationTransaction {
             HashMap::new();
         let mut staged_family_z = HashMap::new();
         let mut staged_object_order = Vec::new();
-        let mut spatial_anchor_checks = Vec::new();
+        let mut spatial_anchor_checks = HashMap::new();
+        let mut staged_spatial_anchors = HashMap::new();
         let mut staged_updaters =
             HashMap::<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>::new();
         let mut staged_signal_timeline =
@@ -2467,10 +2469,8 @@ impl SemanticMutationTransaction {
                 } => {
                     if let SemanticTransactionNodeRef::Pending(token) = object {
                         if removed_pending.contains(token) {
-                            return Err(SemanticMutationTransactionError::UnknownPendingNode {
-                                index,
-                                token: *token,
-                            });
+                            changed.push(false);
+                            continue;
                         }
                     }
                     if let Some(anchor) = anchor_family {
@@ -2486,7 +2486,22 @@ impl SemanticMutationTransaction {
                         catalog.ensure_object(*object, index)?;
                         if anchor != object {
                             catalog.ensure_family(*anchor, index)?;
-                            spatial_anchor_checks.push((index, *anchor, *object));
+                            spatial_anchor_checks.insert(*object, (index, *anchor, *object));
+                        } else {
+                            spatial_anchor_checks.remove(object);
+                        }
+                    } else {
+                        spatial_anchor_checks.remove(object);
+                    }
+                    match (object, anchor_family) {
+                        (
+                            SemanticTransactionNodeRef::Existing(_),
+                            Some(anchor @ SemanticTransactionNodeRef::Pending(_)),
+                        ) => {
+                            staged_spatial_anchors.insert(*object, *anchor);
+                        }
+                        _ => {
+                            staged_spatial_anchors.remove(object);
                         }
                     }
                     let state = catalog.staged_object_state(
@@ -3001,7 +3016,7 @@ impl SemanticMutationTransaction {
             }
         }
 
-        for (index, anchor, object) in spatial_anchor_checks {
+        for (index, anchor, object) in spatial_anchor_checks.into_values() {
             if !family_edges.contains_ancestor(&catalog, anchor, object) {
                 return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
             }
@@ -3081,6 +3096,7 @@ impl SemanticMutationTransaction {
             staged_family_z,
             changed,
             staged_objects,
+            staged_spatial_anchors,
             staged_pending_paths,
             staged_object_order,
             staged_updaters,
