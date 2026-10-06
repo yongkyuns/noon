@@ -61,6 +61,10 @@ def _pose(value):
     return tuple(float(component) for component in value)
 
 
+def _world_transform_values(translation=(0, 0, 0), rotation=(1, 0, 0, 0), scale=(1, 1, 1)):
+    return (*_vector(translation), *_vector(rotation, 4), *_vector(scale))
+
+
 def _count(value):
     if isinstance(value, bool):
         raise TypeError("mesh sample counts require integers")
@@ -294,7 +298,7 @@ class WorldTransformTo:
         if not isinstance(mobject, _base.Mobject):
             raise TypeError("WorldTransformTo requires a Mobject")
         self.mobject = mobject
-        self.endpoint = (*_vector(translation), *_vector(rotation, 4), *_vector(scale))
+        self.endpoint = _world_transform_values(translation, rotation, scale)
         self.anim_args = dict(kwargs)
 
 
@@ -351,6 +355,21 @@ class SpatialScene(_base.Scene):
     def add_fixed_orientation_mobjects(self, *mobjects):
         from _manim_scene import _canonical_edit_membership
         _canonical_edit_membership(self, "add", mobjects, spatial_domain="fixed_orientation")
+        return self
+
+    def set_world_transform(self, mobject, *, translation=(0, 0, 0),
+                            rotation=(1, 0, 0, 0), scale=(1, 1, 1)):
+        """Set one typed spatial Mobject's authored pose without playback."""
+        from _manim_scene import _context
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("set_world_transform requires a typed Mobject")
+        if getattr(mobject, "_semantic_family_handle", None) is not None:
+            raise TypeError("set_world_transform requires one Mobject, not a family")
+        handle = _handle_for(mobject)
+        if handle is None:
+            raise TypeError("set_world_transform requires one active typed Mobject")
+        endpoint = _world_transform_values(translation, rotation, scale)
+        engine_call(_context(self).setWorldTransform, handle, _bulk(endpoint))
         return self
 
     def shift_world(self, mobject, vector):
