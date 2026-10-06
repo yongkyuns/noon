@@ -310,12 +310,14 @@ pub fn cairo_cone_bodies_scene(
         )
         .map_err(|error| error.to_string())?;
 
-    let mut default = author_cairo_cone(&mut scene, 1.0, 1.0, 0.0, SemanticVec3::new(0.0, 0.0, 1.0))?;
+    let mut default =
+        author_cairo_cone(&mut scene, 1.0, 1.0, 0.0, SemanticVec3::new(0.0, 0.0, 1.0))?;
     default
         .world_affine(WorldAffineEdit::Shift(SemanticVec3::new(-1.25, 0.0, 0.0)))
         .map_err(|error| error.to_string())?;
 
-    let mut tilted = author_cairo_cone(&mut scene, 0.8, 1.4, 0.2, SemanticVec3::new(1.0, 2.0, 2.0))?;
+    let mut tilted =
+        author_cairo_cone(&mut scene, 0.8, 1.4, 0.2, SemanticVec3::new(1.0, 2.0, 2.0))?;
     tilted
         .world_affine(WorldAffineEdit::Shift(SemanticVec3::new(1.25, 0.0, 0.0)))
         .map_err(|error| error.to_string())?;
