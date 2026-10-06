@@ -17,31 +17,43 @@ jobs:
       SCCACHE_GHA_RW_MODE: READ_ONLY
       TASK_ASSETS: /tmp/task-1653-assets
       BASE_SHA: 886ede3e2243d621cda5823b30a7911f4e382417
+      CANDIDATE_SHA: f2d7fb9e5b7c161d6ac1723f1497a814d30c229b
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 2
-      - name: Stage audited patch inputs and checkout exact production base
+      - name: Repair test-module placement on the exact candidate
         shell: bash
         run: |
           set -euo pipefail
           cp -R .github/task-1653-assets "$TASK_ASSETS"
-          cp .github/task-1653-apply.py /tmp/task-1653-apply.py
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          git checkout --detach "$BASE_SHA"
-          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git fetch --no-tags --depth=2 origin "$CANDIDATE_SHA"
+          git checkout --detach "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           python - <<'PY'
           from pathlib import Path
-          p = Path('/tmp/task-1653-apply.py')
-          # Anchor indented replacement patterns at line boundaries.
-          s = p.read_text().replace('    assert text.count(old) == 1, (old, text.count(old))', '    if old.startswith(" "):\n        old, new = "\\n" + old, "\\n" + new\n    assert text.count(old) == 1, (old, text.count(old))')
+          module = '#[cfg(test)]\nmod tests {\n'
+          p = Path('crates/noon-render-wgpu/src/render_order.rs')
+          s = p.read_text()
+          marker = '    #[test]\n    fn zero_contribution_keeps_camera_resident_and_updates_only_one_partition()'
+          assert s.count(marker) == 1 and s.count(module) == 1
+          start = s.index(marker)
+          tail = s[start:].rstrip()
+          assert tail.endswith('}')
+          tests = tail[:-1]
+          s = s[:start].rstrip() + '\n}\n'
+          s = s.replace(module, module + tests + '\n', 1)
           p.write_text(s)
-          PY
-          python /tmp/task-1653-apply.py
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('crates/noon-render-wgpu/src/lib.rs')
-          s = p.read_text().replace('Live primitive instances referenced by the current submission projection.', 'Present resident primitive instances, before zero-contribution suppression.')
+          p = Path('crates/noon-render-wgpu/src/gpu/retained_text.rs')
+          s = p.read_text()
+          marker = 'impl std::error::Error for InteractiveDrawError {'
+          assert s.count(marker) == 1 and s.count(module) == 1
+          head, tail = s.split(marker)
+          tail = tail.rstrip()
+          assert tail.endswith('}') and tail.count('#[test]') == 1
+          tests = tail[:-1]
+          s = head + marker + '}\n'
+          s = s.replace(module, module + tests + '\n', 1)
           p.write_text(s)
           PY
       - name: Use repository-pinned Rust
@@ -56,30 +68,36 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Format and publish clean production-only branch
+      - name: Format and stage clean repaired candidate for connector publication
+        id: publish
         run: |
           set -euo pipefail
           cargo fmt --all
           git diff --check
           python - <<'PY'
           import subprocess
-          expected = {'crates/noon-render-wgpu/src/lib.rs', 'crates/noon-render-wgpu/src/render_order.rs', 'crates/noon-render-wgpu/src/gpu/mod.rs', 'crates/noon-render-wgpu/src/gpu/retained_text.rs', 'crates/noon-render-wgpu/tests/secondary_viewport.rs', 'docs/architecture.md'}
+          expected = {'crates/noon-render-wgpu/src/render_order.rs', 'crates/noon-render-wgpu/src/gpu/retained_text.rs'}
           changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
           assert changed == expected, changed
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/noon-render-wgpu docs/architecture.md
-          git commit -m 'Skip zero-contribution retained geometry draws without retiring semantic objects (#1653)'
-          git push origin HEAD:refs/heads/fix/1653-zero-contribution-draws
+          git add crates/noon-render-wgpu/src
+          git commit -m 'Place zero-contribution regression functions in their owning test modules'
+          git push origin HEAD:refs/heads/task/1653-repaired-candidate
           git rev-parse HEAD | tee /tmp/task-1653-head.txt
           git diff "$BASE_SHA" HEAD > /tmp/task-1653-candidate.patch
       - name: Focused zero-contribution regressions
-        run: cargo test -p noon-render-wgpu --all-features --lib zero_contribution -- --nocapture
+        id: focused
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
+        run: cargo test -p noon-render-wgpu --all-features --lib zero_contribution -- --nocapture 2>&1 | tee /tmp/task-1653-focused.log
       - name: Verify regression fails on original renderer
+        id: baseline
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
+          trap 'git restore --source=HEAD -- crates/noon-render-wgpu/src' EXIT
           git restore --source="$BASE_SHA" -- crates/noon-render-wgpu/src
           python - <<'PY'
           from pathlib import Path
@@ -87,27 +105,41 @@ jobs:
           tests = (Path(os.environ['TASK_ASSETS']) / 'order-tests.rs').read_text()
           first = tests.split('    #[test]', 2)[1]
           p = Path('crates/noon-render-wgpu/src/render_order.rs')
-          s = p.read_text().rstrip()
-          assert s.endswith('}')
-          p.write_text(s[:-1] + '\n    #[test]' + first + '\n}\n')
+          s = p.read_text()
+          marker = '#[cfg(test)]\nmod tests {\n'
+          assert s.count(marker) == 1
+          p.write_text(s.replace(marker, marker + '\n    #[test]' + first + '\n', 1))
           PY
           set +e
           cargo test -p noon-render-wgpu --all-features --lib zero_contribution_keeps_camera_resident_and_updates_only_one_partition -- --nocapture > /tmp/task-1653-baseline-regression.log 2>&1
           status=$?
           set -e
           cat /tmp/task-1653-baseline-regression.log
-          git restore --source=HEAD -- crates/noon-render-wgpu/src
           test "$status" = 101
           grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/task-1653-baseline-regression.log
           grep -F 'Some(true)' /tmp/task-1653-baseline-regression.log
       - name: Renderer unit and integration suite
-        run: cargo test -p noon-render-wgpu --all-features --no-fail-fast
+        id: renderer
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
+        run: cargo test -p noon-render-wgpu --all-features --no-fail-fast 2>&1 | tee /tmp/task-1653-renderer.log
       - name: Install software Vulkan
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
       - name: Real software Vulkan pixel equality and restoration
-        run: cargo test -p noon-render-wgpu --all-features --test secondary_viewport zero_contribution -- --include-ignored --nocapture --test-threads=1
+        id: raster
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
+        run: cargo test -p noon-render-wgpu --all-features --test secondary_viewport zero_contribution -- --include-ignored --nocapture --test-threads=1 2>&1 | tee /tmp/task-1653-raster.log
       - name: Renderer lint
-        run: cargo clippy -p noon-render-wgpu --all-targets --all-features -- -D warnings
+        id: lint
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
+        run: cargo clippy -p noon-render-wgpu --all-targets --all-features -- -D warnings 2>&1 | tee /tmp/task-1653-lint.log
+      - name: Record qualification outcomes
+        if: always()
+        env:
+          OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          printf '%s\n' "$OUTCOMES" > /tmp/task-1653-outcomes.json
+          git status --porcelain > /tmp/task-1653-final-status.txt
       - name: Archive implementation and regression evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -116,6 +148,8 @@ jobs:
           path: |
             /tmp/task-1653-head.txt
             /tmp/task-1653-candidate.patch
-            /tmp/task-1653-baseline-regression.log
+            /tmp/task-1653-*.log
+            /tmp/task-1653-outcomes.json
+            /tmp/task-1653-final-status.txt
           retention-days: 7
           if-no-files-found: warn
