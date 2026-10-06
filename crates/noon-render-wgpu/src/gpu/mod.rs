@@ -1664,6 +1664,34 @@ impl GpuRenderer {
         single_sample_analytics: bool,
         binding: &mut Option<GeometryBinding>,
     ) -> DrawStats {
+        let mut stats = DrawStats::default();
+        for instance_range in prepared.contributing_instance_ranges(&resolved.batch) {
+            let segment = ResolvedOrderedBatch {
+                batch: OrderedRenderBatch {
+                    primitive: resolved.batch.primitive,
+                    instance_range,
+                },
+                mega: resolved.mega.clone(),
+            };
+            stats += self.draw_contributing_ordered_batch(
+                pass,
+                prepared,
+                &segment,
+                single_sample_analytics,
+                binding,
+            );
+        }
+        stats
+    }
+
+    fn draw_contributing_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+    ) -> DrawStats {
         let batch = &resolved.batch;
         let (next, pipeline, vertices, instances, indices) = match batch.primitive {
             RenderPrimitive::Circle => (
@@ -1760,11 +1788,15 @@ impl GpuRenderer {
             }
             RenderPrimitive::MegaPath { .. } => {
                 let mega = resolved.mega.as_ref().expect("resolved mega metadata");
-                pass.draw_indexed(mega.index_range.clone(), 0, 0..1);
-                return DrawStats {
-                    draw_calls: 1,
-                    instances_drawn: mega.path_count,
-                };
+                let mut stats = DrawStats::default();
+                for (index_range, path_count) in
+                    prepared.contributing_mega_index_ranges(mega.index_range.clone())
+                {
+                    pass.draw_indexed(index_range, 0, 0..1);
+                    stats.draw_calls += 1;
+                    stats.instances_drawn += path_count;
+                }
+                return stats;
             }
             _ => pass.draw(0..6, batch.instance_range.clone()),
         }

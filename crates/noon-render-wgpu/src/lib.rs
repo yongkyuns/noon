@@ -292,6 +292,8 @@ pub struct PreparedFrame<'a> {
     slots: &'a [PreparedSlot],
     slot_presences: &'a [bool],
     complete_submission: bool,
+    zero_contribution: &'a [render_order::ZeroContributionRanges; 5],
+    mega_path_offsets: &'a [u32],
 }
 
 /// Packed geometry state for one exact source-frame row.
@@ -619,6 +621,8 @@ pub struct FramePreparer {
     // Stable slices in the immutable packed mega index stream. A live-edited
     // path is detached rather than forcing a whole-stream rewrite.
     mega_path_segments: Vec<Option<Range<u32>>>,
+    mega_path_offsets: Vec<u32>,
+    zero_contribution: [render_order::ZeroContributionRanges; 5],
     mega_path_detached: Vec<bool>,
     render_batches: Vec<OrderedRenderBatch>,
     render_chunks: Vec<PreparedRenderChunk>,
@@ -861,6 +865,11 @@ impl FramePreparer {
                 replacement_chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
             }
         }
+        for chunk in replacement_chunks {
+            let start = chunk * Self::RENDER_ORDER_CHUNK_SIZE;
+            self.rebuild_render_order_chunks(Some(start..start + Self::RENDER_ORDER_CHUNK_SIZE));
+        }
+
         for &object_index in changes.object_indices() {
             let added = changes.added_indices().binary_search(&object_index).is_ok();
             let removed = changes
@@ -874,7 +883,6 @@ impl FramePreparer {
             {
                 continue;
             }
-            let prior_draw_slot = self.color_contributing_slot(self.slots[object_index]);
             let object = &frame.objects[object_index];
             match self.slots[object_index] {
                 PreparedSlot::Absent => {}
@@ -946,16 +954,6 @@ impl FramePreparer {
                 }
                 PreparedSlot::Unsupported(_) => {}
             }
-            if prior_draw_slot != self.color_contributing_slot(self.slots[object_index]) {
-                self.record_render_order_chunk(object_index, &mut replacement_chunks);
-            }
-        }
-
-        // Eligibility must see the newly packed effective style. Reuse bounded
-        // painter partitions, never a whole-scene rebuild for an opacity change.
-        for chunk in replacement_chunks {
-            let start = chunk * Self::RENDER_ORDER_CHUNK_SIZE;
-            self.rebuild_render_order_chunks(Some(start..start + Self::RENDER_ORDER_CHUNK_SIZE));
         }
 
         if let Some(range) = changes.painter_order_range() {
@@ -970,6 +968,7 @@ impl FramePreparer {
         normalize_dirty_ranges(&mut self.path_index_dirty_ranges);
         normalize_dirty_ranges(&mut self.mega_path_instance_dirty_ranges);
         normalize_dirty_ranges(&mut self.mega_path_index_dirty_ranges);
+        self.sync_zero_contribution();
 
         // Incremental path replacements can create one CPU tessellation per
         // content version. Compact only after crossing a high-water mark, and
@@ -1248,9 +1247,7 @@ impl FramePreparer {
         };
         let appended_at_tail = self.install_structural_slot(object_index, slot);
 
-        let appended_to_mega = mega_eligible
-            && self.color_contributing_slot(slot) != PreparedSlot::Absent
-            && self.append_mega_path_draw(batch, packed);
+        let appended_to_mega = mega_eligible && self.append_mega_path_draw(batch, packed);
         if appended_to_mega {
             if appended_at_tail {
                 if let Some(line_index) = reveal_head {
@@ -1514,6 +1511,7 @@ impl FramePreparer {
         self.slots.clear();
         self.slot_presences.clear();
         self.active_instance_count = 0;
+        self.zero_contribution = Default::default();
         self.clear_dirty_ranges();
 
         let mut path_groups = Vec::<PathGroup>::new();
@@ -1686,6 +1684,7 @@ impl FramePreparer {
         if !self.paths.is_empty() {
             self.path_dirty_ranges.push(0..self.paths.len());
         }
+        self.sync_zero_contribution();
         self.initialized = true;
         self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
 
@@ -1904,6 +1903,8 @@ impl FramePreparer {
             slots: &self.slots,
             slot_presences: &self.slot_presences,
             complete_submission: true,
+            zero_contribution: &self.zero_contribution,
+            mega_path_offsets: &self.mega_path_offsets,
         }
     }
 
@@ -2006,7 +2007,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 33] {
+    fn capacities(&self) -> [usize; 34] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -2024,6 +2025,7 @@ impl FramePreparer {
             self.mega_path_vertex_instances.capacity(),
             self.mega_path_batches.capacity(),
             self.mega_path_segments.capacity(),
+            self.mega_path_offsets.capacity(),
             self.mega_path_detached.capacity(),
             self.mega_path_instance_dirty_ranges.capacity(),
             self.mega_path_index_dirty_ranges.capacity(),

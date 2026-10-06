@@ -158,7 +158,7 @@ impl FramePreparer {
         if !self.visible_projection_matches(visible_object_indices) {
             self.visible_projection_key.clear();
             for &object_index in visible_object_indices {
-                let slot = self.color_contributing_slot(self.slots[object_index]);
+                let slot = self.slots[object_index];
                 let present = self.slot_presences[object_index];
                 let (mega_path_segment, mega_path_detached) = match slot {
                     PreparedSlot::Path { batch, .. } => (
@@ -180,10 +180,7 @@ impl FramePreparer {
             raw_render_batches.clear();
             for &object_index in visible_object_indices {
                 if self.slot_presences[object_index] {
-                    push_slot_batches(
-                        &mut raw_render_batches,
-                        self.color_contributing_slot(self.slots[object_index]),
-                    );
+                    push_slot_batches(&mut raw_render_batches, self.slots[object_index]);
                 }
             }
             let mut render_batches = std::mem::take(&mut self.visible_render_batches);
@@ -237,7 +234,7 @@ impl FramePreparer {
                 .all(|(cached, &object_index)| {
                     if cached.object_index != object_index
                         || cached.present != self.slot_presences[object_index]
-                        || cached.slot != self.color_contributing_slot(self.slots[object_index])
+                        || cached.slot != self.slots[object_index]
                     {
                         return false;
                     }
@@ -255,24 +252,12 @@ impl FramePreparer {
 }
 
 impl FramePreparer {
-    /// Filter only derived submission metadata, not identity or runtime presence.
-    pub(crate) fn color_contributing_slot(&self, slot: PreparedSlot) -> PreparedSlot {
-        if slot.may_contribute_color(&self.circles, &self.rectangles, &self.lines, &self.paths) {
-            slot
-        } else {
-            PreparedSlot::Absent
-        }
-    }
-
     pub(crate) fn append_ordered_render_slot(&mut self, slot: PreparedSlot) {
-        let slot = self.color_contributing_slot(slot);
         push_slot_batches(&mut self.render_batches, slot);
     }
 
     pub(crate) fn append_ordered_reveal_head(&mut self, line_index: usize) {
-        if self.lines[line_index].style.may_contribute_color() {
-            push_batch(&mut self.render_batches, RenderPrimitive::Line, line_index);
-        }
+        push_batch(&mut self.render_batches, RenderPrimitive::Line, line_index);
     }
 
     pub(crate) fn rebuild_ordered_render_batches(&mut self) {
@@ -287,7 +272,6 @@ impl FramePreparer {
                     .unwrap_or(false)
                 {
                     if let Some(slot) = self.slots.get(object_index as usize).copied() {
-                        let slot = self.color_contributing_slot(slot);
                         push_slot_batches(&mut self.render_batches, slot);
                     }
                 }
@@ -298,7 +282,6 @@ impl FramePreparer {
         // Low-level scratch frames without a runtime permutation use storage order.
         for (object_index, slot) in self.slots.iter().copied().enumerate() {
             if self.slot_presences[object_index] {
-                let slot = self.color_contributing_slot(slot);
                 push_slot_batches(&mut self.render_batches, slot);
             }
         }
@@ -378,7 +361,7 @@ impl FramePreparer {
                     .unwrap_or(false)
                 {
                     if let Some(slot) = self.slots.get(object_index).copied() {
-                        push_slot_batches(&mut raw, self.color_contributing_slot(slot));
+                        push_slot_batches(&mut raw, slot);
                     }
                 }
             }
@@ -568,42 +551,185 @@ fn projected_frame<'a>(
         slots: &preparer.slots,
         slot_presences: &preparer.slot_presences,
         complete_submission: false,
+        zero_contribution: &preparer.zero_contribution,
+        mega_path_offsets: &preparer.mega_path_offsets,
     }
 }
 
+/// Disposable index of zero-paint spans in one packed buffer. Source paint is
+/// authoritative; only uploaded dirty rows update this cache. Coalesced spans
+/// make an all-transparent batch O(log spans), not a per-frame instance scan.
+#[derive(Debug, Default)]
+pub(crate) struct ZeroContributionRanges {
+    ranges: std::collections::BTreeMap<u32, u32>,
+}
+
+impl ZeroContributionRanges {
+    pub(crate) fn set(&mut self, mut span: Range<u32>, zero: bool) {
+        if span.is_empty() {
+            return;
+        }
+        let previous = self
+            .ranges
+            .range(..=span.start)
+            .next_back()
+            .map(|(&a, &b)| (a, b));
+        if zero {
+            if let Some((start, end)) = previous {
+                if end >= span.end {
+                    return;
+                }
+                if end >= span.start {
+                    self.ranges.remove(&start);
+                    span.start = start;
+                }
+            }
+            while let Some((&start, &end)) = self.ranges.range(span.start..).next() {
+                if start > span.end {
+                    break;
+                }
+                self.ranges.remove(&start);
+                span.end = span.end.max(end);
+            }
+            self.ranges.insert(span.start, span.end);
+        } else {
+            if let Some((start, end)) =
+                previous.filter(|&(start, end)| start < span.start && end > span.start)
+            {
+                *self
+                    .ranges
+                    .get_mut(&start)
+                    .expect("retained preceding span") = span.start;
+                if end > span.end {
+                    self.ranges.insert(span.end, end);
+                    return;
+                }
+            }
+            while let Some((&start, &end)) = self.ranges.range(span.start..span.end).next() {
+                self.ranges.remove(&start);
+                if end > span.end {
+                    self.ranges.insert(span.end, end);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn visible_ranges(
+        zero: Option<&Self>,
+        span: Range<u32>,
+    ) -> impl Iterator<Item = Range<u32>> + '_ {
+        let mut cursor = span.start;
+        let end = span.end;
+        let start = zero
+            .and_then(|zero| {
+                zero.ranges
+                    .range(..=cursor)
+                    .next_back()
+                    .map(|(&start, _)| start)
+            })
+            .unwrap_or(cursor);
+        let mut ranges = zero
+            .into_iter()
+            .flat_map(move |zero| zero.ranges.range(start..end));
+        std::iter::from_fn(move || {
+            for (&start, &stop) in ranges.by_ref() {
+                let visible_start = cursor;
+                let visible_end = start.min(end);
+                cursor = cursor.max(stop.min(end));
+                if visible_start < visible_end {
+                    return Some(visible_start..visible_end);
+                }
+            }
+            let start = cursor;
+            cursor = end;
+            (start < end).then_some(start..end)
+        })
+    }
+}
+
+impl FramePreparer {
+    /// Only already-dirty packed rows are visited. A clean frame does no work;
+    /// opacity changes never erase source painter anchors or rebuild their order.
+    pub(crate) fn sync_zero_contribution(&mut self) {
+        for range in &self.circle_dirty_ranges {
+            for index in range.clone() {
+                self.zero_contribution[0].set(
+                    packed_row_span(index),
+                    !self.circles[index].style.may_contribute_color(),
+                );
+            }
+        }
+        for range in &self.rectangle_dirty_ranges {
+            for index in range.clone() {
+                self.zero_contribution[1].set(
+                    packed_row_span(index),
+                    !self.rectangles[index].style.may_contribute_color(),
+                );
+            }
+        }
+        for range in &self.line_dirty_ranges {
+            for index in range.clone() {
+                self.zero_contribution[2].set(
+                    packed_row_span(index),
+                    !self.lines[index].style.may_contribute_color(),
+                );
+            }
+        }
+        for range in &self.path_dirty_ranges {
+            for index in range.clone() {
+                self.zero_contribution[3].set(
+                    packed_row_span(index),
+                    !self.paths[index].style.may_contribute_color(),
+                );
+            }
+        }
+    }
+
+    pub(crate) fn set_mega_zero_contribution(
+        &mut self,
+        range: Range<u32>,
+        style: crate::PackedStyle,
+    ) {
+        self.zero_contribution[4].set(range, !style.may_contribute_color());
+    }
+}
+
+fn packed_row_span(index: usize) -> Range<u32> {
+    u32::try_from(index).expect("packed instance index exceeds renderer limits")
+        ..u32::try_from(index + 1).expect("packed instance count exceeds renderer limits")
+}
+
 impl PreparedFrame<'_> {
-    /// Mixed-content source membership survives fades. Filter current packed
-    /// ranges during its existing submission walk instead of rebuilding text or
-    /// geometry order. Geometry-only frames use retained painter partitions.
+    /// Preserve source descriptors (including transient anchors), but submit
+    /// only contributing instance spans at the shared GPU draw boundary.
     pub(crate) fn contributing_instance_ranges(
         &self,
         batch: &OrderedRenderBatch,
     ) -> impl Iterator<Item = Range<u32>> + '_ {
-        let primitive = batch.primitive;
-        let mut remaining = batch.instance_range.clone();
-        std::iter::from_fn(move || {
-            let contributes = |index: u32| match primitive {
-                RenderPrimitive::Circle => {
-                    self.circles[index as usize].style.may_contribute_color()
-                }
-                RenderPrimitive::Rectangle => {
-                    self.rectangles[index as usize].style.may_contribute_color()
-                }
-                RenderPrimitive::Line => self.lines[index as usize].style.may_contribute_color(),
-                RenderPrimitive::Path { .. } => {
-                    self.paths[index as usize].style.may_contribute_color()
-                }
-                // Mega streams are already filtered by retained painter projection.
-                RenderPrimitive::MegaPath { .. } => true,
-            };
-            while remaining.start < remaining.end && !contributes(remaining.start) {
-                remaining.start += 1;
-            }
-            let start = remaining.start;
-            while remaining.start < remaining.end && contributes(remaining.start) {
-                remaining.start += 1;
-            }
-            (start < remaining.start).then_some(start..remaining.start)
+        let zero = match batch.primitive {
+            RenderPrimitive::Circle => Some(&self.zero_contribution[0]),
+            RenderPrimitive::Rectangle => Some(&self.zero_contribution[1]),
+            RenderPrimitive::Line => Some(&self.zero_contribution[2]),
+            RenderPrimitive::Path { .. } => Some(&self.zero_contribution[3]),
+            // Packed mega draws are filtered in index units, below.
+            RenderPrimitive::MegaPath { .. } => None,
+        };
+        ZeroContributionRanges::visible_ranges(zero, batch.instance_range.clone())
+    }
+
+    pub(crate) fn contributing_mega_index_ranges(
+        &self,
+        span: Range<u32>,
+    ) -> impl Iterator<Item = (Range<u32>, usize)> + '_ {
+        ZeroContributionRanges::visible_ranges(Some(&self.zero_contribution[4]), span).map(|span| {
+            let start = self
+                .mega_path_offsets
+                .partition_point(|&offset| offset < span.start);
+            let end = self
+                .mega_path_offsets
+                .partition_point(|&offset| offset < span.end);
+            (span, end - start)
         })
     }
 }
@@ -655,8 +781,27 @@ fn push_batch(batches: &mut Vec<OrderedRenderBatch>, primitive: RenderPrimitive,
 
 #[cfg(test)]
 mod tests {
+    fn eligible_geometry_count(prepared: &PreparedFrame<'_>) -> usize {
+        prepared
+            .ordered_render_batches()
+            .map(|ordered| {
+                if let Some(mega) = ordered.mega_path_batch {
+                    prepared
+                        .contributing_mega_index_ranges(mega.index_range.clone())
+                        .map(|(_, count)| count)
+                        .sum()
+                } else {
+                    prepared
+                        .contributing_instance_ranges(ordered.batch)
+                        .map(|range| range.len())
+                        .sum()
+                }
+            })
+            .sum()
+    }
+
     #[test]
-    fn zero_contribution_keeps_camera_resident_and_updates_only_one_partition() {
+    fn zero_contribution_keeps_camera_and_painter_anchors_without_order_rebuilds() {
         let mut frame = frame(
             (0..8192)
                 .map(|id| object(id, GeometryRef::rectangle(14.222222, 8.0)))
@@ -675,8 +820,9 @@ mod tests {
             cold.ordered_render_batches()
                 .map(|b| b.batch.instance_range.len())
                 .sum::<usize>(),
-            8191
+            8192
         );
+        assert_eq!(eligible_geometry_count(&cold), 8191);
         for opacity in [0.25, 1.0, 0.0, f32::MIN_POSITIVE, 0.0] {
             frame.objects[camera].style.opacity = opacity;
             frame.objects[camera].transform.translation.x += 0.125;
@@ -685,11 +831,8 @@ mod tests {
             assert_eq!(prepared.stats.full_rebuilds, 0);
             assert_eq!(prepared.stats.instances_repacked, 1);
             assert_eq!(prepared.stats.geometry_cache_misses, 0);
-            assert!(
-                prepared.stats.render_order_positions_visited
-                    <= FramePreparer::RENDER_ORDER_CHUNK_SIZE
-            );
-            assert!(prepared.stats.render_order_chunks_rebuilt <= 1);
+            assert_eq!(prepared.stats.render_order_positions_visited, 0);
+            assert_eq!(prepared.stats.render_order_chunks_rebuilt, 0);
             assert_eq!(
                 prepared
                     .observe_object(camera)
@@ -704,11 +847,12 @@ mod tests {
                 frame.objects[camera].transform.translation.x
             );
             assert_eq!(
-                prepared
-                    .ordered_render_batches()
-                    .map(|b| b.batch.instance_range.len())
-                    .sum::<usize>(),
+                eligible_geometry_count(&prepared),
                 8191 + usize::from(opacity != 0.0)
+            );
+            assert_eq!(
+                prepared.zero_contribution[1].ranges.len(),
+                usize::from(opacity == 0.0)
             );
         }
         let clean = preparer.prepare_incremental(&frame, &FrameChanges::default());
@@ -753,7 +897,7 @@ mod tests {
             state.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
             let prepared = preparer.prepare(&frame(vec![state.clone()]));
             assert_eq!(
-                prepared.ordered_render_batches().next().is_some(),
+                eligible_geometry_count(&prepared) != 0,
                 expected,
                 "style: {:?}",
                 state.style
@@ -762,34 +906,29 @@ mod tests {
     }
 
     #[test]
-    fn zero_contribution_visibility_cache_tracks_appearance_without_stale_membership() {
+    fn zero_contribution_appearance_restores_without_rebuilding_visibility_projection() {
         let mut frame = frame(vec![object(0, GeometryRef::rectangle(2.0, 2.0))]);
-        frame.objects[0].appearance = 0.0;
         let mut preparer = FramePreparer::new();
-        for (appearance, expected_projections) in [(0.0, 1), (0.5, 2), (1.0, 2), (0.0, 3), (1.0, 4)]
-        {
+        for appearance in [0.0, 0.5, 1.0, 0.0, 1.0] {
             frame.objects[0].appearance = appearance;
             let prepared = preparer
                 .prepare_incremental_visible(&frame, &FrameChanges::objects(vec![0]), &[0])
                 .unwrap();
             assert_eq!(
-                prepared.ordered_render_batches().next().is_some(),
-                appearance != 0.0
+                eligible_geometry_count(&prepared),
+                usize::from(appearance != 0.0)
             );
             assert_eq!(prepared.rectangles.len(), 1);
             assert_eq!(
                 prepared.observe_object(0).unwrap().submission_membership,
                 None
             );
-            assert_eq!(
-                preparer.visible_projection_stats().projections,
-                expected_projections
-            );
+            assert_eq!(preparer.visible_projection_stats().projections, 1);
         }
     }
 
     #[test]
-    fn zero_contribution_batched_holes_preserve_painter_order_and_independent_rows() {
+    fn zero_contribution_batched_holes_keep_painter_anchors_and_independent_rows() {
         let mut frame = frame(
             (0..5)
                 .map(|id| object(id, GeometryRef::rectangle(2.0, 2.0)))
@@ -799,65 +938,21 @@ mod tests {
         frame.objects[3].style.opacity = 0.0;
         let mut preparer = FramePreparer::new();
         let prepared = preparer.prepare(&frame);
-        let ranges: Vec<_> = prepared
-            .ordered_render_batches()
-            .map(|b| b.batch.instance_range.clone())
-            .collect();
-        assert_eq!(ranges, vec![0..1, 2..3, 4..5]);
-        let batch = OrderedRenderBatch {
-            primitive: RenderPrimitive::Rectangle,
-            instance_range: 0..5,
-        };
+        assert_eq!(prepared.render_batches[0].instance_range, 0..5);
         assert_eq!(
             prepared
-                .contributing_instance_ranges(&batch)
+                .contributing_instance_ranges(&prepared.render_batches[0])
                 .collect::<Vec<_>>(),
-            ranges
+            vec![0..1, 2..3, 4..5]
         );
         preparer.set_painter_order(&frame, &[4, 3, 2, 1, 0]);
         let prepared = preparer.prepare(&frame);
-        assert_eq!(
-            prepared
-                .ordered_render_batches()
-                .map(|b| b.batch.instance_range.clone())
-                .collect::<Vec<_>>(),
-            vec![4..5, 2..3, 0..1]
-        );
-    }
-
-    #[test]
-    fn zero_contribution_paths_reappear_without_losing_resident_meshes() {
-        use noon_core::{Color, Vec2, VectorPath};
-        let mut state = object(
-            0,
-            GeometryRef::path(VectorPath::new().move_to(Vec2::new(-1.0, 0.0)).cubic_to(
-                Vec2::new(-0.5, 1.0),
-                Vec2::new(0.5, -1.0),
-                Vec2::new(1.0, 0.0),
-            )),
-        );
-        state.style.fill = None;
-        state.style.stroke = Some(Color::WHITE);
-        state.style.stroke_width = 0.1;
-        state.style.opacity = 0.0;
-        let mut frame = frame(vec![state]);
-        let mut preparer = FramePreparer::new();
-        let cold = preparer.prepare(&frame);
-        let vertices = cold.path_vertices.to_vec();
-        assert_eq!(cold.paths.len(), 1);
-        assert_eq!(cold.ordered_render_batches().count(), 0);
-        for opacity in [1.0, 0.0, 0.5] {
-            frame.objects[0].style.opacity = opacity;
-            let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
-            assert_eq!(prepared.stats.full_rebuilds, 0);
-            assert_eq!(prepared.stats.geometry_cache_misses, 0);
-            assert_eq!(prepared.path_vertices, vertices);
-            assert_eq!(
-                prepared.ordered_render_batches().next().is_some(),
-                opacity != 0.0
-            );
-            assert!(!prepared.path_geometry_dirty);
-        }
+        assert_eq!(prepared.ordered_render_batches().count(), 5);
+        let ranges = prepared
+            .ordered_render_batches()
+            .flat_map(|b| prepared.contributing_instance_ranges(b.batch))
+            .collect::<Vec<_>>();
+        assert_eq!(ranges, vec![4..5, 2..3, 0..1]);
     }
 
     #[test]
@@ -890,11 +985,126 @@ mod tests {
                 Some(opacity != 0.0)
             );
             assert_eq!(
-                prepared.ordered_render_batches().count(),
-                reference.ordered_render_batches().count()
+                eligible_geometry_count(&prepared),
+                eligible_geometry_count(&reference)
             );
             assert!(frame.presences[0]);
         }
+    }
+
+    #[test]
+    fn zero_contribution_interval_edits_match_dense_reference_and_coalesce() {
+        let mut zero = ZeroContributionRanges::default();
+        let mut expected = [false; 64];
+        let mut seed = 0x1653_u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for _ in 0..1000 {
+            let a = next() as usize % 65;
+            let b = next() as usize % 65;
+            let hidden = next() & 1 != 0;
+            let span = a.min(b)..a.max(b);
+            expected[span.clone()].fill(hidden);
+            zero.set(span.start as u32..span.end as u32, hidden);
+            let mut previous_end = None;
+            for (&start, &end) in &zero.ranges {
+                assert!(start < end);
+                assert!(previous_end.is_none_or(|previous| previous < start));
+                previous_end = Some(end);
+            }
+            for query_start in [0, a.min(b), a.max(b), 64] {
+                let query = query_start..64;
+                let actual = ZeroContributionRanges::visible_ranges(
+                    Some(&zero),
+                    query.start as u32..query.end as u32,
+                )
+                .flatten()
+                .map(|index| index as usize)
+                .collect::<Vec<_>>();
+                let reference = query.filter(|&index| !expected[index]).collect::<Vec<_>>();
+                assert_eq!(actual, reference);
+            }
+        }
+        let mut huge = ZeroContributionRanges::default();
+        huge.set(100..2_000_000_000, true);
+        huge.set(1000..2000, false);
+        assert_eq!(huge.ranges.len(), 2);
+        assert_eq!(
+            ZeroContributionRanges::visible_ranges(Some(&huge), 0..u32::MAX).collect::<Vec<_>>(),
+            vec![0..100, 1000..2000, 2_000_000_000..u32::MAX]
+        );
+    }
+
+    #[test]
+    fn zero_contribution_mega_paths_restore_append_and_reorder_without_mesh_rebuild() {
+        use noon_core::{Color, Vec2, VectorPath};
+        let path_object = |id| {
+            let y = id as f32 * 0.02;
+            let mut state = object(
+                id,
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                ),
+            );
+            state.style.fill = None;
+            state.style.stroke = Some(Color::WHITE);
+            state.style.stroke_width = 0.01;
+            state
+        };
+        let mut frame = frame((0..5).map(path_object).collect());
+        frame.objects[1].style.opacity = 0.0;
+        frame.objects[3].style.opacity = 0.0;
+        let mut preparer = FramePreparer::new();
+        let cold = preparer.prepare(&frame);
+        assert_eq!(cold.stats.mega_path_count, 5);
+        assert_eq!(eligible_geometry_count(&cold), 3);
+        let vertices = cold.path_vertices.to_vec();
+        let indices = cold.mega_path_indices.to_vec();
+        for opacity in [1.0, 0.0, 0.5] {
+            frame.objects[1].style.opacity = opacity;
+            let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+            assert_eq!(prepared.stats.full_rebuilds, 0);
+            assert_eq!(prepared.stats.render_order_positions_visited, 0);
+            assert_eq!(prepared.stats.geometry_cache_misses, 0);
+            assert_eq!(
+                eligible_geometry_count(&prepared),
+                3 + usize::from(opacity != 0.0)
+            );
+            assert_eq!(prepared.path_vertices, vertices);
+            assert_eq!(prepared.mega_path_indices, indices);
+            assert!(prepared.mega_path_index_dirty_ranges.is_empty());
+        }
+        let mut appended = path_object(5);
+        appended.style.opacity = 0.0;
+        frame.objects.push(appended);
+        frame.presences.push(true);
+        frame.reveals.push(1.0);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
+        let prepared =
+            preparer.prepare_incremental(&frame, &FrameChanges::structural(vec![5], Vec::new()));
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(eligible_geometry_count(&prepared), 4);
+        assert_eq!(prepared.mega_path_offsets.len(), 6);
+        frame.objects[5].style.opacity = 1.0;
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![5]));
+        assert_eq!(eligible_geometry_count(&prepared), 5);
+        assert!(prepared.mega_path_index_dirty_ranges.is_empty());
+        preparer.set_painter_order(&frame, &[5, 4, 3, 2, 1, 0]);
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..6));
+        assert_eq!(eligible_geometry_count(&prepared), 5);
+        assert!(prepared.mega_path_index_dirty_ranges.is_empty());
+        frame.presences[2] = false;
+        let prepared =
+            preparer.prepare_incremental(&frame, &FrameChanges::structural(Vec::new(), vec![2]));
+        assert_eq!(eligible_geometry_count(&prepared), 4);
     }
 
     use noon_core::{GeometryRef, ObjectId, Style, Transform2D};

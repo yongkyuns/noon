@@ -3955,22 +3955,16 @@ impl GpuRenderer {
                             }
                             _ => None,
                         };
-                        for instance_range in prepared.geometry.contributing_instance_ranges(batch)
-                        {
-                            stats.geometry += self.draw_resolved_ordered_batch(
-                                pass,
-                                &prepared.geometry,
-                                &super::ResolvedOrderedBatch {
-                                    batch: OrderedRenderBatch {
-                                        primitive: batch.primitive,
-                                        instance_range,
-                                    },
-                                    mega: mega.clone(),
-                                },
-                                sample_count == 1,
-                                &mut binding,
-                            );
-                        }
+                        stats.geometry += self.draw_resolved_ordered_batch(
+                            pass,
+                            &prepared.geometry,
+                            &super::ResolvedOrderedBatch {
+                                batch: batch.clone(),
+                                mega,
+                            },
+                            sample_count == 1,
+                            &mut binding,
+                        );
                     }
                 }
                 RetainedRenderItem::Glyph {
@@ -4130,7 +4124,6 @@ fn retained_sample_count(items: &[RetainedRenderItem]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-
     #[test]
     fn zero_contribution_mixed_camera_draw_restores_without_rebuilding_text_or_order() {
         let (mut frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
