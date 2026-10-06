@@ -1,4 +1,5 @@
 name: Playground Product Gate
+# Diagnostic A/A trigger for PR #1882 performance attribution; no execution change.
 
 on:
   pull_request:
