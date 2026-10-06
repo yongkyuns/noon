@@ -342,12 +342,12 @@ jobs:
         working-directory: candidate
         run: node .github/ci/product-artifact.mjs verify candidate .
 
-      - name: Measure three alternating product pairs
+      - name: Measure seven alternating product pairs
         working-directory: candidate
         env:
           NOON_PRODUCT_WORKSPACE: ${{ github.workspace }}
         run: |
-          # Fixed before measurement: B/C, C/B, B/C. Every run is retained;
+          # Fixed before measurement: seven alternating pairs, starting B/C. Every run is retained;
           # a failed run fails the cohort rather than selecting another sample.
           # Reuse the exact same two packages for both existing gallery lessons.
           for noon_example in parity-square-and-circle showcase-camera-follows-path; do
