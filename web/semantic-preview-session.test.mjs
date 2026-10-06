@@ -111,6 +111,41 @@ test("missing continuation is an explicit failure, not a document fallback", asy
   assert.deepEqual(calls, ["authoring:terminate"]);
 });
 
+test("static source attaches its completed context paused and samples only time zero", async (t) => {
+  const descriptor = { contextId: "static-context", continuationGeneration: null };
+  const { session, calls } = fixture(t, {
+    authoring: { run: async () => ({ kind: "semantic_scene", duration: 0, semanticExecution: descriptor }) },
+    execution: {
+      startSemanticExecution: async (actual, options) => {
+        assert.deepEqual(actual, descriptor);
+        assert.equal(options.initiallyPaused, true);
+        assert.equal(options.pacing, undefined);
+        calls.push("static:start");
+      },
+      advanceTo: async time => { calls.push(time); return { time }; },
+      sampleToAuthoredTime: async () => { throw new Error("static source has no continuation"); },
+    },
+  });
+  await session.open("static scene");
+  await flush();
+  assert.equal(session.snapshot.sourceState, "completed");
+  assert.equal(session.snapshot.authoredDuration, 0);
+  assert.equal(session.snapshot.frame.publishedTime, 0);
+  assert.deepEqual(calls, ["prepare", "static:start", 0]);
+  await session.sample(0, { stopAtSourceCompletion: true });
+  await assert.rejects(session.sample(0.5), /only its authored time-zero/);
+  assert.deepEqual(calls, ["prepare", "static:start", 0, 0]);
+});
+
+test("completed timed source cannot bypass the live continuation contract", async (t) => {
+  const { session, calls } = fixture(t, { authoring: {
+    run: async () => ({ kind: "semantic_scene", duration: 1,
+      semanticExecution: { contextId: "finished", continuationGeneration: null } }),
+  } });
+  await assert.rejects(session.open("timed scene"), /no semantic continuation/);
+  assert.deepEqual(calls, ["authoring:terminate"]);
+});
+
 test("source failure before attachment retires the authoring worker", async (t) => {
   const { session, calls } = fixture(t, { authoring: { run: async () => { throw new Error("syntax error"); } } });
   await assert.rejects(session.open("scene"), /syntax error/);
