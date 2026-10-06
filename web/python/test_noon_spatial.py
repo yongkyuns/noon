@@ -114,6 +114,52 @@ class SpatialFacadeTests(unittest.TestCase):
         self.assertEqual(request.endpoint, (1, 2, 3, 1, 0, 0, 0, 1, 1, 1))
         self.assertEqual(request.anim_args, {"run_time": 2})
 
+    def test_static_world_pose_routes_one_typed_endpoint_to_rust(self):
+        scene = object.__new__(spatial.SpatialScene)
+        mesh = object.__new__(spatial.Mesh3D)
+        handle = object()
+        context = Mock()
+        scene_module = Mock()
+        scene_module._context.return_value = context
+        with patch.object(spatial, "_handle_for", return_value=handle), \
+             patch.object(spatial, "_bulk", side_effect=tuple) as bulk, \
+             patch.dict(sys.modules, {"_manim_scene": scene_module}):
+            result = scene.set_world_transform(
+                mesh, translation=(1, 2, 3), rotation=(0.5, 0.5, 0.5, 0.5),
+                scale=(2, 3, 4),
+            )
+        self.assertIs(result, scene)
+        bulk.assert_called_once_with((1.0, 2.0, 3.0, 0.5, 0.5, 0.5, 0.5, 2.0, 3.0, 4.0))
+        context.setWorldTransform.assert_called_once_with(
+            handle, (1.0, 2.0, 3.0, 0.5, 0.5, 0.5, 0.5, 2.0, 3.0, 4.0),
+        )
+
+    def test_static_world_pose_rejects_non_mobjects_families_and_untyped_targets(self):
+        scene = object.__new__(spatial.SpatialScene)
+        scene_module = Mock()
+        with patch.dict(sys.modules, {"_manim_scene": scene_module}):
+            with self.assertRaisesRegex(TypeError, "typed Mobject"):
+                scene.set_world_transform(object())
+            family = object.__new__(spatial.Mesh3D)
+            family._semantic_family_handle = object()
+            with self.assertRaisesRegex(TypeError, "not a family"):
+                scene.set_world_transform(family)
+            mesh = object.__new__(spatial.Mesh3D)
+            with patch.object(spatial, "_handle_for", return_value=None):
+                with self.assertRaisesRegex(TypeError, "active typed Mobject"):
+                    scene.set_world_transform(mesh)
+        scene_module._context.assert_not_called()
+
+    def test_static_world_pose_validates_all_components_before_rust_call(self):
+        scene = object.__new__(spatial.SpatialScene)
+        mesh = object.__new__(spatial.Mesh3D)
+        scene_module = Mock()
+        with patch.object(spatial, "_handle_for", return_value=object()), \
+             patch.dict(sys.modules, {"_manim_scene": scene_module}):
+            with self.assertRaises(ValueError):
+                scene.set_world_transform(mesh, translation=(1, 2))
+        scene_module._context.assert_not_called()
+
     def test_invalid_options_and_fractional_counts_never_allocate(self):
         with patch.object(spatial, "_mesh_options") as factory, \
              patch.object(spatial, "_surface_plan") as plan:

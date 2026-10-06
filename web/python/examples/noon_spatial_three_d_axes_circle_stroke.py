@@ -16,14 +16,11 @@ class SpatialCircleScreenStroke(ThreeDScene):
         circle.set_fill(opacity=0)
         circle.set_stroke(WHITE, width=4)
         self.add_world_mobjects(circle)
-        await self.play(
-            WorldTransformTo(
-                circle,
-                translation=(-1.3, 1.35, 0.0),
-                rotation=(0.9747941070689433, 0.0, 0.22310636213174545, 0.0),
-                scale=(1.1, 0.7, 1.0),
-            ),
-            run_time=0,
+        self.set_world_transform(
+            circle,
+            translation=(-1.3, 1.35, 0.0),
+            rotation=(0.9747941070689433, 0.0, 0.22310636213174545, 0.0),
+            scale=(1.1, 0.7, 1.0),
         )
         await self.play(
             CameraProfileTo(
