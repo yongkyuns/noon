@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const runtimeIdentity = JSON.parse(await readFile(path.join(root, "web/runtime-build-identity.json"), "utf8"));
 const artifact = path.resolve(root, process.env.NOON_SCENE_PERF_REPORT ?? "browser-smoke-artifacts/scene-perf-report.json");
 const server = await serveRepository(root, Number(process.env.NOON_SCENE_PERF_PORT ?? 4193));
 const browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs("webgpu") });
@@ -36,6 +37,10 @@ try {
         assert.equal(result.report.execution.mode, "semantic");
         assert.equal(result.report.execution.sourceContinuation, spec.continuation);
         assert.equal(result.report.scene.objects, spec.objects);
+        assert.deepEqual(result.report.runtimeBuild, runtimeIdentity,
+          `${spec.name}: ordinary and diagnostic runs must identify the served package`);
+        assert.deepEqual(result.report.environment.backingResolution,
+          await page.locator("#scene").evaluate(canvas => [canvas.width, canvas.height]));
         assert.ok(result.report.cadence.frames > 0);
         if (spec.duration !== undefined) {
           assert.equal(result.report.execution.authoredDuration, spec.duration);
@@ -49,8 +54,6 @@ try {
           assert.ok(result.report.samples.every(sample => Number.isFinite(sample.advanceRoundTripMs)));
         } else assert.equal(result.report.samples, undefined);
         if (spec.includeRendererSamples) {
-          assert.match(result.report.runtimeBuild.buildId, /^[0-9a-f]{64}$/);
-          assert.match(result.report.runtimeBuild.sourceRevision, /^[0-9a-f]{40}$/);
           assert.ok(result.report.rendererSamples.length > 0);
           const substageSamples = result.report.rendererSubstageSamples;
           assert.ok(substageSamples.length > 0);
@@ -79,7 +82,11 @@ try {
           assert.ok(stageSamples.every(sample =>
             Number.isFinite(sample.applyMs) && Number.isFinite(sample.renderMs) &&
             Number.isFinite(sample.receiveToPresentMs) && Number.isFinite(sample.ackPostMs)));
-        } else assert.equal(result.report.rendererPublicationStageSamples, undefined);
+        } else {
+          assert.equal(result.report.rendererSamples, undefined);
+          assert.equal(result.report.rendererPublicationStageSamples, undefined);
+          assert.equal(result.report.rendererSubstageSamples, undefined);
+        }
         assert.equal(result.report.cpu, undefined);
         assert.equal(result.report.setup.serializationMs, undefined);
       }

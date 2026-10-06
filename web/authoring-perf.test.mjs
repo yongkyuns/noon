@@ -11,15 +11,3 @@ test("authoring tools cannot restore the deleted frontend identity authority", a
     await assert.rejects(access(new URL(file, import.meta.url)), { code: "ENOENT" });
   }
 });
-
-test("scene performance reports worker provenance and backing resolution without extra sampling", async () => {
-  const source = await readFile(new URL("scene-perf.js", import.meta.url), "utf8");
-  assert.match(source, /import \{ ProvenancedPythonAuthoringClient \} from "\.\/provenanced-authoring-client\.js"/);
-  assert.doesNotMatch(source, /import \{ PythonAuthoringClient \} from "\.\/authoring-client\.js"/);
-  assert.match(source, /client = new ProvenancedPythonAuthoringClient\(\)/);
-  assert.match(source, /runtimeBuildIdentity = readyIdentity/);
-  assert.match(source, /\.\.\(runtimeBuildIdentity === null \? \{\} : \{ runtimeBuild: runtimeBuildIdentity \}\)/);
-  assert.match(source, /backingResolution: \[canvas\.width, canvas\.height\]/);
-  assert.match(source, /const rendererSamples = parameters\.get\("includeRendererSamples"\) === "1" \? \[\] : null/);
-  assert.match(source, /profilePublicationStages: rendererSamples !== null/);
-});
