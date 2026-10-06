@@ -123,6 +123,32 @@ test("sequence sample resolves its indexed Manim frame and keeps a sequence labe
   }
 });
 
+test("a held sequence endpoint keeps an artifact distinct from its materialized frame", async () => {
+  const run = await runChecker({
+    frameCount: 1,
+    frames: [{ time: 1, objects: [] }],
+    terminalState: { time: 2, objects: [] },
+    samples: [
+      { frameIndex: 0, referenceKind: "sequence", terminalState: false, time: 1, materializedTime: 1 },
+      { frameIndex: 0, referenceKind: "sequence", terminalState: true, time: 2, materializedTime: 1 },
+    ],
+  });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr);
+    const report = JSON.parse(await readFile(path.join(run.artifactRoot, "report.json"), "utf8"));
+    const samples = report.fixtures[0].backends.webgpu.samples;
+    assert.notEqual(samples[0].semantic.path, samples[1].semantic.path);
+    for (const sample of samples) {
+      const artifact = JSON.parse(await readFile(path.join(run.artifactRoot, sample.semantic.path), "utf8"));
+      assert.equal(artifact.time, sample.time);
+      assert.equal(artifact.manim.time, 1);
+      assert.equal(artifact.noon.time, sample.time);
+    }
+  } finally {
+    await rm(run.root, { recursive: true, force: true });
+  }
+});
+
 test("sequence, repeated frozen holds, and terminal retain distinct logical and materialized times", async () => {
   const run = await runChecker({
     frameCount: 3,

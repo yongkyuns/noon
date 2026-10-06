@@ -168,6 +168,7 @@ function referenceStateForSample(fixtureId, fixture, manimFixture, sample) {
 function semanticArtifactLabel(sample) {
   if (sample.referenceKind === "terminal") return "terminal";
   const frame = `frame-${String(sample.frameIndex).padStart(4, "0")}`;
+  if (sample.terminalState) return `${frame}-terminal`;
   if (sample.referenceKind === "frozen-hold") {
     return `${frame}-hold-${String(sample.time).replace(/[^0-9a-z]/gi, "_")}`;
   }
