@@ -629,3 +629,125 @@ fn invalid_fixed_orientation_anchor_rolls_back_and_rejects_unrelated_or_stale_ro
         &before
     );
 }
+
+#[test]
+fn fixed_orientation_anchor_can_reference_a_family_created_in_the_same_transaction() {
+    let mut store = SemanticStore::new();
+    let before_len = store.len();
+    let before_revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::new();
+    let family = transaction.create_node(SemanticNodeCreation::family());
+    let alias = transaction.create_node(SemanticNodeCreation::family());
+    let child = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    transaction
+        .set_spatial_composition_domain_with_anchor_ref(
+            child,
+            crate::SemanticSpatialCompositionDomain::FixedOrientation,
+            Some(family.into()),
+        )
+        .add_member(family, alias)
+        .add_member(alias, child);
+
+    let result = transaction.apply(&mut store).unwrap();
+    let family_id = result.resolve(family).unwrap();
+    let alias_id = result.resolve(alias).unwrap();
+    let child_id = result.resolve(child).unwrap();
+    assert_eq!(store.len(), before_len + 3);
+    assert!(store.is_family_ancestor(family_id, child_id).unwrap());
+    assert!(store.is_family_ancestor(alias_id, child_id).unwrap());
+    assert_eq!(
+        store
+            .semantic_object_state_checked(child_id)
+            .unwrap()
+            .spatial_anchor_family(),
+        Some(family_id)
+    );
+    assert_eq!(store.scene_revision(), before_revision + 1);
+}
+
+#[test]
+fn prepared_object_updates_resolve_pending_spatial_anchor_before_publication() {
+    let mut store = SemanticStore::new();
+    let child = object(&mut store, 1.0);
+    let mut transaction = SemanticMutationTransaction::new();
+    let family = transaction.create_node(SemanticNodeCreation::family());
+    transaction
+        .add_member(family, child)
+        .set_spatial_composition_domain_with_anchor_ref(
+            child,
+            crate::SemanticSpatialCompositionDomain::FixedOrientation,
+            Some(family.into()),
+        );
+
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let updates = prepared.object_updates().collect::<Vec<_>>();
+    assert_eq!(updates.len(), 1);
+    let proposed_anchor = updates[0].1.spatial_anchor_family().unwrap();
+    let result = prepared.commit();
+    assert_eq!(result.resolve(family), Some(proposed_anchor));
+    assert_eq!(
+        store
+            .semantic_object_state_checked(child)
+            .unwrap()
+            .spatial_anchor_family(),
+        Some(proposed_anchor)
+    );
+}
+
+#[test]
+fn invalid_pending_spatial_anchors_reject_without_publishing_any_nodes() {
+    let mut store = SemanticStore::new();
+    let target = object(&mut store, 1.0);
+    let before_state = store.semantic_object_state_checked(target).unwrap().clone();
+    let before_len = store.len();
+    let before_revision = store.scene_revision();
+
+    let mut unrelated = SemanticMutationTransaction::new();
+    let family = unrelated.create_node(SemanticNodeCreation::family());
+    unrelated.set_spatial_composition_domain_with_anchor_ref(
+        target,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        Some(family.into()),
+    );
+    assert!(unrelated.apply(&mut store).is_err());
+
+    let mut signal_anchor = SemanticMutationTransaction::new();
+    let signal = signal_anchor.create_node(SemanticNodeCreation::input_signal(1.0_f64).unwrap());
+    signal_anchor.set_spatial_composition_domain_with_anchor_ref(
+        target,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        Some(signal.into()),
+    );
+    assert!(signal_anchor.apply(&mut store).is_err());
+
+    let mut foreign_owner = SemanticMutationTransaction::new();
+    let foreign = foreign_owner.create_node(SemanticNodeCreation::family());
+    let mut foreign_reference = SemanticMutationTransaction::new();
+    foreign_reference.set_spatial_composition_domain_with_anchor_ref(
+        target,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        Some(foreign.into()),
+    );
+    assert!(foreign_reference.apply(&mut store).is_err());
+
+    let mut removed = SemanticMutationTransaction::new();
+    let removed_family = removed.create_node(SemanticNodeCreation::family());
+    removed
+        .add_member(removed_family, target)
+        .set_spatial_composition_domain_with_anchor_ref(
+            target,
+            crate::SemanticSpatialCompositionDomain::FixedOrientation,
+            Some(removed_family.into()),
+        )
+        .remove_node(removed_family);
+    assert!(removed.apply(&mut store).is_err());
+
+    assert_eq!(store.len(), before_len);
+    assert_eq!(store.scene_revision(), before_revision);
+    assert_eq!(
+        store.semantic_object_state_checked(target).unwrap(),
+        &before_state
+    );
+}

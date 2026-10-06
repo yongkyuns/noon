@@ -596,9 +596,35 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 let SemanticTransactionNodeRef::Existing(node_id) = node else {
                     return None;
                 };
-                changed_objects
-                    .contains(node)
-                    .then(|| (*node_id, self.preflight.staged_objects[node].clone()))
+                if !changed_objects.contains(node) {
+                    return None;
+                }
+                let mut state = self.preflight.staged_objects[node].clone();
+                if let Some((domain, Some(anchor))) = self
+                    .transaction
+                    .mutations
+                    .iter()
+                    .rev()
+                    .find_map(|mutation| match mutation {
+                        SemanticMutation::SetSpatialCompositionDomain {
+                            object: SemanticTransactionNodeRef::Existing(object),
+                            domain,
+                            anchor_family: Some(anchor),
+                        } if object == node_id => Some((*domain, Some(*anchor))),
+                        SemanticMutation::SetSpatialCompositionDomain {
+                            object: SemanticTransactionNodeRef::Existing(object),
+                            domain,
+                            anchor_family: None,
+                        } if object == node_id => Some((*domain, None)),
+                        _ => None,
+                    })
+                {
+                    let anchor = resolve_node_ref(anchor, &self.planned_nodes);
+                    state
+                        .set_spatial_composition_domain_with_anchor(domain, Some(anchor))
+                        .expect("preflight validated resolved spatial anchor");
+                }
+                Some((*node_id, state))
             })
     }
 
@@ -1266,6 +1292,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     anchor_family,
                 } => {
                     let object = resolve_node_ref(object, &committed_nodes);
+                    let anchor_family =
+                        anchor_family.map(|anchor| resolve_node_ref(anchor, &committed_nodes));
                     store.unregister_semantic_references_for_owner(object);
                     store
                         .node_mut(object)

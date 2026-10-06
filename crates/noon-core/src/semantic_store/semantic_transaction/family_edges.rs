@@ -204,6 +204,15 @@ impl FamilyEdgePreflight {
             .unwrap_or_else(|| catalog.contains(family, member))
     }
 
+    pub(super) fn contains_ancestor(
+        &self,
+        catalog: &TransactionNodeCatalog<'_>,
+        ancestor: SemanticTransactionNodeRef,
+        descendant: SemanticTransactionNodeRef,
+    ) -> bool {
+        self.reaches(catalog, ancestor, descendant)
+    }
+
     pub(super) fn contains_existing(
         &self,
         store: &crate::SemanticStore,
