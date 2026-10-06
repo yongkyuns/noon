@@ -1,5 +1,5 @@
 # Temporary #1653 diagnostic. DO NOT MERGE.
-name: Camera draw cost investigation
+name: Camera residual draw cost investigation
 on:
   push:
     branches: [codex/camera-absolute-fps-1882]
@@ -28,18 +28,18 @@ jobs:
           run-id: 37496512820
           artifact-ids: 11428082914
           path: published
-      - name: Validate probe and install pinned browser
+      - name: Validate residual controls and install pinned browser
         working-directory: source
         run: |
-          node --test ../probe/.github/ci/camera-draw-probe.test.mjs
+          python ../probe/.github/ci/camera-residual-prepare.py --test ../probe/.github/ci
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Execute all twelve fixed-order conditions
+      - name: Execute all eight fixed-order conditions
         shell: bash
         run: |
           mkdir -p results
           overall=0
-          for item in normal-1:normal line-1:skip-line path-1:skip-path text-1:skip-text present-1:skip-present clip-1:clip-all clip-2:clip-all present-2:skip-present text-2:skip-text path-2:skip-path line-2:skip-line normal-2:normal; do
+          for item in normal-1:normal rectangle-1:skip-rectangle backend-present-1:skip-backend-present circle-1:skip-circle circle-2:skip-circle backend-present-2:skip-backend-present rectangle-2:skip-rectangle normal-2:normal; do
             label=${item%:*}
             mode=${item#*:}
             mkdir -p "results/$label"
@@ -47,7 +47,7 @@ jobs:
             mkdir -p site/web
             tar -xf published/artifact.tar -C site/web
             set +e
-            python probe/.github/ci/camera-draw-prepare.py source site "results/$label" probe/.github/ci "$mode" > "results/$label/prepare.log" 2>&1
+            python probe/.github/ci/camera-residual-prepare.py source site "results/$label" probe/.github/ci "$mode" > "results/$label/prepare.log" 2>&1
             code=$?
             if [[ "$code" == 0 ]]; then
               NOON_PRODUCT_SITE_ROOT="$PWD/site" \
@@ -70,7 +70,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: camera-draw-cost-${{ github.run_id }}-${{ github.run_attempt }}
+          name: camera-residual-cost-${{ github.run_id }}-${{ github.run_attempt }}
           path: results
           if-no-files-found: error
           retention-days: 14
