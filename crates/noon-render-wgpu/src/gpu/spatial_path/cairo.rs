@@ -133,6 +133,9 @@ impl Uniform {
         geometry: CairoPathGeometry,
         appearance: &CompiledCairoPathAppearance,
     ) -> Result<Self, SpatialPathError> {
+        if !appearance.is_valid() {
+            return Err(SpatialPathError::InvalidStyle);
+        }
         let c = geometry.corners;
         let point = |v: SemanticVec3| [v.x as f32, v.y as f32, v.z as f32, 0.];
         let mut result = Self {
@@ -191,5 +194,55 @@ impl Uniform {
             return Err(SpatialPathError::UnrepresentableVertex);
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noon_compile::CompiledWorldBounds3D64;
+    use noon_core::{GeometryRef, SemanticVec3};
+
+    #[test]
+    fn cairo_path_inputs_use_effective_family_bounds_and_reject_invalid_inputs() {
+        let path = noon_geometry::canonical_outline_path(&GeometryRef::line(
+            noon_core::Vec2::new(-1.0, 0.0),
+            noon_core::Vec2::new(1.0, 0.0),
+        ))
+        .unwrap();
+        let geometry = noon_geometry::cairo_path_geometry(&path).unwrap();
+        let mut appearance = CompiledCairoPathAppearance {
+            sheen_factor: 0.2,
+            gradient_direction: Some(SemanticVec3::new(-7.0, -9.0, 0.0)),
+            world_family_bounds: Some(CompiledWorldBounds3D64 {
+                min: SemanticVec3::new(-5.25, -0.175, -2.0),
+                max: SemanticVec3::new(5.25, 0.175, 4.0),
+            }),
+        };
+        let uniform = Uniform::lower(geometry, &appearance).unwrap();
+        assert_eq!(uniform.gradient_start, [5.25, 0.175, 1.0, 0.0]);
+        assert_eq!(uniform.gradient_end, [-5.25, -0.175, 1.0, 0.0]);
+        assert_eq!(uniform.metadata, [0.2, 1.0, 1.0, 0.0]);
+        appearance.world_family_bounds = None;
+        assert_eq!(
+            Uniform::lower(geometry, &appearance),
+            Err(SpatialPathError::MissingAnchor)
+        );
+        appearance.gradient_direction = None;
+        assert!(Uniform::lower(geometry, &appearance).is_ok());
+        appearance.sheen_factor = 1.01;
+        assert_eq!(
+            Uniform::lower(geometry, &appearance),
+            Err(SpatialPathError::InvalidStyle)
+        );
+        appearance.sheen_factor = 0.2;
+        appearance.world_family_bounds = Some(CompiledWorldBounds3D64 {
+            min: SemanticVec3::new(6.0, 0.0, 0.0),
+            max: SemanticVec3::new(5.0, 0.0, 0.0),
+        });
+        assert_eq!(
+            Uniform::lower(geometry, &appearance),
+            Err(SpatialPathError::InvalidStyle)
+        );
     }
 }
