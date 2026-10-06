@@ -73,3 +73,73 @@ export async function diagnoseWorkerHistory({ identity, retained, openFresh, mea
     await fresh.close();
   }
 }
+
+
+// Controlled diagnostic: both participants start fresh from the same verified
+// package. Only the treatment receives the declared prehistory. The subsequent
+// alternating pairs therefore isolate that history from the old worker's
+// unrelated scored/profile history. This never contributes to acceptance.
+export async function diagnoseControlledHistory({
+  identity, openFresh, measure, history, label, record,
+}) {
+  assert.match(identity?.source ?? "", /^[0-9a-f]{40}$/, "missing verified control source");
+  assert.ok(Array.isArray(history) && history.length > 0, "controlled history must be non-empty");
+  assert.match(label ?? "", /^[a-z0-9_-]+$/, "controlled history requires a stable label");
+  const source = performanceSource("jspi", "deterministic");
+  const evidence = { schema: 1, diagnosticOnly: true,
+    comparison: "treatment-over-control / fresh-peers / genuine-jspi",
+    label, identity, sourceSha: createHash("sha256").update(source).digest("hex"),
+    history: history.map(({ mode, workload, source }) => ({
+      mode, workload, sourceSha: createHash("sha256").update(source).digest("hex"),
+    })),
+    warmups: [], treatmentHistory: [], pairs: [], complete: false };
+  await record(evidence);
+  const control = await openFresh("control");
+  let treatment;
+  try {
+    treatment = await openFresh("treatment");
+    assert.notEqual(control, treatment, "controlled history requires independent workers");
+    for (let warm = 0; warm < PERF_PROTOCOL.warmups; ++warm) {
+      for (const [name, participant] of warm % 2
+        ? [["treatment", treatment], ["control", control]]
+        : [["control", control], ["treatment", treatment]]) {
+        const observation = await measure(participant, source, "jspi", "deterministic");
+        evidence.warmups.push({ side: name, observation });
+        await record(evidence);
+      }
+    }
+    for (const item of history) {
+      const observation = await measure(treatment, item.source, item.mode, item.workload);
+      evidence.treatmentHistory.push({ mode: item.mode, workload: item.workload, observation });
+      await record(evidence);
+    }
+    for (let pair = 0; pair < PERF_PROTOCOL.pairs; ++pair) {
+      const observations = [];
+      for (const side of pair % 2 ? [1, 0] : [0, 1]) {
+        const participant = side ? treatment : control;
+        observations[side] = await measure(participant, source, "jspi", "deterministic");
+      }
+      evidence.pairs.push(observations);
+      await record(evidence);
+      const [before, after] = observations;
+      for (const value of observations) {
+        assert.equal(value.mode, "jspi");
+        assert.equal(value.workload, "deterministic");
+        assert.equal(value.coroutine, false);
+        assert.equal(value.callback_calls, 0);
+        assert.equal(value.metrics.objectCount, PERF_PROTOCOL.objects);
+      }
+      assert.equal(after.metrics.presentedFrames, before.metrics.presentedFrames);
+      assert.ok(before.center.every((v, i) => Number.isFinite(v) &&
+        Number.isFinite(after.center[i]) && Math.abs(v - after.center[i]) < 2e-5));
+    }
+    evidence.costs = Object.fromEntries(["creation_ms", "local_ms", "execution_ms"].map(key => [key,
+      pairedCost(evidence.pairs.map(p => p[0][key]), evidence.pairs.map(p => p[1][key]))]));
+    evidence.complete = true;
+    await record(evidence);
+    return evidence;
+  } finally {
+    await treatment?.close();
+    await control.close();
+  }
+}

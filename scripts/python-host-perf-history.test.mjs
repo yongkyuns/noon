@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { diagnoseWorkerHistory } from "./python-host-perf-history.mjs";
+import { diagnoseWorkerHistory, diagnoseControlledHistory } from "./python-host-perf-history.mjs";
 import { PERF_PROTOCOL, performanceSource } from "./python-host-perf-protocol.mjs";
 
 function fixture() {
@@ -129,4 +129,48 @@ test("sampling failure retains complete history evidence and closes the fresh wo
   assert.deepEqual(f.lifecycle, ["open", "close"]);
   assert.equal(f.records.at(-1).pairs.length, 7);
   assert.equal(f.records.at(-1).workerProfilesComplete, false);
+});
+
+
+test("controlled history starts fresh peers and isolates only declared treatment history", async () => {
+  const lifecycle = [], records = [], measured = [];
+  const make = name => ({ name, reports: [], close: async () => lifecycle.push(`close-${name}`) });
+  const source = performanceSource("jspi", "deterministic");
+  const history = Array.from({ length: 3 }, () => ({ mode: "jspi", workload: "deterministic", source }));
+  const result = await diagnoseControlledHistory({
+    identity: { source: "b".repeat(40) }, label: "same_source",
+    openFresh: async name => { lifecycle.push(`open-${name}`); return make(name); },
+    history, record: async value => records.push(structuredClone(value)),
+    measure: async (participant, measuredSource, mode, workload) => {
+      assert.equal(measuredSource, source);
+      assert.equal(mode, "jspi"); assert.equal(workload, "deterministic");
+      measured.push(participant.name);
+      return { mode, workload, coroutine: false, callback_calls: 0, center: [1.2048, 0],
+        metrics: { presentedFrames: 50, objectCount: PERF_PROTOCOL.objects },
+        creation_ms: 10, local_ms: participant.name === "treatment" ? 12 : 10, execution_ms: 20 };
+    },
+  });
+  assert.deepEqual(lifecycle.slice(0, 2), ["open-control", "open-treatment"]);
+  assert.equal(result.treatmentHistory.length, 3);
+  assert.equal(result.pairs.length, PERF_PROTOCOL.pairs);
+  assert.equal(result.complete, true);
+  assert.ok(result.costs.local_ms.ratio > 1);
+  assert.equal(measured.filter(name => name === "treatment").length,
+    PERF_PROTOCOL.warmups + history.length + PERF_PROTOCOL.pairs);
+  assert.equal(measured.filter(name => name === "control").length,
+    PERF_PROTOCOL.warmups + PERF_PROTOCOL.pairs);
+  assert.deepEqual(lifecycle.slice(-2), ["close-treatment", "close-control"]);
+  assert.equal(records.at(-1).complete, true);
+});
+
+test("controlled-history diagnostics are after scored rows and cannot rescore them", async () => {
+  const runner = await readFile(new URL("./python-host-perf.mjs", import.meta.url), "utf8");
+  const controlled = runner.indexOf("  // Fresh-peer causal controls.");
+  assert.ok(controlled > runner.indexOf("localDiagnostics.push"));
+  assert.ok(controlled > runner.indexOf("qualifyProductMetrics(comparison)"));
+  const block = runner.slice(controlled, runner.indexOf('} catch (error) {', controlled));
+  assert.match(block, /diagnoseControlledHistory/);
+  assert.match(block, /repeated_same_source/);
+  assert.match(block, /heterogeneous_sources/);
+  assert.doesNotMatch(block, /rows\.push|pairedCost\(|warmups\.push|failures\.splice/);
 });

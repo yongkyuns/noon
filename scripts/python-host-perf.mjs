@@ -12,7 +12,7 @@ import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { profileSource, validateProfile, localEditProfileSource, validateLocalEditProfile } from "./python-host-profile.mjs";
 import { qualifyProductMetrics } from "./paired-product-metrics.mjs";
-import { diagnoseWorkerHistory } from "./python-host-perf-history.mjs";
+import { diagnoseWorkerHistory, diagnoseControlledHistory } from "./python-host-perf-history.mjs";
 import { stringifyEvidence } from "./python-host-report.mjs";
 import { PERF_PROTOCOL as protocol, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
 
@@ -228,6 +228,58 @@ try {
       measure: (participant, source) => measure(side, source, "jspi", "deterministic", participant),
       record: evidence => writeFile(path.join(output, `worker-history-${side}.json`), stringifyEvidence(evidence) + "\n"),
     });
+  }
+
+  // Fresh-peer causal controls. Unlike the old retained/fresh diagnostic, both
+  // workers begin from identical package initialization. Only treatment receives
+  // the declared history. These observations are diagnostic-only and occur after
+  // every acceptance measurement/profile; they cannot rescore an earlier row.
+  for (const side of [0, 1]) {
+    const openControlled = async name => {
+      const context = await browser.newContext({ viewport: { width: 320, height: 180 } });
+      try {
+        await cache.install(context);
+        const page = await context.newPage();
+        const observations = [];
+        page.on("console", message => {
+          if (message.text().startsWith("NOON_PERF_REPORT ")) {
+            observations.push(JSON.parse(message.text().slice(17)));
+          }
+        });
+        page.on("pageerror", error => failures.push({
+          kind: "controlled_history_pageerror", side, name, message: String(error),
+        }));
+        await page.goto(`${servers[side].baseUrl}/web/execution-worker-smoke.html`);
+        await page.evaluate(async () => {
+          const { PythonAuthoringClient } = await import("./authoring-client.js");
+          window.perfAuthoring = new PythonAuthoringClient();
+          await window.perfAuthoring.ready();
+        });
+        return { page, reports: observations, close: () => context.close() };
+      } catch (error) {
+        await context.close();
+        throw error;
+      }
+    };
+    const controlledMeasure = (participant, source, mode, workload) =>
+      measure(side, source, mode, workload, participant);
+    const repeated = Array.from({ length: 9 }, () => ({
+      mode: "jspi", workload: "deterministic",
+      source: performanceSource("jspi", "deterministic"),
+    }));
+    const heterogeneous = protocol.modes.flatMap(mode => protocol.workloads.map(workload => ({
+      mode, workload, source: performanceSource(mode, workload),
+    })));
+    for (const [label, history] of [["repeated_same_source", repeated],
+      ["heterogeneous_sources", heterogeneous]]) {
+      await diagnoseControlledHistory({
+        identity: identities[side], openFresh: openControlled,
+        measure: controlledMeasure, history, label,
+        record: evidence => writeFile(
+          path.join(output, `controlled-history-${side}-${label}.json`),
+          stringifyEvidence(evidence) + "\n"),
+      });
+    }
   }
 } catch (error) {
   failures.push({ kind: "execution", message: String(error), stack: error.stack });
