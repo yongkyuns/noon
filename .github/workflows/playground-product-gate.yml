@@ -354,7 +354,7 @@ jobs:
             if [[ "$noon_example" == showcase-camera-follows-path ]]; then noon_evidence="$noon_evidence/camera"; fi
             for noon_pair in 1 2 3 4 5 6 7; do
               noon_order="baseline candidate"
-              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
+              if (( noon_pair % 2 == 0 )); then noon_order="candidate baseline"; fi
               noon_position=0
               for noon_side in $noon_order; do
                 noon_position=$((noon_position + 1))
