@@ -22,8 +22,8 @@ use presentation::PresentationBridge;
 pub use raster_image_prepare::RasterImagePrepareError;
 
 use crate::{
-    CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedDerivedDisplay,
-    PreparedFrame, RectangleInstance, RenderPrimitive,
+    CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathInstance, PathVertex,
+    PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
