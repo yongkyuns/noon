@@ -41,15 +41,17 @@ jobs:
   build:
     name: Build product comparison packages
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     outputs:
       baseline-artifact: ${{ steps.baseline-artifact.outputs.artifact-id }}
+      anchor-artifact: ${{ steps.anchor-artifact.outputs.artifact-id }}
       candidate-artifact: ${{ steps.candidate-artifact.outputs.artifact-id }}
       candidate-fixture-artifact: ${{ steps.candidate-fixture-artifact.outputs.artifact-id }}
       baseline-sha: ${{ steps.sources.outputs.baseline-sha }}
       candidate-sha: ${{ steps.sources.outputs.candidate-sha }}
       head-sha: ${{ steps.sources.outputs.head-sha }}
       event-base-sha: ${{ steps.sources.outputs.event-base-sha }}
+      anchor-sha: ${{ steps.anchor.outputs.anchor-sha }}
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -79,11 +81,21 @@ jobs:
           NOON_PRODUCT_EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node candidate/.github/ci/product-artifact.mjs sources candidate
 
+      - name: Pin cumulative performance anchor
+        id: anchor
+        run: node candidate/.github/ci/product-performance-anchor.mjs pin
+
       - name: Checkout tested merge first parent
         uses: actions/checkout@v7
         with:
           ref: ${{ steps.sources.outputs.baseline-sha }}
           path: baseline
+
+      - name: Checkout cumulative performance anchor
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.anchor.outputs.anchor-sha }}
+          path: anchor
 
       - name: Test CI artifact contracts
         working-directory: candidate
@@ -91,7 +103,7 @@ jobs:
 
       - name: Use each checkout's pinned Rust and WASM target
         run: |
-          for noon_checkout in baseline candidate; do
+          for noon_checkout in baseline anchor candidate; do
             (
               cd "$noon_checkout"
               rustup install
@@ -141,6 +153,38 @@ jobs:
           printf 'Baseline release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
           sccache --show-stats
           node candidate/.github/ci/product-artifact.mjs stamp baseline .product-source
+
+      - name: Build cumulative anchor production package
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
+          NOON_PRODUCT_BASE_SHA: ${{ steps.anchor.outputs.anchor-sha }}
+        run: |
+          (cd anchor && cargo generate-lockfile)
+          node candidate/.github/ci/product-artifact.mjs prepare baseline anchor
+          mv anchor .product-source
+          trap 'mv .product-source anchor' EXIT
+          rm -rf .product-target
+          sccache --zero-stats
+          noon_build_started=$SECONDS
+          (cd .product-source && bash scripts/build-web-demo.sh)
+          printf 'Cumulative anchor release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
+          sccache --show-stats
+          node candidate/.github/ci/product-artifact.mjs stamp baseline .product-source
+
+      - name: Upload cumulative anchor production package
+        id: anchor-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-anchor-${{ github.run_attempt }}
+          path: |
+            anchor/web/pkg
+            anchor/web/python-worker.js
+            anchor/web/runtime-build-identity.json
+            anchor/web/python/compat-bundle.*.json
+            anchor/web/ci-artifact.json
+            anchor/web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build candidate renderer-smoke fixture package
         env:
@@ -227,12 +271,13 @@ jobs:
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
       NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
       NOON_PRODUCT_HEAD_SHA: ${{ needs.build.outputs.head-sha }}
       NOON_PRODUCT_EVENT_BASE_SHA: ${{ needs.build.outputs.event-base-sha }}
+      NOON_PRODUCT_ANCHOR_SHA: ${{ needs.build.outputs.anchor-sha }}
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "0"
       NOON_RENDERER_SMOKE: "0"
@@ -255,11 +300,23 @@ jobs:
           ref: ${{ needs.build.outputs.baseline-sha }}
           path: baseline
 
+      - name: Checkout cumulative performance anchor
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.anchor-sha }}
+          path: anchor
+
       - name: Download baseline production package
         uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ needs.build.outputs.baseline-artifact }}
           path: baseline/web
+
+      - name: Download cumulative anchor production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.anchor-artifact }}
+          path: anchor/web
 
       - name: Download candidate production package
         uses: actions/download-artifact@v8
@@ -277,6 +334,11 @@ jobs:
         run: |
           node candidate/.github/ci/product-artifact.mjs verify baseline baseline
           node candidate/.github/ci/product-artifact.mjs verify candidate candidate
+
+      - name: Verify cumulative anchor source, configuration and package contents
+        env:
+          NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.anchor-sha }}
+        run: node candidate/.github/ci/product-artifact.mjs verify baseline anchor
 
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
@@ -367,6 +429,37 @@ jobs:
             done
           done
 
+      - name: Measure three alternating cumulative-anchor pairs
+        working-directory: candidate
+        env:
+          NOON_PRODUCT_WORKSPACE: ${{ github.workspace }}
+        run: |
+          # Use the identical prescribed cohort against the pinned accepted source.
+          # The anchor report deliberately uses the comparator's baseline role so
+          # the exact same fail-closed comparison code and thresholds are reused.
+          for noon_example in parity-square-and-circle showcase-camera-follows-path; do
+            noon_evidence="browser-smoke-artifacts/product-gate/cumulative"
+            if [[ "$noon_example" == showcase-camera-follows-path ]]; then noon_evidence="$noon_evidence/camera"; fi
+            for noon_pair in 1 2 3; do
+              noon_order="anchor candidate"
+              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate anchor"; fi
+              noon_position=0
+              for noon_side in $noon_order; do
+                noon_position=$((noon_position + 1))
+                noon_label="$noon_side"
+                if [[ "$noon_side" == anchor ]]; then noon_label="baseline"; fi
+                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
+                NOON_PRODUCT_PORT=4205 \
+                NOON_PRODUCT_EXAMPLE="$noon_example" \
+                NOON_PRODUCT_LABEL="$noon_label" \
+                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
+                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
+                  node scripts/playground-product-e2e.mjs
+              done
+            done
+          done
+
       - name: Compare product behavior
         working-directory: candidate
         env:
@@ -381,6 +474,13 @@ jobs:
           node scripts/playground-product-compare.mjs \
             browser-smoke-artifacts/product-gate/camera/baseline \
             browser-smoke-artifacts/product-gate/camera/candidate --pairs 3
+          printf '\nCumulative pinned-anchor comparisons (%s):\n' "$NOON_PRODUCT_ANCHOR_SHA"
+          node scripts/playground-product-compare.mjs \
+            browser-smoke-artifacts/product-gate/cumulative/anchor \
+            browser-smoke-artifacts/product-gate/cumulative/candidate --pairs 3
+          node scripts/playground-product-compare.mjs \
+            browser-smoke-artifacts/product-gate/cumulative/camera/anchor \
+            browser-smoke-artifacts/product-gate/cumulative/camera/candidate --pairs 3
 
       - name: Upload product regression evidence
         if: always()

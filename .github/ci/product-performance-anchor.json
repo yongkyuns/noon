@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "source": "58135c4069a6f8d700dcaaee677d7c8c7a48d6c5",
+  "label": "post-zero-contribution-renderer-2026-10-06",
+  "policy": "same-run-alternating-pairs",
+  "workloads": [
+    "parity-square-and-circle",
+    "showcase-camera-follows-path"
+  ]
+}
