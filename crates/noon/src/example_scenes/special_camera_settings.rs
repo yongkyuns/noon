@@ -106,6 +106,16 @@ pub fn scene(case: CameraCase) -> Result<(Scene, Mobject), String> {
                 )
                 .map_err(|e| e.to_string())?;
             scene.add(&light).map_err(|e| e.to_string())?;
+            // The light example adds axes before its surface. Preserve that
+            // authored painter order, including the diagnostic observations.
+            if case == CameraCase::Light {
+                scene
+                    .add_in_spatial_composition_domain(
+                        MobjectTarget::Family(axes.family()),
+                        SemanticSpatialCompositionDomain::World,
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
             let plan = if case == CameraCase::Light {
                 UvSurfacePlan::new([-FRAC_PI_2, FRAC_PI_2], [0., TAU], [15, 32])
             } else {
@@ -161,12 +171,14 @@ pub fn scene(case: CameraCase) -> Result<(Scene, Mobject), String> {
                 .map_err(|e| e.to_string())?;
         }
     }
-    scene
-        .add_in_spatial_composition_domain(
-            MobjectTarget::Family(axes.family()),
-            SemanticSpatialCompositionDomain::World,
-        )
-        .map_err(|e| e.to_string())?;
+    if case != CameraCase::Light {
+        scene
+            .add_in_spatial_composition_domain(
+                MobjectTarget::Family(axes.family()),
+                SemanticSpatialCompositionDomain::World,
+            )
+            .map_err(|e| e.to_string())?;
+    }
     Ok((scene, camera))
 }
 
@@ -234,4 +246,30 @@ pub fn static_session(case: CameraCase) -> Result<crate::ExecutionSession, Strin
         .0
         .execution_session()
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_camera_examples_preserve_authored_axes_surface_order() {
+        for (case, first, last) in [
+            (CameraCase::Light, "planar", "mesh"),
+            (CameraCase::Surface, "mesh", "planar"),
+        ] {
+            let frame = crate::execution_frame_value(&static_session(case).unwrap());
+            let draws: Vec<_> = frame["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| {
+                    row["spatial"]["camera_projection"].is_null()
+                        && row["spatial"]["point_light"] == false
+                })
+                .collect();
+            assert_eq!(draws.first().unwrap()["spatial"]["draw_kind"], first);
+            assert_eq!(draws.last().unwrap()["spatial"]["draw_kind"], last);
+        }
+    }
 }
