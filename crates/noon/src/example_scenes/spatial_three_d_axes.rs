@@ -146,6 +146,60 @@ pub fn session() -> Result<ExecutionSession, String> {
     Ok(session)
 }
 
+/// Circle screen-stroke qualification under the same finite moving 3D camera.
+pub fn circle_screen_stroke_session() -> Result<ExecutionSession, String> {
+    let mut scene = Scene::new();
+    let camera = scene
+        .camera_3d_profile(start_profile(), 0.1, 100.0)
+        .map_err(|error| error.to_string())?;
+    let mut circle = scene.circle(0.65).map_err(|error| error.to_string())?;
+    circle
+        .set_fill(1.0, 1.0, 1.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_stroke(1.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_stroke_width(0.04)
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_stroke_width_mode("screen_space")
+        .map_err(|error| error.to_string())?;
+    let pose = SemanticWorldTransform3D::new(
+        SemanticVec3::new(-1.3, 1.35, 0.0),
+        SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.45)
+            .ok_or("invalid Circle tilt")?,
+        SemanticVec3::new(1.1, 0.7, 1.0),
+    )
+    .ok_or("invalid Circle world pose")?;
+    scene
+        .set_world_transform(&circle, pose)
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_in_spatial_composition_domain(
+            crate::MobjectTarget::Object(&circle),
+            SemanticSpatialCompositionDomain::World,
+        )
+        .map_err(|error| error.to_string())?;
+    let options = AnimationOptions::new()
+        .run_time(1.0)
+        .rate_func(RateFunction::Linear);
+    let movement = scene
+        .declare_camera_profile_move(&camera, end_profile(), options)
+        .map_err(|error| error.to_string())?;
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    session
+        .activate_animation_segment(
+            &scene.integration_store().borrow(),
+            movement.node_id(),
+            AnimationOptions::new(),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(session)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

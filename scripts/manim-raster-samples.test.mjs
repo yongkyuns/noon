@@ -266,6 +266,58 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
       `${label}: the static appearance case has zero authored duration`);
   }
 
+  const sphereTorusDirect = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-surface-sphere-torus-direct",
+  );
+  const sphereTorusWorker = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-surface-sphere-torus-worker",
+  );
+  assert.ok(sphereTorusDirect?.direct_factory,
+    "paired default Sphere/Torus uses the direct typed scene factory");
+  assert.ok(sphereTorusWorker?.noon_source,
+    "paired default Sphere/Torus uses the Python worker");
+  assert.equal(sphereTorusDirect.scene, "CairoSphereTorus");
+  assert.equal(sphereTorusWorker.scene, sphereTorusDirect.scene);
+  assert.equal(sphereTorusDirect.expected_object_count, 865);
+  assert.equal(sphereTorusWorker.expected_object_count, 865);
+  assert.equal(sphereTorusDirect.expected_duration, 1);
+  assert.equal(sphereTorusWorker.expected_duration, 1);
+  assert.deepEqual(sphereTorusDirect.sample_times, [0, 0.5, 29 / 30]);
+  assert.deepEqual(sphereTorusWorker.sample_times, sphereTorusDirect.sample_times);
+  assert.equal(sphereTorusDirect.source, direct.source);
+  assert.equal(sphereTorusWorker.source, direct.source);
+  assert.equal(sphereTorusWorker.noon_source, worker.noon_source);
+  const solidsWorkerSource = await readFile(path.join(repoRoot, sphereTorusWorker.noon_source), "utf8");
+  const referenceSolids = cairoReference.split("class CairoSphereTorus", 2)[1];
+  const workerSolids = solidsWorkerSource.split("class CairoSphereTorus", 2)[1];
+  for (const [label, source] of [["reference", referenceSolids], ["worker", workerSolids]]) {
+    assert.ok(source, `${label}: missing default Sphere/Torus scene`);
+    assert.match(source, /Sphere\(center=\(-1\.2, 0, 0\), radius=0\.6\)/,
+      `${label}: uses the pinned default-resolution Sphere at the selected center`);
+    assert.match(source, /Torus\(major_radius=0\.6, minor_radius=0\.2\)/,
+      `${label}: uses the pinned default-resolution Torus`);
+    assert.match(source, /phi=0\.6, theta=-1\.2[\s\S]*?focal_distance=5, zoom=1/,
+      `${label}: starts from the shared camera profile`);
+    assert.match(source, /(?:phi=0\.8, theta=-0\.1, gamma=0\.2|\(0\.8, -0\.1, 0\.2, 5\.0, 1\.1, 8\.0, 0\.3, 0\.0, 0\.0\))[\s\S]*?run_time=1/,
+      `${label}: moves the camera for one second`);
+    assert.doesNotMatch(source, /resolution\s*=|checkerboard_colors\s*=|stroke_width\s*=|shade_in_3d\s*=/,
+      `${label}: leaves resolution and Surface shading/stroke defaults intact`);
+  }
+  assert.match(workerSolids, /Torus\([\s\S]*?\.shift\(\(1\.2, 0, 0\)\)/,
+    "worker separates the torus from the sphere without changing its geometry");
+  assert.match(referenceSolids, /Torus\([\s\S]*?\.shift\(\(1\.2, 0, 0\)\)/,
+    "reference separates the torus from the sphere without changing its geometry");
+  const nativeSphereTorus = nativeSource.split("pub fn cairo_sphere_torus_scene", 2)[1];
+  assert.ok(nativeSphereTorus, "direct Rust defines the paired Cairo Surface scene");
+  assert.match(nativeSphereTorus, /\[24, 12\]/,
+    "direct Rust uses Manim's pinned Cairo Sphere resolution");
+  assert.match(nativeSphereTorus, /\[24, 24\]/,
+    "direct Rust uses Manim's pinned Cairo Torus resolution");
+  assert.match(nativeSphereTorus, /SemanticSpatialMaterial::CairoSurface/,
+    "both native meshes use retained Cairo Surface appearance resources");
+  assert.match(nativeSphereTorus, /declare_camera_profile_move[\s\S]*?run_time\(1\.0\)/,
+    "direct Rust animates the camera for the paired one-second fixture");
+
   const selectedPaths = [
     direct.source,
     worker.noon_source,

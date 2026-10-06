@@ -12,8 +12,10 @@ use crate::{SemanticTransform2_5D, SemanticVec3};
 
 /// Material policies for retained spatial meshes. `PointLit` uses one
 /// backend-neutral cubic directional response. `CairoSurface` is reserved for
-/// sampled Surface cells carrying their immutable Cairo control-point profile;
-/// it does not claim Cairo behavior for arbitrary mesh topology.
+/// retained single faces carrying their immutable Cairo control-point profile.
+/// Sampled Surface cells can additionally retain checkerboard UV roles; Cube
+/// and Prism faces use the same material without inventing UV identities.
+/// It does not claim Cairo behavior for arbitrary mesh topology.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SemanticSpatialMaterial {
     #[default]

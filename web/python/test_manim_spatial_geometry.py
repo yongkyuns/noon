@@ -44,19 +44,67 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         for name in ("Surface", "Sphere", "Dot3D", "Cube", "Cylinder", "Prism", "Line3D", "Torus", "Cone"):
             self.assertIs(getattr(noon, name), getattr(spatial, name))
 
-    def test_sphere_translates_its_parameter_origin_instead_of_bounds_center(self):
-        with patch.object(Mesh3D, "sphere", return_value=self.mesh) as factory:
-            sphere = spatial.Sphere(center=(1, 2, 3), radius=2, resolution=(12, 8),
-                                    checkerboard_colors=False, stroke_width=0,
-                                    shade_in_3d=False)
-        factory.assert_called_once()
-        self.assertEqual(factory.call_args.args, (2.0,))
-        self.assertEqual(factory.call_args.kwargs["resolution"], (12, 8))
-        self.assertEqual(factory.call_args.kwargs["u_range"], (0.0, 2 * math.pi))
-        self.assertEqual(factory.call_args.kwargs["v_range"], (0.0, math.pi))
-        self.mesh.shift.assert_called_once_with((1, 2, 3))
-        self.mesh.move_to.assert_not_called()
-        self.assertIs(sphere._semantic_handle, self.mesh._semantic_handle)
+    def test_sphere_delegates_exact_mapping_and_center_to_shared_surface(self):
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as initialize, \
+             patch.object(spatial.Surface, "shift", autospec=True) as shift:
+            sphere = spatial.Sphere(center=(1, 2, 3), radius=2, resolution=(12, 8))
+
+        initialize.assert_called_once()
+        self.assertIsInstance(sphere, spatial.Surface)
+        self.assertEqual(initialize.call_args.kwargs["resolution"], (12, 8))
+        self.assertEqual(initialize.call_args.kwargs["u_range"], (0, 2 * math.pi))
+        self.assertEqual(initialize.call_args.kwargs["v_range"], (0, math.pi))
+        func = initialize.call_args.args[1]
+        u, v = 0.4, 0.7
+        self.assertEqual(func(u, v), (
+            2 * math.cos(u) * math.sin(v),
+            2 * math.sin(u) * math.sin(v),
+            -2 * math.cos(v),
+        ))
+        shift.assert_called_once_with(sphere, (1.0, 2.0, 3.0))
+
+    def test_torus_delegates_pinned_surface_mapping_and_partial_uv_ranges(self):
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as initialize:
+            torus = spatial.Torus(major_radius=4, minor_radius=1.5,
+                                  u_range=(0.2, 3.0), v_range=(0.4, 5.2),
+                                  resolution=(10, 7))
+
+        initialize.assert_called_once()
+        self.assertIsInstance(torus, spatial.Surface)
+        self.assertEqual(initialize.call_args.kwargs["u_range"], (0.2, 3.0))
+        self.assertEqual(initialize.call_args.kwargs["v_range"], (0.4, 5.2))
+        self.assertEqual(initialize.call_args.kwargs["resolution"], (10, 7))
+        func = initialize.call_args.args[1]
+        u, v = 0.4, 0.7
+        radial = 4 - 1.5 * math.cos(v)
+        self.assertEqual(func(u, v), (
+            radial * math.cos(u),
+            radial * math.sin(u),
+            -1.5 * math.sin(v),
+        ))
+        for kwargs in ({"major_radius": float("nan")}, {"minor_radius": 0},
+                       {"major_radius": 1, "minor_radius": 1},
+                       {"u_range": (1, 1)}):
+            with self.subTest(kwargs=kwargs), patch.object(
+                spatial.Surface, "__init__", autospec=True, return_value=None,
+            ) as factory:
+                with self.assertRaises(ValueError):
+                    spatial.Torus(**kwargs)
+                factory.assert_not_called()
+
+    def test_dot3d_uses_uniform_surface_fill_without_checkerboard(self):
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as initialize, \
+             patch.object(spatial.Surface, "shift", autospec=True):
+            dot = spatial.Dot3D(point=(1, 2, 3), color=noon.RED)
+
+        self.assertIsInstance(dot, spatial.Sphere)
+        self.assertIs(initialize.call_args.kwargs["checkerboard_colors"], False)
+        self.assertIs(initialize.call_args.kwargs["fill_color"], noon.RED)
+        self.assertIs(initialize.call_args.kwargs["shade_in_3d"], True)
+        self.assertEqual(initialize.call_args.kwargs["resolution"], (8, 8))
 
     def test_surface_defaults_use_one_rust_cell_family_and_sample_callback_once(self):
         import _noon_spatial as native
@@ -385,17 +433,145 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         candidate.setPointLit.assert_called_once_with(False)
         candidate.setCairoSurface.assert_called_once_with(True)
         self.assertIs(surface._semantic_family_handle, family)
-        with patch.object(Mesh3D, "sphere", return_value=self.mesh) as factory:
+
+    def test_sphere_and_torus_defaults_use_shared_cairo_cells_with_pole_and_live_semantics(self):
+        import _noon_spatial as native
+
+        sampled = []
+        plans = []
+        candidate = Mock()
+        members = (SimpleNamespace(semanticSlot=17, semanticGeneration=2),)
+        family = _family_handle(members)
+        sample_parameters = tuple(
+            value for pair in ((0.0, 0.0), (0.0, math.pi), (0.4, 0.7), (0.4, 0.7))
+            for value in pair
+        ) * 4
+
+        class Plan:
+            def __init__(self):
+                self.freed = False
+
+            def cairoParameters(self):
+                return sample_parameters
+
+            def finishCairoCells(self, points):
+                sampled.append(tuple(points))
+                return candidate
+
+            def free(self):
+                self.freed = True
+
+        def make_plan(*args):
+            plans.append((args, Plan()))
+            return plans[-1][1]
+
+        context = Mock()
+        context.liveExecutionOwnership.return_value = "active"
+        context.createMeshFamily.return_value = family
+        with patch.object(native, "_surface_plan", side_effect=make_plan), \
+             patch.object(native, "_mesh_family_options", object()), \
+             patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
+             patch.object(native, "_create_mesh_family") as detached_create, \
+             patch.object(spatial, "_live_constructor_context", return_value=context):
+            sphere = spatial.Sphere()
+            torus = spatial.Torus()
+
+        self.assertEqual([args for args, _ in plans], [
+            (0, 2 * math.pi, 0, math.pi, 24, 12),
+            (0, 2 * math.pi, 0, 2 * math.pi, 24, 24),
+        ])
+        self.assertTrue(all(plan.freed for _, plan in plans))
+        self.assertEqual(len(sampled), 2)
+        self.assertEqual(sampled[0][:3], (0.0, 0.0, -1.0))
+        self.assertAlmostEqual(sampled[0][3 + 2], 1.0)
+        u, v = 0.4, 0.7
+        self.assertAlmostEqual(sampled[0][6], math.cos(u) * math.sin(v))
+        self.assertAlmostEqual(sampled[0][7], math.sin(u) * math.sin(v))
+        self.assertAlmostEqual(sampled[0][8], -math.cos(v))
+        radial = 3 - math.cos(v)
+        self.assertAlmostEqual(sampled[1][6], radial * math.cos(u))
+        self.assertAlmostEqual(sampled[1][7], radial * math.sin(u))
+        self.assertAlmostEqual(sampled[1][8], -math.sin(v))
+        self.assertIs(sphere._canonical_live_target_context, context)
+        self.assertIs(torus._canonical_live_target_context, context)
+        self.assertEqual(context.createMeshFamily.call_count, 2)
+        context.shiftFamilyWorld.assert_called_once_with(family, 0.0, 0.0, 0.0)
+        detached_create.assert_not_called()
+        candidate.setCairoSurface.assert_has_calls([call(True), call(True)])
+
+        copied = Mock()
+        with patch.object(compat.Group, "copy", return_value=copied) as copy_group:
+            self.assertIs(sphere.copy(), copied)
+        copy_group.assert_called_once_with(sphere)
+        with patch.object(semantic, "_set_style", return_value=sphere) as set_style:
+            sphere.set_style(fill_color=noon.RED, stroke_color=noon.GREEN)
+        set_style.assert_called_once()
+
+    def test_sphere_and_torus_keep_the_opaque_single_mesh_opt_out(self):
+        sphere_mesh, torus_mesh = Mock(), Mock()
+        for mesh in (sphere_mesh, torus_mesh):
+            mesh._semantic_handle = Mock()
+        with patch.object(Mesh3D, "sphere", return_value=sphere_mesh) as sphere_factory, \
+             patch.object(Mesh3D, "torus", return_value=torus_mesh) as torus_factory, \
+             patch.object(Mesh3D, "parametric") as parametric:
+            sphere = spatial.Sphere(checkerboard_colors=False, stroke_width=0,
+                                    shade_in_3d=False)
+            torus = spatial.Torus(checkerboard_colors=False, stroke_width=0,
+                                  shade_in_3d=False)
+
+        self.assertIsNotNone(sphere._semantic_handle)
+        self.assertIsNotNone(torus._semantic_handle)
+        sphere_factory.assert_called_once_with(
+            1.0, resolution=(24, 12), u_range=(0.0, 2 * math.pi),
+            v_range=(0.0, math.pi), color=spatial._color(noon.BLUE_D), point_lit=False,
+        )
+        torus_factory.assert_called_once_with(
+            3.0, 1.0, resolution=(24, 24), color=spatial._color(noon.BLUE_D),
+            point_lit=False,
+        )
+        parametric.assert_not_called()
+
+        partial_mesh = Mock()
+        partial_mesh._semantic_handle = Mock()
+        with patch.object(Mesh3D, "parametric", return_value=partial_mesh) as parametric:
+            partial_torus = spatial.Torus(
+                u_range=(0.2, 3.0), checkerboard_colors=False,
+                stroke_width=0, shade_in_3d=False,
+            )
+        self.assertIsNotNone(partial_torus._semantic_handle)
+        parametric.assert_called_once()
+        self.assertEqual(parametric.call_args.kwargs["u_range"], (0.2, 3.0))
+
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as initialize, \
+             patch.object(spatial.Surface, "shift", autospec=True):
             spatial.Sphere(center=(1, 2, 3), u_range=(math.pi / 4, 3 * math.pi / 4),
                            v_range=(math.pi / 6, 5 * math.pi / 6),
                            checkerboard_colors=False, stroke_width=0, shade_in_3d=False)
-        self.assertEqual(factory.call_args.kwargs["u_range"], (math.pi / 4, 3 * math.pi / 4))
-        self.assertEqual(factory.call_args.kwargs["v_range"], (math.pi / 6, 5 * math.pi / 6))
-        self.mesh.shift.assert_called_once_with((1, 2, 3))
-        self.mesh.move_to.assert_not_called()
+        self.assertEqual(initialize.call_args.kwargs["u_range"], (math.pi / 4, 3 * math.pi / 4))
+        self.assertEqual(initialize.call_args.kwargs["v_range"], (math.pi / 6, 5 * math.pi / 6))
+        partial_sphere_mesh = Mock()
+        partial_sphere_mesh._semantic_handle = Mock()
+        with patch.object(Mesh3D, "sphere", return_value=partial_sphere_mesh) as sphere_factory, \
+             patch.object(Mesh3D, "parametric") as parametric:
+            spatial.Sphere(
+                u_range=(math.pi / 4, 3 * math.pi / 4),
+                v_range=(math.pi / 6, 5 * math.pi / 6),
+                checkerboard_colors=False, stroke_width=0, shade_in_3d=False,
+            )
+        sphere_factory.assert_called_once_with(
+            1.0, resolution=(24, 12),
+            u_range=(math.pi / 4, 3 * math.pi / 4),
+            v_range=(math.pi / 6, 5 * math.pi / 6),
+            color=spatial._color(noon.BLUE_D), point_lit=False,
+        )
+        parametric.assert_not_called()
         for kwargs in ({"u_range": (-0.1, 1)}, {"u_range": (2, 1)},
-                       {"v_range": (0, math.pi + 0.1)}):
-            with self.subTest(kwargs=kwargs), patch.object(Mesh3D, "sphere") as factory:
+                       {"v_range": (0, math.pi + 0.1)}, {"radius": float("nan")},
+                       {"radius": 0}):
+            with self.subTest(kwargs=kwargs), patch.object(
+                spatial.Surface, "__init__", autospec=True, return_value=None,
+            ) as factory:
                 with self.assertRaises(ValueError):
                     spatial.Sphere(**kwargs)
                 factory.assert_not_called()
@@ -413,8 +589,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             with self.assertRaises(NotImplementedError):
                 spatial.Cylinder(fill_opacity=0.5)
         for shape in (spatial.Cube, spatial.Prism):
-            with self.assertRaises(NotImplementedError):
-                shape(shade_in_3d=True)
+            with self.assertRaises(TypeError):
+                shape(shade_in_3d=1)
             with self.assertRaises(NotImplementedError):
                 shape(stroke_width=1, shade_in_3d=False)
 
@@ -436,13 +612,13 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         with patch.object(native, "_prism_face_family_options", return_value=candidate) as faces, \
              patch.object(native, "_create_mesh_family", return_value=family) as admit, \
              patch.object(spatial, "_live_constructor_context", return_value=None):
-            cube = spatial.Cube(shade_in_3d=False)
+            cube = spatial.Cube()
             prism = spatial.Prism(dimensions=(3, 2, 1), fill_opacity=0.4,
                                   fill_color=translucent_red, shade_in_3d=False)
 
         faces.assert_has_calls([
-            call((2.0, 2.0, 2.0)),
-            call((3.0, 2.0, 1.0)),
+            call((2.0, 2.0, 2.0), True),
+            call((3.0, 2.0, 1.0), False),
         ])
         self.assertEqual(faces.call_count, 2)
         default = noon.BLUE

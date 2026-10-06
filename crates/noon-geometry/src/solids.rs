@@ -1,6 +1,6 @@
 //! Generated indexed triangle meshes for common closed solids.
 
-use noon_core::{MeshResource, SemanticVec3};
+use noon_core::{CairoSurfaceAppearance, MeshResource, SemanticVec3};
 
 use crate::surface::{
     normalize, SurfaceError, SurfaceSample, UvSurfacePlan, MAX_SURFACE_CELLS, MAX_SURFACE_VERTICES,
@@ -66,9 +66,11 @@ pub fn torus_mesh(
     plan.sample(|u, v| {
         let (sin_u, cos_u) = u.sin_cos();
         let (sin_v, cos_v) = v.sin_cos();
-        let radial = major_radius + minor_radius * cos_v;
-        let position = SemanticVec3::new(radial * cos_u, radial * sin_u, minor_radius * sin_v);
-        let normal = SemanticVec3::new(cos_v * cos_u, cos_v * sin_u, sin_v);
+        // Match Manim v0.21 Torus.func: the tube angle is reversed relative
+        // to the common analytic parameterization, with z directed downward.
+        let radial = major_radius - minor_radius * cos_v;
+        let position = SemanticVec3::new(radial * cos_u, radial * sin_u, -minor_radius * sin_v);
+        let normal = SemanticVec3::new(-cos_v * cos_u, -cos_v * sin_u, -sin_v);
         SurfaceSample::with_normal(position, normal)
     })?
     .into_mesh_resource()
@@ -205,16 +207,8 @@ pub fn prism_mesh(size: SemanticVec3) -> Result<MeshResource, SurfaceError> {
 
 /// The six flat-shaded faces in +X, -X, +Y, -Y, +Z, -Z order.
 pub fn prism_faces(size: SemanticVec3) -> Result<[MeshResource; 6], SurfaceError> {
-    if !size.is_finite() {
-        return Err(SurfaceError::NonFinitePosition);
-    }
-    if size.x <= 0.0 || size.y <= 0.0 || size.z <= 0.0 {
-        return Err(SurfaceError::InvalidRange);
-    }
-    let h = SemanticVec3::new(size.x * 0.5, size.y * 0.5, size.z * 0.5);
-    if h.x == 0.0 || h.y == 0.0 || h.z == 0.0 {
-        return Err(SurfaceError::InvalidRange);
-    }
+    let [hx, hy, hz] = prism_half_extents(size)?;
+    let h = SemanticVec3::new(hx, hy, hz);
     let mut builder = MeshBuilder::default();
     let mut faces = Vec::with_capacity(6);
     // Each [a,b,c,d] face uses the same a-b-d / b-c-d CCW topology as UV cells.
@@ -279,6 +273,109 @@ pub fn prism_faces(size: SemanticVec3) -> Result<[MeshResource; 6], SurfaceError
     )?;
     faces.push(builder.finish()?);
     faces.try_into().map_err(|_| SurfaceError::SurfaceTooLarge)
+}
+
+/// The same six indexed faces with Manim-Cairo's closed-square gradient and
+/// normal samples retained per face. Geometry topology remains the shared
+/// outward-wound prism mesh; the appearance spans and family order preserve
+/// Manim's IN, OUT, LEFT, RIGHT, UP, DOWN source paths.
+pub fn prism_faces_cairo(size: SemanticVec3) -> Result<[MeshResource; 6], SurfaceError> {
+    let [hx, hy, hz] = prism_half_extents(size)?;
+    let faces = prism_faces(size)?;
+    // Manim Cube emits IN, OUT, LEFT, RIGHT, UP, DOWN. Match each retained
+    // outward-wound geometry face to that source path's ordered square corners.
+    let paths = [
+        // +X geometry corresponds to Cube's RIGHT face.
+        [
+            SemanticVec3::new(hx, hy, hz),
+            SemanticVec3::new(hx, hy, -hz),
+            SemanticVec3::new(hx, -hy, -hz),
+            SemanticVec3::new(hx, -hy, hz),
+        ],
+        // -X geometry corresponds to Cube's LEFT face.
+        [
+            SemanticVec3::new(-hx, hy, -hz),
+            SemanticVec3::new(-hx, hy, hz),
+            SemanticVec3::new(-hx, -hy, hz),
+            SemanticVec3::new(-hx, -hy, -hz),
+        ],
+        // +Y geometry corresponds to Cube's UP face.
+        [
+            SemanticVec3::new(-hx, hy, -hz),
+            SemanticVec3::new(hx, hy, -hz),
+            SemanticVec3::new(hx, hy, hz),
+            SemanticVec3::new(-hx, hy, hz),
+        ],
+        // -Y geometry corresponds to Cube's DOWN face.
+        [
+            SemanticVec3::new(-hx, -hy, hz),
+            SemanticVec3::new(hx, -hy, hz),
+            SemanticVec3::new(hx, -hy, -hz),
+            SemanticVec3::new(-hx, -hy, -hz),
+        ],
+        // +Z geometry corresponds to Cube's OUT face.
+        [
+            SemanticVec3::new(-hx, hy, hz),
+            SemanticVec3::new(hx, hy, hz),
+            SemanticVec3::new(hx, -hy, hz),
+            SemanticVec3::new(-hx, -hy, hz),
+        ],
+        // -Z geometry corresponds to Cube's IN face.
+        [
+            SemanticVec3::new(-hx, -hy, -hz),
+            SemanticVec3::new(hx, -hy, -hz),
+            SemanticVec3::new(hx, hy, -hz),
+            SemanticVec3::new(-hx, hy, -hz),
+        ],
+    ];
+    let [px, nx, py, ny, pz, nz] = faces
+        .into_iter()
+        .zip(paths)
+        .map(|(face, corners)| {
+            face.with_cairo_appearance(square_cairo_appearance(corners))
+                .map_err(Into::into)
+        })
+        .collect::<Result<Vec<_>, SurfaceError>>()?
+        .try_into()
+        .map_err(|_| SurfaceError::SurfaceTooLarge)?;
+    Ok([nz, pz, nx, px, py, ny])
+}
+
+fn square_cairo_appearance([p0, p3, corner6, p12]: [SemanticVec3; 4]) -> CairoSurfaceAppearance {
+    // A closed Cairo Square stores each straight side as cubic thirds. Its
+    // shading endpoint at point 6 is therefore two-thirds along side 2.
+    let p6 = add(p3, scale(subtract(corner6, p3), 2.0 / 3.0));
+    let p9 = add(corner6, scale(subtract(p12, corner6), 1.0 / 3.0));
+    CairoSurfaceAppearance {
+        p0,
+        p6,
+        span_p3_p0: subtract(p3, p0),
+        span_p12_p0: subtract(p12, p0),
+        span_p9_p6: subtract(p9, p6),
+        span_p3_p6: subtract(p3, p6),
+    }
+}
+
+fn prism_half_extents(size: SemanticVec3) -> Result<[f64; 3], SurfaceError> {
+    if !size.is_finite() {
+        return Err(SurfaceError::NonFinitePosition);
+    }
+    if size.x <= 0.0 || size.y <= 0.0 || size.z <= 0.0 {
+        return Err(SurfaceError::InvalidRange);
+    }
+    let halves = [size.x * 0.5, size.y * 0.5, size.z * 0.5];
+    if halves.contains(&0.0) {
+        return Err(SurfaceError::InvalidRange);
+    }
+    Ok(halves)
+}
+
+fn add(a: SemanticVec3, b: SemanticVec3) -> SemanticVec3 {
+    SemanticVec3::new(a.x + b.x, a.y + b.y, a.z + b.z)
+}
+
+fn subtract(a: SemanticVec3, b: SemanticVec3) -> SemanticVec3 {
+    SemanticVec3::new(a.x - b.x, a.y - b.y, a.z - b.z)
 }
 
 pub fn cube_mesh(size: f64) -> Result<MeshResource, SurfaceError> {
@@ -465,7 +562,44 @@ mod tests {
         assert_eq!(torus.positions().len(), 13 * 9);
         assert_eq!(torus.indices().len(), 12 * 8 * 6);
         assert!(torus.bounds().min.x <= -4.0 && torus.bounds().max.x >= 4.0);
-        assert!(triangle_normal(&torus, 0).x > 0.0);
+        assert!(triangle_normal(&torus, 0).x < 0.0);
+    }
+
+    #[test]
+    fn torus_matches_manim_parameterization_at_odd_resolution_and_seam() {
+        let [u_cells, v_cells] = [5, 3];
+        let major_radius = 2.5;
+        let minor_radius = 0.75;
+        let torus = torus_mesh(major_radius, minor_radius, [u_cells, v_cells]).unwrap();
+        let u_index = 2;
+        let v_index = 1;
+        let index = u_index * (v_cells + 1) + v_index;
+        let u = std::f64::consts::TAU * u_index as f64 / u_cells as f64;
+        let v = std::f64::consts::TAU * v_index as f64 / v_cells as f64;
+        let radial = major_radius - minor_radius * v.cos();
+        let expected_position =
+            SemanticVec3::new(radial * u.cos(), radial * u.sin(), -minor_radius * v.sin());
+        let expected_normal = SemanticVec3::new(-v.cos() * u.cos(), -v.cos() * u.sin(), -v.sin());
+        let position = torus.positions()[index];
+        let normal = torus.normals().unwrap()[index];
+        assert!((position.x - expected_position.x).abs() < 1.0e-14);
+        assert!((position.y - expected_position.y).abs() < 1.0e-14);
+        assert!((position.z - expected_position.z).abs() < 1.0e-14);
+        assert!((normal.x - expected_normal.x).abs() < 1.0e-14);
+        assert!((normal.y - expected_normal.y).abs() < 1.0e-14);
+        assert!((normal.z - expected_normal.z).abs() < 1.0e-14);
+
+        let stride = v_cells + 1;
+        let seam_delta = crate::surface::subtract(
+            torus.positions()[v_index],
+            torus.positions()[u_cells * stride + v_index],
+        );
+        assert!(seam_delta.x.abs() + seam_delta.y.abs() + seam_delta.z.abs() < 1.0e-14);
+        let triangle = triangle_normal(&torus, 2 * (u_index * v_cells + v_index));
+        assert!(
+            triangle.x * normal.x + triangle.y * normal.y + triangle.z * normal.z > 0.0,
+            "odd-resolution torus triangles face along the Manim normal",
+        );
     }
 
     #[test]
@@ -557,6 +691,71 @@ mod tests {
                 + normal.z * expected_normal.z;
             assert!(dot > 0.0, "face {face} winding must be outward: {normal:?}");
         }
+    }
+
+    #[test]
+    fn cairo_prism_appearances_match_manim_cube_square_paths() {
+        let faces = prism_faces_cairo(SemanticVec3::new(2.0, 4.0, 6.0)).unwrap();
+        let expected = [
+            (
+                SemanticVec3::new(-1.0, -2.0, -3.0),
+                SemanticVec3::new(1.0, 2.0 / 3.0, -3.0),
+                SemanticVec3::new(0.0, 0.0, 1.0),
+            ),
+            (
+                SemanticVec3::new(-1.0, 2.0, 3.0),
+                SemanticVec3::new(1.0, -2.0 / 3.0, 3.0),
+                SemanticVec3::new(0.0, 0.0, -1.0),
+            ),
+            (
+                SemanticVec3::new(-1.0, 2.0, -3.0),
+                SemanticVec3::new(-1.0, -2.0 / 3.0, 3.0),
+                SemanticVec3::new(1.0, 0.0, 0.0),
+            ),
+            (
+                SemanticVec3::new(1.0, 2.0, 3.0),
+                SemanticVec3::new(1.0, -2.0 / 3.0, -3.0),
+                SemanticVec3::new(-1.0, 0.0, 0.0),
+            ),
+            (
+                SemanticVec3::new(-1.0, 2.0, -3.0),
+                SemanticVec3::new(1.0, 2.0, 1.0),
+                SemanticVec3::new(0.0, -1.0, 0.0),
+            ),
+            (
+                SemanticVec3::new(-1.0, -2.0, 3.0),
+                SemanticVec3::new(1.0, -2.0, -1.0),
+                SemanticVec3::new(0.0, 1.0, 0.0),
+            ),
+        ];
+
+        for (face, (p0, p6, manim_normal)) in faces.iter().zip(expected) {
+            let appearance = face.cairo_appearance().unwrap();
+            assert_eq!(appearance.p0, p0);
+            assert!((appearance.p6.x - p6.x).abs() < 1e-12);
+            assert!((appearance.p6.y - p6.y).abs() < 1e-12);
+            assert!((appearance.p6.z - p6.z).abs() < 1e-12);
+            let start_normal = crate::surface::normalize(crate::surface::cross(
+                appearance.span_p3_p0,
+                appearance.span_p12_p0,
+            ))
+            .unwrap();
+            let end_normal = crate::surface::normalize(crate::surface::cross(
+                appearance.span_p9_p6,
+                appearance.span_p3_p6,
+            ))
+            .unwrap();
+            assert_eq!(start_normal, manim_normal);
+            assert_eq!(end_normal, manim_normal);
+            assert!(
+                face.has_usable_normals(),
+                "native mesh normals stay outward"
+            );
+        }
+        assert!(prism_faces(SemanticVec3::new(2.0, 4.0, 6.0))
+            .unwrap()
+            .iter()
+            .all(|face| face.cairo_appearance().is_none()));
     }
 
     #[test]

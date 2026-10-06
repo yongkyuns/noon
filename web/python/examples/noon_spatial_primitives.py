@@ -55,3 +55,29 @@ class SpatialPrimitives(ThreeDScene):
             WorldTransformTo(triangle, rotation=(0.9800665778412416, 0, 0.19866933079506122, 0)),
             run_time=1, rate_func=linear,
         )
+
+
+class SpatialCairoCubePrism(ThreeDScene):
+    """Default shaded translucent Cube/Prism faces through the worker."""
+
+    def __init__(self):
+        super().__init__(near=0.1, far=30)
+
+    async def construct(self):
+        self.set_camera_orientation(
+            phi=0.6, theta=-1.2, gamma=0, focal_distance=5, zoom=1,
+            frame_center=(0, 0, 0),
+        )
+        cube = Cube(
+            side_length=1.0, fill_color=RED, fill_opacity=0.75,
+            stroke_width=0, shade_in_3d=True,
+        ).shift((-1.2, 0.0, 0.0))
+        prism = Prism(
+            dimensions=(1.0, 0.8, 0.6), fill_color=BLUE, fill_opacity=0.75,
+            stroke_width=0, shade_in_3d=True,
+        ).shift((1.2, 0.0, 0.0))
+        self.add_world_mobjects(cube, prism)
+        await self.move_camera(
+            phi=0.8, theta=-0.1, gamma=0.2, focal_distance=5, zoom=1.1,
+            frame_center=(0.2, 0, 0), run_time=1, rate_func=linear,
+        )

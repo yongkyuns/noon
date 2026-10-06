@@ -949,7 +949,12 @@ fn path_key(
     identity: u64,
 ) -> Result<PathKey, SpatialPathError> {
     let style = visible_path_style(style);
-    if screen_stroke(style) && !matches!(geometry, GeometryRef::Line { .. }) {
+    if screen_stroke(style)
+        && !matches!(
+            geometry,
+            GeometryRef::Line { .. } | GeometryRef::Circle { .. }
+        )
+    {
         return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
     }
     if !style.stroke_width.is_finite() || style.stroke_width < 0.0 {
@@ -1271,8 +1276,18 @@ pub(super) fn tessellate(
 ) -> Result<TessellatedSpatialPath, SpatialPathError> {
     validate_style(style, object_alpha * style.opacity, domain)?;
     let style = visible_path_style(style);
-    if screen_stroke(style) && !matches!(geometry, GeometryRef::Line { .. }) {
+    if screen_stroke(style)
+        && !matches!(
+            geometry,
+            GeometryRef::Line { .. } | GeometryRef::Circle { .. }
+        )
+    {
         return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
+    }
+    if screen_stroke(style)
+        && matches!(geometry, GeometryRef::Circle { radius } if !radius.is_finite() || *radius <= 0.0)
+    {
+        return Err(SpatialPathError::UnrepresentableVertex);
     }
     let source = match geometry {
         GeometryRef::External(id) => {
@@ -1299,8 +1314,10 @@ pub(super) fn tessellate(
     let stroke = style.stroke.is_some() && style.stroke_width > 0.0;
     let mesh = noon_geometry::tessellate_styled_with_fill(
         &path,
-        if screen_stroke(style) {
+        if screen_stroke(style) && matches!(geometry, GeometryRef::Line { .. }) {
             1.0
+        } else if screen_stroke(style) {
+            0.0
         } else if stroke {
             style.stroke_width
         } else {
@@ -1311,7 +1328,15 @@ pub(super) fn tessellate(
         fill,
     )
     .map_err(|_| SpatialPathError::Tessellation)?;
-    let line = if screen_stroke(style) {
+    let circle_frames = if screen_stroke(style) && matches!(geometry, GeometryRef::Circle { .. }) {
+        Some(
+            noon_geometry::tessellate_screen_stroke(&path, style.stroke_join, style.stroke_cap)
+                .map_err(|_| SpatialPathError::Tessellation)?,
+        )
+    } else {
+        None
+    };
+    let line = if screen_stroke(style) && matches!(geometry, GeometryRef::Line { .. }) {
         let GeometryRef::Line { start, end } = geometry else {
             unreachable!("screen stroke was checked above")
         };
@@ -1324,7 +1349,7 @@ pub(super) fn tessellate(
     } else {
         None
     };
-    let vertices: Vec<SpatialPathVertex> = mesh
+    let mut vertices: Vec<SpatialPathVertex> = mesh
         .vertices
         .into_iter()
         .map(|vertex| {
@@ -1352,6 +1377,27 @@ pub(super) fn tessellate(
             output
         })
         .collect();
+    let mut indices = mesh.indices;
+    if let Some(frames) = circle_frames {
+        let offset = u32::try_from(vertices.len()).map_err(|_| SpatialPathError::BufferLimit)?;
+        vertices.extend(frames.vertices.into_iter().map(|vertex| SpatialPathVertex {
+            position: [vertex.position.x, vertex.position.y],
+            surface: crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0),
+            tangent: [vertex.tangent.x, vertex.tangent.y],
+            extrusion: [vertex.extrusion.x, vertex.extrusion.y],
+        }));
+        indices.extend(
+            frames
+                .indices
+                .into_iter()
+                .map(|index| {
+                    index
+                        .checked_add(offset)
+                        .ok_or(SpatialPathError::BufferLimit)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
     if vertices.iter().any(|vertex| {
         vertex
             .position
@@ -1362,10 +1408,7 @@ pub(super) fn tessellate(
     }) {
         return Err(SpatialPathError::UnrepresentableVertex);
     }
-    Ok(TessellatedSpatialPath {
-        vertices,
-        indices: mesh.indices,
-    })
+    Ok(TessellatedSpatialPath { vertices, indices })
 }
 
 #[cfg(test)]
@@ -1503,6 +1546,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn circle_screen_strokes_keep_fill_roles_and_projective_extrusion_frames() {
+        let resources = GeometryResourceArena::default();
+        let geometry = GeometryRef::circle(1.25);
+        let style = Style {
+            fill: Some(Color::WHITE),
+            stroke: Some(Color::BLACK),
+            stroke_width: 0.08,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let mesh = tessellate(&geometry, &resources, style, 1.0, Domain::World).unwrap();
+        assert!(!mesh.indices.is_empty());
+        let fill_surface = crate::pack_path_surface(noon_geometry::PathSurface::Fill, 1.0);
+        let stroke_surface = crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0);
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.surface == fill_surface));
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.surface == stroke_surface));
+        for vertex in mesh
+            .vertices
+            .iter()
+            .filter(|vertex| vertex.surface == stroke_surface)
+        {
+            let tangent = Vec2::new(vertex.tangent[0], vertex.tangent[1]);
+            assert!((tangent.length() - 1.0).abs() < 1e-4);
+            assert!(vertex.position.iter().all(|value| value.is_finite()));
+            assert!(vertex.extrusion.iter().all(|value| value.is_finite()));
+            assert!(vertex.extrusion[1].abs() <= 0.5001);
+        }
+        assert_eq!(
+            path_key(&geometry, &resources, style, 9).unwrap(),
+            path_key(
+                &geometry,
+                &resources,
+                Style {
+                    stroke_width: 0.3,
+                    ..style
+                },
+                9
+            )
+            .unwrap(),
+            "screen width is instance state, not tessellation topology"
+        );
+        assert_eq!(
+            tessellate(
+                &GeometryRef::circle(0.0),
+                &resources,
+                style,
+                1.0,
+                Domain::World
+            )
+            .unwrap_err(),
+            SpatialPathError::UnrepresentableVertex
+        );
+        assert_eq!(
+            tessellate(
+                &GeometryRef::rectangle(1.0, 1.0),
+                &resources,
+                style,
+                1.0,
+                Domain::World
+            )
+            .unwrap_err(),
+            SpatialPathError::UnsupportedScreenSpaceStroke
+        );
     }
 
     #[test]

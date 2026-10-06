@@ -6,6 +6,7 @@ use crate::{
     SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D, SurfaceOptions,
     SurfaceSample, UvSurfacePlan,
 };
+use noon_core::ManimCamera3DProfile;
 
 /// Author an opaque unlit UV surface, ordinary semantic camera, and world-rotation intent.
 fn author_surface(material: SemanticSpatialMaterial) -> Result<(Scene, crate::Mobject), String> {
@@ -174,6 +175,120 @@ pub fn cairo_scene() -> Result<(Scene, crate::SurfaceFamily), String> {
 pub fn cairo_session() -> Result<ExecutionSession, String> {
     let (scene, _) = cairo_scene()?;
     scene.execution_session().map_err(|error| error.to_string())
+}
+
+/// Pinned default Sphere and Torus profiles sampled through the Cairo Surface lane.
+pub fn cairo_sphere_torus_scene() -> Result<
+    (
+        Scene,
+        crate::SurfaceFamily,
+        crate::SurfaceFamily,
+        DeclaredAnimation,
+    ),
+    String,
+> {
+    let mut scene = Scene::new();
+    let start = ManimCamera3DProfile {
+        phi: 0.6,
+        theta: -1.2,
+        gamma: 0.0,
+        focal_distance: 5.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::ZERO,
+    };
+    let camera = scene
+        .camera_3d_profile(start, 0.1, 100.0)
+        .map_err(|error| error.to_string())?;
+
+    let sphere_plan = UvSurfacePlan::new(
+        [0.0, std::f64::consts::TAU],
+        [0.0, std::f64::consts::PI],
+        [24, 12],
+    )
+    .map_err(|error| error.to_string())?;
+    let sphere_grid = sphere_plan
+        .sample_cairo(|u, v| {
+            SemanticVec3::new(
+                -1.2 + 0.6 * u.cos() * v.sin(),
+                0.6 * u.sin() * v.sin(),
+                -0.6 * v.cos(),
+            )
+        })
+        .map_err(|error| error.to_string())?;
+    let sphere = scene
+        .surface_cairo_family(
+            sphere_grid,
+            SurfaceOptions {
+                material: SemanticSpatialMaterial::CairoSurface,
+                ..SurfaceOptions::default()
+            },
+        )
+        .map_err(|error| error.to_string())?;
+
+    let torus_plan = UvSurfacePlan::new(
+        [0.0, std::f64::consts::TAU],
+        [0.0, std::f64::consts::TAU],
+        [24, 24],
+    )
+    .map_err(|error| error.to_string())?;
+    let torus_grid = torus_plan
+        .sample_cairo(|u, v| {
+            let radial = 0.6 - 0.2 * v.cos();
+            SemanticVec3::new(1.2 + radial * u.cos(), radial * u.sin(), -0.2 * v.sin())
+        })
+        .map_err(|error| error.to_string())?;
+    let torus = scene
+        .surface_cairo_family(
+            torus_grid,
+            SurfaceOptions {
+                material: SemanticSpatialMaterial::CairoSurface,
+                ..SurfaceOptions::default()
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_many(&[
+            crate::MobjectTarget::Family(sphere.family()),
+            crate::MobjectTarget::Family(torus.family()),
+        ])
+        .map_err(|error| error.to_string())?;
+
+    let end = ManimCamera3DProfile {
+        phi: 0.8,
+        theta: -0.1,
+        gamma: 0.2,
+        focal_distance: 5.0,
+        zoom: 1.1,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::new(0.3, 0.0, 0.0),
+    };
+    let movement = scene
+        .declare_camera_profile_move(
+            &camera,
+            end,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok((scene, sphere, torus, movement))
+}
+
+/// One-second paired default Sphere/Torus execution session.
+pub fn cairo_sphere_torus_session() -> Result<ExecutionSession, String> {
+    let (scene, _, _, movement) = cairo_sphere_torus_scene()?;
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    session
+        .activate_animation_segment(
+            &scene.integration_store().borrow(),
+            movement.node_id(),
+            AnimationOptions::new(),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(session)
 }
 
 #[cfg(test)]
@@ -345,6 +460,45 @@ mod tests {
             assert_eq!(mesh.positions().len(), 4);
             assert_eq!(mesh.indices(), [0, 1, 3, 1, 2, 3]);
         }
+    }
+
+    #[test]
+    fn cairo_sphere_torus_fixture_uses_default_resolution_cells_and_camera_motion() {
+        let (scene, sphere, torus, _) = cairo_sphere_torus_scene().unwrap();
+        let store = scene.integration_store().borrow();
+        for (family, expected_cells) in [(&sphere, 24 * 12), (&torus, 24 * 24)] {
+            let leaves = store.ordered_leaf_nodes(family.family().node_id()).unwrap();
+            assert_eq!(leaves.len(), expected_cells);
+            for leaf in leaves {
+                let state = store.semantic_object_state_checked(leaf).unwrap();
+                assert_eq!(
+                    state.spatial_material(),
+                    SemanticSpatialMaterial::CairoSurface
+                );
+                assert_eq!(state.style.stroke_width, 0.005);
+                assert_eq!(state.style.stroke_opacity, 1.0);
+                let handle = state
+                    .content
+                    .geometry()
+                    .and_then(|geometry| geometry.resource_handle())
+                    .unwrap();
+                let Some(GeometryResource::Mesh(mesh)) = store.geometry_resources().get(handle)
+                else {
+                    panic!("Cairo Sphere/Torus cells retain mesh resources");
+                };
+                assert!(mesh.cairo_appearance().is_some());
+            }
+        }
+        drop(store);
+
+        let mut session = cairo_sphere_torus_session().unwrap();
+        let start = session.camera_3d().unwrap().unwrap().position;
+        session.advance_to(0.5).unwrap();
+        let midpoint = session.camera_3d().unwrap().unwrap().position;
+        session.advance_to(29.0 / 30.0).unwrap();
+        let endpoint = session.camera_3d().unwrap().unwrap().position;
+        assert_ne!(start, midpoint);
+        assert_ne!(midpoint, endpoint);
     }
 
     #[test]

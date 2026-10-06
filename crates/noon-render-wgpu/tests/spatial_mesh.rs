@@ -740,6 +740,23 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
         .unwrap()
         .into();
         let line_id = attach(&mut store, line);
+        let mut circle = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.65 });
+        circle.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.25,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            ..SemanticStyle::default()
+        };
+        circle.transform = SemanticWorldTransform3D::new(
+            SemanticVec3::new(-1.3, 1.35, 0.0),
+            noon_core::SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.45)
+                .unwrap(),
+            SemanticVec3::new(1.1, 0.7, 1.0),
+        )
+        .unwrap()
+        .into();
+        let circle_id = attach(&mut store, circle);
         let mut index = SemanticExecutionIndex::new();
         let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
             .unwrap()
@@ -781,6 +798,9 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
         let target = Target::new(&device);
         let mut preparer = FramePreparer::new();
         let mut counts = Vec::new();
+        let mut circle_widths = Vec::new();
+        let mut circle_pixel_counts = Vec::new();
+        let mut circle_rasters = Vec::new();
         for (index, time) in [0.0, 0.5, 1.0, 0.0].into_iter().enumerate() {
             runtime.seek(time).unwrap();
             let (uploads, pixels) = render(
@@ -796,6 +816,57 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
                 .filter(|&y| pixel(&pixels, WIDTH / 2, y)[0] > 128)
                 .count();
             assert_eq!(width, 4, "screen width must remain 0.25 frame units, despite perspective and 0.01 object Y scale at {time}");
+            let circle_pixels: Vec<_> = (8..60)
+                .flat_map(|y| (5..60).map(move |x| (x, y)))
+                .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+                .collect();
+            assert!(
+                circle_pixels.len() > 30,
+                "tilted Circle stroke disappeared at {time}"
+            );
+            let min_x = circle_pixels.iter().map(|(x, _)| *x).min().unwrap();
+            let max_x = circle_pixels.iter().map(|(x, _)| *x).max().unwrap();
+            let min_y = circle_pixels.iter().map(|(_, y)| *y).min().unwrap();
+            let max_y = circle_pixels.iter().map(|(_, y)| *y).max().unwrap();
+            assert!(max_x - min_x >= 8 && max_y - min_y >= 8);
+            let center_x = (min_x + max_x) / 2;
+            let center_y = (min_y + max_y) / 2;
+            assert!(
+                pixel(&pixels, center_x, center_y)[0] < 32,
+                "Circle stroke must preserve its inner silhouette at {time}"
+            );
+            let left_edge = (5..center_x).find(|x| pixel(&pixels, *x, center_y)[0] > 128);
+            let right_edge = (center_x..60)
+                .rev()
+                .find(|x| pixel(&pixels, *x, center_y)[0] > 128);
+            let top_edge = (8..center_y).find(|y| pixel(&pixels, center_x, *y)[0] > 128);
+            let bottom_edge = (center_y..60)
+                .rev()
+                .find(|y| pixel(&pixels, center_x, *y)[0] > 128);
+            assert!(
+                left_edge.is_some()
+                    && right_edge.is_some()
+                    && top_edge.is_some()
+                    && bottom_edge.is_some(),
+                "Circle stroke must cover all four outer cardinal silhouettes at {time}"
+            );
+            let left_width = (left_edge.unwrap()..=center_x)
+                .take_while(|x| pixel(&pixels, *x, center_y)[0] > 128)
+                .count();
+            let top_width = (top_edge.unwrap()..=center_y)
+                .take_while(|y| pixel(&pixels, center_x, *y)[0] > 128)
+                .count();
+            assert!(
+                (3..=5).contains(&left_width),
+                "left cardinal stroke thickness {left_width} at {time}"
+            );
+            assert!(
+                (3..=5).contains(&top_width),
+                "top cardinal stroke thickness {top_width} at {time}"
+            );
+            circle_widths.push((left_width, top_width));
+            circle_pixel_counts.push(circle_pixels.len());
+            circle_rasters.push(pixels.clone());
             counts.push(
                 (0..WIDTH)
                     .filter(|&x| pixel(&pixels, x, HEIGHT / 2)[0] > 128)
@@ -820,7 +891,21 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
             counts[0], counts[3],
             "backward seek restores the same projected extent"
         );
+        assert!(
+            circle_widths
+                .iter()
+                .take(3)
+                .all(|(left, top)| left.abs_diff(circle_widths[0].0) <= 1
+                    && top.abs_diff(circle_widths[0].1) <= 1),
+            "screen stroke thickness remains stable across perspective distances: {circle_widths:?}"
+        );
+        assert_eq!(circle_widths[0], circle_widths[3]);
+        assert_eq!(
+            circle_rasters[0], circle_rasters[3],
+            "Circle raster exactly replays after backward seek"
+        );
         let line_object = index.execution_object_id(line_id).unwrap();
+        let circle_object = index.execution_object_id(circle_id).unwrap();
         let style = noon_core::Style {
             stroke_width: 0.5,
             ..runtime
@@ -859,6 +944,48 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
                 .filter(|&y| pixel(&pixels, WIDTH / 2, y)[0] > 128)
                 .count(),
             8
+        );
+        let circle_frame = runtime.frame();
+        let circle_style = noon_core::Style {
+            stroke_width: 0.5,
+            ..circle_frame
+                .objects
+                .iter()
+                .find(|object| object.id == circle_object)
+                .unwrap()
+                .style
+        };
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: circle_object,
+                style: circle_style,
+            })
+            .unwrap();
+        let (uploads, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut runtime,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            uploads.geometry_bytes, 0,
+            "Circle width edits reuse retained topology"
+        );
+        assert!(
+            uploads.instance_bytes > 0,
+            "Circle width edits update its instance"
+        );
+        let widened = (8..60)
+            .flat_map(|y| (5..60).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+            .count();
+        assert!(
+            widened > circle_pixel_counts[3] + 20,
+            "Circle width edit visibly thickens the retained stroke: {widened} vs {}",
+            circle_pixel_counts[3]
         );
     });
 }

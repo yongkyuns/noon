@@ -137,6 +137,27 @@ impl MeshResource {
     pub fn indices(&self) -> &[u32] {
         &self.indices
     }
+    /// One retained triangle or two quad triangles sharing an edge. This is the common bounded
+    /// face contract for Cairo appearance and object-depth translucency.
+    pub fn is_single_face(&self) -> bool {
+        match (self.positions.len(), self.indices.len()) {
+            (3, 3) => {
+                let mut indices = [self.indices[0], self.indices[1], self.indices[2]];
+                indices.sort_unstable();
+                indices == [0, 1, 2]
+            }
+            (4, 6) => {
+                let mut first = [self.indices[0], self.indices[1], self.indices[2]];
+                let mut second = [self.indices[3], self.indices[4], self.indices[5]];
+                first.sort_unstable();
+                second.sort_unstable();
+                first.windows(2).all(|p| p[0] != p[1])
+                    && second.windows(2).all(|p| p[0] != p[1])
+                    && first.iter().filter(|i| second.contains(i)).count() == 2
+            }
+            _ => false,
+        }
+    }
     pub const fn bounds(&self) -> MeshBounds3D {
         self.bounds
     }

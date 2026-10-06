@@ -43,15 +43,19 @@ class SpatialFacadeTests(unittest.TestCase):
         admit.assert_called_once_with(candidate)
 
     def test_prism_face_options_are_generated_by_the_rust_factory(self):
-        candidate = Candidate()
         class Factory:
             @staticmethod
             def prismFaces(*values):
-                self.assertEqual(values, (3.0, 2.0, 1.0))
-                return candidate
+                return values
         with patch.object(spatial, "_mesh_options", Factory):
-            result = spatial._prism_face_family_options((3, 2, 1))
-        self.assertIs(result, candidate)
+            self.assertEqual(
+                spatial._prism_face_family_options((3, 2, 1), False),
+                (3.0, 2.0, 1.0, False),
+            )
+            self.assertEqual(
+                spatial._prism_face_family_options((3, 2, 1), True),
+                (3.0, 2.0, 1.0, True),
+            )
         with patch.object(spatial, "_mesh_options") as factory:
             with self.assertRaises(ValueError):
                 spatial._prism_face_family_options((1, 2))

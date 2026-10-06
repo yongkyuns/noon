@@ -349,7 +349,12 @@ fn translucent_prism_face_family_is_atomic_reusable_and_rust_transformable() {
         .geometry_resources()
         .stats();
     assert!(scene
-        .prism_face_family(SemanticVec3::new(3.0, 2.0, 1.0), Color::BLUE, f64::NAN,)
+        .prism_face_family(
+            SemanticVec3::new(3.0, 2.0, 1.0),
+            Color::BLUE,
+            f64::NAN,
+            false,
+        )
         .is_err());
     assert_eq!(scene.revision(), revision);
     assert_eq!(
@@ -361,7 +366,9 @@ fn translucent_prism_face_family_is_atomic_reusable_and_rust_transformable() {
         resource_stats
     );
 
-    let cube = scene.cube_face_family(2.0, Color::BLUE, 0.75).unwrap();
+    let cube = scene
+        .cube_face_family(2.0, Color::BLUE, 0.75, false)
+        .unwrap();
     assert_eq!(
         store_leaf_count(scene.integration_store(), cube.node_id()),
         6
@@ -369,7 +376,7 @@ fn translucent_prism_face_family_is_atomic_reusable_and_rust_transformable() {
 
     let tint = Color::rgba(0.2, 0.4, 0.8, 0.6);
     let family = scene
-        .prism_face_family(SemanticVec3::new(3.0, 2.0, 1.0), tint, 0.75)
+        .prism_face_family(SemanticVec3::new(3.0, 2.0, 1.0), tint, 0.75, false)
         .unwrap();
     let store = std::rc::Rc::clone(scene.integration_store());
     let leaves = store.borrow().ordered_leaf_nodes(family.node_id()).unwrap();
@@ -382,6 +389,7 @@ fn translucent_prism_face_family_is_atomic_reusable_and_rust_transformable() {
             assert_eq!(state.style.fill, Some(SemanticPaint::Solid(tint)));
             assert_eq!(state.style.fill_opacity, 0.75);
             assert_eq!(state.style.stroke, None);
+            assert_eq!(state.spatial_material(), SemanticSpatialMaterial::Unlit);
             let handle = state.content.geometry().unwrap().resource_handle().unwrap();
             let Some(GeometryResource::Mesh(mesh)) = borrowed.geometry_resources().get(handle)
             else {
@@ -390,6 +398,7 @@ fn translucent_prism_face_family_is_atomic_reusable_and_rust_transformable() {
             assert_eq!(mesh.positions().len(), 4);
             assert_eq!(mesh.normals().unwrap().len(), 4);
             assert_eq!(mesh.indices(), [0, 1, 3, 1, 2, 3]);
+            assert!(mesh.cairo_appearance().is_none());
             handle
         })
         .collect::<Vec<_>>();
@@ -441,6 +450,36 @@ fn translucent_prism_face_family_is_atomic_reusable_and_rust_transformable() {
         store.borrow().geometry_resources().stats(),
         resources_after_copy
     );
+}
+
+#[test]
+fn cairo_shaded_prism_uses_six_retained_face_appearances_and_distinct_material() {
+    let mut scene = Scene::new();
+    let family = scene
+        .prism_face_family(SemanticVec3::new(3.0, 2.0, 1.0), Color::BLUE, 0.75, true)
+        .unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    let leaves = store.borrow().ordered_leaf_nodes(family.node_id()).unwrap();
+    assert_eq!(leaves.len(), 6);
+    let borrowed = store.borrow();
+    for leaf in leaves {
+        let state = borrowed.semantic_object_state_checked(leaf).unwrap();
+        assert_eq!(
+            state.spatial_material(),
+            SemanticSpatialMaterial::CairoSurface
+        );
+        let StoredGeometry::Resource(handle) = state.content.geometry().unwrap() else {
+            panic!("Cairo shaded prism face should retain a mesh");
+        };
+        let Some(GeometryResource::Mesh(mesh)) = borrowed.geometry_resources().get(handle) else {
+            panic!("Cairo shaded prism face should retain a mesh resource");
+        };
+        assert!(mesh.cairo_appearance().is_some());
+        assert!(
+            mesh.has_usable_normals(),
+            "native outward normals remain retained"
+        );
+    }
 }
 
 fn store_leaf_count(

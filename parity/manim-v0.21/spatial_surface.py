@@ -27,3 +27,18 @@ class CairoSpatialSurface(ThreeDScene):
             u_range=(-1, 1), v_range=(-1, 1), resolution=(8, 8),
         )
         self.add(surface)
+
+
+class CairoSphereTorus(ThreeDScene):
+    def construct(self):
+        self.set_camera_orientation(
+            phi=0.6, theta=-1.2, gamma=0, focal_distance=5, zoom=1,
+            frame_center=(0, 0, 0),
+        )
+        sphere = Sphere(center=(-1.2, 0, 0), radius=0.6)
+        torus = Torus(major_radius=0.6, minor_radius=0.2).shift((1.2, 0, 0))
+        self.add(sphere, torus)
+        self.move_camera(
+            phi=0.8, theta=-0.1, gamma=0.2, zoom=1.1,
+            frame_center=(0.3, 0, 0), run_time=1, rate_func=linear,
+        )

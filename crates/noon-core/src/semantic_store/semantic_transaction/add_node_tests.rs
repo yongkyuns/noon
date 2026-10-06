@@ -166,7 +166,7 @@ fn cairo_surface_material_requires_its_retained_mesh_appearance() {
 }
 
 #[test]
-fn cairo_surface_material_requires_surface_uv_identity_even_with_appearance() {
+fn cairo_face_material_uses_geometry_appearance_without_checkerboard_uv_roles() {
     let mut store = SemanticStore::new();
     let appearance = crate::CairoSurfaceAppearance {
         p0: SemanticVec3::ZERO,
@@ -194,9 +194,27 @@ fn cairo_surface_material_requires_surface_uv_identity_even_with_appearance() {
     let mut transaction = SemanticMutationTransaction::new();
     transaction.add_node(SemanticNodeCreation::object(state));
 
+    transaction.apply(&mut store).unwrap();
+    assert_eq!(store.len(), 1);
+
+    let multi_face = MeshResource::new(vec![SemanticVec3::ZERO; 5], None, vec![0, 1, 2, 2, 3, 4])
+        .unwrap()
+        .with_cairo_appearance(appearance)
+        .unwrap();
+    let handle = store.geometry_resources.insert_mesh(multi_face);
+    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    state.set_spatial_material(SemanticSpatialMaterial::CairoSurface);
+    state.set_surface_uv_cell(Some([0, 0]));
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_node(SemanticNodeCreation::object(state));
     assert_eq!(
         transaction.apply(&mut store),
         Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index: 0 })
+    );
+    assert_eq!(
+        store.len(),
+        1,
+        "UV roles cannot bypass face topology admission"
     );
 }
 
