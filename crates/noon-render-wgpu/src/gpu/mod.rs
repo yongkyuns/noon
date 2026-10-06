@@ -1779,41 +1779,7 @@ impl GpuRenderer {
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &PreparedFrame<'_>,
     ) -> DrawStats {
-        let mut stats = DrawStats::default();
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-
-        if !prepared.circles.is_empty() {
-            let count = u32::try_from(prepared.circles.len())
-                .expect("circle instance count exceeds wgpu draw limits");
-            pass.set_pipeline(&self.circle_pipeline);
-            pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
-            pass.draw(0..6, 0..count);
-            stats.draw_calls += 1;
-            stats.instances_drawn += prepared.circles.len();
-        }
-
-        if !prepared.rectangles.is_empty() {
-            let count = u32::try_from(prepared.rectangles.len())
-                .expect("rectangle instance count exceeds wgpu draw limits");
-            pass.set_pipeline(&self.rectangle_pipeline);
-            pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
-            pass.draw(0..6, 0..count);
-            stats.draw_calls += 1;
-            stats.instances_drawn += prepared.rectangles.len();
-        }
-
-        if !prepared.lines.is_empty() {
-            let count = u32::try_from(prepared.lines.len())
-                .expect("line instance count exceeds wgpu draw limits");
-            pass.set_pipeline(&self.line_pipeline);
-            pass.set_vertex_buffer(1, self.line_buffer.slice(..));
-            pass.draw(0..6, 0..count);
-            stats.draw_calls += 1;
-            stats.instances_drawn += prepared.lines.len();
-        }
-
-        stats
+        self.draw_ordered(pass, prepared, false)
     }
 
     pub const fn circle_capacity_bytes(&self) -> usize {

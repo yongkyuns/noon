@@ -69,6 +69,26 @@ pub struct PackedStyle {
     pub stroke_enabled: u32,
 }
 
+impl PackedStyle {
+    /// Exact, conservative source-over eligibility using effective packed paint.
+    /// No epsilon: every nonzero alpha remains eligible, including tiny fades.
+    pub(crate) fn may_contribute_color(self) -> bool {
+        if !self.opacity.is_finite()
+            || !self.stroke_width.is_finite()
+            || !self
+                .fill
+                .iter()
+                .chain(self.stroke.iter())
+                .all(|v| v.is_finite())
+        {
+            return true;
+        }
+        self.opacity != 0.0
+            && ((self.fill_enabled != 0 && self.fill[3] != 0.0)
+                || (self.stroke_enabled & 1 != 0 && self.stroke[3] != 0.0))
+    }
+}
+
 impl From<Style> for PackedStyle {
     fn from(value: Style) -> Self {
         let (fill, fill_enabled) = pack_optional_color(value.fill);
@@ -179,7 +199,7 @@ pub struct PreparedOrderedRenderBatchRef<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
     pub batch_count: usize,
-    /// Live primitive instances referenced by the current submission projection.
+    /// Present resident primitive instances, before zero-contribution suppression.
     /// Retained packed arrays may be larger while absent rows remain resident.
     pub instance_count: usize,
     pub unsupported_count: usize,
@@ -456,7 +476,9 @@ impl PreparedFrame<'_> {
             instance_dirty: dirty_ranges
                 .iter()
                 .any(|range| range.contains(&instance_index)),
-            submission_membership: self.complete_submission.then_some(true),
+            submission_membership: self.complete_submission.then(|| {
+                slot.may_contribute_color(self.circles, self.rectangles, self.lines, self.paths)
+            }),
         })
     }
 }
@@ -475,6 +497,29 @@ enum PreparedSlot {
         reveal_head: Option<usize>,
     },
     Unsupported(usize),
+}
+
+impl PreparedSlot {
+    fn may_contribute_color(
+        self,
+        circles: &[CircleInstance],
+        rectangles: &[RectangleInstance],
+        lines: &[LineInstance],
+        paths: &[PathInstance],
+    ) -> bool {
+        match self {
+            Self::Absent | Self::Unsupported(_) => false,
+            Self::Circle(index) => circles[index].style.may_contribute_color(),
+            Self::Rectangle(index) => rectangles[index].style.may_contribute_color(),
+            Self::Line(index) => lines[index].style.may_contribute_color(),
+            Self::Path {
+                index, reveal_head, ..
+            } => {
+                paths[index].style.may_contribute_color()
+                    || reveal_head.is_some_and(|head| lines[head].style.may_contribute_color())
+            }
+        }
+    }
 }
 
 const fn prepared_slot_instance_count(slot: PreparedSlot) -> usize {
@@ -816,11 +861,6 @@ impl FramePreparer {
                 replacement_chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
             }
         }
-        for chunk in replacement_chunks {
-            let start = chunk * Self::RENDER_ORDER_CHUNK_SIZE;
-            self.rebuild_render_order_chunks(Some(start..start + Self::RENDER_ORDER_CHUNK_SIZE));
-        }
-
         for &object_index in changes.object_indices() {
             let added = changes.added_indices().binary_search(&object_index).is_ok();
             let removed = changes
@@ -834,6 +874,7 @@ impl FramePreparer {
             {
                 continue;
             }
+            let prior_draw_slot = self.color_contributing_slot(self.slots[object_index]);
             let object = &frame.objects[object_index];
             match self.slots[object_index] {
                 PreparedSlot::Absent => {}
@@ -905,6 +946,16 @@ impl FramePreparer {
                 }
                 PreparedSlot::Unsupported(_) => {}
             }
+            if prior_draw_slot != self.color_contributing_slot(self.slots[object_index]) {
+                self.record_render_order_chunk(object_index, &mut replacement_chunks);
+            }
+        }
+
+        // Eligibility must see the newly packed effective style. Reuse bounded
+        // painter partitions, never a whole-scene rebuild for an opacity change.
+        for chunk in replacement_chunks {
+            let start = chunk * Self::RENDER_ORDER_CHUNK_SIZE;
+            self.rebuild_render_order_chunks(Some(start..start + Self::RENDER_ORDER_CHUNK_SIZE));
         }
 
         if let Some(range) = changes.painter_order_range() {
@@ -1197,7 +1248,9 @@ impl FramePreparer {
         };
         let appended_at_tail = self.install_structural_slot(object_index, slot);
 
-        let appended_to_mega = mega_eligible && self.append_mega_path_draw(batch, packed);
+        let appended_to_mega = mega_eligible
+            && self.color_contributing_slot(slot) != PreparedSlot::Absent
+            && self.append_mega_path_draw(batch, packed);
         if appended_to_mega {
             if appended_at_tail {
                 if let Some(line_index) = reveal_head {
