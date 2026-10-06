@@ -1,30 +1,121 @@
-name: Task 1653 source snapshot (do not merge)
+name: Task 1653 implementation validation (do not merge)
 on:
   push:
     branches: [task/1653-renderer-source-audit]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  snapshot:
+  implement:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      TASK_ASSETS: /tmp/task-1653-assets
+      BASE_SHA: 886ede3e2243d621cda5823b30a7911f4e382417
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          ref: 886ede3e2243d621cda5823b30a7911f4e382417
-          persist-credentials: false
-      - name: Archive exact base source for renderer implementation
+          fetch-depth: 2
+      - name: Stage audited patch inputs and checkout exact production base
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 886ede3e2243d621cda5823b30a7911f4e382417
-          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/noon-886ede3e-source.tar.gz"
-          sha256sum "$RUNNER_TEMP/noon-886ede3e-source.tar.gz" > "$RUNNER_TEMP/source.sha256"
-      - uses: actions/upload-artifact@v4
+          cp -R .github/task-1653-assets "$TASK_ASSETS"
+          cp .github/task-1653-apply.py /tmp/task-1653-apply.py
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout --detach "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('/tmp/task-1653-apply.py')
+          # Anchor indented replacement patterns at line boundaries.
+          s = p.read_text().replace('    assert text.count(old) == 1, (old, text.count(old))', '    if old.startswith(" "):\n        old, new = "\\n" + old, "\\n" + new\n    assert text.count(old) == 1, (old, text.count(old))')
+          p.write_text(s)
+          PY
+          python /tmp/task-1653-apply.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-render-wgpu/src/lib.rs')
+          s = p.read_text().replace('Live primitive instances referenced by the current submission projection.', 'Present resident primitive instances, before zero-contribution suppression.')
+          p.write_text(s)
+          PY
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
         with:
-          name: task-1653-exact-base-source
           path: |
-            ${{ runner.temp }}/noon-886ede3e-source.tar.gz
-            ${{ runner.temp }}/source.sha256
-          retention-days: 3
-          if-no-files-found: error
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and publish clean production-only branch
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          python - <<'PY'
+          import subprocess
+          expected = {'crates/noon-render-wgpu/src/lib.rs', 'crates/noon-render-wgpu/src/render_order.rs', 'crates/noon-render-wgpu/src/gpu/mod.rs', 'crates/noon-render-wgpu/src/gpu/retained_text.rs', 'crates/noon-render-wgpu/tests/secondary_viewport.rs', 'docs/architecture.md'}
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert changed == expected, changed
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/noon-render-wgpu docs/architecture.md
+          git commit -m 'Skip zero-contribution retained geometry draws without retiring semantic objects (#1653)'
+          git push origin HEAD:refs/heads/fix/1653-zero-contribution-draws
+          git rev-parse HEAD | tee /tmp/task-1653-head.txt
+          git diff "$BASE_SHA" HEAD > /tmp/task-1653-candidate.patch
+      - name: Focused zero-contribution regressions
+        run: cargo test -p noon-render-wgpu --all-features --lib zero_contribution -- --nocapture
+      - name: Verify regression fails on original renderer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore --source="$BASE_SHA" -- crates/noon-render-wgpu/src
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          tests = (Path(os.environ['TASK_ASSETS']) / 'order-tests.rs').read_text()
+          first = tests.split('    #[test]', 2)[1]
+          p = Path('crates/noon-render-wgpu/src/render_order.rs')
+          s = p.read_text().rstrip()
+          assert s.endswith('}')
+          p.write_text(s[:-1] + '\n    #[test]' + first + '\n}\n')
+          PY
+          set +e
+          cargo test -p noon-render-wgpu --all-features --lib zero_contribution_keeps_camera_resident_and_updates_only_one_partition -- --nocapture > /tmp/task-1653-baseline-regression.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/task-1653-baseline-regression.log
+          git restore --source=HEAD -- crates/noon-render-wgpu/src
+          test "$status" = 101
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/task-1653-baseline-regression.log
+          grep -F 'Some(true)' /tmp/task-1653-baseline-regression.log
+      - name: Renderer unit and integration suite
+        run: cargo test -p noon-render-wgpu --all-features --no-fail-fast
+      - name: Install software Vulkan
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+      - name: Real software Vulkan pixel equality and restoration
+        run: cargo test -p noon-render-wgpu --all-features --test secondary_viewport zero_contribution -- --include-ignored --nocapture --test-threads=1
+      - name: Renderer lint
+        run: cargo clippy -p noon-render-wgpu --all-targets --all-features -- -D warnings
+      - name: Archive implementation and regression evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: task-1653-implementation-evidence
+          path: |
+            /tmp/task-1653-head.txt
+            /tmp/task-1653-candidate.patch
+            /tmp/task-1653-baseline-regression.log
+          retention-days: 7
+          if-no-files-found: warn
