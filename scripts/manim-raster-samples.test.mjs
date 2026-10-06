@@ -318,6 +318,53 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
   assert.match(nativeSphereTorus, /declare_camera_profile_move[\s\S]*?run_time\(1\.0\)/,
     "direct Rust animates the camera for the paired one-second fixture");
 
+  const coneDirect = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-surface-cone-bodies-direct",
+  );
+  const coneWorker = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-surface-cone-bodies-worker",
+  );
+  assert.equal(coneDirect?.direct_factory, "createDirectSpatialSurfaceConeBodiesSmokeRenderer");
+  assert.equal(coneWorker?.noon_source, worker.noon_source);
+  assert.equal(coneDirect.scene, "CairoConeBodies");
+  assert.equal(coneWorker.scene, coneDirect.scene);
+  assert.equal(coneDirect.expected_duration, 0);
+  assert.equal(coneWorker.expected_duration, 0);
+  assert.equal(coneDirect.expected_object_count, 2049);
+  assert.equal(coneWorker.expected_object_count, 2049);
+  assert.deepEqual(coneDirect.sample_times, [0]);
+  assert.deepEqual(coneWorker.sample_times, coneDirect.sample_times);
+  assert.equal(coneDirect.source, direct.source);
+  assert.equal(coneWorker.source, direct.source);
+  const coneReference = cairoReference.split("class CairoConeBodies", 2)[1];
+  const coneWorkerSource = solidsWorkerSource.split("class CairoConeBodies", 2)[1];
+  for (const [label, source] of [["reference", coneReference], ["worker", coneWorkerSource]]) {
+    assert.ok(source, `${label}: missing Cone body scene`);
+    assert.match(source, /Cone\(\)\.shift\(\(-1\.25, 0, 0\)\)/,
+      `${label}: includes the pinned default-resolution default Cone`);
+    assert.match(source, /Cone\([\s\S]*?base_radius=0\.8, height=1\.4, direction=\(1, 2, 2\), u_min=0\.2/,
+      `${label}: includes the tilted partial radial Cone`);
+    assert.doesNotMatch(source, /resolution\s*=|checkerboard_colors\s*=|stroke_width\s*=|shade_in_3d\s*=/,
+      `${label}: preserves pinned Cone/Surface resolution and appearance defaults`);
+    assert.doesNotMatch(source, /self\.(?:play|wait)\(/,
+      `${label}: fixture remains static`);
+  }
+  const nativeConeScene = nativeSource.split("pub fn cairo_cone_bodies_scene", 2)[1];
+  assert.ok(nativeConeScene, "direct Rust defines the paired Cairo Cone body scene");
+  assert.match(nativeConeScene, /\[32, 32\]/,
+    "direct Rust uses the pinned 32x32 Cone Surface resolution");
+  assert.match(nativeConeScene, /0\.8,\s*1\.4,\s*0\.2/,
+    "direct Rust includes the partial radial body");
+  assert.match(nativeConeScene, /SemanticSpatialMaterial::CairoSurface/,
+    "direct Rust uses retained Cairo appearance metadata");
+  assert.match(nativeConeScene, /WorldAffineEdit::Rotate/,
+    "direct Rust authors tilted direction using the shared family transform");
+  const directExecutionSource = await readFile(
+    path.join(repoRoot, "crates/noon-web/src/direct_execution_smoke.rs"), "utf8",
+  );
+  assert.match(directExecutionSource, /createDirectSpatialSurfaceConeBodiesSmokeRenderer/,
+    "the manifest factory is exported by the existing direct execution host");
+
   const selectedPaths = [
     direct.source,
     worker.noon_source,

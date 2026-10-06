@@ -434,6 +434,139 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         candidate.setCairoSurface.assert_called_once_with(True)
         self.assertIs(surface._semantic_family_handle, family)
 
+    def test_default_cone_uses_manim_surface_cells_and_rust_axial_family_pose(self):
+        import _noon_spatial as native
+
+        base_radius, height = 2.0, 3.0
+        u_max = math.hypot(base_radius, height)
+        u, v = 0.5 * u_max, math.pi / 3
+        parameters = tuple(value for _ in range(16) for value in (u, v))
+        candidate = Mock()
+        member = SimpleNamespace(semanticSlot=17, semanticGeneration=2)
+        family = _family_handle((member,))
+        events = []
+        candidate.setAxialPose.side_effect = lambda *args: events.append("pose")
+
+        class Plan:
+            def __init__(self):
+                self.freed = False
+
+            def cairoParameters(self):
+                return parameters
+
+            def finishCairoCells(self, points):
+                self.points = tuple(points)
+                return candidate
+
+            def free(self):
+                self.freed = True
+
+        plan = Plan()
+        plan_calls = []
+
+        def make_plan(*args):
+            plan_calls.append(args)
+            return plan
+
+        def publish(value):
+            events.append("publish")
+            self.assertIs(value, candidate)
+            return family
+
+        with patch.object(native, "_surface_plan", side_effect=make_plan), \
+             patch.object(native, "_mesh_family_options", object()), \
+             patch.object(native, "_bulk", side_effect=tuple), \
+             patch.object(native, "_create_mesh_family", side_effect=publish) as create_family, \
+             patch.object(spatial, "_live_constructor_context", return_value=None):
+            cone = spatial.Cone(
+                base_radius=base_radius, height=height, direction=(-1, 2, -3),
+            )
+
+        self.assertEqual(plan_calls, [(0.0, u_max, 0.0, 2 * math.pi, 32, 32)])
+        create_family.assert_called_once_with(candidate)
+        self.assertTrue(plan.freed)
+        theta = math.pi - math.atan(base_radius / height)
+        expected = (
+            u * math.sin(theta) * math.cos(v),
+            u * math.sin(theta) * math.sin(v),
+            u * math.cos(theta),
+        )
+        for actual, expected_component in zip(plan.points[:3], expected):
+            self.assertAlmostEqual(actual, expected_component)
+        candidate.setFill.assert_called_once_with(
+            noon.BLUE_D.red, noon.BLUE_D.green, noon.BLUE_D.blue,
+            noon.BLUE_D.alpha, 1.0,
+        )
+        candidate.setStroke.assert_called_once_with(
+            spatial._DEFAULT_SURFACE_STROKE.red,
+            spatial._DEFAULT_SURFACE_STROKE.green,
+            spatial._DEFAULT_SURFACE_STROKE.blue,
+            spatial._DEFAULT_SURFACE_STROKE.alpha, 0.005, 1.0,
+        )
+        candidate.setCairoSurface.assert_called_once_with(True)
+        candidate.setAxialPose.assert_called_once_with((-1.0, 2.0, -3.0), 0.0)
+        self.assertEqual(events, ["pose", "publish"])
+        self.assertIs(cone._semantic_family_handle, family)
+        self.assertIsInstance(cone, spatial.Surface)
+
+    def test_cone_tilted_opt_out_fallbacks_use_posed_surface_family(self):
+        import _noon_spatial as native
+
+        direction = (-2.0, 3.0, 4.0)
+        for u_min, resolution in ((0.25, (4, 4)), (0.0, (3, 4))):
+            with self.subTest(u_min=u_min, resolution=resolution):
+                candidate = Mock()
+                family = _family_handle((SimpleNamespace(
+                    semanticSlot=17, semanticGeneration=2,
+                ),))
+                events = []
+                candidate.setAxialPose.side_effect = lambda *args: events.append("pose")
+
+                class Plan:
+                    freed = False
+
+                    def cairoParameters(self):
+                        return tuple(value for _ in range(16) for value in (0.5, 0.75))
+
+                    def parameters(self):
+                        return tuple(value for _ in range(16) for value in (0.5, 0.75))
+
+                    def finishCairoCells(self, points):
+                        self.points = tuple(points)
+                        return candidate
+
+                    def finishCells(self, points, normals):
+                        self.points = tuple(points)
+                        return candidate
+
+                    def free(self):
+                        self.freed = True
+
+                plan = Plan()
+
+                def publish(value):
+                    events.append("publish")
+                    self.assertIs(value, candidate)
+                    return family
+
+                with patch.object(native, "_surface_plan", return_value=plan), \
+                     patch.object(native, "_mesh_family_options", object()), \
+                     patch.object(native, "_bulk", side_effect=tuple), \
+                     patch.object(native, "_create_mesh_family", side_effect=publish), \
+                     patch.object(spatial, "_live_constructor_context", return_value=None), \
+                     patch.object(Mesh3D, "parametric") as parametric:
+                    cone = spatial.Cone(
+                        base_radius=3, height=4, direction=direction,
+                        u_min=u_min, resolution=resolution, shade_in_3d=False,
+                        checkerboard_colors=False, stroke_width=0,
+                    )
+
+                parametric.assert_not_called()
+                self.assertTrue(plan.freed)
+                candidate.setAxialPose.assert_called_once_with(direction, 0.0)
+                self.assertEqual(events, ["pose", "publish"])
+                self.assertIs(cone._semantic_family_handle, family)
+
     def test_sphere_and_torus_defaults_use_shared_cairo_cells_with_pole_and_live_semantics(self):
         import _noon_spatial as native
 
@@ -666,7 +799,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             spatial.Cone(show_base=1, stroke_width=0, shade_in_3d=False)
 
-    def test_angular_sweeps_are_bounded_and_cone_radial_profile_remains_rejected(self):
+    def test_angular_sweeps_are_bounded_and_cone_radial_profiles_are_validated(self):
         for shape in (spatial.Cylinder, spatial.Cone):
             for v_range in ((-0.1, 1), (1, 1), (2, 1),
                             (0, 2 * math.pi + 0.1), (0, float("inf"))):
@@ -675,10 +808,39 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
                     with self.assertRaises((TypeError, ValueError)):
                         shape(v_range=v_range, stroke_width=0, shade_in_3d=False)
                     factory.assert_not_called()
-        with patch.object(Mesh3D, "cone") as factory:
-            with self.assertRaisesRegex(NotImplementedError, "u_min"):
-                spatial.Cone(u_min=0.2, stroke_width=0, shade_in_3d=False)
-            factory.assert_not_called()
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as initialize:
+            spatial.Cone(base_radius=3, height=4, u_min=1,
+                         v_range=(math.pi / 4, math.pi), resolution=(4, 6))
+        self.assertEqual(initialize.call_args.kwargs["u_range"], (1.0, 5.0))
+        self.assertEqual(initialize.call_args.kwargs["v_range"], (math.pi / 4, math.pi))
+        self.assertEqual(initialize.call_args.kwargs["resolution"], (4, 6))
+        self.assertEqual(initialize.call_args.kwargs["_axial_pose"], ((0.0, 0.0, 1.0), 0.0))
+        function = initialize.call_args.args[1]
+        u, v = 3.0, 0.7
+        theta = math.pi - math.atan(3 / 4)
+        self.assertEqual(function(u, v), (
+            u * math.sin(theta) * math.cos(v),
+            u * math.sin(theta) * math.sin(v),
+            u * math.cos(theta),
+        ))
+
+        for u_min in (-0.1, 5.0, float("nan"), float("inf")):
+            with self.subTest(u_min=u_min), patch.object(
+                spatial.Surface, "__init__", autospec=True, return_value=None,
+            ) as factory:
+                with self.assertRaises(ValueError):
+                    spatial.Cone(base_radius=3, height=4, u_min=u_min)
+                factory.assert_not_called()
+
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as initialize:
+            with self.assertRaisesRegex(ValueError, "u_min"):
+                spatial.Cone(base_radius=1.7e308, height=1.7e308)
+            initialize.assert_not_called()
+
+        with self.assertRaisesRegex(NotImplementedError, "Cairo-shaded Cone bases"):
+            spatial.Cone(show_base=True)
 
 
 if __name__ == "__main__":

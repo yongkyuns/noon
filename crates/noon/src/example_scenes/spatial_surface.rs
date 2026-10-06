@@ -4,7 +4,7 @@ use crate::{
     surface_mesh, AnimationOptions, Color, DeclaredAnimation, ExecutionSession, MeshOptions,
     RateFunction, Scene, SemanticCamera3D, SemanticPaint, SemanticProjection3D, SemanticRotation3D,
     SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D, SurfaceOptions,
-    SurfaceSample, UvSurfacePlan,
+    SurfaceSample, UvSurfacePlan, WorldAffineEdit,
 };
 use noon_core::ManimCamera3DProfile;
 
@@ -291,6 +291,101 @@ pub fn cairo_sphere_torus_session() -> Result<ExecutionSession, String> {
     Ok(session)
 }
 
+/// Paired Manim Cone body cells: one default cone and one tilted radial patch.
+pub fn cairo_cone_bodies_scene(
+) -> Result<(Scene, crate::SurfaceFamily, crate::SurfaceFamily), String> {
+    let mut scene = Scene::new();
+    scene
+        .camera_3d(
+            SemanticCamera3D::new(
+                SemanticVec3::new(0.0, 0.0, 5.0),
+                SemanticRotation3D::IDENTITY,
+                SemanticProjection3D::Perspective {
+                    vertical_fov_radians: 1.0,
+                    near: 0.1,
+                    far: 30.0,
+                },
+            )
+            .ok_or("invalid spatial-cone camera")?,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let default = author_cairo_cone(&mut scene, 1.0, 1.0, 0.0, SemanticVec3::new(0.0, 0.0, 1.0))?;
+    default
+        .world_affine(WorldAffineEdit::Shift(SemanticVec3::new(-1.25, 0.0, 0.0)))
+        .map_err(|error| error.to_string())?;
+
+    let tilted = author_cairo_cone(&mut scene, 0.8, 1.4, 0.2, SemanticVec3::new(1.0, 2.0, 2.0))?;
+    tilted
+        .world_affine(WorldAffineEdit::Shift(SemanticVec3::new(1.25, 0.0, 0.0)))
+        .map_err(|error| error.to_string())?;
+
+    scene
+        .add_many(&[
+            crate::MobjectTarget::Family(default.family()),
+            crate::MobjectTarget::Family(tilted.family()),
+        ])
+        .map_err(|error| error.to_string())?;
+    Ok((scene, default, tilted))
+}
+
+fn author_cairo_cone(
+    scene: &mut Scene,
+    base_radius: f64,
+    height: f64,
+    u_min: f64,
+    direction: SemanticVec3,
+) -> Result<crate::SurfaceFamily, String> {
+    let u_max = base_radius.hypot(height);
+    if !u_max.is_finite() || base_radius <= 0.0 || height <= 0.0 || !(0.0..u_max).contains(&u_min) {
+        return Err("invalid fixture cone radial profile".into());
+    }
+    let axial_pose = SemanticWorldTransform3D::from_axial_direction(direction, 0.0)
+        .ok_or("invalid fixture cone direction")?;
+    let theta = std::f64::consts::PI - (base_radius / height).atan();
+    let plan = UvSurfacePlan::new([u_min, u_max], [0.0, std::f64::consts::TAU], [32, 32])
+        .map_err(|error| error.to_string())?;
+    let grid = plan
+        .sample_cairo(|u, v| {
+            SemanticVec3::new(
+                u * theta.sin() * v.cos(),
+                u * theta.sin() * v.sin(),
+                u * theta.cos(),
+            )
+        })
+        .map_err(|error| error.to_string())?;
+    let mut family = scene
+        .surface_cairo_family(
+            grid,
+            SurfaceOptions {
+                fill_colors: [Color::BLUE_D, Color::BLUE_D],
+                material: SemanticSpatialMaterial::CairoSurface,
+                ..SurfaceOptions::default()
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let [w, x, y, z] = axial_pose.rotation.components();
+    let half_sine = (1.0 - w.clamp(-1.0, 1.0).powi(2)).sqrt();
+    if half_sine > f64::EPSILON {
+        let axis = SemanticVec3::new(x / half_sine, y / half_sine, z / half_sine);
+        let radians = 2.0 * w.clamp(-1.0, 1.0).acos();
+        family
+            .world_affine(WorldAffineEdit::Rotate {
+                axis,
+                radians,
+                about: Some(SemanticVec3::ZERO),
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(family)
+}
+
+/// Static paired default/tilted Cone execution session.
+pub fn cairo_cone_bodies_session() -> Result<ExecutionSession, String> {
+    let (scene, _, _) = cairo_cone_bodies_scene()?;
+    scene.execution_session().map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,6 +594,66 @@ mod tests {
         let endpoint = session.camera_3d().unwrap().unwrap().position;
         assert_ne!(start, midpoint);
         assert_ne!(midpoint, endpoint);
+    }
+
+    #[test]
+    fn cairo_cone_bodies_keep_default_and_tilted_partial_cells_and_axis_transforms() {
+        let (scene, default, tilted) = cairo_cone_bodies_scene().unwrap();
+        let store = scene.integration_store().borrow();
+        let expected = [
+            (
+                &default,
+                SemanticVec3::new(0.0, 0.0, 1.0),
+                SemanticVec3::new(-1.25, 0.0, 0.0),
+            ),
+            (
+                &tilted,
+                SemanticVec3::new(1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0),
+                SemanticVec3::new(1.25, 0.0, 0.0),
+            ),
+        ];
+        for (family, direction, translation) in expected {
+            let leaves = store.ordered_leaf_nodes(family.family().node_id()).unwrap();
+            assert_eq!(leaves.len(), 32 * 32);
+            let mut observed_rotation = None;
+            for leaf in leaves {
+                let state = store.semantic_object_state_checked(leaf).unwrap();
+                assert_eq!(
+                    state.spatial_material(),
+                    SemanticSpatialMaterial::CairoSurface
+                );
+                assert_eq!(state.style.stroke_width, 0.005);
+                assert_eq!(state.style.stroke_opacity, 1.0);
+                assert_eq!(state.style.fill, Some(SemanticPaint::Solid(Color::BLUE_D)));
+                let world = state.transform.world_transform().unwrap();
+                assert_eq!(world.translation, translation);
+                let actual_axis = world
+                    .rotation
+                    .rotate_vector(SemanticVec3::new(0.0, 0.0, 1.0))
+                    .unwrap();
+                if let Some(previous) = observed_rotation {
+                    assert_eq!(actual_axis, previous);
+                } else {
+                    observed_rotation = Some(actual_axis);
+                }
+                for (actual, expected) in [actual_axis.x, actual_axis.y, actual_axis.z]
+                    .into_iter()
+                    .zip([direction.x, direction.y, direction.z])
+                {
+                    assert!((actual - expected).abs() < 1.0e-12);
+                }
+                let handle = state
+                    .content
+                    .geometry()
+                    .and_then(|geometry| geometry.resource_handle())
+                    .unwrap();
+                let Some(GeometryResource::Mesh(mesh)) = store.geometry_resources().get(handle)
+                else {
+                    panic!("Cone body retains Cairo mesh cells");
+                };
+                assert!(mesh.cairo_appearance().is_some());
+            }
+        }
     }
 
     #[test]
