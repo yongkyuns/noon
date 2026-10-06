@@ -1184,6 +1184,16 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_fade(
+        &mut self,
+        family: &noon::MobjectFamily,
+        darkness: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.fade_family(family, darkness))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill(
         &mut self,
         mobject: &noon::Mobject,

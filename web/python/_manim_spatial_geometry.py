@@ -110,7 +110,9 @@ class Sphere(_Mesh3D):
             raise NotImplementedError("mesh edge strokes are unsupported")
         mesh = _Mesh3D.sphere(float(radius), resolution=_grid_resolution(resolution, "Sphere"),
                               u_range=u_range, v_range=v_range, color=_color(fill_color))
-        mesh.move_to(center)
+        # Manim translates the parameterized sphere origin, including partial
+        # patches whose bounds center differs from that origin.
+        mesh.shift(center)
         _take_mesh(self, mesh)
 
 

@@ -3,13 +3,29 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { resolveRasterReferenceSamples, sampleRasterFrames } from "./manim-raster-support.mjs";
+import { resolveRasterReferenceSamples, sampleRasterFrames, selectDirectReplayCapture } from "./manim-raster-support.mjs";
 import { resolveRasterTolerance } from "./manim-raster-policy.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const referenceTimes = Array.from({ length: 66 }, (_, index) => index / 30);
 const fractions = [0, 0.25, 0.5, 0.75, 1];
+
+test("direct replay prefers a true forward interior and labels static-only repeats", () => {
+  const staticA = { time: 0.5, observationMode: "static-hold-seek" };
+  const forward = { time: 1.5, observationMode: "forward" };
+  assert.deepEqual(selectDirectReplayCapture([staticA, forward], 2), {
+    capture: forward, replayMode: "direct-seek-replay",
+  });
+  assert.deepEqual(selectDirectReplayCapture([staticA, { time: 1.5, observationMode: "static-hold-seek" }], 2), {
+    capture: staticA, replayMode: "static-hold-observation-repeat",
+  });
+  assert.equal(selectDirectReplayCapture([
+    staticA, { time: 1.5, observationMode: "unclassified" },
+  ], 2), null);
+  assert.equal(selectDirectReplayCapture([{ time: 0, observationMode: "forward" }], 2), null);
+  assert.equal(selectDirectReplayCapture([{ time: 0.5, observationMode: "forward" }], 0), null);
+});
 
 test("fraction sampling retains the existing rounded-frame contract", () => {
   const samples = sampleRasterFrames(referenceTimes, fractions);
@@ -38,11 +54,23 @@ test("zero-duration terminal state resolves only against one independently obser
     logicalDuration: 0, terminalState: terminal, pngFrameCount: 1, semanticFrames: [],
   });
   assert.deepEqual(samples, [{ frameIndex: 0, time: 0, requestedTime: 0, materializedTime: 0,
-    terminalState: true, label: "frame-0000" }]);
+    terminalState: false, referenceKind: "sequence", label: "frame-0000" }]);
   assert.deepEqual(resolveRasterReferenceSamples([], undefined, {
     logicalDuration: 0, terminalState: terminal, pngFrameCount: 1,
     semanticFrames: [], sampleFractions: fractions,
   }), samples, "fraction sampling of a single static PNG collapses to t=0");
+  const independent = resolveRasterReferenceSamples([], [0], {
+    logicalDuration: 0, terminalState: terminal, terminalPng: { path: "/tmp/terminal.png" },
+    pngFrameCount: 1, semanticFrames: [],
+  });
+  assert.equal(independent[0].referenceKind, "terminal");
+  assert.equal(independent[0].frameIndex, null);
+  const terminalOnly = resolveRasterReferenceSamples([], [0], {
+    logicalDuration: 0, terminalState: terminal, terminalPng: { path: "/tmp/terminal.png" },
+    pngFrameCount: 0, semanticFrames: [],
+  });
+  assert.equal(terminalOnly[0].referenceKind, "terminal");
+  assert.equal(terminalOnly[0].frameIndex, null);
   for (const options of [
     { logicalDuration: 0, terminalState: terminal, pngFrameCount: 0, semanticFrames: [] },
     { logicalDuration: 0, terminalState: terminal, pngFrameCount: 2, semanticFrames: [] },
@@ -75,7 +103,7 @@ test("logical endpoint reuses the last PNG only when terminal visuals match exac
     logicalDuration: 2, terminalState: terminal, pngFrameCount: 2, semanticFrames: frames,
   });
   assert.deepEqual(samples, [{ frameIndex: 1, time: 2, requestedTime: 2, materializedTime: 1,
-    terminalState: true, label: "frame-0001-terminal" }]);
+    terminalState: true, referenceKind: "sequence", label: "frame-0001-terminal" }]);
   const endpointPair = resolveRasterReferenceSamples([0, 1], [1, 2], {
     logicalDuration: 2, terminalState: terminal, pngFrameCount: 2, semanticFrames: frames,
   });
@@ -99,6 +127,33 @@ test("logical endpoint reuses the last PNG only when terminal visuals match exac
     pngFrameCount: 2, semanticFrames: nested,
   }), /no reference frame at requested logical time 2/,
   "nested time fields remain part of visible semantic state");
+});
+
+test("interior frozen-hold times map only through recorded half-open intervals", () => {
+  const frames = [0, 1, 2].map((time, frame_index) => ({
+    time, frame_index, animation_time: time, objects: [{ value: frame_index }],
+  }));
+  const frozenIntervals = [{ frame_index: 2, start_time: 2, end_time: 3 }];
+  const samples = resolveRasterReferenceSamples([0, 1, 2], [2, 2.5, 3], {
+    logicalDuration: 3, terminalState: { time: 3, objects: [{ value: 2 }] },
+    terminalPng: { path: "/tmp/terminal.png" }, frozenIntervals,
+    pngFrameCount: 3, semanticFrames: frames,
+  });
+  assert.deepEqual(samples.map(({ frameIndex, time, materializedTime, referenceKind, label }) =>
+    [frameIndex, time, materializedTime, referenceKind, label]), [
+    [2, 2, 2, "sequence", "frame-0002"],
+    [2, 2.5, 2, "frozen-hold", "frame-0002-hold-2_5"],
+    [null, 3, 3, "terminal", "frame-0002-terminal"],
+  ]);
+  assert.throws(() => resolveRasterReferenceSamples([0, 1, 2], [2.5], {
+    logicalDuration: 3, terminalState: { time: 3 }, pngFrameCount: 3,
+    semanticFrames: frames, frozenIntervals: [],
+  }), /no reference frame at requested logical time 2.5/);
+  assert.throws(() => resolveRasterReferenceSamples([0, 1, 2], [2.5], {
+    logicalDuration: 3, terminalState: { time: 3 }, pngFrameCount: 3,
+    semanticFrames: frames,
+    frozenIntervals: [{ frame_index: 1, start_time: 1, end_time: 2.4 }],
+  }), /no reference frame at requested logical time 2.5/);
 });
 
 test("a missing contract boundary fails instead of selecting a nearby frame", () => {

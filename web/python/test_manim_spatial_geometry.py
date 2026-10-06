@@ -44,7 +44,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         for name in ("Surface", "Sphere", "Dot3D", "Cube", "Cylinder", "Prism", "Line3D", "Torus", "Cone"):
             self.assertIs(getattr(noon, name), getattr(spatial, name))
 
-    def test_sphere_uses_native_mesh_and_rust_world_center(self):
+    def test_sphere_translates_its_parameter_origin_instead_of_bounds_center(self):
         with patch.object(Mesh3D, "sphere", return_value=self.mesh) as factory:
             sphere = spatial.Sphere(center=(1, 2, 3), radius=2, resolution=(12, 8),
                                     checkerboard_colors=False, stroke_width=0,
@@ -54,7 +54,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         self.assertEqual(factory.call_args.kwargs["resolution"], (12, 8))
         self.assertEqual(factory.call_args.kwargs["u_range"], (0.0, 2 * math.pi))
         self.assertEqual(factory.call_args.kwargs["v_range"], (0.0, math.pi))
-        self.mesh.move_to.assert_called_once_with((1, 2, 3))
+        self.mesh.shift.assert_called_once_with((1, 2, 3))
+        self.mesh.move_to.assert_not_called()
         self.assertIs(sphere._semantic_handle, self.mesh._semantic_handle)
 
     def test_surface_defaults_use_one_rust_cell_family_and_sample_callback_once(self):
@@ -385,11 +386,13 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         candidate.setCairoSurface.assert_called_once_with(True)
         self.assertIs(surface._semantic_family_handle, family)
         with patch.object(Mesh3D, "sphere", return_value=self.mesh) as factory:
-            spatial.Sphere(u_range=(math.pi / 4, 3 * math.pi / 4),
+            spatial.Sphere(center=(1, 2, 3), u_range=(math.pi / 4, 3 * math.pi / 4),
                            v_range=(math.pi / 6, 5 * math.pi / 6),
                            checkerboard_colors=False, stroke_width=0, shade_in_3d=False)
         self.assertEqual(factory.call_args.kwargs["u_range"], (math.pi / 4, 3 * math.pi / 4))
         self.assertEqual(factory.call_args.kwargs["v_range"], (math.pi / 6, 5 * math.pi / 6))
+        self.mesh.shift.assert_called_once_with((1, 2, 3))
+        self.mesh.move_to.assert_not_called()
         for kwargs in ({"u_range": (-0.1, 1)}, {"u_range": (2, 1)},
                        {"v_range": (0, math.pi + 0.1)}):
             with self.subTest(kwargs=kwargs), patch.object(Mesh3D, "sphere") as factory:

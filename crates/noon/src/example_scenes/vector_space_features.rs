@@ -26,17 +26,15 @@ pub fn session() -> Result<ExecutionSession, String> {
             show_basis_vectors: false,
         })
         .map_err(|error| error.to_string())?;
+    let number_label_options = NumberLabelOptions {
+        font_size: 24.0,
+        buff: f64::from(noon_core::SMALL_BUFF),
+        direction: [1.0, -1.0],
+        ..NumberLabelOptions::default()
+    };
     lts.background_plane()
         .ok_or("background plane is disabled")?
-        .add_coordinates(
-            None,
-            None,
-            &NumberLabelOptions::default(),
-            &NumberLabelOptions {
-                direction: [-1.0, 0.0],
-                ..Default::default()
-            },
-        )
+        .add_coordinates(None, None, &number_label_options, &number_label_options)
         .map_err(|error| error.to_string())?;
 
     let mut square = scene.square(0.5).map_err(|error| error.to_string())?;

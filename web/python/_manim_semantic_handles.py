@@ -1539,11 +1539,17 @@ def _group_set_opacity(self, opacity):
 
 def _group_fade(self, darkness=0.5):
     darkness = _compat._opacity("darkness", darkness)
-    engine_call(
-        self._semantic_family_handle.fade,
-        darkness,
-        operation="Group.fade",
-    )
+    handle = getattr(self, "_semantic_family_handle", None)
+    if handle is None:
+        raise RuntimeError("Group fade requires the shared Rust authoring host")
+    context = _group_target_context(self)
+    try:
+        if context is None:
+            engine_call(handle.fade, darkness, operation="Group.fade")
+        else:
+            engine_call(context.liveSetFamilyFade, handle, darkness)
+    except Exception as error:
+        raise_engine_error(error)
     return self
 
 

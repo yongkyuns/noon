@@ -1,6 +1,7 @@
 """Static NumberPlane grid over ordinary shared Rust coordinate/family handles."""
 from operator import index
 
+import noon as _base
 import _manim_plotting as _plot
 from _noon_errors import engine_call
 
@@ -95,12 +96,19 @@ class NumberPlane(_plot.Axes):
 
     def add_coordinates(self, x_values=None, y_values=None, **kwargs):
         from _manim_number_labels import add_number_plane_coordinates
+        x_config = dict(kwargs.pop("x_config", None) or {})
+        y_config = dict(kwargs.pop("y_config", None) or {})
+        if "direction" not in kwargs:
+            x_config.setdefault("direction", _base.DR)
+            y_config.setdefault("direction", _base.DR)
+        kwargs.setdefault("font_size", 24)
+        kwargs.setdefault("buff", _base.SMALL_BUFF)
         return add_number_plane_coordinates(
             self,
             x_values,
             y_values,
-            x_config=kwargs.pop("x_config", None),
-            y_config=kwargs.pop("y_config", None),
+            x_config=x_config,
+            y_config=y_config,
             config=kwargs,
         )
 

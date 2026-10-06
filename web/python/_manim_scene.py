@@ -1590,8 +1590,6 @@ def _canonical_arrow_grow_animation(scene: _base.Scene, animation: object):
     arrow_handle = getattr(target, "_semantic_arrow_handle", None)
     if family_handle is None or arrow_handle is None:
         raise NotImplementedError("GrowArrow requires a shared semantic Arrow")
-    if target._scene is not None:
-        raise ValueError("GrowArrow requires a detached Arrow")
     leaves = _compat._leaf_mobjects(target)
     if not leaves or any(
         not isinstance(member, _base.Mobject)

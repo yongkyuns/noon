@@ -1005,6 +1005,9 @@ pub(crate) fn filled_tip_style(
     tip.fill = Some(SemanticPaint::Solid(*color));
     tip.fill_opacity = 1.0;
     tip.stroke = Some(SemanticPaint::Solid(*color));
+    // Manim's default ArrowTriangleFilledTip has no outline. Shaft width
+    // controls the axis stroke, not the filled tip's boundary.
+    tip.stroke_width = 0.0;
     Ok(tip)
 }
 

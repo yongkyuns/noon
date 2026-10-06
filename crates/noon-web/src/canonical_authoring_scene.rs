@@ -8651,6 +8651,21 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFamilyFade)]
+        pub fn live_set_family_fade(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            darkness: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_fade(&family, darkness)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveArrangeFamilyInGrid)]
         pub fn live_arrange_family_in_grid(
             &mut self,

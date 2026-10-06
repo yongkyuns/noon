@@ -58,16 +58,16 @@ function visualState(state) {
     .filter(([key]) => !["frame_index", "time", "animation_time"].includes(key)));
 }
 
-// Resolve requested logical samples to existing Cairo PNGs. An authored
-// endpoint may reuse the final PNG only when the terminal visual state is
-// exactly the state of that materialized frame. An empty semantic timeline is
-// accepted only for a zero-duration scene with exactly one independently
-// observed Cairo PNG; its terminal state describes that sole static output.
+// Resolve logical samples against observed Cairo images. Interior static holds
+// require an explicit frozen interval; changed endpoints require a separately
+// captured terminal PNG. Reuse of a final sequence PNG requires exact terminal
+// visual equality. Zero-duration scenes retain an empty semantic timeline.
 export function resolveRasterReferenceSamples(frameTimes, sampleTimes, {
-  logicalDuration, terminalState, pngFrameCount, semanticFrames, sampleFractions,
+  logicalDuration, terminalState, terminalPng, frozenIntervals = [], pngFrameCount,
+  semanticFrames, sampleFractions,
 }) {
   if (!Array.isArray(frameTimes) || !Number.isFinite(logicalDuration) || logicalDuration < 0
-      || !Number.isInteger(pngFrameCount) || pngFrameCount < 1) {
+      || !Number.isInteger(pngFrameCount) || pngFrameCount < 0) {
     throw new Error("invalid logical duration or independently observed PNG count");
   }
   if (frameTimes.length > pngFrameCount) {
@@ -87,42 +87,95 @@ export function resolveRasterReferenceSamples(frameTimes, sampleTimes, {
     throw new Error("sample_times must be finite, non-negative and strictly increasing");
   }
   if (frameTimes.length === 0) {
-    if (pngFrameCount !== 1 || logicalDuration !== 0 || !terminalState
+    const emptyTerminalOnly = pngFrameCount === 0 && Boolean(terminalPng);
+    if ((!emptyTerminalOnly && pngFrameCount !== 1) || logicalDuration !== 0 || !terminalState
         || terminalState.time !== 0) {
-      throw new Error("empty semantic timeline requires one PNG and a zero-duration terminal state");
+      throw new Error("empty semantic timeline requires a zero-duration terminal and observed Cairo image");
     }
     const selected = sampleTimes === undefined
       ? sampleRasterFrames([0], sampleFractions)
       : sampleRasterFrames([0], [], sampleTimes);
-    return selected.map(sample => ({ ...sample, requestedTime: sample.time,
-      materializedTime: 0, terminalState: true }));
+    return selected.map((sample) => terminalPng && (sampleTimes !== undefined || pngFrameCount === 0)
+      ? { ...sample, frameIndex: null, requestedTime: sample.time, materializedTime: 0,
+        terminalState: true, referenceKind: "terminal", label: "frame-0000-terminal" }
+      : { ...sample, requestedTime: sample.time, materializedTime: 0,
+        terminalState: false, referenceKind: "sequence" });
   }
   if (frameTimes.length !== pngFrameCount) {
     throw new Error("semantic and independently observed PNG frame counts differ");
   }
   if (sampleTimes === undefined) {
     return sampleRasterFrames(frameTimes, sampleFractions).map(sample => ({ ...sample,
-      requestedTime: sample.time, materializedTime: sample.time, terminalState: false }));
+      requestedTime: sample.time, materializedTime: sample.time, terminalState: false,
+      referenceKind: "sequence" }));
   }
+  const intervals = frozenIntervals.map((interval, intervalIndex) => {
+    const frameIndex = interval?.frame_index;
+    const start = interval?.start_time;
+    const end = interval?.end_time;
+    if (!Number.isSafeInteger(frameIndex) || frameIndex < 0 || frameIndex >= frameTimes.length
+        || !Number.isFinite(start) || !Number.isFinite(end) || start < 0
+        || end < start || end > logicalDuration + 1e-9
+        || Math.abs(frameTimes[frameIndex] - start) > 1e-9) {
+      throw new Error(`invalid frozen interval ${intervalIndex}`);
+    }
+    return { frameIndex, start, end };
+  });
   return sampleTimes.map(requestedTime => {
+    if (Math.abs(requestedTime - logicalDuration) <= 1e-9 && terminalPng) {
+      if (typeof terminalState?.time !== "number" || !Number.isFinite(terminalState.time)
+          || Math.abs(terminalState.time - logicalDuration) > 1e-9) {
+        throw new Error("terminal PNG requires a terminal semantic state at the authored endpoint");
+      }
+      const lastIndex = frameTimes.length - 1;
+      return { frameIndex: null, time: requestedTime, requestedTime,
+        materializedTime: logicalDuration, terminalState: true, referenceKind: "terminal",
+        label: `frame-${String(lastIndex).padStart(4, "0")}-terminal` };
+    }
     const exact = frameTimes.findIndex(time => Math.abs(time - requestedTime) <= 1e-9);
     if (exact >= 0) return { frameIndex: exact, time: requestedTime, requestedTime,
-      materializedTime: frameTimes[exact], terminalState: false,
+      materializedTime: frameTimes[exact], terminalState: false, referenceKind: "sequence",
       label: `frame-${String(exact).padStart(4, "0")}` };
+    const covering = intervals.filter(interval => requestedTime >= interval.start
+      && requestedTime < interval.end);
+    if (covering.length === 1) {
+      const { frameIndex } = covering[0];
+      return { frameIndex, time: requestedTime, requestedTime,
+        materializedTime: frameTimes[frameIndex], terminalState: false,
+        referenceKind: "frozen-hold",
+        label: `frame-${String(frameIndex).padStart(4, "0")}-hold-${String(requestedTime).replace(/[^0-9a-z]/gi, "_")}` };
+    }
+    if (covering.length > 1) throw new Error(`overlapping frozen holds at logical time ${requestedTime}`);
     if (Math.abs(requestedTime - logicalDuration) <= 1e-9
         && terminalState && typeof terminalState.time === "number"
+        && Number.isFinite(terminalState.time)
         && Math.abs(terminalState.time - logicalDuration) <= 1e-9) {
       const lastIndex = frameTimes.length - 1;
       // The terminal comparison uses observed scene state, not time alone.
       if (Array.isArray(semanticFrames) && semanticFrames[lastIndex]
           && isDeepStrictEqual(visualState(semanticFrames[lastIndex]), visualState(terminalState))) {
         return { frameIndex: lastIndex, time: requestedTime, requestedTime,
-          materializedTime: frameTimes[lastIndex], terminalState: true,
+          materializedTime: frameTimes[lastIndex], terminalState: true, referenceKind: "sequence",
           label: `frame-${String(lastIndex).padStart(4, "0")}-terminal` };
       }
     }
     throw new Error(`no reference frame at requested logical time ${requestedTime}`);
   });
+}
+
+export function selectDirectReplayCapture(captures, duration) {
+  if (!Array.isArray(captures) || !Number.isFinite(duration) || duration <= 0) return null;
+  const interior = captures.filter(capture => Number.isFinite(capture.time)
+    && capture.time > 0 && capture.time < duration);
+  const nearest = candidates => candidates.sort((left, right) =>
+    Math.abs(left.time - duration / 2) - Math.abs(right.time - duration / 2)
+    || left.time - right.time)[0] ?? null;
+  const forward = nearest(interior.filter(capture => capture.observationMode === "forward"));
+  if (forward) return { capture: forward, replayMode: "direct-seek-replay" };
+  if (interior.length > 0 && interior.every(capture => capture.observationMode === "static-hold-seek")) {
+    return { capture: nearest(interior), replayMode: "static-hold-observation-repeat" };
+  }
+  return null;
 }
 
 export function rasterFixtureSource(source, scene, { requires_latex = false } = {}) {

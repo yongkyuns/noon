@@ -79,6 +79,123 @@ fn cairo_surface_family_publishes_appearance_metadata_with_distinct_material() {
 }
 
 #[test]
+fn cairo_spherical_surface_family_accepts_poles_and_recolors_without_replacing_meshes() {
+    let plan = UvSurfacePlan::new(
+        [0.0, std::f64::consts::TAU],
+        [0.0, std::f64::consts::PI],
+        [8, 6],
+    )
+    .unwrap();
+    let cairo_grid = plan
+        .sample_cairo(|u, v| {
+            let (sin_v, cos_v) = v.sin_cos();
+            let (sin_u, cos_u) = u.sin_cos();
+            SemanticVec3::new(cos_u * sin_v, sin_u * sin_v, -cos_v)
+        })
+        .unwrap();
+    assert!(cairo_grid.grid().normals().contains(&SemanticVec3::ZERO));
+
+    let mut scene = Scene::new();
+    let surface = scene
+        .surface_cairo_family(
+            cairo_grid,
+            SurfaceOptions {
+                material: SemanticSpatialMaterial::CairoSurface,
+                ..SurfaceOptions::default()
+            },
+        )
+        .unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    let leaves = store
+        .borrow()
+        .ordered_leaf_nodes(surface.family().node_id())
+        .unwrap();
+    assert_eq!(leaves.len(), 8 * 6);
+
+    let retained_handles = {
+        let borrowed = store.borrow();
+        leaves
+            .iter()
+            .map(|leaf| {
+                let state = borrowed.semantic_object_state_checked(*leaf).unwrap();
+                assert_eq!(
+                    state.spatial_material(),
+                    SemanticSpatialMaterial::CairoSurface
+                );
+                let StoredGeometry::Resource(handle) = state.content.geometry().unwrap() else {
+                    panic!("Cairo pole cell should retain a mesh resource");
+                };
+                let Some(noon_core::GeometryResource::Mesh(mesh)) =
+                    borrowed.geometry_resources().get(handle)
+                else {
+                    panic!("Cairo pole cell should retain a mesh");
+                };
+                assert!(mesh
+                    .cairo_appearance()
+                    .is_some_and(|appearance| appearance.is_finite()));
+                handle
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let revision = scene.revision();
+    scene
+        .set_surface_checkerboard(&surface, [Color::RED, Color::GREEN], 0.4)
+        .unwrap();
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let borrowed = store.borrow();
+    for (leaf, retained_handle) in leaves.iter().zip(retained_handles) {
+        let state = borrowed.semantic_object_state_checked(*leaf).unwrap();
+        assert_eq!(
+            state.spatial_material(),
+            SemanticSpatialMaterial::CairoSurface
+        );
+        assert_eq!(state.style.fill_opacity, 0.4);
+        let [u, v] = state.surface_uv_cell().unwrap();
+        assert_eq!(
+            state.style.fill,
+            Some(SemanticPaint::Solid(if (u % 2 + v % 2) % 2 == 0 {
+                Color::RED
+            } else {
+                Color::GREEN
+            }))
+        );
+        assert!(matches!(
+            state.content.geometry(),
+            Some(StoredGeometry::Resource(handle)) if handle == retained_handle
+        ));
+    }
+}
+
+#[test]
+fn non_cairo_surface_family_still_rejects_zero_vertex_normals() {
+    let positions = vec![
+        SemanticVec3::ZERO,
+        SemanticVec3::new(1.0, 0.0, 0.0),
+        SemanticVec3::new(1.0, 1.0, 0.0),
+        SemanticVec3::new(0.0, 1.0, 0.0),
+    ];
+    let mesh = MeshResource::new(
+        positions,
+        Some(vec![SemanticVec3::ZERO; 4]),
+        vec![0, 1, 3, 1, 2, 3],
+    )
+    .unwrap();
+    let mut scene = Scene::new();
+    let object = scene
+        .mesh(MeshOptions::new(mesh).with_surface_uv_cell([0, 0]))
+        .unwrap();
+    let family = scene.family(&[(&object).into()]).unwrap();
+
+    assert!(matches!(
+        SurfaceFamily::from_family(family),
+        Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::SurfaceCellRole
+        ))
+    ));
+}
+
+#[test]
 fn surface_family_retains_uv_roles_and_applies_defaults_and_atomic_checkerboard() {
     let mut scene = Scene::new();
     let surface = scene

@@ -10,9 +10,11 @@ logical segment separately, leaving Cairo's own clock behavior unchanged.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import math
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -51,6 +53,7 @@ class NullFileWriter:
 class SemanticRenderer(CairoRenderer):
     def __init__(self, camera_class: type[Camera] = Camera) -> None:
         self.frames: list[dict[str, Any]] = []
+        self.frozen_intervals: list[dict[str, Any]] = []
         self._active_scene = None
         self.logical_time = 0.0
         super().__init__(file_writer_class=NullFileWriter, camera_class=camera_class)
@@ -81,9 +84,16 @@ class SemanticRenderer(CairoRenderer):
         """Mirror Cairo PNG materialization: one state, full logical-time advance."""
         if self._active_scene is None:
             raise RuntimeError("semantic renderer has no active scene for frozen frame")
+        start = float(self.logical_time)
+        frame_index = len(self.frames)
         self.frames.append(
-            _scene_state(self._active_scene, len(self.frames), self.logical_time, 0.0)
+            _scene_state(self._active_scene, frame_index, start, 0.0)
         )
+        self.frozen_intervals.append({
+            "frame_index": frame_index,
+            "start_time": start,
+            "end_time": start + float(duration),
+        })
         self.time += float(duration)
 
 
@@ -205,6 +215,7 @@ def _render_fixture(
     module: Any,
     fixture: dict[str, Any],
     frame_rate: float,
+    terminal_png_root: Path | None = None,
 ) -> dict[str, Any]:
     scene_class = getattr(module, fixture["scene"])
     # A supplied renderer bypasses Scene's normal camera-class construction. Preserve
@@ -218,10 +229,29 @@ def _render_fixture(
     )
     renderer = SemanticRenderer(camera_class=camera_class)
     scene = scene_class(renderer=renderer)
+    terminal_png = None
     scene.setup()
     try:
         scene.construct()
         terminal_state = _scene_state(scene, len(renderer.frames), renderer.logical_time, 0.0)
+        endpoint_requested = any(
+            math.isclose(float(time), renderer.logical_time, rel_tol=0.0, abs_tol=1e-9)
+            for time in fixture.get("sample_times", [])
+        )
+        if terminal_png_root is not None and (not renderer.frames or endpoint_requested):
+            filename = re.sub(r"[^A-Za-z0-9_.-]", "_", fixture["id"]) + ".png"
+            terminal_path = terminal_png_root / filename
+            terminal_path.parent.mkdir(parents=True, exist_ok=True)
+            # Bypass SemanticRenderer.update_frame: render the unchanged terminal
+            # scene through pinned Cairo before scene teardown, then capture its pixels.
+            CairoRenderer.update_frame(renderer, scene)
+            renderer.camera.get_image().save(terminal_path, format="PNG")
+            terminal_png = {
+                "path": str(terminal_path.resolve()),
+                "sha256": hashlib.sha256(terminal_path.read_bytes()).hexdigest(),
+                "authored_time": renderer.logical_time,
+                "capture": "CairoRenderer.update_frame + camera.get_image before tear_down",
+            }
     finally:
         scene.tear_down()
 
@@ -249,7 +279,9 @@ def _render_fixture(
         "logical_duration": renderer.logical_time,
         "frame_rate": frame_rate,
         "frames": renderer.frames,
+        "frozen_intervals": renderer.frozen_intervals,
         "terminal_state": terminal_state,
+        "terminal_png": terminal_png,
     }
 
 
@@ -257,6 +289,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--terminal-png-root", type=Path)
     args = parser.parse_args()
 
     import manim
@@ -293,7 +326,7 @@ def main() -> int:
                 module = _load_source(source_path)
                 modules[source_path] = module
             fixtures.append(
-                _render_fixture(module, fixture, float(reference["frame_rate"]))
+                _render_fixture(module, fixture, float(reference["frame_rate"]), args.terminal_png_root)
             )
 
     payload = {

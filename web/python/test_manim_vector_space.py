@@ -39,6 +39,33 @@ class ManimVectorSpaceTests(unittest.TestCase):
             assert inspect.signature(VectorScene.add_vector).parameters["animate"].default is True
             assert inspect.signature(LinearTransformationScene.add_vector).parameters["animate"].default is False
 
+            # A family wrapper has no per-object Scene field. Admission checks
+            # the leaves while Rust owns the Arrow family's membership.
+            import sys
+            from types import SimpleNamespace
+            sys.modules["js"] = SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)
+            import _manim_scene
+            import _manim_compat
+            from noon import Mobject, Scene
+            from unittest.mock import patch
+            real_vector = object.__new__(_manim_arrow.Vector)
+            real_vector._semantic_family_handle = object()
+            real_vector._semantic_arrow_handle = object()
+            assert not hasattr(real_vector, "_scene")
+            leaf = object.__new__(Mobject)
+            leaf._scene, leaf._semantic_handle = None, object()
+            growth = object.__new__(_manim_growing.GrowArrow)
+            growth.mobject = real_vector
+            with patch.object(_manim_compat, "_leaf_mobjects", return_value=[leaf]):
+                admitted = _manim_scene._canonical_arrow_grow_animation(Scene(), growth)
+                assert admitted == (real_vector, real_vector._semantic_arrow_handle, [leaf])
+                leaf._scene = Scene()
+                try:
+                    _manim_scene._canonical_arrow_grow_animation(Scene(), growth)
+                    raise AssertionError("attached Arrow leaf was admitted")
+                except NotImplementedError:
+                    pass
+
             class Arrow:
                 def get_start(self):
                     from noon import Vec2
@@ -163,6 +190,7 @@ class ManimVectorSpaceTests(unittest.TestCase):
             """
             import _manim_number_labels
             from _manim_number_plane import NumberPlane
+            from noon import DR, RIGHT, SMALL_BUFF
 
             calls = []
             def add_labels(plane, x, y, **kwargs):
@@ -172,8 +200,15 @@ class ManimVectorSpaceTests(unittest.TestCase):
             plane = object.__new__(NumberPlane)
             assert NumberPlane.add_coordinates(plane, (1, 2), (3,), decimal_places=1) is plane
             assert calls == [(plane, (1, 2), (3,), {
-                "x_config": None, "y_config": None, "config": {"decimal_places": 1},
+                "x_config": {"direction": DR}, "y_config": {"direction": DR},
+                "config": {"decimal_places": 1, "font_size": 24, "buff": SMALL_BUFF},
             })]
+            NumberPlane.add_coordinates(plane, direction=RIGHT, font_size=30, buff=0.2,
+                                        y_config={"font_size": 12})
+            assert calls[-1] == (plane, None, None, {
+                "x_config": {}, "y_config": {"font_size": 12},
+                "config": {"direction": RIGHT, "font_size": 30, "buff": 0.2},
+            })
             """
         )
         completed = subprocess.run(
@@ -428,6 +463,7 @@ class ManimVectorSpaceTests(unittest.TestCase):
             calls = []
             class Handle:
                 def fade(self, darkness): calls.append(darkness)
+                def memberKeys(self): return []
             group = object.__new__(_manim_compat.Group)
             group._semantic_family_handle = Handle()
             _manim_semantic_handles.engine_call = lambda function, *args, **kwargs: function(*args)

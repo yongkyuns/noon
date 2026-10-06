@@ -240,7 +240,19 @@ impl MobjectFamily {
 
     /// Multiply enabled fill and stroke alpha, matching Manim's `fade`.
     pub fn fade(&self, darkness: f64) -> Result<(), AuthoringError> {
-        self.edit_style(|style| edit_fade(style, darkness))
+        self.fade_transaction(darkness)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    /// Prepare one validated paint transaction so authored and live owners
+    /// publish the same family fade semantics.
+    pub(crate) fn fade_transaction(
+        &self,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.style_transaction(|style| edit_fade(style, darkness))
     }
 
     fn edit_style(

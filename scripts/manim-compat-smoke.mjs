@@ -55,12 +55,21 @@ class SpatialMeshAdapterSmoke(ThreeDScene):
         for index, mesh in enumerate(meshes):
             assert all(abs(actual - expected) < 1e-7 for actual, expected in
                        zip(mesh.get_center(), (index * 0.8 - 2.4, 0, 0))), (index, mesh.get_center())
-        handles = [mesh._semantic_handle for mesh in meshes]
-        assert all(handle is not None and handle is mesh._semantic_handle
-                   for mesh, handle in zip(meshes, handles))
+        # Cube and Prism retain independently ordered faces for translucent
+        # composition. Other opaque primitives retain one indexed mesh.
+        handles = []
+        for index, mesh in enumerate(meshes):
+            family = getattr(mesh, "_semantic_family_handle", None)
+            if index in (1, 2):
+                assert family is not None and int(family.memberCount) == 6
+                handles.extend(member._semantic_handle for member in mesh.submobjects)
+            else:
+                assert family is None and mesh._semantic_handle is not None
+                handles.append(mesh._semantic_handle)
+        assert len(handles) == 17 and all(handle is not None for handle in handles)
         identities = [(int(handle.semanticSlot), int(handle.semanticGeneration))
                       for handle in handles]
-        assert len(set(identities)) == len(meshes)
+        assert len(set(identities)) == len(handles)
         self.add_world_mobjects(*meshes)
 
         start_camera = self._camera_endpoint()

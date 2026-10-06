@@ -2979,6 +2979,17 @@ impl<'a> LiveSession<'a> {
         self.edit_family_style(family, |style| edit_manim_opacity(style, opacity))
     }
 
+    /// Fade enabled fill and stroke channels through the live execution owner.
+    pub fn fade_family(
+        &mut self,
+        family: &MobjectFamily,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.fade_transaction(darkness)?)
+    }
+
     pub fn set_family_member_colors(
         &mut self,
         family: &MobjectFamily,
