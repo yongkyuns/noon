@@ -240,6 +240,10 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
     The target is an inert Rust geometry candidate. Rust validates semantic
     state before publication; Python only applies public argument coercions.
     """
+    # No Python options means no coercion work. The Rust geometry candidate was
+    # already created/validated by the caller and still follows normal admission.
+    if not kwargs:
+        return
     options = dict(kwargs)
     allowed = {
         "position", "rotation", "scale", "fill", "stroke",
