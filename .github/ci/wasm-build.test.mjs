@@ -4,7 +4,9 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { productConfig, validateProductEnvironment } from "./product-artifact.mjs";
+import { fileURLToPath } from "node:url";
+import { productConfig, validateProductEnvironment, resolveProductSources,
+  prepareProductArtifact, stampProductArtifact, verifyProductArtifact } from "./product-artifact.mjs";
 import { measure, prepare, prepareArtifact, sourceSha, stamp, trustedWriter,
   validateEnvironment, verify, packageSizes, summarizePackageSizes } from "./wasm-build.mjs";
 
@@ -45,6 +47,69 @@ async function stamped(t) {
   const manifest = await stamp(result.root, identity, env);
   return { ...result, identity, manifest };
 }
+
+async function productFixture(t) {
+  const result = await fixture(t);
+  const { git, put } = result;
+  const eventBase = git("rev-parse", "HEAD");
+  const commit = (message, ...parents) => git("-c", "user.name=CI Test", "-c", "user.email=ci@example.invalid",
+    "commit-tree", git("write-tree"), ...parents.flatMap(sha => ["-p", sha]), "-m", message);
+  await put("crates/noon-web/src/lib.rs", "// PR change\n");
+  git("add", "crates/noon-web/src/lib.rs");
+  const head = commit("PR head", eventBase);
+  git("reset", "--hard", eventBase);
+  await put("unrelated.txt", "target branch advanced after the event\n");
+  git("add", "unrelated.txt");
+  const baseline = commit("new target base", eventBase);
+  await put("crates/noon-web/src/lib.rs", "// PR change\n");
+  git("add", "crates/noon-web/src/lib.rs");
+  const candidate = commit("tested merge", baseline, head);
+  git("reset", "--hard", candidate);
+  const sources = { schema: 1, candidate, baseline, head, eventBase };
+  const expected = { ...env, GITHUB_SHA: candidate,
+    NOON_PRODUCT_CANDIDATE_SHA: candidate, NOON_PRODUCT_BASE_SHA: baseline,
+    NOON_PRODUCT_HEAD_SHA: head, NOON_PRODUCT_EVENT_BASE_SHA: eventBase,
+    NOON_WASM_PROFILE: "release", NOON_WASM_SKIP_OPT: "0", NOON_RENDERER_SMOKE: "0" };
+  return { ...result, commit, sources, expected };
+}
+
+test("product source selection excludes unrelated target changes from the PR comparison", async t => {
+  const { root, git, sources, expected } = await productFixture(t);
+  assert.notEqual(sources.eventBase, sources.baseline);
+  assert.deepEqual(resolveProductSources(root, expected), sources);
+  assert.equal(git("diff", "--name-only", sources.baseline, sources.candidate), "crates/noon-web/src/lib.rs");
+  assert.match(git("diff", "--name-only", sources.eventBase, sources.candidate), /unrelated\.txt/);
+  const shallow = await mkdtemp(path.join(os.tmpdir(), "noon-product-shallow-"));
+  t.after(() => rm(shallow, { recursive: true, force: true }));
+  execFileSync("git", ["clone", "--quiet", "--depth", "2", `file://${root}`, shallow]);
+  assert.deepEqual(resolveProductSources(shallow, expected), sources);
+  assert.equal(execFileSync("git", ["rev-parse", "--is-shallow-repository"], { cwd: shallow, encoding: "utf8" }).trim(), "true");
+});
+
+test("product source selection rejects substituted heads, incomplete history, and non-PR merges", async t => {
+  const { root, git, commit, sources, expected } = await productFixture(t);
+  assert.throws(() => resolveProductSources(root, { ...expected, GITHUB_SHA: sources.head }), /checkout differs/);
+  assert.throws(() => resolveProductSources(root, { ...expected, NOON_PRODUCT_HEAD_SHA: sources.eventBase }), /requested PR head/);
+  assert.throws(() => resolveProductSources(root, { ...expected, NOON_PRODUCT_EVENT_BASE_SHA: "bad" }), /event base SHA/);
+  const octopus = commit("octopus", sources.baseline, sources.head, sources.eventBase);
+  git("reset", "--hard", octopus);
+  assert.throws(() => resolveProductSources(root, { ...expected, GITHUB_SHA: octopus }), /two-parent merge/);
+  git("reset", "--hard", sources.head);
+  assert.throws(() => resolveProductSources(root, { ...expected, GITHUB_SHA: sources.head }), /two-parent merge/);
+  git("reset", "--hard", sources.candidate);
+  await writeFile(path.join(root, ".git/shallow"), `${sources.candidate}\n`);
+  assert.throws(() => resolveProductSources(root, expected), /fetched parents/);
+});
+
+test("product source CLI pins validated commits in Actions outputs and environment", async t => {
+  const { root, expected, sources } = await productFixture(t);
+  const output = path.join(root, "actions-output");
+  const environment = path.join(root, "actions-env");
+  execFileSync(process.execPath, [fileURLToPath(new URL("./product-artifact.mjs", import.meta.url)), "sources", root],
+    { env: { ...process.env, ...expected, GITHUB_OUTPUT: output, GITHUB_ENV: environment } });
+  assert.equal(await readFile(output, "utf8"), `candidate-sha=${sources.candidate}\nbaseline-sha=${sources.baseline}\nhead-sha=${sources.head}\nevent-base-sha=${sources.eventBase}\n`);
+  assert.equal(await readFile(environment, "utf8"), `NOON_PRODUCT_CANDIDATE_SHA=${sources.candidate}\nNOON_PRODUCT_BASE_SHA=${sources.baseline}\nNOON_PRODUCT_HEAD_SHA=${sources.head}\nNOON_PRODUCT_EVENT_BASE_SHA=${sources.eventBase}\n`);
+});
 
 test("same source/configuration round-trips without Cargo in the consumer", async (t) => {
   const { root, manifest } = await stamped(t);
@@ -195,22 +260,37 @@ test("dirty tracked source cannot be labeled as the HEAD artifact", async (t) =>
 });
 
 for (const role of ["baseline", "candidate", "candidate-fixture"]) {
-  test(`${role} product package verifies the release role and exact event source`, async (t) => {
-    const { root, git } = await fixture(t);
-    const expected = { ...env, GITHUB_SHA: git("rev-parse", "HEAD") };
-    const build = productConfig(role);
-    const identity = await prepareArtifact(root, expected, compiler, build);
-    const manifest = await stamp(root, identity, expected, build);
-    assert.deepEqual(await verify(root, expected, build), manifest);
+  test(`${role} product package verifies the release role and producer source pair`, async (t) => {
+    const { root, git, put, sources, expected } = await productFixture(t);
+    if (role === "baseline") git("reset", "--hard", sources.baseline);
+    expected.NOON_RENDERER_SMOKE = role === "candidate-fixture" ? "1" : "0";
+    const identity = await prepareProductArtifact(root, expected, compiler, role);
+    const manifest = await stampProductArtifact(root, identity, expected, role);
+    assert.deepEqual(await verifyProductArtifact(root, expected, role), manifest);
+    assert.deepEqual(manifest.productSources, sources);
+    assert.equal(manifest.source, role === "baseline" ? sources.baseline : sources.candidate);
     assert.equal(manifest.build.profile, "release");
+    // Retries consume the producer pair, not a newer event's/ref's source.
+    assert.deepEqual(await verifyProductArtifact(root, { ...expected, GITHUB_SHA: "f".repeat(40) }, role), manifest);
     // Default dev artifacts and other release feature sets cannot substitute.
-    await assert.rejects(verify(root, expected), /configuration mismatch/);
+    const artifactEnv = { GITHUB_SHA: manifest.source };
+    await assert.rejects(verify(root, artifactEnv), /configuration mismatch/);
     if (role === "candidate-fixture") {
-      await assert.rejects(verify(root, expected, productConfig("candidate")), /configuration mismatch/);
+      await assert.rejects(verify(root, artifactEnv, productConfig("candidate")), /configuration mismatch/);
     } else {
       assert.deepEqual(productConfig(role), productConfig(role === "baseline" ? "candidate" : "baseline"));
     }
-    await assert.rejects(verify(root, { ...expected, GITHUB_SHA: "f".repeat(40) }, build), /checkout differs/);
+    await assert.rejects(verifyProductArtifact(root, { ...expected, NOON_PRODUCT_BASE_SHA: sources.eventBase }, role),
+      role === "baseline" ? /checkout differs/ : /merge parents/);
+    await assert.rejects(verifyProductArtifact(root, { ...expected, NOON_PRODUCT_CANDIDATE_SHA: "f".repeat(40) }, role),
+      role === "baseline" ? /source pair mismatch/ : /checkout differs/);
+    await assert.rejects(verifyProductArtifact(root, { ...expected, NOON_PRODUCT_HEAD_SHA: undefined }, role), /head SHA/);
+    await assert.rejects(stampProductArtifact(root, { ...identity, productSources: undefined }, expected, role),
+      /source pair changed/);
+    await put("web/ci-artifact.json", JSON.stringify({ ...manifest, productSources: { ...sources, eventBase: sources.baseline } }));
+    await assert.rejects(verifyProductArtifact(root, expected, role), /source pair mismatch/);
+    await put("web/ci-artifact.json", JSON.stringify({ ...manifest, productSources: undefined }));
+    await assert.rejects(verifyProductArtifact(root, expected, role), /source pair mismatch/);
   });
 }
 
@@ -263,6 +343,23 @@ test("product gate resolves the installer and verifies the downloaded package la
   assert.match(compareJob, /cp -a \.\.\/candidate-fixture\/\. web\//);
   const restoration = compareJob.slice(compareJob.indexOf("      - name: Restore candidate production package for benchmark"));
   assert.match(restoration, /artifact-ids: \$\{\{ needs\.build\.outputs\.candidate-artifact \}\}[\s\S]*?path: candidate\/web/);
+});
+
+test("product gate pins the tested merge and retries the producer's exact source pair", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const producer = workflow.slice(workflow.indexOf("  build:"), workflow.indexOf("  compare:"));
+  const consumer = workflow.slice(workflow.indexOf("  compare:"));
+  assert.match(producer, /ref: \$\{\{ github\.sha \}\}\n\s+fetch-depth: 2\n\s+path: candidate/);
+  assert.match(producer, /product-artifact\.mjs sources candidate/);
+  assert.match(producer, /NOON_PRODUCT_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(producer, /ref: \$\{\{ steps\.sources\.outputs\.baseline-sha \}\}/);
+  for (const name of ["candidate", "baseline", "head", "event-base"]) {
+    assert.match(producer, new RegExp(`${name}-sha: \\$\\{\\{ steps\\.sources\\.outputs\\.${name}-sha \\}\\}`));
+    assert.match(consumer, new RegExp(`needs\\.build\\.outputs\\.${name}-sha`));
+  }
+  assert.match(consumer, /ref: \$\{\{ needs\.build\.outputs\.candidate-sha \}\}\n\s+fetch-depth: 2/);
+  assert.match(consumer, /ref: \$\{\{ needs\.build\.outputs\.baseline-sha \}\}/);
+  assert.doesNotMatch(consumer, /github\.event\.pull_request\.(base|head)\.sha|ref: \$\{\{ github\.sha/);
 });
 
 test("product gate requires PNG comparison controls after dependency setup", async () => {
