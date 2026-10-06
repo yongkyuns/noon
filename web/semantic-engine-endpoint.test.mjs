@@ -796,7 +796,7 @@ for (const [time, stopAtSourceCompletion] of [[2, false], [3, true], [3, false]]
       assert.equal(result.sourceCompleted, true);
       assert.equal(result.type, "sample_to_authored_time");
       assert.deepEqual(Object.keys(result.sampleTiming).sort(), [
-        "authoringBoundaryWaitMs", "callbackPhaseMs", "deltaDrainMs",
+        "authoringBoundaryWaitMs", "callbackCommitMs", "callbackCompleteMs", "callbackPhaseMs", "callbackRunMs", "deltaDrainMs",
         "deltaMetadataMs", "deltaSendMs", "endpointMs", "presentationWaitMs",
         "rustDriveMs", "segmentHandoffMs",
       ]);
@@ -1391,6 +1391,79 @@ test("an unchanged callback observation fails explicitly without waiting for ren
   } finally { endpoint?.stop(); f.close(); }
 });
 
+test("forward timing covers ordered callback regions and waits for the exact publication", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const invoked = [];
+  const f = fixture("transferable", async (phase) => {
+    invoked.push(phase.region);
+    clock += phase.region === 0 ? 5 : 7;
+    return JSON.stringify({ token: phase.token, region: phase.region, writes: [] });
+  }, null, { initiallyPaused: true }, { complete: async () => { clock += 2; } });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    await ready;
+    const first = await initial;
+    for (const type of ["execution_ack", "execution_presented"]) {
+      f.render.port2.postMessage({ type, session: first.session, sequence: first.sequence });
+    }
+    let pending = true;
+    const advanceForward = f.player.advanceForwardToCallbackPhaseJson;
+    const phase = { token: { sequence: "1" }, region: 0, time: 1 };
+    f.player.advanceForwardToCallbackPhaseJson = time => {
+      clock += 3;
+      advanceForward(time);
+      if (!pending) return null;
+      pending = false;
+      return JSON.stringify(phase);
+    };
+    f.player.commitCallbackPhaseJson = batch => {
+      const { region } = JSON.parse(batch);
+      clock += region === 0 ? 2 : 4;
+      return region === 0 ? JSON.stringify({ ...phase, region: 1 }) : null;
+    };
+    f.player.drainDeltaJson = () => { clock += 6; return f.player.initialDeltaJson(); };
+    const publication = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    const result = request(f.control.port2, "advance_to", 334, { time: 1, collectTimings: true });
+    const delta = await publication;
+    let settled = false;
+    result.then(() => { settled = true; });
+    // An acknowledgement of the previous image cannot finish this sample.
+    f.render.port2.postMessage({ type: "execution_presented", session: first.session, sequence: first.sequence });
+    await turn();
+    assert.equal(settled, false);
+    assert.deepEqual(invoked, [0, 1]);
+    clock += 9;
+    f.render.port2.postMessage({ type: "execution_presented", session: delta.session, sequence: delta.sequence });
+    const advanced = await result;
+    assert.equal(advanced.time, 1);
+    assert.deepEqual(advanced.sampleTiming, {
+      rustDriveMs: 6, callbackPhaseMs: 20,
+      callbackRunMs: 12, callbackCommitMs: 6, callbackCompleteMs: 2,
+      presentationWaitMs: 9, deltaDrainMs: 6, deltaMetadataMs: 0, deltaSendMs: 0,
+      segmentHandoffMs: 0, authoringBoundaryWaitMs: 0, endpointMs: 41,
+    });
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("forward timing rejects invalid flags before advancing", async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    f.player.advanceForwardToCallbackPhaseJson = () => assert.fail("invalid diagnostic cannot advance");
+    const result = await request(f.control.port2, "advance_to", 335, { time: 1, collectTimings: "true" });
+    assert.equal(result.type, "error");
+    assert.match(result.message, /flag must be a boolean/);
+    assert.equal(result.sampleTiming, undefined);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("forward authored-time control crosses every required barrier before publishing its requested frame", async () => {
   const callbackTimes = [];
   const committedTokens = [];
@@ -1441,7 +1514,9 @@ test("forward authored-time control crosses every required barrier before publis
       session: delta.session,
       sequence: delta.sequence,
     });
-    assert.equal((await advanced).time, 3);
+    const result = await advanced;
+    assert.equal(result.time, 3);
+    assert.equal(result.sampleTiming, undefined, "ordinary callback playback does not collect timings");
     endpoint.stop();
   } finally { endpoint?.stop(); f.close(); }
 });

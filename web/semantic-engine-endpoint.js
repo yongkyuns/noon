@@ -363,7 +363,7 @@ export async function attachSemanticEngine(
   };
   async function publishCallbackPhase(
     phaseJson,
-    { initial = false, emitDelta = true, onPhaseToken = null, observeAtTime = null } = {},
+    { initial = false, emitDelta = true, onPhaseToken = null, observeAtTime = null, timing = null } = {},
   ) {
     let phaseToken = null;
     let rendererObservation = null;
@@ -387,14 +387,20 @@ export async function attachSemanticEngine(
       const phaseGeneration = callbackGeneration;
       pendingPhaseJson = phaseJson;
       try {
+        const callbackStartedAtMs = timing === null ? 0 : performance.now();
         const batchJson = await runRequiredCallbackPhase(phase, player);
+        if (timing !== null) timing.callbackRunMs += performance.now() - callbackStartedAtMs;
         if (stopped || phaseGeneration !== callbackGeneration || player === null) {
           try { await discardRequiredCallbackPhase?.(phase); } catch { /* endpoint teardown owns termination */ }
           return { phaseToken, publication: null, interrupted: true };
         }
+        const commitStartedAtMs = timing === null ? 0 : performance.now();
         const nextRegionJson = player.commitCallbackPhaseJson(batchJson);
+        if (timing !== null) timing.callbackCommitMs += performance.now() - commitStartedAtMs;
         if (nextRegionJson === null || nextRegionJson === undefined) {
+          const completeStartedAtMs = timing === null ? 0 : performance.now();
           await completeRequiredCallbackPhase?.(phase);
+          if (timing !== null) timing.callbackCompleteMs += performance.now() - completeStartedAtMs;
           pendingPhaseJson = null;
         }
         const completedRegionJson = phaseJson;
@@ -468,7 +474,7 @@ export async function attachSemanticEngine(
     return player.requiredCallbackReadJson(tokenJson, callbackReadRequestJson(request));
   }
 
-  async function advanceToAuthoredTime(time, observeRenderer) {
+  async function advanceToAuthoredTime(time, observeRenderer, timing = null) {
     const phaseTokens = new Set();
     let phaseCount = 0;
     let rendererObservation = null;
@@ -478,10 +484,16 @@ export async function attachSemanticEngine(
           "forward authored-time advance reached its callback phase bound before the requested time",
         );
       }
+      const driveStartedAtMs = timing === null ? 0 : performance.now();
+      const phaseJson = player.advanceForwardToCallbackPhaseJson(time);
+      if (timing !== null) timing.rustDriveMs += performance.now() - driveStartedAtMs;
+      const hasPhase = phaseJson !== null && phaseJson !== undefined;
+      const callbackStartedAtMs = timing === null || !hasPhase ? 0 : performance.now();
       const result = await publishCallbackPhase(
-        player.advanceForwardToCallbackPhaseJson(time),
+        phaseJson,
         {
           emitDelta: false,
+          timing,
           observeAtTime: observeRenderer && rendererObservation === null ? time : null,
           onPhaseToken(token) {
             if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE) {
@@ -497,6 +509,7 @@ export async function attachSemanticEngine(
           },
         },
       );
+      if (timing !== null && hasPhase) timing.callbackPhaseMs += performance.now() - callbackStartedAtMs;
       if (result.interrupted) return null;
       rendererObservation ??= result.rendererObservation;
       if (result.phaseToken !== null) continue;
@@ -505,7 +518,7 @@ export async function attachSemanticEngine(
           `forward authored-time advance stopped at ${player.time()} before requested time ${time}`,
         );
       }
-      const publication = send(player.drainDeltaJson());
+      const publication = drainAndSendDelta(timing);
       return {
         publication: publication ?? rendererObservation?.publication ?? null,
         rendererObservation,
@@ -691,7 +704,7 @@ export async function attachSemanticEngine(
     }
   }
 
-  const drainAndSendSampleDelta = (timing) => {
+  const drainAndSendDelta = (timing) => {
     if (timing === null) return send(player.drainDeltaJson());
     const drainStartedAtMs = performance.now();
     const deltaJson = player.drainDeltaJson();
@@ -721,6 +734,7 @@ export async function attachSemanticEngine(
           const callbackStartedAtMs = timing === null ? 0 : performance.now();
           const result = await publishCallbackPhase(phaseJson, {
             emitDelta: false,
+            timing,
             onPhaseToken(token) {
               if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE) {
                 throw new Error("external semantic continuation exceeded its callback phase bound");
@@ -739,7 +753,7 @@ export async function attachSemanticEngine(
 
         const readyPublication = timing === null
           ? send(player.drainDeltaJson())
-          : drainAndSendSampleDelta(timing);
+          : drainAndSendDelta(timing);
         if (!reachedEndpoint) {
           const presentationStartedAtMs = timing === null ? 0 : performance.now();
           await awaitPresentation(readyPublication);
@@ -756,7 +770,7 @@ export async function attachSemanticEngine(
         if (timing !== null) timing.segmentHandoffMs += performance.now() - handoffStartedAtMs;
         const completionPublication = timing === null
           ? send(player.drainDeltaJson())
-          : drainAndSendSampleDelta(timing);
+          : drainAndSendDelta(timing);
         if (!await settleContinuationPublication(completionPublication, timing)) return;
         const completedPlayer = player;
         returnedPlaybackTime = completedPlayer.time();
@@ -794,6 +808,21 @@ export async function attachSemanticEngine(
         // next segment endpoint.
       }
     }
+  }
+
+  function createSampleTiming(collectTimings) {
+    if (collectTimings !== undefined && typeof collectTimings !== "boolean") {
+      throw new Error("sample timing collection flag must be a boolean");
+    }
+    // All durations use this endpoint's clock. Callback run/complete include
+    // Python invocation and bridge work; acknowledgement is not GPU/display time.
+    return collectTimings === true ? {
+      rustDriveMs: 0, callbackPhaseMs: 0,
+      callbackRunMs: 0, callbackCommitMs: 0, callbackCompleteMs: 0,
+      presentationWaitMs: 0,
+      deltaDrainMs: 0, deltaMetadataMs: 0, deltaSendMs: 0,
+      segmentHandoffMs: 0, authoringBoundaryWaitMs: 0,
+    } : null;
   }
 
   async function drain() {
@@ -853,22 +882,30 @@ export async function attachSemanticEngine(
           }
           case "advance_to": {
             if (callbackFault !== null) throw callbackFault;
+            sampleTiming = createSampleTiming(message.collectTimings);
             if (player.isPlaying()) {
               throw new Error(
                 "pause semantic execution before forward authored-time advancement",
               );
             }
             latestTick = null;
+            const sampleStartedAtMs = sampleTiming === null ? 0 : performance.now();
             const advanced = await advanceToAuthoredTime(
               message.time,
               message.observeRenderer === true,
+              sampleTiming,
             );
             const observation = advanced?.rendererObservation?.observation ??
               Promise.resolve(null);
+            const presentationStartedAtMs = sampleTiming === null ? 0 : performance.now();
             [, rendererObservation] = await Promise.all([
               awaitPresentation(advanced?.publication ?? null),
               observation,
             ]);
+            if (sampleTiming !== null) {
+              sampleTiming.presentationWaitMs += performance.now() - presentationStartedAtMs;
+              sampleTiming.endpointMs = performance.now() - sampleStartedAtMs;
+            }
             observeExecutionWake(performance.now());
             break;
           }
@@ -879,23 +916,9 @@ export async function attachSemanticEngine(
             break;
           case "sample_to_authored_time": {
             if (callbackFault !== null) throw callbackFault;
-            if (message.collectTimings !== undefined && typeof message.collectTimings !== "boolean") {
-              throw new Error("sample timing collection flag must be a boolean");
-            }
+            sampleTiming = createSampleTiming(message.collectTimings);
             latestTick = null;
-            const sampleStartedAtMs = message.collectTimings === true ? performance.now() : 0;
-            // Optional stage tracing is collected only for explicit perf runs;
-            // presentationWaitMs is a render-worker acknowledgement, not GPU time.
-            sampleTiming = message.collectTimings === true ? {
-              rustDriveMs: 0,
-              callbackPhaseMs: 0,
-              presentationWaitMs: 0,
-              deltaDrainMs: 0,
-              deltaMetadataMs: 0,
-              deltaSendMs: 0,
-              segmentHandoffMs: 0,
-              authoringBoundaryWaitMs: 0,
-            } : null;
+            const sampleStartedAtMs = sampleTiming === null ? 0 : performance.now();
             sourceCompleted = await sampleContinuationToAuthoredTime(
               message.time, message.stopAtSourceCompletion === true, sampleTiming,
             ) === true;

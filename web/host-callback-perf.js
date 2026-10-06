@@ -1,7 +1,7 @@
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
-import { FrameMetrics, SampleWindow } from "./frame-metrics.js";
+import { FrameMetrics, SampleWindow, summarizeSamples } from "./frame-metrics.js";
 
 const SAMPLE_RATE_HZ = 60;
 const SAMPLE_STEP_SECONDS = 1 / SAMPLE_RATE_HZ;
@@ -31,7 +31,7 @@ try {
   );
 
   const report = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     benchmark: "Noon canonical Python callback advance round trip",
     generatedAt: new Date().toISOString(),
     workload: {
@@ -119,6 +119,7 @@ async function measureWorkload(authored, workloadDurationSeconds) {
     const metricsBefore = rendererMetrics(await execution.metrics());
     const cadence = new FrameMetrics({ targetHz: SAMPLE_RATE_HZ });
     const roundTrip = new SampleWindow(measuredFrames);
+    const timingSamples = [];
     const jank = new BrowserJankMonitor();
     const start = performance.now();
     jank.start();
@@ -126,11 +127,15 @@ async function measureWorkload(authored, workloadDurationSeconds) {
       const timestamp = await nextAnimationFrame();
       const began = performance.now();
       const requestedTime = sampleTime(warmupFrames + frame);
-      const advanced = await execution.advanceTo(requestedTime);
+      const advanced = await execution.advanceTo(requestedTime, { collectTimings: true });
       if (advanced.playing !== false || Math.abs(advanced.time - requestedTime) > 1e-9) {
         throw new Error(`canonical endpoint did not publish exact time ${requestedTime}`);
       }
       const elapsed = performance.now() - began;
+      if (!advanced.sampleTiming || !Object.values(advanced.sampleTiming).every(
+        value => Number.isFinite(value) && value >= 0,
+      )) throw new Error("canonical endpoint returned invalid sample timings");
+      timingSamples.push({ time: requestedTime, roundTripMs: elapsed, ...advanced.sampleTiming });
       roundTrip.record(elapsed);
       cadence.record(timestamp, elapsed);
     }
@@ -155,6 +160,18 @@ async function measureWorkload(authored, workloadDurationSeconds) {
         stepSeconds: SAMPLE_STEP_SECONDS,
       },
       advanceRoundTripMs: roundTrip.summary(),
+      stages: {
+        clock: "semantic-endpoint-wall-durations",
+        semantics: "callbackRunMs and callbackCompleteMs include Python/bridge wall time; " +
+          "callbackCommitMs is Rust commit; callbackPhaseMs includes these sub-stages; " +
+          "presentationWaitMs waits for render-worker acknowledgement, not GPU/display completion; " +
+          "endpointMs covers advance through acknowledgement, excluding reply/wake bookkeeping; " +
+          "roundTripMs also includes client/worker delivery and queueing",
+        samples: timingSamples,
+        wallMs: Object.fromEntries(Object.keys(timingSamples[0]).filter(key => key !== "time").map(
+          key => [key, summarizeSamples(timingSamples.map(sample => sample[key]))],
+        )),
+      },
       frameIntervalMs: frame.interval,
       cadence: frame.cadence,
       longTasks: jank.summary(start, end),
