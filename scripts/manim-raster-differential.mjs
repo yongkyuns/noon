@@ -476,13 +476,25 @@ async function prepareHostCapturePage(page) {
 
 async function captureHostFixture(page, fixture, referenceResult, fixtureDir, expectedBackend) {
   if (fixture.direct_factory) {
-    const loaded = await page.evaluate(async ({ factory }) => {
+    const loaded = await page.evaluate(async ({ factory, requiresLatex }) => {
       const canvas = document.querySelector("#scene");
       canvas.width = 960;
       canvas.height = 540;
       const wasm = await import("./pkg/noon_web.js");
       await wasm.default();
-      const renderer = await wasm[factory](canvas.transferControlToOffscreen());
+      let compiler = null;
+      let renderer;
+      try {
+        if (requiresLatex) {
+          const { prepareLatexBackend } = await import("./latex/backend.js");
+          compiler = new wasm.WasmLatexCompiler(await prepareLatexBackend());
+        }
+        const offscreen = canvas.transferControlToOffscreen();
+        renderer = compiler == null ? await wasm[factory](offscreen)
+          : await wasm[factory](offscreen, compiler);
+      } finally {
+        compiler?.free();
+      }
       renderer.resize(960, 540);
       window.noonSpatialMeshOracle = renderer;
       renderer.directWakeDirectiveJson(0);
@@ -493,7 +505,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
       }
       return { kind: "direct_typed_execution", rendererBackend: renderer.rendererBackend(),
         objectCount: renderer.objectCount(), presented, time: renderer.time() };
-    }, { factory: fixture.direct_factory });
+    }, { factory: fixture.direct_factory, requiresLatex: fixture.requires_latex === true });
     assert.equal(loaded.kind, "direct_typed_execution", `${fixture.id}: canonical Rust/WASM scene`);
     assert.equal(loaded.rendererBackend, expectedBackend, `${fixture.id}: host renderer backend`);
     assert.equal(loaded.presented, true, `${fixture.id}: initial direct frame not presented`);

@@ -1,4 +1,4 @@
-"""Native Text numeric labels; Rust owns preparation and atomic attachment."""
+"""Rust-prepared native Text and DecimalNumber coordinate label families."""
 from __future__ import annotations
 
 import noon as _base
@@ -6,6 +6,11 @@ import _manim_compat as _compat
 import _manim_plotting as _plot
 import _manim_semantic_handles as _shared
 from _noon_errors import engine_call
+
+try:
+    from js import noonNumberPlaneDecimalCoordinateLabelFamilies as _plane_decimal_labels
+except ImportError:
+    _plane_decimal_labels = None
 
 
 def _cold_labels():
@@ -52,6 +57,16 @@ def _family(handle, size, color):
     return _plot._family(object.__new__(_compat.Group), handle, members)
 
 
+def _decimal_family(handle, color):
+    from _manim_numbers import DecimalNumber
+
+    members = [DecimalNumber._from_numeric_handle(
+        member, None, color=color, presentation_applied=True,
+    )
+               for member in engine_call(handle.decimalNumberLabelMembers)]
+    return _plot._family(object.__new__(_compat.Group), handle, members)
+
+
 def _remember(axis, labels):
     # Only register aliases to the new Rust-owned family. Membership and order
     # have already committed in Rust; Python does not repeat the attachment.
@@ -79,10 +94,64 @@ def add_coordinates(axes, x_values, y_values, *, x_config, y_config, config):
 
 
 def add_number_plane_coordinates(plane, x_values, y_values, *, x_config, y_config, config):
-    return _add_coordinate_labels(
-        plane, "numberPlaneCoordinateLabelFamilies", x_values, y_values,
-        x_config=x_config, y_config=y_config, config=config,
+    # An explicit native font opts into the retained native-Text profile.
+    x_config = dict(x_config or {})
+    y_config = dict(y_config or {})
+    axis_fonts = [axis.get("font") for axis in (x_config, y_config)]
+    if "font" in config:
+        return _add_coordinate_labels(
+            plane, "numberPlaneCoordinateLabelFamilies", x_values, y_values,
+            x_config=x_config, y_config=y_config, config=config,
+        )
+    if any(font is not None for font in axis_fonts):
+        if any(font is None for font in axis_fonts):
+            raise NotImplementedError("per-axis native font requires fonts for both NumberPlane axes")
+        return _add_coordinate_labels(
+            plane, "numberPlaneCoordinateLabelFamilies", x_values, y_values,
+            x_config=x_config, y_config=y_config, config=config,
+        )
+    return add_number_plane_decimal_coordinates(
+        plane, x_values, y_values, x_config=x_config, y_config=y_config, config=config,
     )
+
+
+def add_number_plane_decimal_coordinates(plane, x_values, y_values, *, x_config, y_config, config):
+    _cold_labels()
+    if _plane_decimal_labels is None:
+        raise RuntimeError("NumberPlane DecimalNumber labels require await prepare_latex()")
+    x_values_js = _plot._array(() if x_values is None else x_values)
+    y_values_js = _plot._array(() if y_values is None else y_values)
+    x_settings = dict(config)
+    y_settings = dict(config)
+    x_settings.setdefault("direction", _base.DR)
+    y_settings.setdefault("direction", _base.DR)
+    x_settings.update({} if x_config is None else x_config)
+    y_settings.update({} if y_config is None else y_config)
+    for settings in (x_settings, y_settings):
+        if "num_decimal_places" in settings:
+            places = settings.pop("num_decimal_places")
+            if "decimal_places" in settings and settings["decimal_places"] != places:
+                raise ValueError("decimal_places and num_decimal_places disagree")
+            settings.setdefault("decimal_places", places)
+    precision = getattr(plane, "_coordinate_decimal_places", (1, 1))
+    x_settings.setdefault("decimal_places", precision[0])
+    y_settings.setdefault("decimal_places", precision[1])
+    x_options, x_size, x_color = _options(x_settings)
+    try:
+        y_options, y_size, y_color = _options(y_settings)
+    except BaseException:
+        x_options.free()
+        raise
+    handles = engine_call(
+        _plane_decimal_labels,
+        plane._semantic_family_handle,
+        x_values_js, x_values is None,
+        y_values_js, y_values is None,
+        x_options, y_options,
+    )
+    _remember(plane.x_axis, _decimal_family(handles[0], x_color))
+    _remember(plane.y_axis, _decimal_family(handles[1], y_color))
+    return plane
 
 
 def _add_coordinate_labels(owner, method_name, x_values, y_values, *, x_config, y_config, config):

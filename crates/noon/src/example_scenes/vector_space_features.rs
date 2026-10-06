@@ -11,6 +11,33 @@ const STRETCH_X: [f64; 4] = [2.0, 0.0, 0.0, 1.0];
 const STRETCH_AFTER_SWAP: [f64; 4] = [0.0, 2.0, 1.0, 0.0];
 
 pub fn session() -> Result<ExecutionSession, String> {
+    build(|plane, options| {
+        plane
+            .add_coordinates(None, None, options, options)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+}
+
+/// The pinned Manim case uses DecimalNumber coordinates. The caller prepares
+/// its real TeX backend before construction; the runtime retains only glyphs.
+#[cfg(feature = "latex")]
+pub fn decimal_session(backend: &mut impl crate::LatexBackend) -> Result<ExecutionSession, String> {
+    build(|plane, options| {
+        let options = NumberLabelOptions {
+            decimal_places: 1,
+            ..options.clone()
+        };
+        plane
+            .add_decimal_coordinates(backend, None, None, &options, &options)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn build(
+    add_coordinates: impl FnOnce(&crate::ManimNumberPlane, &NumberLabelOptions) -> Result<(), String>,
+) -> Result<ExecutionSession, String> {
     let plane = ManimNumberPlaneOptions {
         x_range: [-1.0, 1.0, 1.0],
         y_range: [-1.0, 1.0, 1.0],
@@ -32,10 +59,11 @@ pub fn session() -> Result<ExecutionSession, String> {
         direction: [1.0, -1.0],
         ..NumberLabelOptions::default()
     };
-    lts.background_plane()
-        .ok_or("background plane is disabled")?
-        .add_coordinates(None, None, &number_label_options, &number_label_options)
-        .map_err(|error| error.to_string())?;
+    add_coordinates(
+        lts.background_plane()
+            .ok_or("background plane is disabled")?,
+        &number_label_options,
+    )?;
 
     let mut square = scene.square(0.5).map_err(|error| error.to_string())?;
     square
@@ -204,6 +232,41 @@ mod tests {
         assert_eq!(forward.frame().objects.len(), 15);
         let initial = forward.frame().clone();
         let initial_count = present_count(&initial);
+        let (square_index, _) = initial
+            .objects
+            .iter()
+            .enumerate()
+            .find(|(_, row)| {
+                row.style.stroke == Some(crate::Color::WHITE)
+                    && matches!(row.geometry(), Some(noon_core::GeometryRef::VectorPath(_)))
+            })
+            .expect("initial square geometry");
+        let square_bounds = initial
+            .render_geometry(square_index)
+            .unwrap()
+            .world_bounds(initial.render_transform(square_index))
+            .unwrap();
+        assert_eq!(square_bounds.min, noon_core::Vec2::new(0.25, 0.25));
+        assert_eq!(square_bounds.max, noon_core::Vec2::new(0.75, 0.75));
+        let vector_index = initial
+            .objects
+            .iter()
+            .zip(&initial.presences)
+            .position(|(row, present)| {
+                *present && row.style.stroke == Some(crate::Color::from_hex(0xF7D96F))
+            })
+            .expect("initial vector shaft");
+        let vector_bounds = initial
+            .render_geometry(vector_index)
+            .unwrap()
+            .world_bounds(initial.render_transform(vector_index))
+            .unwrap();
+        let end = vector_bounds.max;
+        assert_eq!(vector_bounds.min, noon_core::Vec2::ZERO);
+        assert!(
+            end.x > end.y,
+            "the initial vector must precede the axis swap"
+        );
 
         forward.advance_to(0.25).unwrap();
         let after_first_ghost = forward.frame().clone();

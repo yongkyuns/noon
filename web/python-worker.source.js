@@ -238,6 +238,17 @@ async function initializePyodide() {
     return context == null ? chart.labelFamily(size, buff, math, rgba, latexCompiler)
       : context.liveBarLabelFamily(chart, size, buff, math, rgba, latexCompiler);
   };
+  self.noonNumberPlaneDecimalCoordinateLabelFamilies = (
+    plane, xValues, automaticX, yValues, automaticY, xOptions, yOptions,
+  ) => {
+    if (!latexCompiler) {
+      xOptions.free(); yOptions.free();
+      throw new Error("Call await prepare_latex() before constructing NumberPlane coordinates");
+    }
+    return plane.numberPlaneDecimalCoordinateLabelFamilies(
+      xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
+    );
+  };
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);

@@ -132,6 +132,78 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(self.options[1].direction, (1, 0))
         self.assertEqual([o.freed for o in self.options], [0, 0])
 
+    def test_number_plane_defaults_to_decimal_glyph_families_and_one_decimal(self):
+        x_axis = SimpleNamespace(_semantic_member_wrappers={})
+        y_axis = SimpleNamespace(_semantic_member_wrappers={})
+        class FamilyHandle:
+            def decimalNumberLabelMembers(self):
+                return ()
+        class PlaneHandle:
+            def numberPlaneCoordinateLabelFamilies(self, *args):
+                raise AssertionError("native Text route should be opt-in")
+        plane_handle = PlaneHandle()
+        plane = SimpleNamespace(x_axis=x_axis, y_axis=y_axis,
+                                _semantic_family_handle=plane_handle,
+                                _coordinate_decimal_places=(2, 3))
+        calls = []
+        def decimal_bridge(*args):
+            calls.append(args)
+            return FamilyHandle(), FamilyHandle()
+        patch.object(labels, "_plane_decimal_labels", decimal_bridge).start()
+        patch.object(labels._plot, "_family", side_effect=lambda wrapper, handle, members: (handle, members)).start()
+        result = labels.add_number_plane_coordinates(
+            plane, (1.0,), (-1.0,), x_config=None, y_config=None,
+            config={"font_size": 24, "buff": 0.1},
+        )
+        self.assertIs(result, plane)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1:5], ([1.0], False, [-1.0], False))
+        self.assertEqual([entry[2] for entry in self.created], [2, 3])
+        self.assertEqual(len(x_axis.numbers), 2)
+        self.assertEqual(len(y_axis.numbers), 2)
+
+        self.created.clear()
+        labels.add_number_plane_coordinates(
+            plane, (1.0,), (-1.0,), x_config=None, y_config=None,
+            config={"num_decimal_places": 0},
+        )
+        self.assertEqual([entry[2] for entry in self.created], [0, 0])
+
+    def test_number_plane_requires_prepared_latex_without_native_font_opt_in(self):
+        patch.object(labels, "_plane_decimal_labels", None).start()
+        plane = SimpleNamespace(x_axis=object(), y_axis=object(),
+                                _semantic_family_handle=object())
+        with self.assertRaisesRegex(RuntimeError, "prepare_latex"):
+            labels.add_number_plane_coordinates(
+                plane, None, None, x_config=None, y_config=None, config={}
+            )
+        self.assertEqual(self.options, [])
+
+    def test_number_plane_rejects_single_axis_native_font_fallback(self):
+        plane = SimpleNamespace(x_axis=object(), y_axis=object(),
+                                _semantic_family_handle=object())
+        with self.assertRaisesRegex(NotImplementedError, "both NumberPlane axes"):
+            labels.add_number_plane_coordinates(
+                plane, None, None, x_config={"font": "Fixture Sans"},
+                y_config=None, config={},
+            )
+        self.assertEqual(self.options, [])
+
+    def test_number_plane_global_font_keeps_native_text_path(self):
+        x_axis = SimpleNamespace(_semantic_member_wrappers={})
+        y_axis = SimpleNamespace(_semantic_member_wrappers={})
+        owner = SimpleNamespace(
+            x_axis=x_axis, y_axis=y_axis,
+            _semantic_family_handle=SimpleNamespace(numberPlaneCoordinateLabelFamilies=self.commit_axes),
+        )
+        patch.object(labels, "_plane_decimal_labels", None).start()
+        labels.add_number_plane_coordinates(
+            owner, None, None, x_config=None, y_config=None,
+            config={"font": "Fixture Sans"},
+        )
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual([entry[0] for entry in self.created], ["Fixture Sans", "Fixture Sans"])
+
     def test_live_and_callback_guards_precede_allocation(self):
         labels._shared._live_constructor_context.return_value = object()
         with self.assertRaises(NotImplementedError):

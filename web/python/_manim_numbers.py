@@ -18,7 +18,7 @@ except ImportError:
 
 class DecimalNumber(_RetainedTextMobject):
     @classmethod
-    def _from_numeric_handle(cls, handle, context):
+    def _from_numeric_handle(cls, handle, context, *, color=None, presentation_applied=False):
         number = object.__new__(cls)
         if context is not None:
             number._canonical_live_target_context = context
@@ -28,8 +28,9 @@ class DecimalNumber(_RetainedTextMobject):
             str(engine_call(handle.text)),
             float(engine_call(handle.fontSize, _semantic._live_mutation_context(number))),
             semantic,
-            _base.WHITE,
+            _base.WHITE if color is None else color,
             1.0,
+            presentation_applied=presentation_applied,
         )
         return number
     def _rebind_copied_semantic_handle(self):

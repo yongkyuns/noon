@@ -949,6 +949,7 @@
       ],
       "notes": "Focused native/Python LTS parity for Rust-positioned coordinates, a non-Arrow transformable family, and retained faded ghosts across two matrix transforms. Animated intermediate samples use the materialized 30fps grid relative to each authored quarter-second wait boundary.",
       "id": "lts-feature-slice-direct",
+      "requires_latex": true,
       "direct_factory": "createDirectVectorSpaceFeaturesRenderer",
       "expected_object_count": 15
     },
@@ -967,6 +968,7 @@
       ],
       "notes": "Focused native/Python LTS parity for Rust-positioned coordinates, a non-Arrow transformable family, and retained faded ghosts across two matrix transforms. Animated intermediate samples use the materialized 30fps grid relative to each authored quarter-second wait boundary.",
       "id": "lts-feature-slice-worker",
+      "requires_latex": true,
       "noon_source": "web/python/examples/noon_vector_space_features.py",
       "expected_object_count": 15
     },

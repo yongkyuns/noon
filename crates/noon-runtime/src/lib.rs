@@ -2235,6 +2235,19 @@ fn apply_group_to_row(
         }
     }
     if group.cursor == 0 {
+        // Completion can replace authored geometry with the latest endpoint.
+        // Coupled geometry tracks retain their source snapshot so an earlier
+        // wait must recover it, just as affine channels recover their first `from`.
+        if let Some(first) = tracks.first() {
+            if group.channel.property == Property::Transform {
+                return apply_transform_track(&mut row, first, 0.0);
+            }
+            if group.channel.property == Property::Morph
+                && matches!(first.values, TrackValues::PreparedMorph { .. })
+            {
+                return apply_prepared_morph_track(&mut row, first, 0.0);
+            }
+        }
         return false;
     }
     if group.channel.property == Property::ZIndex {
@@ -3238,6 +3251,97 @@ mod tests {
             time_map: CompositionTimeMap::identity(),
         });
         CompiledScene::compile_objects(objects, &tracks).expect("scene must compile")
+    }
+
+    #[test]
+    fn delayed_transform_recovers_its_source_before_start_after_completion() {
+        let object = ObjectId::new(0);
+        let from = TransformTrackEndpoint::new(GeometryRef::circle(1.0));
+        let mut to = TransformTrackEndpoint::new(GeometryRef::circle(2.0));
+        to.transform.translation = Vec2::new(10.0, 0.0);
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Transform,
+            values: TrackValues::Object {
+                from: from.clone(),
+                to: to.clone(),
+            },
+            timing: TrackTiming::new(0.25, 0.5, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        // Completion has reconciled the endpoint into the authored object.
+        // The historical track must still recover the source during an earlier wait.
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                to.geometry,
+                to.transform,
+                to.style,
+            )],
+            &[track],
+        )
+        .unwrap();
+        let mut instance = SceneInstance::new(compiled);
+        for time in [0.0, 0.1, 0.25, 0.75, 0.0] {
+            let frame = instance.seek(time).unwrap();
+            let expected = if time >= 0.75 { 2.0 } else { 1.0 };
+            assert_eq!(
+                frame.objects[0].geometry(),
+                Some(&GeometryRef::circle(expected))
+            );
+            assert_eq!(
+                frame.objects[0].transform.translation,
+                if time >= 0.75 {
+                    Vec2::new(10.0, 0.0)
+                } else {
+                    Vec2::ZERO
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn delayed_prepared_morph_recovers_its_source_rendering_before_start() {
+        let object = ObjectId::new(0);
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0));
+        let pair = GeometryRef::path(source.with_morph_target(target.clone()));
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Morph,
+            values: TrackValues::PreparedMorph {
+                from: 0.0,
+                to: 1.0,
+                geometry: pair.clone(),
+                render_transform: Some(Transform2D::IDENTITY),
+            },
+            timing: TrackTiming::new(0.25, 0.5, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                GeometryRef::path(target),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )],
+            &[track],
+        )
+        .unwrap();
+        let mut instance = SceneInstance::new(compiled);
+        instance.seek(0.5).unwrap();
+        for time in [0.0, 0.1, 0.25] {
+            let frame = instance.seek(time).unwrap();
+            assert_eq!(frame.morph(0), 0.0);
+            assert_eq!(frame.render_geometries[0].as_deref(), Some(&pair));
+            assert_eq!(frame.render_transforms[0], Some(Transform2D::IDENTITY));
+        }
     }
 
     #[test]

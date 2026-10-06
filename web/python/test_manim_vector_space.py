@@ -256,7 +256,7 @@ class ManimVectorSpaceTests(unittest.TestCase):
 
             result = labels.add_number_plane_coordinates(
                 plane, (1, 2), (3,), x_config={"decimal_places": 1},
-                y_config={"decimal_places": 2}, config={"font_size": 17},
+                y_config={"decimal_places": 2}, config={"font_size": 17, "font": "Fixture Sans"},
             )
             assert result is plane
             assert options[0][1]["direction"] is labels._base.DOWN

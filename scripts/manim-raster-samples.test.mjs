@@ -461,6 +461,8 @@ test("focused LTS feature slice pairs native and Python coordinate and ghost beh
   const direct = manifest.fixtures.find(fixture => fixture.id === "lts-feature-slice-direct");
   const worker = manifest.fixtures.find(fixture => fixture.id === "lts-feature-slice-worker");
   assert.equal(direct?.direct_factory, "createDirectVectorSpaceFeaturesRenderer");
+  assert.equal(direct.requires_latex, true, "direct coordinate labels use real TeX");
+  assert.equal(worker.requires_latex, true, "prepare TeX before Python scene setup");
   assert.equal(worker?.noon_source, "web/python/examples/noon_vector_space_features.py");
   assert.equal(direct.source, "parity/manim-v0.21/vector_space_features.py");
   assert.equal(worker.source, direct.source);
@@ -472,6 +474,10 @@ test("focused LTS feature slice pairs native and Python coordinate and ghost beh
     direct.source,
     worker.noon_source,
     "crates/noon/src/example_scenes/vector_space_features.rs",
+    "crates/noon/src/text_authoring/semantic/decimal_labels.rs",
+    "crates/noon-web/src/authoring_number_labels.rs",
+    "web/python/_manim_numbers.py",
+    "web/python-worker.source.js",
     "crates/noon-web/src/direct_execution_smoke.rs",
     "web/python/_manim_vector_space.py",
     "web/python/_manim_number_plane.py",

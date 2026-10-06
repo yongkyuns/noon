@@ -1,4 +1,5 @@
 """Static NumberPlane grid over ordinary shared Rust coordinate/family handles."""
+import math
 from operator import index
 
 import noon as _base
@@ -26,6 +27,18 @@ def _line_style(options, values, *, faded):
 def _lines(handle):
     return _plot._family(object.__new__(_plot._compat.Group), handle,
                          [_plot._leaf(leaf) for leaf in engine_call(handle.directMobjects)])
+
+
+def _coordinate_decimal_places(axis_range):
+    """Mirror NumberLine's formatting inference after its range becomes floats."""
+    try:
+        step = 1.0 if axis_range is None or len(axis_range) < 3 else float(axis_range[2])
+    except (TypeError, ValueError, IndexError):
+        return 1
+    if not math.isfinite(step):
+        return 1
+    spelling = str(step)
+    return len(spelling.partition(".")[2]) if "." in spelling else 0
 
 
 class NumberPlane(_plot.Axes):
@@ -67,6 +80,10 @@ class NumberPlane(_plot.Axes):
             options.free()
             raise
         handle = engine_call(context.liveCreateCoordinates if context is not None else _plot._create_coordinates, options)
+        self._coordinate_decimal_places = (
+            _coordinate_decimal_places(x_range),
+            _coordinate_decimal_places(y_range),
+        )
         members = [_lines(engine_call(handle.numberPlanePart, i)) for i in (0, 1)]
         members.extend(_plot._attach_number_line(object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, i))
                        for i in (2, 3))

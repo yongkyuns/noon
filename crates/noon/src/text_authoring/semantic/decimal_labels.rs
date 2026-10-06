@@ -5,8 +5,8 @@ use crate::plot_presentation::{
     number_labels, NumberLabelAuthoringError as Error, NumberLabelOptions,
 };
 use crate::{
-    AuthoringError, Bounds2D64, DecimalFormat, LatexBackend, ManimAxes, ManimNextToArgs,
-    ManimNumberLine, MobjectFamily, NumberLineFrame, TextAuthoringError,
+    AuthoringError, AxesFrame, Bounds2D64, DecimalFormat, LatexBackend, ManimAxes, ManimNextToArgs,
+    ManimNumberLine, ManimNumberPlane, MobjectFamily, NumberLineFrame, TextAuthoringError,
 };
 use noon_core::{
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
@@ -229,6 +229,32 @@ fn stage(
     Ok(family)
 }
 
+fn publish_decimal_coordinate_families(
+    backend: &mut impl LatexBackend,
+    store: &mut SemanticStore,
+    frame: AxesFrame,
+    parents: [SemanticNodeId; 2],
+    numbers: [Option<&[f64]>; 2],
+    options: [&NumberLabelOptions; 2],
+) -> Result<[SemanticNodeId; 2], Error> {
+    let x = PreparedDecimalLabels::prepare(backend, frame.x(), numbers[0], options[0])?;
+    let y = PreparedDecimalLabels::prepare(backend, frame.y(), numbers[1], options[1])?;
+    let (_, roots) = PreparedDecimalLabels::publish_pair(
+        store,
+        x,
+        parents[0].into(),
+        y,
+        parents[1].into(),
+        |store, transaction| {
+            transaction
+                .apply(store)
+                .map_err(AuthoringError::from)
+                .map_err(TextAuthoringError::Semantic)
+        },
+    )?;
+    Ok(roots)
+}
+
 impl ManimNumberLine {
     /// Construct a detached DecimalNumber family. `None` selects tick values.
     pub fn decimal_number_labels(
@@ -284,23 +310,45 @@ impl ManimAxes {
         y_options: &NumberLabelOptions,
     ) -> Result<[MobjectFamily; 2], Error> {
         let frame = self.authored_frame()?;
-        let x = PreparedDecimalLabels::prepare(backend, frame.x(), x_numbers, x_options)?;
-        let y = PreparedDecimalLabels::prepare(backend, frame.y(), y_numbers, y_options)?;
         let x_axis = self.x_axis()?;
         let y_axis = self.y_axis()?;
         let store = Rc::clone(self.family().integration_store());
-        let (_, [x, y]) = PreparedDecimalLabels::publish_pair(
+        let [x, y] = publish_decimal_coordinate_families(
+            backend,
             &mut store.borrow_mut(),
-            x,
-            x_axis.family().node_id().into(),
-            y,
-            y_axis.family().node_id().into(),
-            |store, transaction| {
-                transaction
-                    .apply(store)
-                    .map_err(AuthoringError::from)
-                    .map_err(TextAuthoringError::Semantic)
-            },
+            frame,
+            [x_axis.family().node_id(), y_axis.family().node_id()],
+            [x_numbers, y_numbers],
+            [x_options, y_options],
+        )?;
+        Ok([
+            MobjectFamily::from_node(Rc::clone(&store), x)?,
+            MobjectFamily::from_node(store, y)?,
+        ])
+    }
+}
+
+impl ManimNumberPlane {
+    /// Prepare and attach both DecimalNumber coordinate families atomically.
+    pub fn add_decimal_coordinates(
+        &self,
+        backend: &mut impl LatexBackend,
+        x_numbers: Option<&[f64]>,
+        y_numbers: Option<&[f64]>,
+        x_options: &NumberLabelOptions,
+        y_options: &NumberLabelOptions,
+    ) -> Result<[MobjectFamily; 2], Error> {
+        let frame = self.authored_frame()?;
+        let x_axis = self.x_axis()?;
+        let y_axis = self.y_axis()?;
+        let store = Rc::clone(self.family().integration_store());
+        let [x, y] = publish_decimal_coordinate_families(
+            backend,
+            &mut store.borrow_mut(),
+            frame,
+            [x_axis.family().node_id(), y_axis.family().node_id()],
+            [x_numbers, y_numbers],
+            [x_options, y_options],
         )?;
         Ok([
             MobjectFamily::from_node(Rc::clone(&store), x)?,

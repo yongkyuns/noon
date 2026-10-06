@@ -1135,8 +1135,10 @@ pub async fn create_direct_vector_space_smoke_renderer(
 #[wasm_bindgen(js_name = createDirectVectorSpaceFeaturesRenderer)]
 pub async fn create_direct_vector_space_features_renderer(
     canvas: OffscreenCanvas,
+    compiler: &mut crate::WasmLatexCompiler,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let session = noon::example_scenes::vector_space_features::session().map_err(js_error)?;
+    let session =
+        noon::example_scenes::vector_space_features::decimal_session(compiler).map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
