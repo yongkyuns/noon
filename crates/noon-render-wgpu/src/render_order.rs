@@ -789,12 +789,12 @@ mod tests {
                     prepared
                         .contributing_mega_index_ranges(mega.index_range.clone())
                         .map(|(_, count)| count)
-                        .sum()
+                        .sum::<usize>()
                 } else {
                     prepared
                         .contributing_instance_ranges(ordered.batch)
                         .map(|range| range.len())
-                        .sum()
+                        .sum::<usize>()
                 }
             })
             .sum()
