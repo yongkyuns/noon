@@ -211,11 +211,11 @@ function pythonLifecycle() {
     const frame = noonFrame(oracle.terminal_state);
     frame.publication = { scene_revision: 4, execution_revision: 8, frame_epoch: 12 };
     const before = { state: { time: 3, playing: false, replaySupported: false,
-      replayUnavailable: "opaque host callbacks cannot be replayed" }, frame };
+      replayUnavailable: "UnsupportedDomain" }, frame };
     return { duration: 3, backend: "WebGPU", presentedFrames: 1,
       samples: [noonFrame(oracle.frames[0]), noonFrame(oracle.frames[45]), noonFrame(oracle.terminal_state)],
       before, controls: ["seek", "restartPlayback", "resume"].map(operation => ({ operation,
-        denial: "Replay unavailable: opaque host callbacks cannot be replayed", after: structuredClone(before) })) };
+        denial: "Error: Replay unavailable: UnsupportedDomain", after: structuredClone(before) })) };
   };
   return { observation: { runs: [makeRun(), makeRun()] }, oracle };
 }
@@ -223,7 +223,7 @@ function pythonLifecycle() {
 test("Python lifecycle requires completed-source denial and a fresh Run", () => {
   const { observation, oracle } = pythonLifecycle();
   assert.deepEqual(assertFollowingPythonLifecycle(observation, oracle, "WebGPU"),
-    { completedRuns: 2, replay: "denied", failureAtomic: true, freshRun: true });
+    { completedRuns: 2, replay: "denied", denialKind: "unsupported-domain", failureAtomic: true, freshRun: true });
 });
 
 for (const [name, mutate] of [
@@ -238,6 +238,14 @@ for (const [name, mutate] of [
   ["missing replay admission", data => { delete data.runs[0].before.state.replaySupported; }],
   ["replay falsely allowed", data => { data.runs[0].before.state.replaySupported = true; }],
   ["unrelated denial reason", data => { data.runs[0].before.state.replayUnavailable = "source still running"; }],
+  ["missing domain classification", data => { data.runs[0].before.state.replayUnavailable = null; }],
+  ["incomplete replay", data => { data.runs[0].before.state.replayUnavailable = "Incomplete"; }],
+  ["exhausted replay budget", data => { data.runs[0].before.state.replayUnavailable = "RetentionLimit"; }],
+  ["unrecorded input", data => { data.runs[0].before.state.replayUnavailable = "UnrecordedInput"; }],
+  ["invented callback prose", data => { data.runs[0].before.state.replayUnavailable = "opaque host callbacks cannot be replayed"; }],
+  ["different replay-control failure", data => { data.runs[0].controls[0].denial = "Error: Replay unavailable: RetentionLimit"; }],
+  ["unwrapped domain error", data => { data.runs[0].controls[1].denial = "UnsupportedDomain"; }],
+  ["unrelated error containing replay text", data => { data.runs[0].controls[2].denial = "TypeError: Replay unavailable: UnsupportedDomain"; }],
   ["clock still playing", data => { data.runs[0].before.state.playing = true; }],
   ["handoff changed time", data => { data.runs[0].before.state.time = 0; }],
   ["missing publication identity", data => { delete data.runs[0].before.frame.publication; }],
