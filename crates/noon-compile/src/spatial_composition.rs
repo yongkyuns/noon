@@ -6,10 +6,20 @@ use noon_core::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Default)]
-pub(super) struct CairoPathPointResourceCache(
-    HashMap<GeometryResourceHandle, std::sync::Weak<[SemanticVec3]>>,
-);
+#[derive(Clone, Debug)]
+pub(super) struct CairoPathPointResourceCache {
+    entries: HashMap<GeometryResourceHandle, std::sync::Weak<[SemanticVec3]>>,
+    next_prune_at: usize,
+}
+
+impl Default for CairoPathPointResourceCache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            next_prune_at: 64,
+        }
+    }
+}
 
 impl PartialEq for CairoPathPointResourceCache {
     fn eq(&self, _other: &Self) -> bool {
@@ -21,13 +31,27 @@ impl PartialEq for CairoPathPointResourceCache {
 impl std::ops::Deref for CairoPathPointResourceCache {
     type Target = HashMap<GeometryResourceHandle, std::sync::Weak<[SemanticVec3]>>;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.entries
     }
 }
 
 impl std::ops::DerefMut for CairoPathPointResourceCache {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.entries
+    }
+}
+
+impl CairoPathPointResourceCache {
+    fn insert_live_version(
+        &mut self,
+        handle: GeometryResourceHandle,
+        points: &Arc<[SemanticVec3]>,
+    ) {
+        self.entries.insert(handle, Arc::downgrade(points));
+        if self.entries.len() >= self.next_prune_at {
+            self.entries.retain(|_, points| points.strong_count() > 0);
+            self.next_prune_at = self.entries.len().saturating_mul(2).max(64);
+        }
     }
 }
 
@@ -38,7 +62,11 @@ fn convex_hull(mut points: Vec<noon_core::Vec2>) -> Vec<noon_core::Vec2> {
         return points;
     }
     let cross = |o: noon_core::Vec2, a: noon_core::Vec2, b: noon_core::Vec2| {
-        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+        let ax = f64::from(a.x) - f64::from(o.x);
+        let ay = f64::from(a.y) - f64::from(o.y);
+        let bx = f64::from(b.x) - f64::from(o.x);
+        let by = f64::from(b.y) - f64::from(o.y);
+        ax * by - ay * bx
     };
     let mut lower = Vec::new();
     for point in points.iter().copied() {
@@ -529,11 +557,7 @@ impl CompiledScene {
             .into();
         if let Some(handle) = external_handle {
             self.cairo_path_points_by_resource
-                .insert(handle, Arc::downgrade(&points));
-            if self.cairo_path_points_by_resource.len() >= 64 {
-                self.cairo_path_points_by_resource
-                    .retain(|_, points| points.strong_count() > 0);
-            }
+                .insert_live_version(handle, &points);
         }
         self.cairo_path_control_points.insert(row, points);
     }
@@ -674,5 +698,55 @@ mod tests {
         scene.refresh_cairo_path_control_points(1);
         assert!(scene.cairo_path_points(1).is_none());
         assert!(second_weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn cairo_control_cache_prunes_amortized_without_repeated_full_scans() {
+        let mut cache = CairoPathPointResourceCache::default();
+        let live_points: Vec<_> = (0..64)
+            .map(|index| {
+                let points: Arc<[SemanticVec3]> =
+                    vec![SemanticVec3::new(index as f64, 0.0, 0.0)].into();
+                cache.insert_live_version(handle(index), &points);
+                points
+            })
+            .collect();
+        assert_eq!(cache.len(), 64);
+        assert_eq!(cache.next_prune_at, 128);
+
+        for index in 64..128 {
+            let points: Arc<[SemanticVec3]> =
+                vec![SemanticVec3::new(index as f64, 0.0, 0.0)].into();
+            cache.insert_live_version(handle(index), &points);
+        }
+        assert_eq!(
+            cache.len(),
+            64,
+            "the dead weak entries are pruned at threshold"
+        );
+        assert_eq!(cache.next_prune_at, 128);
+
+        let next: Arc<[SemanticVec3]> = vec![SemanticVec3::ZERO].into();
+        cache.insert_live_version(handle(128), &next);
+        assert_eq!(cache.len(), 65, "the next insert must not rescan the table");
+        assert_eq!(cache.next_prune_at, 128);
+        assert_eq!(live_points.len(), 64);
+    }
+
+    #[test]
+    fn cairo_control_hull_keeps_finite_extreme_coordinates_ordered() {
+        let limit = f32::MAX;
+        let hull = convex_hull(vec![
+            noon_core::Vec2::new(-limit, -limit),
+            noon_core::Vec2::new(limit, -limit),
+            noon_core::Vec2::new(limit, limit),
+            noon_core::Vec2::new(-limit, limit),
+            noon_core::Vec2::ZERO,
+        ]);
+        assert_eq!(hull.len(), 4);
+        assert_eq!(hull[0], noon_core::Vec2::new(-limit, -limit));
+        assert_eq!(hull[1], noon_core::Vec2::new(limit, -limit));
+        assert_eq!(hull[2], noon_core::Vec2::new(limit, limit));
+        assert_eq!(hull[3], noon_core::Vec2::new(-limit, limit));
     }
 }
