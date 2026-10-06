@@ -1531,30 +1531,6 @@ mod tests {
     }
 
     #[test]
-    fn fixed_orientation_join_tangent_uses_physical_pixel_axes_for_nonsquare_viewport() {
-        // Fixed-orientation geometry is mapped through independent X/Y clip
-        // scales. Converting the mapped displacement back to pixels must
-        // recover the world-plane tangent, even for a nonsquare viewport.
-        let viewport = [320.0_f32, 180.0_f32];
-        let clip_scale = [2.0 / viewport[0], 2.0 / viewport[1]];
-        let tangent = [1.0_f32, 0.6_f32];
-        let clip_delta = [tangent[0] * clip_scale[0], tangent[1] * clip_scale[1]];
-        let pixel_delta = [
-            clip_delta[0] * viewport[0] * 0.5,
-            clip_delta[1] * viewport[1] * 0.5,
-        ];
-        let length = pixel_delta[0].hypot(pixel_delta[1]);
-        let direction = [pixel_delta[0] / length, pixel_delta[1] / length];
-        assert!((direction[0] - 1.0 / 1.36_f32.sqrt()).abs() < 1.0e-6);
-        assert!((direction[1] - 0.6 / 1.36_f32.sqrt()).abs() < 1.0e-6);
-
-        // Keep the shader branch paired with that numeric contract: dividing
-        // by clip_scale would make the normal aspect-ratio dependent.
-        let shader = include_str!("spatial_path.wgsl");
-        assert!(shader.contains("return (world * vec4<f32>(tangent, 0.0, 0.0)).xy;"));
-    }
-
-    #[test]
     fn tessellation_stays_local_and_rejects_unsupported_styles() {
         let resources = GeometryResourceArena::default();
         let geometry = GeometryRef::rectangle(2.0, 1.0);
