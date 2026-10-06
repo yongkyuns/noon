@@ -198,6 +198,29 @@ fn malformed_surface_cell_rolls_back_mixed_family_resources_and_nodes() {
 }
 
 #[test]
+fn mixed_live_family_rolls_back_valid_body_when_cap_path_preparation_fails() {
+    let scene = Scene::new();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    let mut execution = scene.execution_session().unwrap();
+    let before_resources = store.borrow().geometry_resources().len();
+    let before_nodes = store.borrow().len();
+    let invalid_cap = SpatialPathOptions {
+        path: noon_core::VectorPath::new().move_to(noon_core::Vec2::new(f32::NAN, 0.0)),
+        transform: SemanticWorldTransform3D::IDENTITY,
+        style: SemanticStyle::default(),
+        material: SemanticSpatialMaterial::Unlit,
+        cairo_appearance: None,
+    };
+
+    let mut live = crate::LiveSession::new(&store, scene.root(), &mut execution);
+    assert!(live
+        .create_mesh_family_with_paths(vec![cube()], vec![invalid_cap])
+        .is_err());
+    assert_eq!(store.borrow().geometry_resources().len(), before_resources);
+    assert_eq!(store.borrow().len(), before_nodes);
+}
+
+#[test]
 fn cairo_surface_family_publishes_appearance_metadata_with_distinct_material() {
     let cairo_grid = UvSurfacePlan::new([0.0, 1.0], [0.0, 1.0], [1, 1])
         .unwrap()

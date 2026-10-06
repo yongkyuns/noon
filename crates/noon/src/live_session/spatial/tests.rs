@@ -82,30 +82,6 @@ fn execution_mesh(
 }
 
 #[test]
-fn mixed_live_family_rolls_back_valid_body_when_cap_path_preparation_fails() {
-    let scene = Scene::new();
-    let store = std::rc::Rc::clone(scene.integration_store());
-    let mut execution = scene.execution_session().unwrap();
-    let before_resources = store.borrow().geometry_resources().len();
-    let before_nodes = store.borrow().len();
-    let body = MeshOptions::new(noon_geometry::cube_mesh(1.0).unwrap());
-    let invalid_cap = crate::SpatialPathOptions {
-        path: noon_core::VectorPath::new().move_to(noon_core::Vec2::new(f32::NAN, 0.0)),
-        transform: SemanticWorldTransform3D::IDENTITY,
-        style: noon_core::SemanticStyle::default(),
-        material: noon_core::SemanticSpatialMaterial::Unlit,
-        cairo_appearance: None,
-    };
-
-    let mut live = LiveSession::new(&store, scene.root(), &mut execution);
-    assert!(live
-        .create_mesh_family_with_paths(vec![body], vec![invalid_cap])
-        .is_err());
-    assert_eq!(store.borrow().geometry_resources().len(), before_resources);
-    assert_eq!(store.borrow().len(), before_nodes);
-}
-
-#[test]
 fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
     let (scene, objects, mut execution, segment) = fixture();
     let target = &objects[0];
