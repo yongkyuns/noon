@@ -151,30 +151,26 @@ try {
       const source = performanceSource(mode, workload);
       const sourceSha = createHash("sha256").update(source).digest("hex");
       await writeFile(path.join(output, `${workload}-${mode}.py`), source);
-      // Every scored observation uses a new worker. The paired t interval assumes
-      // independent pair ratios; reusing one aging worker across all seven pairs
-      // violates that assumption and was empirically shown to shift local-edit cost
-      // on both baseline and candidate. Browser/package startup stays outside the
-      // Python-reported timings, and pair order remains fixed/alternating.
-      for (let warm = 0; warm < protocol.warmups; ++warm) {
-        const participants = await Promise.all([0, 1].map(side =>
-          openScoredParticipant(side, `warmup-${workload}-${mode}-${warm + 1}`)));
-        try {
-          for (const side of warm % 2 ? [1, 0] : [0, 1]) {
-            warmups.push({ side, workload, mode, workerLifetime: "fresh-per-observation",
-              result: await measure(side, source, mode, workload, participants[side]) });
-          }
-        } finally {
-          await Promise.all(participants.map(participant => participant.close()));
-        }
-      }
+      // Every scored pair uses two new workers. Each exact scored worker first
+      // receives the same unscored source warmup, then one scored observation.
+      // This preserves independent pair ratios without turning qualification
+      // into a cold-worker benchmark. Browser/package startup and warmup timings
+      // never enter the paired cost calculation; pair order remains alternating.
       const pairs = [];
       for (let pair = 0; pair < protocol.pairs; ++pair) {
         const participants = await Promise.all([0, 1].map(side =>
           openScoredParticipant(side, `pair-${workload}-${mode}-${pair + 1}`)));
         const values = [];
         try {
-          for (const side of pair % 2 ? [1, 0] : [0, 1]) {
+          const order = pair % 2 ? [1, 0] : [0, 1];
+          for (let warm = 0; warm < protocol.scoredWorkerWarmups; ++warm) {
+            for (const side of order) {
+              warmups.push({ side, workload, mode, pair: pair + 1, warmup: warm + 1,
+                workerLifetime: "fresh-per-pair-warmed",
+                result: await measure(side, source, mode, workload, participants[side]) });
+            }
+          }
+          for (const side of order) {
             values[side] = await measure(side, source, mode, workload, participants[side]);
           }
         } finally {
@@ -186,7 +182,8 @@ try {
         pairs.push(values);
         // Persist immediately; retain every fixed pair and all failed evidence.
         await writeFile(path.join(output, `${workload}-${mode}.json`),
-          stringifyEvidence({ sourceSha, workerLifetime: "fresh-per-observation", pairs }) + "\n");
+          stringifyEvidence({ sourceSha, workerLifetime: "fresh-per-pair-warmed",
+            scoredWorkerWarmups: protocol.scoredWorkerWarmups, pairs }) + "\n");
       }
       const costs = Object.fromEntries(["creation_ms", "local_ms", "execution_ms"].map(key => [key,
         pairedCost(pairs.map(pair => pair[0][key]), pairs.map(pair => pair[1][key]))]));

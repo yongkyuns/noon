@@ -176,16 +176,17 @@ test("controlled-history diagnostics are after scored rows and cannot rescore th
 });
 
 
-test("scored fixed-work pairs use fresh workers without changing budgets or pair count", async () => {
+test("scored fixed-work pairs warm the exact fresh workers without changing budgets", async () => {
   const runner = await readFile(new URL("./python-host-perf.mjs", import.meta.url), "utf8");
-  const scored = runner.indexOf("      // Every scored observation uses a new worker.");
+  const scored = runner.indexOf("      // Every scored pair uses two new workers.");
   const profiles = runner.indexOf("  // Profiles are a separate diagnostic experiment");
   assert.ok(scored > 0 && profiles > scored);
   const block = runner.slice(scored, profiles);
   assert.match(block, /openScoredParticipant/);
+  assert.match(block, /protocol\.scoredWorkerWarmups/);
+  assert.match(block, /measure\(side, source, mode, workload, participants\[side\]\)/);
+  assert.match(block, /workerLifetime: "fresh-per-pair-warmed"/);
   assert.match(block, /Promise\.all\(participants\.map\(participant => participant\.close\(\)\)\)/);
-  assert.match(block, /workerLifetime: "fresh-per-observation"/);
   assert.match(block, /protocol\.pairs/);
-  assert.match(block, /protocol\.warmups/);
   assert.doesNotMatch(block, /maxPointRatio\s*=|maxUpperRatio\s*=|pairs\s*=\s*[0-9]/);
 });

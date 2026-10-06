@@ -1,7 +1,7 @@
 // Qualification inputs/statistics only, not an engine or a runtime scheduler.
 import assert from "node:assert/strict";
 
-export const PERF_PROTOCOL = Object.freeze({ pairs: 7, warmups: 2, workerLifetime: "fresh-per-observation", objects: 600,
+export const PERF_PROTOCOL = Object.freeze({ pairs: 7, warmups: 2, scoredWorkerWarmups: 1, workerLifetime: "fresh-per-pair-warmed", objects: 600,
   localEdits: 2048, segments: 32, callbacks: 4, samples: 60, sampleHz: 48,
   modes: ["async", "portable", "jspi"], workloads: ["deterministic", "segments", "callbacks"],
   maxPointRatio: 1.03, maxUpperRatio: 1.05 });
