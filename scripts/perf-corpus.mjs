@@ -7,7 +7,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { evaluateBudget } from "./perf-corpus-budget.mjs";
-import { isIdentifiedGpuAdapter, isSoftwareGpuAdapter } from "./manim-raster-support.mjs";
+import {
+  browserArgs, classifyBrowserGpuDiagnostics, rendererGpuQualification,
+} from "./manim-raster-support.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(
@@ -16,6 +18,9 @@ const manifest = JSON.parse(
 assert.equal(manifest.schemaVersion, 1);
 const backend = process.env.NOON_CORPUS_BACKEND ?? "webgpu";
 assert.ok(backend === "webgpu" || backend === "webgl", `unknown backend: ${backend}`);
+const gpuMode = process.env.NOON_CORPUS_GPU_MODE ?? null;
+assert.ok(gpuMode === null || gpuMode === "hardware" || gpuMode === "software",
+  "NOON_CORPUS_GPU_MODE must be hardware or software");
 const selected = new Set(list(process.env.NOON_CORPUS_CASES ?? ""));
 const cases = manifest.cases.filter((item) => selected.size === 0 || selected.has(item.id));
 assert.ok(cases.length > 0, "performance corpus selection is empty");
@@ -53,9 +58,11 @@ server.stderr.on("data", (chunk) => (serverOutput += chunk));
 let browser = null;
 try {
   await waitForServer();
-  browser = await chromium.launch({ channel: "chromium", headless: browserMode === "headless", args: browserArgs(backend) });
+  browser = await chromium.launch({ channel: "chromium", headless: browserMode === "headless",
+    args: gpuMode === null ? defaultBrowserArgs(backend) : browserArgs(backend, { gpuMode }) });
   const results = [];
   let failedBudgets = 0;
+  let failedGpuQualifications = 0;
   for (const definition of cases) {
     const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
     const sourceFile = path.join(repoRoot, "web", definition.source.slice(2));
@@ -72,6 +79,7 @@ try {
       includeRendererSamples: includeRendererSamples ? "1" : "0",
       rendererMetricsSampling: "sparse",
       includeStageTimings: includeStageTimings ? "1" : "0",
+      includeRendererGpuIdentity: gpuMode === null ? "0" : "1",
     });
     process.stdout.write(`Corpus ${backend} ${definition.id}… `);
     await page.goto(`${baseUrl}/web/scene-perf.html?${query}`, { waitUntil: "load" });
@@ -87,7 +95,23 @@ try {
     const report = await page.evaluate(() => window.__NOON_SCENE_PERF__);
     assert.equal(report.environment?.rendererBackend, backend === "webgpu" ? "WebGPU" : "WebGL2",
       `${definition.id}: observed renderer backend does not match requested ${backend}`);
-    const gpuDiagnostics = await page.evaluate(async (requestedBackend) => {
+    const gpuQualification = gpuMode === null ? null : rendererGpuQualification(
+      gpuMode, report.environment?.rendererGpuIdentity, backend,
+    );
+    if (gpuQualification !== null) {
+      report.environment.rendererGpuIdentityClassification = gpuQualification.classification;
+      report.environment.gpuQualification = gpuQualification;
+      if (!gpuQualification.passed) failedGpuQualifications += 1;
+    }
+    const gpuDiagnostics = gpuMode !== null ? {
+      api: "renderer-device",
+      identityScope: "actual WGPU device backing the retained renderer",
+      available: true,
+      adapter: report.environment.rendererGpuIdentity,
+      classification: report.environment.rendererGpuIdentityClassification,
+      classificationMeaning:
+        "software is a known software renderer; hardware-like-unverified is an identified non-software renderer. This does not verify physical display presentation.",
+    } : await page.evaluate(async (requestedBackend) => {
       if (requestedBackend === "webgpu") {
         if (!navigator.gpu) return {
           api: "webgpu", identityScope: "separate diagnostic adapter request", available: false, adapter: null,
@@ -125,9 +149,11 @@ try {
         renderer: extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : null,
       };
     }, backend);
-    gpuDiagnostics.classification = classifyGpuDiagnostics(gpuDiagnostics);
-    gpuDiagnostics.classificationMeaning =
-      "software means a known software/fallback marker; hardware-like-unverified means an identified descriptor without such a marker; unknown means unavailable or redacted. None proves a physical device.";
+    if (gpuMode === null) {
+      gpuDiagnostics.classification = classifyBrowserGpuDiagnostics(gpuDiagnostics);
+      gpuDiagnostics.classificationMeaning =
+        "software means a known software/fallback marker; hardware-like-unverified means an identified descriptor without such a marker; unknown means unavailable or redacted. None proves a physical device.";
+    }
     const sourceSha256After = createHash("sha256")
       .update(await readFile(sourceFile))
       .digest("hex");
@@ -145,6 +171,7 @@ try {
       },
       browser: { name: "Chromium", version: browser.version(), mode: browserMode },
       gpuDiagnostics,
+      ...(gpuQualification === null ? {} : { gpuQualification }),
       presentation: {
         scope: "browser rendering and requestAnimationFrame cadence",
         physicalDisplayPresentationVerified: false,
@@ -175,6 +202,7 @@ try {
     },
     configuration: {
       backend, warmup, frames, targetHz, enforce, browserMode,
+      gpuMode,
       includeSamples, includeRendererSamples, includeStageTimings,
       rendererMetricsSampling: "sparse",
       runtimeBuildIdentityIncluded: includeRendererSamples,
@@ -186,7 +214,8 @@ try {
   await mkdir(path.dirname(artifactPath), { recursive: true });
   await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
   console.log(`Wrote ${path.relative(repoRoot, artifactPath)}`);
-  if (enforce && failedBudgets > 0) process.exitCode = 2;
+  if (failedGpuQualifications > 0) process.exitCode = 3;
+  else if (enforce && failedBudgets > 0) process.exitCode = 2;
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
@@ -207,7 +236,7 @@ async function waitForServer() {
   throw new Error(`Corpus server did not start: ${lastError}\n${serverOutput}`);
 }
 
-function browserArgs(mode) {
+function defaultBrowserArgs(mode) {
   return mode === "webgpu"
     ? ["--enable-unsafe-webgpu", "--use-gpu-in-tests", "--ignore-gpu-blocklist", "--disable-gpu-sandbox", "--disable-dev-shm-usage"]
     : ["--disable-features=WebGPU", "--ignore-gpu-blocklist", "--disable-gpu-sandbox", "--disable-dev-shm-usage"];
@@ -221,20 +250,6 @@ function booleanOption(name) {
   const value = process.env[name] ?? "0";
   assert.ok(value === "0" || value === "1", `${name} must be 0 or 1`);
   return value === "1";
-}
-
-function classifyGpuDiagnostics(diagnostics) {
-  if (diagnostics.api === "webgpu") {
-    const adapter = diagnostics.adapter;
-    if (!adapter || !isIdentifiedGpuAdapter(adapter)) return "unknown";
-    return isSoftwareGpuAdapter(adapter) ? "software" : "hardware-like-unverified";
-  }
-  const rendererInfo = {
-    vendor: String(diagnostics.vendor ?? ""),
-    device: String(diagnostics.renderer ?? ""),
-  };
-  if (![rendererInfo.vendor, rendererInfo.device].some((value) => value.trim() !== "")) return "unknown";
-  return isSoftwareGpuAdapter(rendererInfo) ? "software" : "hardware-like-unverified";
 }
 
 async function workingTreeIdentity() {

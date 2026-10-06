@@ -211,6 +211,7 @@ test("engine and render requests use independent issuance spaces", async () => {
   assert.deepEqual(renderMetrics, {
     channel: "noon.render", protocolVersion: 1, type: "metrics", requestId: 2,
     profilePublicationStages: false, profileRenderSubstages: false,
+    includeGpuIdentity: false,
   });
   assert.equal(engineMetrics.requestId, 0);
   assert.equal(renderMetrics.requestId, 2);
@@ -242,15 +243,16 @@ test("engine and render requests use independent issuance spaces", async () => {
   client.terminate();
 });
 
-test("render substage profiling is an explicit render-worker metrics option", async () => {
+test("render metrics options, including one-shot GPU identity, are explicit", async () => {
   const errors = [];
   const { client, engine, render } = await startClient(errors);
-  const metricsPromise = client.metrics({ profileRenderSubstages: true });
+  const metricsPromise = client.metrics({ profileRenderSubstages: true, includeGpuIdentity: true });
   await Promise.resolve();
   const engineMetrics = requestMessage(engine, "metrics");
   const renderMetrics = requestMessage(render, "metrics");
   assert.equal(renderMetrics.profilePublicationStages, false);
   assert.equal(renderMetrics.profileRenderSubstages, true);
+  assert.equal(renderMetrics.includeGpuIdentity, true);
   engine.emitMessage(engineMessage("metrics", { requestId: engineMetrics.requestId, metrics: {} }));
   render.emitMessage(renderMessage("metrics", { requestId: renderMetrics.requestId, metrics: {} }));
   await metricsPromise;

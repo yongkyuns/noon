@@ -681,13 +681,15 @@ export class ExecutionWorkerClient {
     return this.#requestEngine("state", {});
   }
 
-  async metrics({ profilePublicationStages = false, profileRenderSubstages = false } = {}) {
+  async metrics({ profilePublicationStages = false, profileRenderSubstages = false,
+    includeGpuIdentity = false } = {}) {
     if (typeof profilePublicationStages !== "boolean" ||
-        typeof profileRenderSubstages !== "boolean") {
+        typeof profileRenderSubstages !== "boolean" || typeof includeGpuIdentity !== "boolean") {
       throw new TypeError("renderer profiling options must be booleans");
     }
     const [render, engine] = await Promise.all([
-      this.#requestRender("metrics", { profilePublicationStages, profileRenderSubstages }),
+      this.#requestRender("metrics", { profilePublicationStages, profileRenderSubstages,
+        includeGpuIdentity }),
       this.#requestEngine("metrics", {}),
     ]);
     return { ...render, engineMetrics: engine.metrics, renderHost: this.#renderHost };
