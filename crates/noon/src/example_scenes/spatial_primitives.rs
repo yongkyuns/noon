@@ -3,12 +3,12 @@
 use crate::{
     AnimationOptions, Color, ExecutionSession, MeshOptions, MobjectTarget, RateFunction, Scene,
     SemanticCamera3D, SemanticProjection3D, SemanticSpatialCompositionDomain, SemanticVec3,
-    SemanticWorldTransform3D, WorldAffineEdit,
+    SemanticWorldTransform3D, SurfaceOptions, WorldAffineEdit,
 };
 use noon_core::{
     CompositionTimeMap, ManimCamera3DProfile, SemanticAnimationCompositionKind,
     SemanticMutationTransaction, SemanticObjectTrackProperty, SemanticObjectTrackValues,
-    SemanticPaint, SemanticRotation3D, SemanticStyle, TrackTiming,
+    SemanticPaint, SemanticRotation3D, SemanticSpatialMaterial, SemanticStyle, TrackTiming,
 };
 
 const DURATION: f64 = 1.0;
