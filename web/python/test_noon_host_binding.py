@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 
 @contextmanager
-def browser_host():
+def browser_host(can_sync=True):
     resolved = []
     js = types.ModuleType('js')
     def resolve(name):
@@ -18,7 +18,7 @@ def browser_host():
         raise AttributeError(name)
     js.__getattr__ = resolve
     ffi = types.ModuleType('pyodide.ffi')
-    ffi.can_run_sync = lambda: True
+    ffi.can_run_sync = lambda: can_sync
     ffi.run_sync = lambda value: value
     spec = importlib.util.spec_from_file_location(
         '_noon_host_binding_test', Path(__file__).with_name('_noon_host.py'))
@@ -56,6 +56,20 @@ class BrowserBindingTests(unittest.TestCase):
                 noonRequireSemanticContinuationActive('retired')
             self.assertIs(host.wait_sync, ffi.run_sync)
             self.assertIs(host.can_wait_sync, ffi.can_run_sync)
+
+    def test_jspi_capability_must_be_disabled_before_binding_initialization(self):
+        # A late mutation of pyodide.ffi cannot change a function already
+        # imported by the host adapter. Browser negatives must bootstrap a
+        # genuinely unsupported worker, not patch a stale module export.
+        with browser_host() as (host, js, ffi, resolved):
+            selected = host.can_wait_sync
+            ffi.can_run_sync = lambda: False
+            self.assertIs(host.can_wait_sync, selected)
+            self.assertTrue(host.can_wait_sync())
+            self.assertFalse(ffi.can_run_sync())
+        with browser_host(can_sync=False) as (host, js, ffi, resolved):
+            self.assertIs(host.can_wait_sync, ffi.can_run_sync)
+            self.assertFalse(host.can_wait_sync())
 
     def test_missing_optional_binding_is_not_cached_or_eagerly_resolved(self):
         with browser_host() as (host, js, ffi, resolved):
