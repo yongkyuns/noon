@@ -516,7 +516,11 @@ fn line_gpu_coverage_is_stable_at_pixel_phases_and_preserves_caps() {
             rgba(&rounded, 80, 31)[0] > 0,
             "round end extends beyond its endpoint"
         );
-        assert_eq!(rgba(&rounded, 44, 31)[0], 0, "round start has bounded extent");
+        assert_eq!(
+            rgba(&rounded, 44, 31)[0],
+            0,
+            "round start has bounded extent"
+        );
         assert_eq!(rgba(&rounded, 83, 31)[0], 0, "round end has bounded extent");
     });
 }
