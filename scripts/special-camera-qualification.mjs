@@ -231,7 +231,11 @@ export function assertFollowingPythonLifecycle(observation, oracle, backend) {
       assertFollowingState(frame, expected, label);
     }
     assert.equal(run.before?.state?.replaySupported, false, `${label}: must reach final replay admission`);
-    assert.match(run.before.state.replayUnavailable ?? "", /callback|host/i, `${label}: opaque-callback reason`);
+    // ExecutionSession::seal_replay uses the shared UnsupportedDomain class
+    // for retained callback history. It is not a callback-specific message;
+    // source identity and the following-state samples qualify that separately.
+    assert.equal(run.before.state.replayUnavailable, "UnsupportedDomain",
+      `${label}: expected shared unsupported-domain replay admission`);
     assert.equal(run.before.state.playing, false, `${label}: denied replay must remain paused`);
     assert.equal(run.before.state.time, 3, `${label}: handoff changed authored time`);
     assert.ok(run.before.frame?.publication && typeof run.before.frame.publication === "object"
@@ -240,11 +244,12 @@ export function assertFollowingPythonLifecycle(observation, oracle, backend) {
     assert.deepEqual(run.controls?.map(control => control.operation), ["seek", "restartPlayback", "resume"],
       `${label}: missing replay controls`);
     for (const control of run.controls) {
-      assert.match(control.denial ?? "", /replay unavailable/i, `${label}/${control.operation}: not a replay denial`);
+      assert.equal(control.denial, "Error: Replay unavailable: UnsupportedDomain",
+        `${label}/${control.operation}: expected the admitted replay rejection`);
       assert.deepEqual(control.after, run.before, `${label}/${control.operation}: rejected control changed publication`);
     }
   }
-  return { completedRuns: 2, replay: "denied", failureAtomic: true, freshRun: true };
+  return { completedRuns: 2, replay: "denied", denialKind: "unsupported-domain", failureAtomic: true, freshRun: true };
 }
 
 async function followingOracle(qualifyPairedAuthoring) {
