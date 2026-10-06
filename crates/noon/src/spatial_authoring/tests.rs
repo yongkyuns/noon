@@ -40,6 +40,45 @@ fn flat_grid() -> SurfaceGrid {
 }
 
 #[test]
+fn cairo_surface_family_publishes_appearance_metadata_with_distinct_material() {
+    let cairo_grid = UvSurfacePlan::new([0.0, 1.0], [0.0, 1.0], [1, 1])
+        .unwrap()
+        .sample_cairo(|u, v| SemanticVec3::new(u, v, u * u + v * v))
+        .unwrap();
+    let expected = cairo_grid.appearances()[0];
+    let mut scene = Scene::new();
+    let family = scene
+        .surface_cairo_family(
+            cairo_grid,
+            SurfaceOptions {
+                material: SemanticSpatialMaterial::CairoSurface,
+                ..SurfaceOptions::default()
+            },
+        )
+        .unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    let leaves = store
+        .borrow()
+        .ordered_leaf_nodes(family.family().node_id())
+        .unwrap();
+    assert_eq!(leaves.len(), 1);
+    let borrowed = store.borrow();
+    let state = borrowed.semantic_object_state_checked(leaves[0]).unwrap();
+    assert_eq!(
+        state.spatial_material(),
+        SemanticSpatialMaterial::CairoSurface
+    );
+    let StoredGeometry::Resource(handle) = state.content.geometry().unwrap() else {
+        panic!("Cairo Surface cell should retain a mesh resource");
+    };
+    let Some(noon_core::GeometryResource::Mesh(mesh)) = borrowed.geometry_resources().get(handle)
+    else {
+        panic!("Cairo Surface cell should retain a mesh");
+    };
+    assert_eq!(mesh.cairo_appearance(), Some(&expected));
+}
+
+#[test]
 fn surface_family_retains_uv_roles_and_applies_defaults_and_atomic_checkerboard() {
     let mut scene = Scene::new();
     let surface = scene
@@ -118,7 +157,7 @@ fn surface_family_unlit_is_explicit_and_invalid_members_fail_atomically() {
         .surface_family(
             flat_grid(),
             SurfaceOptions {
-                point_lit: false,
+                material: SemanticSpatialMaterial::Unlit,
                 ..SurfaceOptions::default()
             },
         )
@@ -181,6 +220,117 @@ fn surface_family_unlit_is_explicit_and_invalid_members_fail_atomically() {
             crate::UnsupportedAuthoringOperation::SurfaceCellRole
         ))
     ));
+}
+
+#[test]
+fn translucent_prism_face_family_is_atomic_reusable_and_rust_transformable() {
+    let mut scene = Scene::new();
+    let revision = scene.revision();
+    let resource_stats = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .stats();
+    assert!(scene
+        .prism_face_family(SemanticVec3::new(3.0, 2.0, 1.0), Color::BLUE, f64::NAN,)
+        .is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .stats(),
+        resource_stats
+    );
+
+    let cube = scene.cube_face_family(2.0, Color::BLUE, 0.75).unwrap();
+    assert_eq!(
+        store_leaf_count(scene.integration_store(), cube.node_id()),
+        6
+    );
+
+    let tint = Color::rgba(0.2, 0.4, 0.8, 0.6);
+    let family = scene
+        .prism_face_family(SemanticVec3::new(3.0, 2.0, 1.0), tint, 0.75)
+        .unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    let leaves = store.borrow().ordered_leaf_nodes(family.node_id()).unwrap();
+    assert_eq!(leaves.len(), 6);
+    let resource_handles = leaves
+        .iter()
+        .map(|leaf| {
+            let borrowed = store.borrow();
+            let state = borrowed.semantic_object_state_checked(*leaf).unwrap();
+            assert_eq!(state.style.fill, Some(SemanticPaint::Solid(tint)));
+            assert_eq!(state.style.fill_opacity, 0.75);
+            assert_eq!(state.style.stroke, None);
+            let handle = state.content.geometry().unwrap().resource_handle().unwrap();
+            let Some(GeometryResource::Mesh(mesh)) = borrowed.geometry_resources().get(handle)
+            else {
+                panic!("prism face mesh resource")
+            };
+            assert_eq!(mesh.positions().len(), 4);
+            assert_eq!(mesh.normals().unwrap().len(), 4);
+            assert_eq!(mesh.indices(), [0, 1, 3, 1, 2, 3]);
+            handle
+        })
+        .collect::<Vec<_>>();
+
+    let copy = family.copy_family().unwrap();
+    let copy_family = copy.root().clone();
+    let copied_leaves = store
+        .borrow()
+        .ordered_leaf_nodes(copy_family.node_id())
+        .unwrap();
+    assert_eq!(copied_leaves.len(), 6);
+    let copied_handles = copied_leaves
+        .iter()
+        .map(|leaf| {
+            store
+                .borrow()
+                .semantic_object_state_checked(*leaf)
+                .unwrap()
+                .content
+                .geometry()
+                .unwrap()
+                .resource_handle()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(copied_handles, resource_handles);
+    let resources_after_copy = store.borrow().geometry_resources().stats();
+
+    let mut moved = copy_family.clone();
+    moved
+        .world_affine(WorldAffineEdit::Shift(SemanticVec3::new(1.0, -2.0, 0.5)))
+        .unwrap();
+    for leaf in copied_leaves {
+        let borrowed = store.borrow();
+        let state = borrowed.semantic_object_state_checked(leaf).unwrap();
+        let world = state.transform.world_transform().unwrap();
+        assert_eq!(world.translation, SemanticVec3::new(1.0, -2.0, 0.5));
+        assert_eq!(state.style.fill_opacity, 0.75);
+    }
+    for leaf in leaves {
+        let borrowed = store.borrow();
+        let state = borrowed.semantic_object_state_checked(leaf).unwrap();
+        assert_eq!(
+            state.transform.world_transform().unwrap().translation,
+            SemanticVec3::ZERO
+        );
+    }
+    assert_eq!(
+        store.borrow().geometry_resources().stats(),
+        resources_after_copy
+    );
+}
+
+fn store_leaf_count(
+    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    family: noon_core::SemanticNodeId,
+) -> usize {
+    store.borrow().ordered_leaf_nodes(family).unwrap().len()
 }
 
 fn assert_vec3_near(actual: SemanticVec3, expected: SemanticVec3) {
@@ -345,6 +495,89 @@ fn world_center_rejects_foreign_and_stale_handles() {
         .apply(&mut running.integration_store().borrow_mut())
         .unwrap();
     assert!(running.effective_world_center(&detached).is_err());
+}
+
+#[test]
+fn family_world_center_uses_authored_and_effective_leaf_bounds() {
+    let mut scene = Scene::new();
+    let first = scene.mesh(offset_mesh()).unwrap();
+    let mut second_transform = SemanticWorldTransform3D::IDENTITY;
+    second_transform.translation = SemanticVec3::new(20.0, 0.0, 0.0);
+    let second = scene
+        .mesh(
+            MeshOptions::new(noon_geometry::cube_mesh(1.0).unwrap())
+                .with_transform(second_transform),
+        )
+        .unwrap();
+    let detached_member = scene.mesh(offset_mesh()).unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    let family = MobjectFamily::create(store, &[(&first).into(), (&second).into()]).unwrap();
+    let detached_family = MobjectFamily::create(
+        std::rc::Rc::clone(scene.integration_store()),
+        &[(&detached_member).into()],
+    )
+    .unwrap();
+    assert_eq!(
+        family.world_center().unwrap(),
+        SemanticVec3::new(15.25, 0.75, 0.75)
+    );
+    assert_eq!(
+        detached_family.world_center().unwrap(),
+        SemanticVec3::new(11.0, 1.0, 1.0)
+    );
+    scene.add_many(&[(&family).into()]).unwrap();
+
+    let mut target = first.world_transform().unwrap();
+    target.translation.x += 3.0;
+    let declaration = scene
+        .declare_world_transform(
+            &first,
+            target,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    let root = transaction.create_animation_composition(
+        noon_core::SemanticAnimationCompositionKind::Parallel,
+        [declaration.node_id()],
+        AnimationOptions::new(),
+    );
+    let root = transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap()
+        .resolve(root)
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    session
+        .activate_animation_segment(
+            &scene.integration_store().borrow(),
+            root,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+    session.advance_to(1.0).unwrap();
+    scene.install_execution(session);
+    assert_eq!(
+        scene.effective_world_family_center(&family).unwrap(),
+        SemanticVec3::new(16.0, 0.75, 0.75)
+    );
+    assert_eq!(
+        scene
+            .effective_world_family_center(&detached_family)
+            .unwrap(),
+        SemanticVec3::new(11.0, 1.0, 1.0)
+    );
+
+    let mut external = SemanticMutationTransaction::new();
+    external.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 0.5 },
+    )));
+    external
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    assert!(scene.effective_world_family_center(&family).is_err());
 }
 
 #[test]

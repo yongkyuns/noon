@@ -29,9 +29,9 @@ class RasterManifestTests(unittest.TestCase):
         self.assertEqual(worker["scene"], direct["scene"])
         self.assertEqual(direct["source"], worker["source"])
         self.assertEqual(direct["direct_factory"], "createDirectVectorSpaceSmokeRenderer")
-        self.assertEqual(direct["expected_duration"], 3.0)
-        self.assertEqual(worker["expected_duration"], 3.0)
-        self.assertEqual(direct["sample_times"], [0.0, 1.5, 2.966666666666667])
+        self.assertEqual(direct["expected_duration"], 4.0)
+        self.assertEqual(worker["expected_duration"], 4.0)
+        self.assertEqual(direct["sample_times"], [0.0, 0.5, 1.0, 2.5, 3.966666666666667])
         self.assertEqual(worker["sample_times"], direct["sample_times"])
         self.assertNotIn("tolerance", direct)
         self.assertNotIn("tolerance", worker)
@@ -39,6 +39,27 @@ class RasterManifestTests(unittest.TestCase):
         self.assertIn("from manim import *", source)
         self.assertIn("class VectorSpaceLTS(LinearTransformationScene)", source)
         self.assertIn("self.apply_matrix([[0.0, 1.0], [1.0, 0.0]])", source)
+
+    def test_focused_lts_feature_pair_uses_tracked_vector_for_ghost_history(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        fixtures = {
+            fixture["id"]: fixture
+            for fixture in manifest["fixtures"]
+            if fixture["id"] in {"lts-feature-slice-direct", "lts-feature-slice-worker"}
+        }
+        self.assertEqual(set(fixtures), {"lts-feature-slice-direct", "lts-feature-slice-worker"})
+        direct = fixtures["lts-feature-slice-direct"]
+        worker = fixtures["lts-feature-slice-worker"]
+        self.assertEqual(direct["scene"], "VectorSpaceLTSFeatures")
+        self.assertEqual(worker["scene"], direct["scene"])
+        oracle = (ROOT / direct["source"]).read_text(encoding="utf-8")
+        noon = (ROOT / worker["noon_source"]).read_text(encoding="utf-8")
+        for source in (oracle, noon):
+            self.assertIn("self.add_transformable_mobject(square)", source)
+            self.assertIn("Vector((0.5, 0.25), color=YELLOW)", source)
+            self.assertIn("self.add_vector(vector, animate=False)", source)
+            self.assertIn("self.apply_matrix([[0.0, 1.0], [1.0, 0.0]]", source)
+            self.assertIn("self.apply_matrix([[2.0, 0.0], [0.0, 1.0]]", source)
 
     def test_spatial_mesh_fixture_is_a_direct_typed_rust_wasm_pair(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

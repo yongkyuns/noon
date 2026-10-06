@@ -1,6 +1,7 @@
+import math
 import unittest
 import sys
-from unittest.mock import patch, Mock
+from unittest.mock import call, patch, Mock
 
 import noon
 import _noon_spatial as spatial
@@ -29,7 +30,7 @@ class SpatialFacadeTests(unittest.TestCase):
         class Factory:
             @staticmethod
             def sphere(*values):
-                self.assertEqual(values, (2.0, 8, 4))
+                self.assertEqual(values, (2.0, 8, 4, 0.0, 2 * math.pi, 0.0, math.pi))
                 return candidate
         with patch.object(spatial, "_mesh_options", Factory), \
              patch.object(spatial, "_live_constructor_context", return_value=None), \
@@ -40,6 +41,21 @@ class SpatialFacadeTests(unittest.TestCase):
         self.assertEqual(candidate.calls, [("color", (noon.RED.red, noon.RED.green, noon.RED.blue, noon.RED.alpha)), ("lit", True)])
         self.assertEqual(candidate.freed, 0)
         admit.assert_called_once_with(candidate)
+
+    def test_prism_face_options_are_generated_by_the_rust_factory(self):
+        candidate = Candidate()
+        class Factory:
+            @staticmethod
+            def prismFaces(*values):
+                self.assertEqual(values, (3.0, 2.0, 1.0))
+                return candidate
+        with patch.object(spatial, "_mesh_options", Factory):
+            result = spatial._prism_face_family_options((3, 2, 1))
+        self.assertIs(result, candidate)
+        with patch.object(spatial, "_mesh_options") as factory:
+            with self.assertRaises(ValueError):
+                spatial._prism_face_family_options((1, 2))
+            factory.prismFaces.assert_not_called()
 
     def test_failed_inert_configuration_frees_candidate_without_admission(self):
         candidate = Candidate()
@@ -143,6 +159,9 @@ class SpatialFacadeTests(unittest.TestCase):
                     self.assertIs(mesh._semantic_handle, handle)
                     admit.assert_called_once_with(candidate)
                     self.assertEqual(candidate.freed, 0)
+                    getattr(factory, kind).assert_called_once_with(
+                        1.0, 2.0, 32, True, 0.0, 2 * math.pi,
+                    )
 
     def test_failed_axial_pose_frees_candidate_and_never_admits(self):
         candidate = Candidate()
@@ -156,6 +175,52 @@ class SpatialFacadeTests(unittest.TestCase):
                 spatial.Mesh3D.cylinder(direction=(0, 0, 0))
         self.assertEqual(candidate.freed, 1)
         admit.assert_not_called()
+
+    def test_open_end_options_reach_the_shared_constructors_and_reject_non_booleans(self):
+        with patch.object(spatial, "_mesh_options") as factory:
+            for kind, option in (("cylinder", "show_ends"), ("cone", "show_base")):
+                candidate = Candidate()
+                getattr(factory, kind).return_value = candidate
+                with self.subTest(kind=kind), \
+                     patch.object(spatial, "_bulk", side_effect=tuple), \
+                     patch.object(spatial, "_live_constructor_context", return_value=None), \
+                     patch.object(spatial, "_create_mesh", return_value=object()):
+                    getattr(spatial.Mesh3D, kind)(**{option: False})
+                getattr(factory, kind).assert_called_once_with(
+                    1.0, 2.0, 32, False, 0.0, 2 * math.pi,
+                )
+                getattr(factory, kind).reset_mock()
+            for kind, option in (("cylinder", "show_ends"), ("cone", "show_base")):
+                with self.subTest(kind=kind), self.assertRaises(TypeError):
+                    getattr(spatial.Mesh3D, kind)(**{option: 0})
+                getattr(factory, kind).assert_not_called()
+
+    def test_partial_azimuth_ranges_reach_rust_and_invalid_ranges_fail_before_allocation(self):
+        with patch.object(spatial, "_mesh_options") as factory:
+            candidate = Candidate()
+            factory.cylinder.return_value = candidate
+            with patch.object(spatial, "_bulk", side_effect=tuple), \
+                 patch.object(spatial, "_live_constructor_context", return_value=None), \
+                 patch.object(spatial, "_create_mesh", return_value=object()):
+                spatial.Mesh3D.cylinder(v_range=(math.pi / 4, math.pi))
+            factory.cylinder.assert_called_once_with(
+                1.0, 2.0, 32, True, math.pi / 4, math.pi,
+            )
+            factory.reset_mock()
+            factory.cone.return_value = Candidate()
+            with patch.object(spatial, "_bulk", side_effect=tuple), \
+                 patch.object(spatial, "_live_constructor_context", return_value=None), \
+                 patch.object(spatial, "_create_mesh", return_value=object()):
+                spatial.Mesh3D.cone(v_range=(math.pi / 2, math.pi))
+            factory.cone.assert_called_once_with(
+                1.0, 2.0, 32, True, math.pi / 2, math.pi,
+            )
+            for kind in ("cylinder", "cone"):
+                factory.reset_mock()
+                for value in ((-0.1, 1), (1, 1), (2, 1), (0, 2 * math.pi + 0.1)):
+                    with self.subTest(kind=kind, value=value), self.assertRaises(ValueError):
+                        getattr(spatial.Mesh3D, kind)(v_range=value)
+                getattr(factory, kind).assert_not_called()
 
     def test_malformed_axial_direction_never_allocates(self):
         with patch.object(spatial, "_mesh_options") as factory:
@@ -192,6 +257,26 @@ class SpatialFacadeTests(unittest.TestCase):
              patch.object(spatial, "_live_mutation_context", return_value=None):
             self.assertIs(mesh.move_to((1, 2, 3)), mesh)
         handle.shiftWorld.assert_called_once_with(-9.0, 5.0, 1.0)
+
+    def test_family_move_to_uses_rust_authored_and_live_bounds_centers(self):
+        family = Mock()
+        family.worldFamilyCenter.return_value = [10.0, -3.0, 2.0]
+        value = object.__new__(spatial.Mesh3D)
+        value._semantic_family_handle = family
+        with patch.object(spatial, "_group_target_context", return_value=None), \
+             patch.object(spatial, "_bulk", side_effect=tuple):
+            self.assertEqual(value.get_center(), (10.0, -3.0, 2.0))
+            self.assertIs(value.move_to((1, 2, 3)), value)
+        family.worldFamilyCenter.assert_has_calls([call(), call()])
+        family.shiftWorld.assert_called_once_with(-9.0, 5.0, 1.0)
+
+        context = Mock()
+        context.effectiveWorldFamilyCenter.return_value = [4.0, 5.0, 6.0]
+        with patch.object(spatial, "_group_target_context", return_value=context), \
+             patch.object(spatial, "_bulk", side_effect=tuple):
+            self.assertIs(value.move_to((1, 2, 3)), value)
+        context.effectiveWorldFamilyCenter.assert_called_once_with(family)
+        context.shiftFamilyWorld.assert_called_once_with(family, -3.0, -3.0, -3.0)
 
     def test_world_rotation_uses_the_same_scalar_axis_signature_for_cold_handles(self):
         mesh = object.__new__(spatial.Mesh3D)

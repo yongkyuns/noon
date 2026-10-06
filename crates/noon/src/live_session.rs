@@ -277,6 +277,12 @@ pub enum AnimationCompositionRequest<'a> {
         direction: SemanticFadeDirection,
         options: AnimationOptions,
     },
+    /// Introduce an Arrow family from its retained start point using shared
+    /// per-leaf affine lifecycle tracks and one atomic family admission.
+    FamilyArrowGrow {
+        target: &'a crate::ManimArrow,
+        options: AnimationOptions,
+    },
     /// Write or unwrite one plain Text object through its Rust-derived glyph members.
     TextWrite {
         target: &'a Mobject,
@@ -1712,6 +1718,18 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
+    /// Grow one retained Arrow from its authored start point through the shared
+    /// family lifecycle path. Only Arrow families are accepted by this API.
+    pub fn declare_and_activate_arrow_grow(
+        &mut self,
+        target: &crate::ManimArrow,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_family(target.family())?;
+        let request = AnimationCompositionRequest::FamilyArrowGrow { target, options };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
     /// Write or unwrite one plain Text object through shared glyph semantics.
     pub fn declare_and_activate_text_write(
         &mut self,
@@ -2239,6 +2257,25 @@ impl<'a> LiveSession<'a> {
                 Request::FamilyFade {
                     target: target.node_id(),
                     direction: *direction,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::FamilyArrowGrow { target, options } => {
+                self.require_family(target.family())?;
+                let endpoints = target
+                    .manim_endpoints()
+                    .map_err(|error| LiveSessionError::Animation(error.to_string()))?;
+                Request::FamilyArrowGrow {
+                    target: target.family().node_id(),
+                    endpoint: noon_core::SemanticAffineLifecycleEndpoint {
+                        point: noon_core::SemanticVec3::new(
+                            endpoints.start.0,
+                            endpoints.start.1,
+                            0.0,
+                        ),
+                        rotation_offset: 0.0,
+                        point_color: None,
+                    },
                     options: *options,
                 }
             }

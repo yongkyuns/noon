@@ -2576,6 +2576,8 @@ pub(crate) fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> 
             || spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::World)
         && (spatial.material != noon_core::SemanticSpatialMaterial::PointLit
             || spatial.draw_kind == CompiledSpatialDrawKind::Mesh)
+        && (spatial.material != noon_core::SemanticSpatialMaterial::CairoSurface
+            || spatial.draw_kind == CompiledSpatialDrawKind::Mesh)
         && ((spatial.composition_domain
             == noon_core::SemanticSpatialCompositionDomain::FixedOrientation)
             || (spatial.fixed_orientation_anchor_family.is_none()

@@ -45,6 +45,8 @@ class ManimConstantExportTests(unittest.TestCase):
             assert namespace["MED_SMALL_BUFF"] == 0.25
             assert namespace["MED_LARGE_BUFF"] == 0.5
             assert namespace["LARGE_BUFF"] == 1.0
+            from _manim_growing import GrowArrow
+            assert namespace["GrowArrow"] is GrowArrow
             wait = namespace["Wait"](0.25)
             group = namespace["AnimationGroup"](wait)
             assert wait.run_time == 0.25 and group.animations == [wait]

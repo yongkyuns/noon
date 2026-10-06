@@ -39,6 +39,8 @@ pub enum UnsupportedAuthoringOperation {
     CaptureReactiveBinding,
     /// Surface checkerboard semantics require retained mesh leaves with UV roles.
     SurfaceCellRole,
+    /// CairoSurface material requires a Cairo-sampled cell appearance payload.
+    CairoSurfaceAppearanceRequired,
     /// target editor cannot capture a runtime style backed by a paint resource.
     CaptureResourcePaint,
     /// Manim color queries do not support resource paints.
@@ -78,6 +80,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::CaptureRenderOverride => "object state capture requires effective authored content without reveal or morph overrides",
             Self::CaptureReactiveBinding => "cannot capture a reactive binding into object state",
             Self::SurfaceCellRole => "surface checkerboard requires retained mesh cells with UV roles",
+            Self::CairoSurfaceAppearanceRequired => "Cairo Surface shading requires retained per-cell Cairo appearance samples",
             Self::CaptureResourcePaint => "target editor cannot capture a runtime style backed by a paint resource",
             Self::ResourcePaintColorQuery => "Manim color queries do not support resource paints",
             Self::ResourcePaintOpacityQuery => "Manim opacity queries do not support resource paints",

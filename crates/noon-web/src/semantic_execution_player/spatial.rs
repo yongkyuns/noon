@@ -72,6 +72,14 @@ impl super::SemanticExecutionPlayer {
         self.with_live_session(|live| live.effective_world_center(object))
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_world_family_center(
+        &mut self,
+        family: &MobjectFamily,
+    ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_world_family_center(family))
+    }
+
     pub(crate) fn live_set_world_transform(
         &mut self,
         object: &Mobject,
@@ -176,6 +184,16 @@ mod wasm {
                 WorldAffineEdit::Shift(noon_core::SemanticVec3::new(x, y, z)),
             )
             .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = effectiveWorldFamilyCenter)]
+        pub fn effective_world_family_center(
+            &mut self,
+            family: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.live_effective_world_family_center(family.semantic_family_ref())
+                .map(|center| vec![center.x, center.y, center.z])
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = rotateWorld)]

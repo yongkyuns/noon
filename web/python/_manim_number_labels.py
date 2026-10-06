@@ -72,8 +72,22 @@ def number_mobjects(axis, values, *, attach, config):
 
 
 def add_coordinates(axes, x_values, y_values, *, x_config, y_config, config):
+    return _add_coordinate_labels(
+        axes, "coordinateLabelFamilies", x_values, y_values,
+        x_config=x_config, y_config=y_config, config=config,
+    )
+
+
+def add_number_plane_coordinates(plane, x_values, y_values, *, x_config, y_config, config):
+    return _add_coordinate_labels(
+        plane, "numberPlaneCoordinateLabelFamilies", x_values, y_values,
+        x_config=x_config, y_config=y_config, config=config,
+    )
+
+
+def _add_coordinate_labels(owner, method_name, x_values, y_values, *, x_config, y_config, config):
     _cold_labels()
-    x_axis, y_axis = axes.x_axis, axes.y_axis
+    x_axis, y_axis = owner.x_axis, owner.y_axis
     x_values_js = _plot._array(() if x_values is None else x_values)
     y_values_js = _plot._array(() if y_values is None else y_values)
     x_settings = dict(config)
@@ -90,9 +104,12 @@ def add_coordinates(axes, x_values, y_values, *, x_config, y_config, config):
         raise
     # Both inert option handles are consumed by this one Rust call, including
     # its error path. Do not free their moved JS proxies a second time.
-    x_handle, y_handle = engine_call(axes._semantic_family_handle.coordinateLabelFamilies,
-                                   x_values_js, x_values is None, y_values_js, y_values is None,
-                                   x_options, y_options)
-    _remember(x_axis, _family(x_handle, x_size, x_color))
-    _remember(y_axis, _family(y_handle, y_size, y_color))
-    return axes
+    handles = engine_call(
+        getattr(owner._semantic_family_handle, method_name),
+        x_values_js, x_values is None,
+        y_values_js, y_values is None,
+        x_options, y_options,
+    )
+    _remember(x_axis, _family(handles[0], x_size, x_color))
+    _remember(y_axis, _family(handles[1], y_size, y_color))
+    return owner

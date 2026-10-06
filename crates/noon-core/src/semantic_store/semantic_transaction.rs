@@ -42,7 +42,7 @@ use family_edges::FamilyEdgePreflight;
 mod node_addition;
 pub use node_addition::SemanticNodeCreation;
 use node_addition::SemanticPendingPathObject;
-use node_addition::{commit_add_node, preflight_add_node};
+use node_addition::{commit_add_node, preflight_add_node, validate_cairo_surface_resource};
 
 mod provisional;
 use provisional::{
@@ -2359,6 +2359,13 @@ impl SemanticMutationTransaction {
                         index,
                     )?;
                     validate_object_content_resource(store, *content, index)?;
+                    validate_cairo_surface_resource(
+                        store,
+                        state.spatial_material(),
+                        state.surface_uv_cell(),
+                        *content,
+                        index,
+                    )?;
                     let did_change = state.content != *content;
                     if did_change {
                         state.content = *content;
@@ -3965,6 +3972,9 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticTransactionNodeRef,
     },
+    InvalidSpatialMaterialResource {
+        index: usize,
+    },
     InvalidStyle {
         index: usize,
         object: SemanticNodeId,
@@ -4525,6 +4535,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidSpatialMaterialPose { index, object } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot assign a singular pose to PointLit object {object:?}"
+            ),
+            Self::InvalidSpatialMaterialResource { index } => write!(
+                formatter,
+                "semantic transaction mutation {index} requires a CairoSurface mesh with retained appearance metadata"
             ),
             Self::InvalidStyle { index, object } => write!(
                 formatter,

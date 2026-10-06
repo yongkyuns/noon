@@ -93,8 +93,16 @@ class NumberPlane(_plot.Axes):
             return engine_call(context.queryNumberPlaneFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.numberPlaneFrame)
 
-    def add_coordinates(self, *args, **kwargs):
-        raise NotImplementedError("NumberPlane numeric label families are not yet supported")
+    def add_coordinates(self, x_values=None, y_values=None, **kwargs):
+        from _manim_number_labels import add_number_plane_coordinates
+        return add_number_plane_coordinates(
+            self,
+            x_values,
+            y_values,
+            x_config=kwargs.pop("x_config", None),
+            y_config=kwargs.pop("y_config", None),
+            config=kwargs,
+        )
 
 
 __all__ = ["NumberPlane"]

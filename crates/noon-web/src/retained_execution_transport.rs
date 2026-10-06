@@ -92,6 +92,7 @@ pub enum TransportSpatialMaterial {
     #[default]
     Unlit,
     PointLit,
+    CairoSurface,
 }
 
 impl TransportSpatialState {
@@ -126,6 +127,7 @@ impl TransportSpatialState {
             material: match value.material {
                 SemanticSpatialMaterial::Unlit => TransportSpatialMaterial::Unlit,
                 SemanticSpatialMaterial::PointLit => TransportSpatialMaterial::PointLit,
+                SemanticSpatialMaterial::CairoSurface => TransportSpatialMaterial::CairoSurface,
             },
             point_light: value.point_light,
         }
@@ -138,6 +140,8 @@ impl TransportSpatialState {
             && self.composition_domain != Domain::World
             || self.draw_kind == Draw::Mesh && self.composition_domain != Domain::World
             || self.material == TransportSpatialMaterial::PointLit && self.draw_kind != Draw::Mesh
+            || self.material == TransportSpatialMaterial::CairoSurface
+                && self.draw_kind != Draw::Mesh
             || self.material == TransportSpatialMaterial::PointLit
                 && self.scale.into_iter().any(|component| component == 0.0)
             || self.camera_projection.is_some() && self.point_light
@@ -229,6 +233,7 @@ impl TransportSpatialState {
             material: match self.material {
                 TransportSpatialMaterial::Unlit => SemanticSpatialMaterial::Unlit,
                 TransportSpatialMaterial::PointLit => SemanticSpatialMaterial::PointLit,
+                TransportSpatialMaterial::CairoSurface => SemanticSpatialMaterial::CairoSurface,
             },
             point_light: self.point_light,
         })
@@ -2044,6 +2049,24 @@ mod tests {
         assert!(compiled.camera_motions.is_none());
         assert_eq!(TransportSpatialState::from_compiled(&compiled), valid);
 
+        let cairo_surface = TransportSpatialState {
+            draw_kind: Draw::Mesh,
+            composition_domain: Domain::World,
+            fixed_orientation_center: None,
+            material: TransportSpatialMaterial::CairoSurface,
+            ..valid
+        };
+        assert!(cairo_surface.is_valid());
+        let compiled = cairo_surface.into_compiled().unwrap();
+        assert_eq!(
+            compiled.material,
+            noon_core::SemanticSpatialMaterial::CairoSurface
+        );
+        assert_eq!(
+            TransportSpatialState::from_compiled(&compiled),
+            cairo_surface
+        );
+
         let camera = TransportSpatialState {
             composition_domain: Domain::World,
             fixed_orientation_center: None,
@@ -2070,6 +2093,10 @@ mod tests {
             },
             TransportSpatialState {
                 material: TransportSpatialMaterial::PointLit,
+                ..valid
+            },
+            TransportSpatialState {
+                material: TransportSpatialMaterial::CairoSurface,
                 ..valid
             },
             TransportSpatialState {

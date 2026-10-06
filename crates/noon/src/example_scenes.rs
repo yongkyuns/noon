@@ -78,6 +78,7 @@ pub mod timed_composition;
 #[cfg(feature = "latex")]
 pub mod variable;
 pub mod vector_space;
+pub mod vector_space_features;
 pub mod zoomed_scene;
 
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]

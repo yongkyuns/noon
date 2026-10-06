@@ -1,8 +1,9 @@
 //! Shared direct and native/WASM qualification scene for public spatial primitives.
 
 use crate::{
-    AnimationOptions, Color, ExecutionSession, MeshOptions, RateFunction, Scene, SemanticCamera3D,
-    SemanticProjection3D, SemanticVec3, SemanticWorldTransform3D,
+    AnimationOptions, Color, ExecutionSession, MeshOptions, MobjectTarget, RateFunction, Scene,
+    SemanticCamera3D, SemanticProjection3D, SemanticVec3, SemanticWorldTransform3D,
+    WorldAffineEdit,
 };
 use noon_core::{
     CompositionTimeMap, SemanticAnimationCompositionKind, SemanticMutationTransaction,
@@ -14,7 +15,8 @@ const DURATION: f64 = 1.0;
 const NEAR: f64 = 0.1;
 const FAR: f64 = 30.0;
 
-/// A capped Line3D tube, a triangular mesh, and oriented Cylinder/Cone poses.
+/// A capped Line3D tube, explicit triangle, translucent Prism, and
+/// open/closed Cylinder/Cone meshes plus a bounded partial Sphere patch.
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
     scene
@@ -58,6 +60,19 @@ pub fn session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     scene.add(&triangle).map_err(|error| error.to_string())?;
 
+    let mut prism = scene
+        .prism_face_family(SemanticVec3::new(1.0, 0.7, 0.5), Color::BLUE, 0.75)
+        .map_err(|error| error.to_string())?;
+    let prism_center = SemanticVec3::new(1.6, -1.9, 0.25);
+    // Keep the translucent Prism away from the opaque triangle and the axial
+    // solids so the fixture isolates face-family alpha without intersections.
+    prism
+        .world_affine(WorldAffineEdit::Shift(prism_center))
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_many(&[MobjectTarget::Family(&prism)])
+        .map_err(|error| error.to_string())?;
+
     for (geometry, direction, offset, placement, color) in [
         (
             crate::cylinder_mesh(0.2, 1.1, 16),
@@ -67,11 +82,25 @@ pub fn session() -> Result<ExecutionSession, String> {
             Color::GREEN,
         ),
         (
+            noon_geometry::cylinder_mesh_range(0.2, 1.1, 16, false, [0.0, std::f64::consts::TAU]),
+            SemanticVec3::new(1.0, 2.0, 1.0),
+            -0.55,
+            SemanticVec3::new(-0.55, 0.8, 0.0),
+            Color::TEAL,
+        ),
+        (
             crate::cone_mesh(0.25, 0.9, 16),
             SemanticVec3::new(-2.0, 1.0, -1.0),
             -0.9,
-            SemanticVec3::new(1.2, 0.8, 0.0),
+            SemanticVec3::new(0.85, 0.8, 0.0),
             Color::YELLOW,
+        ),
+        (
+            noon_geometry::cone_mesh_range(0.25, 0.9, 16, false, [0.0, std::f64::consts::TAU]),
+            SemanticVec3::new(-2.0, 1.0, -1.0),
+            -0.9,
+            SemanticVec3::new(1.75, 0.8, 0.0),
+            Color::RED,
         ),
     ] {
         let mut pose = SemanticWorldTransform3D::from_axial_direction(direction, offset)
@@ -88,6 +117,31 @@ pub fn session() -> Result<ExecutionSession, String> {
             .map_err(|error| error.to_string())?;
         scene.add(&object).map_err(|error| error.to_string())?;
     }
+
+    let sphere_geometry = noon_geometry::sphere_mesh_range(
+        0.35,
+        [24, 12],
+        [
+            std::f64::consts::FRAC_PI_4,
+            3.0 * std::f64::consts::FRAC_PI_4,
+        ],
+        [
+            std::f64::consts::FRAC_PI_6,
+            5.0 * std::f64::consts::FRAC_PI_6,
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    let sphere = scene
+        .mesh(
+            MeshOptions::new(sphere_geometry)
+                .with_transform(world_transform(
+                    SemanticVec3::new(0.0, 1.9, 0.0),
+                    SemanticRotation3D::IDENTITY,
+                ))
+                .with_style(opaque(Color::PINK)),
+        )
+        .map_err(|error| error.to_string())?;
+    scene.add(&sphere).map_err(|error| error.to_string())?;
 
     let triangle_rotation =
         SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.4)
@@ -106,7 +160,8 @@ pub fn session() -> Result<ExecutionSession, String> {
         TrackTiming::new(0.0, DURATION, RateFunction::Linear),
         CompositionTimeMap::identity(),
     );
-    let triangle_track = transaction.create_object_property_track(
+    let mut tracks = vec![line_track];
+    tracks.push(transaction.create_object_property_track(
         triangle.node_id(),
         SemanticObjectTrackProperty::WorldTransform,
         SemanticObjectTrackValues::WorldTransform {
@@ -115,10 +170,10 @@ pub fn session() -> Result<ExecutionSession, String> {
         },
         TrackTiming::new(0.0, DURATION, RateFunction::Linear),
         CompositionTimeMap::identity(),
-    );
+    ));
     let animation_root = transaction.create_animation_composition(
         SemanticAnimationCompositionKind::Parallel,
-        [line_track, triangle_track],
+        tracks,
         AnimationOptions::new(),
     );
     let committed = transaction
@@ -164,9 +219,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_line_and_explicit_triangle_share_the_native_execution_timeline() {
+    fn public_line_and_explicit_triangle_share_the_native_timeline() {
         let mut session = session().unwrap();
-        assert_eq!(session.frame().objects.len(), 5);
+        assert_eq!(session.frame().objects.len(), 14);
+        assert_eq!(
+            session
+                .frame()
+                .objects
+                .iter()
+                .filter(|row| row.style.fill
+                    == Some(Color {
+                        alpha: 0.75,
+                        ..Color::BLUE
+                    }))
+                .count(),
+            6
+        );
         assert_eq!(
             session.wake_state().timeline(),
             noon_runtime::TimelineWakeState::Continuous
@@ -190,6 +258,7 @@ mod tests {
             )
         };
         assert_eq!(rows(&session).0.translation, SemanticVec3::ZERO);
+        assert_eq!(rows(&session).1.translation, SemanticVec3::ZERO);
         session.advance_to(0.5).unwrap();
         assert_eq!(rows(&session).0.translation.z, 0.125);
         assert!((rows(&session).1.rotation.components()[2] - (0.1_f64).sin()).abs() < 1.0e-12);

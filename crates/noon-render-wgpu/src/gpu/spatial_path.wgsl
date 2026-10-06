@@ -20,6 +20,9 @@ struct VertexInput {
     @location(8) opacity: f32,
     @location(9) fixed_orientation: u32,
     @location(10) fixed_anchor: vec3<f32>,
+    @location(11) tangent: vec2<f32>,
+    @location(12) extrusion: vec2<f32>,
+    @location(13) screen_stroke_width: f32,
 };
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -46,6 +49,29 @@ fn vs_main(input: VertexInput) -> VertexOutput {
                 1.0,
             );
         } else {
+            clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        }
+    }
+    if any(input.tangent != vec2<f32>(0.0)) {
+        // Project the retained centerline, then expand its stroke in the
+        // authoring frame. The homogeneous derivative is the exact projected
+        // straight-line direction, including perspective and world rotation.
+        var direction = input.tangent;
+        if input.fixed_orientation == 0u {
+            let derivative = camera.view_projection * world * vec4<f32>(input.tangent, 0.0, 0.0);
+            direction = (derivative.xy * clip.w - clip.xy * derivative.w) / fixed_camera.clip_scale;
+        } else {
+            direction = (world * vec4<f32>(input.tangent, 0.0, 0.0)).xy;
+        }
+        let largest = max(abs(direction.x), abs(direction.y));
+        if largest > 1e-8 && largest <= 3.402823e38 {
+            let unit = normalize(direction / largest);
+            let normal = vec2<f32>(-unit.y, unit.x);
+            let offset = (unit * input.extrusion.x + normal * input.extrusion.y) * input.screen_stroke_width;
+            clip = vec4<f32>(clip.xy + offset * fixed_camera.clip_scale * clip.w, clip.zw);
+        } else {
+            // An end-on segment has no projected centerline. Collapse it
+            // coherently instead of normalizing a zero/non-finite direction.
             clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         }
     }

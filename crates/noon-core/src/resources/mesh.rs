@@ -1,5 +1,33 @@
 use crate::SemanticVec3;
 
+/// Cairo-compatible per-cell gradient endpoints and corner-relative spans.
+/// The renderer owns lighting and projection; this immutable geometry metadata
+/// only preserves the mapped control-point samples needed to derive them.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CairoSurfaceAppearance {
+    pub p0: SemanticVec3,
+    pub p6: SemanticVec3,
+    pub span_p3_p0: SemanticVec3,
+    pub span_p12_p0: SemanticVec3,
+    pub span_p9_p6: SemanticVec3,
+    pub span_p3_p6: SemanticVec3,
+}
+
+impl CairoSurfaceAppearance {
+    pub fn is_finite(&self) -> bool {
+        [
+            self.p0,
+            self.p6,
+            self.span_p3_p0,
+            self.span_p12_p0,
+            self.span_p9_p6,
+            self.span_p3_p6,
+        ]
+        .into_iter()
+        .all(SemanticVec3::is_finite)
+    }
+}
+
 /// Axis-aligned bounds of a mesh in its local coordinate system.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshBounds3D {
@@ -15,6 +43,7 @@ pub struct MeshResource {
     has_usable_normals: bool,
     indices: Vec<u32>,
     bounds: MeshBounds3D,
+    cairo_appearance: Option<Box<CairoSurfaceAppearance>>,
 }
 
 impl MeshResource {
@@ -77,7 +106,21 @@ impl MeshResource {
             has_usable_normals,
             indices,
             bounds: MeshBounds3D { min, max },
+            cairo_appearance: None,
         })
+    }
+
+    /// Attach immutable Cairo surface shading geometry after validating every
+    /// retained endpoint and span. Ordinary meshes keep the unboxed `None`.
+    pub fn with_cairo_appearance(
+        mut self,
+        appearance: CairoSurfaceAppearance,
+    ) -> Result<Self, MeshResourceError> {
+        if !appearance.is_finite() {
+            return Err(MeshResourceError::NonFiniteCairoAppearance);
+        }
+        self.cairo_appearance = Some(Box::new(appearance));
+        Ok(self)
     }
 
     pub fn positions(&self) -> &[SemanticVec3] {
@@ -97,6 +140,9 @@ impl MeshResource {
     pub const fn bounds(&self) -> MeshBounds3D {
         self.bounds
     }
+    pub fn cairo_appearance(&self) -> Option<&CairoSurfaceAppearance> {
+        self.cairo_appearance.as_deref()
+    }
 
     /// Logical payload bytes retained by the resource, excluding allocator overhead.
     pub fn retained_bytes(&self) -> usize {
@@ -105,6 +151,10 @@ impl MeshResource {
                 values.len() * std::mem::size_of::<SemanticVec3>()
             })
             + self.indices.len() * std::mem::size_of::<u32>()
+            + self
+                .cairo_appearance
+                .as_ref()
+                .map_or(0, |_| std::mem::size_of::<CairoSurfaceAppearance>())
     }
 }
 
@@ -116,6 +166,7 @@ pub enum MeshResourceError {
     NormalCountMismatch { positions: usize, normals: usize },
     InvalidTriangleIndexCount(usize),
     IndexOutOfBounds { index: u32, positions: usize },
+    NonFiniteCairoAppearance,
 }
 
 impl std::fmt::Display for MeshResourceError {
@@ -133,6 +184,9 @@ impl std::fmt::Display for MeshResourceError {
             ),
             Self::IndexOutOfBounds { index, positions } => {
                 write!(f, "mesh index {index} exceeds position count {positions}")
+            }
+            Self::NonFiniteCairoAppearance => {
+                f.write_str("mesh has non-finite Cairo surface appearance data")
             }
         }
     }
@@ -171,6 +225,34 @@ mod tests {
         assert_eq!(
             mesh.retained_bytes(),
             3 * std::mem::size_of::<SemanticVec3>() + 3 * std::mem::size_of::<u32>()
+        );
+        assert!(mesh.cairo_appearance().is_none());
+    }
+
+    #[test]
+    fn cairo_appearance_is_optional_validated_retained_and_part_of_equality() {
+        let appearance = CairoSurfaceAppearance {
+            p0: SemanticVec3::ZERO,
+            p6: SemanticVec3::new(1.0, 2.0 / 3.0, 1.333334444),
+            span_p3_p0: SemanticVec3::new(1.0, 0.0, 1.0),
+            span_p12_p0: SemanticVec3::new(0.0, 1.0, 1.0),
+            span_p9_p6: SemanticVec3::new(-1.0 / 3.0, 1.0 / 3.0, 0.0),
+            span_p3_p6: SemanticVec3::new(0.0, -2.0 / 3.0, -0.333334444),
+        };
+        let plain = valid();
+        let retained = plain.clone().with_cairo_appearance(appearance).unwrap();
+        assert_eq!(retained.cairo_appearance(), Some(&appearance));
+        assert_ne!(retained, plain);
+        assert_eq!(
+            retained.retained_bytes(),
+            plain.retained_bytes() + std::mem::size_of::<CairoSurfaceAppearance>()
+        );
+        assert_eq!(
+            plain.with_cairo_appearance(CairoSurfaceAppearance {
+                p6: SemanticVec3::new(f64::NAN, 0.0, 0.0),
+                ..appearance
+            }),
+            Err(MeshResourceError::NonFiniteCairoAppearance)
         );
     }
 

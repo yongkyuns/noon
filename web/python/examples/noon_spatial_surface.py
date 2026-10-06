@@ -21,3 +21,18 @@ class SpatialSurface(SpatialScene):
         await self.play(WorldTransformTo(
             surface, rotation=(0.955336489125606, 0, 0, 0.29552020666134)
         ), run_time=1, rate_func=linear)
+
+
+class CairoSpatialSurface(SpatialScene):
+    def __init__(self):
+        super().__init__(far=30)
+
+    async def construct(self):
+        surface = Surface(
+            lambda u, v: (u, v, 0.35 * (u * u + v * v)),
+            u_range=(-1, 1),
+            v_range=(-1, 1),
+            resolution=(8, 8),
+        )
+        self.add(surface)
+        await self.wait(1)

@@ -472,6 +472,397 @@ fn pixel(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
     bytes[start..start + 4].try_into().unwrap()
 }
 
+fn cairo_surface_scene(shared_unlit: bool) -> SceneInstance {
+    let mut store = SemanticStore::new();
+    let payload = MeshResource::new(
+        vec![
+            SemanticVec3::new(-1., -1., 0.),
+            SemanticVec3::new(1., -1., 0.),
+            SemanticVec3::new(1., 1., 0.),
+            SemanticVec3::new(-1., 1., 0.),
+        ],
+        None,
+        vec![0, 1, 3, 1, 2, 3],
+    )
+    .unwrap()
+    .with_cairo_appearance(noon_core::CairoSurfaceAppearance {
+        p0: SemanticVec3::new(-1., -1., 0.),
+        p6: SemanticVec3::new(1., 1., 0.),
+        span_p3_p0: SemanticVec3::new(2., 0., 0.),
+        span_p12_p0: SemanticVec3::new(0., 2., 0.),
+        span_p9_p6: SemanticVec3::new(-2., 0., 0.),
+        span_p3_p6: SemanticVec3::new(0., -2., 0.),
+    })
+    .unwrap();
+    let handle = store.insert_geometry_mesh(payload);
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0. });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+            height: 4.,
+            near: 0.1,
+            far: 30.,
+        }))
+        .unwrap();
+    camera.transform.translation.z = 5.;
+    let camera_node = attach(&mut store, camera);
+    let mut surface = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    surface.style = opaque_style(Color::rgba(0.8, 0.8, 0.8, 1.));
+    surface.set_spatial_material(SemanticSpatialMaterial::CairoSurface);
+    surface.set_surface_uv_cell(Some([0, 0]));
+    if shared_unlit {
+        surface.transform.scale = SemanticVec3::new(0.45, 0.45, 1.);
+        surface.transform.translation.x = -0.75;
+    }
+    attach(&mut store, surface);
+    if shared_unlit {
+        let mut unlit = SemanticObjectState::new(StoredGeometry::Resource(handle));
+        unlit.style = opaque_style(Color::rgba(0.8, 0.8, 0.8, 1.));
+        unlit.transform.scale = SemanticVec3::new(0.45, 0.45, 1.);
+        unlit.transform.translation.x = 0.75;
+        attach(&mut store, unlit);
+    }
+    let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0. });
+    light.set_role(SemanticObjectRole::PointLight3D);
+    // Cairo's white scalar response deliberately ignores this red native light.
+    light.style = opaque_style(Color::RED);
+    light.transform.translation = SemanticVec3::new(-1., -1., 1.);
+    let light_node = attach(&mut store, light);
+    let mut index = SemanticExecutionIndex::new();
+    let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .into_parts();
+    let pose = |x| {
+        SemanticWorldTransform3D::new(
+            SemanticVec3::new(x, x, 1.),
+            noon_core::SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1., 1., 1.),
+        )
+        .unwrap()
+    };
+    compiled
+        .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(0),
+            object: index.execution_object_id(light_node).unwrap(),
+            property: Property::WorldTransform,
+            values: TrackValues::WorldTransform {
+                from: WorldTransformTrackEndpoint::from_world(pose(-1.)),
+                to: WorldTransformTrackEndpoint::from_world(pose(1.)),
+            },
+            timing: TrackTiming::new(0., 1., RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        }))
+        .unwrap();
+    let camera_pose = |x| {
+        SemanticWorldTransform3D::new(
+            SemanticVec3::new(x, 0., 5.),
+            noon_core::SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1., 1., 1.),
+        )
+        .unwrap()
+    };
+    compiled
+        .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(1),
+            object: index.execution_object_id(camera_node).unwrap(),
+            property: Property::WorldTransform,
+            values: TrackValues::WorldTransform {
+                from: WorldTransformTrackEndpoint::from_world(camera_pose(0.)),
+                to: WorldTransformTrackEndpoint::from_world(camera_pose(0.5)),
+            },
+            timing: TrackTiming::new(1., 1., RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        }))
+        .unwrap();
+    SceneInstance::new(compiled)
+}
+
+#[test]
+fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo Surface GPU qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut preparer = FramePreparer::new();
+        let mut scene = cairo_surface_scene(false);
+        let (initial, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(initial.resident_meshes, 1);
+        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 96);
+        // Independent analytic stops: clamp(.8 + .5) = 1; .8 + .5/27.
+        // At the center their midpoint is .909259..., not clamp(1.059259...).
+        let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        for channel in &center[..3] {
+            assert!(
+                (230..=234).contains(channel),
+                "Cairo clamped-stop gradient: {center:?}"
+            );
+        }
+        let first = pixel(&pixels, 40, 87);
+        let last = pixel(&pixels, 87, 40);
+        assert!(
+            first[0] > last[0] + 25,
+            "projected gradient follows p0 to p6: {first:?}, {last:?}"
+        );
+        scene.advance_to(1.).unwrap();
+        let (moved, end_pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(moved.geometry_bytes, 0);
+        assert_eq!(moved.instance_bytes, 0);
+        assert_eq!(moved.camera_bytes, 0);
+        assert_eq!(moved.light_bytes, 32);
+        assert!(pixel(&end_pixels, 40, 87)[0] + 25 < pixel(&end_pixels, 87, 40)[0]);
+        scene.advance_to(2.).unwrap();
+        let (camera_moved, camera_pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(camera_moved.geometry_bytes, 0);
+        assert_eq!(camera_moved.instance_bytes, 0);
+        assert_eq!(camera_moved.camera_bytes, 64);
+        assert_eq!(camera_moved.light_bytes, 0);
+        assert_eq!(
+            pixel(&camera_pixels, 48, 64),
+            pixel(&end_pixels, 64, 64),
+            "camera motion projects the same retained shading gradient"
+        );
+        scene.seek(0.).unwrap();
+        let (rewound, replay) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(rewound.geometry_bytes, 0);
+        assert_eq!(
+            pixels, replay,
+            "deterministic seek restores the endpoint gradient"
+        );
+
+        let mut shared = cairo_surface_scene(true);
+        let mut shared_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        shared_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let (stats, pixels) = render(
+            &device,
+            &queue,
+            &mut shared_renderer,
+            &mut preparer,
+            &mut shared,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            stats.resident_meshes, 1,
+            "different materials retain one shared topology"
+        );
+        assert_eq!(stats.resident_instances, 2);
+        let unlit = pixel(&pixels, 88, 64);
+        assert_eq!(
+            unlit,
+            [204, 204, 204, 255],
+            "Cairo pipeline must not shade the Unlit instance"
+        );
+        assert_ne!(pixel(&pixels, 40, 64), unlit);
+    });
+}
+
+#[test]
+fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping screen-stroke GPU qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let mut store = SemanticStore::new();
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera
+            .set_camera_projection(Some(SemanticProjection3D::Perspective {
+                vertical_fov_radians: 1.0,
+                near: 0.1,
+                far: 30.0,
+            }))
+            .unwrap();
+        camera.transform.translation.z = 5.0;
+        let camera_id = attach(&mut store, camera);
+        let mut line = SemanticObjectState::new(StoredGeometry::Line {
+            start: noon_core::Vec2::new(-1.0, 0.0),
+            end: noon_core::Vec2::new(1.0, 0.0),
+        });
+        line.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.25,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            ..SemanticStyle::default()
+        };
+        line.transform = SemanticWorldTransform3D::new(
+            SemanticVec3::ZERO,
+            noon_core::SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(2.0, 0.01, 1.0),
+        )
+        .unwrap()
+        .into();
+        let line_id = attach(&mut store, line);
+        let mut index = SemanticExecutionIndex::new();
+        let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        compiled
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(0),
+                object: index.execution_object_id(camera_id).unwrap(),
+                property: Property::WorldTransform,
+                values: TrackValues::WorldTransform {
+                    from: WorldTransformTrackEndpoint::from_world(
+                        SemanticWorldTransform3D::new(
+                            SemanticVec3::new(0.0, 0.0, 5.0),
+                            noon_core::SemanticRotation3D::IDENTITY,
+                            SemanticVec3::new(1.0, 1.0, 1.0),
+                        )
+                        .unwrap(),
+                    ),
+                    to: WorldTransformTrackEndpoint::from_world(
+                        SemanticWorldTransform3D::new(
+                            SemanticVec3::new(0.0, 0.0, 10.0),
+                            noon_core::SemanticRotation3D::IDENTITY,
+                            SemanticVec3::new(1.0, 1.0, 1.0),
+                        )
+                        .unwrap(),
+                    ),
+                },
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+        let mut runtime = SceneInstance::new(compiled);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(8.0, 8.0)).unwrap(),
+        );
+        let target = Target::new(&device);
+        let mut preparer = FramePreparer::new();
+        let mut counts = Vec::new();
+        for (index, time) in [0.0, 0.5, 1.0, 0.0].into_iter().enumerate() {
+            runtime.seek(time).unwrap();
+            let (uploads, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut runtime,
+                &target,
+            )
+            .unwrap();
+            let width = (0..HEIGHT)
+                .filter(|&y| pixel(&pixels, WIDTH / 2, y)[0] > 128)
+                .count();
+            assert_eq!(width, 4, "screen width must remain 0.25 frame units, despite perspective and 0.01 object Y scale at {time}");
+            counts.push(
+                (0..WIDTH)
+                    .filter(|&x| pixel(&pixels, x, HEIGHT / 2)[0] > 128)
+                    .count(),
+            );
+            if index > 0 {
+                assert_eq!(
+                    uploads.geometry_bytes, 0,
+                    "camera frames reuse stroke topology"
+                );
+                assert_eq!(
+                    uploads.instance_bytes, 0,
+                    "camera frames do not rewrite object instances"
+                );
+            }
+        }
+        assert!(
+            counts[0] > counts[1] && counts[1] > counts[2],
+            "perspective still changes centerline length"
+        );
+        assert_eq!(
+            counts[0], counts[3],
+            "backward seek restores the same projected extent"
+        );
+        let line_object = index.execution_object_id(line_id).unwrap();
+        let style = noon_core::Style {
+            stroke_width: 0.5,
+            ..runtime
+                .frame()
+                .objects
+                .iter()
+                .find(|object| object.id == line_object)
+                .unwrap()
+                .style
+        };
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: line_object,
+                style,
+            })
+            .unwrap();
+        let (uploads, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut runtime,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            uploads.geometry_bytes, 0,
+            "width edits reuse the unit stroke topology"
+        );
+        assert!(
+            uploads.instance_bytes > 0,
+            "width edits update the affected instance"
+        );
+        assert_eq!(
+            (0..HEIGHT)
+                .filter(|&y| pixel(&pixels, WIDTH / 2, y)[0] > 128)
+                .count(),
+            8
+        );
+    });
+}
+
 #[test]
 fn spatial_renderer_rejects_an_older_publication_after_advancing() {
     pollster::block_on(async {

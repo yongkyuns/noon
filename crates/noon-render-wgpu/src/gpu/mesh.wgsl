@@ -103,7 +103,7 @@ struct EdgeOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
 };
-@vertex fn vs_boundary(input: EdgeInput) -> EdgeOutput {
+fn boundary_position(input: EdgeInput) -> vec4<f32> {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
     var a = camera.view_projection * world * vec4<f32>(input.start, 1.0);
     var b = camera.view_projection * world * vec4<f32>(input.end, 1.0);
@@ -130,8 +130,11 @@ struct EdgeOutput {
     // stays on the GPU even while the camera moves.
     p = vec4<f32>(p.xy + perpendicular * input.corner.y * input.normal1.w
         * boundary_metrics.zw * 0.5 * p.w, p.zw);
+    return p;
+}
+@vertex fn vs_boundary(input: EdgeInput) -> EdgeOutput {
     var result: EdgeOutput;
-    result.position = p;
+    result.position = boundary_position(input);
     result.color = input.color;
     return result;
 }

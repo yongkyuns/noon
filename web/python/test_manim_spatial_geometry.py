@@ -1,6 +1,7 @@
+import math
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, call
 
 import noon
 import _manim_spatial_geometry as spatial
@@ -51,6 +52,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         factory.assert_called_once()
         self.assertEqual(factory.call_args.args, (2.0,))
         self.assertEqual(factory.call_args.kwargs["resolution"], (12, 8))
+        self.assertEqual(factory.call_args.kwargs["u_range"], (0.0, 2 * math.pi))
+        self.assertEqual(factory.call_args.kwargs["v_range"], (0.0, math.pi))
         self.mesh.move_to.assert_called_once_with((1, 2, 3))
         self.assertIs(sphere._semantic_handle, self.mesh._semantic_handle)
 
@@ -102,6 +105,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             stroke.red, stroke.green, stroke.blue, stroke.alpha, 0.005, 1.0,
         )
         candidate.setPointLit.assert_called_once_with(True)
+        candidate.setCairoSurface.assert_called_once_with(False)
         self.assertIsInstance(surface, compat.Group)
         self.assertIs(surface._semantic_family_handle, family)
         self.assertIs(surface.submobjects[0]._semantic_handle, member)
@@ -178,9 +182,11 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             0.25,
         )
         self.assertEqual(semantic._family_member_handle(surface), ("family", handle))
-        with self.assertRaisesRegex(NotImplementedError, "world observations"):
-            surface.get_center()
-        with self.assertRaisesRegex(NotImplementedError, "world observations"):
+        handle.worldFamilyCenter.return_value = [1.0, 2.0, 3.0]
+        with patch.object(native, "_group_target_context", return_value=None):
+            self.assertEqual(surface.get_center(), (1.0, 2.0, 3.0))
+        handle.worldFamilyCenter.assert_called_once_with()
+        with self.assertRaisesRegex(NotImplementedError, "world transforms"):
             _ = surface.world_transform
         for name in ("id", "geometry", "transform", "style"):
             with self.subTest(property=name), self.assertRaises(AttributeError):
@@ -319,11 +325,14 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
     def test_cylinder_centers_and_orients_inert_native_mesh_before_admission(self):
         with patch.object(Mesh3D, "cylinder", return_value=self.mesh) as factory:
             cylinder = spatial.Cylinder(height=4, direction=(1, -2, 3), resolution=(16, 16),
+                                        v_range=(math.pi / 4, math.pi),
                                         checkerboard_colors=False, stroke_width=0,
                                         shade_in_3d=False)
         factory.assert_called_once()
+        self.assertIs(factory.call_args.kwargs["show_ends"], True)
         self.assertEqual(factory.call_args.kwargs["direction"], (1, -2, 3))
         self.assertEqual(factory.call_args.kwargs["axial_offset"], -2.0)
+        self.assertEqual(factory.call_args.kwargs["v_range"], (math.pi / 4, math.pi))
         self.mesh.shift.assert_not_called()
         self.assertIs(cylinder._semantic_handle, self.mesh._semantic_handle)
 
@@ -332,52 +341,165 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             spatial.Surface(lambda u, v: (u, v, 0), surface_piece_config={})
         with self.assertRaises(TypeError):
             spatial.Surface(lambda u, v: (u, v, 0), shade_in_3d=1)
-        with self.assertRaisesRegex(NotImplementedError, "Manim Cairo Surface shading"):
-            spatial.Surface(lambda u, v: (u, v, 0))
         with self.assertRaises(TypeError):
             spatial.Surface(lambda u, v: (u, v, 0), shade_in_3d=False, point_lit=1)
-        with self.assertRaises(NotImplementedError):
-            spatial.Sphere(u_range=(0, 1))
+        with self.assertRaisesRegex(ValueError, "distinct Surface materials"):
+            spatial.Surface(lambda u, v: (u, v, 0), shade_in_3d=True, point_lit=True)
+        with self.assertRaisesRegex(NotImplementedError, "custom normal callbacks"):
+            spatial.Surface(lambda u, v: (u, v, 0), normal=lambda u, v: (0, 0, 1))
+
+    def test_cairo_shaded_surface_samples_closed_path_controls_and_selects_its_material(self):
+        import _noon_spatial as native
+
+        parameters = tuple(float(value) for _ in range(16) for value in (0, 0))
+        candidate = Mock()
+        handle = Mock()
+
+        class Plan:
+            def cairoParameters(self):
+                return parameters
+
+            def finishCairoCells(self, sampled):
+                self.sampled = sampled
+                return candidate
+
+            def free(self):
+                self.freed = True
+
+        plan = Plan()
+        sampled = []
+        callback = lambda u, v: sampled.append((u, v)) or (u, v, u * u + v * v)
+        member = SimpleNamespace(semanticSlot=17, semanticGeneration=2)
+        family = _family_handle((member,))
+        with patch.object(native, "_surface_plan", return_value=plan), \
+             patch.object(native, "_mesh_family_options", object()), \
+             patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
+             patch.object(native, "_create_mesh_family", return_value=family), \
+             patch.object(spatial, "_live_constructor_context", return_value=None):
+            surface = spatial.Surface(callback, resolution=(1, 1), shade_in_3d=True)
+
+        self.assertEqual(len(sampled), 16)
+        self.assertEqual(len(plan.sampled), 48)
+        self.assertTrue(plan.freed)
+        candidate.setPointLit.assert_called_once_with(False)
+        candidate.setCairoSurface.assert_called_once_with(True)
+        self.assertIs(surface._semantic_family_handle, family)
+        with patch.object(Mesh3D, "sphere", return_value=self.mesh) as factory:
+            spatial.Sphere(u_range=(math.pi / 4, 3 * math.pi / 4),
+                           v_range=(math.pi / 6, 5 * math.pi / 6),
+                           checkerboard_colors=False, stroke_width=0, shade_in_3d=False)
+        self.assertEqual(factory.call_args.kwargs["u_range"], (math.pi / 4, 3 * math.pi / 4))
+        self.assertEqual(factory.call_args.kwargs["v_range"], (math.pi / 6, 5 * math.pi / 6))
+        for kwargs in ({"u_range": (-0.1, 1)}, {"u_range": (2, 1)},
+                       {"v_range": (0, math.pi + 0.1)}):
+            with self.subTest(kwargs=kwargs), patch.object(Mesh3D, "sphere") as factory:
+                with self.assertRaises(ValueError):
+                    spatial.Sphere(**kwargs)
+                factory.assert_not_called()
 
     def test_axial_direction_caps_opacity_and_strokes_are_not_silently_approximated(self):
+        import _noon_spatial as native
+
         with patch.object(Mesh3D, "cylinder") as factory:
-            with self.assertRaises(NotImplementedError):
-                spatial.Cylinder(show_ends=False)
+            open_cylinder = spatial.Cylinder(show_ends=False, checkerboard_colors=False,
+                                             stroke_width=0, shade_in_3d=False)
+            self.assertIsNotNone(open_cylinder)
+            self.assertIs(factory.call_args.kwargs["show_ends"], False)
+            with self.assertRaises(TypeError):
+                spatial.Cylinder(show_ends=0)
             with self.assertRaises(NotImplementedError):
                 spatial.Cylinder(fill_opacity=0.5)
+        for shape in (spatial.Cube, spatial.Prism):
             with self.assertRaises(NotImplementedError):
-                spatial.Cube(fill_opacity=1, stroke_width=1)
+                shape(shade_in_3d=True)
             with self.assertRaises(NotImplementedError):
-                spatial.Cube(fill_opacity=1, stroke_width=0)
-            with self.assertRaises(NotImplementedError):
-                spatial.Prism(fill_opacity=1, stroke_width=0)
-            with self.assertRaises(NotImplementedError):
-                spatial.Cube()
-            with self.assertRaises(NotImplementedError):
-                spatial.Cone()
-            factory.assert_not_called()
+                shape(stroke_width=1, shade_in_3d=False)
 
-    def test_cube_and_prism_require_explicit_cairo_shading_opt_out(self):
-        with patch.object(Mesh3D, "cube", return_value=self.mesh) as cube_factory:
-            cube = spatial.Cube(fill_opacity=1, shade_in_3d=False)
-        cube_factory.assert_called_once_with(2.0, color=spatial._color(noon.BLUE))
-        self.assertIs(cube._semantic_handle, self.mesh._semantic_handle)
+        with patch.object(native, "_prism_face_family_options") as options:
+            with self.assertRaises(ValueError):
+                spatial.Cube(fill_opacity=1.1, shade_in_3d=False)
+            options.assert_not_called()
 
-        with patch.object(Mesh3D, "prism", return_value=self.mesh) as prism_factory:
-            prism = spatial.Prism(fill_opacity=1, shade_in_3d=False)
-        prism_factory.assert_called_once_with((3, 2, 1), color=spatial._color(noon.BLUE))
-        self.assertIs(prism._semantic_handle, self.mesh._semantic_handle)
+    def test_cube_and_prism_use_one_shared_translucent_face_family(self):
+        import _noon_spatial as native
+
+        members = tuple(
+            SimpleNamespace(semanticSlot=index + 1, semanticGeneration=1)
+            for index in range(6)
+        )
+        family = _family_handle(members)
+        candidate = Mock()
+        translucent_red = noon.Color(0.8, 0.1, 0.2, 0.5)
+        with patch.object(native, "_prism_face_family_options", return_value=candidate) as faces, \
+             patch.object(native, "_create_mesh_family", return_value=family) as admit, \
+             patch.object(spatial, "_live_constructor_context", return_value=None):
+            cube = spatial.Cube(shade_in_3d=False)
+            prism = spatial.Prism(dimensions=(3, 2, 1), fill_opacity=0.4,
+                                  fill_color=translucent_red, shade_in_3d=False)
+
+        faces.assert_has_calls([
+            call((2.0, 2.0, 2.0)),
+            call((3.0, 2.0, 1.0)),
+        ])
+        self.assertEqual(faces.call_count, 2)
+        default = noon.BLUE
+        self.assertEqual(candidate.setFill.call_args_list, [
+            call(default.red, default.green, default.blue, default.alpha, 0.75),
+            call(translucent_red.red, translucent_red.green, translucent_red.blue,
+                 translucent_red.alpha, 0.4),
+        ])
+        self.assertEqual(admit.call_count, 2)
+        for shape in (cube, prism):
+            self.assertIsInstance(shape, compat.Group)
+            self.assertIs(shape._semantic_family_handle, family)
+            self.assertEqual(len(shape.submobjects), 6)
+        cube.set_fill(opacity=0.25)
+        family.setFill.assert_called_once()
+        with patch.object(native, "_bulk", side_effect=lambda values: tuple(values)):
+            cube.shift((1, 2, 3))
+        family.shiftWorld.assert_called_once_with(1.0, 2.0, 3.0)
+        family.worldFamilyCenter.return_value = [10.0, -3.0, 2.0]
+        with patch.object(native, "_group_target_context", return_value=None), \
+             patch.object(native, "_bulk", side_effect=lambda values: tuple(values)):
+            self.assertIs(cube.move_to((1, 2, 3)), cube)
+        family.worldFamilyCenter.assert_called_once_with()
+        family.shiftWorld.assert_called_with(-9.0, 5.0, 1.0)
 
     def test_capped_cone_profile_is_explicit_and_uses_native_mesh(self):
         with patch.object(Mesh3D, "cone", return_value=self.mesh) as factory:
             cone = spatial.Cone(show_base=True, height=2, direction=(-1, 2, -3), resolution=12,
+                                v_range=(math.pi / 3, math.pi),
                                 stroke_width=0, shade_in_3d=False)
         factory.assert_called_once()
         self.assertEqual(factory.call_args.args[:3], (1.0, 2.0, 12))
         self.assertEqual(factory.call_args.kwargs["direction"], (-1, 2, -3))
         self.assertEqual(factory.call_args.kwargs["axial_offset"], -2.0)
+        self.assertEqual(factory.call_args.kwargs["v_range"], (math.pi / 3, math.pi))
         self.mesh.shift.assert_not_called()
         self.assertIs(cone._semantic_handle, self.mesh._semantic_handle)
+
+    def test_cone_uses_the_pinned_open_base_default_and_accepts_only_boolean_options(self):
+        with patch.object(Mesh3D, "cone", return_value=self.mesh) as factory:
+            cone = spatial.Cone(stroke_width=0, shade_in_3d=False)
+        factory.assert_called_once()
+        self.assertIs(factory.call_args.kwargs["show_base"], False)
+        self.assertIs(cone._semantic_handle, self.mesh._semantic_handle)
+        with self.assertRaises(TypeError):
+            spatial.Cone(show_base=1, stroke_width=0, shade_in_3d=False)
+
+    def test_angular_sweeps_are_bounded_and_cone_radial_profile_remains_rejected(self):
+        for shape in (spatial.Cylinder, spatial.Cone):
+            for v_range in ((-0.1, 1), (1, 1), (2, 1),
+                            (0, 2 * math.pi + 0.1), (0, float("inf"))):
+                with self.subTest(shape=shape.__name__, v_range=v_range), \
+                     patch.object(Mesh3D, "cylinder" if shape is spatial.Cylinder else "cone") as factory:
+                    with self.assertRaises((TypeError, ValueError)):
+                        shape(v_range=v_range, stroke_width=0, shade_in_3d=False)
+                    factory.assert_not_called()
+        with patch.object(Mesh3D, "cone") as factory:
+            with self.assertRaisesRegex(NotImplementedError, "u_min"):
+                spatial.Cone(u_min=0.2, stroke_width=0, shade_in_3d=False)
+            factory.assert_not_called()
 
 
 if __name__ == "__main__":

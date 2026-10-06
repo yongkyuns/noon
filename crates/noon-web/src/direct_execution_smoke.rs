@@ -194,6 +194,15 @@ pub async fn create_direct_spatial_surface_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Direct Rust/WASM counterpart of the default Cairo-shaded Surface case.
+#[wasm_bindgen(js_name = createDirectSpatialSurfaceCairoSmokeRenderer)]
+pub async fn create_direct_spatial_surface_cairo_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::spatial_surface::cairo_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Point-lit surface and light-only world track through the direct retained renderer.
 #[wasm_bindgen(js_name = createDirectSpatialSurfaceLightingSmokeRenderer)]
 pub async fn create_direct_spatial_surface_lighting_smoke_renderer(
@@ -1119,6 +1128,15 @@ pub async fn create_direct_vector_space_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::vector_space::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct typed Rust/WASM fixture for LTS coordinates, transformables and ghosts.
+#[wasm_bindgen(js_name = createDirectVectorSpaceFeaturesRenderer)]
+pub async fn create_direct_vector_space_features_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::vector_space_features::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 

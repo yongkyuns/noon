@@ -2,7 +2,7 @@
 use crate::authoring_error::{js_error, AuthoringFailure};
 use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmCoordinateOptions};
 use noon::plot_presentation::NumberLabelOptions;
-use noon::{ManimAxes, ManimNumberLine, Mobject};
+use noon::{ManimAxes, ManimNumberLine, ManimNumberPlane, Mobject};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
@@ -12,6 +12,14 @@ pub(crate) fn failure(error: impl std::fmt::Display) -> JsValue {
         "plot.number_labels",
         error.to_string(),
     ))
+}
+
+fn label_family_handles(families: [noon::MobjectFamily; 2]) -> js_sys::Array {
+    let result = js_sys::Array::new();
+    for family in families {
+        result.push(&WasmAuthoringFamilyHandle::from_semantic_family(family).into());
+    }
+    result
 }
 
 /// Inert presentation only. A family is created only by the consuming operation.
@@ -124,11 +132,29 @@ impl WasmAuthoringFamilyHandle {
                 &y_options.options,
             )
             .map_err(failure)?;
-        let result = js_sys::Array::new();
-        for family in families {
-            result.push(&Self::from_semantic_family(family).into());
-        }
-        Ok(result)
+        Ok(label_family_handles(families))
+    }
+
+    #[wasm_bindgen(js_name = numberPlaneCoordinateLabelFamilies)]
+    pub fn number_plane_coordinate_label_families(
+        &self,
+        x_values: &[f64],
+        automatic_x: bool,
+        y_values: &[f64],
+        automatic_y: bool,
+        x_options: WasmNumberLabelOptions,
+        y_options: WasmNumberLabelOptions,
+    ) -> Result<js_sys::Array, JsValue> {
+        let plane = ManimNumberPlane::from_family(self.semantic_family()?).map_err(failure)?;
+        let families = plane
+            .add_coordinates(
+                numbers(x_values, automatic_x)?,
+                numbers(y_values, automatic_y)?,
+                &x_options.options,
+                &y_options.options,
+            )
+            .map_err(failure)?;
+        Ok(label_family_handles(families))
     }
 
     /// Materialize wrappers for this newly returned label family only. Source

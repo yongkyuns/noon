@@ -1,6 +1,6 @@
 //! Bounded linear ThreeDAxes authoring on the shared semantic family substrate.
 //!
-//! This intentionally omits Manim's Cairo axis shading/pieces and labels.
+//! This intentionally omits Manim's Cairo axis shading and pieces.
 //! The axes remain three ordinary NumberLine families and one ordinary family;
 //! coordinate conversion is derived from their checked authored shafts.
 
@@ -13,8 +13,9 @@ use noon_core::{
 
 /// Supported linear ThreeDAxes request. Ranges are `[min, max, step]`; lengths
 /// are world-space units. Defaults match pinned Manim v0.21 at frame height 8.
-/// The z normal is fixed to +Z; custom axis configs, labels, Cairo piece counts,
-/// directional shading, and custom tip shapes are outside this native slice.
+/// The z normal is fixed to +Z; arbitrary axis configs, TeX compilation,
+/// Cairo piece counts, directional shading, and custom tip shapes are outside
+/// this slice. Label strings/families arrive as existing retained text.
 #[derive(Clone, Debug)]
 pub struct ManimThreeDAxesOptions {
     pub x_range: [f64; 3],
@@ -28,6 +29,21 @@ pub struct ManimThreeDAxesOptions {
     pub tip_length: f64,
     pub ticks: CoordinateTicks,
     pub style: SemanticStyle,
+    /// Per-axis values override the shared constructor defaults when present.
+    pub axis_overrides: [ManimThreeDAxisOverrides; 3],
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ManimThreeDAxisOverrides {
+    pub ticks_enabled: Option<bool>,
+    pub tick_size: Option<f64>,
+    pub exclude_origin_tick: Option<bool>,
+    pub tips: Option<bool>,
+    pub tip_length: Option<f64>,
+    pub color: Option<noon_core::Color>,
+    pub stroke_width: Option<f64>,
+    pub stroke_opacity: Option<f64>,
+    pub opacity: Option<f64>,
 }
 
 impl Default for ManimThreeDAxesOptions {
@@ -46,6 +62,7 @@ impl Default for ManimThreeDAxesOptions {
                 ..CoordinateTicks::default()
             },
             style: three_d_axis_style(),
+            axis_overrides: std::array::from_fn(|_| ManimThreeDAxisOverrides::default()),
         }
     }
 }
@@ -202,7 +219,6 @@ impl ManimThreeDAxes {
     ) -> Result<Self, CoordinateAuthoringError> {
         let prepared = prepare_three_d_axes(options)?;
         let root = publish_prepared_three_d_axes(
-            options,
             prepared.axes,
             prepared.tip_paths,
             &mut store.borrow_mut(),
@@ -322,6 +338,179 @@ impl ManimThreeDAxes {
         let shafts = self.axis_shafts()?;
         ManimThreeDAxesFrame::from_axes([&shafts[0], &shafts[1], &shafts[2]], Some(worlds))
     }
+
+    /// Place retained text objects or families using the pinned Manim layout
+    /// sequence: axis-family edge center, label critical corner, raw direction
+    /// buffer, screen fit, then Y/Z label rotation about the family center.
+    pub fn create_axis_label_targets(
+        &self,
+        labels: &[(usize, crate::MobjectTarget<'_>)],
+        buff: f64,
+        fixed_orientation: bool,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        if labels.is_empty() || !buff.is_finite() || buff < 0.0 {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "invalid ThreeDAxes labels",
+            ));
+        }
+        let store = Rc::clone(self.family.integration_store());
+        let mut seen = [false; 3];
+        let mut all_nodes = std::collections::HashSet::new();
+        let mut prepared = Vec::new();
+        let mut family_members = Vec::new();
+        for &(index, label) in labels {
+            if index > 2 || seen[index] || !Rc::ptr_eq(&store, label.integration_store()) {
+                return Err(CoordinateAuthoringError::InvalidOptions(
+                    "invalid ThreeDAxes labels",
+                ));
+            }
+            seen[index] = true;
+            label.validate()?;
+            let layout = match label {
+                crate::MobjectTarget::Object(object) => {
+                    crate::LayoutAnchor::from(object).layout()?
+                }
+                crate::MobjectTarget::Family(family) => {
+                    crate::LayoutAnchor::from(family).layout()?
+                }
+            };
+            let (direction, edge, rotation_axis, rotation_angle) = match index {
+                0 => (
+                    SemanticVec3::new(1.0, 1.0, 0.0),
+                    SemanticVec3::new(1.0, 1.0, 0.0),
+                    SemanticVec3::new(0.0, 0.0, 1.0),
+                    0.0,
+                ),
+                1 => (
+                    SemanticVec3::new(1.0, 1.0, 0.0),
+                    SemanticVec3::new(1.0, 1.0, 0.0),
+                    SemanticVec3::new(0.0, 0.0, 1.0),
+                    std::f64::consts::FRAC_PI_2,
+                ),
+                _ => (
+                    SemanticVec3::new(1.0, 0.0, 0.0),
+                    SemanticVec3::new(0.0, 0.0, 1.0),
+                    SemanticVec3::new(1.0, 0.0, 0.0),
+                    std::f64::consts::FRAC_PI_2,
+                ),
+            };
+            let axis_family = self.axis(index)?;
+            let (axis_min, axis_max) = crate::world_affine::target_world_bounds(
+                &store,
+                crate::MobjectTarget::Family(axis_family.family()),
+            )?;
+            let anchor = critical_world_point(axis_min, axis_max, edge);
+            let source_corner = layout.critical_point(-direction.x, -direction.y);
+            let mut delta = (
+                anchor.x - source_corner.0 + buff * direction.x,
+                anchor.y - source_corner.1 + buff * direction.y,
+            );
+            shift_label_onto_default_frame(&layout, &mut delta);
+            let label_center = layout.critical_point(0.0, 0.0);
+            let label_center =
+                SemanticVec3::new(label_center.0 + delta.0, label_center.1 + delta.1, 0.0);
+            let rotation =
+                noon_core::SemanticRotation3D::from_axis_angle(rotation_axis, rotation_angle)
+                    .ok_or(CoordinateAuthoringError::InvalidOptions(
+                        "invalid ThreeDAxes label rotation",
+                    ))?;
+            let target_node = label.node_id();
+            family_members.push(target_node);
+            let leaves = match label {
+                crate::MobjectTarget::Object(object) => vec![object.node_id()],
+                crate::MobjectTarget::Family(family) => store
+                    .borrow()
+                    .ordered_leaf_nodes(family.node_id())
+                    .map_err(AuthoringError::from)?,
+            };
+            for node in leaves {
+                if !all_nodes.insert(node) {
+                    return Err(CoordinateAuthoringError::InvalidOptions(
+                        "ThreeDAxes labels cannot share text leaves",
+                    ));
+                }
+                let leaf = Mobject::from_node(Rc::clone(&store), node)?;
+                let state = leaf.state()?;
+                if state.content.text().is_none() {
+                    return Err(CoordinateAuthoringError::InvalidOptions(
+                        "ThreeDAxes labels require retained text objects",
+                    ));
+                }
+                let planar =
+                    state
+                        .transform
+                        .as_planar()
+                        .ok_or(CoordinateAuthoringError::InvalidOptions(
+                            "ThreeDAxes label leaves require planar source transforms",
+                        ))?;
+                if planar.translation.z != 0.0 || planar.scale.z != 1.0 {
+                    return Err(CoordinateAuthoringError::InvalidOptions(
+                        "ThreeDAxes label families must lie in the authored XY plane",
+                    ));
+                }
+                let old_rotation = noon_core::SemanticRotation3D::from_axis_angle(
+                    SemanticVec3::new(0.0, 0.0, 1.0),
+                    planar.rotation_z,
+                )
+                .ok_or(CoordinateAuthoringError::InvalidOptions(
+                    "invalid ThreeDAxes label rotation",
+                ))?;
+                let leaf_rotation = rotation.compose(old_rotation).ok_or(
+                    CoordinateAuthoringError::InvalidOptions("invalid ThreeDAxes label rotation"),
+                )?;
+                let placed_translation = SemanticVec3::new(
+                    planar.translation.x + delta.0,
+                    planar.translation.y + delta.1,
+                    0.0,
+                );
+                let relative = sub(placed_translation, label_center);
+                let translation = add(
+                    label_center,
+                    rotation.rotate_vector(relative).ok_or(
+                        CoordinateAuthoringError::InvalidOptions(
+                            "invalid ThreeDAxes label placement",
+                        ),
+                    )?,
+                );
+                let leaf_transform =
+                    SemanticWorldTransform3D::new(translation, leaf_rotation, planar.scale).ok_or(
+                        CoordinateAuthoringError::InvalidOptions(
+                            "invalid ThreeDAxes label placement",
+                        ),
+                    )?;
+                prepared.push((node, leaf_transform, target_node));
+            }
+        }
+
+        let mut transaction = SemanticMutationTransaction::new();
+        let family_token = transaction.create_node(SemanticNodeCreation::family());
+        for member in family_members {
+            transaction.add_member(family_token, member);
+        }
+        for (node, transform, label_anchor) in prepared {
+            transaction.set_object_transform(node, transform.into());
+            if fixed_orientation {
+                transaction.set_spatial_composition_domain_with_anchor(
+                    node,
+                    SemanticSpatialCompositionDomain::FixedOrientation,
+                    Some(label_anchor),
+                );
+            } else {
+                transaction
+                    .set_spatial_composition_domain(node, SemanticSpatialCompositionDomain::World);
+            }
+        }
+        let result = transaction
+            .apply(&mut store.borrow_mut())
+            .map_err(AuthoringError::from)?;
+        MobjectFamily::from_node(
+            store,
+            result
+                .resolve(family_token)
+                .expect("published family token"),
+        )
+        .map_err(Into::into)
+    }
 }
 
 fn three_axis_members(
@@ -353,13 +542,7 @@ impl Scene {
     ) -> Result<ManimThreeDAxes, CoordinateAuthoringError> {
         let prepared = prepare_three_d_axes(options)?;
         let root = self.with_semantic_publication(|store, publish| {
-            publish_prepared_three_d_axes(
-                options,
-                prepared.axes,
-                prepared.tip_paths,
-                store,
-                publish,
-            )
+            publish_prepared_three_d_axes(prepared.axes, prepared.tip_paths, store, publish)
         })?;
         let family = MobjectFamily::from_node(Rc::clone(self.integration_store()), root)?;
         ManimThreeDAxes::from_family(family)
@@ -389,13 +572,7 @@ impl crate::LiveSession<'_> {
     ) -> Result<ManimThreeDAxes, CoordinateAuthoringError> {
         let prepared = prepare_three_d_axes(options)?;
         let root = self.with_semantic_publication(|store, publish| {
-            publish_prepared_three_d_axes(
-                options,
-                prepared.axes,
-                prepared.tip_paths,
-                store,
-                publish,
-            )
+            publish_prepared_three_d_axes(prepared.axes, prepared.tip_paths, store, publish)
         })?;
         let family = MobjectFamily::from_node(Rc::clone(self.integration_store()), root)?;
         ManimThreeDAxes::from_family(family)
@@ -417,7 +594,12 @@ impl crate::LiveSession<'_> {
 }
 
 struct PreparedThreeDAxes {
-    axes: Vec<(Vec<SemanticObjectState>, SemanticWorldTransform3D)>,
+    axes: Vec<(
+        Vec<SemanticObjectState>,
+        SemanticWorldTransform3D,
+        bool,
+        SemanticStyle,
+    )>,
     tip_paths: Vec<VectorPath>,
 }
 
@@ -444,39 +626,51 @@ fn prepare_three_d_axes(
             -std::f64::consts::FRAC_PI_2,
         ),
     ];
-    if options.tips
-        && (!options.tip_length.is_finite()
-            || options.tip_length <= 0.0
-            || !matches!(options.style.stroke.as_ref(), Some(SemanticPaint::Solid(_))))
-    {
-        return Err(CoordinateAuthoringError::InvalidOptions(
-            "invalid ThreeDAxes tip dimensions or tip color",
-        ));
-    }
-    if options.style.stroke_width_mode != StrokeWidthMode::ScaleWithObject {
-        return Err(CoordinateAuthoringError::InvalidOptions(
-            "ThreeDAxes World paths require ScaleWithObject stroke width; ScreenSpace expansion is unsupported",
-        ));
-    }
     let mut prepared_axes = Vec::with_capacity(3);
     let mut tip_paths = Vec::with_capacity(3);
-    for (range, length, axis, angle) in axes {
+    for (index, (range, length, axis, angle)) in axes.into_iter().enumerate() {
+        let overrides = &options.axis_overrides[index];
+        let tips = overrides.tips.unwrap_or(options.tips);
+        let tip_length = overrides.tip_length.unwrap_or(options.tip_length);
+        let ticks = CoordinateTicks {
+            enabled: overrides.ticks_enabled.unwrap_or(options.ticks.enabled),
+            half_length: overrides.tick_size.unwrap_or(options.ticks.half_length),
+            exclude_origin: overrides
+                .exclude_origin_tick
+                .unwrap_or(options.ticks.exclude_origin),
+            ..options.ticks
+        };
+        let mut style = options.style.clone();
+        if let Some(color) = overrides.color {
+            style.stroke = Some(SemanticPaint::Solid(color));
+        }
+        if let Some(width) = overrides.stroke_width {
+            style.stroke_width = width;
+        }
+        if let Some(opacity) = overrides.stroke_opacity {
+            style.stroke_opacity = opacity;
+        }
+        if let Some(opacity) = overrides.opacity {
+            style.object_opacity = opacity;
+        }
+        if tips
+            && (!tip_length.is_finite()
+                || tip_length <= 0.0
+                || !matches!(style.stroke.as_ref(), Some(SemanticPaint::Solid(_))))
+        {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "invalid ThreeDAxes tip dimensions or tip color",
+            ));
+        }
         noon_geometry::validate_coordinate_range(range)?;
         if !length.is_finite() || length <= 0.0 {
             return Err(CoordinateError::InvalidLength.into());
         }
         let frame = NumberLineFrame::centered(range, length, 0.0)?;
-        let states = if options.tips {
-            super::prepare_line_with_elongated_ticks(
-                frame,
-                options.ticks,
-                &options.style,
-                &[],
-                2.0,
-                true,
-            )?
+        let states = if tips {
+            super::prepare_line_with_elongated_ticks(frame, ticks, &style, &[], 2.0, true)?
         } else {
-            prepare_line(frame, options.ticks, &options.style)?
+            prepare_line(frame, ticks, &style)?
         };
         let axis_rotation = noon_core::SemanticRotation3D::from_axis_angle(axis, angle).ok_or(
             CoordinateAuthoringError::InvalidOptions("invalid axis orientation"),
@@ -497,11 +691,11 @@ fn prepare_three_d_axes(
         .ok_or(CoordinateAuthoringError::InvalidOptions(
             "invalid axis transform",
         ))?;
-        if options.tips {
+        if tips {
             let end = frame.end();
-            tip_paths.push(filled_tip_path(end, (1.0, 0.0), options.tip_length)?);
+            tip_paths.push(filled_tip_path(end, (1.0, 0.0), tip_length)?);
         }
-        prepared_axes.push((states, world));
+        prepared_axes.push((states, world, tips, style));
     }
     Ok(PreparedThreeDAxes {
         axes: prepared_axes,
@@ -510,8 +704,12 @@ fn prepare_three_d_axes(
 }
 
 fn publish_prepared_three_d_axes(
-    options: &ManimThreeDAxesOptions,
-    prepared_axes: Vec<(Vec<SemanticObjectState>, SemanticWorldTransform3D)>,
+    prepared_axes: Vec<(
+        Vec<SemanticObjectState>,
+        SemanticWorldTransform3D,
+        bool,
+        SemanticStyle,
+    )>,
     tip_paths: Vec<VectorPath>,
     store: &mut noon_core::SemanticStore,
     mut publish: impl FnMut(
@@ -523,7 +721,7 @@ fn publish_prepared_three_d_axes(
         let mut transaction = SemanticMutationTransaction::new();
         let root = transaction.create_node(SemanticNodeCreation::family());
         let mut tip_index = 0;
-        for (states, world) in prepared_axes {
+        for (states, world, tips, style) in prepared_axes {
             let mut states = states.into_iter().map(|mut state| {
                 state.transform = SemanticTransform::from(world);
                 state
@@ -543,7 +741,7 @@ fn publish_prepared_three_d_axes(
                 transaction
                     .set_spatial_composition_domain(token, SemanticSpatialCompositionDomain::World);
             }
-            if options.tips {
+            if tips {
                 let tip_handle = tip_handles
                     .get(tip_index)
                     .copied()
@@ -551,8 +749,7 @@ fn publish_prepared_three_d_axes(
                 let mut tip =
                     SemanticObjectState::new(noon_core::StoredGeometry::Resource(tip_handle));
                 tip.transform = SemanticTransform::from(world);
-                tip.style =
-                    tip_style(&options.style).map_err(|_| AuthoringError::NonFiniteObjectState)?;
+                tip.style = tip_style(&style).map_err(|_| AuthoringError::NonFiniteObjectState)?;
                 let token = transaction.create_node(SemanticNodeCreation::object(tip));
                 transaction.add_member(group, token);
                 transaction
@@ -574,7 +771,7 @@ fn tip_style(style: &SemanticStyle) -> Result<SemanticStyle, CoordinateAuthoring
 
 fn three_d_axis_style() -> SemanticStyle {
     let mut style = default_axis_style();
-    style.stroke_width_mode = StrokeWidthMode::ScaleWithObject;
+    style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
     style
 }
 
@@ -597,9 +794,74 @@ fn clamp_zero(range: [f64; 3]) -> f64 {
     0.0f64.max(range[0]).min(range[1])
 }
 
+fn critical_world_point(
+    min: SemanticVec3,
+    max: SemanticVec3,
+    direction: SemanticVec3,
+) -> SemanticVec3 {
+    let component = |low: f64, high: f64, direction: f64| {
+        if direction < 0.0 {
+            low
+        } else if direction > 0.0 {
+            high
+        } else {
+            (low + high) * 0.5
+        }
+    };
+    SemanticVec3::new(
+        component(min.x, max.x, direction.x),
+        component(min.y, max.y, direction.y),
+        component(min.z, max.z, direction.z),
+    )
+}
+
+/// Match Manim's `shift_onto_screen(buff=MED_SMALL_BUFF)` in the default
+/// authored frame. This runs before ThreeDAxes rotates its Y/Z label, as it
+/// does in the pinned get-axis-label methods.
+fn shift_label_onto_default_frame(layout: &crate::FamilyLayout, delta: &mut (f64, f64)) {
+    let edge_buff = f64::from(noon_core::MED_SMALL_BUFF);
+    let half_width = f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5;
+    let half_height = f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5;
+    let top = layout.critical_point(0.0, 1.0).1 + delta.1;
+    let top_limit = half_height - edge_buff;
+    if top > top_limit {
+        delta.1 += top_limit - top;
+    }
+    let bottom = layout.critical_point(0.0, -1.0).1 + delta.1;
+    let bottom_limit = -half_height + edge_buff;
+    if bottom < bottom_limit {
+        delta.1 += bottom_limit - bottom;
+    }
+    let left = layout.critical_point(-1.0, 0.0).0 + delta.0;
+    let left_limit = -half_width + edge_buff;
+    if left < left_limit {
+        delta.0 += left_limit - left;
+    }
+    let right = layout.critical_point(1.0, 0.0).0 + delta.0;
+    let right_limit = half_width - edge_buff;
+    if right > right_limit {
+        delta.0 += right_limit - right;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_vec3_near(actual: SemanticVec3, expected: SemanticVec3) {
+        assert!(
+            (actual.x - expected.x).abs() < 1e-6,
+            "{actual:?} != {expected:?}"
+        );
+        assert!(
+            (actual.y - expected.y).abs() < 1e-6,
+            "{actual:?} != {expected:?}"
+        );
+        assert!(
+            (actual.z - expected.z).abs() < 1e-6,
+            "{actual:?} != {expected:?}"
+        );
+    }
 
     #[test]
     fn asymmetric_three_d_axes_round_trip_in_world_coordinates() {
@@ -668,12 +930,347 @@ mod tests {
     }
 
     #[test]
-    fn three_d_axes_reject_unimplemented_screen_space_strokes_atomically() {
+    fn three_d_axes_keep_screen_space_width_on_every_shaft_and_tick() {
         let mut scene = Scene::new();
-        let before = scene.integration_store().borrow().scene_revision();
+        let axes = scene
+            .three_d_axes(&ManimThreeDAxesOptions::default())
+            .unwrap();
+        for shaft in axes.axis_shafts().unwrap() {
+            assert_eq!(
+                shaft.state().unwrap().style.stroke_width_mode,
+                StrokeWidthMode::ScreenSpace
+            );
+        }
+    }
+
+    #[test]
+    fn per_axis_overrides_keep_shared_frame_and_change_only_selected_members() {
         let mut options = ManimThreeDAxesOptions::default();
-        options.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
-        assert!(scene.three_d_axes(&options).is_err());
-        assert_eq!(scene.integration_store().borrow().scene_revision(), before);
+        options.axis_overrides[0].tips = Some(false);
+        options.axis_overrides[0].ticks_enabled = Some(false);
+        options.axis_overrides[0].color = Some(noon_core::Color::RED);
+        options.axis_overrides[0].stroke_width = Some(0.04);
+        let mut scene = Scene::new();
+        let axes = scene.three_d_axes(&options).unwrap();
+        assert!(axes.tip(0).unwrap().is_none());
+        assert!(axes.tip(1).unwrap().is_some());
+        let x_style = axes
+            .axis(0)
+            .unwrap()
+            .shaft()
+            .unwrap()
+            .state()
+            .unwrap()
+            .style;
+        assert_eq!(x_style.stroke_width, 0.04);
+        assert_eq!(
+            x_style.stroke,
+            Some(SemanticPaint::Solid(noon_core::Color::RED))
+        );
+        let coordinates = SemanticVec3::new(2.0, -1.0, 1.5);
+        let configured_point =
+            axes.authored_frame()
+                .unwrap()
+                .c2p(coordinates.x, coordinates.y, coordinates.z);
+        let default_axes = Scene::new()
+            .three_d_axes(&ManimThreeDAxesOptions::default())
+            .unwrap();
+        let default_point =
+            default_axes
+                .authored_frame()
+                .unwrap()
+                .c2p(coordinates.x, coordinates.y, coordinates.z);
+        assert_eq!(configured_point, default_point);
+    }
+
+    #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+    #[test]
+    fn axis_label_frame_fit_uses_default_frame_not_camera_frame_center() {
+        let bounds_at = |frame_center| {
+            let mut scene = Scene::new();
+            scene
+                .camera_3d_profile(
+                    noon_core::ManimCamera3DProfile {
+                        phi: 0.6,
+                        theta: -1.2,
+                        gamma: 0.0,
+                        focal_distance: 5.0,
+                        zoom: 1.0,
+                        frame_height: 8.0,
+                        frame_center,
+                    },
+                    0.1,
+                    100.0,
+                )
+                .unwrap();
+            let axes = scene
+                .three_d_axes(&ManimThreeDAxesOptions::default())
+                .unwrap();
+            let label = scene.text(crate::Text::new("axis label")).unwrap();
+            axes.create_axis_label_targets(
+                &[(0, crate::MobjectTarget::Object(&label))],
+                0.1,
+                false,
+            )
+            .unwrap();
+            crate::world_affine::target_world_bounds(
+                scene.integration_store(),
+                crate::MobjectTarget::Object(&label),
+            )
+            .unwrap()
+        };
+
+        let origin_center = bounds_at(SemanticVec3::ZERO);
+        let offset_center = bounds_at(SemanticVec3::new(2.0, -1.5, 3.0));
+        assert_eq!(origin_center, offset_center);
+        let frame_right =
+            f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - f64::from(noon_core::MED_SMALL_BUFF);
+        let frame_top =
+            f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5 - f64::from(noon_core::MED_SMALL_BUFF);
+        assert!((origin_center.1.x - frame_right).abs() < 1e-5);
+        assert!(origin_center.1.y < frame_top);
+    }
+
+    #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+    #[test]
+    fn rotated_multi_leaf_axis_labels_keep_family_center_and_compose_leaf_rotation() {
+        let mut scene = Scene::new();
+        let mut options = ManimThreeDAxesOptions::new(
+            [-1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+            2.0,
+            2.0,
+            2.0,
+        );
+        options.tips = false;
+        let axes = scene.three_d_axes(&options).unwrap();
+        let old_rotation =
+            noon_core::SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 0.0, 1.0), 0.35)
+                .unwrap();
+
+        let mut label_family = || {
+            let left = scene.text(crate::Text::new("m")).unwrap();
+            let right = scene.text(crate::Text::new("m")).unwrap();
+            let mut transaction = SemanticMutationTransaction::new();
+            for (label, x) in [(&left, -0.75), (&right, 0.75)] {
+                let scale = label.state().unwrap().transform.scale;
+                transaction.set_object_transform(
+                    label.node_id(),
+                    noon_core::SemanticTransform {
+                        translation: SemanticVec3::new(x, 0.0, 0.0),
+                        scale,
+                        orientation: noon_core::SemanticOrientation::Planar(0.35),
+                    },
+                );
+            }
+            transaction
+                .apply(&mut scene.integration_store().borrow_mut())
+                .unwrap();
+            crate::MobjectFamily::create(
+                Rc::clone(scene.integration_store()),
+                &[(&left).into(), (&right).into()],
+            )
+            .unwrap()
+        };
+        let y_family = label_family();
+        let z_family = label_family();
+        drop(label_family);
+        let expected_centers = [(1usize, &y_family), (2usize, &z_family)].map(|(index, family)| {
+            let (direction, edge) = if index == 1 {
+                ((1.0, 1.0), SemanticVec3::new(1.0, 1.0, 0.0))
+            } else {
+                ((1.0, 0.0), SemanticVec3::new(0.0, 0.0, 1.0))
+            };
+            let layout = crate::LayoutAnchor::from(family).layout().unwrap();
+            let (axis_min, axis_max) = crate::world_affine::target_world_bounds(
+                scene.integration_store(),
+                crate::MobjectTarget::Family(axes.axis(index).unwrap().family()),
+            )
+            .unwrap();
+            let anchor = critical_world_point(axis_min, axis_max, edge);
+            let corner = layout.critical_point(-direction.0, -direction.1);
+            let center = layout.center();
+            (
+                center.0 + anchor.x - corner.0 + 0.1 * direction.0,
+                center.1 + anchor.y - corner.1 + 0.1 * direction.1,
+            )
+        });
+
+        axes.create_axis_label_targets(
+            &[
+                (1, crate::MobjectTarget::Family(&y_family)),
+                (2, crate::MobjectTarget::Family(&z_family)),
+            ],
+            0.1,
+            false,
+        )
+        .unwrap();
+
+        for (family, center_xy, expected_rotation_axis) in [
+            (
+                &y_family,
+                expected_centers[0],
+                SemanticVec3::new(0.0, 0.0, 1.0),
+            ),
+            (
+                &z_family,
+                expected_centers[1],
+                SemanticVec3::new(1.0, 0.0, 0.0),
+            ),
+        ] {
+            let leaves = scene
+                .integration_store()
+                .borrow()
+                .ordered_leaf_nodes(family.node_id())
+                .unwrap();
+            assert_eq!(leaves.len(), 2);
+            let rotation = noon_core::SemanticRotation3D::from_axis_angle(
+                expected_rotation_axis,
+                std::f64::consts::FRAC_PI_2,
+            )
+            .unwrap();
+            let expected_orientation = rotation.compose(old_rotation).unwrap();
+            for (leaf, source_x) in leaves.iter().zip([-0.75, 0.75]) {
+                let world = {
+                    let store = scene.integration_store();
+                    let borrowed = store.borrow();
+                    borrowed
+                        .semantic_object_state_checked(*leaf)
+                        .unwrap()
+                        .transform
+                        .world_transform()
+                        .unwrap()
+                };
+                let relative = rotation
+                    .rotate_vector(SemanticVec3::new(source_x, 0.0, 0.0))
+                    .unwrap();
+                assert_vec3_near(
+                    world.translation,
+                    SemanticVec3::new(
+                        center_xy.0 + relative.x,
+                        center_xy.1 + relative.y,
+                        relative.z,
+                    ),
+                );
+                assert_eq!(world.rotation, expected_orientation);
+            }
+            let (min, max) = crate::world_affine::target_world_bounds(
+                scene.integration_store(),
+                crate::MobjectTarget::Family(family),
+            )
+            .unwrap();
+            assert_vec3_near(
+                SemanticVec3::new(
+                    (min.x + max.x) * 0.5,
+                    (min.y + max.y) * 0.5,
+                    (min.z + max.z) * 0.5,
+                ),
+                SemanticVec3::new(center_xy.0, center_xy.1, 0.0),
+            );
+        }
+    }
+
+    #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+    #[test]
+    fn axis_label_layout_rejects_foreign_family_without_publication() {
+        let mut scene = Scene::new();
+        let axes = scene
+            .three_d_axes(&ManimThreeDAxesOptions::default())
+            .unwrap();
+        let mut foreign_scene = Scene::new();
+        let a = foreign_scene.text(crate::Text::new("a")).unwrap();
+        let b = foreign_scene.text(crate::Text::new("b")).unwrap();
+        let family = crate::MobjectFamily::create(
+            Rc::clone(foreign_scene.integration_store()),
+            &[(&a).into(), (&b).into()],
+        )
+        .unwrap();
+        let revision = scene.integration_store().borrow().scene_revision();
+        assert!(axes
+            .create_axis_label_targets(&[(1, crate::MobjectTarget::Family(&family))], 0.1, false,)
+            .is_err());
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+    }
+
+    #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+    #[test]
+    fn retained_axis_labels_publish_placement_and_composition_together() {
+        let mut scene = Scene::new();
+        let axes = scene
+            .three_d_axes(&ManimThreeDAxesOptions::default())
+            .unwrap();
+        let x = scene.text(crate::Text::new("x")).unwrap();
+        let y = scene.text(crate::Text::new("y")).unwrap();
+        let z = scene.text(crate::Text::new("z")).unwrap();
+        let y_layout = crate::LayoutAnchor::from(&y).layout().unwrap();
+        let y_width = y_layout.critical_point(1.0, 0.0).0 - y_layout.critical_point(-1.0, 0.0).0;
+        let y_height = y_layout.critical_point(0.0, 1.0).1 - y_layout.critical_point(0.0, -1.0).1;
+        let before = scene.integration_store().borrow().scene_revision();
+        let labels = axes
+            .create_axis_label_targets(
+                &[
+                    (0, crate::MobjectTarget::Object(&x)),
+                    (1, crate::MobjectTarget::Object(&y)),
+                    (2, crate::MobjectTarget::Object(&z)),
+                ],
+                0.1,
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before.checked_next().unwrap()
+        );
+        let member_count = scene
+            .integration_store()
+            .borrow()
+            .semantic_family_checked(labels.node_id())
+            .unwrap()
+            .members_iter()
+            .count();
+        assert_eq!(member_count, 3);
+        // Manim first shifts the unrotated Y label to the screen edge, then
+        // rotates it around its center. The resulting upper extent includes
+        // half its original width (rather than half its height).
+        let (_, y_max) = crate::world_affine::target_world_bounds(
+            scene.integration_store(),
+            crate::MobjectTarget::Object(&y),
+        )
+        .unwrap();
+        let expected_y_max = f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5
+            - f64::from(noon_core::MED_SMALL_BUFF)
+            - y_height * 0.5
+            + y_width * 0.5;
+        assert!((y_max.y - expected_y_max).abs() < 1e-5);
+        for label in [&x, &y, &z] {
+            let state = label.state().unwrap();
+            assert_eq!(
+                state.spatial_composition_domain(),
+                SemanticSpatialCompositionDomain::FixedOrientation
+            );
+            assert_eq!(state.spatial_anchor_family(), Some(label.node_id()));
+            assert!(matches!(
+                state.transform.orientation,
+                noon_core::SemanticOrientation::Spatial(_)
+            ));
+        }
+        assert!(axes
+            .create_axis_label_targets(
+                &[
+                    (0, crate::MobjectTarget::Object(&x)),
+                    (0, crate::MobjectTarget::Object(&y)),
+                ],
+                0.1,
+                false,
+            )
+            .is_err());
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before.checked_next().unwrap()
+        );
     }
 }

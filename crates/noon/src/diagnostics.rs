@@ -132,9 +132,11 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                     "rotation_wxyz": world.rotation.components(),
                     "scale": [world.scale.x, world.scale.y, world.scale.z],
                     "camera_projection": projection,
-                    "material": if state.material == noon_core::SemanticSpatialMaterial::PointLit {
-                        "point_lit"
-                    } else { "unlit" },
+                    "material": match state.material {
+                        noon_core::SemanticSpatialMaterial::Unlit => "unlit",
+                        noon_core::SemanticSpatialMaterial::PointLit => "point_lit",
+                        noon_core::SemanticSpatialMaterial::CairoSurface => "cairo_surface",
+                    },
                     "point_light": state.point_light,
                 })
             });

@@ -3,8 +3,8 @@
 use crate::{
     surface_mesh, AnimationOptions, Color, DeclaredAnimation, ExecutionSession, MeshOptions,
     RateFunction, Scene, SemanticCamera3D, SemanticPaint, SemanticProjection3D, SemanticRotation3D,
-    SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D, SurfaceSample,
-    UvSurfacePlan,
+    SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D, SurfaceOptions,
+    SurfaceSample, UvSurfacePlan,
 };
 
 /// Author an opaque unlit UV surface, ordinary semantic camera, and world-rotation intent.
@@ -133,6 +133,50 @@ pub fn lighting_session() -> Result<ExecutionSession, String> {
     Ok(session)
 }
 
+/// Default Cairo-shaded Manim Surface subset, retained as a UV cell family.
+pub fn cairo_scene() -> Result<(Scene, crate::SurfaceFamily), String> {
+    let mut scene = Scene::new();
+    scene
+        .camera_3d(
+            SemanticCamera3D::new(
+                SemanticVec3::new(0.0, 0.0, 5.0),
+                SemanticRotation3D::IDENTITY,
+                SemanticProjection3D::Perspective {
+                    vertical_fov_radians: 1.0,
+                    near: 0.1,
+                    far: 30.0,
+                },
+            )
+            .ok_or("invalid spatial-surface Cairo camera")?,
+        )
+        .map_err(|error| error.to_string())?;
+    let plan =
+        UvSurfacePlan::new([-1.0, 1.0], [-1.0, 1.0], [8, 8]).map_err(|error| error.to_string())?;
+    let grid = plan
+        .sample_cairo(|u, v| SemanticVec3::new(u, v, 0.35 * (u * u + v * v)))
+        .map_err(|error| error.to_string())?;
+    let surface = scene
+        .surface_cairo_family(
+            grid,
+            SurfaceOptions {
+                material: SemanticSpatialMaterial::CairoSurface,
+                ..SurfaceOptions::default()
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_many(&[crate::MobjectTarget::Family(surface.family())])
+        .map_err(|error| error.to_string())?;
+    scene.wait(1.0)?;
+    Ok((scene, surface))
+}
+
+/// One-second static execution session for the Cairo Surface raster case.
+pub fn cairo_session() -> Result<ExecutionSession, String> {
+    let (scene, _) = cairo_scene()?;
+    scene.execution_session().map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +303,64 @@ mod tests {
         assert_eq!(observed[0].1.translation, SemanticVec3::new(4.0, -3.0, 6.0));
         assert_eq!(observed[1].1.translation, SemanticVec3::new(0.5, 0.0, 5.0));
         assert_eq!(observed[2].1.translation, SemanticVec3::new(-3.0, 3.0, 4.0));
+    }
+
+    #[test]
+    fn cairo_surface_fixture_retains_bounded_cells_and_default_appearance() {
+        let (scene, surface) = cairo_scene().unwrap();
+        let leaves = scene
+            .integration_store()
+            .borrow()
+            .ordered_leaf_nodes(surface.family().node_id())
+            .unwrap();
+        assert_eq!(leaves.len(), 64);
+        let store = scene.integration_store().borrow();
+        for (index, leaf) in leaves.iter().enumerate() {
+            let state = store.semantic_object_state_checked(*leaf).unwrap();
+            let uv_cell = [index / 8, index % 8];
+            assert_eq!(state.surface_uv_cell(), Some(uv_cell));
+            assert_eq!(
+                state.spatial_material(),
+                SemanticSpatialMaterial::CairoSurface
+            );
+            assert_eq!(state.style.stroke_width, 0.005);
+            assert_eq!(state.style.stroke_opacity, 1.0);
+            let [u, v] = uv_cell;
+            assert_eq!(
+                state.style.fill,
+                Some(SemanticPaint::Solid(if (u + v) % 2 == 0 {
+                    Color::BLUE_D
+                } else {
+                    Color::BLUE_E
+                }))
+            );
+            let handle = state
+                .content
+                .geometry()
+                .and_then(|geometry| geometry.resource_handle())
+                .unwrap();
+            let Some(GeometryResource::Mesh(mesh)) = store.geometry_resources().get(handle) else {
+                panic!("Cairo Surface family retains mesh cells");
+            };
+            assert!(mesh.cairo_appearance().is_some());
+            assert_eq!(mesh.positions().len(), 4);
+            assert_eq!(mesh.indices(), [0, 1, 3, 1, 2, 3]);
+        }
+    }
+
+    #[test]
+    fn cairo_surface_session_is_static_at_first_and_last_30_fps_samples() {
+        let mut session = cairo_session().unwrap();
+        session.advance_to(0.0).unwrap();
+        let mut first = session.frame().clone();
+        assert_eq!(first.objects.len(), 65);
+        session.advance_to(29.0 / 30.0).unwrap();
+        let last = session.frame().clone();
+        first.time = last.time;
+        assert_eq!(first, last);
+        assert_eq!(session.effective_time(), 29.0 / 30.0);
+        session.advance_to(1.0).unwrap();
+        first.time = 1.0;
+        assert_eq!(session.frame(), &first);
     }
 }

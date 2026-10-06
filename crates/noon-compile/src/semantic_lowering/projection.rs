@@ -849,6 +849,10 @@ pub(super) fn lower_object_state(
     if state.spatial_material() == noon_core::SemanticSpatialMaterial::PointLit && !mesh_content {
         return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
     }
+    if state.spatial_material() == noon_core::SemanticSpatialMaterial::CairoSurface && !mesh_content
+    {
+        return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
+    }
     if is_camera_3d && state.transform.scale != noon_core::SemanticVec3::new(1.0, 1.0, 1.0) {
         return Err(SemanticLoweringError::UnsupportedCameraScale { node: semantic_id });
     }

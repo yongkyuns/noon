@@ -27,6 +27,10 @@ pub(super) struct SpatialPathVertex {
     pub position: [f32; 2],
     /// 0 is fill, 1 is stroke, matching `noon_geometry::PathSurface`.
     pub surface: u32,
+    /// Retained straight centerline tangent and cap/body offsets. Both are zero
+    /// for ordinary local tessellation; screen strokes expand after projection.
+    pub tangent: [f32; 2],
+    pub extrusion: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -48,6 +52,7 @@ type FixedOrientationOrderKey = (u32, u32, usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct Specialization {
     pub stroke_width: u32,
+    pub screen_stroke: bool,
     pub stroke_join: noon_core::StrokeJoin,
     pub stroke_cap: noon_core::StrokeCap,
     pub fill: bool,
@@ -75,7 +80,7 @@ struct PathInstance {
     opacity: f32,
     fixed_orientation: u32,
     fixed_anchor: [f32; 3],
-    padding: u32,
+    screen_stroke_width: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -104,6 +109,7 @@ pub(super) struct SpatialPathGpuState {
     /// Rebuild only when the publication reports an order change.
     painter_ranks: HashMap<usize, u32>,
     painter_ranks_initialized: bool,
+    clip_scale_users: usize,
     paths: HashMap<PathKey, ResidentPath>,
     instances: Vec<PathInstance>,
     free_instances: Vec<usize>,
@@ -140,11 +146,11 @@ impl PathGpuState {
         format: wgpu::TextureFormat,
         sample_count: u32,
     ) -> Self {
-        const VERTEX: [wgpu::VertexAttribute; 2] =
-            wgpu::vertex_attr_array![0 => Float32x2, 1 => Uint32];
-        const INSTANCE: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
+        const VERTEX: [wgpu::VertexAttribute; 4] =
+            wgpu::vertex_attr_array![0 => Float32x2, 1 => Uint32, 11 => Float32x2, 12 => Float32x2];
+        const INSTANCE: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
             2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
-            6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3
+            6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3, 13 => Float32
         ];
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon spatial path camera layout"),
@@ -420,13 +426,20 @@ impl SpatialPathGpuState {
 
     fn publish_draw(&mut self, id: DrawId, draw: PathDraw) {
         let previous = self.draws.insert(id, draw);
+        self.clip_scale_users -= usize::from(previous.is_some_and(Self::uses_clip_scale));
+        self.clip_scale_users += usize::from(Self::uses_clip_scale(draw));
         self.update_fixed_order(id, previous.as_ref(), Some(&draw));
     }
 
     fn remove_draw(&mut self, id: DrawId) -> Option<PathDraw> {
         let previous = self.draws.remove(&id)?;
+        self.clip_scale_users -= usize::from(Self::uses_clip_scale(previous));
         self.update_fixed_order(id, Some(&previous), None);
         Some(previous)
+    }
+
+    fn uses_clip_scale(draw: PathDraw) -> bool {
+        draw.domain == Domain::FixedOrientation || draw.key.specialization.screen_stroke
     }
 
     fn row_draw_ids(&self, row: usize) -> impl Iterator<Item = DrawId> + '_ {
@@ -601,7 +614,11 @@ impl SpatialPathGpuState {
                     opacity: object_alpha,
                     fixed_orientation: u32::from(fixed),
                     fixed_anchor: [anchor.x as f32, anchor.y as f32, anchor.z as f32],
-                    padding: 0,
+                    screen_stroke_width: if screen_stroke(style) {
+                        style.stroke_width
+                    } else {
+                        0.0
+                    },
                 };
                 if instance
                     .fill
@@ -826,12 +843,7 @@ impl SpatialPathGpuState {
                 stats.instance_bytes += std::mem::size_of::<PathInstance>();
             }
         }
-        if self
-            .draws
-            .values()
-            .any(|draw| draw.domain == Domain::FixedOrientation)
-            && gpu.fixed_camera_scale != plan.camera_clip_scale
-        {
+        if self.clip_scale_users > 0 && gpu.fixed_camera_scale != plan.camera_clip_scale {
             queue.write_buffer(
                 &gpu.fixed_camera,
                 0,
@@ -937,10 +949,7 @@ fn path_key(
     identity: u64,
 ) -> Result<PathKey, SpatialPathError> {
     let style = visible_path_style(style);
-    if style.stroke.is_some()
-        && style.stroke_width > 0.0
-        && style.stroke_width_mode != StrokeWidthMode::ScaleWithObject
-    {
+    if screen_stroke(style) && !matches!(geometry, GeometryRef::Line { .. }) {
         return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
     }
     if !style.stroke_width.is_finite() || style.stroke_width < 0.0 {
@@ -976,24 +985,19 @@ fn path_key(
     };
     Ok(PathKey {
         source,
-        specialization: Specialization {
-            stroke_width: if style.stroke.is_some() {
-                style.stroke_width.to_bits()
-            } else {
-                0.0_f32.to_bits()
-            },
-            stroke_join: style.stroke_join,
-            stroke_cap: style.stroke_cap,
-            fill: style.fill.is_some(),
-            stroke: style.stroke.is_some() && style.stroke_width > 0.0,
-        },
+        specialization: specialization(style),
     })
 }
 
 fn specialization(style: Style) -> Specialization {
     Specialization {
+        screen_stroke: screen_stroke(style),
         stroke_width: if style.stroke.is_some() {
-            style.stroke_width.to_bits()
+            if screen_stroke(style) {
+                1.0_f32.to_bits()
+            } else {
+                style.stroke_width.to_bits()
+            }
         } else {
             0.0_f32.to_bits()
         },
@@ -1002,6 +1006,12 @@ fn specialization(style: Style) -> Specialization {
         fill: style.fill.is_some(),
         stroke: style.stroke.is_some() && style.stroke_width > 0.0,
     }
+}
+
+fn screen_stroke(style: Style) -> bool {
+    style.stroke.is_some()
+        && style.stroke_width > 0.0
+        && style.stroke_width_mode == StrokeWidthMode::ScreenSpace
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1261,10 +1271,7 @@ pub(super) fn tessellate(
 ) -> Result<TessellatedSpatialPath, SpatialPathError> {
     validate_style(style, object_alpha * style.opacity, domain)?;
     let style = visible_path_style(style);
-    if style.stroke.is_some()
-        && style.stroke_width > 0.0
-        && style.stroke_width_mode != StrokeWidthMode::ScaleWithObject
-    {
+    if screen_stroke(style) && !matches!(geometry, GeometryRef::Line { .. }) {
         return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
     }
     let source = match geometry {
@@ -1292,24 +1299,67 @@ pub(super) fn tessellate(
     let stroke = style.stroke.is_some() && style.stroke_width > 0.0;
     let mesh = noon_geometry::tessellate_styled_with_fill(
         &path,
-        if stroke { style.stroke_width } else { 0.0 },
+        if screen_stroke(style) {
+            1.0
+        } else if stroke {
+            style.stroke_width
+        } else {
+            0.0
+        },
         style.stroke_join,
         style.stroke_cap,
         fill,
     )
     .map_err(|_| SpatialPathError::Tessellation)?;
+    let line = if screen_stroke(style) {
+        let GeometryRef::Line { start, end } = geometry else {
+            unreachable!("screen stroke was checked above")
+        };
+        let delta = *end - *start;
+        let length = delta.length();
+        if !length.is_finite() || length <= 0.0 {
+            return Err(SpatialPathError::UnrepresentableVertex);
+        }
+        Some((*start, delta / length, length))
+    } else {
+        None
+    };
     let vertices: Vec<SpatialPathVertex> = mesh
         .vertices
         .into_iter()
-        .map(|vertex| SpatialPathVertex {
-            position: [vertex.position.x, vertex.position.y],
-            surface: crate::pack_path_surface(vertex.surface, 1.0),
+        .map(|vertex| {
+            let mut output = SpatialPathVertex {
+                position: [vertex.position.x, vertex.position.y],
+                surface: crate::pack_path_surface(vertex.surface, 1.0),
+                tangent: [0.0; 2],
+                extrusion: [0.0; 2],
+            };
+            if let Some((start, tangent, length)) =
+                line.filter(|_| vertex.surface == noon_geometry::PathSurface::Stroke)
+            {
+                let perpendicular = Vec2::new(-tangent.y, tangent.x);
+                let delta = vertex.position - start;
+                let along = (delta.x * tangent.x + delta.y * tangent.y).clamp(0.0, length);
+                let center = start + tangent * along;
+                let offset = vertex.position - center;
+                output.position = [center.x, center.y];
+                output.tangent = [tangent.x, tangent.y];
+                output.extrusion = [
+                    offset.x * tangent.x + offset.y * tangent.y,
+                    offset.x * perpendicular.x + offset.y * perpendicular.y,
+                ];
+            }
+            output
         })
         .collect();
-    if vertices
-        .iter()
-        .any(|vertex| vertex.position.iter().any(|value| !value.is_finite()))
-    {
+    if vertices.iter().any(|vertex| {
+        vertex
+            .position
+            .iter()
+            .chain(vertex.tangent.iter())
+            .chain(vertex.extrusion.iter())
+            .any(|value| !value.is_finite())
+    }) {
         return Err(SpatialPathError::UnrepresentableVertex);
     }
     Ok(TessellatedSpatialPath {
@@ -1383,6 +1433,76 @@ mod tests {
             tessellate(&geometry, &resources, style, 0.5, Domain::World).unwrap_err(),
             SpatialPathError::NonOpaqueStyle
         );
+    }
+
+    #[test]
+    fn straight_screen_strokes_retain_centerline_caps_and_distinct_resource_keys() {
+        let resources = GeometryResourceArena::default();
+        for cap in [
+            noon_core::StrokeCap::Butt,
+            noon_core::StrokeCap::Round,
+            noon_core::StrokeCap::Square,
+        ] {
+            let style = Style {
+                fill: None,
+                stroke: Some(Color::WHITE),
+                stroke_width: 0.2,
+                stroke_width_mode: StrokeWidthMode::ScreenSpace,
+                stroke_cap: cap,
+                ..Style::default()
+            };
+            for (start, end) in [
+                (Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
+                (Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)),
+                (Vec2::new(0.0, -1.0), Vec2::new(0.0, 1.0)),
+            ] {
+                let geometry = GeometryRef::line(start, end);
+                let mesh = tessellate(&geometry, &resources, style, 1.0, Domain::World).unwrap();
+                assert!(!mesh.indices.is_empty());
+                let tangent = (end - start).normalized().unwrap();
+                let normal = Vec2::new(-tangent.y, tangent.x);
+                for vertex in &mesh.vertices {
+                    assert_eq!(vertex.tangent, [tangent.x, tangent.y]);
+                    let center = Vec2::new(vertex.position[0], vertex.position[1]);
+                    let offset = tangent * vertex.extrusion[0] + normal * vertex.extrusion[1];
+                    assert!(vertex.extrusion[1].abs() <= 0.50001);
+                    assert!(vertex.extrusion[0].abs() <= 0.50001);
+                    if cap == noon_core::StrokeCap::Butt {
+                        assert!(vertex.extrusion[0].abs() < 1e-6);
+                    }
+                    assert!((center + offset).x.is_finite());
+                }
+                let screen_key = path_key(&geometry, &resources, style, 1).unwrap();
+                let world_key = path_key(
+                    &geometry,
+                    &resources,
+                    Style {
+                        stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+                        ..style
+                    },
+                    1,
+                )
+                .unwrap();
+                assert_ne!(
+                    screen_key, world_key,
+                    "different expansion policies cannot reuse the same vertices"
+                );
+                assert_eq!(
+                    screen_key,
+                    path_key(
+                        &geometry,
+                        &resources,
+                        Style {
+                            stroke_width: 0.6,
+                            ..style
+                        },
+                        1
+                    )
+                    .unwrap(),
+                    "screen width is compact instance state, not topology"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1564,6 +1684,7 @@ mod tests {
                 source: SourceKey::Inline(index as u64),
                 specialization: Specialization {
                     stroke_width: 0,
+                    screen_stroke: false,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
                     fill: true,
@@ -1595,6 +1716,7 @@ mod tests {
                 source: SourceKey::Inline(row as u64),
                 specialization: Specialization {
                     stroke_width: 0,
+                    screen_stroke: false,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
                     fill: true,

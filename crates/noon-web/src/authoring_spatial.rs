@@ -1,15 +1,16 @@
 //! Thin WASM value adapters for shared Rust spatial authoring operations.
 //!
-//! This API exposes explicitly indexed mesh/surface operations. It does not
-//! claim Manim Cairo shaded-normal or family ordering parity.
+//! This API exposes explicitly indexed mesh/surface operations. Cairo Surface
+//! mode retains the bounded sampled appearance profile; it does not claim
+//! general Cairo parity for arbitrary mesh topology.
 
 #![cfg(target_arch = "wasm32")]
 
 use crate::authoring_error::{js_error, AuthoringFailure};
 use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoringStore};
 use noon::{
-    Color, MeshOptions, SemanticPaint, SemanticSpatialMaterial, SurfaceSample, UvSurfacePlan,
-    WorldAffineEdit,
+    CairoSurfaceGrid, Color, MeshOptions, SemanticPaint, SemanticSpatialMaterial, SurfaceSample,
+    UvSurfacePlan, WorldAffineEdit,
 };
 use noon_core::{MeshResource, SemanticVec3, SemanticWorldTransform3D};
 use std::rc::Rc;
@@ -130,6 +131,12 @@ fn flattened_surface_samples<'a>(
     })
 }
 
+fn flattened_cairo_surface_samples(points: &[f64]) -> impl Iterator<Item = SemanticVec3> + '_ {
+    points
+        .chunks_exact(3)
+        .map(|point| SemanticVec3::new(point[0], point[1], point[2]))
+}
+
 #[wasm_bindgen]
 pub struct WasmMeshOptions {
     pub(crate) options: MeshOptions,
@@ -138,11 +145,24 @@ pub struct WasmMeshOptions {
 #[wasm_bindgen]
 impl WasmMeshOptions {
     /// Generic native geometry conventions; this is not full Manim class parity.
-    pub fn sphere(radius: f64, u_cells: usize, v_cells: usize) -> Result<Self, JsValue> {
-        noon::sphere_mesh(radius, [u_cells, v_cells])
-            .map(mesh_options)
-            .map(|options| Self { options })
-            .map_err(|e| invalid("spatial.invalid_mesh", e))
+    pub fn sphere(
+        radius: f64,
+        u_cells: usize,
+        v_cells: usize,
+        u_start: f64,
+        u_end: f64,
+        v_start: f64,
+        v_end: f64,
+    ) -> Result<Self, JsValue> {
+        noon_geometry::sphere_mesh_range(
+            radius,
+            [u_cells, v_cells],
+            [u_start, u_end],
+            [v_start, v_end],
+        )
+        .map(mesh_options)
+        .map(|options| Self { options })
+        .map_err(|e| invalid("spatial.invalid_mesh", e))
     }
     #[wasm_bindgen(js_name = line3D)]
     pub fn line_3d(
@@ -202,17 +222,55 @@ impl WasmMeshOptions {
             .map(|options| Self { options })
             .map_err(|e| invalid("spatial.invalid_mesh", e))
     }
-    pub fn cylinder(radius: f64, height: f64, segments: usize) -> Result<Self, JsValue> {
-        noon::cylinder_mesh(radius, height, segments)
-            .map(mesh_options)
-            .map(|options| Self { options })
-            .map_err(|e| invalid("spatial.invalid_mesh", e))
+
+    /// Six canonical indexed prism faces for one ordinary semantic family.
+    /// Style remains inert until atomic family creation.
+    #[wasm_bindgen(js_name = prismFaces)]
+    pub fn prism_faces(x: f64, y: f64, z: f64) -> Result<WasmMeshFamilyOptions, JsValue> {
+        noon_geometry::prism_faces(SemanticVec3::new(x, y, z))
+            .map(|faces| WasmMeshFamilyOptions {
+                options: faces.into_iter().map(mesh_options).collect(),
+                cells: Vec::new(),
+            })
+            .map_err(|error| invalid("spatial.invalid_mesh", error))
     }
-    pub fn cone(radius: f64, height: f64, segments: usize) -> Result<Self, JsValue> {
-        noon::cone_mesh(radius, height, segments)
-            .map(mesh_options)
-            .map(|options| Self { options })
-            .map_err(|e| invalid("spatial.invalid_mesh", e))
+    pub fn cylinder(
+        radius: f64,
+        height: f64,
+        segments: usize,
+        show_ends: bool,
+        angle_start: f64,
+        angle_end: f64,
+    ) -> Result<Self, JsValue> {
+        noon_geometry::cylinder_mesh_range(
+            radius,
+            height,
+            segments,
+            show_ends,
+            [angle_start, angle_end],
+        )
+        .map(mesh_options)
+        .map(|options| Self { options })
+        .map_err(|e| invalid("spatial.invalid_mesh", e))
+    }
+    pub fn cone(
+        radius: f64,
+        height: f64,
+        segments: usize,
+        show_base: bool,
+        angle_start: f64,
+        angle_end: f64,
+    ) -> Result<Self, JsValue> {
+        noon_geometry::cone_mesh_range(
+            radius,
+            height,
+            segments,
+            show_base,
+            [angle_start, angle_end],
+        )
+        .map(mesh_options)
+        .map(|options| Self { options })
+        .map_err(|e| invalid("spatial.invalid_mesh", e))
     }
     /// Configure the inert pose before a mesh is admitted to its semantic owner.
     #[wasm_bindgen(js_name = setAxialPose)]
@@ -288,6 +346,9 @@ impl WasmMeshFamilyOptions {
         }
         Ok(())
     }
+    pub(crate) fn has_surface_roles(&self) -> bool {
+        !self.cells.is_empty()
+    }
     #[wasm_bindgen(js_name = setFill)]
     pub fn set_fill(
         &mut self,
@@ -352,6 +413,28 @@ impl WasmMeshFamilyOptions {
             options.material = material;
         }
     }
+    #[wasm_bindgen(js_name = setCairoSurface)]
+    pub fn set_cairo_surface(&mut self, enabled: bool) -> Result<(), JsValue> {
+        if enabled
+            && self
+                .options
+                .iter()
+                .any(|options| options.geometry.cairo_appearance().is_none())
+        {
+            return Err(invalid(
+                "spatial.invalid_cairo_surface_material",
+                "CairoSurface requires a Cairo-sampled appearance on every mesh cell",
+            ));
+        }
+        for options in &mut self.options {
+            if enabled {
+                options.material = SemanticSpatialMaterial::CairoSurface;
+            } else if options.material == SemanticSpatialMaterial::CairoSurface {
+                options.material = SemanticSpatialMaterial::Unlit;
+            }
+        }
+        Ok(())
+    }
     #[wasm_bindgen(js_name = setCheckerboard)]
     pub fn set_checkerboard(
         &mut self,
@@ -411,6 +494,13 @@ impl WasmSurfaceSamplingPlan {
     pub fn parameters(&self) -> Vec<f64> {
         self.plan.coordinates().flat_map(|(u, v)| [u, v]).collect()
     }
+    #[wasm_bindgen(js_name = cairoParameters)]
+    pub fn cairo_parameters(&self) -> Vec<f64> {
+        self.plan
+            .cairo_coordinates()
+            .flat_map(|(u, v)| [u, v])
+            .collect()
+    }
     #[wasm_bindgen(js_name = finishMesh)]
     pub fn finish_mesh(&self, points: &[f64], normals: &[f64]) -> Result<WasmMeshOptions, JsValue> {
         let expected =
@@ -465,6 +555,39 @@ impl WasmSurfaceSamplingPlan {
         }
         Ok(WasmMeshFamilyOptions { options, cells })
     }
+
+    #[wasm_bindgen(js_name = finishCairoCells)]
+    pub fn finish_cairo_cells(&self, points: &[f64]) -> Result<WasmMeshFamilyOptions, JsValue> {
+        let expected = self
+            .plan
+            .cell_count()
+            .checked_mul(16)
+            .and_then(|count| count.checked_mul(3))
+            .ok_or_else(|| invalid("spatial.invalid_surface", "surface payload is too large"))?;
+        if points.len() != expected {
+            return Err(invalid(
+                "spatial.invalid_surface_samples",
+                format!("expected {expected} Cairo position components"),
+            ));
+        }
+        let grid: CairoSurfaceGrid = self
+            .plan
+            .finish_cairo_samples(flattened_cairo_surface_samples(points))
+            .map_err(|e| invalid("spatial.invalid_surface_samples", e))?;
+        let mut options = Vec::with_capacity(self.plan.cell_count());
+        let mut cells = Vec::with_capacity(self.plan.cell_count());
+        for (cell, appearance) in grid.cells() {
+            let uv_cell = cell.uv_cell;
+            let mesh = cell
+                .into_mesh_resource()
+                .map_err(|e| invalid("spatial.invalid_surface", e))?
+                .with_cairo_appearance(appearance)
+                .map_err(|e| invalid("spatial.invalid_surface", e))?;
+            options.push(mesh_options(mesh));
+            cells.push(uv_cell);
+        }
+        Ok(WasmMeshFamilyOptions { options, cells })
+    }
 }
 
 #[wasm_bindgen]
@@ -483,14 +606,23 @@ impl WasmAuthoringStore {
         &self,
         mut candidate: WasmMeshFamilyOptions,
     ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-        candidate.retain_surface_roles()?;
+        let surface = candidate.has_surface_roles();
+        if surface {
+            candidate.retain_surface_roles()?;
+        }
         let family =
             noon::MobjectFamily::from_meshes(Rc::clone(&self.semantics), candidate.options)
                 .map_err(js_error)?;
-        let surface = noon::SurfaceFamily::from_family(family).map_err(js_error)?;
-        Ok(crate::WasmAuthoringFamilyHandle::from_surface_family(
-            surface,
-        ))
+        if surface {
+            let surface = noon::SurfaceFamily::from_family(family).map_err(js_error)?;
+            Ok(crate::WasmAuthoringFamilyHandle::from_surface_family(
+                surface,
+            ))
+        } else {
+            Ok(crate::WasmAuthoringFamilyHandle::from_semantic_family(
+                family,
+            ))
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ManimAxesOptions, ManimNumberLineOptions, Mobject, Scene};
+use crate::{ManimAxesOptions, ManimNumberLineOptions, ManimNumberPlaneOptions, Mobject, Scene};
 
 fn counts(scene: &Scene) -> (usize, usize, usize) {
     let store = scene.integration_store().borrow();
@@ -126,6 +126,51 @@ fn second_axis_preparation_failure_is_atomic_including_fonts() {
             .filter(|o| o.state().unwrap().content.text().is_some())
             .count(),
         0
+    );
+}
+
+#[test]
+fn number_plane_coordinate_labels_use_shared_layout_and_attach_atomically() {
+    let mut scene = Scene::new();
+    let plane = scene
+        .number_plane(&ManimNumberPlaneOptions {
+            x_range: [0.0, 2.0, 1.0],
+            y_range: [0.0, 2.0, 1.0],
+            x_length: Some(4.0),
+            y_length: Some(4.0),
+            ..Default::default()
+        })
+        .unwrap();
+    let before = counts(&scene);
+    let revision = scene.revision();
+    let x = NumberLabelOptions::default();
+    let y = NumberLabelOptions {
+        font: "No such font family".into(),
+        ..x.clone()
+    };
+    assert!(plane
+        .add_coordinates(Some(&[1.0]), Some(&[1.0]), &x, &y)
+        .is_err());
+    assert_eq!(counts(&scene), before);
+    assert_eq!(scene.revision(), revision);
+
+    let labels = plane
+        .add_coordinates(Some(&[1.0]), Some(&[1.0]), &x, &x)
+        .unwrap();
+    assert_eq!(
+        leaves(&labels[0]).iter().map(text).collect::<Vec<_>>(),
+        ["1"]
+    );
+    assert_eq!(
+        leaves(&labels[1]).iter().map(text).collect::<Vec<_>>(),
+        ["1"]
+    );
+    assert_eq!(
+        leaves(plane.family())
+            .iter()
+            .filter(|object| object.state().unwrap().content.text().is_some())
+            .count(),
+        2,
     );
 }
 

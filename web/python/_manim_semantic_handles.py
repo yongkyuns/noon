@@ -1537,6 +1537,16 @@ def _group_set_opacity(self, opacity):
     return _group_paint(self, "Opacity", (alpha,))
 
 
+def _group_fade(self, darkness=0.5):
+    darkness = _compat._opacity("darkness", darkness)
+    engine_call(
+        self._semantic_family_handle.fade,
+        darkness,
+        operation="Group.fade",
+    )
+    return self
+
+
 def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF,
                            cell_alignment=_base.ORIGIN, row_alignments=None,
                            col_alignments=None, row_heights=None, col_widths=None,

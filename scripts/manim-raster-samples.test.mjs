@@ -86,10 +86,50 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
   assert.match(workerSource, /checkerboard_colors=False[\s\S]*stroke_width=0[\s\S]*shade_in_3d=False/,
     "the fixture opts into geometry/material settings that the retained mesh lane supports");
 
+  const cairoDirect = manifest.fixtures.find(fixture => fixture.id === "spatial-surface-cairo-direct");
+  const cairoWorker = manifest.fixtures.find(fixture => fixture.id === "spatial-surface-cairo-worker");
+  assert.ok(cairoDirect?.direct_factory, "default Cairo Surface uses direct typed execution");
+  assert.ok(cairoWorker?.noon_source, "default Cairo Surface uses the Python worker");
+  assert.equal(cairoDirect.source, direct.source);
+  assert.equal(cairoWorker.source, direct.source);
+  assert.equal(cairoWorker.noon_source, worker.noon_source);
+  assert.equal(cairoDirect.scene, "CairoSpatialSurface");
+  assert.equal(cairoWorker.scene, cairoDirect.scene);
+  assert.equal(cairoDirect.expected_duration, 1);
+  assert.equal(cairoWorker.expected_duration, 1);
+  assert.deepEqual(cairoDirect.sample_times, [0, 0.5, 29 / 30]);
+  assert.deepEqual(cairoWorker.sample_times, cairoDirect.sample_times);
+  assert.equal(cairoDirect.expected_object_count, 65);
+  assert.equal(cairoWorker.expected_object_count, 65);
+  const cairoReference = await readFile(path.join(repoRoot, cairoDirect.source), "utf8");
+  const cairoWorkerSource = await readFile(path.join(repoRoot, cairoWorker.noon_source), "utf8");
+  const nativeSource = await readFile(
+    path.join(repoRoot, "crates/noon/src/example_scenes/spatial_surface.rs"), "utf8",
+  );
+  assert.match(nativeSource, /UvSurfacePlan::new\(\[-1\.0, 1\.0\], \[-1\.0, 1\.0\], \[8, 8\]\)/,
+    "direct Rust samples the same bounded 8×8 UV domain");
+  assert.match(nativeSource, /sample_cairo\(\|u, v\|\s*SemanticVec3::new\(u, v, 0\.35 \* \(u \* u \+ v \* v\)\)\s*\)/,
+    "direct Rust uses the same nonlinear Cairo control-point callback");
+  assert.match(nativeSource, /material: SemanticSpatialMaterial::CairoSurface/,
+    "direct Rust selects the distinct Cairo Surface material");
+  for (const [label, source] of [["reference", cairoReference], ["worker", cairoWorkerSource]]) {
+    const fixture = source.split("class CairoSpatialSurface", 2)[1];
+    assert.ok(fixture, `${label}: missing CairoSpatialSurface`);
+    assert.match(fixture, /Surface\([\s\S]*?u_range=\(-1, 1\)[\s\S]*?v_range=\(-1, 1\)[\s\S]*?resolution=\(8, 8\)/,
+      `${label}: bounded Surface dimensions match the direct Rust case`);
+    assert.match(fixture, /0\.35\s*\*\s*\(u\s*\*\s*u\s*\+\s*v\s*\*\s*v\)/,
+      `${label}: callback matches the nonlinear capability fixture`);
+    assert.doesNotMatch(fixture, /shade_in_3d\s*=\s*False|checkerboard_colors\s*=|stroke_width\s*=/,
+      `${label}: uses pinned Surface defaults for shading, checkerboard, and border`);
+    assert.match(fixture, /wait\(1\)/,
+      `${label}: holds the static scene for the one-second fixture duration`);
+  }
+
   const selectedPaths = [
     direct.source,
     worker.noon_source,
     "crates/noon/src/example_scenes/spatial_surface.rs",
+    "crates/noon-web/src/direct_execution_smoke.rs",
     "crates/noon-native/examples/spatial_surface.rs",
     "crates/noon-geometry/src/surface.rs",
     "crates/noon-geometry/src/solids.rs",
@@ -106,7 +146,7 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
   }
 });
 
-test("Line3D and explicit triangular mesh fixtures use the existing paired raster harness", async () => {
+test("Line3D, triangle, and translucent Prism fixtures use the existing paired raster harness", async () => {
   const manifest = JSON.parse(await readFile(
     path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8",
   ));
@@ -120,12 +160,16 @@ test("Line3D and explicit triangular mesh fixtures use the existing paired raste
   assert.equal(direct.source, "parity/manim-v0.21/spatial_primitives.py");
   assert.equal(worker.source, direct.source);
   assert.equal(worker.noon_source, "web/python/examples/noon_spatial_primitives.py");
-  assert.equal(direct.expected_object_count, 5);
-  assert.equal(worker.expected_object_count, 5);
+  assert.equal(direct.expected_object_count, 14);
+  assert.equal(worker.expected_object_count, 14);
 
   const workerSource = await readFile(path.join(repoRoot, worker.noon_source), "utf8");
   assert.match(workerSource, /\bLine3D\(/);
-  assert.match(workerSource, /Mesh3D\.polyhedron\(/);
+  assert.match(workerSource, /Prism\(/);
+  assert.match(workerSource, /fill_opacity=0\.75/);
+  assert.match(workerSource, /show_ends=False/);
+  assert.match(workerSource, /show_base=False/);
+  assert.match(workerSource, /u_range=\(PI \/ 4, 3 \* PI \/ 4\), v_range=\(PI \/ 6, 5 \* PI \/ 6\)/);
   assert.match(workerSource, /checkerboard_colors=False[\s\S]*stroke_width=0[\s\S]*shade_in_3d=False/,
     "public Line3D selects geometry, opacity, stroke, and shading defaults supported by its mesh profile");
   for (const relativePath of [
@@ -185,9 +229,33 @@ test("ThreeDAxes direct and worker fixtures enroll source, timing, and Rust coor
   assert.equal(direct?.direct_factory, "createDirectSpatialThreeDAxesSmokeRenderer");
   assert.equal(worker?.noon_source, "web/python/examples/noon_spatial_three_d_axes.py");
   assert.equal(direct.source, "parity/manim-v0.21/spatial_three_d_axes.py");
+  assert.equal(direct.expected_object_count, 38);
+  assert.equal(worker.expected_object_count, 38);
   assert.deepEqual(direct.sample_times, [0, 0.5, 0.9666666666666667]);
   assert.deepEqual(worker.sample_times, direct.sample_times);
   assert.deepEqual(worker.raster_tolerance, direct.raster_tolerance);
+
+  const nativeSource = await readFile(path.join(repoRoot, "crates/noon/src/example_scenes/spatial_three_d_axes.rs"), "utf8");
+  const referenceSource = await readFile(path.join(repoRoot, direct.source), "utf8");
+  const workerSource = await readFile(path.join(repoRoot, worker.noon_source), "utf8");
+  assert.match(nativeSource, /axis_overrides\[0\]\.tips = Some\(false\)/);
+  assert.match(nativeSource, /tipless X axis keeps both endpoint ticks/);
+  assert.match(referenceSource, /include_tip": False/);
+  assert.match(workerSource, /include_tip": False/);
+  assert.match(nativeSource, /stroke_width = Some\(0\.04\)/);
+  assert.match(referenceSource, /stroke_width": 4/);
+  assert.match(workerSource, /stroke_width": 4/);
+  assert.match(referenceSource, /z_axis_config=\{"color": BLUE\}/);
+  assert.match(workerSource, /z_axis_config=\{"color": BLUE\}/);
+  assert.match(referenceSource, /axes\.get_axis_labels\(/);
+  assert.match(workerSource, /axes\.get_axis_labels\(/);
+  assert.match(nativeSource, /create_axis_label_targets/);
+  for (const source of [nativeSource, referenceSource, workerSource]) {
+    assert.match(source, /tick_size.*0\.15|tick_size: Some\(0\.15\)/);
+    assert.match(source, /RED/);
+    assert.match(source, /GREEN/);
+    assert.match(source, /BLUE/);
+  }
 
   for (const relativePath of [
     direct.source,
@@ -215,8 +283,8 @@ test("VectorScene/LTS matrix fixture pairs native and Python ordinary timelines"
   assert.equal(worker?.noon_source, "web/python/examples/noon_vector_space.py");
   assert.equal(direct.source, "parity/manim-v0.21/vector_space.py");
   assert.equal(worker.source, direct.source);
-  assert.equal(direct.expected_duration, 3);
-  assert.deepEqual(direct.sample_times, [0, 1.5, 2.966666666666667]);
+  assert.equal(direct.expected_duration, 4);
+  assert.deepEqual(direct.sample_times, [0, 0.5, 1, 2.5, 3.966666666666667]);
   assert.deepEqual(worker.sample_times, direct.sample_times);
   assert.deepEqual(direct.raster_tolerance, {
     max_bounds_delta_px: 1, max_differing_ratio: 0.04,
@@ -239,5 +307,35 @@ test("VectorScene/LTS matrix fixture pairs native and Python ordinary timelines"
     await readFile(path.join(repoRoot, relativePath));
     assert.ok(workflow.includes(`"${relativePath}"`),
       `${relativePath} must trigger the existing raster workflow`);
+  }
+});
+
+test("focused LTS feature slice pairs native and Python coordinate and ghost behavior", async () => {
+  const manifest = JSON.parse(await readFile(
+    path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8",
+  ));
+  const workflow = await readFile(
+    path.join(repoRoot, ".github/workflows/manim-raster-differential.yml"), "utf8",
+  );
+  const direct = manifest.fixtures.find(fixture => fixture.id === "lts-feature-slice-direct");
+  const worker = manifest.fixtures.find(fixture => fixture.id === "lts-feature-slice-worker");
+  assert.equal(direct?.direct_factory, "createDirectVectorSpaceFeaturesRenderer");
+  assert.equal(worker?.noon_source, "web/python/examples/noon_vector_space_features.py");
+  assert.equal(direct.source, "parity/manim-v0.21/vector_space_features.py");
+  assert.equal(worker.source, direct.source);
+  assert.equal(direct.expected_duration, 1.5);
+  assert.deepEqual(worker.sample_times, direct.sample_times);
+  for (const relativePath of [
+    direct.source,
+    worker.noon_source,
+    "crates/noon/src/example_scenes/vector_space_features.rs",
+    "crates/noon-web/src/direct_execution_smoke.rs",
+    "web/python/_manim_vector_space.py",
+    "web/python/_manim_number_plane.py",
+    "web/python/_manim_number_labels.py",
+  ]) {
+    await readFile(path.join(repoRoot, relativePath));
+    assert.ok(workflow.includes(`"${relativePath}"`),
+      `${relativePath} must trigger the existing raster CI workflow`);
   }
 });

@@ -57,6 +57,19 @@ impl WasmCoordinateOptions {
             CoordinateRequest::ThreeDAxes(options) => &mut options.style,
         }
     }
+
+    fn axis_overrides_mut(
+        &mut self,
+        axis: u32,
+    ) -> Result<&mut noon::ManimThreeDAxisOverrides, JsValue> {
+        let CoordinateRequest::ThreeDAxes(options) = &mut self.request else {
+            return Err(js_error("per-axis options require ThreeDAxes"));
+        };
+        options
+            .axis_overrides
+            .get_mut(axis as usize)
+            .ok_or_else(|| js_error("ThreeDAxes axis index must be 0, 1, or 2"))
+    }
 }
 
 #[wasm_bindgen]
@@ -160,6 +173,89 @@ impl WasmCoordinateOptions {
                 ));
             }
         }
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setTipLength)]
+    pub fn set_tip_length(&mut self, length: f64) -> Result<(), JsValue> {
+        let CoordinateRequest::ThreeDAxes(options) = &mut self.request else {
+            return Err(js_error("tip length is configurable only for ThreeDAxes"));
+        };
+        options.tip_length = length;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisTicks)]
+    pub fn set_axis_ticks(&mut self, axis: u32, enabled: bool) -> Result<(), JsValue> {
+        self.axis_overrides_mut(axis)?.ticks_enabled = Some(enabled);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisTickSize)]
+    pub fn set_axis_tick_size(&mut self, axis: u32, size: f64) -> Result<(), JsValue> {
+        self.axis_overrides_mut(axis)?.tick_size = Some(size);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisExcludeOriginTick)]
+    pub fn set_axis_exclude_origin_tick(
+        &mut self,
+        axis: u32,
+        exclude: bool,
+    ) -> Result<(), JsValue> {
+        self.axis_overrides_mut(axis)?.exclude_origin_tick = Some(exclude);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisTips)]
+    pub fn set_axis_tips(&mut self, axis: u32, enabled: bool) -> Result<(), JsValue> {
+        self.axis_overrides_mut(axis)?.tips = Some(enabled);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisTipLength)]
+    pub fn set_axis_tip_length(&mut self, axis: u32, length: f64) -> Result<(), JsValue> {
+        self.axis_overrides_mut(axis)?.tip_length = Some(length);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisColor)]
+    pub fn set_axis_color(
+        &mut self,
+        axis: u32,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        let color = crate::authoring_mobject::family_color(true, red, green, blue, alpha)
+            .map_err(|error| {
+                js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "coordinate.color",
+                    error,
+                ))
+            })?
+            .expect("enabled color");
+        self.axis_overrides_mut(axis)?.color = Some(color);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisStrokeWidth)]
+    pub fn set_axis_stroke_width(&mut self, axis: u32, width: f64) -> Result<(), JsValue> {
+        self.axis_overrides_mut(axis)?.stroke_width = Some(width);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisStrokeOpacity)]
+    pub fn set_axis_stroke_opacity(&mut self, axis: u32, opacity: f64) -> Result<(), JsValue> {
+        self.axis_overrides_mut(axis)?.stroke_opacity = Some(opacity);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisOpacity)]
+    pub fn set_axis_opacity(&mut self, axis: u32, opacity: f64) -> Result<(), JsValue> {
+        self.axis_overrides_mut(axis)?.opacity = Some(opacity);
         Ok(())
     }
 
@@ -460,6 +556,35 @@ impl WasmAuthoringFamilyHandle {
             .map_err(js_error)?;
         axes.tip(index as usize)
             .map(|tip| tip.map(WasmAuthoringMobjectHandle::from_semantic_mobject))
+            .map_err(coordinate_failure)
+            .map_err(js_error)
+    }
+
+    /// Family-valued variant for existing multi-leaf retained TeX labels.
+    #[wasm_bindgen(js_name = threeDAxesLabelFamilies)]
+    pub fn three_d_axes_label_families(
+        &self,
+        x: Option<&WasmAuthoringFamilyHandle>,
+        y: Option<&WasmAuthoringFamilyHandle>,
+        z: Option<&WasmAuthoringFamilyHandle>,
+        buff: f64,
+        fixed_orientation: bool,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let axes = ManimThreeDAxes::from_family(self.semantic_family()?)
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        let mut families = Vec::new();
+        for (index, handle) in [(0, x), (1, y), (2, z)] {
+            if let Some(handle) = handle {
+                families.push((index, handle.semantic_family()?));
+            }
+        }
+        let labels = families
+            .iter()
+            .map(|(index, family)| (*index, noon::MobjectTarget::Family(family)))
+            .collect::<Vec<_>>();
+        axes.create_axis_label_targets(&labels, buff, fixed_orientation)
+            .map(Self::from_semantic_family)
             .map_err(coordinate_failure)
             .map_err(js_error)
     }

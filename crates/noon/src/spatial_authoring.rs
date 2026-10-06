@@ -7,7 +7,7 @@ use noon_core::{
     SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D, StoredGeometry,
     StrokeWidthMode,
 };
-use noon_geometry::SurfaceGrid;
+use noon_geometry::{CairoSurfaceGrid, SurfaceGrid};
 use std::{rc::Rc, sync::Arc};
 
 /// Inert mesh constructor input. Generation/sampling happens once before admission;
@@ -93,7 +93,7 @@ pub struct SurfaceOptions {
     pub stroke_color: Color,
     pub stroke_width: f64,
     pub stroke_opacity: f64,
-    pub point_lit: bool,
+    pub material: SemanticSpatialMaterial,
 }
 
 impl Default for SurfaceOptions {
@@ -106,7 +106,7 @@ impl Default for SurfaceOptions {
             // units used by Noon (0.01 scene units per pixel).
             stroke_width: 0.005,
             stroke_opacity: 1.0,
-            point_lit: true,
+            material: SemanticSpatialMaterial::PointLit,
         }
     }
 }
@@ -273,12 +273,24 @@ fn validate_surface_leaf(
 
 fn surface_mesh_options(
     cell: noon_geometry::SurfaceCell,
+    cairo_appearance: Option<noon_core::CairoSurfaceAppearance>,
     options: SurfaceOptions,
 ) -> Result<MeshOptions, AuthoringError> {
     let [u, v] = cell.uv_cell;
     let mesh = cell
         .into_mesh_resource()
         .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let mesh = if let Some(appearance) = cairo_appearance {
+        mesh.with_cairo_appearance(appearance)
+            .map_err(|_| AuthoringError::NonFiniteGeometry)?
+    } else {
+        if options.material == SemanticSpatialMaterial::CairoSurface {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::CairoSurfaceAppearanceRequired,
+            ));
+        }
+        mesh
+    };
     let mut result = MeshOptions::new(mesh);
     result.style = SemanticStyle {
         fill: Some(SemanticPaint::Solid(if (u % 2 + v % 2) % 2 == 0 {
@@ -293,12 +305,17 @@ fn surface_mesh_options(
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         ..SemanticStyle::default()
     };
-    result.material = if options.point_lit {
-        SemanticSpatialMaterial::PointLit
-    } else {
-        SemanticSpatialMaterial::Unlit
-    };
+    result.material = options.material;
     Ok(result)
+}
+
+fn validate_surface_options(options: SurfaceOptions) -> Result<(), AuthoringError> {
+    validate_unit_interval("fill opacity", options.fill_opacity)?;
+    validate_unit_interval("stroke opacity", options.stroke_opacity)?;
+    if !options.stroke_width.is_finite() || options.stroke_width < 0.0 {
+        return Err(AuthoringError::NegativeStrokeWidth(options.stroke_width));
+    }
+    Ok(())
 }
 
 pub(crate) fn publish_mesh_creation(
@@ -403,6 +420,27 @@ impl Scene {
         )
     }
 
+    /// Read the center of a family's coherent effective world-space bounds.
+    /// Detached live leaves use authored poses after session provenance checks.
+    pub fn effective_world_family_center(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<SemanticVec3, AuthoringError> {
+        let target = crate::MobjectTarget::Family(family);
+        let session = self.running_execution();
+        crate::world_affine::target_world_center_with(
+            self.integration_store(),
+            target,
+            |store, node, state| match session {
+                Some(session) => effective_world_or_authored(session, store, node),
+                None => state
+                    .transform
+                    .world_transform()
+                    .ok_or(AuthoringError::NonFiniteObjectState),
+            },
+        )
+    }
+
     /// Admit one detached mesh through the Scene-owned atomic resource publication.
     pub fn mesh(&mut self, options: MeshOptions) -> Result<Mobject, AuthoringError> {
         let node = self.with_semantic_publication(|store, publish| {
@@ -423,6 +461,46 @@ impl Scene {
         MobjectFamily::from_node(Rc::clone(self.integration_store()), node)
     }
 
+    /// Publish a rectangular prism as six immutable, individually ordered face
+    /// meshes in one ordinary semantic family transaction. `fill_opacity` is
+    /// retained per face for the renderer's existing depth-sorted alpha path.
+    pub fn prism_face_family(
+        &mut self,
+        size: SemanticVec3,
+        fill_color: Color,
+        fill_opacity: f64,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        validate_unit_interval("fill opacity", fill_opacity)?;
+        let faces =
+            noon_geometry::prism_faces(size).map_err(|_| AuthoringError::NonFiniteGeometry)?;
+        let options = faces
+            .into_iter()
+            .map(|geometry| {
+                let mut mesh = MeshOptions::new(geometry);
+                mesh.style.fill = Some(SemanticPaint::Solid(fill_color));
+                mesh.style.fill_opacity = fill_opacity;
+                mesh.style.stroke = None;
+                mesh.style.stroke_width = 0.0;
+                mesh
+            })
+            .collect();
+        self.mesh_family(options)
+    }
+
+    /// Publish a cube through the same six-face family path as a prism.
+    pub fn cube_face_family(
+        &mut self,
+        side_length: f64,
+        fill_color: Color,
+        fill_opacity: f64,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        self.prism_face_family(
+            SemanticVec3::new(side_length, side_length, side_length),
+            fill_color,
+            fill_opacity,
+        )
+    }
+
     /// Publish an already sampled UV grid as ordinary semantic mesh leaves,
     /// retaining its UV roles for later atomic checkerboard changes.
     pub fn surface_family(
@@ -430,15 +508,36 @@ impl Scene {
         grid: SurfaceGrid,
         options: SurfaceOptions,
     ) -> Result<SurfaceFamily, AuthoringError> {
-        validate_unit_interval("fill opacity", options.fill_opacity)?;
-        validate_unit_interval("stroke opacity", options.stroke_opacity)?;
-        if !options.stroke_width.is_finite() || options.stroke_width < 0.0 {
-            return Err(AuthoringError::NegativeStrokeWidth(options.stroke_width));
-        }
+        validate_surface_options(options)?;
         let mut meshes = Vec::with_capacity(grid.plan().cell_count());
         for cell in grid.cells() {
             let uv_cell = cell.uv_cell;
-            meshes.push(surface_mesh_options(cell, options)?.with_surface_uv_cell(uv_cell));
+            meshes.push(surface_mesh_options(cell, None, options)?.with_surface_uv_cell(uv_cell));
+        }
+        let family = self.mesh_family(meshes)?;
+        SurfaceFamily::from_family(family)
+    }
+
+    /// Publish Manim-Cairo sampled UV cells with their immutable endpoint and
+    /// span metadata. This material remains distinct from native PointLit.
+    pub fn surface_cairo_family(
+        &mut self,
+        grid: CairoSurfaceGrid,
+        options: SurfaceOptions,
+    ) -> Result<SurfaceFamily, AuthoringError> {
+        validate_surface_options(options)?;
+        if options.material != SemanticSpatialMaterial::CairoSurface {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::CairoSurfaceAppearanceRequired,
+            ));
+        }
+        let mut meshes = Vec::with_capacity(grid.grid().plan().cell_count());
+        for (cell, appearance) in grid.cells() {
+            let uv_cell = cell.uv_cell;
+            meshes.push(
+                surface_mesh_options(cell, Some(appearance), options)?
+                    .with_surface_uv_cell(uv_cell),
+            );
         }
         let family = self.mesh_family(meshes)?;
         SurfaceFamily::from_family(family)

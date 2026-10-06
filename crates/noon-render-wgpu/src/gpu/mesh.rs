@@ -3,6 +3,7 @@
 //! already encoded/submitted work when resource references are dropped here.
 
 mod boundary;
+mod cairo;
 
 use super::spatial_path::{SpatialPathError, SpatialPathGpuState};
 use super::{create_buffer_with_data, DrawStats};
@@ -47,6 +48,7 @@ pub enum SpatialPrepareError {
     MissingPointLight,
     MultiplePointLights,
     PointLitMeshNeedsNormals(usize),
+    MissingCairoAppearance(usize),
     SpatialPath(SpatialPathError),
     BufferLimit,
     StalePublication,
@@ -90,6 +92,7 @@ struct ResidentMesh {
     index_count: u32,
     users: usize,
     boundary: Option<(wgpu::Buffer, u32)>,
+    cairo: Option<wgpu::BindGroup>,
 }
 #[derive(Debug)]
 struct Draw {
@@ -112,6 +115,9 @@ struct StagedDraw {
 #[derive(Debug)]
 struct GpuState {
     device: wgpu::Device,
+    camera_layout: wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+    cairo: Option<cairo::Pipelines>,
     viewport: [u32; 2],
     pipeline: wgpu::RenderPipeline,
     pipeline_msaa: wgpu::RenderPipeline,
@@ -144,7 +150,7 @@ pub(super) struct SpatialGpuState {
     light: Option<PointLight>,
     point_lit_draws: usize,
     meshes: HashMap<GeometryResourceHandle, ResidentMesh>,
-    mesh_instances: BTreeMap<GeometryResourceHandle, InstanceRanges>,
+    mesh_instances: BTreeMap<(GeometryResourceHandle, bool), InstanceRanges>,
     transparent_draws: BTreeSet<usize>,
     transparent_order: Vec<usize>,
     stroked_draws: BTreeSet<usize>,
@@ -399,6 +405,11 @@ impl SpatialGpuState {
                         if spatial.material == SemanticSpatialMaterial::PointLit {
                             validate_point_lit_normals(mesh, index)?;
                         }
+                        if spatial.material == SemanticSpatialMaterial::CairoSurface
+                            && mesh.cairo_appearance().is_none()
+                        {
+                            return Err(SpatialPrepareError::MissingCairoAppearance(index));
+                        }
                         let color = object.style.fill.unwrap_or(noon_core::Color::TRANSPARENT);
                         let alpha = color.alpha * object.style.opacity * object.appearance;
                         if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
@@ -419,7 +430,11 @@ impl SpatialGpuState {
                                 let mut result = instance(
                                     spatial.world,
                                     [color.red, color.green, color.blue, alpha],
-                                    SemanticSpatialMaterial::Unlit,
+                                    if spatial.material == SemanticSpatialMaterial::CairoSurface {
+                                        spatial.material
+                                    } else {
+                                        SemanticSpatialMaterial::Unlit
+                                    },
                                 )
                                 .ok_or(SpatialPrepareError::InvalidWorld(index))?;
                                 let scale = match object.style.stroke_width_mode {
@@ -539,6 +554,30 @@ impl SpatialGpuState {
                 }
             }
         }
+        let mut new_cairo = HashMap::new();
+        for (index, draw) in &staged {
+            if let Some(draw) = draw
+                .as_ref()
+                .filter(|draw| draw.material == SemanticSpatialMaterial::CairoSurface)
+            {
+                if !self
+                    .meshes
+                    .get(&draw.handle)
+                    .is_some_and(|mesh| mesh.cairo.is_some())
+                    && !new_cairo.contains_key(&draw.handle)
+                {
+                    let appearance = draw
+                        .mesh
+                        .cairo_appearance()
+                        .ok_or(SpatialPrepareError::MissingCairoAppearance(*index))?;
+                    let value = cairo::Uniform::lower(appearance)?;
+                    if size_of::<cairo::Uniform>() > device.limits().max_buffer_size as usize {
+                        return Err(SpatialPrepareError::BufferLimit);
+                    }
+                    new_cairo.insert(draw.handle, value);
+                }
+            }
+        }
         let mut new_boundaries = HashMap::new();
         for (_, draw) in &staged {
             if let Some(draw) = draw.as_ref().filter(|draw| draw.stroke.is_some()) {
@@ -629,9 +668,23 @@ impl SpatialGpuState {
                     index_count: mesh.indices().len() as u32,
                     users: 0,
                     boundary: None,
+                    cairo: None,
                 },
             );
             stats.geometry_bytes += vertex_bytes.len() + index_bytes.len();
+        }
+        if !new_cairo.is_empty() {
+            let gpu = self.gpu.as_mut().expect("Cairo draws require GPU state");
+            let pipelines = gpu.cairo.get_or_insert_with(|| {
+                cairo::Pipelines::new(device, &gpu.camera_layout, gpu.format)
+            });
+            for (handle, appearance) in new_cairo {
+                self.meshes
+                    .get_mut(&handle)
+                    .expect("staged Cairo resource")
+                    .cairo = Some(pipelines.retain(device, queue, appearance));
+                stats.geometry_bytes += size_of::<cairo::Uniform>();
+            }
         }
         for (handle, edges) in new_boundaries {
             let bytes = bytemuck::cast_slice(&edges);
@@ -677,14 +730,17 @@ impl SpatialGpuState {
                     .as_ref()
                     .zip(staged.as_ref())
                     .is_some_and(|(old, new)| {
-                        old.handle == new.handle && !old.transparent && !new.transparent
+                        old.handle == new.handle
+                            && !old.transparent
+                            && !new.transparent
+                            && is_cairo(old.material) == is_cairo(new.material)
                     });
             if let Some(old) = previous
                 .as_ref()
                 .filter(|old| !old.transparent && !same_opaque_membership)
             {
                 self.mesh_instances
-                    .get_mut(&old.handle)
+                    .get_mut(&(old.handle, is_cairo(old.material)))
                     .expect("resident opaque group")
                     .remove(old.instance);
             }
@@ -714,7 +770,7 @@ impl SpatialGpuState {
                 }
                 if !staged.transparent && !same_opaque_membership {
                     self.mesh_instances
-                        .entry(staged.handle)
+                        .entry((staged.handle, is_cairo(staged.material)))
                         .or_default()
                         .insert(slot);
                 }
@@ -743,7 +799,8 @@ impl SpatialGpuState {
         for handle in released {
             if self.meshes.get(&handle).is_some_and(|mesh| mesh.users == 0) {
                 self.meshes.remove(&handle);
-                self.mesh_instances.remove(&handle);
+                self.mesh_instances.remove(&(handle, false));
+                self.mesh_instances.remove(&(handle, true));
             }
         }
         if transparent_changed {
@@ -804,7 +861,9 @@ impl SpatialGpuState {
                 2.0 / camera.world_size.x,
                 2.0 / camera.world_size.y,
             ];
-            if !self.stroked_draws.is_empty() && gpu.boundary_metrics_value != Some(metrics) {
+            if (!self.stroked_draws.is_empty() || gpu.cairo.is_some())
+                && gpu.boundary_metrics_value != Some(metrics)
+            {
                 queue.write_buffer(&gpu.boundary_metrics, 0, bytemuck::cast_slice(&metrics));
                 gpu.boundary_metrics_value = Some(metrics);
                 stats.camera_bytes += size_of_val(&metrics);
@@ -902,11 +961,27 @@ impl SpatialGpuState {
         if *count == 0 {
             return 0;
         }
-        pass.set_pipeline(if sample_count == 1 {
-            &gpu.boundary_pipeline
+        if is_cairo(draw.material) {
+            pass.set_pipeline(gpu.cairo.as_ref().expect("Cairo pipelines").select(
+                sample_count,
+                true,
+                true,
+            ));
+            pass.set_bind_group(
+                1,
+                self.meshes[&draw.handle]
+                    .cairo
+                    .as_ref()
+                    .expect("Cairo appearance"),
+                &[],
+            );
         } else {
-            &gpu.boundary_pipeline_msaa
-        });
+            pass.set_pipeline(if sample_count == 1 {
+                &gpu.boundary_pipeline
+            } else {
+                &gpu.boundary_pipeline_msaa
+            });
+        }
         pass.set_bind_group(0, &gpu.camera_group, &[]);
         pass.set_vertex_buffer(0, vertices.slice(..));
         pass.set_vertex_buffer(
@@ -973,8 +1048,23 @@ impl SpatialGpuState {
             });
             pass.set_bind_group(0, &gpu.camera_group, &[]);
             pass.set_vertex_buffer(1, gpu.instances.slice(..));
-            for (handle, ranges) in &self.mesh_instances {
+            for ((handle, cairo), ranges) in &self.mesh_instances {
                 let mesh = &self.meshes[handle];
+                if *cairo {
+                    pass.set_pipeline(gpu.cairo.as_ref().expect("Cairo pipelines").select(
+                        sample_count,
+                        false,
+                        false,
+                    ));
+                    pass.set_bind_group(1, mesh.cairo.as_ref().expect("Cairo appearance"), &[]);
+                } else {
+                    pass.set_pipeline(if sample_count == 1 {
+                        &gpu.pipeline
+                    } else {
+                        &gpu.pipeline_msaa
+                    });
+                }
+                pass.set_bind_group(0, &gpu.camera_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 for (start, end) in ranges.iter() {
@@ -995,11 +1085,20 @@ impl SpatialGpuState {
             let draw = &self.draws[&index];
             let mesh = &self.meshes[&draw.handle];
             if self.instances[draw.instance].color[3] > 0.0 {
-                pass.set_pipeline(if sample_count == 1 {
-                    &gpu.transparent_pipeline
+                if is_cairo(draw.material) {
+                    pass.set_pipeline(gpu.cairo.as_ref().expect("Cairo pipelines").select(
+                        sample_count,
+                        true,
+                        false,
+                    ));
+                    pass.set_bind_group(1, mesh.cairo.as_ref().expect("Cairo appearance"), &[]);
                 } else {
-                    &gpu.transparent_pipeline_msaa
-                });
+                    pass.set_pipeline(if sample_count == 1 {
+                        &gpu.transparent_pipeline
+                    } else {
+                        &gpu.transparent_pipeline_msaa
+                    });
+                }
                 pass.set_bind_group(0, &gpu.camera_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_vertex_buffer(1, gpu.instances.slice(..));
@@ -1081,6 +1180,10 @@ fn lower_matrix(values: [f64; 16]) -> Option<[f32; 16]> {
         .all(|value| value.is_finite())
         .then_some(result)
 }
+fn is_cairo(material: SemanticSpatialMaterial) -> bool {
+    material == SemanticSpatialMaterial::CairoSurface
+}
+
 fn instance(
     world: SemanticWorldTransform3D,
     color: [f32; 4],
@@ -1101,7 +1204,11 @@ fn instance(
         // this attribute, so use a zero reciprocal for collapsed axes; PointLit
         // poses are rejected before staging and therefore always have a true
         // inverse-transpose normal basis.
-        let reciprocal = if scale == 0. { 0. } else { 1. / scale };
+        let reciprocal = if material != SemanticSpatialMaterial::PointLit || scale == 0. {
+            0.
+        } else {
+            1. / scale
+        };
         normals[i] = [
             (axis.x * reciprocal) as f32,
             (axis.y * reciprocal) as f32,
@@ -1275,8 +1382,24 @@ impl GpuState {
             label: Some("Noon retained mesh shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("mesh.wgsl").into()),
         });
-        let pipeline_msaa = pipeline(device, &pipeline_layout, &shader, format, 4, false, false);
-        let opaque_pipeline = pipeline(device, &pipeline_layout, &shader, format, 1, false, false);
+        let pipeline_msaa = pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            format,
+            4,
+            false,
+            PipelineKind::Mesh,
+        );
+        let opaque_pipeline = pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            format,
+            1,
+            false,
+            PipelineKind::Mesh,
+        );
         let instances = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Noon empty mesh instances"),
             size: 4,
@@ -1285,6 +1408,9 @@ impl GpuState {
         });
         Self {
             device: device.clone(),
+            camera_layout: layout.clone(),
+            format,
+            cairo: None,
             viewport,
             pipeline: opaque_pipeline,
             pipeline_msaa,
@@ -1295,7 +1421,7 @@ impl GpuState {
                 format,
                 1,
                 true,
-                false,
+                PipelineKind::Mesh,
             ),
             transparent_pipeline_msaa: pipeline(
                 device,
@@ -1304,9 +1430,17 @@ impl GpuState {
                 format,
                 4,
                 true,
-                false,
+                PipelineKind::Mesh,
             ),
-            boundary_pipeline: pipeline(device, &pipeline_layout, &shader, format, 1, true, true),
+            boundary_pipeline: pipeline(
+                device,
+                &pipeline_layout,
+                &shader,
+                format,
+                1,
+                true,
+                PipelineKind::Boundary,
+            ),
             boundary_pipeline_msaa: pipeline(
                 device,
                 &pipeline_layout,
@@ -1314,7 +1448,7 @@ impl GpuState {
                 format,
                 4,
                 true,
-                true,
+                PipelineKind::Boundary,
             ),
             boundary_metrics,
             boundary_metrics_value: None,
@@ -1354,6 +1488,14 @@ fn depth(device: &wgpu::Device, viewport: [u32; 2], count: u32) -> wgpu::Texture
         })
         .create_view(&wgpu::TextureViewDescriptor::default())
 }
+#[derive(Clone, Copy)]
+enum PipelineKind {
+    Mesh,
+    Boundary,
+    CairoMesh,
+    CairoBoundary,
+}
+
 fn pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -1361,8 +1503,10 @@ fn pipeline(
     format: wgpu::TextureFormat,
     count: u32,
     transparent: bool,
-    boundary: bool,
+    kind: PipelineKind,
 ) -> wgpu::RenderPipeline {
+    let boundary = matches!(kind, PipelineKind::Boundary | PipelineKind::CairoBoundary);
+    let cairo = matches!(kind, PipelineKind::CairoMesh | PipelineKind::CairoBoundary);
     const VERTEX: [wgpu::VertexAttribute; 2] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
     const EDGE: [wgpu::VertexAttribute; 3] =
@@ -1374,7 +1518,12 @@ fn pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some(if boundary { "vs_boundary" } else { "vs_main" }),
+            entry_point: Some(match kind {
+                PipelineKind::Mesh => "vs_main",
+                PipelineKind::Boundary => "vs_boundary",
+                PipelineKind::CairoMesh => "vs_cairo",
+                PipelineKind::CairoBoundary => "vs_cairo_boundary",
+            }),
             compilation_options: Default::default(),
             buffers: &[
                 Some(wgpu::VertexBufferLayout {
@@ -1395,7 +1544,13 @@ fn pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(if boundary { "fs_boundary" } else { "fs_main" }),
+            entry_point: Some(if cairo {
+                "fs_cairo"
+            } else if boundary {
+                "fs_boundary"
+            } else {
+                "fs_main"
+            }),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,

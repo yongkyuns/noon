@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
 use crate::{
-    GeometryResourceHandle, SemanticNodeId, SemanticObjectProperty, SemanticObjectRole,
-    SemanticObjectState, SemanticSignalError, SemanticSignalState, SemanticSignalValue,
-    SemanticStore, SemanticStoreError, SemanticStyle, SemanticTransform2_5D, SourceIdentity,
-    StoredGeometry,
+    GeometryResource, GeometryResourceHandle, SemanticNodeId, SemanticObjectContent,
+    SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticSignalError,
+    SemanticSignalState, SemanticSignalValue, SemanticSpatialMaterial, SemanticStore,
+    SemanticStoreError, SemanticStyle, SemanticTransform2_5D, SourceIdentity, StoredGeometry,
 };
 
 use super::{
@@ -268,6 +268,13 @@ pub(super) fn preflight_add_node(
                 return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
             }
             validate_object_content_resource(store, state.content, index)?;
+            validate_cairo_surface_resource(
+                store,
+                state.spatial_material(),
+                state.surface_uv_cell(),
+                state.content,
+                index,
+            )?;
 
             if let SemanticObjectRole::Inset2DView(view) = state.role() {
                 if !matches!(
@@ -318,6 +325,33 @@ pub(super) fn preflight_add_node(
     }
 
     Ok(())
+}
+
+pub(super) fn validate_cairo_surface_resource(
+    store: &SemanticStore,
+    material: SemanticSpatialMaterial,
+    surface_uv_cell: Option<[usize; 2]>,
+    content: SemanticObjectContent,
+    index: usize,
+) -> Result<(), SemanticMutationTransactionError> {
+    if material != SemanticSpatialMaterial::CairoSurface {
+        return Ok(());
+    }
+    if surface_uv_cell.is_none() {
+        return Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index });
+    }
+    let Some(StoredGeometry::Resource(handle)) = content.geometry() else {
+        return Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index });
+    };
+    let has_appearance = matches!(
+        store.geometry_resources().get(handle),
+        Some(GeometryResource::Mesh(mesh)) if mesh.cairo_appearance().is_some()
+    );
+    if has_appearance {
+        Ok(())
+    } else {
+        Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index })
+    }
 }
 
 pub(super) fn commit_add_node(

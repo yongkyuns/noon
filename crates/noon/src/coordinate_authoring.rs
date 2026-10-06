@@ -9,7 +9,9 @@ mod number_plane;
 mod three_d_axes;
 pub(crate) use number_plane::prepare_number_plane;
 pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
-pub use three_d_axes::{ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions};
+pub use three_d_axes::{
+    ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions, ManimThreeDAxisOverrides,
+};
 
 use std::{cell::RefCell, rc::Rc};
 

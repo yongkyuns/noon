@@ -289,32 +289,32 @@ function assertSpatialCameraHudPixels(buffer, context) {
 
 async function assertVectorSpaceOracle(semantic, samples) {
   const byIndex = new Map(semantic.frames.map(frame => [frame.frame_index, frame]));
-  const initialSample = samples.find(sample => Math.abs(sample.time) < 1e-9);
-  const initialOracle = initialSample ? byIndex.get(initialSample.frameIndex)?.oracle : null;
-  assert.ok(initialOracle, "vector-space-lts: missing initial endpoint oracle");
+  // The ordinary one-second GrowArrow entrance precedes the three-second
+  // matrix transform. The initial moving vector is collapsed; use authored
+  // endpoints rather than treating that frame as the matrix's starting pose.
+  const authored = { basis_i: [1, 0], basis_j: [0, 1], moving_vector: [2, 1] };
   for (const sample of samples) {
     const oracle = byIndex.get(sample.frameIndex)?.oracle;
     assert.ok(oracle, `vector-space-lts: missing numeric Manim state at ${sample.time}`);
-    const progress = Math.min(1, Math.max(0, sample.time / 3));
     // Pinned Manim smooth uses a normalized sigmoid with inflection 10.
     const sigmoid = value => 1 / (1 + Math.exp(-value));
     const edge = sigmoid(-5);
-    const eased = Math.min(1, Math.max(0, (sigmoid(10 * (progress - 0.5)) - edge) / (1 - 2 * edge)));
+    const smooth = progress => Math.min(1, Math.max(0,
+      (sigmoid(10 * (progress - 0.5)) - edge) / (1 - 2 * edge)));
+    const matrixProgress = smooth(Math.min(1, Math.max(0, (sample.time - 1) / 3)));
     const checkEndpoint = (name, target) => {
       const vector = oracle[name];
-      const initial = initialOracle[name];
+      const initial = authored[name];
       assert.ok(vector, `vector-space-lts: missing ${name} endpoints`);
-      assert.ok(initial, `vector-space-lts: missing initial ${name} endpoints`);
       assert.ok(Math.abs(vector.start[0]) < 1e-6 && Math.abs(vector.start[1]) < 1e-6,
         `vector-space-lts: ${name} remains anchored at the origin`);
-      const expected = [
-        (target[0] - initial.end[0]) * eased + initial.end[0],
-        (target[1] - initial.end[1]) * eased + initial.end[1],
-      ];
+      const expected = name === "moving_vector" && sample.time < 1
+        ? initial.map(value => value * smooth(sample.time))
+        : initial.map((value, axis) => value + (target[axis] - value) * matrixProgress);
       assert.ok(Math.abs(vector.end[0] - expected[0]) < 1e-6,
-        `vector-space-lts: ${name} x endpoint matches smooth matrix interpolation`);
+        `vector-space-lts: ${name} x endpoint matches grow/matrix interpolation`);
       assert.ok(Math.abs(vector.end[1] - expected[1]) < 1e-6,
-        `vector-space-lts: ${name} y endpoint matches smooth matrix interpolation`);
+        `vector-space-lts: ${name} y endpoint matches grow/matrix interpolation`);
     };
     checkEndpoint("basis_i", [0, 1]);
     checkEndpoint("basis_j", [1, 0]);

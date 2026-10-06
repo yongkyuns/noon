@@ -45,12 +45,45 @@ pub fn scene() -> Result<
     let camera = scene
         .camera_3d_profile(start_profile(), 0.1, 100.0)
         .map_err(|error| error.to_string())?;
+    let mut axes_options = ManimThreeDAxesOptions::default();
+    axes_options.axis_overrides[0].tips = Some(false);
+    axes_options.axis_overrides[0].color = Some(Color::RED);
+    axes_options.axis_overrides[0].stroke_width = Some(0.04);
+    axes_options.axis_overrides[1].color = Some(Color::GREEN);
+    axes_options.axis_overrides[1].tick_size = Some(0.15);
+    axes_options.axis_overrides[2].color = Some(Color::BLUE);
     let axes = scene
-        .three_d_axes(&ManimThreeDAxesOptions::default())
+        .three_d_axes(&axes_options)
         .map_err(|error| error.to_string())?;
     scene
         .add_in_spatial_composition_domain(
             crate::MobjectTarget::Family(axes.family()),
+            SemanticSpatialCompositionDomain::World,
+        )
+        .map_err(|error| error.to_string())?;
+    let x_label = scene
+        .text(crate::Text::new("x"))
+        .map_err(|error| error.to_string())?;
+    let y_label = scene
+        .text(crate::Text::new("y"))
+        .map_err(|error| error.to_string())?;
+    let z_label = scene
+        .text(crate::Text::new("z"))
+        .map_err(|error| error.to_string())?;
+    let labels = axes
+        .create_axis_label_targets(
+            &[
+                (0, crate::MobjectTarget::Object(&x_label)),
+                (1, crate::MobjectTarget::Object(&y_label)),
+                (2, crate::MobjectTarget::Object(&z_label)),
+            ],
+            0.1,
+            false,
+        )
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_in_spatial_composition_domain(
+            crate::MobjectTarget::Family(&labels),
             SemanticSpatialCompositionDomain::World,
         )
         .map_err(|error| error.to_string())?;
@@ -118,18 +151,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_axes_tips_and_coordinate_point_share_the_finite_camera_track() {
+    fn configured_axes_and_coordinate_point_share_the_finite_camera_track() {
         let (scene, axes, point, camera, _) = scene().unwrap();
         let frame = axes.authored_frame().unwrap();
         let point_state = point.state().unwrap();
         let expected = frame.c2p(2.0, -1.0, 1.5).unwrap();
         assert_eq!(point_state.transform.translation, expected);
-        assert!((0..3).all(|axis| axes.tip(axis).unwrap().is_some()));
+        assert!(axes.tip(0).unwrap().is_none());
+        assert!(axes.tip(1).unwrap().is_some());
+        assert!(axes.tip(2).unwrap().is_some());
+        let x_ticks = axes.axis(0).unwrap().ticks().unwrap();
+        let x_tick_count = scene
+            .integration_store()
+            .borrow()
+            .semantic_family_members_checked(x_ticks.node_id())
+            .unwrap()
+            .len();
+        assert_eq!(x_tick_count, 12, "tipless X axis keeps both endpoint ticks");
         let mut session = session().unwrap();
-        assert!(
-            session.frame().objects.len() > 30,
-            "axes must be in the presented scene"
-        );
+        assert_eq!(session.frame().objects.len(), 38);
         for (time, expected_profile) in [(0.0, start_profile()), (1.0, end_profile())] {
             session.advance_to(time).unwrap();
             assert_eq!(
@@ -140,13 +180,6 @@ mod tests {
                 expected_profile
             );
         }
-        assert!(
-            scene
-                .integration_store()
-                .borrow()
-                .geometry_resources()
-                .len()
-                >= 3
-        );
+        assert!(scene.integration_store().borrow().text_resources().len() >= 3);
     }
 }

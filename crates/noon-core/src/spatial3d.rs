@@ -10,14 +10,16 @@
 
 use crate::{SemanticTransform2_5D, SemanticVec3};
 
-/// Minimal material policy for retained spatial meshes. `PointLit` uses one
-/// backend-neutral cubic directional response; it intentionally does not model
-/// PBR or claim Cairo's endpoint-gradient behavior for arbitrary topology.
+/// Material policies for retained spatial meshes. `PointLit` uses one
+/// backend-neutral cubic directional response. `CairoSurface` is reserved for
+/// sampled Surface cells carrying their immutable Cairo control-point profile;
+/// it does not claim Cairo behavior for arbitrary mesh topology.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SemanticSpatialMaterial {
     #[default]
     Unlit,
     PointLit,
+    CairoSurface,
 }
 
 /// How world-authored geometry is composed with the active camera.

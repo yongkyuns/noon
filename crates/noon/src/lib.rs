@@ -191,8 +191,8 @@ pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimBarChart,
     ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, ManimNumberPlane,
     ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, ManimThreeDAxes,
-    ManimThreeDAxesFrame, ManimThreeDAxesOptions, PolarAzimuthDirection, RiemannRectangleOptions,
-    RiemannRectanglePlan, RiemannSample,
+    ManimThreeDAxesFrame, ManimThreeDAxesOptions, ManimThreeDAxisOverrides, PolarAzimuthDirection,
+    RiemannRectangleOptions, RiemannRectanglePlan, RiemannSample,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
@@ -273,8 +273,8 @@ pub use noon_core::{
 };
 pub use noon_geometry::{
     cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,
-    torus_mesh, triangular_polyhedron_mesh, SurfaceError, SurfaceGrid, SurfaceSample,
-    UvSurfacePlan,
+    torus_mesh, triangular_polyhedron_mesh, CairoSurfaceGrid, SurfaceError, SurfaceGrid,
+    SurfaceSample, UvSurfacePlan,
 };
 pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame, PolarFrame};
 pub use noon_geometry::{
@@ -339,8 +339,8 @@ pub mod prelude {
     pub use crate::WorldAffineEdit;
     pub use crate::{
         cone_mesh, cube_mesh, cylinder_mesh, prism_mesh, sphere_mesh, surface_mesh, torus_mesh,
-        CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile, MeshOptions, MeshResource,
-        SemanticCamera3D, SemanticProjection3D, SemanticRotation3D,
+        CairoSurfaceGrid, CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile,
+        MeshOptions, MeshResource, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D,
         SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticVec3,
         SemanticWorldTransform3D, SurfaceFamily, SurfaceGrid, SurfaceOptions, SurfaceSample,
         UvSurfacePlan,

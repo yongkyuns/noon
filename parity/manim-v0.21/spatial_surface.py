@@ -16,3 +16,15 @@ class SpatialSurface(ThreeDScene):
         self.add(surface)
         self.play(Rotate(surface, 0.6, axis=OUT, about_point=ORIGIN),
                   run_time=1, rate_func=linear)
+
+
+class CairoSpatialSurface(ThreeDScene):
+    def construct(self):
+        self.set_camera_orientation(phi=0, theta=-90 * DEGREES,
+                                    focal_distance=5, zoom=4 / (5 * math.tan(0.5)))
+        surface = Surface(
+            lambda u, v: [u, v, 0.35 * (u * u + v * v)],
+            u_range=(-1, 1), v_range=(-1, 1), resolution=(8, 8),
+        )
+        self.add(surface)
+        self.wait(1)

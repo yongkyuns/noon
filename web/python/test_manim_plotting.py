@@ -89,6 +89,97 @@ class PlottingAdapterTests(unittest.TestCase):
         create.assert_called_once_with((0, 1, 0.1), unit_size=4,
                                        numbers_with_elongated_ticks=[], include_ticks=False)
 
+    def test_three_d_axes_axis_config_inherits_and_applies_per_axis_overrides(self):
+        options = Mock()
+        with patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+             patch.object(plotting, "_coordinate_options") as factory, \
+             patch.object(plotting, "_create_coordinates", side_effect=RuntimeError("stop")):
+            factory.threeDAxes.return_value = options
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                plotting.ThreeDAxes(
+                    tips=False,
+                    axis_config={"include_tip": True, "include_ticks": False,
+                                 "tick_size": 0.2, "color": plotting._base.RED},
+                    x_axis_config={"include_tip": False, "tick_size": 0.3,
+                                   "stroke_width": 2},
+                    y_axis_config={"exclude_origin_tick": False, "opacity": 0.5},
+                    z_axis_config={"color": plotting._base.BLUE},
+                )
+        options.setTips.assert_called_once_with(True)
+        options.setTicks.assert_called_once_with(False, 0.2, True)
+        options.setAxisTips.assert_called_once_with(0, False)
+        options.setAxisTickSize.assert_called_once_with(0, 0.3)
+        options.setAxisStrokeWidth.assert_called_once_with(0, 2.0)
+        options.setAxisExcludeOriginTick.assert_called_once_with(1, False)
+        options.setAxisOpacity.assert_called_once_with(1, 0.5)
+        options.setAxisColor.assert_called_once_with(2, plotting._base.BLUE.red,
+                                                     plotting._base.BLUE.green,
+                                                     plotting._base.BLUE.blue,
+                                                     plotting._base.BLUE.alpha)
+
+    def test_three_d_axes_rejects_unsupported_or_invalid_axis_config_before_publish(self):
+        for kwargs, error in (
+            ({"x_axis_config": {"numbers_to_include": [1]}}, NotImplementedError),
+            ({"axis_config": {"scaling": object()}}, NotImplementedError),
+            ({"z_axis_config": {"include_tip": 1}}, TypeError),
+            ({"x_axis_config": {"stroke_width": -1}}, ValueError),
+        ):
+            with self.subTest(kwargs=kwargs), \
+                 patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+                 patch.object(plotting, "_coordinate_options") as factory, \
+                 patch.object(plotting, "_create_coordinates") as publish:
+                options = factory.threeDAxes.return_value
+                with self.assertRaises(error):
+                    plotting.ThreeDAxes(**kwargs)
+                publish.assert_not_called()
+                if options.free.called:
+                    options.free.assert_called_once()
+
+    def test_three_d_axes_labels_send_retained_text_handles_as_one_rust_operation(self):
+        class RetainedMobject:
+            pass
+
+        labels = [RetainedMobject(), RetainedMobject(), RetainedMobject()]
+        handles = [_handle(index + 10) for index in range(3)]
+        for label, handle in zip(labels, handles):
+            label._semantic_family_handle = handle
+        result = _family_handle(40)
+        axes = object.__new__(plotting.ThreeDAxes)
+        axes._semantic_family_handle = SimpleNamespace(
+            threeDAxesLabelFamilies=Mock(return_value=result)
+        )
+        with patch.object(plotting._base, "Mobject", RetainedMobject), \
+             patch.object(plotting, "_three_d_axis_label_object", side_effect=labels), \
+             patch.object(plotting._shared, "_family_wrapper_key", side_effect=["10:1", "11:1", "12:1"]):
+            group = axes.get_axis_labels(*labels, buff=0.2, fixed_orientation=True)
+        axes._semantic_family_handle.threeDAxesLabelFamilies.assert_called_once_with(
+            *handles, 0.2, True,
+        )
+        self.assertIs(group._semantic_family_handle, result)
+        self.assertEqual(list(group._semantic_member_wrappers.values()), labels)
+
+    def test_three_d_axes_labels_reject_unretained_inputs_before_rust_call(self):
+        class RetainedMobject:
+            pass
+
+        axes = object.__new__(plotting.ThreeDAxes)
+        axes._semantic_family_handle = SimpleNamespace(threeDAxesLabelFamilies=Mock())
+        with patch.object(plotting._base, "Mobject", RetainedMobject), \
+             patch.object(plotting, "_three_d_axis_label_object", return_value=RetainedMobject()):
+            with self.assertRaisesRegex(TypeError, "retained semantic family handles"):
+                axes.get_x_axis_label(RetainedMobject())
+        axes._semantic_family_handle.threeDAxesLabelFamilies.assert_not_called()
+
+    def test_three_d_axes_string_labels_reuse_the_existing_mathtex_family(self):
+        class RetainedTex(plotting._compat.Group):
+            pass
+
+        tex = object.__new__(RetainedTex)
+        tex._semantic_family_handle = _handle(25)
+        with patch("_manim_latex.MathTex", return_value=tex) as make_math:
+            self.assertIs(plotting._three_d_axis_label_object("x"), tex)
+        make_math.assert_called_once_with("x")
+
     def setUp(self):
         self.array_bridge = patch.object(plotting, "_to_js", lambda values: values)
         self.array_bridge.start()

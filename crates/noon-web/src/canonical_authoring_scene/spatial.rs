@@ -150,6 +150,24 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    pub(crate) fn effective_world_family_center(
+        &mut self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon_core::SemanticVec3, crate::authoring_error::AuthoringFailure> {
+        if !Rc::ptr_eq(self.scene.integration_store(), family.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => family.world_center().map_err(Into::into),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .live_effective_world_family_center(family),
+            PlayerOwnership::Transferred(_) => {
+                Err("effective world state is owned by the transferred execution session".into())
+            }
+        }
+    }
+
     pub(crate) fn set_world_transform(
         &mut self,
         object: &noon::Mobject,
@@ -314,9 +332,26 @@ mod tests {
     fn world_center_queries_follow_scene_owner_and_authored_detached_fallback() {
         let mut context = CanonicalAuthoringScene::default();
         let object = context.create_mesh(mesh_at(2.0)).unwrap();
+        let companion = context.create_mesh(mesh_at(6.0)).unwrap();
+        let family = noon::MobjectFamily::create(
+            Rc::clone(context.scene.integration_store()),
+            &[(&object).into(), (&companion).into()],
+        )
+        .unwrap();
+        context.scene.add_many(&[(&family).into()]).unwrap();
+        let detached_member = context.create_mesh(mesh_at(7.0)).unwrap();
+        let detached_family = noon::MobjectFamily::create(
+            Rc::clone(context.scene.integration_store()),
+            &[(&detached_member).into()],
+        )
+        .unwrap();
         assert_eq!(
             context.effective_world_center(&object).unwrap(),
             SemanticVec3::new(2.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            context.effective_world_family_center(&family).unwrap(),
+            SemanticVec3::new(4.0, 0.0, 0.0)
         );
         context.live_player(1.0).unwrap();
         let mut pose = object.world_transform().unwrap();
@@ -326,10 +361,20 @@ mod tests {
             context.effective_world_center(&object).unwrap(),
             SemanticVec3::new(4.0, 5.0, 6.0)
         );
+        assert_eq!(
+            context.effective_world_family_center(&family).unwrap(),
+            SemanticVec3::new(5.0, 2.5, 3.0)
+        );
 
         let detached = context.create_mesh(mesh_at(7.0)).unwrap();
         assert_eq!(
             context.effective_world_center(&detached).unwrap(),
+            SemanticVec3::new(7.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            context
+                .effective_world_family_center(&detached_family)
+                .unwrap(),
             SemanticVec3::new(7.0, 0.0, 0.0)
         );
 

@@ -20,6 +20,21 @@ def _point(value: object) -> _base.Vec2:
     return _base._as_vec2(value)
 
 
+class GrowArrow:
+    """Introduce one retained Arrow from its Rust-queried start point."""
+
+    def __init__(self, arrow: object, **kwargs: Any) -> None:
+        from _manim_arrow import Arrow
+
+        if not isinstance(arrow, Arrow):
+            raise TypeError("GrowArrow requires a shared Arrow")
+        if "point_color" in kwargs:
+            raise NotImplementedError("GrowArrow point_color is not in the shared Arrow profile")
+        self.mobject = arrow
+        self.target = arrow
+        self.anim_args = dict(kwargs)
+
+
 class GrowFromPoint:
     """Introduce one leaf mobject from an exact scene point."""
 

@@ -487,6 +487,10 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_set_opacity
         return _group_set_opacity(self, opacity)
 
+    def fade(self, darkness: float = 0.5) -> Group:
+        from _manim_semantic_handles import _group_fade
+        return _group_fade(self, darkness)
+
     def next_to(
         self,
         mobject_or_point: object,

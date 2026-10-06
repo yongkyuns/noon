@@ -65,6 +65,20 @@ impl LiveSession<'_> {
             .map_err(Into::into)
     }
 
+    pub fn effective_world_family_center(
+        &self,
+        family: &crate::MobjectFamily,
+    ) -> Result<noon_core::SemanticVec3, LiveSessionError> {
+        crate::world_affine::target_world_center_with(
+            self.store,
+            crate::MobjectTarget::Family(family),
+            |store, node, _| {
+                crate::spatial_authoring::effective_world_or_authored(self.session, store, node)
+            },
+        )
+        .map_err(Into::into)
+    }
+
     /// Detached creation uses the same resource/publication boundary as Scene.
     pub fn create_mesh(&mut self, options: MeshOptions) -> Result<Mobject, LiveSessionError> {
         let node = self.with_semantic_publication(|store, publish| {

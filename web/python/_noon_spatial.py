@@ -7,6 +7,7 @@ sampling coordinates, topology, normals, transforms, and playback.
 """
 from __future__ import annotations
 
+import math
 from array import array
 from operator import index as _integer_index
 
@@ -34,6 +35,18 @@ def _vector(value, length=3):
     values = tuple(float(component) for component in value)
     if len(values) != length:
         raise ValueError(f"expected {length} numeric components")
+    return values
+
+
+def _angular_range(value, name):
+    try:
+        values = tuple(float(item) for item in value)
+    except (TypeError, ValueError) as error:
+        raise TypeError(f"{name} requires two numeric endpoints") from error
+    if len(values) != 2 or not all(math.isfinite(item) for item in values):
+        raise ValueError(f"{name} requires two finite endpoints")
+    if values[0] < 0 or values[0] >= values[1] or values[1] > 2 * math.pi:
+        raise ValueError(f"{name} must be increasing within [0, 2π]")
     return values
 
 
@@ -72,6 +85,13 @@ def _mesh_arguments(options):
         raise TypeError("point_lit requires a boolean")
 
 
+def _prism_face_family_options(size):
+    if _mesh_options is None:
+        raise RuntimeError("prism face construction requires the shared Rust authoring host")
+    size = _vector(size)
+    return engine_call(_mesh_options.prismFaces, *size)
+
+
 class _WorldMobject(_base.Mobject):
     """Motion routes through shared Rust authored/effective world operations."""
 
@@ -80,8 +100,9 @@ class _WorldMobject(_base.Mobject):
         handle = family if family is not None else _handle_for(self)
         if handle is None:
             raise NotImplementedError("world edits require an ordinary typed authoring context")
-        if family is not None and authored not in {"shiftWorld", "rotateWorld", "scaleWorld"}:
-            raise NotImplementedError("world observations require one spatial Mobject, not a family")
+        family_operations = {"shiftWorld", "rotateWorld", "scaleWorld"}
+        if family is not None and authored not in family_operations | {"worldFamilyCenter"}:
+            raise NotImplementedError("world transforms require one spatial Mobject; family transforms are unavailable")
         context = _group_target_context(self) if family is not None else _live_mutation_context(self)
         if family is not None:
             if context is None:
@@ -92,6 +113,7 @@ class _WorldMobject(_base.Mobject):
                 "shiftWorld": "shiftFamilyWorld",
                 "rotateWorld": "rotateFamilyWorld",
                 "scaleWorld": "scaleFamilyWorld",
+                "worldFamilyCenter": "effectiveWorldFamilyCenter",
             }
             return engine_call(getattr(context, family_live[authored]), handle, *args)
         if context is None:
@@ -103,7 +125,10 @@ class _WorldMobject(_base.Mobject):
         return _pose(self._world_call("worldTransform", "effectiveWorldTransform"))
 
     def get_center(self):
-        return _pose(self._world_call("worldCenter", "effectiveWorldCenter"))
+        family = getattr(self, "_semantic_family_handle", None)
+        authored = "worldFamilyCenter" if family is not None else "worldCenter"
+        live = "effectiveWorldFamilyCenter" if family is not None else "effectiveWorldCenter"
+        return _pose(self._world_call(authored, live))
 
     @property
     def animate(self):
@@ -167,8 +192,25 @@ class Mesh3D(_WorldMobject):
         return cls(candidate, **options)
 
     @classmethod
-    def sphere(cls, radius=1, resolution=(32, 16), **options):
-        return cls._solid("sphere", (float(radius), *_resolution(resolution)), options)
+    def sphere(cls, radius=1, resolution=(32, 16), *, u_range=(0, 2 * math.pi),
+               v_range=(0, math.pi), **options):
+        def checked_range(value, name):
+            try:
+                values = tuple(float(item) for item in value)
+            except (TypeError, ValueError) as error:
+                raise TypeError(f"{name} requires two numeric endpoints") from error
+            if len(values) != 2 or not all(math.isfinite(item) for item in values):
+                raise ValueError(f"{name} requires two finite endpoints")
+            if values[0] >= values[1]:
+                raise ValueError(f"{name} must be increasing")
+            return values
+        u_range = checked_range(u_range, "sphere u_range")
+        v_range = checked_range(v_range, "sphere v_range")
+        if u_range[0] < 0 or u_range[1] > 2 * math.pi:
+            raise ValueError("sphere u_range must be increasing within [0, 2π]")
+        if v_range[0] < 0 or v_range[1] > math.pi:
+            raise ValueError("sphere v_range must be increasing within [0, π]")
+        return cls._solid("sphere", (float(radius), *_resolution(resolution), *u_range, *v_range), options)
 
     @classmethod
     def cube(cls, size=2, **options):
@@ -198,16 +240,24 @@ class Mesh3D(_WorldMobject):
 
     @classmethod
     def cylinder(cls, radius=1, height=2, segments=32, *, direction=(0, 0, 1),
-                 axial_offset=0, **options):
+                 axial_offset=0, show_ends=True, v_range=(0, 2 * math.pi), **options):
         """Orient the retained local +Z cylinder after applying a local Z offset."""
-        return cls._solid("cylinder", (float(radius), float(height), _count(segments)),
+        if not isinstance(show_ends, bool):
+            raise TypeError("show_ends requires a boolean")
+        v_range = _angular_range(v_range, "cylinder v_range")
+        return cls._solid("cylinder", (float(radius), float(height), _count(segments), show_ends,
+                                        *v_range),
                           options, axial_pose=(direction, axial_offset))
 
     @classmethod
     def cone(cls, radius=1, height=2, segments=32, *, direction=(0, 0, 1),
-             axial_offset=0, **options):
+             axial_offset=0, show_base=True, v_range=(0, 2 * math.pi), **options):
         """Orient the retained local +Z cone after applying a local Z offset."""
-        return cls._solid("cone", (float(radius), float(height), _count(segments)),
+        if not isinstance(show_base, bool):
+            raise TypeError("show_base requires a boolean")
+        v_range = _angular_range(v_range, "cone v_range")
+        return cls._solid("cone", (float(radius), float(height), _count(segments), show_base,
+                                    *v_range),
                           options, axial_pose=(direction, axial_offset))
 
     @classmethod

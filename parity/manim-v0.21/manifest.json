@@ -900,8 +900,14 @@
       "scene": "VectorSpaceLTS",
       "source": "parity/manim-v0.21/vector_space.py",
       "direct_factory": "createDirectVectorSpaceSmokeRenderer",
-      "expected_duration": 3.0,
-      "sample_times": [0.0, 1.5, 2.966666666666667],
+      "expected_duration": 4.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        1.0,
+        2.5,
+        3.966666666666667
+      ],
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.04
@@ -914,13 +920,55 @@
       "scene": "VectorSpaceLTS",
       "source": "parity/manim-v0.21/vector_space.py",
       "noon_source": "web/python/examples/noon_vector_space.py",
-      "expected_duration": 3.0,
-      "sample_times": [0.0, 1.5, 2.966666666666667],
+      "expected_duration": 4.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        1.0,
+        2.5,
+        3.966666666666667
+      ],
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.04
       },
       "notes": "The same VectorScene/LTS matrix animation through the async Python worker, using Rust-owned matrix path-arc defaults and ordinary shared ApplyMatrix/Transform requests. Shares the direct fixture's measured thin-grid edge budget, unchanged 0.5 mean-error limit, strict foreground coverage guard, and numeric Arrow bounds/colors."
+    },
+    {
+      "scene": "VectorSpaceLTSFeatures",
+      "source": "parity/manim-v0.21/vector_space_features.py",
+      "expected_duration": 1.5,
+      "sample_times": [
+        0.0,
+        0.25,
+        0.5,
+        0.75,
+        1.0,
+        1.25,
+        1.4666666666666666
+      ],
+      "notes": "Focused native/Python LTS parity for Rust-positioned coordinates, a non-Arrow transformable family, and retained faded ghosts across two matrix transforms.",
+      "id": "lts-feature-slice-direct",
+      "direct_factory": "createDirectVectorSpaceFeaturesRenderer",
+      "expected_object_count": 15
+    },
+    {
+      "scene": "VectorSpaceLTSFeatures",
+      "source": "parity/manim-v0.21/vector_space_features.py",
+      "expected_duration": 1.5,
+      "sample_times": [
+        0.0,
+        0.25,
+        0.5,
+        0.75,
+        1.0,
+        1.25,
+        1.4666666666666666
+      ],
+      "notes": "Focused native/Python LTS parity for Rust-positioned coordinates, a non-Arrow transformable family, and retained faded ghosts across two matrix transforms.",
+      "id": "lts-feature-slice-worker",
+      "noon_source": "web/python/examples/noon_vector_space_features.py",
+      "expected_object_count": 15
     },
     {
       "id": "spatial-camera-labels-direct",
@@ -962,33 +1010,41 @@
     },
     {
       "id": "spatial-three-d-axes-direct",
-      "expected_object_count": 35,
+      "expected_object_count": 38,
       "scene": "SpatialThreeDAxes",
       "source": "parity/manim-v0.21/spatial_three_d_axes.py",
       "direct_factory": "createDirectSpatialThreeDAxesSmokeRenderer",
       "expected_duration": 1.0,
-      "sample_times": [0.0, 0.5, 0.9666666666666667],
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       },
-      "notes": "Default pinned linear ThreeDAxes ranges/lengths/ticks/positive tips, an f64 Rust-c2p point, and a finite camera-profile track. Cairo axis pieces/shading and axis labels are deliberately outside this bounded native subset; default tips are retained and included."
+      "notes": "Pinned linear ThreeDAxes ranges/lengths with per-axis X/Y/Z color, tick, and tip overrides, retained DejaVu Sans Mono labels supplied as ordinary Text, an f64 Rust-c2p point, and a finite camera-profile track. X omits its tip while retaining the endpoint tick; Y keeps its adjusted ticks; Z keeps its default tip. Cairo pieces/shading and camera-edge label correction remain outside this subset."
     },
     {
       "id": "spatial-three-d-axes-worker",
-      "expected_object_count": 35,
+      "expected_object_count": 38,
       "scene": "SpatialThreeDAxes",
       "source": "parity/manim-v0.21/spatial_three_d_axes.py",
       "noon_source": "web/python/examples/noon_spatial_three_d_axes.py",
       "expected_duration": 1.0,
-      "sample_times": [0.0, 0.5, 0.9666666666666667],
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       },
-      "notes": "The same typed axes/tips, coordinate point, and camera track through the async Python worker. Numeric placement is queried from Rust; no frontend projection or coordinate math is used. Cairo axis pieces/shading and labels remain explicitly outside the supported subset."
+      "notes": "The same pinned linear ThreeDAxes ranges/lengths and per-axis X/Y/Z color, tick, and tip overrides, coordinate point, and camera track through the async Python worker. Numeric placement is queried from Rust; no frontend projection or coordinate math is used. Cairo axis pieces/shading and labels remain outside the supported subset."
     },
     {
       "scene": "SpatialSurface",
@@ -1029,19 +1085,61 @@
       }
     },
     {
+      "scene": "CairoSpatialSurface",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 65,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "id": "spatial-surface-cairo-direct",
+      "direct_factory": "createDirectSpatialSurfaceCairoSmokeRenderer",
+      "notes": "Bounded executable Cairo Surface capability case: default checkerboard, opaque fill, 0.5-pixel border, and shade_in_3d=True for F(u,v)=(u,v,0.35*(u\u00b2+v\u00b2)) over [-1,1]\u00b2 at 8\u00d78 resolution. Static 1s comparison at the first and last 30fps samples; this case does not qualify broader Cairo shading behavior.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      }
+    },
+    {
+      "scene": "CairoSpatialSurface",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 65,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "id": "spatial-surface-cairo-worker",
+      "noon_source": "web/python/examples/noon_spatial_surface.py",
+      "notes": "The same default Cairo Surface constructor and static geometry through the Python authoring worker and retained renderer. It exercises one bounded Surface configuration and is not a general Cairo qualification.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      }
+    },
+    {
       "id": "spatial-primitives-direct",
       "scene": "SpatialPrimitives",
       "source": "parity/manim-v0.21/spatial_primitives.py",
       "direct_factory": "createDirectSpatialPrimitivesSmokeRenderer",
       "expected_duration": 1.0,
-      "expected_object_count": 5,
-      "sample_times": [0.0, 0.5, 0.9666666666666667],
+      "expected_object_count": 14,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       },
-      "notes": "Native and direct-WASM ordinary Scene publication of the bounded opaque Line3D tube, explicit one-face triangular mesh, and oriented Cylinder/Cone, matched to the pinned Manim source using the existing spatial mesh raster tolerance."
+      "notes": "Native and direct-WASM ordinary Scene publication of the bounded Line3D tube, explicit triangle, separate six-face unshaded Prism family at 0.75 fill opacity, oriented open/closed Cylinder/Cone meshes, and a bounded partial Sphere patch, matched to the pinned Manim source using the existing spatial mesh raster tolerance."
     },
     {
       "id": "spatial-primitives-worker",
@@ -1049,14 +1147,18 @@
       "source": "parity/manim-v0.21/spatial_primitives.py",
       "noon_source": "web/python/examples/noon_spatial_primitives.py",
       "expected_duration": 1.0,
-      "expected_object_count": 5,
-      "sample_times": [0.0, 0.5, 0.9666666666666667],
+      "expected_object_count": 14,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
       "raster_tolerance": {
         "max_bounds_delta_px": 3,
         "max_differing_ratio": 0.02,
         "max_mean_absolute_channel_error": 1.5
       },
-      "notes": "The same Line3D, Mesh3D.polyhedron, and oriented Cylinder/Cone scene through the actual async Python worker, retained geometry bridge, and existing renderer; all line mesh defaults that affect geometry/material are set explicitly."
+      "notes": "The same Line3D, explicit triangle, separate six-face unshaded 0.75-opacity Prism family, and oriented open/closed Cylinder/Cone scene through the actual async Python worker, retained geometry bridge, and existing renderer; all line mesh defaults that affect geometry/material are set explicitly."
     },
     {
       "id": "mathtex-substrings",

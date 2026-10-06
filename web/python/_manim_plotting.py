@@ -12,6 +12,8 @@ geometry publication. Python owns callables/coercion, never coordinate math.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
+import math
 from operator import index as _index
 from typing import NamedTuple
 
@@ -162,6 +164,76 @@ def _coordinate_constructor_context():
     if _create_coordinates is None:
         raise RuntimeError("coordinates require the shared Rust authoring host")
     return _shared._live_constructor_context("coordinates")
+
+
+_THREE_D_AXIS_CONFIG_KEYS = {
+    "include_tip", "include_ticks", "tick_size", "exclude_origin_tick",
+    "tip_length", "color", "stroke_width", "stroke_opacity", "opacity",
+}
+
+
+def _three_d_axis_config(value, name):
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a mapping")
+    unknown = sorted(set(value) - _THREE_D_AXIS_CONFIG_KEYS)
+    if unknown:
+        raise NotImplementedError(f"unsupported {name} option(s): " + ", ".join(unknown))
+    return dict(value)
+
+
+def _finite_axis_option(value, name, *, nonnegative=False):
+    if isinstance(value, bool):
+        raise TypeError(f"{name} requires a finite number")
+    value = float(value)
+    if not math.isfinite(value) or (nonnegative and value < 0):
+        raise ValueError(f"{name} must be finite" + (" and nonnegative" if nonnegative else ""))
+    if name in ("opacity", "stroke_opacity") and not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return value
+
+
+def _apply_three_d_axis_config(options, index, config):
+    setters = {
+        "include_tip": "setAxisTips",
+        "include_ticks": "setAxisTicks",
+        "exclude_origin_tick": "setAxisExcludeOriginTick",
+    }
+    for key, method in setters.items():
+        if key in config:
+            if not isinstance(config[key], bool):
+                raise TypeError(f"{key} requires a boolean")
+            engine_call(getattr(options, method), index, config[key])
+    if "tick_size" in config:
+        engine_call(options.setAxisTickSize, index,
+                    _finite_axis_option(config["tick_size"], "tick_size", nonnegative=True))
+    if "tip_length" in config:
+        tip_length = _finite_axis_option(config["tip_length"], "tip_length")
+        if tip_length <= 0:
+            raise ValueError("tip_length must be positive")
+        engine_call(options.setAxisTipLength, index, tip_length)
+    if "color" in config:
+        color = _compat._as_color("axis color", config["color"])
+        engine_call(options.setAxisColor, index, color.red, color.green, color.blue, color.alpha)
+    for key, method in (("stroke_width", "setAxisStrokeWidth"),
+                        ("stroke_opacity", "setAxisStrokeOpacity"),
+                        ("opacity", "setAxisOpacity")):
+        if key in config:
+            engine_call(getattr(options, method), index,
+                        _finite_axis_option(config[key], key, nonnegative=key == "stroke_width"))
+
+
+def _three_d_axis_label_object(label):
+    if isinstance(label, str):
+        from _manim_latex import MathTex
+
+        label = MathTex(label)
+    if isinstance(label, _compat.Group):
+        return label
+    if isinstance(label, _base.Mobject):
+        return _compat.Group(label)
+    raise TypeError("ThreeDAxes labels require strings or retained text objects")
 
 
 class NumberLine(_compat.Group):
@@ -551,27 +623,56 @@ class ThreeDAxes(_compat.Group):
     """Linear X/Y/Z axes with pinned Manim ranges, lengths and positive tips.
 
     The numeric frame, world-axis transforms, ticks, tips, and coordinate
-    conversions are Rust-owned. Cairo axis pieces/shading, labels, custom axis
-    configurations, z-normal changes, and custom tip shapes are unsupported.
+    conversions are Rust-owned. Cairo axis pieces/shading, custom tip shapes,
+    and z-normal changes are unsupported. Axis labels use retained Text or
+    MathTex families. The axis config accepts
+    bounded stroke, tick, and filled-tip options.
     """
 
     def __init__(self, x_range=(-6, 6, 1), y_range=(-5, 5, 1),
                  z_range=(-4, 4, 1), x_length=10.5, y_length=10.5,
                  z_length=6.5, *, tips=True, include_ticks=True, tick_size=0.1,
+                 axis_config=None, x_axis_config=None, y_axis_config=None, z_axis_config=None,
                  labels=None, color=None, **kwargs):
         context = _coordinate_constructor_context()
         if labels is not None:
             raise NotImplementedError("ThreeDAxes axis labels are not yet supported")
-        if not isinstance(tips, bool) or not isinstance(include_ticks, bool):
-            raise TypeError("tips and include_ticks require booleans")
+        if kwargs:
+            raise TypeError("unsupported ThreeDAxes option(s): " + ", ".join(sorted(kwargs)))
+        common = _three_d_axis_config(axis_config, "axis_config")
+        axis_configs = [
+            _three_d_axis_config(value, name)
+            for value, name in ((x_axis_config, "x_axis_config"),
+                                (y_axis_config, "y_axis_config"),
+                                (z_axis_config, "z_axis_config"))
+        ]
+        global_tips = common.pop("include_tip", tips)
+        global_ticks = common.pop("include_ticks", include_ticks)
+        global_tick_size = common.pop("tick_size", tick_size)
+        global_exclude_origin = common.pop("exclude_origin_tick", True)
+        global_tip_length = common.pop("tip_length", None)
+        if not all(isinstance(value, bool) for value in (global_tips, global_ticks, global_exclude_origin)):
+            raise TypeError("ThreeDAxes tips, include_ticks, and exclude_origin_tick require booleans")
+        if isinstance(global_tick_size, bool):
+            raise TypeError("ThreeDAxes tick_size requires a finite number")
+        global_tick_size = float(global_tick_size)
+        if not math.isfinite(global_tick_size) or global_tick_size < 0:
+            raise ValueError("ThreeDAxes tick_size must be finite and nonnegative")
         options = engine_call(
             _coordinate_options.threeDAxes, _array(x_range), _array(y_range),
             _array(z_range), float(x_length), float(y_length), float(z_length),
         )
         try:
-            engine_call(options.setTicks, include_ticks, float(tick_size), True)
-            engine_call(options.setTips, tips)
-            _coordinate_style(options, color, kwargs)
+            engine_call(options.setTicks, global_ticks, global_tick_size, global_exclude_origin)
+            engine_call(options.setTips, global_tips)
+            if global_tip_length is not None:
+                global_tip_length = _finite_axis_option(global_tip_length, "tip_length")
+                if global_tip_length <= 0:
+                    raise ValueError("tip_length must be positive")
+                engine_call(options.setTipLength, global_tip_length)
+            _coordinate_style(options, common.pop("color", color), common)
+            for index, config in enumerate(axis_configs):
+                _apply_three_d_axis_config(options, index, config)
         except BaseException:
             options.free()
             raise
@@ -588,6 +689,57 @@ class ThreeDAxes(_compat.Group):
             for index in range(3)
         ]
         _family(self, handle, axes)
+
+    def _axis_label_family(self, labels, *, buff=0.1, fixed_orientation=False, **kwargs):
+        if kwargs:
+            raise NotImplementedError("unsupported ThreeDAxes label option(s): " + ", ".join(sorted(kwargs)))
+        if not isinstance(fixed_orientation, bool):
+            raise TypeError("fixed_orientation requires a boolean")
+        buff = _finite_axis_option(buff, "buff", nonnegative=True)
+        selected = []
+        handles = [None, None, None]
+        for index, label in labels:
+            label = _three_d_axis_label_object(label)
+            handle = getattr(label, "_semantic_family_handle", None)
+            if handle is None:
+                raise TypeError("ThreeDAxes labels require fresh retained semantic family handles")
+            selected.append(label)
+            handles[index] = handle
+        if not selected:
+            raise ValueError("at least one ThreeDAxes label is required")
+        family = engine_call(
+            self._semantic_family_handle.threeDAxesLabelFamilies,
+            *handles, buff, fixed_orientation,
+        )
+        wrapper = object.__new__(_compat.Group)
+        return _family(wrapper, family, selected)
+
+    def get_x_axis_label(self, label, *, buff=0.1, fixed_orientation=False, **kwargs):
+        """Place one existing retained text object at the positive X endpoint."""
+        return self._axis_label_family(((0, label),), buff=buff,
+                                       fixed_orientation=fixed_orientation, **kwargs)
+
+    def get_y_axis_label(self, label, *, buff=0.1, fixed_orientation=False, **kwargs):
+        """Place one existing retained text object at the positive Y endpoint."""
+        return self._axis_label_family(((1, label),), buff=buff,
+                                       fixed_orientation=fixed_orientation, **kwargs)
+
+    def get_z_axis_label(self, label, *, buff=0.1, fixed_orientation=False, **kwargs):
+        """Place one existing retained text object at the positive Z endpoint."""
+        return self._axis_label_family(((2, label),), buff=buff,
+                                       fixed_orientation=fixed_orientation, **kwargs)
+
+    def get_axis_labels(self, x_label="x", y_label="y", z_label="z", *, buff=0.1,
+                        fixed_orientation=False, **kwargs):
+        """Place three existing retained text objects in one Rust transaction.
+
+        Strings use the existing retained MathTex compiler path, which must
+        already be prepared. Existing Text and MathTex families retain their
+        Rust-owned layout and screen-edge correction.
+        """
+        return self._axis_label_family(((0, x_label), (1, y_label), (2, z_label)),
+                                       buff=buff, fixed_orientation=fixed_orientation,
+                                       **kwargs)
 
     @property
     def x_axis(self):

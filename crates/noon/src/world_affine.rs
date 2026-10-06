@@ -90,7 +90,7 @@ where
         WorldAffineEdit::Scale { about, .. } | WorldAffineEdit::Rotate { about, .. } => {
             Some(match about {
                 Some(point) => point,
-                None => union_world_bounds_center(&store, &poses)?,
+                None => world_bounds_center_from_poses(&store, &poses)?,
             })
         }
     };
@@ -155,7 +155,7 @@ fn validate_spatial_leaf(
 ) -> Result<(), AuthoringError> {
     match state.role() {
         SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D => Ok(()),
-        SemanticObjectRole::Ordinary => match state.content {
+        SemanticObjectRole::Ordinary | SemanticObjectRole::NumberLine(_) => match state.content {
             noon_core::SemanticObjectContent::Image(_) => Err(unsupported_spatial_path()),
             noon_core::SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => store
                 .geometry_resources()
@@ -177,10 +177,10 @@ fn unsupported_spatial_path() -> AuthoringError {
     AuthoringError::Unsupported(UnsupportedAuthoringOperation::WorldAffineContent)
 }
 
-fn union_world_bounds_center(
+fn union_world_bounds(
     store: &SemanticStore,
     poses: &[LeafPose],
-) -> Result<SemanticVec3, AuthoringError> {
+) -> Result<(SemanticVec3, SemanticVec3), AuthoringError> {
     let mut min = SemanticVec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut max = SemanticVec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for pose in poses {
@@ -188,7 +188,7 @@ fn union_world_bounds_center(
             SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D => {
                 [pose.world.translation; 8]
             }
-            SemanticObjectRole::Ordinary => {
+            SemanticObjectRole::Ordinary | SemanticObjectRole::NumberLine(_) => {
                 let (local_min, local_max) = match pose.state.content.geometry() {
                     Some(StoredGeometry::Resource(handle))
                         if matches!(
@@ -261,15 +261,21 @@ fn union_world_bounds_center(
             max.z = max.z.max(point.z);
         }
     }
-    let center = SemanticVec3::new(
+    (min.is_finite() && max.is_finite())
+        .then_some((min, max))
+        .ok_or(AuthoringError::NonFiniteObjectState)
+}
+
+fn world_bounds_center_from_poses(
+    store: &SemanticStore,
+    poses: &[LeafPose],
+) -> Result<SemanticVec3, AuthoringError> {
+    let (min, max) = union_world_bounds(store, poses)?;
+    Ok(SemanticVec3::new(
         midpoint(min.x, max.x),
         midpoint(min.y, max.y),
         midpoint(min.z, max.z),
-    );
-    center
-        .is_finite()
-        .then_some(center)
-        .ok_or(AuthoringError::NonFiniteObjectState)
+    ))
 }
 
 /// Compute the center of one object's world-space axis-aligned bounds using
@@ -284,7 +290,7 @@ pub(crate) fn world_bounds_center(
         return Err(AuthoringError::NonFiniteObjectState);
     }
     validate_spatial_leaf(store, state)?;
-    union_world_bounds_center(
+    world_bounds_center_from_poses(
         store,
         &[LeafPose {
             node,
@@ -292,6 +298,96 @@ pub(crate) fn world_bounds_center(
             world,
         }],
     )
+}
+
+/// World-space axis-aligned bounds for the current authored members of one
+/// semantic object/family, sharing the same local bounds and transformed
+/// corner calculation used by spatial affine pivots.
+pub(crate) fn target_world_bounds(
+    store_rc: &Rc<RefCell<SemanticStore>>,
+    target: MobjectTarget<'_>,
+) -> Result<(SemanticVec3, SemanticVec3), AuthoringError> {
+    target_world_bounds_with(store_rc, target, |_, _, state| {
+        state
+            .transform
+            .world_transform()
+            .ok_or(AuthoringError::NonFiniteObjectState)
+    })
+}
+
+/// Compute aggregate world bounds from one coherent authored/effective pose
+/// sample over a target's unique semantic leaves.
+pub(crate) fn target_world_bounds_with<F>(
+    store_rc: &Rc<RefCell<SemanticStore>>,
+    target: MobjectTarget<'_>,
+    mut world_for: F,
+) -> Result<(SemanticVec3, SemanticVec3), AuthoringError>
+where
+    F: FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        &SemanticObjectState,
+    ) -> Result<SemanticWorldTransform3D, AuthoringError>,
+{
+    let root = target.require_store(store_rc)?;
+    let store = store_rc.borrow();
+    let leaves = store
+        .ordered_leaf_nodes(root)
+        .map_err(AuthoringError::from)?;
+    if leaves.is_empty() {
+        return Err(AuthoringError::FamilyPairing(
+            noon_core::SemanticFamilyPairingError::Empty,
+        ));
+    }
+    let mut poses = Vec::with_capacity(leaves.len());
+    for node in leaves {
+        let state = store
+            .semantic_object_state_checked(node)
+            .map_err(AuthoringError::from)?
+            .clone();
+        if !state.spatial_declaration_is_valid() {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        validate_spatial_leaf(&store, &state)?;
+        let world = world_for(&store, node, &state)?;
+        if !valid_world(world) {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        poses.push(LeafPose { node, state, world });
+    }
+    union_world_bounds(&store, &poses)
+}
+
+pub(crate) fn target_world_center(
+    store_rc: &Rc<RefCell<SemanticStore>>,
+    target: MobjectTarget<'_>,
+) -> Result<SemanticVec3, AuthoringError> {
+    target_world_center_with(store_rc, target, |_, _, state| {
+        state
+            .transform
+            .world_transform()
+            .ok_or(AuthoringError::NonFiniteObjectState)
+    })
+}
+
+pub(crate) fn target_world_center_with<F>(
+    store_rc: &Rc<RefCell<SemanticStore>>,
+    target: MobjectTarget<'_>,
+    world_for: F,
+) -> Result<SemanticVec3, AuthoringError>
+where
+    F: FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        &SemanticObjectState,
+    ) -> Result<SemanticWorldTransform3D, AuthoringError>,
+{
+    let (min, max) = target_world_bounds_with(store_rc, target, world_for)?;
+    Ok(SemanticVec3::new(
+        midpoint(min.x, max.x),
+        midpoint(min.y, max.y),
+        midpoint(min.z, max.z),
+    ))
 }
 
 fn midpoint(a: f64, b: f64) -> f64 {
