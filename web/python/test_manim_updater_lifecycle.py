@@ -2,6 +2,7 @@
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import _manim_updaters as updaters
 
@@ -103,6 +104,53 @@ class UpdaterLifecycleTests(unittest.TestCase):
         updaters.add_updater(self.mobject, callback)
         self.assertEqual(self.context.calls, [("add", self.handle, "0", 0.0, None)])
         self.assertIs(session.callbacks[0], callback)
+
+
+class CallbackEntryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_forwards_frame_and_pinned_player_once(self):
+        player = object()
+        frame = {"token": {"sequence": 2}, "invocations": [{"callback_id": "7"}]}
+        with patch.object(updaters, "run_canonical_callback_phase", return_value="batch") as run:
+            result = await updaters._run_canonical_callback_phase_json(
+                "3", updaters.json.dumps(frame), player
+            )
+        self.assertEqual(result, "batch")
+        run.assert_called_once_with(3, frame, callback_player=player)
+
+    async def test_completion_and_discard_reach_the_same_phase_identity(self):
+        identity = {"token": {"sequence": 2}, "region": 4}
+        for committed in (True, False):
+            with self.subTest(committed=committed), \
+                    patch.object(updaters, "complete_canonical_callback_phase") as complete, \
+                    patch.object(updaters, "discard_canonical_callback_phase") as discard:
+                await updaters._finish_canonical_callback_phase_json(
+                    "3", updaters.json.dumps(identity), committed
+                )
+                selected, other = (complete, discard) if committed else (discard, complete)
+                selected.assert_called_once_with(3, identity)
+                other.assert_not_called()
+
+    async def test_invalid_json_never_invokes_the_phase(self):
+        with patch.object(updaters, "run_canonical_callback_phase") as run, \
+                patch.object(updaters, "complete_canonical_callback_phase") as complete:
+            with self.assertRaises(ValueError):
+                await updaters._run_canonical_callback_phase_json(3, "invalid", object())
+            with self.assertRaises(ValueError):
+                await updaters._finish_canonical_callback_phase_json(3, "invalid", True)
+            run.assert_not_called()
+            complete.assert_not_called()
+
+    async def test_phase_and_stale_completion_errors_propagate_unchanged(self):
+        failure = RuntimeError("stale callback token")
+        with patch.object(updaters, "run_canonical_callback_phase", side_effect=failure), \
+                patch.object(updaters, "complete_canonical_callback_phase", side_effect=failure):
+            for entry in (
+                updaters._run_canonical_callback_phase_json(3, "{}", object()),
+                updaters._finish_canonical_callback_phase_json(3, "{}", True),
+            ):
+                with self.assertRaises(RuntimeError) as caught:
+                    await entry
+                self.assertIs(caught.exception, failure)
 
 
 if __name__ == "__main__":
