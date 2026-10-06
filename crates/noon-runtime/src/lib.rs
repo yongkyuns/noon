@@ -696,6 +696,15 @@ impl SceneInstance {
             | ExecutionPatch::RemoveObject(object) => self
                 .compiled
                 .object_index(*object)
+                .filter(|index| {
+                    self.frame
+                        .objects
+                        .get(*index as usize)
+                        .and_then(|row| row.spatial.as_deref())
+                        .is_none_or(|spatial| {
+                            spatial.camera_projection.is_none() && !spatial.point_light
+                        })
+                })
                 .map(|index| self.compiled.spatial_anchor_groups_for_row(index).to_vec()),
             ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { anchor_family, .. } => self
                 .compiled
