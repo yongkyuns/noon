@@ -771,8 +771,9 @@ fn fixed_orientation_family_rows_share_and_locally_refresh_world_bounds_center()
 fn cairo_path_family_gradient_uses_transformed_path_controls_and_refreshes_locally() {
     let mut store = SemanticStore::new();
     let anchor = store.insert_family();
-    let make_path = |path: noon_core::VectorPath, x: f64, y: f64, cairo: bool| {
-        let mut state = SemanticObjectState::new(StoredGeometry::VectorPath(path));
+    let mut make_path = |path: noon_core::VectorPath, x: f64, y: f64, cairo: bool| {
+        let handle = store.insert_geometry_path(path).unwrap();
+        let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
         if cairo {
             state.set_spatial_material(noon_core::SemanticSpatialMaterial::CairoPath);
             state
