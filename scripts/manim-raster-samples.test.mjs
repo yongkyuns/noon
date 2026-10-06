@@ -433,6 +433,59 @@ test("Line3D, triangle, and translucent Prism fixtures use the existing paired r
   }
 });
 
+test("default Cylinder ends and capped Cone use the existing paired raster harness", async () => {
+  const manifest = JSON.parse(await readFile(
+    path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8",
+  ));
+  const workflow = await readFile(
+    path.join(repoRoot, ".github/workflows/manim-raster-differential.yml"), "utf8",
+  );
+  const direct = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-cairo-cylinder-cone-caps-direct",
+  );
+  const worker = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-cairo-cylinder-cone-caps-worker",
+  );
+  assert.equal(direct?.scene, "SpatialCairoCylinderConeCaps");
+  assert.equal(direct?.direct_factory,
+    "createDirectSpatialCairoCylinderConeCapsSmokeRenderer");
+  assert.equal(worker?.scene, direct.scene);
+  assert.equal(worker?.source, direct.source);
+  assert.equal(worker?.noon_source, "web/python/examples/noon_spatial_primitives.py");
+  assert.equal(direct.expected_duration, 1.0);
+  assert.equal(worker.expected_duration, direct.expected_duration);
+  assert.equal(direct.expected_object_count, 710);
+  assert.equal(worker.expected_object_count, direct.expected_object_count);
+  assert.deepEqual(direct.sample_times, [0, 0.5, 0.9666666666666667]);
+  assert.deepEqual(worker.sample_times, direct.sample_times);
+
+  const reference = await readFile(path.join(repoRoot, direct.source), "utf8");
+  const workerSource = await readFile(path.join(repoRoot, worker.noon_source), "utf8");
+  const referenceCase = reference.split("class SpatialCairoCylinderConeCaps", 2)[1];
+  const workerCase = workerSource.split("class SpatialCairoCylinderConeCaps", 2)[1];
+  for (const [label, source] of [["pinned Manim", referenceCase], ["Python worker", workerCase]]) {
+    assert.ok(source, `${label} class exists`);
+    assert.match(source, /cylinder\s*=\s*Cylinder\(\)/,
+      `${label} includes an actual default Cylinder`);
+    assert.match(source, /direction=.*(?:\[|\()1,\s*2,\s*1(?:\]|\))/,
+      `${label} includes an arbitrary-axis Cylinder`);
+    assert.match(source, /show_base=True/,
+      `${label} includes a capped Cone`);
+    assert.match(source, /self\.(?:add|add_world_mobjects)\(cylinder, oriented_cylinder, cone\)/);
+  }
+  for (const relativePath of [
+    direct.source,
+    worker.noon_source,
+    "crates/noon/src/example_scenes/spatial_primitives.rs",
+    "crates/noon-web/src/direct_execution_smoke.rs",
+    "web/python/_manim_spatial_geometry.py",
+  ]) {
+    await readFile(path.join(repoRoot, relativePath));
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
+      `${relativePath} must trigger the existing raster CI workflow`);
+  }
+});
+
 test("mixed camera-label fixtures enroll the direct and Python worker sources", async () => {
   const manifest = JSON.parse(await readFile(
     path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8",

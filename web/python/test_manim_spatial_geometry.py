@@ -392,6 +392,24 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         point = initialize.call_args.args[1]
         self.assertEqual(point(1.0, 0.0), (1.0, 0.0, 1.0))
 
+    def test_cylinder_defaults_match_pinned_surface_and_shaded_end_contract(self):
+        with patch.object(spatial.Surface, "__init__", autospec=True,
+                          return_value=None) as initialize:
+            cylinder = spatial.Cylinder()
+
+        kwargs = initialize.call_args.kwargs
+        self.assertIsInstance(cylinder, spatial.Surface)
+        self.assertEqual(kwargs["resolution"], (24, 24))
+        self.assertEqual(kwargs["u_range"], (-1.0, 1.0))
+        self.assertEqual(kwargs["v_range"], (0.0, 2.0 * math.pi))
+        self.assertIs(kwargs["fill_color"], noon.BLUE_D)
+        self.assertEqual(kwargs["stroke_width"], 0.5)
+        self.assertTrue(kwargs["shade_in_3d"])
+        self.assertEqual(kwargs["_cairo_circle_caps"], (
+            (1.0, -1.0, noon.BLUE_D, True),
+            (1.0, 1.0, noon.BLUE_D, True),
+        ))
+
     def test_cairo_decorations_and_non_native_options_fail_explicitly(self):
         with self.assertRaises(TypeError):
             spatial.Surface(lambda u, v: (u, v, 0), surface_piece_config={})
@@ -477,7 +495,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         cap_args = candidate.addCircleCap.call_args.args
         self.assertEqual(cap_args[:7], (1.0, -1.0, color.red, color.green,
                                          color.blue, color.alpha, True))
-        self.assertEqual(cap_args[7], (-7.0, -9.0, 10.0))
+        self.assertEqual(len(cap_args), 7)
 
     def test_default_cone_uses_manim_surface_cells_and_rust_axial_family_pose(self):
         import _noon_spatial as native

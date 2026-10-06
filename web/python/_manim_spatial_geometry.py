@@ -268,7 +268,7 @@ class Surface(_Mesh3D, _compat.Group):
             for radius, local_z, color, shaded in _cairo_circle_caps:
                 engine_call(candidate.addCircleCap, float(radius), float(local_z),
                             color.red, color.green, color.blue, color.alpha,
-                            bool(shaded), _bulk((-7.0, -9.0, 10.0)))
+                            bool(shaded))
             handle = (engine_call(_create_mesh_family, candidate) if context is None
                       else engine_call(context.createMeshFamily, candidate))
         except BaseException:
@@ -355,7 +355,7 @@ class Cylinder(Surface):
     def __init__(self, radius=1, height=2, direction=(0, 0, 1),
                  v_range=(0, 2 * math.pi), show_ends=True, resolution=(24, 24),
                  fill_color=_base.BLUE_D, fill_opacity=1,
-                 checkerboard_colors=_DEFAULT_CHECKERBOARD, stroke_width=0,
+                 checkerboard_colors=_DEFAULT_CHECKERBOARD, stroke_width=0.5,
                  shade_in_3d=True, **kwargs):
         from _noon_spatial import _vector
 

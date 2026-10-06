@@ -38,7 +38,6 @@ impl SpatialPathOptions {
         transform: SemanticWorldTransform3D,
         fill_color: Color,
         shade_in_3d: bool,
-        light_source: SemanticVec3,
     ) -> Result<Self, AuthoringError> {
         let radius = if radius.is_finite() && radius > 0.0 && radius <= f32::MAX as f64 {
             radius as f32
@@ -48,17 +47,6 @@ impl SpatialPathOptions {
         if radius <= 0.0 {
             return Err(AuthoringError::NonFiniteGeometry);
         }
-        if shade_in_3d
-            && (!light_source.is_finite()
-                || light_source
-                    .x
-                    .abs()
-                    .max(light_source.y.abs())
-                    .max(light_source.z.abs())
-                    == 0.0)
-        {
-            return Err(AuthoringError::NonFiniteObjectState);
-        }
         if fill_color.alpha != 0.0 && fill_color.alpha != 1.0 {
             return Err(AuthoringError::Unsupported(
                 crate::UnsupportedAuthoringOperation::SpatialPathOpacity,
@@ -66,10 +54,9 @@ impl SpatialPathOptions {
         }
         let path = noon_geometry::canonical_outline_path(&noon_core::GeometryRef::circle(radius))
             .ok_or(AuthoringError::NonFiniteGeometry)?;
-        let cairo_appearance = shade_in_3d.then_some(SemanticCairoPathAppearance {
-            sheen_factor: 0.2,
-            gradient_direction: Some(light_source),
-        });
+        // A Manim Circle shaded as a 3D VMobject keeps its default zero sheen
+        // and derives its endpoint gradient from its own retained path bounds.
+        let cairo_appearance = shade_in_3d.then_some(SemanticCairoPathAppearance::default());
         Ok(Self {
             path,
             transform,

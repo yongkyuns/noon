@@ -268,6 +268,223 @@ pub fn cairo_cube_prism_session() -> Result<ExecutionSession, String> {
     Ok(session)
 }
 
+/// Pinned default Cylinder caps and optional Cone base with retained Cairo surfaces.
+pub fn cairo_cylinder_cone_caps_session() -> Result<ExecutionSession, String> {
+    let mut scene = Scene::new();
+    let camera = scene
+        .camera_3d_profile(
+            ManimCamera3DProfile {
+                phi: 0.6,
+                theta: -1.2,
+                gamma: 0.0,
+                focal_distance: 5.0,
+                zoom: 1.0,
+                frame_height: 8.0,
+                frame_center: SemanticVec3::ZERO,
+            },
+            NEAR,
+            FAR,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let default_cylinder = cairo_cylinder_family(
+        &mut scene,
+        1.0,
+        2.0,
+        [24, 24],
+        SemanticVec3::new(0.0, 0.0, 1.0),
+        SemanticVec3::new(-2.0, 0.0, 0.0),
+        Color::BLUE_D,
+        true,
+        true,
+    )?;
+    let oriented_cylinder = cairo_cylinder_family(
+        &mut scene,
+        0.55,
+        1.25,
+        [8, 8],
+        SemanticVec3::new(1.0, 2.0, 1.0),
+        SemanticVec3::new(0.0, 0.0, 0.0),
+        Color::TEAL,
+        false,
+        true,
+    )?;
+    let capped_cone = cairo_cone_family(
+        &mut scene,
+        0.55,
+        1.3,
+        [8, 8],
+        SemanticVec3::new(-1.0, 2.0, -1.0),
+        SemanticVec3::new(2.0, 0.0, 0.0),
+    )?;
+    for family in [&default_cylinder, &oriented_cylinder, &capped_cone] {
+        scene
+            .add_many(&[MobjectTarget::Family(family.family())])
+            .map_err(|error| error.to_string())?;
+    }
+
+    let movement = scene
+        .declare_camera_profile_move(
+            &camera,
+            ManimCamera3DProfile {
+                phi: 0.8,
+                theta: -0.1,
+                gamma: 0.2,
+                focal_distance: 5.0,
+                zoom: 1.1,
+                frame_height: 8.0,
+                frame_center: SemanticVec3::new(0.2, 0.0, 0.0),
+            },
+            AnimationOptions::new()
+                .run_time(DURATION)
+                .rate_func(RateFunction::Linear),
+        )
+        .map_err(|error| error.to_string())?;
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    session
+        .activate_animation_segment(
+            &scene.integration_store().borrow(),
+            movement.node_id(),
+            AnimationOptions::new(),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(session)
+}
+
+fn cairo_cylinder_family(
+    scene: &mut Scene,
+    radius: f64,
+    height: f64,
+    resolution: [usize; 2],
+    direction: SemanticVec3,
+    placement: SemanticVec3,
+    color: Color,
+    checkerboard: bool,
+    shade_caps: bool,
+) -> Result<crate::SurfaceFamily, String> {
+    let half_height = height * 0.5;
+    let plan = crate::UvSurfacePlan::new(
+        [-half_height, half_height],
+        [0.0, std::f64::consts::TAU],
+        resolution,
+    )
+    .map_err(|error| error.to_string())?;
+    let grid = plan
+        .sample_cairo(|z, angle| SemanticVec3::new(radius * angle.cos(), radius * angle.sin(), z))
+        .map_err(|error| error.to_string())?;
+    let pose = SemanticWorldTransform3D::from_axial_direction(direction, 0.0)
+        .ok_or("invalid Cylinder axis")?;
+    let caps = [-half_height, half_height]
+        .into_iter()
+        .map(|z| {
+            crate::SpatialPathOptions::circle(
+                radius,
+                SemanticWorldTransform3D::new(
+                    SemanticVec3::new(0.0, 0.0, z),
+                    SemanticRotation3D::IDENTITY,
+                    SemanticVec3::new(1.0, 1.0, 1.0),
+                )
+                .expect("fixture cap transform is finite"),
+                color,
+                shade_caps,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let options = SurfaceOptions {
+        fill_colors: if checkerboard {
+            [Color::BLUE_D, Color::BLUE_E]
+        } else {
+            [color, color]
+        },
+        material: SemanticSpatialMaterial::CairoSurface,
+        ..SurfaceOptions::default()
+    };
+    let mut family = scene
+        .surface_cairo_family_with_paths(grid, options, caps)
+        .map_err(|error| error.to_string())?;
+    apply_axial_pose(&mut family, pose)?;
+    family
+        .world_affine(WorldAffineEdit::Shift(placement))
+        .map_err(|error| error.to_string())?;
+    Ok(family)
+}
+
+fn cairo_cone_family(
+    scene: &mut Scene,
+    base_radius: f64,
+    height: f64,
+    resolution: [usize; 2],
+    direction: SemanticVec3,
+    placement: SemanticVec3,
+) -> Result<crate::SurfaceFamily, String> {
+    let slant = base_radius.hypot(height);
+    let theta = std::f64::consts::PI - (base_radius / height).atan();
+    let plan = crate::UvSurfacePlan::new([0.0, slant], [0.0, std::f64::consts::TAU], resolution)
+        .map_err(|error| error.to_string())?;
+    let grid = plan
+        .sample_cairo(|u, angle| {
+            SemanticVec3::new(
+                u * theta.sin() * angle.cos(),
+                u * theta.sin() * angle.sin(),
+                u * theta.cos(),
+            )
+        })
+        .map_err(|error| error.to_string())?;
+    let base = crate::SpatialPathOptions::circle(
+        base_radius,
+        SemanticWorldTransform3D::new(
+            SemanticVec3::new(0.0, 0.0, -height),
+            SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .expect("fixture cone base transform is finite"),
+        Color::BLUE_D,
+        false,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut family = scene
+        .surface_cairo_family_with_paths(
+            grid,
+            SurfaceOptions {
+                fill_colors: [Color::BLUE_D; 2],
+                material: SemanticSpatialMaterial::CairoSurface,
+                ..SurfaceOptions::default()
+            },
+            vec![base],
+        )
+        .map_err(|error| error.to_string())?;
+    let pose = SemanticWorldTransform3D::from_axial_direction(direction, 0.0)
+        .ok_or("invalid Cone axis")?;
+    apply_axial_pose(&mut family, pose)?;
+    family
+        .world_affine(WorldAffineEdit::Shift(placement))
+        .map_err(|error| error.to_string())?;
+    Ok(family)
+}
+
+fn apply_axial_pose(
+    family: &mut crate::SurfaceFamily,
+    pose: SemanticWorldTransform3D,
+) -> Result<(), String> {
+    let [w, x, y, z] = pose.rotation.components();
+    let half_sine = (1.0 - w.clamp(-1.0, 1.0).powi(2)).sqrt();
+    if half_sine > f64::EPSILON {
+        let axis = SemanticVec3::new(x / half_sine, y / half_sine, z / half_sine);
+        let radians = 2.0 * w.clamp(-1.0, 1.0).acos();
+        family
+            .world_affine(WorldAffineEdit::Rotate {
+                axis,
+                radians,
+                about: Some(SemanticVec3::ZERO),
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn opaque(color: Color) -> SemanticStyle {
     SemanticStyle {
         fill: Some(SemanticPaint::Solid(color)),
@@ -343,5 +560,26 @@ mod tests {
         session.seek(0.5).unwrap();
         session.seek(DURATION).unwrap();
         assert_eq!(session.frame(), &forward);
+    }
+
+    #[test]
+    fn cairo_cylinder_ends_and_capped_cone_share_camera_timeline_and_leaf_count() {
+        let mut session = cairo_cylinder_cone_caps_session().unwrap();
+        assert_eq!(session.frame().objects.len(), 710);
+        assert_eq!(
+            session.wake_state().timeline(),
+            noon_runtime::TimelineWakeState::Continuous
+        );
+        let initial = session.frame().clone();
+        session.advance_to(0.5).unwrap();
+        let midpoint = session.frame().clone();
+        assert_ne!(midpoint, initial);
+        session.advance_to(DURATION).unwrap();
+        let endpoint = session.frame().clone();
+        assert_ne!(endpoint, midpoint);
+        session.seek(0.5).unwrap();
+        assert_eq!(session.frame(), &midpoint);
+        session.seek(0.0).unwrap();
+        assert_eq!(session.frame(), &initial);
     }
 }

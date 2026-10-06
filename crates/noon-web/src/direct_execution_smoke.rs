@@ -195,6 +195,16 @@ pub async fn create_direct_spatial_cairo_cube_prism_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Default Cairo-shaded Cylinder ends and the optional Cone base.
+#[wasm_bindgen(js_name = createDirectSpatialCairoCylinderConeCapsSmokeRenderer)]
+pub async fn create_direct_spatial_cairo_cylinder_cone_caps_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::spatial_primitives::cairo_cylinder_cone_caps_session()
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Direct Rust/WASM smoke for the shared renderer-independent UV surface fixture.
 #[wasm_bindgen(js_name = createDirectSpatialSurfaceSmokeRenderer)]
 pub async fn create_direct_spatial_surface_smoke_renderer(

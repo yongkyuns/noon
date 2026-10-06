@@ -81,3 +81,30 @@ class SpatialCairoCubePrism(ThreeDScene):
             phi=0.8, theta=-0.1, gamma=0.2, focal_distance=5, zoom=1.1,
             frame_center=(0.2, 0, 0), run_time=1, rate_func=linear,
         )
+
+
+class SpatialCairoCylinderConeCaps(ThreeDScene):
+    """Default Cylinder ends and optional Cone base through the worker."""
+
+    def __init__(self):
+        super().__init__(near=0.1, far=30)
+
+    async def construct(self):
+        self.set_camera_orientation(
+            phi=0.6, theta=-1.2, gamma=0, focal_distance=5, zoom=1,
+            frame_center=(0, 0, 0),
+        )
+        cylinder = Cylinder().shift((-2.0, 0.0, 0.0))
+        oriented_cylinder = Cylinder(
+            radius=0.55, height=1.25, direction=(1, 2, 1), resolution=(8, 8),
+            fill_color=TEAL, checkerboard_colors=False,
+        )
+        cone = Cone(
+            base_radius=0.55, height=1.3, direction=(-1, 2, -1),
+            show_base=True, resolution=(8, 8),
+        ).shift((2.0, 0.0, 0.0))
+        self.add_world_mobjects(cylinder, oriented_cylinder, cone)
+        await self.move_camera(
+            phi=0.8, theta=-0.1, gamma=0.2, focal_distance=5, zoom=1.1,
+            frame_center=(0.2, 0, 0), run_time=1, rate_func=linear,
+        )

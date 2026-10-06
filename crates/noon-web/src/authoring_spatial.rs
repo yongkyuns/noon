@@ -353,7 +353,6 @@ struct CircleCapRequest {
     local_z: f64,
     color: Color,
     shade_in_3d: bool,
-    light_source: SemanticVec3,
 }
 
 #[wasm_bindgen]
@@ -393,7 +392,6 @@ impl WasmMeshFamilyOptions {
         blue: f64,
         alpha: f64,
         shade_in_3d: bool,
-        light_source: &[f64],
     ) -> Result<(), JsValue> {
         if !radius.is_finite() || radius <= 0.0 || !local_z.is_finite() {
             return Err(invalid(
@@ -401,14 +399,12 @@ impl WasmMeshFamilyOptions {
                 "cap radius must be positive and local offset finite",
             ));
         }
-        let light_source = vec3(light_source, "light source")?;
         let color = color(red, green, blue, alpha)?;
         self.circle_caps.push(CircleCapRequest {
             radius,
             local_z,
             color,
             shade_in_3d,
-            light_source,
         });
         Ok(())
     }
@@ -427,14 +423,9 @@ impl WasmMeshFamilyOptions {
                     .ok_or_else(|| {
                         invalid("spatial.invalid_direction", "invalid cap axial pose")
                     })?;
-            let options = SpatialPathOptions::circle(
-                cap.radius,
-                transform,
-                cap.color,
-                cap.shade_in_3d,
-                cap.light_source,
-            )
-            .map_err(js_error)?;
+            let options =
+                SpatialPathOptions::circle(cap.radius, transform, cap.color, cap.shade_in_3d)
+                    .map_err(js_error)?;
             paths.push(options);
         }
         Ok((self.options, paths))

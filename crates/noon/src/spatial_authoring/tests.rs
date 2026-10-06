@@ -51,7 +51,6 @@ fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells
             .unwrap(),
         Color::RED,
         true,
-        SemanticVec3::new(-7.0, -9.0, 10.0),
     )
     .unwrap();
     let mut scene = Scene::new();
@@ -93,10 +92,7 @@ fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells
         );
         assert_eq!(
             cap_state.cairo_path_appearance(),
-            Some(SemanticCairoPathAppearance {
-                sheen_factor: 0.2,
-                gradient_direction: Some(SemanticVec3::new(-7.0, -9.0, 10.0)),
-            })
+            Some(SemanticCairoPathAppearance::default())
         );
         assert_eq!(
             cap_state.spatial_composition_domain(),
@@ -156,7 +152,6 @@ fn malformed_surface_cell_rolls_back_mixed_family_resources_and_nodes() {
             SemanticWorldTransform3D::IDENTITY,
             Color::rgba(1.0, 0.0, 0.0, 0.5),
             false,
-            SemanticVec3::ZERO,
         ),
         Err(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::SpatialPathOpacity
@@ -175,14 +170,9 @@ fn malformed_surface_cell_rolls_back_mixed_family_resources_and_nodes() {
         .unwrap(),
     )
     .with_surface_uv_cell([0, 0]);
-    let cap = SpatialPathOptions::circle(
-        1.0,
-        SemanticWorldTransform3D::IDENTITY,
-        Color::RED,
-        false,
-        SemanticVec3::ZERO,
-    )
-    .unwrap();
+    let cap =
+        SpatialPathOptions::circle(1.0, SemanticWorldTransform3D::IDENTITY, Color::RED, false)
+            .unwrap();
     assert!(
         MobjectFamily::from_meshes_and_paths(store.clone(), vec![invalid_cell], vec![cap]).is_err()
     );

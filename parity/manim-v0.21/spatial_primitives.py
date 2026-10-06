@@ -80,3 +80,29 @@ class SpatialCairoCubePrism(ThreeDScene):
             phi=0.8, theta=-0.1, gamma=0.2, focal_distance=5, zoom=1.1,
             frame_center=(0.2, 0, 0), run_time=1, rate_func=linear,
         )
+
+
+class SpatialCairoCylinderConeCaps(ThreeDScene):
+    """Pinned default Cylinder ends and optional Cone base under camera motion."""
+
+    def construct(self):
+        self.set_camera_orientation(
+            phi=0.6, theta=-1.2, gamma=0, focal_distance=5, zoom=1,
+            frame_center=ORIGIN,
+        )
+        # Keep one exact no-argument Cylinder so upstream defaults remain visible
+        # in the paired evidence, including BLUE_D, 24x24, shaded ends, and caps.
+        cylinder = Cylinder().shift((-2.0, 0.0, 0.0))
+        oriented_cylinder = Cylinder(
+            radius=0.55, height=1.25, direction=np.array([1, 2, 1]),
+            resolution=(8, 8), fill_color=TEAL, checkerboard_colors=False,
+        )
+        cone = Cone(
+            base_radius=0.55, height=1.3, direction=np.array([-1, 2, -1]),
+            show_base=True, resolution=(8, 8),
+        ).shift((2.0, 0.0, 0.0))
+        self.add(cylinder, oriented_cylinder, cone)
+        self.move_camera(
+            phi=0.8, theta=-0.1, gamma=0.2, focal_distance=5, zoom=1.1,
+            frame_center=(0.2, 0, 0), run_time=1, rate_func=linear,
+        )
