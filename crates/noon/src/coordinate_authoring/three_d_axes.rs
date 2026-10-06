@@ -1155,10 +1155,12 @@ mod tests {
 
     #[test]
     fn three_d_axes_piece_bounds_and_unshaded_profile_are_explicit() {
-        let mut options = ManimThreeDAxesOptions::default();
-        options.num_axis_pieces = 1;
-        options.tips = false;
-        options.shade_in_3d = false;
+        let options = ManimThreeDAxesOptions {
+            num_axis_pieces: 1,
+            tips: false,
+            shade_in_3d: false,
+            ..ManimThreeDAxesOptions::default()
+        };
         let mut scene = Scene::new();
         let axes = scene.three_d_axes(&options).unwrap();
         assert!(axes.tip(0).unwrap().is_none());
