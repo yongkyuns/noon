@@ -903,7 +903,7 @@ pub struct CompiledScene {
     spatial_anchor_row_groups: HashMap<u32, u32>,
     spatial_anchor_bounds_row_groups: HashMap<u32, Vec<u32>>,
     spatial_anchor_local_bounds: HashMap<u32, Option<CompiledLocalBounds2D64>>,
-    cairo_path_control_points: HashMap<u32, Arc<[SemanticVec3]>>,
+    cairo_path_control_points: HashMap<u32, Arc<Vec<SemanticVec3>>>,
     cairo_path_points_by_resource: CairoPathPointResourceCache,
     resources: CompiledResources,
 }

@@ -703,25 +703,36 @@ fn prepared_object_updates_resolve_pending_spatial_anchor_before_publication() {
 }
 
 #[test]
-fn prepared_anchor_updates_follow_clear_and_reassign_last_write() {
+fn prepared_anchor_updates_follow_clear_then_provisional_reassignment() {
     let mut store = SemanticStore::new();
     let child = object(&mut store, 1.0);
     let mut transaction = SemanticMutationTransaction::new();
     let first_family = transaction.create_node(SemanticNodeCreation::family());
-    let final_family = transaction.create_node(SemanticNodeCreation::family());
     transaction
         .add_member(first_family, child)
-        .add_member(final_family, child)
         .set_spatial_composition_domain_with_anchor_ref(
             child,
             crate::SemanticSpatialCompositionDomain::FixedOrientation,
             Some(first_family.into()),
-        )
-        .set_spatial_composition_domain_with_anchor_ref(
-            child,
-            crate::SemanticSpatialCompositionDomain::FixedOrientation,
-            None,
-        )
+        );
+    transaction.apply(&mut store).unwrap();
+
+    let mut clear = SemanticMutationTransaction::new();
+    clear.set_spatial_composition_domain_with_anchor_ref(
+        child,
+        crate::SemanticSpatialCompositionDomain::FixedOrientation,
+        None,
+    );
+    let prepared = clear.prepare(&mut store).unwrap();
+    let updates = prepared.object_updates().collect::<Vec<_>>();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].1.spatial_anchor_family(), None);
+    prepared.commit();
+
+    let mut transaction = SemanticMutationTransaction::new();
+    let final_family = transaction.create_node(SemanticNodeCreation::family());
+    transaction
+        .add_member(final_family, child)
         .set_spatial_composition_domain_with_anchor_ref(
             child,
             crate::SemanticSpatialCompositionDomain::FixedOrientation,

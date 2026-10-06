@@ -532,15 +532,17 @@ impl SceneInstance {
             {
                 self.pending_spatial_anchor_rows.insert(object_index);
             }
-            if self.frame.objects.get(object_index).is_some_and(|object| {
-                object.spatial.as_deref().is_some_and(|spatial| {
-                    spatial.material == noon_core::SemanticSpatialMaterial::CairoPath
-                        && spatial
-                            .cairo_path_appearance
-                            .as_deref()
-                            .is_some_and(|a| a.gradient_direction.is_some())
+            if self.compiled.spatial_anchor_group_for_row(index).is_none()
+                && self.frame.objects.get(object_index).is_some_and(|object| {
+                    object.spatial.as_deref().is_some_and(|spatial| {
+                        spatial.material == noon_core::SemanticSpatialMaterial::CairoPath
+                            && spatial
+                                .cairo_path_appearance
+                                .as_deref()
+                                .is_some_and(|a| a.gradient_direction.is_some())
+                    })
                 })
-            }) {
+            {
                 self.pending_spatial_anchor_rows.insert(object_index);
             }
         }

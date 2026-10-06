@@ -109,7 +109,10 @@ fn path_vertex(input: VertexInput) -> VertexOutput {
                 let normal = vec2<f32>(-previous.y, previous.x);
                 offset = (normal * cos(theta) + previous * (input.stroke_metadata.y * sin(theta))) * 0.5;
             }
-            clip.xy += offset * input.screen_stroke_width * fixed_camera.clip_scale * clip.w;
+            clip = vec4<f32>(
+                clip.xy + offset * input.screen_stroke_width * fixed_camera.clip_scale * clip.w,
+                clip.zw,
+            );
         } else if kind != 2.0 {
             clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         }

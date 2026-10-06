@@ -1764,7 +1764,7 @@ mod tests {
         assert!(closed_mesh
             .vertices
             .iter()
-            .any(|vertex| vertex.stroke_metadata[0] == 3.0));
+            .any(|vertex| vertex.stroke_metadata[0] == 1.0));
         let corner = GeometryRef::VectorPath(
             noon_core::VectorPath::new()
                 .move_to(Vec2::new(-1.0, 0.0))
@@ -1773,6 +1773,21 @@ mod tests {
         );
         let corner_mesh = tessellate(&corner, &resources, style, 1.0, Domain::World).unwrap();
         assert!(corner_mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.stroke_metadata[0] == 1.0));
+        let miter_mesh = tessellate(
+            &corner,
+            &resources,
+            Style {
+                stroke_join: noon_core::StrokeJoin::Miter,
+                ..style
+            },
+            1.0,
+            Domain::World,
+        )
+        .unwrap();
+        assert!(miter_mesh
             .vertices
             .iter()
             .any(|vertex| vertex.stroke_metadata[0] == 3.0));

@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub(super) struct CairoPathPointResourceCache {
-    entries: HashMap<GeometryResourceHandle, std::sync::Weak<[SemanticVec3]>>,
+    // Keep the point buffer in a Vec: a dead Weak<slice> retains its allocation,
+    // whereas this memo retains only the Arc header after the last user retires.
+    entries: HashMap<GeometryResourceHandle, std::sync::Weak<Vec<SemanticVec3>>>,
     next_prune_at: usize,
 }
 
@@ -29,7 +31,7 @@ impl PartialEq for CairoPathPointResourceCache {
 }
 
 impl std::ops::Deref for CairoPathPointResourceCache {
-    type Target = HashMap<GeometryResourceHandle, std::sync::Weak<[SemanticVec3]>>;
+    type Target = HashMap<GeometryResourceHandle, std::sync::Weak<Vec<SemanticVec3>>>;
     fn deref(&self) -> &Self::Target {
         &self.entries
     }
@@ -45,7 +47,7 @@ impl CairoPathPointResourceCache {
     fn insert_live_version(
         &mut self,
         handle: GeometryResourceHandle,
-        points: &Arc<[SemanticVec3]>,
+        points: &Arc<Vec<SemanticVec3>>,
     ) {
         self.entries.insert(handle, Arc::downgrade(points));
         if self.entries.len() >= self.next_prune_at {
@@ -425,7 +427,9 @@ impl CompiledScene {
     }
 
     pub fn cairo_path_points(&self, row: u32) -> Option<&[SemanticVec3]> {
-        self.cairo_path_control_points.get(&row).map(AsRef::as_ref)
+        self.cairo_path_control_points
+            .get(&row)
+            .map(|points| points.as_slice())
     }
 
     pub fn spatial_anchor_group_bounds_members(&self, group_index: u32) -> &[u32] {
@@ -542,7 +546,7 @@ impl CompiledScene {
             return;
         };
         let points = convex_hull(points);
-        let points: Arc<[SemanticVec3]> = points
+        let points: Arc<Vec<SemanticVec3>> = points
             .into_iter()
             .map(|p| SemanticVec3::new(f64::from(p.x), f64::from(p.y), 0.0))
             .collect::<Vec<_>>()
@@ -656,7 +660,6 @@ mod tests {
             .clone();
         let shared = first_weak.upgrade().unwrap();
         assert_eq!(Arc::strong_count(&shared), 3); // Two row caches plus this observation.
-        drop(shared);
 
         scene
             .resources
@@ -666,6 +669,9 @@ mod tests {
         scene.refresh_cairo_path_control_points(0);
         assert!(first_weak.upgrade().is_some()); // Row 1 still uses the old version.
         scene.refresh_cairo_path_control_points(1);
+        assert!(first_weak.upgrade().is_some()); // A held snapshot still owns this version.
+        assert_eq!(shared[1].x, 1.0);
+        drop(shared);
         assert!(first_weak.upgrade().is_none());
         assert_eq!(scene.cairo_path_points(0).unwrap()[1].x, 3.0);
         let second_weak = scene
@@ -697,7 +703,7 @@ mod tests {
         let mut cache = CairoPathPointResourceCache::default();
         let live_points: Vec<_> = (0..64)
             .map(|index| {
-                let points: Arc<[SemanticVec3]> =
+                let points: Arc<Vec<SemanticVec3>> =
                     vec![SemanticVec3::new(index as f64, 0.0, 0.0)].into();
                 cache.insert_live_version(handle(index), &points);
                 points
@@ -707,21 +713,21 @@ mod tests {
         assert_eq!(cache.next_prune_at, 128);
 
         for index in 64..128 {
-            let points: Arc<[SemanticVec3]> =
+            let points: Arc<Vec<SemanticVec3>> =
                 vec![SemanticVec3::new(index as f64, 0.0, 0.0)].into();
             cache.insert_live_version(handle(index), &points);
         }
         assert_eq!(
             cache.len(),
-            64,
-            "the dead weak entries are pruned at threshold"
+            65,
+            "the prune preserves 64 held versions and the current insertion"
         );
-        assert_eq!(cache.next_prune_at, 128);
+        assert_eq!(cache.next_prune_at, 130);
 
-        let next: Arc<[SemanticVec3]> = vec![SemanticVec3::ZERO].into();
+        let next: Arc<Vec<SemanticVec3>> = vec![SemanticVec3::ZERO].into();
         cache.insert_live_version(handle(128), &next);
-        assert_eq!(cache.len(), 65, "the next insert must not rescan the table");
-        assert_eq!(cache.next_prune_at, 128);
+        assert_eq!(cache.len(), 66, "the next insert must not rescan the table");
+        assert_eq!(cache.next_prune_at, 130);
         assert_eq!(live_points.len(), 64);
     }
 
