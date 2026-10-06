@@ -8,6 +8,12 @@ import { resolveRasterTolerance } from "./manim-raster-policy.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+function rasterWorkflowIncludes(workflow, relativePath) {
+  const pullRequest = workflow.split("\n  push:", 1)[0];
+  const patterns = Array.from(pullRequest.matchAll(/^\s+- "([^"\n]+)"$/gm), match => match[1]);
+  return patterns.some(pattern => path.matchesGlob(relativePath, pattern));
+}
+
 const referenceTimes = Array.from({ length: 66 }, (_, index) => index / 30);
 const fractions = [0, 0.25, 0.5, 0.75, 1];
 
@@ -381,7 +387,7 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
   ];
   for (const relativePath of selectedPaths) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster CI workflow`);
   }
 });
@@ -422,7 +428,7 @@ test("Line3D, triangle, and translucent Prism fixtures use the existing paired r
     "web/python/_noon_spatial.py",
   ]) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster CI workflow`);
   }
 });
@@ -452,7 +458,7 @@ test("mixed camera-label fixtures enroll the direct and Python worker sources", 
     "crates/noon-web/src/direct_execution_smoke.rs",
   ]) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster CI workflow`);
   }
 });
@@ -505,7 +511,7 @@ test("ThreeDAxes direct and worker fixtures enroll source, timing, and Rust coor
     "crates/noon-web/src/direct_execution_smoke.rs",
   ]) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster CI workflow`);
   }
 });
@@ -545,7 +551,7 @@ test("VectorScene/LTS matrix fixture pairs native and Python ordinary timelines"
     "web/python/test_manim_vector_space.py",
   ]) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster workflow`);
   }
 });
@@ -583,7 +589,7 @@ test("focused LTS feature slice pairs native and Python coordinate and ghost beh
     "web/python/_manim_number_labels.py",
   ]) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster CI workflow`);
   }
 });
