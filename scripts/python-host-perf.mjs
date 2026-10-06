@@ -148,8 +148,16 @@ try {
   // Do not turn the old, loose 20% product threshold into a no-regression claim.
   for (const cohort of ["", "camera/"]) {
     const comparison = JSON.parse(await readFile(path.join(output, "..", cohort, "candidate/comparison.json"), "utf8"));
-    const ratio = comparison.fps.candidate / comparison.fps.baseline;
-    if (ratio < 0.97) failures.push({ kind: "product_fps", cohort, ratio });
+    const fps = comparison.fps?.paired;
+    assert.ok(fps && ["pass", "inconclusive", "regression"].includes(fps.status),
+      "product comparison is missing paired FPS qualification");
+    if (fps.status === "regression") failures.push({ kind: "product_fps", cohort, ...fps });
+    const render = comparison.rendererCostQualification?.renderMs ?? null;
+    if (render !== null && render.status !== "pass") {
+      failures.push({ kind: "product_render_cost", cohort, ...render });
+    } else if (render === null && fps.status === "inconclusive" && fps.ratio < 0.97) {
+      failures.push({ kind: "product_fps_inconclusive", cohort, ...fps });
+    }
     for (const [name, value] of Object.entries(comparison.latency)) {
       if (value.candidateMs > value.baselineMs * 1.03 + 20) failures.push({ kind: "product_latency", cohort, name, ...value });
     }
