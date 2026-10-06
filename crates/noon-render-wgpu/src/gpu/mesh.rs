@@ -634,7 +634,8 @@ impl SpatialGpuState {
             self.paths.commit(
                 device,
                 queue,
-                &gpu.camera,
+                &gpu.camera_layout,
+                &gpu.camera_group,
                 format,
                 super::PATH_SAMPLE_COUNT,
                 path_plan,
@@ -1360,7 +1361,14 @@ impl GpuState {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Noon retained mesh shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("mesh.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("mesh.wgsl"),
+                    "\n",
+                    include_str!("spatial_math.wgsl")
+                )
+                .into(),
+            ),
         });
         let pipeline_msaa = pipeline(
             device,

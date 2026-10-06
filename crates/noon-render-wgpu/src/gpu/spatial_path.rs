@@ -4,6 +4,8 @@
 //! The spatial renderer owns the resulting buffers and updates only compact
 //! per-object pose data for ordinary world motion.
 
+mod cairo;
+
 use super::create_buffer_with_data;
 use super::retained_text::{
     append_transformed_path, resolved_text_vector_style, transform_path, variation_fingerprint,
@@ -116,10 +118,13 @@ pub(super) struct SpatialPathGpuState {
     free_instances: Vec<usize>,
     gpu: Option<PathGpuState>,
     outlines: GlyphOutlineCache,
+    cairo: Option<Box<cairo::State>>,
 }
 
 #[derive(Debug)]
 struct PathGpuState {
+    camera_layout: wgpu::BindGroupLayout,
+    fixed_camera_layout: wgpu::BindGroupLayout,
     camera_group: wgpu::BindGroup,
     fixed_camera_group: wgpu::BindGroup,
     fixed_camera: wgpu::Buffer,
@@ -139,42 +144,25 @@ struct FixedCameraUniform {
     _padding: [f32; 2],
 }
 
+const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    0 => Float32x2, 1 => Uint32, 11 => Float32x2, 12 => Float32x2, 14 => Float32x3
+];
+const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
+    2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
+    6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3, 13 => Float32
+];
+
 impl PathGpuState {
     fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        camera_buffer: &wgpu::Buffer,
+        camera_layout: &wgpu::BindGroupLayout,
+        camera_group: &wgpu::BindGroup,
         format: wgpu::TextureFormat,
         sample_count: u32,
     ) -> Self {
-        const VERTEX: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
-            0 => Float32x2, 1 => Uint32, 11 => Float32x2, 12 => Float32x2, 14 => Float32x3
-        ];
-        const INSTANCE: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
-            2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
-            6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3, 13 => Float32
-        ];
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Noon spatial path camera layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(64),
-                },
-                count: None,
-            }],
-        });
-        let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Noon spatial path camera"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
+        let layout = camera_layout.clone();
+        let camera_group = camera_group.clone();
         let fixed_camera_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Noon spatial path fixed-orientation camera layout"),
@@ -227,8 +215,9 @@ impl PathGpuState {
             format,
             1,
             true,
-            &VERTEX,
-            &INSTANCE,
+            &PATH_VERTEX_ATTRIBUTES,
+            &PATH_INSTANCE_ATTRIBUTES,
+            false,
         );
         let world_pipeline_msaa = spatial_path_pipeline(
             device,
@@ -237,8 +226,9 @@ impl PathGpuState {
             format,
             sample_count,
             true,
-            &VERTEX,
-            &INSTANCE,
+            &PATH_VERTEX_ATTRIBUTES,
+            &PATH_INSTANCE_ATTRIBUTES,
+            false,
         );
         let fixed_pipeline = spatial_path_pipeline(
             device,
@@ -247,8 +237,9 @@ impl PathGpuState {
             format,
             1,
             false,
-            &VERTEX,
-            &INSTANCE,
+            &PATH_VERTEX_ATTRIBUTES,
+            &PATH_INSTANCE_ATTRIBUTES,
+            false,
         );
         let fixed_pipeline_msaa = spatial_path_pipeline(
             device,
@@ -257,8 +248,9 @@ impl PathGpuState {
             format,
             sample_count,
             false,
-            &VERTEX,
-            &INSTANCE,
+            &PATH_VERTEX_ATTRIBUTES,
+            &PATH_INSTANCE_ATTRIBUTES,
+            false,
         );
         let instances = create_buffer_with_data(
             device,
@@ -268,6 +260,8 @@ impl PathGpuState {
             wgpu::BufferUsages::VERTEX,
         );
         Self {
+            camera_layout: layout,
+            fixed_camera_layout,
             camera_group,
             fixed_camera_group,
             fixed_camera,
@@ -292,6 +286,7 @@ fn spatial_path_pipeline(
     depth: bool,
     vertex_attributes: &'static [wgpu::VertexAttribute],
     instance_attributes: &'static [wgpu::VertexAttribute],
+    cairo: bool,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(if depth {
@@ -302,7 +297,7 @@ fn spatial_path_pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(if cairo { "vs_cairo" } else { "vs_main" }),
             compilation_options: Default::default(),
             buffers: &[
                 Some(wgpu::VertexBufferLayout {
@@ -319,7 +314,7 @@ fn spatial_path_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(if cairo { "fs_cairo" } else { "fs_main" }),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -358,6 +353,7 @@ fn spatial_path_pipeline(
 pub(super) struct PathPlan {
     staged: Vec<(DrawId, Option<StagedPath>)>,
     new_paths: HashMap<PathKey, TessellatedSpatialPath>,
+    new_cairo_geometry: HashMap<PathKey, noon_geometry::CairoPathGeometry>,
     needed: usize,
     capacity: usize,
     camera_clip_scale: [f32; 2],
@@ -376,6 +372,7 @@ struct StagedPath {
     instance: PathInstance,
     domain: Domain,
     painter_rank: u32,
+    cairo: Option<Box<cairo::Uniform>>,
 }
 
 #[derive(Debug)]
@@ -488,6 +485,7 @@ impl SpatialPathGpuState {
     ) -> Result<PathPlan, SpatialPathError> {
         let mut staged = Vec::with_capacity(indices.len());
         let mut new_paths = HashMap::new();
+        let mut new_cairo_geometry = HashMap::new();
         let camera_clip_scale = [2.0 / camera.world_size.x, 2.0 / camera.world_size.y];
         if !camera_clip_scale
             .iter()
@@ -512,7 +510,10 @@ impl SpatialPathGpuState {
             }) else {
                 continue;
             };
-            if spatial.material != SemanticSpatialMaterial::Unlit {
+            if !matches!(
+                spatial.material,
+                SemanticSpatialMaterial::Unlit | SemanticSpatialMaterial::CairoPath
+            ) {
                 return Err(SpatialPathError::UnsupportedMaterial);
             }
             if frame.reveal(index) != 1.0 || frame.morph(index) != 0.0 {
@@ -593,6 +594,32 @@ impl SpatialPathGpuState {
                     },
                     None => path_key(geometry.as_ref(), resources, style, index as u64)?,
                 };
+                let cairo = if spatial.material == SemanticSpatialMaterial::CairoPath {
+                    let appearance = spatial
+                        .cairo_path_appearance
+                        .as_deref()
+                        .ok_or(SpatialPathError::UnsupportedMaterial)?;
+                    let geometry_metadata = if let Some(corners) = self
+                        .cairo
+                        .as_deref()
+                        .and_then(|state| state.geometry.get(&keyed))
+                        .or_else(|| new_cairo_geometry.get(&keyed))
+                    {
+                        *corners
+                    } else {
+                        let path = local_path(geometry.as_ref(), resources)?;
+                        let corners = noon_geometry::cairo_path_geometry(&path)
+                            .ok_or(SpatialPathError::UnsupportedGeometry)?;
+                        new_cairo_geometry.insert(keyed, corners);
+                        corners
+                    };
+                    Some(Box::new(cairo::Uniform::lower(
+                        geometry_metadata,
+                        appearance,
+                    )?))
+                } else {
+                    None
+                };
                 if !self.paths.contains_key(&keyed) && !new_paths.contains_key(&keyed) {
                     let path = tessellate(
                         geometry.as_ref(),
@@ -639,6 +666,7 @@ impl SpatialPathGpuState {
                         instance,
                         domain: spatial.composition_domain,
                         painter_rank,
+                        cairo,
                     }),
                 ));
             }
@@ -703,6 +731,7 @@ impl SpatialPathGpuState {
         Ok(PathPlan {
             staged,
             new_paths,
+            new_cairo_geometry,
             needed,
             capacity,
             camera_clip_scale,
@@ -735,7 +764,8 @@ impl SpatialPathGpuState {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        camera_buffer: &wgpu::Buffer,
+        camera_layout: &wgpu::BindGroupLayout,
+        camera_group: &wgpu::BindGroup,
         format: wgpu::TextureFormat,
         sample_count: u32,
         plan: PathPlan,
@@ -774,14 +804,53 @@ impl SpatialPathGpuState {
             self.gpu = Some(PathGpuState::new(
                 device,
                 queue,
-                camera_buffer,
+                camera_layout,
+                camera_group,
                 format,
                 sample_count,
             ));
         }
+        if !plan.new_cairo_geometry.is_empty()
+            || plan
+                .staged
+                .iter()
+                .any(|(_, draw)| draw.as_ref().is_some_and(|draw| draw.cairo.is_some()))
+        {
+            let state = self.cairo.get_or_insert_with(Default::default);
+            state.geometry.extend(plan.new_cairo_geometry);
+            if state.pipelines.is_none() {
+                state.pipelines = Some(cairo::Pipelines::new(
+                    device,
+                    self.gpu.as_ref().expect("spatial path GPU state"),
+                    format,
+                    sample_count,
+                ));
+            }
+        }
         let mut dirty = BTreeSet::new();
         let mut released = HashSet::new();
         for (draw_id, staged) in plan.staged {
+            if let Some(state) = self.cairo.as_deref_mut() {
+                if let Some(value) = staged.as_ref().and_then(|draw| draw.cairo.as_deref()) {
+                    if let Some(draw) = state.draws.get_mut(&draw_id) {
+                        if draw.value != *value {
+                            queue.write_buffer(&draw.buffer, 0, bytemuck::bytes_of(value));
+                            draw.value = *value;
+                            stats.instance_bytes += std::mem::size_of::<cairo::Uniform>();
+                        }
+                    } else {
+                        let draw = state
+                            .pipelines
+                            .as_ref()
+                            .expect("Cairo path pipelines")
+                            .retain(device, queue, *value);
+                        state.draws.insert(draw_id, draw);
+                        stats.instance_bytes += std::mem::size_of::<cairo::Uniform>();
+                    }
+                } else {
+                    state.draws.remove(&draw_id);
+                }
+            }
             let previous = self.draws.get(&draw_id).copied();
             let same_path = previous
                 .as_ref()
@@ -822,6 +891,9 @@ impl SpatialPathGpuState {
         for key in released {
             if self.paths.get(&key).is_some_and(|path| path.users == 0) {
                 self.paths.remove(&key);
+                if let Some(state) = self.cairo.as_deref_mut() {
+                    state.geometry.remove(&key);
+                }
             }
         }
         let gpu = self.gpu.as_mut().expect("spatial path GPU state");
@@ -884,11 +956,34 @@ impl SpatialPathGpuState {
             });
             match domain {
                 Domain::World => {
-                    for draw in self
+                    let mut using_cairo = false;
+                    for (id, draw) in self
                         .draws
-                        .values()
-                        .filter(|draw| draw.domain == Domain::World)
+                        .iter()
+                        .filter(|(_, draw)| draw.domain == Domain::World)
                     {
+                        let cairo_draw =
+                            self.cairo.as_deref().and_then(|state| state.draws.get(id));
+                        if using_cairo != cairo_draw.is_some() {
+                            if cairo_draw.is_some() {
+                                let pipelines = self
+                                    .cairo
+                                    .as_deref()
+                                    .and_then(|state| state.pipelines.as_ref())
+                                    .expect("Cairo path pipelines");
+                                pass.set_pipeline(&pipelines.world[usize::from(sample_count != 1)]);
+                            } else {
+                                pass.set_pipeline(if sample_count == 1 {
+                                    &gpu.world_pipeline
+                                } else {
+                                    &gpu.world_pipeline_msaa
+                                });
+                            }
+                            using_cairo = cairo_draw.is_some();
+                        }
+                        if let Some(appearance) = cairo_draw {
+                            pass.set_bind_group(2, &appearance.binding, &[]);
+                        }
                         draw_calls += encode_path_draw(pass, &self.paths, draw);
                     }
                 }
@@ -904,6 +999,27 @@ impl SpatialPathGpuState {
             }
         }
         draw_calls
+    }
+}
+
+fn local_path<'a>(
+    geometry: &'a GeometryRef,
+    resources: &'a dyn GeometryResourceLookup,
+) -> Result<Cow<'a, noon_core::VectorPath>, SpatialPathError> {
+    match geometry {
+        GeometryRef::External(id) => {
+            let handle = resources
+                .current_handle(*id)
+                .ok_or(SpatialPathError::MissingPathResource)?;
+            let Some(GeometryResource::VectorPath(path)) = resources.get(handle) else {
+                return Err(SpatialPathError::UnsupportedGeometry);
+            };
+            Ok(Cow::Borrowed(path.as_ref()))
+        }
+        GeometryRef::VectorPath(path) => Ok(Cow::Borrowed(path)),
+        _ => noon_geometry::canonical_outline_path(geometry)
+            .map(Cow::Owned)
+            .ok_or(SpatialPathError::MissingGeometry),
     }
 }
 
@@ -1274,24 +1390,7 @@ pub(super) fn tessellate(
     {
         return Err(SpatialPathError::UnrepresentableVertex);
     }
-    let source = match geometry {
-        GeometryRef::External(id) => {
-            let handle = resources
-                .current_handle(*id)
-                .ok_or(SpatialPathError::MissingPathResource)?;
-            let Some(GeometryResource::VectorPath(path)) = resources.get(handle) else {
-                return Err(SpatialPathError::UnsupportedGeometry);
-            };
-            (Some(handle), path.as_ref().clone())
-        }
-        GeometryRef::VectorPath(path) => (None, path.clone()),
-        _ => {
-            let path = noon_geometry::canonical_outline_path(geometry)
-                .ok_or(SpatialPathError::MissingGeometry)?;
-            (None, path)
-        }
-    };
-    let (_, path) = source;
+    let path = local_path(geometry, resources)?;
     if path.morph_target().is_some() {
         return Err(SpatialPathError::UnsupportedMorph);
     }
@@ -1787,6 +1886,7 @@ mod tests {
                     instance: PathInstance::zeroed(),
                     domain: Domain::World,
                     painter_rank: 0,
+                    cairo: None,
                 }),
             )
         };
@@ -1799,6 +1899,7 @@ mod tests {
                 staged(DrawId { row: 12, item: 0 }, None),
             ],
             new_paths: HashMap::new(),
+            new_cairo_geometry: HashMap::new(),
             needed: 0,
             capacity: 1,
             camera_clip_scale: [1.0, 1.0],

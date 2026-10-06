@@ -136,8 +136,10 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                         noon_core::SemanticSpatialMaterial::Unlit => "unlit",
                         noon_core::SemanticSpatialMaterial::PointLit => "point_lit",
                         noon_core::SemanticSpatialMaterial::CairoSurface => "cairo_surface",
+                        noon_core::SemanticSpatialMaterial::CairoPath => "cairo_path",
                     },
                     "point_light": state.point_light,
+                    "cairo_path_appearance": state.cairo_path_appearance,
                 })
             });
             json!({

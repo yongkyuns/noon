@@ -76,6 +76,10 @@ impl Pipelines {
                 concat!(
                     include_str!("../mesh.wgsl"),
                     "\n",
+                    include_str!("../spatial_math.wgsl"),
+                    "\n",
+                    include_str!("../cairo_lighting.wgsl"),
+                    "\n",
                     include_str!("cairo.wgsl")
                 )
                 .into(),

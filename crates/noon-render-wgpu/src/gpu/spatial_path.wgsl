@@ -47,8 +47,7 @@ struct VertexOutput {
     @location(1) opacity: f32,
 };
 
-@vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
+fn path_vertex(input: VertexInput) -> VertexOutput {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
     let local_point = vec4<f32>(input.local, 0.0, 1.0);
     var clip = camera.view_projection * world * local_point;
@@ -142,6 +141,10 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.color = select(input.fill, input.stroke, (input.surface & 1u) != 0u);
     output.opacity = input.opacity;
     return output;
+}
+
+@vertex fn vs_main(input: VertexInput) -> VertexOutput {
+    return path_vertex(input);
 }
 
 @fragment

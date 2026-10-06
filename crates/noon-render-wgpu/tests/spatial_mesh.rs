@@ -697,6 +697,186 @@ fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
     });
 }
 
+fn cairo_path_scene() -> SceneInstance {
+    let mut store = SemanticStore::new();
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+            height: 4.0,
+            near: 0.1,
+            far: 30.0,
+        }))
+        .unwrap();
+    camera.transform.translation.z = 5.0;
+    let camera_node = attach(&mut store, camera);
+    let mut shaft = SemanticObjectState::new(StoredGeometry::Line {
+        start: noon_core::Vec2::new(-1.0, 0.0),
+        end: noon_core::Vec2::new(1.0, 0.0),
+    });
+    shaft.style = SemanticStyle {
+        fill: None,
+        stroke: Some(SemanticPaint::Solid(Color::rgba(0.4, 0.4, 0.4, 1.0))),
+        stroke_width: 0.25,
+        stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+        ..SemanticStyle::default()
+    };
+    shaft.transform = SemanticWorldTransform3D::new(
+        SemanticVec3::ZERO,
+        noon_core::SemanticRotation3D::from_axis_angle(
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap(),
+        SemanticVec3::new(1.0, 1.0, 1.0),
+    )
+    .unwrap()
+    .into();
+    shaft.set_spatial_material(SemanticSpatialMaterial::CairoPath);
+    shaft
+        .set_cairo_path_appearance(noon_core::SemanticCairoPathAppearance {
+            sheen_factor: 0.2,
+            gradient_direction: Some(SemanticVec3::new(1.0, 0.0, 0.0)),
+        })
+        .unwrap();
+    attach(&mut store, shaft);
+    let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    light.set_role(SemanticObjectRole::PointLight3D);
+    light.style = opaque_style(Color::RED);
+    light.transform.translation = SemanticVec3::new(-1.0, 1.0, 0.0);
+    let light_node = attach(&mut store, light);
+    let mut index = SemanticExecutionIndex::new();
+    let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .into_parts();
+    for (track, node, start, from, to) in [
+        (
+            0,
+            light_node,
+            0.0,
+            SemanticVec3::new(-1.0, 1.0, 0.0),
+            SemanticVec3::new(-1.0, -1.0, 0.0),
+        ),
+        (
+            1,
+            camera_node,
+            1.0,
+            SemanticVec3::new(0.0, 0.0, 5.0),
+            SemanticVec3::new(0.5, 0.0, 5.0),
+        ),
+    ] {
+        let pose = |translation| {
+            SemanticWorldTransform3D::new(
+                translation,
+                noon_core::SemanticRotation3D::IDENTITY,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap()
+        };
+        compiled
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(track),
+                object: index.execution_object_id(node).unwrap(),
+                property: Property::WorldTransform,
+                values: TrackValues::WorldTransform {
+                    from: WorldTransformTrackEndpoint::from_world(pose(from)),
+                    to: WorldTransformTrackEndpoint::from_world(pose(to)),
+                },
+                timing: TrackTiming::new(start, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+    }
+    SceneInstance::new(compiled)
+}
+
+#[test]
+fn cairo_path_world_up_shading_and_sheen_reuse_geometry_across_light_camera_and_seek() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo path GPU qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut preparer = FramePreparer::new();
+        let mut scene = cairo_path_scene();
+        let (initial, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(initial.resident_instances, 1);
+        assert!(initial.geometry_bytes > 0);
+        // A single-curve Cairo path keeps world UP after the X rotation. Its
+        // independently derived stops are .4 + .5 = .9 and clamp(.6 + .5) = 1.
+        let center = pixel(&pixels, 64, 64);
+        assert!(
+            (241..=244).contains(&center[0]),
+            "world-UP clamped sheen: {center:?}"
+        );
+        assert!(pixel(&pixels, 88, 64)[0] > pixel(&pixels, 40, 64)[0]);
+        scene.advance_to(1.0).unwrap();
+        let (moved, moved_pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(moved.geometry_bytes, 0);
+        assert_eq!(moved.instance_bytes, 0);
+        assert_eq!(moved.camera_bytes, 0);
+        assert_eq!(moved.light_bytes, 32);
+        // Negative illumination uses half of the signed cubic response:
+        // -.25, giving .15/.35 stops and .25 at the center.
+        let center = pixel(&moved_pixels, 64, 64);
+        assert!(
+            (62..=66).contains(&center[0]),
+            "negative Cairo response: {center:?}"
+        );
+        scene.advance_to(2.0).unwrap();
+        let (camera, camera_pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(camera.geometry_bytes, 0);
+        assert_eq!(camera.instance_bytes, 0);
+        assert_eq!(camera.camera_bytes, 64);
+        assert_eq!(camera.light_bytes, 0);
+        assert_eq!(pixel(&camera_pixels, 48, 64), pixel(&moved_pixels, 64, 64));
+        scene.seek(0.0).unwrap();
+        let (rewound, replay) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(rewound.geometry_bytes, 0);
+        assert_eq!(pixels, replay);
+    });
+}
+
 #[test]
 fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale() {
     pollster::block_on(async {
