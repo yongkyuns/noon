@@ -468,14 +468,48 @@ fn live_mesh_creation_and_local_world_edit_preserve_existing_slots() {
         .owned_execution()
         .execution_object_id(object.node_id())
         .unwrap();
-    let detached = scene.mesh(cube()).unwrap();
+    let initial_pose =
+        SemanticWorldTransform3D::from_axial_direction(SemanticVec3::new(1.0, 2.0, 3.0), -1.0)
+            .unwrap();
+    let detached = scene
+        .mesh(
+            MeshOptions::new(noon_geometry::cylinder_mesh(0.3, 2.0, 16).unwrap())
+                .with_transform(initial_pose),
+        )
+        .unwrap();
     assert_eq!(scene.owned_execution().frame().objects.len(), 2);
     scene.add(&detached).unwrap();
     assert_eq!(scene.owned_execution().frame().objects.len(), 3);
-    let mut target = SemanticWorldTransform3D::IDENTITY;
+    assert_eq!(detached.world_transform().unwrap(), initial_pose);
+    let state = detached.state().unwrap();
+    let handle = state.content.geometry().unwrap().resource_handle().unwrap();
+    let retained = match scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .get(handle)
+        .unwrap()
+    {
+        GeometryResource::Mesh(mesh) => Arc::clone(mesh),
+        _ => panic!("cylinder mesh"),
+    };
+    let resources_before = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .stats();
+    let mut target =
+        SemanticWorldTransform3D::from_axial_direction(SemanticVec3::new(-1.0, 2.0, -3.0), -1.0)
+            .unwrap();
     target.translation.z = -2.0;
     scene.set_world_transform(&detached, target).unwrap();
     assert_eq!(detached.world_transform().unwrap(), target);
+    let borrowed = scene.integration_store().borrow();
+    assert_eq!(borrowed.geometry_resources().stats(), resources_before);
+    let GeometryResource::Mesh(after) = borrowed.geometry_resources().get(handle).unwrap() else {
+        panic!("cylinder mesh")
+    };
+    assert!(Arc::ptr_eq(&retained, after));
     assert_eq!(
         scene
             .owned_execution()

@@ -402,6 +402,44 @@ impl SemanticWorldTransform3D {
         })
     }
 
+    /// Place a local +Z axial mesh along a finite nonzero direction, without
+    /// changing its geometry. Apply the local Z offset before orientation.
+    ///
+    /// Orientation is a +Y tilt followed by a +Z azimuth, as in Manim's
+    /// Cylinder/Cone constructors. This also fixes the mesh's radial seam;
+    /// a shortest-arc rotation has a different roll. Direction magnitude does
+    /// not change scale. Zero/non-finite directions or offsets are rejected.
+    pub fn from_axial_direction(direction: SemanticVec3, offset: f64) -> Option<Self> {
+        if !direction.is_finite() || !offset.is_finite() {
+            return None;
+        }
+        let largest = direction
+            .x
+            .abs()
+            .max(direction.y.abs())
+            .max(direction.z.abs());
+        if largest == 0.0 {
+            return None;
+        }
+        let (x, y, z) = (
+            direction.x / largest,
+            direction.y / largest,
+            direction.z / largest,
+        );
+        let radial = x.hypot(y);
+        let azimuth = if radial == 0.0 { 0.0 } else { y.atan2(x) };
+        let tilt =
+            SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), radial.atan2(z))?;
+        let rotation =
+            SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 0.0, 1.0), azimuth)?
+                .compose(tilt)?;
+        Self::new(
+            rotation.rotate_vector(SemanticVec3::new(0.0, 0.0, offset))?,
+            rotation,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+    }
+
     /// Lift existing 2.5D authored transforms without changing their XY order.
     pub fn from_2_5d(value: SemanticTransform2_5D) -> Option<Self> {
         Self::new(
@@ -676,6 +714,90 @@ impl SemanticClipPoint3D {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn axial_constructor_pose_preserves_direction_anchors_and_manim_radial_seam() {
+        for direction in [
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(-1.0, 0.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+            SemanticVec3::new(0.0, -1.0, 0.0),
+            SemanticVec3::new(0.0, 0.0, 1.0),
+            SemanticVec3::new(0.0, 0.0, -1.0),
+            SemanticVec3::new(1.0, 2.0, -3.0),
+            SemanticVec3::new(-2.0, -1.0, 3.0),
+            SemanticVec3::new(f64::MAX, f64::MAX, f64::MAX),
+            SemanticVec3::new(f64::MIN_POSITIVE, 0.0, 0.0),
+        ] {
+            let pose = SemanticWorldTransform3D::from_axial_direction(direction, -2.0).unwrap();
+            let largest = direction
+                .x
+                .abs()
+                .max(direction.y.abs())
+                .max(direction.z.abs());
+            let scaled = SemanticVec3::new(
+                direction.x / largest,
+                direction.y / largest,
+                direction.z / largest,
+            );
+            let length = scaled.x.hypot(scaled.y).hypot(scaled.z);
+            let axis = pose
+                .rotation
+                .rotate_vector(SemanticVec3::new(0.0, 0.0, 1.0))
+                .unwrap();
+            near(axis.x, scaled.x / length);
+            near(axis.y, scaled.y / length);
+            near(axis.z, scaled.z / length);
+            let apex = pose
+                .transform_point(SemanticVec3::new(0.0, 0.0, 2.0))
+                .unwrap();
+            near(apex.x, 0.0);
+            near(apex.y, 0.0);
+            near(apex.z, 0.0);
+            assert_eq!(pose.scale, SemanticVec3::new(1.0, 1.0, 1.0));
+        }
+        // Pinned Manim Y-tilt/Z-azimuth convention, rather than any rotation
+        // that merely maps +Z to the direction (which would miss radial roll).
+        let pose =
+            SemanticWorldTransform3D::from_axial_direction(SemanticVec3::new(1.0, 1.0, 1.0), 0.0)
+                .unwrap();
+        let radial = pose
+            .rotation
+            .rotate_vector(SemanticVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        near(radial.x, 1.0 / 6.0_f64.sqrt());
+        near(radial.y, 1.0 / 6.0_f64.sqrt());
+        near(radial.z, -(2.0_f64 / 3.0).sqrt());
+        let tangent = pose
+            .rotation
+            .rotate_vector(SemanticVec3::new(0.0, 1.0, 0.0))
+            .unwrap();
+        near(tangent.x, -std::f64::consts::FRAC_1_SQRT_2);
+        near(tangent.y, std::f64::consts::FRAC_1_SQRT_2);
+        near(tangent.z, 0.0);
+        assert_eq!(
+            SemanticWorldTransform3D::from_axial_direction(SemanticVec3::new(0.0, 0.0, 1.0), 0.0),
+            Some(SemanticWorldTransform3D::IDENTITY)
+        );
+    }
+
+    #[test]
+    fn axial_constructor_pose_rejects_invalid_directions_and_offsets() {
+        for direction in [
+            SemanticVec3::ZERO,
+            SemanticVec3::new(f64::NAN, 1.0, 0.0),
+            SemanticVec3::new(0.0, f64::INFINITY, 1.0),
+        ] {
+            assert!(SemanticWorldTransform3D::from_axial_direction(direction, 0.0).is_none());
+        }
+        for offset in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(SemanticWorldTransform3D::from_axial_direction(
+                SemanticVec3::new(0.0, 0.0, 1.0),
+                offset
+            )
+            .is_none());
+        }
+    }
 
     fn near(actual: f64, expected: f64) {
         assert!(

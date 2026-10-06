@@ -214,6 +214,19 @@ impl WasmMeshOptions {
             .map(|options| Self { options })
             .map_err(|e| invalid("spatial.invalid_mesh", e))
     }
+    /// Configure the inert pose before a mesh is admitted to its semantic owner.
+    #[wasm_bindgen(js_name = setAxialPose)]
+    pub fn set_axial_pose(&mut self, direction: &[f64], offset: f64) -> Result<(), JsValue> {
+        self.options.transform =
+            SemanticWorldTransform3D::from_axial_direction(vec3(direction, "direction")?, offset)
+                .ok_or_else(|| {
+                invalid(
+                    "spatial.invalid_direction",
+                    "axial pose requires a finite nonzero direction and finite offset",
+                )
+            })?;
+        Ok(())
+    }
     pub fn torus(
         major_radius: f64,
         minor_radius: f64,
