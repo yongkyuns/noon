@@ -1,14 +1,13 @@
 """Grow a vector, then swap its coordinates while faded copies retain each step."""
 from noon import *
 
-await prepare_latex()
-
-
 class LinearAlgebra(LinearTransformationScene):
     def __init__(self):
-        super().__init__(show_coordinates=True, leave_ghost_vectors=True)
+        super().__init__(leave_ghost_vectors=True)
 
     async def construct(self):
+        await prepare_latex()
+        self.background_plane.add_coordinates()
         caption = Typst("Swap the coordinates")
         caption.move_to((0, 3.45, 0))
         self.add(caption)
