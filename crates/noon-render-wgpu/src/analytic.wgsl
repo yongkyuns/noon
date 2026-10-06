@@ -1,4 +1,4 @@
-struct Camera {
+// Diagnostic A/A control for PR #1882 product-gate variance; no shader semantics change.\nstruct Camera {
     center: vec2<f32>,
     clip_scale: vec2<f32>,
     viewport_size: vec2<f32>,
