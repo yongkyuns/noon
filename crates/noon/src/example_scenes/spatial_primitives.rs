@@ -294,9 +294,10 @@ pub fn cairo_cylinder_cone_caps_session() -> Result<ExecutionSession, String> {
         [24, 24],
         SemanticVec3::new(0.0, 0.0, 1.0),
         SemanticVec3::new(-2.0, 0.0, 0.0),
-        Color::BLUE_D,
-        true,
-        true,
+        SurfaceOptions {
+            material: SemanticSpatialMaterial::CairoSurface,
+            ..SurfaceOptions::default()
+        },
     )?;
     let oriented_cylinder = cairo_cylinder_family(
         &mut scene,
@@ -305,9 +306,11 @@ pub fn cairo_cylinder_cone_caps_session() -> Result<ExecutionSession, String> {
         [8, 8],
         SemanticVec3::new(1.0, 2.0, 1.0),
         SemanticVec3::new(0.0, 0.0, 0.0),
-        Color::TEAL,
-        false,
-        true,
+        SurfaceOptions {
+            fill_colors: [Color::TEAL; 2],
+            material: SemanticSpatialMaterial::CairoSurface,
+            ..SurfaceOptions::default()
+        },
     )?;
     let capped_cone = cairo_cone_family(
         &mut scene,
@@ -360,9 +363,7 @@ fn cairo_cylinder_family(
     resolution: [usize; 2],
     direction: SemanticVec3,
     placement: SemanticVec3,
-    color: Color,
-    checkerboard: bool,
-    shade_caps: bool,
+    options: SurfaceOptions,
 ) -> Result<crate::SurfaceFamily, String> {
     let half_height = height * 0.5;
     let plan = crate::UvSurfacePlan::new(
@@ -387,21 +388,12 @@ fn cairo_cylinder_family(
                     SemanticVec3::new(1.0, 1.0, 1.0),
                 )
                 .expect("fixture cap transform is finite"),
-                color,
-                shade_caps,
+                options.fill_colors[0],
+                true,
             )
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    let options = SurfaceOptions {
-        fill_colors: if checkerboard {
-            [Color::BLUE_D, Color::BLUE_E]
-        } else {
-            [color, color]
-        },
-        material: SemanticSpatialMaterial::CairoSurface,
-        ..SurfaceOptions::default()
-    };
     let mut family = scene
         .surface_cairo_family_with_paths(grid, options, caps)
         .map_err(|error| error.to_string())?;
