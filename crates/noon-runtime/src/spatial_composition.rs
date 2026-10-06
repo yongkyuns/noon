@@ -6,18 +6,21 @@ impl SceneInstance {
     pub(super) fn flush_spatial_anchor_changes(&mut self) {
         let groups = std::mem::take(&mut self.pending_spatial_anchor_groups);
         for group in groups {
-            let center = self.spatial_anchor_group_center(group);
-            for member_index in 0..self.compiled.spatial_anchor_group_members(group).len() {
-                let member = self.compiled.spatial_anchor_group_members(group)[member_index];
-                self.set_fixed_orientation_center(member as usize, center);
+            let fixed_count = self.compiled.spatial_anchor_group_members(group).len();
+            if fixed_count > 0 {
+                let center = self.spatial_anchor_group_center(group);
+                for member_index in 0..fixed_count {
+                    let member = self.compiled.spatial_anchor_group_members(group)[member_index];
+                    self.set_fixed_orientation_center(member as usize, center);
+                }
             }
-            let bounds = self.cairo_path_group_bounds(group);
-            for member in self
-                .compiled
-                .spatial_anchor_cairo_path_members(group)
-                .to_vec()
-            {
-                self.set_cairo_path_world_family_bounds(member as usize, bounds);
+            let cairo_count = self.compiled.spatial_anchor_cairo_path_members(group).len();
+            if cairo_count > 0 {
+                let bounds = self.cairo_path_group_bounds(group);
+                for index in 0..cairo_count {
+                    let member = self.compiled.spatial_anchor_cairo_path_members(group)[index];
+                    self.set_cairo_path_world_family_bounds(member as usize, bounds);
+                }
             }
         }
         let rows = std::mem::take(&mut self.pending_spatial_anchor_rows);
@@ -41,18 +44,21 @@ impl SceneInstance {
     pub(super) fn refresh_all_spatial_anchors(&mut self) {
         let groups = (0..self.compiled.spatial_anchor_group_count() as u32).collect::<Vec<_>>();
         for group in groups {
-            let center = self.spatial_anchor_group_center(group);
-            for member_index in 0..self.compiled.spatial_anchor_group_members(group).len() {
-                let member = self.compiled.spatial_anchor_group_members(group)[member_index];
-                self.set_fixed_orientation_center(member as usize, center);
+            let fixed_count = self.compiled.spatial_anchor_group_members(group).len();
+            if fixed_count > 0 {
+                let center = self.spatial_anchor_group_center(group);
+                for member_index in 0..fixed_count {
+                    let member = self.compiled.spatial_anchor_group_members(group)[member_index];
+                    self.set_fixed_orientation_center(member as usize, center);
+                }
             }
-            let bounds = self.cairo_path_group_bounds(group);
-            for member in self
-                .compiled
-                .spatial_anchor_cairo_path_members(group)
-                .to_vec()
-            {
-                self.set_cairo_path_world_family_bounds(member as usize, bounds);
+            let cairo_count = self.compiled.spatial_anchor_cairo_path_members(group).len();
+            if cairo_count > 0 {
+                let bounds = self.cairo_path_group_bounds(group);
+                for index in 0..cairo_count {
+                    let member = self.compiled.spatial_anchor_cairo_path_members(group)[index];
+                    self.set_cairo_path_world_family_bounds(member as usize, bounds);
+                }
             }
         }
         for row in 0..self.frame.objects.len() {

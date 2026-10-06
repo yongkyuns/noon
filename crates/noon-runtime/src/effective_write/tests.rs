@@ -771,15 +771,17 @@ fn fixed_orientation_family_rows_share_and_locally_refresh_world_bounds_center()
 fn cairo_path_family_gradient_uses_transformed_path_controls_and_refreshes_locally() {
     let mut store = SemanticStore::new();
     let anchor = store.insert_family();
-    let make_path = |path: noon_core::VectorPath, x: f64, y: f64| {
+    let make_path = |path: noon_core::VectorPath, x: f64, y: f64, cairo: bool| {
         let mut state = SemanticObjectState::new(StoredGeometry::VectorPath(path));
-        state.set_spatial_material(noon_core::SemanticSpatialMaterial::CairoPath);
-        state
-            .set_cairo_path_appearance(noon_core::SemanticCairoPathAppearance {
-                sheen_factor: 0.2,
-                gradient_direction: Some(SemanticVec3::new(0.0, 1.0, 0.0)),
-            })
-            .unwrap();
+        if cairo {
+            state.set_spatial_material(noon_core::SemanticSpatialMaterial::CairoPath);
+            state
+                .set_cairo_path_appearance(noon_core::SemanticCairoPathAppearance {
+                    sheen_factor: 0.2,
+                    gradient_direction: Some(SemanticVec3::new(0.0, 1.0, 0.0)),
+                })
+                .unwrap();
+        }
         state.transform = SemanticTransform {
             translation: SemanticVec3::new(x, y, 0.0),
             scale: SemanticVec3::new(1.0, 1.0, 1.0),
@@ -793,6 +795,7 @@ fn cairo_path_family_gradient_uses_transformed_path_controls_and_refreshes_local
             .line_to(noon_core::Vec2::new(1.0, 0.0)),
         0.0,
         0.0,
+        true,
     );
     let shaft = make_path(
         noon_core::VectorPath::new()
@@ -800,6 +803,7 @@ fn cairo_path_family_gradient_uses_transformed_path_controls_and_refreshes_local
             .line_to(noon_core::Vec2::new(2.0, 0.0)),
         0.0,
         1.0,
+        true,
     );
     let tip = make_path(
         noon_core::VectorPath::new()
@@ -809,6 +813,7 @@ fn cairo_path_family_gradient_uses_transformed_path_controls_and_refreshes_local
             .close(),
         0.0,
         0.0,
+        false,
     );
     for child in [owner, shaft, tip] {
         store.add_semantic_family_member(anchor, child).unwrap();
@@ -819,13 +824,30 @@ fn cairo_path_family_gradient_uses_transformed_path_controls_and_refreshes_local
         SemanticSpatialCompositionDomain::World,
         Some(anchor),
     );
+    declaration.set_spatial_composition_domain_with_anchor(
+        shaft,
+        SemanticSpatialCompositionDomain::World,
+        Some(anchor),
+    );
     declaration.apply(&mut store).unwrap();
 
     let mut index = SemanticExecutionIndex::new();
     let lowered = lower_semantic_execution_root(&store, anchor, &mut index).unwrap();
     let owner_id = index.execution_object_id(owner).unwrap();
+    let shaft_id = index.execution_object_id(shaft).unwrap();
     let mut instance = SceneInstance::from_semantic_execution(lowered);
-    let bounds = instance.frame().objects[0]
+    let row_for = |id| {
+        instance
+            .frame()
+            .objects
+            .iter()
+            .position(|row| row.id == id)
+            .unwrap()
+    };
+    let owner_row = row_for(owner_id);
+    let shaft_row = row_for(shaft_id);
+    let tip_row = row_for(index.execution_object_id(tip).unwrap());
+    let bounds = instance.frame().objects[owner_row]
         .spatial
         .as_deref()
         .unwrap()
@@ -848,11 +870,11 @@ fn cairo_path_family_gradient_uses_transformed_path_controls_and_refreshes_local
         &mut instance,
         0.0,
         &[EffectivePropertyWrite::WorldTransform {
-            object: index.execution_object_id(shaft).unwrap(),
+            object: shaft_id,
             world: moved,
         }],
     );
-    let bounds = instance.frame().objects[0]
+    let bounds = instance.frame().objects[owner_row]
         .spatial
         .as_deref()
         .unwrap()
@@ -863,9 +885,24 @@ fn cairo_path_family_gradient_uses_transformed_path_controls_and_refreshes_local
         .unwrap();
     assert_eq!(bounds.min.z, 0.0);
     assert_eq!(bounds.max.z, 3.0);
-    assert_eq!(instance.take_frame_changes().object_indices(), &[0, 1]);
+    let shaft_bounds = instance.frame().objects[shaft_row]
+        .spatial
+        .as_deref()
+        .unwrap()
+        .cairo_path_appearance
+        .as_deref()
+        .unwrap()
+        .world_family_bounds
+        .unwrap();
+    assert_eq!(shaft_bounds, bounds);
+    let mut expected_changed = vec![owner_row, shaft_row];
+    expected_changed.sort_unstable();
     assert_eq!(
-        instance.frame().objects[0]
+        instance.take_frame_changes().object_indices(),
+        expected_changed
+    );
+    assert_eq!(
+        instance.frame().objects[tip_row]
             .world_transform()
             .unwrap()
             .translation

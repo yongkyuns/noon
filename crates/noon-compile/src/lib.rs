@@ -904,7 +904,7 @@ pub struct CompiledScene {
     spatial_anchor_bounds_row_groups: HashMap<u32, Vec<u32>>,
     spatial_anchor_local_bounds: HashMap<u32, Option<CompiledLocalBounds2D64>>,
     cairo_path_control_points: HashMap<u32, Arc<[SemanticVec3]>>,
-    cairo_path_points_by_resource: HashMap<GeometryResourceHandle, Arc<[SemanticVec3]>>,
+    cairo_path_points_by_resource: HashMap<GeometryResourceHandle, std::sync::Weak<[SemanticVec3]>>,
     resources: CompiledResources,
 }
 
@@ -1820,6 +1820,7 @@ impl CompiledScene {
                     self.objects[index as usize] = object;
                     let spatial = self.objects[index as usize].spatial.as_deref().cloned();
                     self.update_spatial_anchor_group(index, None, spatial.as_ref());
+                    self.refresh_cairo_path_control_points(index);
                     self.object_indices
                         .insert(self.objects[index as usize].id, index);
                     self.live_object_count += 1;
@@ -1870,6 +1871,7 @@ impl CompiledScene {
                 debug_assert!(object.live);
                 object.live = false;
                 object.dynamic = DynamicProperties::default();
+                self.refresh_cairo_path_control_points(index);
                 self.object_indices.remove(id);
                 self.retired_object_indices.insert(*id, index);
                 self.live_object_count -= 1;

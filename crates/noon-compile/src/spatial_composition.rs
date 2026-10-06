@@ -5,6 +5,39 @@ use noon_core::{
 };
 use std::sync::Arc;
 
+fn convex_hull(mut points: Vec<noon_core::Vec2>) -> Vec<noon_core::Vec2> {
+    points.sort_by(|a, b| a.x.total_cmp(&b.x).then_with(|| a.y.total_cmp(&b.y)));
+    points.dedup_by(|a, b| a.x == b.x && a.y == b.y);
+    if points.len() <= 2 {
+        return points;
+    }
+    let cross = |o: noon_core::Vec2, a: noon_core::Vec2, b: noon_core::Vec2| {
+        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+    };
+    let mut lower = Vec::new();
+    for point in points.iter().copied() {
+        while lower.len() >= 2
+            && cross(lower[lower.len() - 2], lower[lower.len() - 1], point) <= 0.0
+        {
+            lower.pop();
+        }
+        lower.push(point);
+    }
+    let mut upper = Vec::new();
+    for point in points.iter().copied().rev() {
+        while upper.len() >= 2
+            && cross(upper[upper.len() - 2], upper[upper.len() - 1], point) <= 0.0
+        {
+            upper.pop();
+        }
+        upper.push(point);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
+}
+
 /// Cached local planar bounds widened to f64 for world-space family-anchor
 /// calculations. Source paths currently provide f32 coordinates, but all pose
 /// composition and bounds accumulation remains in the semantic precision lane.
@@ -404,6 +437,10 @@ impl CompiledScene {
     }
 
     pub(super) fn refresh_cairo_path_control_points(&mut self, row: u32) {
+        self.cairo_path_control_points.remove(&row);
+        if !self.object_index_is_live(row) {
+            return;
+        }
         let own_gradient = self
             .objects
             .get(row as usize)
@@ -441,8 +478,10 @@ impl CompiledScene {
                     return;
                 };
                 if let Some(points) = self.cairo_path_points_by_resource.get(&handle) {
-                    self.cairo_path_control_points.insert(row, points.clone());
-                    return;
+                    if let Some(points) = points.upgrade() {
+                        self.cairo_path_control_points.insert(row, points);
+                        return;
+                    }
                 }
                 let Some(GeometryResource::VectorPath(path)) = self.resources.get(handle) else {
                     return;
@@ -456,6 +495,7 @@ impl CompiledScene {
         let Some(points) = points.filter(|p| !p.is_empty()) else {
             return;
         };
+        let points = convex_hull(points);
         let points: Arc<[SemanticVec3]> = points
             .into_iter()
             .map(|p| SemanticVec3::new(f64::from(p.x), f64::from(p.y), 0.0))
@@ -463,7 +503,11 @@ impl CompiledScene {
             .into();
         if let Some(handle) = external_handle {
             self.cairo_path_points_by_resource
-                .insert(handle, points.clone());
+                .insert(handle, Arc::downgrade(&points));
+            if self.cairo_path_points_by_resource.len() >= 64 {
+                self.cairo_path_points_by_resource
+                    .retain(|_, points| points.strong_count() > 0);
+            }
         }
         self.cairo_path_control_points.insert(row, points);
     }
@@ -485,5 +529,124 @@ impl CompiledScene {
             .get(&object_index)
             .copied()
             .flatten()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noon_core::{
+        Color, GeometryId, GeometryResourceHandle, ObjectContentRef, ObjectId,
+        SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticWorldTransform3D, Style,
+        TextResourceHandle, TextResourceId, Transform2D, Vec2, VectorPath,
+    };
+
+    fn handle(version: u64) -> GeometryResourceHandle {
+        GeometryResourceHandle {
+            arena: 7,
+            id: GeometryId::new(9),
+            version,
+        }
+    }
+
+    fn cairo_state() -> CompiledSpatialState {
+        CompiledSpatialState {
+            world: SemanticWorldTransform3D::IDENTITY,
+            camera_projection: None,
+            camera_profile: None,
+            camera_motions: None,
+            material: SemanticSpatialMaterial::CairoPath,
+            point_light: false,
+            composition_domain: SemanticSpatialCompositionDomain::World,
+            draw_kind: super::super::CompiledSpatialDrawKind::Planar,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            cairo_path_appearance: Some(Box::new(CompiledCairoPathAppearance {
+                sheen_factor: 0.2,
+                gradient_direction: Some(SemanticVec3::new(0.0, 1.0, 0.0)),
+                world_family_bounds: None,
+            })),
+        }
+    }
+
+    #[test]
+    fn cairo_control_cache_shares_live_versions_and_retires_replaced_or_removed_paths() {
+        let object = super::super::CompiledObject::new(
+            ObjectId::new(4),
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style {
+                fill: Some(Color::WHITE),
+                ..Style::default()
+            },
+        );
+        let second_object = super::super::CompiledObject::new(
+            ObjectId::new(5),
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let mut scene = CompiledScene::compile_objects(vec![object, second_object], &[]).unwrap();
+        let id = GeometryId::new(9);
+        let first = handle(1);
+        let second = handle(2);
+        let path = |end| {
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(end, 0.0))
+        };
+        scene
+            .resources
+            .geometries
+            .insert(first, GeometryResource::VectorPath(Arc::new(path(1.0))));
+        scene.resources.geometry_handles.insert(id, first);
+        scene.objects[0].content = GeometryRef::External(id).into();
+        scene.objects[0].spatial = Some(Box::new(cairo_state()));
+        scene.refresh_cairo_path_control_points(0);
+        scene.objects[1].content = GeometryRef::External(id).into();
+        scene.objects[1].spatial = Some(Box::new(cairo_state()));
+        scene.refresh_cairo_path_control_points(1);
+        assert_eq!(scene.cairo_path_points(0).unwrap().len(), 2);
+        let first_weak = scene
+            .cairo_path_points_by_resource
+            .get(&first)
+            .unwrap()
+            .clone();
+        let shared = first_weak.upgrade().unwrap();
+        assert_eq!(Arc::strong_count(&shared), 3); // Two row caches plus this observation.
+        drop(shared);
+
+        scene
+            .resources
+            .geometries
+            .insert(second, GeometryResource::VectorPath(Arc::new(path(3.0))));
+        scene.resources.geometry_handles.insert(id, second);
+        scene.refresh_cairo_path_control_points(0);
+        assert!(first_weak.upgrade().is_some()); // Row 1 still uses the old version.
+        scene.refresh_cairo_path_control_points(1);
+        assert!(first_weak.upgrade().is_none());
+        assert_eq!(scene.cairo_path_points(0).unwrap()[1].x, 3.0);
+        let second_weak = scene
+            .cairo_path_points_by_resource
+            .get(&second)
+            .unwrap()
+            .clone();
+
+        scene.objects[0].content = ObjectContentRef::Text(TextResourceHandle {
+            arena: 1,
+            id: TextResourceId::new(1),
+            version: 1,
+        });
+        scene.refresh_cairo_path_control_points(0);
+        assert!(scene.cairo_path_points(0).is_none());
+        assert!(second_weak.upgrade().is_some());
+        scene.objects[1].content = ObjectContentRef::Text(TextResourceHandle {
+            arena: 1,
+            id: TextResourceId::new(2),
+            version: 1,
+        });
+        scene.refresh_cairo_path_control_points(1);
+        assert!(scene.cairo_path_points(1).is_none());
+        assert!(second_weak.upgrade().is_none());
     }
 }
