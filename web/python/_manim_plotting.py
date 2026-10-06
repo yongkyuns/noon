@@ -623,23 +623,44 @@ def _attach_three_d_axis(wrapper, handle, tip_handle):
 class ThreeDAxes(_compat.Group):
     """Linear X/Y/Z axes with pinned Manim ranges, lengths and positive tips.
 
-    The numeric frame, world-axis transforms, ticks, tips, and coordinate
-    conversions are Rust-owned. Cairo axis pieces/shading, custom tip shapes,
-    and z-normal changes are unsupported. Axis labels use retained Text or
-    MathTex families. The axis config accepts
-    bounded stroke, tick, and filled-tip options.
+    The numeric frame, world-axis transforms, ticks, tips, Cairo axis pieces,
+    shading, and coordinate conversions are Rust-owned. Axis labels use
+    retained Text or MathTex families. The axis config accepts bounded stroke,
+    tick, and filled-tip options.
     """
 
     def __init__(self, x_range=(-6, 6, 1), y_range=(-5, 5, 1),
                  z_range=(-4, 4, 1), x_length=10.5, y_length=10.5,
                  z_length=6.5, *, tips=True, include_ticks=True, tick_size=0.1,
                  axis_config=None, x_axis_config=None, y_axis_config=None, z_axis_config=None,
-                 labels=None, color=None, **kwargs):
+                 labels=None, color=None, num_axis_pieces=20,
+                 light_source=(-7, -9, 10), shade_in_3d=True, **kwargs):
         context = _coordinate_constructor_context()
         if labels is not None:
             raise NotImplementedError("ThreeDAxes axis labels are not yet supported")
         if kwargs:
             raise TypeError("unsupported ThreeDAxes option(s): " + ", ".join(sorted(kwargs)))
+        if isinstance(num_axis_pieces, bool):
+            raise TypeError("num_axis_pieces requires an integer")
+        try:
+            num_axis_pieces = _index(num_axis_pieces)
+        except TypeError as error:
+            raise TypeError("num_axis_pieces requires an integer") from error
+        if not 1 <= num_axis_pieces <= 256:
+            raise ValueError("num_axis_pieces must be between 1 and 256")
+        if not isinstance(shade_in_3d, bool):
+            raise TypeError("shade_in_3d requires a boolean")
+        try:
+            light_source = tuple(light_source)
+        except TypeError as error:
+            raise TypeError("light_source requires three finite numbers") from error
+        if len(light_source) != 3:
+            raise ValueError("light_source requires exactly three values")
+        light_source = tuple(
+            _finite_axis_option(component, "light_source") for component in light_source
+        )
+        if max(abs(component) for component in light_source) == 0.0:
+            raise ValueError("light_source must be nonzero")
         common = _three_d_axis_config(axis_config, "axis_config")
         axis_configs = [
             _three_d_axis_config(value, name)
@@ -666,6 +687,9 @@ class ThreeDAxes(_compat.Group):
         try:
             engine_call(options.setTicks, global_ticks, global_tick_size, global_exclude_origin)
             engine_call(options.setTips, global_tips)
+            engine_call(options.setNumAxisPieces, num_axis_pieces)
+            engine_call(options.setAxisLightDirection, *light_source)
+            engine_call(options.setShadeIn3D, shade_in_3d)
             if global_tip_length is not None:
                 global_tip_length = _finite_axis_option(global_tip_length, "tip_length")
                 if global_tip_length <= 0:

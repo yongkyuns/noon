@@ -1,21 +1,23 @@
 //! Bounded linear ThreeDAxes authoring on the shared semantic family substrate.
 //!
-//! This intentionally omits Manim's Cairo axis shading and pieces.
 //! The axes remain three ordinary NumberLine families and one ordinary family;
-//! coordinate conversion is derived from their checked authored shafts.
+//! coordinate conversion is derived from their checked authored shafts. Cairo
+//! shading lives on retained path materials, while the original shaft nodes
+//! keep NumberLine identity and coordinate metadata.
 
 use super::*;
 use noon_core::{
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectState, SemanticPaint,
-    SemanticSpatialCompositionDomain, SemanticStyle, SemanticTransform, SemanticVec3,
-    SemanticWorldTransform3D, VectorPath,
+    SemanticCairoPathAppearance, SemanticMutationTransaction, SemanticNodeCreation,
+    SemanticObjectState, SemanticPaint, SemanticSpatialCompositionDomain, SemanticSpatialMaterial,
+    SemanticStyle, SemanticTransform, SemanticVec3, SemanticWorldTransform3D, VectorPath,
 };
 
 /// Supported linear ThreeDAxes request. Ranges are `[min, max, step]`; lengths
 /// are world-space units. Defaults match pinned Manim v0.21 at frame height 8.
-/// The z normal is fixed to +Z; arbitrary axis configs, TeX compilation,
-/// Cairo piece counts, directional shading, and custom tip shapes are outside
-/// this slice. Label strings/families arrive as existing retained text.
+/// The z normal is fixed to +Z; axis piece count and directional light are
+/// bounded, while arbitrary axis configs, TeX compilation, and custom tip
+/// shapes remain outside this slice. Label strings/families arrive as retained
+/// text.
 #[derive(Clone, Debug)]
 pub struct ManimThreeDAxesOptions {
     pub x_range: [f64; 3],
@@ -27,6 +29,12 @@ pub struct ManimThreeDAxesOptions {
     /// Manim's default is true; tips use the pinned filled triangular shape.
     pub tips: bool,
     pub tip_length: f64,
+    /// Number of retained pieces used to render each Cairo-shaded axis shaft.
+    pub num_axis_pieces: usize,
+    /// Captured world-space light direction used by the Cairo axis gradient.
+    pub light_source: SemanticVec3,
+    /// Disable Cairo path materials while retaining the same axis topology.
+    pub shade_in_3d: bool,
     pub ticks: CoordinateTicks,
     pub style: SemanticStyle,
     /// Per-axis values override the shared constructor defaults when present.
@@ -57,6 +65,9 @@ impl Default for ManimThreeDAxesOptions {
             z_length: 6.5,
             tips: true,
             tip_length: 0.35,
+            num_axis_pieces: 20,
+            light_source: SemanticVec3::new(-7.0, -9.0, 10.0),
+            shade_in_3d: true,
             ticks: CoordinateTicks {
                 exclude_origin: true,
                 ..CoordinateTicks::default()
@@ -285,7 +296,11 @@ impl ManimThreeDAxes {
             let ticks = group
                 .next_member(shaft)
                 .ok_or(CoordinateAuthoringError::InvalidTopology)?;
-            group.next_member(ticks)
+            group.next_member(ticks).filter(|id| {
+                borrowed
+                    .node(*id)
+                    .is_some_and(|node| node.semantic_object_state().is_some())
+            })
         };
         tip_id
             .map(|id| Mobject::from_node(store, id).map_err(Into::into))
@@ -594,18 +609,37 @@ impl crate::LiveSession<'_> {
 }
 
 struct PreparedThreeDAxes {
-    axes: Vec<(
-        Vec<SemanticObjectState>,
-        SemanticWorldTransform3D,
-        bool,
-        SemanticStyle,
-    )>,
+    axes: Vec<PreparedThreeDAxis>,
     tip_paths: Vec<VectorPath>,
+}
+
+struct PreparedThreeDAxis {
+    states: Vec<SemanticObjectState>,
+    pieces: Vec<SemanticObjectState>,
+    world: SemanticWorldTransform3D,
+    tips: bool,
+    style: SemanticStyle,
+    shade_in_3d: bool,
+    light_source: SemanticVec3,
 }
 
 fn prepare_three_d_axes(
     options: &ManimThreeDAxesOptions,
 ) -> Result<PreparedThreeDAxes, CoordinateAuthoringError> {
+    if !(1..=256).contains(&options.num_axis_pieces)
+        || !options.light_source.is_finite()
+        || options
+            .light_source
+            .x
+            .abs()
+            .max(options.light_source.y.abs())
+            .max(options.light_source.z.abs())
+            == 0.0
+    {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid ThreeDAxes Cairo piece count or light direction",
+        ));
+    }
     let axes = [
         (
             options.x_range,
@@ -667,11 +701,45 @@ fn prepare_three_d_axes(
             return Err(CoordinateError::InvalidLength.into());
         }
         let frame = NumberLineFrame::centered(range, length, 0.0)?;
-        let states = if tips {
+        let mut states = if tips {
             super::prepare_line_with_elongated_ticks(frame, ticks, &style, &[], 2.0, true)?
         } else {
             prepare_line(frame, ticks, &style)?
         };
+        let shaft = states
+            .first_mut()
+            .ok_or(CoordinateAuthoringError::InvalidTopology)?;
+        // Keep the canonical NumberLine role and geometry for c2p/p2c while
+        // drawing its retained Cairo path pieces below.
+        shaft.style.stroke_width = 0.0;
+        if options.shade_in_3d {
+            for tick in states.iter_mut().skip(1) {
+                configure_cairo_axis_path(tick, options.light_source)?;
+            }
+        }
+        let start = frame.start();
+        let end = frame.end();
+        let pieces = (0..options.num_axis_pieces)
+            .map(|piece| {
+                let t0 = piece as f64 / options.num_axis_pieces as f64;
+                let t1 = (piece + 1) as f64 / options.num_axis_pieces as f64;
+                let mut state = line_state(
+                    [
+                        start[0] + (end[0] - start[0]) * t0,
+                        start[1] + (end[1] - start[1]) * t0,
+                    ],
+                    [
+                        start[0] + (end[0] - start[0]) * t1,
+                        start[1] + (end[1] - start[1]) * t1,
+                    ],
+                    &style,
+                )?;
+                if options.shade_in_3d {
+                    configure_cairo_axis_path(&mut state, options.light_source)?;
+                }
+                Ok(state)
+            })
+            .collect::<Result<Vec<_>, CoordinateAuthoringError>>()?;
         let axis_rotation = noon_core::SemanticRotation3D::from_axis_angle(axis, angle).ok_or(
             CoordinateAuthoringError::InvalidOptions("invalid axis orientation"),
         )?;
@@ -695,7 +763,15 @@ fn prepare_three_d_axes(
             let end = frame.end();
             tip_paths.push(filled_tip_path(end, (1.0, 0.0), tip_length)?);
         }
-        prepared_axes.push((states, world, tips, style));
+        prepared_axes.push(PreparedThreeDAxis {
+            states,
+            pieces,
+            world,
+            tips,
+            style,
+            shade_in_3d: options.shade_in_3d,
+            light_source: options.light_source,
+        });
     }
     Ok(PreparedThreeDAxes {
         axes: prepared_axes,
@@ -704,12 +780,7 @@ fn prepare_three_d_axes(
 }
 
 fn publish_prepared_three_d_axes(
-    prepared_axes: Vec<(
-        Vec<SemanticObjectState>,
-        SemanticWorldTransform3D,
-        bool,
-        SemanticStyle,
-    )>,
+    prepared_axes: Vec<PreparedThreeDAxis>,
     tip_paths: Vec<VectorPath>,
     store: &mut noon_core::SemanticStore,
     mut publish: impl FnMut(
@@ -721,8 +792,9 @@ fn publish_prepared_three_d_axes(
         let mut transaction = SemanticMutationTransaction::new();
         let root = transaction.create_node(SemanticNodeCreation::family());
         let mut tip_index = 0;
-        for (states, world, tips, style) in prepared_axes {
-            let mut states = states.into_iter().map(|mut state| {
+        for axis in prepared_axes {
+            let world = axis.world;
+            let mut states = axis.states.into_iter().map(|mut state| {
                 state.transform = SemanticTransform::from(world);
                 state
             });
@@ -736,12 +808,23 @@ fn publish_prepared_three_d_axes(
             transaction
                 .set_spatial_composition_domain(shaft, SemanticSpatialCompositionDomain::World);
             for state in states {
+                let shaded = state.spatial_material() == SemanticSpatialMaterial::CairoPath;
                 let token = transaction.create_node(SemanticNodeCreation::object(state));
                 transaction.add_member(ticks, token);
-                transaction
-                    .set_spatial_composition_domain(token, SemanticSpatialCompositionDomain::World);
+                if shaded {
+                    transaction.set_spatial_composition_domain_with_anchor_ref(
+                        token,
+                        SemanticSpatialCompositionDomain::World,
+                        Some(group.into()),
+                    );
+                } else {
+                    transaction.set_spatial_composition_domain(
+                        token,
+                        SemanticSpatialCompositionDomain::World,
+                    );
+                }
             }
-            if tips {
+            if axis.tips {
                 let tip_handle = tip_handles
                     .get(tip_index)
                     .copied()
@@ -749,12 +832,47 @@ fn publish_prepared_three_d_axes(
                 let mut tip =
                     SemanticObjectState::new(noon_core::StoredGeometry::Resource(tip_handle));
                 tip.transform = SemanticTransform::from(world);
-                tip.style = tip_style(&style).map_err(|_| AuthoringError::NonFiniteObjectState)?;
+                tip.style =
+                    tip_style(&axis.style).map_err(|_| AuthoringError::NonFiniteObjectState)?;
+                if axis.shade_in_3d {
+                    configure_cairo_axis_path(&mut tip, axis.light_source)
+                        .map_err(|_| AuthoringError::NonFiniteObjectState)?;
+                }
                 let token = transaction.create_node(SemanticNodeCreation::object(tip));
                 transaction.add_member(group, token);
-                transaction
-                    .set_spatial_composition_domain(token, SemanticSpatialCompositionDomain::World);
+                if axis.shade_in_3d {
+                    transaction.set_spatial_composition_domain_with_anchor_ref(
+                        token,
+                        SemanticSpatialCompositionDomain::World,
+                        Some(group.into()),
+                    );
+                } else {
+                    transaction.set_spatial_composition_domain(
+                        token,
+                        SemanticSpatialCompositionDomain::World,
+                    );
+                }
                 tip_index += 1;
+            }
+            let piece_family = transaction.create_node(SemanticNodeCreation::family());
+            transaction.add_member(group, piece_family);
+            for mut piece in axis.pieces {
+                piece.transform = SemanticTransform::from(world);
+                let shaded = piece.spatial_material() == SemanticSpatialMaterial::CairoPath;
+                let token = transaction.create_node(SemanticNodeCreation::object(piece));
+                transaction.add_member(piece_family, token);
+                if shaded {
+                    transaction.set_spatial_composition_domain_with_anchor_ref(
+                        token,
+                        SemanticSpatialCompositionDomain::World,
+                        Some(group.into()),
+                    );
+                } else {
+                    transaction.set_spatial_composition_domain(
+                        token,
+                        SemanticSpatialCompositionDomain::World,
+                    );
+                }
             }
             transaction.add_member(root, group);
         }
@@ -763,6 +881,19 @@ fn publish_prepared_three_d_axes(
             .resolve(root)
             .ok_or(AuthoringError::UnresolvedCreatedNode(root))
     })
+}
+
+fn configure_cairo_axis_path(
+    state: &mut SemanticObjectState,
+    light_source: SemanticVec3,
+) -> Result<(), CoordinateAuthoringError> {
+    state.set_spatial_material(SemanticSpatialMaterial::CairoPath);
+    state
+        .set_cairo_path_appearance(SemanticCairoPathAppearance {
+            sheen_factor: 0.2,
+            gradient_direction: Some(light_source),
+        })
+        .map_err(|_| CoordinateAuthoringError::InvalidOptions("invalid Cairo axis appearance"))
 }
 
 fn tip_style(style: &SemanticStyle) -> Result<SemanticStyle, CoordinateAuthoringError> {
@@ -930,14 +1061,161 @@ mod tests {
     }
 
     #[test]
+    fn three_d_axes_cairo_paths_share_one_axis_family_anchor_and_keep_numberline_shaft() {
+        let mut scene = Scene::new();
+        let options = ManimThreeDAxesOptions::default();
+        let axes = scene.three_d_axes(&options).unwrap();
+        let store = axes.family().integration_store();
+        let axis_groups = three_axis_members(axes.family()).unwrap();
+        let borrowed = store.borrow();
+        for group_id in axis_groups {
+            let group = borrowed.node(group_id).unwrap();
+            let shaft = group.first_member().unwrap();
+            let ticks = group.next_member(shaft).unwrap();
+            let tip = group.next_member(ticks).unwrap();
+            let pieces = group.next_member(tip).unwrap();
+
+            let shaft_state = borrowed.semantic_object_state_checked(shaft).unwrap();
+            assert!(matches!(
+                shaft_state.role(),
+                SemanticObjectRole::NumberLine(_)
+            ));
+            assert_eq!(shaft_state.style.stroke_width, 0.0);
+            assert_eq!(
+                shaft_state.spatial_material(),
+                SemanticSpatialMaterial::Unlit
+            );
+
+            let piece_family = borrowed.node(pieces).unwrap();
+            let mut piece_count = 0;
+            let mut piece = piece_family.first_member();
+            while let Some(piece_id) = piece {
+                let state = borrowed.semantic_object_state_checked(piece_id).unwrap();
+                assert_eq!(state.spatial_material(), SemanticSpatialMaterial::CairoPath);
+                assert_eq!(
+                    state.spatial_composition_domain(),
+                    SemanticSpatialCompositionDomain::World
+                );
+                assert_eq!(state.spatial_anchor_family(), Some(group_id));
+                assert_eq!(
+                    state.cairo_path_appearance(),
+                    Some(SemanticCairoPathAppearance {
+                        sheen_factor: 0.2,
+                        gradient_direction: Some(options.light_source),
+                    })
+                );
+                piece_count += 1;
+                piece = piece_family.next_member(piece_id);
+            }
+            assert_eq!(piece_count, options.num_axis_pieces);
+
+            let tick_family = borrowed.node(ticks).unwrap();
+            let mut tick = tick_family.first_member();
+            while let Some(tick_id) = tick {
+                let state = borrowed.semantic_object_state_checked(tick_id).unwrap();
+                assert_eq!(state.spatial_material(), SemanticSpatialMaterial::CairoPath);
+                assert_eq!(state.spatial_anchor_family(), Some(group_id));
+                tick = tick_family.next_member(tick_id);
+            }
+
+            let tip_state = borrowed.semantic_object_state_checked(tip).unwrap();
+            assert_eq!(
+                tip_state.spatial_material(),
+                SemanticSpatialMaterial::CairoPath
+            );
+            assert_eq!(tip_state.spatial_anchor_family(), Some(group_id));
+        }
+        drop(borrowed);
+        for index in 0..3 {
+            assert!(axes.tip(index).unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn three_d_axes_piece_bounds_and_unshaded_profile_are_explicit() {
+        let mut options = ManimThreeDAxesOptions::default();
+        options.num_axis_pieces = 1;
+        options.tips = false;
+        options.shade_in_3d = false;
+        let mut scene = Scene::new();
+        let axes = scene.three_d_axes(&options).unwrap();
+        assert!(axes.tip(0).unwrap().is_none());
+        let store = axes.family().integration_store();
+        let axis_id = three_axis_members(axes.family()).unwrap()[0];
+        let borrowed = store.borrow();
+        let axis_group = borrowed.node(axis_id).unwrap();
+        let shaft = axis_group.first_member().unwrap();
+        let ticks = axis_group.next_member(shaft).unwrap();
+        let pieces = axis_group.next_member(ticks).unwrap();
+        let pieces = borrowed.node(pieces).unwrap();
+        let piece = pieces.first_member().unwrap();
+        let state = borrowed.semantic_object_state_checked(piece).unwrap();
+        assert_eq!(state.spatial_material(), SemanticSpatialMaterial::Unlit);
+        assert_eq!(state.spatial_anchor_family(), None);
+    }
+
+    #[test]
+    fn three_d_axes_piece_and_light_validation_is_atomic() {
+        let invalid = [
+            ManimThreeDAxesOptions {
+                num_axis_pieces: 0,
+                ..ManimThreeDAxesOptions::default()
+            },
+            ManimThreeDAxesOptions {
+                num_axis_pieces: 257,
+                ..ManimThreeDAxesOptions::default()
+            },
+            ManimThreeDAxesOptions {
+                light_source: SemanticVec3::ZERO,
+                ..ManimThreeDAxesOptions::default()
+            },
+            ManimThreeDAxesOptions {
+                light_source: SemanticVec3::new(f64::NAN, -9.0, 10.0),
+                ..ManimThreeDAxesOptions::default()
+            },
+        ];
+        let mut scene = Scene::new();
+        let store = scene.integration_store();
+        for options in invalid {
+            let before_revision = store.borrow().scene_revision();
+            let before_resources = store.borrow().geometry_resources().stats();
+            assert!(scene.three_d_axes(&options).is_err());
+            assert_eq!(store.borrow().scene_revision(), before_revision);
+            assert_eq!(
+                store.borrow().geometry_resources().stats(),
+                before_resources
+            );
+        }
+    }
+
+    #[test]
     fn three_d_axes_keep_screen_space_width_on_every_shaft_and_tick() {
         let mut scene = Scene::new();
         let axes = scene
             .three_d_axes(&ManimThreeDAxesOptions::default())
             .unwrap();
         for shaft in axes.axis_shafts().unwrap() {
+            let state = shaft.state().unwrap();
+            assert_eq!(state.style.stroke_width_mode, StrokeWidthMode::ScreenSpace);
+            assert_eq!(state.style.stroke_width, 0.0);
+        }
+        let store = axes.family().integration_store();
+        let axis_groups = three_axis_members(axes.family()).unwrap();
+        let borrowed = store.borrow();
+        for group_id in axis_groups {
+            let group = borrowed.node(group_id).unwrap();
+            let shaft = group.first_member().unwrap();
+            let ticks = group.next_member(shaft).unwrap();
+            let tip = group.next_member(ticks).unwrap();
+            let pieces = group.next_member(tip).unwrap();
+            let pieces = borrowed.node(pieces).unwrap();
+            let first_piece = pieces.first_member().unwrap();
             assert_eq!(
-                shaft.state().unwrap().style.stroke_width_mode,
+                borrowed
+                    .semantic_object_state_checked(first_piece)
+                    .unwrap()
+                    .style
+                    .stroke_width_mode,
                 StrokeWidthMode::ScreenSpace
             );
         }
@@ -954,14 +1232,21 @@ mod tests {
         let axes = scene.three_d_axes(&options).unwrap();
         assert!(axes.tip(0).unwrap().is_none());
         assert!(axes.tip(1).unwrap().is_some());
-        let x_style = axes
-            .axis(0)
+        let axis_group = three_axis_members(axes.family()).unwrap()[0];
+        let store = axes.family().integration_store();
+        let borrowed = store.borrow();
+        let group = borrowed.node(axis_group).unwrap();
+        let shaft = group.first_member().unwrap();
+        let ticks = group.next_member(shaft).unwrap();
+        let pieces = group.next_member(ticks).unwrap();
+        let pieces = borrowed.node(pieces).unwrap();
+        let first_piece = pieces.first_member().unwrap();
+        let x_style = borrowed
+            .semantic_object_state_checked(first_piece)
             .unwrap()
-            .shaft()
-            .unwrap()
-            .state()
-            .unwrap()
-            .style;
+            .style
+            .clone();
+        drop(borrowed);
         assert_eq!(x_style.stroke_width, 0.04);
         assert_eq!(
             x_style.stroke,

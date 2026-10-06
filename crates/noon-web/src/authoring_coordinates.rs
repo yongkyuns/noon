@@ -138,6 +138,51 @@ impl WasmCoordinateOptions {
         })
     }
 
+    #[wasm_bindgen(js_name = setNumAxisPieces)]
+    pub fn set_num_axis_pieces(&mut self, pieces: u32) -> Result<(), JsValue> {
+        let CoordinateRequest::ThreeDAxes(options) = &mut self.request else {
+            return Err(js_error("axis pieces require ThreeDAxes"));
+        };
+        if !(1..=256).contains(&pieces) {
+            return Err(js_error(
+                "ThreeDAxes num_axis_pieces must be between 1 and 256",
+            ));
+        }
+        options.num_axis_pieces = pieces as usize;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setAxisLightDirection)]
+    pub fn set_axis_light_direction(&mut self, x: f64, y: f64, z: f64) -> Result<(), JsValue> {
+        let CoordinateRequest::ThreeDAxes(options) = &mut self.request else {
+            return Err(js_error("axis light direction requires ThreeDAxes"));
+        };
+        let direction = noon::SemanticVec3::new(x, y, z);
+        if !direction.is_finite()
+            || direction
+                .x
+                .abs()
+                .max(direction.y.abs())
+                .max(direction.z.abs())
+                == 0.0
+        {
+            return Err(js_error(
+                "ThreeDAxes light_source must be finite and nonzero",
+            ));
+        }
+        options.light_source = direction;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setShadeIn3D)]
+    pub fn set_shade_in_3d(&mut self, enabled: bool) -> Result<(), JsValue> {
+        let CoordinateRequest::ThreeDAxes(options) = &mut self.request else {
+            return Err(js_error("shade_in_3d requires ThreeDAxes"));
+        };
+        options.shade_in_3d = enabled;
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = setTicks)]
     pub fn set_ticks(
         &mut self,
