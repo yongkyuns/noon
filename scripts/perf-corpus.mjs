@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import { evaluateBudget } from "./perf-corpus-budget.mjs";
+import { isIdentifiedGpuAdapter, isSoftwareGpuAdapter } from "./manim-raster-support.mjs";
 
 const { chromium } = playwright;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,6 +25,12 @@ const warmup = positiveInteger(process.env.NOON_CORPUS_WARMUP ?? "30", "warmup")
 const frames = positiveInteger(process.env.NOON_CORPUS_FRAMES ?? "180", "frames");
 const targetHz = positiveNumber(process.env.NOON_CORPUS_TARGET_HZ ?? "60", "target Hz");
 const enforce = process.env.NOON_CORPUS_ENFORCE_BUDGETS === "1";
+const includeSamples = booleanOption("NOON_CORPUS_INCLUDE_SAMPLES");
+const includeRendererSamples = booleanOption("NOON_CORPUS_INCLUDE_RENDERER_SAMPLES");
+const includeStageTimings = booleanOption("NOON_CORPUS_INCLUDE_STAGE_TIMINGS");
+const browserMode = process.env.NOON_CORPUS_BROWSER_MODE ?? "headless";
+assert.ok(browserMode === "headless" || browserMode === "headful",
+  "NOON_CORPUS_BROWSER_MODE must be headless or headful");
 const port = positiveInteger(process.env.NOON_CORPUS_PORT ?? "4178", "port");
 const baseUrl = `http://127.0.0.1:${port}`;
 const artifactPath = path.resolve(
@@ -31,6 +39,7 @@ const artifactPath = path.resolve(
 );
 
 const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
+const workingTree = await workingTreeIdentity();
 let serverOutput = "";
 const server = spawn(
   "python3",
@@ -43,17 +52,25 @@ server.stderr.on("data", (chunk) => (serverOutput += chunk));
 let browser = null;
 try {
   await waitForServer();
-  browser = await chromium.launch({ channel: "chromium", headless: true, args: browserArgs(backend) });
+  browser = await chromium.launch({ channel: "chromium", headless: browserMode === "headless", args: browserArgs(backend) });
   const results = [];
   let failedBudgets = 0;
   for (const definition of cases) {
     const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+    const sourceFile = path.join(repoRoot, "web", definition.source.slice(2));
+    const sourceSha256Before = createHash("sha256")
+      .update(await readFile(sourceFile))
+      .digest("hex");
     const query = new URLSearchParams({
       source: definition.source,
       context: JSON.stringify(definition.context ?? {}),
       warmup: String(warmup),
       frames: String(frames),
       targetHz: String(targetHz),
+      includeSamples: includeSamples ? "1" : "0",
+      includeRendererSamples: includeRendererSamples ? "1" : "0",
+      rendererMetricsSampling: "sparse",
+      includeStageTimings: includeStageTimings ? "1" : "0",
     });
     process.stdout.write(`Corpus ${backend} ${definition.id}… `);
     await page.goto(`${baseUrl}/web/scene-perf.html?${query}`, { waitUntil: "load" });
@@ -67,10 +84,73 @@ try {
       throw new Error(`${definition.id}: ${await page.locator("#status").textContent()}`);
     }
     const report = await page.evaluate(() => window.__NOON_SCENE_PERF__);
+    assert.equal(report.environment?.rendererBackend, backend === "webgpu" ? "WebGPU" : "WebGL2",
+      `${definition.id}: observed renderer backend does not match requested ${backend}`);
+    const gpuDiagnostics = await page.evaluate(async (requestedBackend) => {
+      if (requestedBackend === "webgpu") {
+        if (!navigator.gpu) return {
+          api: "webgpu", identityScope: "separate diagnostic adapter request", available: false, adapter: null,
+        };
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+        if (!adapter) return {
+          api: "webgpu", identityScope: "separate diagnostic adapter request", available: true, adapter: null,
+        };
+        let info = adapter.info ?? null;
+        if (!info && typeof adapter.requestAdapterInfo === "function") info = await adapter.requestAdapterInfo();
+        return {
+          api: "webgpu",
+          identityScope: "separate diagnostic adapter request; not proof of the renderer's device",
+          available: true,
+          adapter: {
+            vendor: String(info?.vendor ?? ""),
+            architecture: String(info?.architecture ?? ""),
+            device: String(info?.device ?? ""),
+            description: String(info?.description ?? ""),
+            isFallbackAdapter: typeof adapter.isFallbackAdapter === "boolean" ? adapter.isFallbackAdapter : null,
+          },
+        };
+      }
+      const canvas = document.createElement("canvas");
+      const gl = canvas.getContext("webgl2");
+      if (!gl) return {
+        api: "webgl2", identityScope: "separate diagnostic canvas context", available: false, vendor: null, renderer: null,
+      };
+      const extension = gl.getExtension("WEBGL_debug_renderer_info");
+      return {
+        api: "webgl2",
+        identityScope: "separate diagnostic canvas context; not proof of the renderer's device",
+        available: true,
+        vendor: extension ? gl.getParameter(extension.UNMASKED_VENDOR_WEBGL) : null,
+        renderer: extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : null,
+      };
+    }, backend);
+    gpuDiagnostics.classification = classifyGpuDiagnostics(gpuDiagnostics);
+    gpuDiagnostics.classificationMeaning =
+      "software means a known software/fallback marker; hardware-like-unverified means an identified descriptor without such a marker; unknown means unavailable or redacted. None proves a physical device.";
+    const sourceSha256After = createHash("sha256")
+      .update(await readFile(sourceFile))
+      .digest("hex");
+    assert.equal(sourceSha256After, sourceSha256Before, `${definition.id}: source changed during measurement`);
     const budget = manifest.tiers[definition.tier]?.budgets ?? null;
     const evaluation = evaluateBudget(report, budget);
     if (!evaluation.passed) failedBudgets += 1;
-    results.push({ definition, report, budget: evaluation });
+    results.push({
+      definition,
+      sourceIdentity: {
+        path: definition.source,
+        sha256: sourceSha256Before,
+        repositoryRevision: commit.status === 0 ? commit.stdout.trim() : null,
+        workingTreeClean: workingTree.clean,
+      },
+      browser: { name: "Chromium", version: browser.version(), mode: browserMode },
+      gpuDiagnostics,
+      presentation: {
+        scope: "browser rendering and requestAnimationFrame cadence",
+        physicalDisplayPresentationVerified: false,
+      },
+      report,
+      budget: evaluation,
+    });
     console.log(
       `${format(report.cadence.effective?.effectiveFps)} FPS, ` +
         `p95 ${format(report.cadence.frameIntervalMs?.p95)} ms, ` +
@@ -92,7 +172,14 @@ try {
       logicalCpuCount: os.cpus().length,
       totalMemoryBytes: os.totalmem(),
     },
-    configuration: { backend, warmup, frames, targetHz, enforce },
+    configuration: {
+      backend, warmup, frames, targetHz, enforce, browserMode,
+      includeSamples, includeRendererSamples, includeStageTimings,
+      rendererMetricsSampling: "sparse",
+      runtimeBuildIdentityIncluded: includeRendererSamples,
+      diagnosticInstrumentationMayAffectTiming: includeRendererSamples || includeStageTimings,
+    },
+    workingTree,
     results,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -127,6 +214,41 @@ function browserArgs(mode) {
 
 function list(value) {
   return String(value).split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function booleanOption(name) {
+  const value = process.env[name] ?? "0";
+  assert.ok(value === "0" || value === "1", `${name} must be 0 or 1`);
+  return value === "1";
+}
+
+function classifyGpuDiagnostics(diagnostics) {
+  if (diagnostics.api === "webgpu") {
+    const adapter = diagnostics.adapter;
+    if (!adapter || !isIdentifiedGpuAdapter(adapter)) return "unknown";
+    return isSoftwareGpuAdapter(adapter) ? "software" : "hardware-like-unverified";
+  }
+  const rendererInfo = {
+    vendor: String(diagnostics.vendor ?? ""),
+    device: String(diagnostics.renderer ?? ""),
+  };
+  if (![rendererInfo.vendor, rendererInfo.device].some((value) => value.trim() !== "")) return "unknown";
+  return isSoftwareGpuAdapter(rendererInfo) ? "software" : "hardware-like-unverified";
+}
+
+async function workingTreeIdentity() {
+  const status = spawnSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+    cwd: repoRoot, encoding: "utf8",
+  });
+  const diff = spawnSync("git", ["diff", "--binary", "HEAD"], { cwd: repoRoot, encoding: "buffer" });
+  const entries = status.status === 0 ? status.stdout.split("\n").filter(Boolean) : null;
+  const untrackedPaths = entries?.filter((entry) => entry.startsWith("?? ")).map((entry) => entry.slice(3)) ?? null;
+  return {
+    clean: status.status === 0 && (entries?.length ?? 1) === 0,
+    statusEntries: entries,
+    untrackedPaths,
+    trackedDiffSha256: diff.status === 0 ? createHash("sha256").update(diff.stdout).digest("hex") : null,
+  };
 }
 
 function positiveInteger(value, name) {

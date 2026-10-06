@@ -117,6 +117,51 @@
       "classification": "scalability-only",
       "domains": ["P4", "P7"],
       "dimensions": ["morph", "unique-geometry", "cache-pressure"]
+    },
+    {
+      "id": "spatial-camera-only",
+      "source": "./python/examples/perf_spatial_workloads.py",
+      "context": {"workload": "camera-only", "duration": 10},
+      "tier": "scalability",
+      "classification": "scalability-only",
+      "domains": ["P2", "P3", "P7"],
+      "dimensions": ["camera-profile-motion", "camera-only-motion", "worker-startup", "scene-authoring", "runtime-preparation", "frame-gap-distribution"]
+    },
+    {
+      "id": "spatial-moving-mesh-600-static",
+      "source": "./python/examples/perf_spatial_workloads.py",
+      "context": {"workload": "moving-mesh-many-static", "static_mesh_count": 600, "duration": 10},
+      "tier": "scalability",
+      "classification": "scalability-only",
+      "domains": ["P2", "P3", "P7"],
+      "dimensions": ["601-mesh-objects", "600-static-shared-geometry-copies", "one-moving-mesh", "dirty-transform-locality", "geometry-upload", "runtime-preparation", "frame-gap-distribution"]
+    },
+    {
+      "id": "spatial-dense-surface-family",
+      "source": "./python/examples/perf_spatial_workloads.py",
+      "context": {"workload": "dense-surface-family", "surface_resolution": 24, "duration": 10},
+      "tier": "scalability",
+      "classification": "scalability-only",
+      "domains": ["P2", "P3", "P7"],
+      "dimensions": ["24x24-surface-family", "family-transform", "renderer-preparation", "dirty-row-upload", "runtime-preparation", "frame-gap-distribution"]
+    },
+    {
+      "id": "spatial-moving-point-light",
+      "source": "./python/examples/perf_spatial_workloads.py",
+      "context": {"workload": "moving-point-light", "surface_resolution": 24, "duration": 10},
+      "tier": "scalability",
+      "classification": "scalability-only",
+      "domains": ["P2", "P3", "P7"],
+      "dimensions": ["point-lit-surface", "moving-point-light", "static-mesh-locality", "renderer-preparation", "runtime-preparation", "frame-gap-distribution"]
+    },
+    {
+      "id": "spatial-mixed-depth-text-hud",
+      "source": "./python/examples/perf_spatial_workloads.py",
+      "context": {"workload": "mixed-depth-text-hud", "duration": 10},
+      "tier": "scalability",
+      "classification": "scalability-only",
+      "domains": ["P2", "P3", "P7"],
+      "dimensions": ["world-depth-occlusion", "world-text", "fixed-frame-HUD", "depth-composition", "runtime-preparation", "frame-gap-distribution"]
     }
   ],
   "auxiliaryCases": [
@@ -154,12 +199,12 @@
   ],
   "domainCoverage": {
     "P1": ["getting-started", "timed-composition", "tutorial-value-tracker"],
-    "P2": ["getting-started", "analytic-field-180", "painter-order-overlap", "retained-dynamic-stress"],
-    "P3": ["analytic-field-180", "painter-order-overlap"],
+    "P2": ["getting-started", "analytic-field-180", "painter-order-overlap", "retained-dynamic-stress", "spatial-camera-only", "spatial-moving-mesh-600-static", "spatial-dense-surface-family", "spatial-moving-point-light", "spatial-mixed-depth-text-hud"],
+    "P3": ["analytic-field-180", "painter-order-overlap", "spatial-camera-only", "spatial-moving-mesh-600-static", "spatial-dense-surface-family", "spatial-moving-point-light", "spatial-mixed-depth-text-hud"],
     "P4": ["create-shapes", "filled-path-transform", "retained-dynamic-stress"],
     "P5": ["tutorial-value-tracker", "host-updater-follow"],
     "P6": ["getting-started", "authoring-edit-rerun-seek"],
-    "P7": ["analytic-field-180", "create-shapes", "host-updater-follow", "authoring-edit-rerun-seek", "retained-dynamic-stress"]
+    "P7": ["analytic-field-180", "create-shapes", "host-updater-follow", "authoring-edit-rerun-seek", "retained-dynamic-stress", "spatial-camera-only", "spatial-moving-mesh-600-static", "spatial-dense-surface-family", "spatial-moving-point-light", "spatial-mixed-depth-text-hud"]
   },
   "futureCoverage": [
     {

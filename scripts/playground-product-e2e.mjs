@@ -455,6 +455,7 @@ try {
     screenshot: screenshotName,
     captureBounds,
     runtime: {
+      runnerPlatform: process.platform,
       backend: cold.state.backend,
       executionMode: cold.state.executionMode,
       browserVersion: browser.version(),
