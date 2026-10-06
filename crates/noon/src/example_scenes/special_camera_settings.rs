@@ -251,25 +251,29 @@ pub fn static_session(case: CameraCase) -> Result<crate::ExecutionSession, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noon_compile::CompiledSpatialDrawKind::{Mesh, Planar};
 
     #[test]
     fn static_camera_examples_preserve_authored_axes_surface_order() {
         for (case, first, last) in [
-            (CameraCase::Light, "planar", "mesh"),
-            (CameraCase::Surface, "mesh", "planar"),
+            (CameraCase::Light, Planar, Mesh),
+            (CameraCase::Surface, Mesh, Planar),
         ] {
-            let frame = crate::execution_frame_value(&static_session(case).unwrap());
-            let draws: Vec<_> = frame["objects"]
-                .as_array()
-                .unwrap()
+            let session = static_session(case).unwrap();
+            let draws: Vec<_> = session
+                .painter_order()
                 .iter()
-                .filter(|row| {
-                    row["spatial"]["camera_projection"].is_null()
-                        && row["spatial"]["point_light"] == false
+                .map(|&index| {
+                    session.frame().objects[index as usize]
+                        .spatial
+                        .as_deref()
+                        .unwrap()
                 })
+                .filter(|state| state.camera_projection.is_none() && !state.point_light)
+                .map(|state| state.draw_kind)
                 .collect();
-            assert_eq!(draws.first().unwrap()["spatial"]["draw_kind"], first);
-            assert_eq!(draws.last().unwrap()["spatial"]["draw_kind"], last);
+            assert_eq!(*draws.first().unwrap(), first);
+            assert_eq!(*draws.last().unwrap(), last);
         }
     }
 }
