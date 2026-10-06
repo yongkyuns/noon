@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { FOLLOWING_SOURCE, FOLLOWING_TIMES, followingManifest,
-  assertFollowingSources, assertFollowingState, assertFollowingReports, assertFollowingPythonLifecycle } from "./special-camera-qualification.mjs";
+  assertFollowingSources, assertFollowingState, assertFollowingReports, assertFollowingPythonLifecycle, assertFollowingDirectLifecycle } from "./special-camera-qualification.mjs";
 
 const paint = (red, green, blue) => ({ red, green, blue, alpha: 1 });
 const white = paint(1, 1, 1);
@@ -251,4 +251,42 @@ for (const [name, mutate] of [
   const { observation, oracle } = pythonLifecycle();
   mutate(observation);
   assert.throws(() => assertFollowingPythonLifecycle(observation, oracle, "WebGPU"));
+});
+
+
+function directLifecycle() {
+  const { observation: python, oracle } = pythonLifecycle();
+  const before = structuredClone(python.runs[0].before.frame);
+  return { oracle, observation: { before, after: structuredClone(before),
+    backend: "WebGPU", cadence: "idle",
+    denial: "typed execution APIs require a direct session source" } };
+}
+
+test("direct continuation ownership denial is distinct from Python callback replay admission", () => {
+  const { observation, oracle } = directLifecycle();
+  assert.deepEqual(assertFollowingDirectLifecycle(observation, oracle, "WebGPU"), {
+    replay: "denied", denialKind: "live-program-ownership", failureAtomic: true,
+    reason: observation.denial,
+  });
+  // The old assertion rejected the actual source-ownership guard, despite the
+  // denied seek preserving state. Do not replace it with an accept-any-error test.
+  assert.doesNotMatch(observation.denial, /replay|callback|continuation/i);
+});
+
+for (const [name, mutate] of [
+  ["source failure", data => { data.error = "source failed"; }],
+  ["wrong backend", data => { data.backend = "WebGL2"; }],
+  ["unfinished continuation", data => { data.cadence = "animation-frame"; }],
+  ["missing publication", data => { delete data.before.publication; }],
+  ["wrong endpoint", data => { data.before.time = 2; }],
+  ["accepted seek", data => { data.denial = null; }],
+  ["presentation barrier", data => { data.denial = "direct execution host must present pending runtime changes before advancing again"; }],
+  ["missing API", data => { data.denial = "TypeError: renderer.seekDirect is not a function"; }],
+  ["callback denial on wrong source type", data => { data.denial = "opaque host callback sessions do not support seek or replay"; }],
+  ["changed camera", data => { data.after.camera.height = 4; }],
+  ["changed publication", data => { data.after.publication.frame_epoch++; }],
+]) test(`direct lifecycle rejects ${name}`, () => {
+  const { observation, oracle } = directLifecycle();
+  mutate(observation);
+  assert.throws(() => assertFollowingDirectLifecycle(observation, oracle, "WebGPU"));
 });

@@ -196,6 +196,24 @@ export function assertFollowingReports(raster, semantic, manifest) {
   return { oracle, checks };
 }
 
+// A direct LiveProgram never exposes its mutable session to seekDirect, even
+// after completion. Qualify that ownership guard; it is not the Python host's
+// completed-source callback replay admission, which is checked independently.
+export function assertFollowingDirectLifecycle(observation, oracle, backend) {
+  assert.equal(observation.error, undefined, "direct lifecycle execution failed");
+  assert.equal(observation.backend, backend, "direct lifecycle backend drift");
+  assert.equal(observation.cadence, "idle", "direct continuation must finish before seek");
+  assert.ok(observation.before?.publication && typeof observation.before.publication === "object"
+    && Object.keys(observation.before.publication).length > 0, "missing direct publication identity");
+  assertFollowingState(observation.before, oracle.terminal_state, `${backend}/direct-completion`);
+  assert.equal(observation.denial, "typed execution APIs require a direct session source",
+    "seekDirect must reject access to the live program's owned session");
+  assert.deepEqual(observation.after, observation.before,
+    "rejected direct seek must preserve the complete effective publication");
+  return { replay: "denied", denialKind: "live-program-ownership", failureAtomic: true,
+    reason: observation.denial };
+}
+
 // A completed Python source must reach replay admission, not merely hit the
 // active-continuation control barrier. Fresh Run uses new production clients.
 export function assertFollowingPythonLifecycle(observation, oracle, backend) {
@@ -301,19 +319,17 @@ async function followingOracle(qualifyPairedAuthoring) {
             const renderer = await wasm.createDirectFollowingGraphCameraRenderer(canvas.transferControlToOffscreen());
             const { sampleDirectProgram } = await import("../scripts/direct-program-sample.mjs");
             renderer.advanceDirectRealtime(0);
-            for (const time of [0, 1, 2, 3]) await sampleDirectProgram(renderer, time);
+            let sample;
+            for (const time of [0, 1, 2, 3]) sample = await sampleDirectProgram(renderer, time);
             const before = JSON.parse(renderer.debugSelectionFrameJson());
             if (typeof renderer.seekDirect !== "function") throw new Error("missing direct replay API");
             let denial = null;
             try { renderer.seekDirect(1.5); } catch (error) { denial = String(error); }
             const after = JSON.parse(renderer.debugSelectionFrameJson());
-            return { before, after, denial };
+            return { before, after, denial, backend: renderer.rendererBackend(), cadence: sample.cadence };
           });
-          assert.equal(observation.before.time, 3);
-          assert.match(observation.denial ?? "", /replay|callback|continuation/i,
-            "opaque callbacks must reject rewind through the shared engine");
-          assert.deepEqual(observation.after, observation.before, "rejected rewind must preserve the complete effective publication");
-          direct = { replay: "denied", failureAtomic: true, reason: observation.denial };
+          await writeFile(path.join(pairedOutput, `direct-lifecycle-${backend}.json`), `${JSON.stringify(observation, null, 2)}\n`);
+          direct = assertFollowingDirectLifecycle(observation, oracle, backend);
         } finally { await page.close(); }
         const pythonPage = await context.newPage();
         pythonPage.setDefaultTimeout(90_000);
