@@ -223,16 +223,32 @@ impl WasmMeshOptions {
             .map_err(|e| invalid("spatial.invalid_mesh", e))
     }
 
-    /// Six canonical indexed prism faces for one ordinary semantic family.
-    /// Style remains inert until atomic family creation.
+    /// Six indexed prism faces for one semantic family. Cairo appearance data
+    /// is retained only when shade_in_3d is selected.
     #[wasm_bindgen(js_name = prismFaces)]
-    pub fn prism_faces(x: f64, y: f64, z: f64) -> Result<WasmMeshFamilyOptions, JsValue> {
-        noon_geometry::prism_faces(SemanticVec3::new(x, y, z))
-            .map(|faces| WasmMeshFamilyOptions {
-                options: faces.into_iter().map(mesh_options).collect(),
-                cells: Vec::new(),
-            })
-            .map_err(|error| invalid("spatial.invalid_mesh", error))
+    pub fn prism_faces(
+        x: f64,
+        y: f64,
+        z: f64,
+        shade_in_3d: bool,
+    ) -> Result<WasmMeshFamilyOptions, JsValue> {
+        let size = SemanticVec3::new(x, y, z);
+        let faces = if shade_in_3d {
+            noon_geometry::prism_faces_cairo(size)
+        } else {
+            noon_geometry::prism_faces(size)
+        }
+        .map_err(|error| invalid("spatial.invalid_mesh", error))?;
+        let mut options = faces.into_iter().map(mesh_options).collect::<Vec<_>>();
+        if shade_in_3d {
+            for option in &mut options {
+                option.material = SemanticSpatialMaterial::CairoSurface;
+            }
+        }
+        Ok(WasmMeshFamilyOptions {
+            options,
+            cells: Vec::new(),
+        })
     }
     pub fn cylinder(
         radius: f64,

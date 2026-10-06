@@ -1049,6 +1049,44 @@
       "notes": "The same pinned linear ThreeDAxes ranges/lengths and per-axis X/Y/Z color, tick, and tip overrides, coordinate point, and camera track through the async Python worker. Numeric placement is queried from Rust; no frontend projection or coordinate math is used. Cairo axis pieces/shading and labels remain outside the supported subset."
     },
     {
+      "id": "spatial-circle-screen-stroke-direct",
+      "expected_object_count": 2,
+      "scene": "SpatialCircleScreenStroke",
+      "source": "parity/manim-v0.21/spatial_three_d_axes_circle_stroke.py",
+      "direct_factory": "createDirectSpatialCircleScreenStrokeSmokeRenderer",
+      "expected_duration": 1.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "A single planar Circle is statically tilted, nonuniformly scaled, and translated before a camera-only move. Its stroke uses Manim's pinned default width; samples qualify the retained stroke at the start, midpoint, and near the camera endpoint."
+    },
+    {
+      "id": "spatial-circle-screen-stroke-worker",
+      "expected_object_count": 2,
+      "scene": "SpatialCircleScreenStroke",
+      "source": "parity/manim-v0.21/spatial_three_d_axes_circle_stroke.py",
+      "noon_source": "web/python/examples/noon_spatial_three_d_axes_circle_stroke.py",
+      "expected_duration": 1.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "The Circle reaches its static world pose before a separate camera-only move; the worker uses shared WorldTransformTo and CameraProfileTo operations. The samples do not claim equivalence between Manim pointwise pose interpolation and Rust SRT interpolation."
+    },
+    {
       "scene": "SpatialSurface",
       "source": "parity/manim-v0.21/spatial_surface.py",
       "expected_duration": 1.0,
@@ -1121,6 +1159,44 @@
       }
     },
     {
+      "id": "spatial-surface-sphere-torus-direct",
+      "scene": "CairoSphereTorus",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 865,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "direct_factory": "createDirectSpatialSurfaceSphereTorusSmokeRenderer",
+      "notes": "Pinned default-resolution Sphere and Torus use the same Cairo Surface callbacks, checkerboard, stroke, and shading under a one-second moving camera. The separate native/direct lane comparison bounds this initial paired surface-solids capability."
+    },
+    {
+      "id": "spatial-surface-sphere-torus-worker",
+      "scene": "CairoSphereTorus",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 865,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "noon_source": "web/python/examples/noon_spatial_surface.py",
+      "notes": "The same default Sphere/Torus constructors and camera profile run through the Python worker; both shapes retain Manim Surface default shading, checkerboard, and stroke."
+    },
+    {
       "id": "spatial-primitives-direct",
       "scene": "SpatialPrimitives",
       "source": "parity/manim-v0.21/spatial_primitives.py",
@@ -1157,6 +1233,44 @@
         "max_mean_absolute_channel_error": 1.5
       },
       "notes": "The same Line3D, explicit triangle, separate six-face unshaded 0.75-opacity Prism family, and oriented open/closed Cylinder/Cone scene through the actual async Python worker, retained geometry bridge, and existing renderer; all line mesh defaults that affect geometry/material are set explicitly."
+    },
+    {
+      "id": "spatial-cairo-cube-prism-direct",
+      "scene": "SpatialCairoCubePrism",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "direct_factory": "createDirectSpatialCairoCubePrismSmokeRenderer",
+      "expected_duration": 1.0,
+      "expected_object_count": 13,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Separate nonintersecting six-face Cube and Prism families retain pinned default Cairo 3D shading and 0.75 opacity while the camera moves."
+    },
+    {
+      "id": "spatial-cairo-cube-prism-worker",
+      "scene": "SpatialCairoCubePrism",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "noon_source": "web/python/examples/noon_spatial_primitives.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 13,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "The same default Cube and Prism face shading, 0.75 opacity, placements, and camera profile are authored through the actual Python worker."
     },
     {
       "id": "mathtex-substrings",

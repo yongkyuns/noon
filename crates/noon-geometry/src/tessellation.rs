@@ -47,6 +47,21 @@ pub struct TessellatedPath {
     reveal_points: Vec<RevealPoint>,
 }
 
+/// Local centerline and screen-normal offsets for a retained screen-space stroke.
+/// The renderer projects the centerline, then applies the stored offsets in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenStrokeVertex {
+    pub position: Vec2,
+    pub tangent: Vec2,
+    pub extrusion: Vec2,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TessellatedScreenStroke {
+    pub vertices: Vec<ScreenStrokeVertex>,
+    pub indices: Vec<u32>,
+}
+
 impl TessellatedPath {
     pub fn revealed_stroke_length(&self, reveal: f32) -> f32 {
         if !reveal.is_finite() {
@@ -184,6 +199,71 @@ pub fn tessellate_styled_with_fill(
         fill_enabled,
         false,
     )
+}
+
+/// Tessellate a unit-width stroke while retaining Lyon's centerline and local
+/// extrusion frame. Intended for smooth closed contours such as canonical
+/// circles; corner-join screen strokes remain unsupported by the renderer.
+pub fn tessellate_screen_stroke(
+    path: &VectorPath,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+) -> Result<TessellatedScreenStroke, GeometryError> {
+    let lyon_path = build_lyon_path(path)?;
+    let options = StrokeOptions::default()
+        .with_tolerance(PATH_TESSELLATION_TOLERANCE)
+        .with_line_width(1.0)
+        .with_miter_limit(MORPH_MITER_LIMIT)
+        .with_line_cap(lyon_line_cap(stroke_cap))
+        .with_line_join(lyon_line_join(stroke_join));
+    let mut buffers = VertexBuffers::<ScreenStrokeVertex, u32>::new();
+    let mut output = BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex<'_, '_>| {
+        let normal = vertex.normal();
+        let normal_length = normal.length();
+        let tangent = if normal_length.is_finite() && normal_length > f32::EPSILON {
+            Vec2::new(normal.y / normal_length, -normal.x / normal_length)
+        } else {
+            Vec2::new(f32::NAN, f32::NAN)
+        };
+        let offset = vertex.position() - vertex.position_on_path();
+        let normal_axis = Vec2::new(-tangent.y, tangent.x);
+        ScreenStrokeVertex {
+            position: vec2(vertex.position_on_path().x, vertex.position_on_path().y),
+            tangent,
+            extrusion: Vec2::new(
+                offset.x * tangent.x + offset.y * tangent.y,
+                offset.x * normal_axis.x + offset.y * normal_axis.y,
+            ),
+        }
+    });
+    StrokeTessellator::new()
+        .tessellate_path(&lyon_path, &options, &mut output)
+        .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
+    if buffers.vertices.is_empty() || buffers.indices.is_empty() {
+        return Err(GeometryError::Tessellation(
+            "screen stroke produced no triangles".to_owned(),
+        ));
+    }
+    if buffers.vertices.iter().any(|vertex| {
+        [
+            vertex.position.x,
+            vertex.position.y,
+            vertex.tangent.x,
+            vertex.tangent.y,
+            vertex.extrusion.x,
+            vertex.extrusion.y,
+        ]
+        .iter()
+        .any(|value| !value.is_finite())
+    }) {
+        return Err(GeometryError::Tessellation(
+            "screen stroke produced an unrepresentable vertex".to_owned(),
+        ));
+    }
+    Ok(TessellatedScreenStroke {
+        vertices: buffers.vertices,
+        indices: buffers.indices,
+    })
 }
 
 /// Tessellate a morph while retaining source/target contour point order.
@@ -1557,6 +1637,30 @@ fn mesh_bounds(vertices: &[MeshVertex]) -> Option<Rect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screen_stroke_mesh_retains_smooth_centerline_and_finite_offsets() {
+        let path = crate::canonical_outline_path(&noon_core::GeometryRef::circle(1.0)).unwrap();
+        let mesh = tessellate_screen_stroke(&path, StrokeJoin::Round, StrokeCap::Butt).unwrap();
+        assert!(!mesh.vertices.is_empty());
+        assert!(!mesh.indices.is_empty());
+        assert!(mesh
+            .indices
+            .iter()
+            .all(|index| (*index as usize) < mesh.vertices.len()));
+        for vertex in &mesh.vertices {
+            assert!(vertex.position.x.is_finite() && vertex.position.y.is_finite());
+            assert!(vertex.tangent.x.is_finite() && vertex.tangent.y.is_finite());
+            assert!((vertex.tangent.length() - 1.0).abs() < 1e-4);
+            assert!(vertex.extrusion.x.is_finite() && vertex.extrusion.y.is_finite());
+            assert!(vertex.extrusion.y.abs() <= 0.5001);
+        }
+        let collapsed = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .cubic_to(Vec2::ZERO, Vec2::ZERO, Vec2::ZERO)
+            .close();
+        assert!(tessellate_screen_stroke(&collapsed, StrokeJoin::Round, StrokeCap::Butt).is_err());
+    }
 
     fn curved_shape() -> VectorPath {
         VectorPath::new()

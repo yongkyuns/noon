@@ -471,10 +471,15 @@ impl Scene {
         size: SemanticVec3,
         fill_color: Color,
         fill_opacity: f64,
+        shade_in_3d: bool,
     ) -> Result<MobjectFamily, AuthoringError> {
         validate_unit_interval("fill opacity", fill_opacity)?;
-        let faces =
-            noon_geometry::prism_faces(size).map_err(|_| AuthoringError::NonFiniteGeometry)?;
+        let faces = if shade_in_3d {
+            noon_geometry::prism_faces_cairo(size)
+        } else {
+            noon_geometry::prism_faces(size)
+        }
+        .map_err(|_| AuthoringError::NonFiniteGeometry)?;
         let options = faces
             .into_iter()
             .map(|geometry| {
@@ -483,6 +488,9 @@ impl Scene {
                 mesh.style.fill_opacity = fill_opacity;
                 mesh.style.stroke = None;
                 mesh.style.stroke_width = 0.0;
+                if shade_in_3d {
+                    mesh.material = SemanticSpatialMaterial::CairoSurface;
+                }
                 mesh
             })
             .collect();
@@ -495,11 +503,13 @@ impl Scene {
         side_length: f64,
         fill_color: Color,
         fill_opacity: f64,
+        shade_in_3d: bool,
     ) -> Result<MobjectFamily, AuthoringError> {
         self.prism_face_family(
             SemanticVec3::new(side_length, side_length, side_length),
             fill_color,
             fill_opacity,
+            shade_in_3d,
         )
     }
 

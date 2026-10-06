@@ -85,11 +85,11 @@ def _mesh_arguments(options):
         raise TypeError("point_lit requires a boolean")
 
 
-def _prism_face_family_options(size):
+def _prism_face_family_options(size, shade_in_3d=False):
     if _mesh_options is None:
         raise RuntimeError("prism face construction requires the shared Rust authoring host")
     size = _vector(size)
-    return engine_call(_mesh_options.prismFaces, *size)
+    return engine_call(_mesh_options.prismFaces, *size, shade_in_3d)
 
 
 class _WorldMobject(_base.Mobject):

@@ -2,13 +2,13 @@
 
 use crate::{
     AnimationOptions, Color, ExecutionSession, MeshOptions, MobjectTarget, RateFunction, Scene,
-    SemanticCamera3D, SemanticProjection3D, SemanticVec3, SemanticWorldTransform3D,
-    WorldAffineEdit,
+    SemanticCamera3D, SemanticProjection3D, SemanticSpatialCompositionDomain, SemanticVec3,
+    SemanticWorldTransform3D, WorldAffineEdit,
 };
 use noon_core::{
-    CompositionTimeMap, SemanticAnimationCompositionKind, SemanticMutationTransaction,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticPaint, SemanticRotation3D,
-    SemanticStyle, TrackTiming,
+    CompositionTimeMap, ManimCamera3DProfile, SemanticAnimationCompositionKind,
+    SemanticMutationTransaction, SemanticObjectTrackProperty, SemanticObjectTrackValues,
+    SemanticPaint, SemanticRotation3D, SemanticStyle, TrackTiming,
 };
 
 const DURATION: f64 = 1.0;
@@ -61,7 +61,7 @@ pub fn session() -> Result<ExecutionSession, String> {
     scene.add(&triangle).map_err(|error| error.to_string())?;
 
     let mut prism = scene
-        .prism_face_family(SemanticVec3::new(1.0, 0.7, 0.5), Color::BLUE, 0.75)
+        .prism_face_family(SemanticVec3::new(1.0, 0.7, 0.5), Color::BLUE, 0.75, false)
         .map_err(|error| error.to_string())?;
     let prism_center = SemanticVec3::new(1.6, -1.9, 0.25);
     // Keep the translucent Prism away from the opaque triangle and the axial
@@ -192,6 +192,80 @@ pub fn session() -> Result<ExecutionSession, String> {
         )
     };
     result.map_err(|error| error.to_string())
+}
+
+/// Default shaded, translucent Cube and Prism faces under finite camera motion.
+pub fn cairo_cube_prism_session() -> Result<ExecutionSession, String> {
+    let mut scene = Scene::new();
+    let camera = scene
+        .camera_3d_profile(
+            ManimCamera3DProfile {
+                phi: 0.6,
+                theta: -1.2,
+                gamma: 0.0,
+                focal_distance: 5.0,
+                zoom: 1.0,
+                frame_height: 8.0,
+                frame_center: SemanticVec3::ZERO,
+            },
+            NEAR,
+            FAR,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let mut cube = scene
+        .cube_face_family(1.0, Color::RED, 0.75, true)
+        .map_err(|error| error.to_string())?;
+    cube.world_affine(WorldAffineEdit::Shift(SemanticVec3::new(-1.2, 0.0, 0.0)))
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_in_spatial_composition_domain(
+            MobjectTarget::Family(&cube),
+            SemanticSpatialCompositionDomain::World,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let mut prism = scene
+        .prism_face_family(SemanticVec3::new(1.0, 0.8, 0.6), Color::BLUE, 0.75, true)
+        .map_err(|error| error.to_string())?;
+    prism
+        .world_affine(WorldAffineEdit::Shift(SemanticVec3::new(1.2, 0.0, 0.0)))
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_in_spatial_composition_domain(
+            MobjectTarget::Family(&prism),
+            SemanticSpatialCompositionDomain::World,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let movement = scene
+        .declare_camera_profile_move(
+            &camera,
+            ManimCamera3DProfile {
+                phi: 0.8,
+                theta: -0.1,
+                gamma: 0.2,
+                focal_distance: 5.0,
+                zoom: 1.1,
+                frame_height: 8.0,
+                frame_center: SemanticVec3::new(0.2, 0.0, 0.0),
+            },
+            AnimationOptions::new()
+                .run_time(DURATION)
+                .rate_func(RateFunction::Linear),
+        )
+        .map_err(|error| error.to_string())?;
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    session
+        .activate_animation_segment(
+            &scene.integration_store().borrow(),
+            movement.node_id(),
+            AnimationOptions::new(),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(session)
 }
 
 fn opaque(color: Color) -> SemanticStyle {

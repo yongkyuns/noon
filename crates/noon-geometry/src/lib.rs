@@ -30,8 +30,8 @@ pub use mesh_helpers::{line_3d_mesh, triangular_polyhedron_mesh};
 
 pub use solids::{
     cone_mesh, cone_mesh_range, cone_parts, cone_parts_range, cube_mesh, cylinder_mesh,
-    cylinder_mesh_range, cylinder_parts, cylinder_parts_range, prism_faces, prism_mesh,
-    sphere_mesh, sphere_mesh_range, surface_mesh, torus_mesh,
+    cylinder_mesh_range, cylinder_parts, cylinder_parts_range, prism_faces, prism_faces_cairo,
+    prism_mesh, sphere_mesh, sphere_mesh_range, surface_mesh, torus_mesh,
 };
 pub use surface::{
     CairoSurfaceAppearance, CairoSurfaceCoordinates, CairoSurfaceGrid, SurfaceCell,

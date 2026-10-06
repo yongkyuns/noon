@@ -418,7 +418,7 @@ impl SpatialGpuState {
                         // Object-depth ordering is well-defined for a retained
                         // face family. Arbitrary multi-face translucent meshes
                         // require a different ordering contract and remain rejected.
-                        if alpha > 0.0 && alpha < 1.0 && !single_face(mesh) {
+                        if alpha > 0.0 && alpha < 1.0 && !mesh.is_single_face() {
                             return Err(SpatialPrepareError::TransparentMesh(index));
                         }
                         let stroke = object
@@ -1239,26 +1239,6 @@ fn validate_point_lit_normals(
         return Err(SpatialPrepareError::PointLitMeshNeedsNormals(object_index));
     }
     Ok(())
-}
-fn single_face(mesh: &MeshResource) -> bool {
-    match (mesh.positions().len(), mesh.indices().len()) {
-        (3, 3) => {
-            let mut indices = [mesh.indices()[0], mesh.indices()[1], mesh.indices()[2]];
-            indices.sort_unstable();
-            indices == [0, 1, 2]
-        }
-        (4, 6) => {
-            let indices = mesh.indices();
-            let mut first = [indices[0], indices[1], indices[2]];
-            let mut second = [indices[3], indices[4], indices[5]];
-            first.sort_unstable();
-            second.sort_unstable();
-            first.windows(2).all(|p| p[0] != p[1])
-                && second.windows(2).all(|p| p[0] != p[1])
-                && first.iter().filter(|i| second.contains(i)).count() == 2
-        }
-        _ => false,
-    }
 }
 fn lower_vertices(mesh: &MeshResource) -> Result<Vec<Vertex>, SpatialPrepareError> {
     mesh.positions()

@@ -2362,7 +2362,6 @@ impl SemanticMutationTransaction {
                     validate_cairo_surface_resource(
                         store,
                         state.spatial_material(),
-                        state.surface_uv_cell(),
                         *content,
                         index,
                     )?;
