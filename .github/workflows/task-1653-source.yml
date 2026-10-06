@@ -1,0 +1,30 @@
+name: Task 1653 source snapshot (do not merge)
+on:
+  push:
+    branches: [task/1653-renderer-source-audit]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 886ede3e2243d621cda5823b30a7911f4e382417
+          persist-credentials: false
+      - name: Archive exact base source for renderer implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 886ede3e2243d621cda5823b30a7911f4e382417
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/noon-886ede3e-source.tar.gz"
+          sha256sum "$RUNNER_TEMP/noon-886ede3e-source.tar.gz" > "$RUNNER_TEMP/source.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: task-1653-exact-base-source
+          path: |
+            ${{ runner.temp }}/noon-886ede3e-source.tar.gz
+            ${{ runner.temp }}/source.sha256
+          retention-days: 3
+          if-no-files-found: error
