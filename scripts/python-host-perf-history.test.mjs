@@ -168,7 +168,7 @@ test("controlled-history diagnostics are after scored rows and cannot rescore th
   const controlled = runner.indexOf("  // Fresh-peer causal controls.");
   assert.ok(controlled > runner.indexOf("localDiagnostics.push"));
   assert.ok(controlled > runner.indexOf("qualifyProductMetrics(comparison)"));
-  const block = runner.slice(controlled, runner.indexOf('} catch (error) {', controlled));
+  const block = runner.slice(controlled, runner.indexOf('  failures.push({ kind: "execution"', controlled));
   assert.match(block, /diagnoseControlledHistory/);
   assert.match(block, /repeated_same_source/);
   assert.match(block, /heterogeneous_sources/);
