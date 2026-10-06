@@ -1,0 +1,76 @@
+# Temporary #1653 diagnostic. DO NOT MERGE.
+name: Camera draw cost investigation
+on:
+  push:
+    branches: [codex/camera-absolute-fps-1882]
+    paths: [.github/workflows/camera-draw-cost-probe.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  investigate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout diagnostic tools
+        uses: actions/checkout@v7
+        with:
+          path: probe
+      - name: Checkout pinned post-1882 source
+        uses: actions/checkout@v7
+        with:
+          ref: 886ede3e2243d621cda5823b30a7911f4e382417
+          path: source
+      - name: Download exact published package
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37496512820
+          artifact-ids: 11428082914
+          path: published
+      - name: Validate probe and install pinned browser
+        working-directory: source
+        run: |
+          node --test ../probe/.github/ci/camera-draw-probe.test.mjs
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Execute all twelve fixed-order conditions
+        shell: bash
+        run: |
+          mkdir -p results
+          overall=0
+          for item in normal-1:normal line-1:skip-line path-1:skip-path text-1:skip-text present-1:skip-present clip-1:clip-all clip-2:clip-all present-2:skip-present text-2:skip-text path-2:skip-path line-2:skip-line normal-2:normal; do
+            label=${item%:*}
+            mode=${item#*:}
+            mkdir -p "results/$label"
+            rm -rf site
+            mkdir -p site/web
+            tar -xf published/artifact.tar -C site/web
+            set +e
+            python probe/.github/ci/camera-draw-prepare.py source site "results/$label" probe/.github/ci "$mode" > "results/$label/prepare.log" 2>&1
+            code=$?
+            if [[ "$code" == 0 ]]; then
+              NOON_PRODUCT_SITE_ROOT="$PWD/site" \
+              NOON_PRODUCT_ARTIFACT_DIR="$PWD/results/$label" \
+              NOON_PRODUCT_EXAMPLE=showcase-camera-follows-path \
+              NOON_PRODUCT_LABEL="$label" \
+              NOON_CAMERA_DRAW_MODE="$mode" \
+                node source/scripts/camera-draw-run.mjs > "results/$label/run.log" 2>&1
+              code=$?
+            fi
+            set -e
+            printf '%s\n' "$code" > "results/$label/exit-status.txt"
+            echo "=== $label: exit $code ==="
+            tail -15 "results/$label/prepare.log"
+            test ! -f "results/$label/run.log" || tail -15 "results/$label/run.log"
+            if [[ "$code" != 0 ]]; then overall=1; fi
+          done
+          exit "$overall"
+      - name: Retain every result and failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: camera-draw-cost-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results
+          if-no-files-found: error
+          retention-days: 14
