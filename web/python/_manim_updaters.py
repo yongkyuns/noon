@@ -14,12 +14,17 @@ import math
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
+from weakref import WeakValueDictionary
 
 import noon as _base
 from _noon_errors import engine_await, engine_call, raise_engine_error
 
 _NEXT_SESSION_ID = 0
-_TRACKED_MOBJECTS: list[_base.Mobject] = []
+# Discovery is not ownership. Detached wrappers can hold self-referential
+# registration history before any Scene/session can release them. Use identity
+# keys (not Mobject equality/hash) and retain wrappers only through their actual
+# callers, scenes, and active callback sessions. Dict order preserves admission.
+_TRACKED_MOBJECTS: WeakValueDictionary[int, _base.Mobject] = WeakValueDictionary()
 _CANONICAL_SESSIONS: dict[int, "_CanonicalCallbackSession"] = {}
 _ACTIVE_CONTEXTS: dict[int, Any] = {}
 _ACTIVE_CANONICAL_CONTEXT: ContextVar["_CanonicalCallbackContext | None"] = ContextVar(
@@ -34,8 +39,9 @@ def _coordinate_operations():
 
 
 def _track(mobject: _base.Mobject) -> None:
-    if not any(existing is mobject for existing in _TRACKED_MOBJECTS):
-        _TRACKED_MOBJECTS.append(mobject)
+    key = id(mobject)
+    if key not in _TRACKED_MOBJECTS:
+        _TRACKED_MOBJECTS[key] = mobject
 
 
 @dataclass(slots=True)
@@ -231,7 +237,7 @@ def prepare_canonical_callbacks(scene: _base.Scene, context: object) -> int | No
     """
 
     history: list[_UpdaterRegistration] = []
-    for mobject in _TRACKED_MOBJECTS:
+    for mobject in _TRACKED_MOBJECTS.values():
         if mobject._scene is scene:
             history.extend(_registration_history(mobject))
     if not history:
@@ -1921,8 +1927,9 @@ def release_session(session_id: int) -> None:
         region.discard_membership()
     session.pending_region_contexts.clear()
     session.pending_callback_context = None
-    _TRACKED_MOBJECTS[:] = [item for item in _TRACKED_MOBJECTS
-                           if getattr(item, "_scene", None) is not session.scene]
+    for key, item in list(_TRACKED_MOBJECTS.items()):
+        if getattr(item, "_scene", None) is session.scene:
+            _TRACKED_MOBJECTS.pop(key, None)
     session.callbacks.clear()
     session.callback_ids.clear()
     session.targets.clear()

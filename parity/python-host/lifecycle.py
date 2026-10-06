@@ -1,5 +1,7 @@
 from noon import *
+import gc
 import json
+import weakref
 
 def close(actual, expected, tolerance=2e-5):
     assert len(actual) == len(expected), (actual, expected)
@@ -8,8 +10,18 @@ def close(actual, expected, tolerance=2e-5):
 def report(case, observations):
     print("NOON_HOST_REPORT " + json.dumps({"case": case, "observations": observations}, allow_nan=False))
 
+def abandoned_updater_ref():
+    temporary = Circle(0.1)
+    temporary.add_updater(lambda obj, dt: None)
+    return weakref.ref(temporary)
+
 class Lifecycle(Scene):
     async def construct(self):
+        # This is a conformance-only collection point, not runtime GC policy.
+        # An unbound wrapper has no owning session to release its updater.
+        abandoned = abandoned_updater_ref()
+        gc.collect()
+        assert abandoned() is None, "updater discovery owns an abandoned wrapper"
         a = Square(0.5).shift(LEFT)
         self.add(a)
         identity = a._semantic_handle
