@@ -304,6 +304,8 @@ async function initializePyodide() {
       incrementValueLive: (context, delta) => context.liveIncrementDecimalValue(handle.mobject(), latexCompiler, delta),
     };
   };
+  self.noonDecimalNumberLabelMembers = (family) =>
+    Array.from(family.decimalNumberLabelMembers(), numericHandle);
   self.noonCreateAuthoringDecimalNumberHandle = (value, places, sign, commas, ellipsis, unit, fontSize, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
     const args = [value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler];

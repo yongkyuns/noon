@@ -9,8 +9,9 @@ from _noon_errors import engine_call
 
 try:
     from js import noonNumberPlaneDecimalCoordinateLabelFamilies as _plane_decimal_labels
+    from js import noonDecimalNumberLabelMembers as _decimal_members
 except ImportError:
-    _plane_decimal_labels = None
+    _plane_decimal_labels = _decimal_members = None
 
 
 def _cold_labels():
@@ -60,10 +61,12 @@ def _family(handle, size, color):
 def _decimal_family(handle, color):
     from _manim_numbers import DecimalNumber
 
+    if _decimal_members is None:
+        raise RuntimeError("DecimalNumber labels require the shared Rust authoring host")
     members = [DecimalNumber._from_numeric_handle(
         member, None, color=color, presentation_applied=True,
     )
-               for member in engine_call(handle.decimalNumberLabelMembers)]
+               for member in engine_call(_decimal_members, handle)]
     return _plot._family(object.__new__(_compat.Group), handle, members)
 
 

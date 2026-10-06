@@ -150,6 +150,7 @@ class NumericLabelAdapterTests(unittest.TestCase):
             calls.append(args)
             return FamilyHandle(), FamilyHandle()
         patch.object(labels, "_plane_decimal_labels", decimal_bridge).start()
+        patch.object(labels, "_decimal_members", side_effect=lambda family: family.decimalNumberLabelMembers()).start()
         patch.object(labels._plot, "_family", side_effect=lambda wrapper, handle, members: (handle, members)).start()
         result = labels.add_number_plane_coordinates(
             plane, (1.0,), (-1.0,), x_config=None, y_config=None,
@@ -178,6 +179,27 @@ class NumericLabelAdapterTests(unittest.TestCase):
                 plane, None, None, x_config=None, y_config=None, config={}
             )
         self.assertEqual(self.options, [])
+
+    def test_nonempty_decimal_label_family_uses_numeric_facades_without_restyling(self):
+        from _manim_numbers import DecimalNumber
+
+        family = Owned()
+        object_handle = SimpleNamespace()
+        numeric = SimpleNamespace(mobject=lambda: object_handle, text=lambda: "-1.0",
+                                  fontSize=lambda context: 18, value=lambda context: -1)
+        bridge = patch.object(labels, "_decimal_members", return_value=(numeric,)).start()
+        wrap = patch.object(labels._plot, "_family",
+                            side_effect=lambda wrapper, handle, members: members).start()
+        members = labels._decimal_family(family, labels._base.RED)
+        bridge.assert_called_once_with(family)
+        wrap.assert_called_once()
+        self.assertEqual(len(members), 1)
+        number = members[0]
+        self.assertIsInstance(number, DecimalNumber)
+        self.assertIs(number._semantic_handle, object_handle)
+        self.assertEqual(number.source, "-1.0")
+        self.assertEqual(number.font_size, 18)
+        self.assertEqual(number.get_value(), -1)
 
     def test_number_plane_rejects_single_axis_native_font_fallback(self):
         plane = SimpleNamespace(x_axis=object(), y_axis=object(),
