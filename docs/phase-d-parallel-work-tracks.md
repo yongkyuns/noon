@@ -2,22 +2,44 @@
 
 ## Status
 
-This document is an execution/scheduling overlay for Phase D of `docs/architecture.md` and #956.
+This document is an execution/scheduling overlay for Phase D of `docs/architecture.md`, the completed #956 milestone, and its #1879 follow-up.
 
 It does **not** define a second architecture, roadmap, goal set, acceptance criterion, 3D model, renderer architecture, or frontend requirement. The architecture, Phase D cases, sequencing constraints, gates, and completion checklist remain exactly those stated in `docs/architecture.md` and the owning issues. If this document conflicts with them, the architecture and owning case win.
 
 The purpose of this document is only to expose safe concurrency inside the existing Phase D plan and to separate the future JS/TypeScript frontend lane from the 3D capability lane.
 
-The bounded D1–D5 profiles are implemented by #1865, #1866, and #1867. Their
-qualification uses the shared native, direct-WASM, and worker paths; the camera,
-axes, surface, primitive, and vector-space raster pairs run on WebGPU and WebGL.
+The bounded D1–D5 profiles are implemented by #1865, #1866, and #1867, with
+additional camera/Surface breadth in #1869. Their qualification uses the shared
+native, direct-WASM, and worker paths; the camera, axes, surface, primitive, and
+vector-space raster pairs run on WebGPU and WebGL. #956 records the completed
+bounded milestone, not broad drop-in Manim 3D support. Remaining rendering/API
+work and coordination belong to [#1879](https://github.com/yongkyuns/noon/issues/1879).
 The optional D6 facade remains tracked by #259. Full pinned gallery cases that
 require capabilities outside these profiles remain explicit follow-ups in #254;
 the inventory below distinguishes them from the qualified representative scenes.
+The foundation tracks and handoffs below are not a queue to restart D1–D5.
+
+## Current follow-up scheduling
+
+Use #1879 and its linked owners for detailed scope, acceptance and current
+claims; this table only identifies work that can proceed beside other work.
+
+| Parallel lane | Owner and scheduling boundary |
+| --- | --- |
+| Exact reference qualification | #254: start with FollowingGraphCamera over its existing shared prerequisites; retain all seven pinned cases and separate semantic failures from appearance differences. |
+| Rendering/default behavior | #1879: shared World-stroke/axis work can proceed beside reference qualification; give shading and staged transparency their own bounded contracts before promotion. |
+| Geometry/vector-space breadth | #1879: independent constructor, axes and composition batches consume the established substrate rather than waiting for general intersections or every reference case. |
+| Performance and pacing | #1653: physical-device attribution, cumulative anchors and representative 3D workloads run continuously beside promoted slices, reusing the existing Product Gate and diagnostics. |
+
+Optional D6/#259 remains independent. Native CPython/Pyodide same-source
+conformance belongs to #1874, not to the native-Rust/browser-Python comparison;
+coordinate binding edits with that owner. Source hot reload remains #64. These
+adjacent tracks do not block the completed bounded milestone or introduce new
+scene/runtime authorities. Keep the per-case evidence in the existing issues.
 
 ## Principle
 
-The existing D1 -> D2 -> D3 -> D4 -> D5 capability progression remains authoritative. Parallelism exists inside and beside that progression; it does not erase the stated readiness gates.
+The established D1 -> D2 -> D3 -> D4 -> D5 capability progression remains authoritative. Its bounded readiness gates have been met; the handoff map below explains dependencies, not unfinished foundation work. Follow-up slices preserve those contracts and qualify only the new capability they promote.
 
 ```text
 D1 world/camera/numeric ----+
@@ -107,6 +129,9 @@ Owned by the Phase A semantic-handle architecture and consumed by D6/#259.
 This handoff is independent of the 3D renderer progression. D6 may expose only capabilities whose shared semantic operations are stable; it does not wait for complete D1–D5 breadth and D1–D5 do not wait for JS parity.
 
 ## Parallel tracks
+
+The D1–D5 owner labels below identify completed substrate handoffs. New rendering
+and API scope routes through #1879, while #254 retains reference-case acceptance.
 
 ### Track DW — world and camera semantics
 
@@ -241,7 +266,7 @@ This preserves the existing Phase D sequencing. The main new scheduling clarific
 7. **Treat D6 as frontend work.** JS/TS consumes shared semantic handles and remains independent of 3D breadth.
 8. **Keep 2D regressions continuously green.** Extending the engine to 3D must not silently change established 2D transform/camera/render semantics.
 
-## Suggested integration cadence
+## Foundation integration cadence (completed)
 
 ```text
 DW and DM land narrow D1 contracts in parallel
@@ -258,4 +283,8 @@ DR reaches the existing D2 gate
 DJ progresses independently whenever the shared frontend ABI/capability it needs is stable.
 ```
 
-The final Phase D exit remains the existing #956 completion checklist. Parallel execution changes scheduling only; it does not change the 3D architecture, readiness gates, capability scope, or optional status of the JS/TypeScript frontend.
+The bounded Phase D exit is recorded as complete in #956. Remaining work and
+its evidence stay in #1879 and the linked owners, not in a reopened foundation
+checklist. Parallel execution changes scheduling only; it does not change the
+3D architecture, readiness contracts, capability scope, or optional status of
+the JS/TypeScript frontend.
