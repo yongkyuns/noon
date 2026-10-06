@@ -2199,9 +2199,10 @@ mod tests {
         let previous_normal = Vec2::new(-previous.y, previous.x) * outer_sign;
         let next_normal = Vec2::new(-next.y, next.x) * outer_sign;
         let miter_direction = (previous_normal + next_normal).normalized().unwrap();
-        let miter_offset = miter_direction * (0.5 / miter_direction.dot(previous_normal));
-        assert!((miter_offset.dot(previous_normal).abs() - 0.5).abs() < 1.0e-5);
-        assert!((miter_offset.dot(next_normal).abs() - 0.5).abs() < 1.0e-5);
+        let dot = |a: Vec2, b: Vec2| a.x * b.x + a.y * b.y;
+        let miter_offset = miter_direction * (0.5 / dot(miter_direction, previous_normal));
+        assert!((dot(miter_offset, previous_normal).abs() - 0.5).abs() < 1.0e-5);
+        assert!((dot(miter_offset, next_normal).abs() - 0.5).abs() < 1.0e-5);
         assert!(
             miter_offset.length() <= 2.0,
             "miter remains within the 4x width limit"
@@ -2211,7 +2212,7 @@ mod tests {
         }
         for progress in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
             let angle = (previous_normal.x * next_normal.y - previous_normal.y * next_normal.x)
-                .atan2(previous_normal.dot(next_normal))
+                .atan2(dot(previous_normal, next_normal))
                 * progress;
             let round_offset = Vec2::new(
                 previous_normal.x * angle.cos() - previous_normal.y * angle.sin(),
