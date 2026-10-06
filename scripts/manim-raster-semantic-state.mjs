@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveRasterReferenceSamples } from "./manim-raster-support.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactRoot = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts");
@@ -116,7 +117,7 @@ function compareSemanticStates(referenceState, noonState) {
   };
 }
 
-function referenceStateForSample(fixtureId, manimFixture, sample) {
+function referenceStateForSample(fixtureId, fixture, manimFixture, sample) {
   assert.ok(sample && typeof sample === "object", `${fixtureId}: malformed raster sample`);
   assert.ok(typeof sample.time === "number" && Number.isFinite(sample.time),
     `${fixtureId}: sample time must be finite`);
@@ -133,6 +134,28 @@ function referenceStateForSample(fixtureId, manimFixture, sample) {
   }
   assert.ok(sample.referenceKind === "sequence" || sample.referenceKind === "frozen-hold",
     `${fixtureId}: unsupported reference kind ${String(sample.referenceKind)}`);
+  assert.ok(typeof sample.materializedTime === "number" && Number.isFinite(sample.materializedTime),
+    `${fixtureId}: ${sample.referenceKind} sample is missing a finite materialized time`);
+  if (sample.referenceKind === "frozen-hold") {
+    const resolved = resolveRasterReferenceSamples(
+      (manimFixture.frames ?? []).map(frame => frame.time),
+      [sample.time],
+      {
+        logicalDuration: Number(fixture.expected_duration),
+        terminalState: manimFixture.terminal_state,
+        terminalPng: manimFixture.terminal_png,
+        frozenIntervals: manimFixture.frozen_intervals ?? [],
+        pngFrameCount: manimFixture.frame_count,
+        semanticFrames: manimFixture.frames,
+      },
+    )[0];
+    assert.equal(resolved.referenceKind, "frozen-hold",
+      `${fixtureId}: logical time ${sample.time} is not covered by a recorded frozen hold`);
+    assert.equal(resolved.frameIndex, sample.frameIndex,
+      `${fixtureId}: frozen-hold frame index does not match recorded interval`);
+    assert.ok(Math.abs(resolved.materializedTime - sample.materializedTime) < 1e-9,
+      `${fixtureId}: frozen-hold materialized time does not match recorded interval`);
+  }
   assert.ok(Number.isSafeInteger(sample.frameIndex) && sample.frameIndex >= 0,
     `${fixtureId}: invalid ${sample.referenceKind} frame index ${String(sample.frameIndex)}`);
   assert.ok(Array.isArray(manimFixture.frames) && sample.frameIndex < manimFixture.frames.length,
@@ -163,10 +186,12 @@ for (const fixtureReport of report.fixtures) {
     assert.ok(!backendReport.error, `${fixture.id}/${backend}: raster execution failed`);
     assert.ok(Array.isArray(backendReport.samples), `${fixture.id}/${backend}: missing raster samples`);
     for (const sample of backendReport.samples) {
-      const referenceState = referenceStateForSample(fixture.id, manimFixture, sample);
+      const referenceState = referenceStateForSample(fixture.id, fixture, manimFixture, sample);
       const noonState = sample.debugFrame;
       assert.ok(noonState?.publication, `${fixture.id}/${backend}: missing shared runtime capture`);
-      assert.ok(Math.abs(referenceState.time - sample.time) < 1e-9);
+      const referenceTime = sample.referenceKind === "terminal" ? sample.time : sample.materializedTime;
+      assert.ok(Math.abs(referenceState.time - referenceTime) < 1e-9,
+        `${fixture.id}/${backend}: Manim state time does not match its materialized time`);
       assert.ok(typeof noonState.time === "number" && Number.isFinite(noonState.time),
         `${fixture.id}/${backend}: captured shared runtime time is invalid`);
       assert.ok(Math.abs(noonState.time - sample.time) < 1e-9);

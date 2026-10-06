@@ -9,12 +9,13 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const checkerPath = path.join(repoRoot, "scripts/manim-raster-semantic-state.mjs");
 
-async function runChecker({ frameCount, frames, terminalState, samples }) {
+async function runChecker({ frameCount, frames, terminalState, samples, duration = 1,
+  frozenIntervals = [], terminalPng }) {
   const root = await mkdtemp(path.join(os.tmpdir(), "noon-semantic-state-"));
   const artifactRoot = path.join(root, "artifacts");
   const semanticRoot = path.join(artifactRoot, "semantic");
   await mkdir(semanticRoot, { recursive: true });
-  const fixture = { id: "sample-fixture", scene: "SampleFixture" };
+  const fixture = { id: "sample-fixture", scene: "SampleFixture", expected_duration: duration };
   const manifestPath = path.join(root, "bounded-manifest.json");
   await writeFile(manifestPath, JSON.stringify({
     reference: { version: "0.21.0", frame_rate: 30 },
@@ -27,6 +28,8 @@ async function runChecker({ frameCount, frames, terminalState, samples }) {
       id: fixture.id,
       frame_count: frameCount,
       frames,
+      frozen_intervals: frozenIntervals,
+      ...(terminalPng === undefined ? {} : { terminal_png: terminalPng }),
       ...(terminalState === undefined ? {} : { terminal_state: terminalState }),
     }],
   }));
@@ -39,6 +42,7 @@ async function runChecker({ frameCount, frames, terminalState, samples }) {
         webgpu: {
           samples: samples.map(sample => ({
             ...sample,
+            materializedTime: sample.materializedTime ?? sample.time,
             debugFrame: { time: sample.time, publication: {}, objects: [] },
           })),
         },
@@ -63,6 +67,7 @@ test("semantic artifact uses terminal state for a zero-duration terminal-only re
   const run = await runChecker({
     frameCount: 0,
     frames: [],
+    duration: 0,
     terminalState,
     samples: [{ frameIndex: null, referenceKind: "terminal", terminalState: true, time: 0 }],
   });
@@ -115,6 +120,65 @@ test("sequence sample resolves its indexed Manim frame and keeps a sequence labe
     assert.equal(artifact.referenceKind, "sequence");
   } finally {
     await rm(run.root, { recursive: true, force: true });
+  }
+});
+
+test("sequence, repeated frozen holds, and terminal retain distinct logical and materialized times", async () => {
+  const run = await runChecker({
+    frameCount: 3,
+    duration: 3,
+    frames: [0, 1, 2].map(time => ({ time, marker: `frame-${time}`, objects: [] })),
+    frozenIntervals: [{ frame_index: 2, start_time: 2, end_time: 3 }],
+    terminalPng: { path: "terminal.png" },
+    terminalState: { time: 3, marker: "terminal", objects: [] },
+    samples: [
+      { frameIndex: 2, referenceKind: "sequence", time: 2, materializedTime: 2 },
+      { frameIndex: 2, referenceKind: "frozen-hold", time: 2.5, materializedTime: 2 },
+      { frameIndex: 2, referenceKind: "frozen-hold", time: 2.75, materializedTime: 2 },
+      { frameIndex: null, referenceKind: "terminal", terminalState: true, time: 3 },
+    ],
+  });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr);
+    const dir = path.join(run.artifactRoot, "semantic/webgpu/sample-fixture");
+    for (const name of ["frame-0002.json", "frame-0002-hold-2_5.json",
+      "frame-0002-hold-2_75.json", "terminal.json"]) {
+      await readFile(path.join(dir, name), "utf8");
+    }
+    const hold = JSON.parse(await readFile(path.join(dir, "frame-0002-hold-2_5.json"), "utf8"));
+    assert.equal(hold.manim.time, 2);
+    assert.equal(hold.noon.time, 2.5);
+    const hold2 = JSON.parse(await readFile(path.join(dir, "frame-0002-hold-2_75.json"), "utf8"));
+    assert.equal(hold2.manim.time, 2);
+    assert.equal(hold2.noon.time, 2.75);
+  } finally {
+    await rm(run.root, { recursive: true, force: true });
+  }
+});
+
+test("frozen hold outside the recorded interval fails closed", async (t) => {
+  for (const item of [
+    { name: "no interval", frozenIntervals: [] },
+    { name: "interval ends before sample", frozenIntervals: [
+      { frame_index: 2, start_time: 2, end_time: 2.4 },
+    ] },
+  ]) {
+    await t.test(item.name, async () => {
+      const run = await runChecker({
+        frameCount: 3,
+        duration: 3,
+        frames: [0, 1, 2].map(time => ({ time, objects: [] })),
+        frozenIntervals: item.frozenIntervals,
+        terminalState: { time: 3, objects: [] },
+        samples: [{ frameIndex: 2, referenceKind: "frozen-hold", time: 2.5, materializedTime: 2 }],
+      });
+      try {
+        assert.notEqual(run.result.status, 0);
+        assert.match(run.result.stderr, /no reference frame at requested logical time 2\.5/);
+      } finally {
+        await rm(run.root, { recursive: true, force: true });
+      }
+    });
   }
 });
 
