@@ -16,7 +16,7 @@ pub use spatial_composition::{
     CompiledCairoPathAppearance, CompiledLocalBounds2D64, CompiledWorldBounds3D64,
 };
 mod semantic_lowering;
-use spatial_composition::CompiledSpatialAnchorGroup;
+use spatial_composition::{CairoPathPointResourceCache, CompiledSpatialAnchorGroup};
 mod transaction_preflight;
 mod transform;
 
@@ -904,7 +904,7 @@ pub struct CompiledScene {
     spatial_anchor_bounds_row_groups: HashMap<u32, Vec<u32>>,
     spatial_anchor_local_bounds: HashMap<u32, Option<CompiledLocalBounds2D64>>,
     cairo_path_control_points: HashMap<u32, Arc<[SemanticVec3]>>,
-    cairo_path_points_by_resource: HashMap<GeometryResourceHandle, std::sync::Weak<[SemanticVec3]>>,
+    cairo_path_points_by_resource: CairoPathPointResourceCache,
     resources: CompiledResources,
 }
 
@@ -1400,7 +1400,7 @@ impl CompiledScene {
             spatial_anchor_bounds_row_groups: HashMap::new(),
             spatial_anchor_local_bounds: HashMap::new(),
             cairo_path_control_points: HashMap::new(),
-            cairo_path_points_by_resource: HashMap::new(),
+            cairo_path_points_by_resource: CairoPathPointResourceCache::default(),
             resources: CompiledResources::default(),
         };
         compiled.rebuild_spatial_anchor_groups();

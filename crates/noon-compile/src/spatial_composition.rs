@@ -3,7 +3,33 @@ use noon_core::{
     GeometryRef, GeometryResource, GeometryResourceHandle, GeometryResourceLookup,
     SemanticSpatialMaterial, SemanticVec3,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct CairoPathPointResourceCache(
+    HashMap<GeometryResourceHandle, std::sync::Weak<[SemanticVec3]>>,
+);
+
+impl PartialEq for CairoPathPointResourceCache {
+    fn eq(&self, _other: &Self) -> bool {
+        // Weak memoization is an execution optimization, not compiled scene state.
+        true
+    }
+}
+
+impl std::ops::Deref for CairoPathPointResourceCache {
+    type Target = HashMap<GeometryResourceHandle, std::sync::Weak<[SemanticVec3]>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for CairoPathPointResourceCache {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 fn convex_hull(mut points: Vec<noon_core::Vec2>) -> Vec<noon_core::Vec2> {
     points.sort_by(|a, b| a.x.total_cmp(&b.x).then_with(|| a.y.total_cmp(&b.y)));
