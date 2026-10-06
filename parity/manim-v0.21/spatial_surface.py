@@ -1,5 +1,6 @@
 from manim import *
 import math
+import numpy as np
 
 
 class SpatialSurface(ThreeDScene):
@@ -52,6 +53,6 @@ class CairoConeBodies(ThreeDScene):
         )
         default_cone = Cone().shift((-1.25, 0, 0))
         tilted_partial_cone = Cone(
-            base_radius=0.8, height=1.4, direction=(1, 2, 2), u_min=0.2,
+            base_radius=0.8, height=1.4, direction=np.array([1, 2, 2]), u_min=0.2,
         ).shift((1.25, 0, 0))
         self.add(default_cone, tilted_partial_cone)
