@@ -296,7 +296,7 @@ jobs:
         working-directory: candidate
         env:
           NOON_PRODUCT_IMAGE_TESTS: "1"
-        run: node --test web/playground-product-compare-validation.test.mjs
+        run: node --test scripts/paired-product-metrics.test.mjs web/playground-product-compare-validation.test.mjs
 
       - name: Recheck executable tutorial corpus
         working-directory: candidate
@@ -352,7 +352,7 @@ jobs:
           for noon_example in parity-square-and-circle showcase-camera-follows-path; do
             noon_evidence="browser-smoke-artifacts/product-gate"
             if [[ "$noon_example" == showcase-camera-follows-path ]]; then noon_evidence="$noon_evidence/camera"; fi
-            for noon_pair in 1 2 3; do
+            for noon_pair in 1 2 3 4 5 6 7; do
               noon_order="baseline candidate"
               if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
               noon_position=0
@@ -376,14 +376,15 @@ jobs:
           NOON_PRODUCT_MAX_LATENCY_RATIO: "1.25"
           NOON_PRODUCT_LATENCY_SLACK_MS: "350"
           NOON_PRODUCT_MIN_FPS_RATIO: "0.80"
+          NOON_PRODUCT_STRICT_MIN_FPS_RATIO: "0.97"
           NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO: "0.015"
         run: |
           node scripts/playground-product-compare.mjs \
             browser-smoke-artifacts/product-gate/baseline \
-            browser-smoke-artifacts/product-gate/candidate --pairs 3
+            browser-smoke-artifacts/product-gate/candidate --pairs 7
           node scripts/playground-product-compare.mjs \
             browser-smoke-artifacts/product-gate/camera/baseline \
-            browser-smoke-artifacts/product-gate/camera/candidate --pairs 3
+            browser-smoke-artifacts/product-gate/camera/candidate --pairs 7
 
       - name: Measure fixed-work Python host overhead on matched packages
         if: ${{ !cancelled() && steps.production-verified.outcome == 'success' }}
