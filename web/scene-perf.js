@@ -1,4 +1,3 @@
-import { PythonAuthoringClient } from "./authoring-client.js";
 import { ProvenancedPythonAuthoringClient } from "./provenanced-authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
@@ -58,11 +57,9 @@ function failSource(error) {
 try {
   const source = await loadText(sourcePath);
   const workerStarted = performance.now();
-  client = rendererSamples === null
-    ? new PythonAuthoringClient()
-    : new ProvenancedPythonAuthoringClient();
+  client = new ProvenancedPythonAuthoringClient();
   const readyIdentity = await client.ready();
-  if (rendererSamples !== null) runtimeBuildIdentity = readyIdentity;
+  runtimeBuildIdentity = readyIdentity;
   const workerStartupMs = performance.now() - workerStarted;
   execution = new AuthoringExecutionClient(canvas, {
     onError: failSource,
@@ -260,6 +257,7 @@ try {
       ...(includeRendererGpuIdentity ? { rendererGpuIdentity: before.rendererGpuIdentity } : {}),
       devicePixelRatio: window.devicePixelRatio || 1,
       viewportCssPixels: [canvas.clientWidth, canvas.clientHeight],
+      backingResolution: [canvas.width, canvas.height],
       targetHz,
     },
     setup: { workerStartupMs, initialExecutionReadyMs, warmupFrames },
