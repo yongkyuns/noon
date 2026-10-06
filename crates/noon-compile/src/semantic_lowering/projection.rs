@@ -488,6 +488,9 @@ pub enum SemanticLoweringError {
     UnsupportedSpatialMaterial {
         node: SemanticNodeId,
     },
+    UnsupportedWorldPathStyle {
+        node: SemanticNodeId,
+    },
     UnsupportedSpatialCompositionDomain {
         node: SemanticNodeId,
     },
@@ -573,6 +576,12 @@ impl std::fmt::Display for SemanticLoweringError {
             Self::UnsupportedSpatialCompositionDomain { node } => write!(
                 formatter,
                 "semantic object {}:{} uses a spatial composition domain that is unsupported for its geometry",
+                node.slot(),
+                node.generation()
+            ),
+            Self::UnsupportedWorldPathStyle { node } => write!(
+                formatter,
+                "World path {}:{} requires opaque or disabled fill/stroke paint",
                 node.slot(),
                 node.generation()
             ),
@@ -832,6 +841,9 @@ pub(super) fn lower_object_state(
     store: &SemanticStore,
 ) -> Result<LoweredObjectState, SemanticLoweringError> {
     let mesh_content = object_has_mesh_content(state, store);
+    if !state.world_path_style_is_supported(store.geometry_resources()) {
+        return Err(SemanticLoweringError::UnsupportedWorldPathStyle { node: semantic_id });
+    }
     let is_camera_3d = state.role() == noon_core::SemanticObjectRole::Camera3D;
     let is_point_light = state.role() == noon_core::SemanticObjectRole::PointLight3D;
     let domain = state.spatial_composition_domain();
@@ -1250,6 +1262,22 @@ mod tests {
         assert_eq!(object_state.base_style.opacity, 0.6);
         assert_eq!(object_state.presentation.z_index, 9.0);
         assert_eq!(object_state.presentation.insertion_order, 0);
+    }
+
+    #[test]
+    fn offline_world_path_partial_paint_rejects_before_installing_execution_ids() {
+        let mut store = SemanticStore::new();
+        attach(&mut store, circle(1.0));
+        let mut state = circle(1.0);
+        state.transform = noon_core::SemanticWorldTransform3D::IDENTITY.into();
+        state.style.fill_opacity = 0.5;
+        let invalid = attach(&mut store, state);
+        let mut index = SemanticExecutionIndex::new();
+        assert!(matches!(
+            index.lower_scene(&store),
+            Err(SemanticLoweringError::UnsupportedWorldPathStyle { node }) if node == invalid
+        ));
+        assert_eq!(index.len(), 0);
     }
 
     #[test]

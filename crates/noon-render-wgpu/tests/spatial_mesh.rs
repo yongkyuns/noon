@@ -1069,14 +1069,14 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
             stroke_cap: noon_core::StrokeCap::Square,
             ..SemanticStyle::default()
         };
-        corner.transform = SemanticWorldTransform3D::new(
+        let corner_world = SemanticWorldTransform3D::new(
             SemanticVec3::new(-1.6, -1.2, 0.0),
             noon_core::SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.7)
                 .unwrap(),
             SemanticVec3::new(1.5, 0.7, 1.0),
         )
-        .unwrap()
-        .into();
+        .unwrap();
+        corner.transform = corner_world.into();
         let corner_id = attach(&mut store, corner);
         let mut index = SemanticExecutionIndex::new();
         let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
@@ -1136,7 +1136,9 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
                 &target,
             )
             .unwrap();
-            let width = (0..HEIGHT)
+            // Other paths can project onto this column as the camera recedes;
+            // measure only the centered horizontal line's cross-section.
+            let width = (HEIGHT / 2 - 8..HEIGHT / 2 + 8)
                 .filter(|&y| pixel(&pixels, WIDTH / 2, y)[0] > 128)
                 .count();
             assert_eq!(width, 4, "screen width must remain 0.25 frame units, despite perspective and 0.01 object Y scale at {time}");
@@ -1168,14 +1170,40 @@ fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale(
             corner_pixel_counts.push(corner_pixels);
             corner_rasters.push(pixels.clone());
             if index == 0 {
-                let horizontal_width = (38..48)
-                    .map(|x| (76..90).filter(|&y| pixel(&pixels, x, y)[0] > 128).count())
-                    .max()
-                    .unwrap();
-                let vertical_width = (72..79)
-                    .map(|y| (42..56).filter(|&x| pixel(&pixels, x, y)[0] > 128).count())
-                    .max()
-                    .unwrap();
+                // Locate cross-sections from the independent scalar projection,
+                // rather than guessing screen windows for this rotated pose.
+                let project = |x: f64, y: f64| {
+                    let world = corner_world
+                        .transform_point(SemanticVec3::new(x, y, 0.0))
+                        .unwrap();
+                    let focal = 1.0 / (0.5_f64).tan();
+                    let depth = 5.0 - world.z;
+                    [
+                        (1.0 + focal * world.x / depth) * f64::from(WIDTH) * 0.5,
+                        (1.0 - focal * world.y / depth) * f64::from(HEIGHT) * 0.5,
+                    ]
+                };
+                let width_across = |start: [f64; 2], end: [f64; 2]| {
+                    let dx = end[0] - start[0];
+                    let dy = end[1] - start[1];
+                    let length = dx.hypot(dy);
+                    let center = [(start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5];
+                    let samples = (-6..=6)
+                        .map(|step| {
+                            let step = f64::from(step);
+                            (
+                                (center[0] - step * dy / length).floor() as u32,
+                                (center[1] + step * dx / length).floor() as u32,
+                            )
+                        })
+                        .collect::<std::collections::BTreeSet<_>>();
+                    samples
+                        .into_iter()
+                        .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+                        .count()
+                };
+                let horizontal_width = width_across(project(-0.55, -0.4), project(0.0, -0.4));
+                let vertical_width = width_across(project(0.0, -0.4), project(0.0, 0.55));
                 assert!(
                     (3..=5).contains(&horizontal_width),
                     "projected horizontal segment width {horizontal_width}px"

@@ -861,7 +861,9 @@ impl SpatialGpuState {
                 2.0 / camera.world_size.x,
                 2.0 / camera.world_size.y,
             ];
-            if (!self.stroked_draws.is_empty() || gpu.cairo.is_some())
+            if (!self.stroked_draws.is_empty()
+                || gpu.cairo.is_some()
+                || self.paths.has_cairo_draws())
                 && gpu.boundary_metrics_value != Some(metrics)
             {
                 queue.write_buffer(&gpu.boundary_metrics, 0, bytemuck::cast_slice(&metrics));

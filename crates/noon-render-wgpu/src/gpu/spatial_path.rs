@@ -392,6 +392,12 @@ impl SpatialPathGpuState {
         self.draws.len()
     }
 
+    pub(super) fn has_cairo_draws(&self) -> bool {
+        self.cairo
+            .as_deref()
+            .is_some_and(|state| !state.draws.is_empty())
+    }
+
     pub(super) fn draw_indices(&self) -> impl Iterator<Item = usize> {
         self.draws
             .keys()

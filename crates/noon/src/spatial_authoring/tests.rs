@@ -139,6 +139,50 @@ fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells
         unreachable!()
     };
     assert!(std::sync::Arc::ptr_eq(&cap_geometry, after));
+    drop(borrowed);
+
+    scene
+        .edit_membership(crate::SceneMembershipRequest::Add(&[
+            crate::MobjectTarget::Family(family.family()),
+        ]))
+        .unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    let before_frame = execution.frame().clone();
+    let before_context = execution.publication_context();
+    let before_states = leaves
+        .iter()
+        .map(|node| {
+            store
+                .borrow()
+                .semantic_object_state_checked(*node)
+                .unwrap()
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    let before_resources = store.borrow().geometry_resources().stats();
+    {
+        let mut live = crate::LiveSession::new(&store, scene.root(), &mut execution);
+        // The body accepts partial alpha, but its World cap does not. The
+        // complete family publication must fail without changing either leaf.
+        assert!(live
+            .set_family_fill(family.family(), Some(Color::BLUE), Some(0.5))
+            .is_err());
+    }
+    for (node, state) in leaves.iter().zip(&before_states) {
+        assert_eq!(
+            store.borrow().semantic_object_state_checked(*node).unwrap(),
+            state
+        );
+    }
+    assert_eq!(
+        store.borrow().geometry_resources().stats(),
+        before_resources
+    );
+    assert_eq!(execution.frame(), &before_frame);
+    assert_eq!(execution.publication_context(), before_context);
+    let mut live = crate::LiveSession::new(&store, scene.root(), &mut execution);
+    live.set_family_fill(family.family(), Some(Color::BLUE), Some(1.0))
+        .unwrap();
 }
 
 #[test]

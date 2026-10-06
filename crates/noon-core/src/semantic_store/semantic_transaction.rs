@@ -3059,6 +3059,11 @@ impl SemanticMutationTransaction {
         // Only affected/provisional objects are staged; this remains local to
         // the transaction and runs before any semantic resource publication.
         for (object, state) in &staged_objects {
+            if !state.world_path_style_is_supported(store.geometry_resources()) {
+                return Err(
+                    SemanticMutationTransactionError::UnsupportedWorldPathStyle { object: *object },
+                );
+            }
             if state.content.image().is_some()
                 && (!crate::SemanticImageContent::supports_style(&state.style)
                     || state
@@ -4042,6 +4047,9 @@ pub enum SemanticMutationTransactionError {
     UnsupportedImageStyle {
         object: SemanticTransactionNodeRef,
     },
+    UnsupportedWorldPathStyle {
+        object: SemanticTransactionNodeRef,
+    },
     UnsupportedImageAnimation {
         index: usize,
     },
@@ -4610,6 +4618,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::UnsupportedImageStyle { object } => write!(
                 formatter,
                 "image {object:?} supports alpha and affine edits, not recoloring, strokes or patterns",
+            ),
+            Self::UnsupportedWorldPathStyle { object } => write!(
+                formatter,
+                "World path {object:?} requires opaque or disabled fill/stroke paint; partial transparency is unsupported",
             ),
             Self::UnsupportedImageAnimation { index } => write!(
                 formatter,

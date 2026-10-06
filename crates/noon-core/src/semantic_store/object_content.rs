@@ -579,6 +579,59 @@ impl SemanticObjectState {
         self.spatial_properties.as_deref().cloned()
     }
 
+    /// Check the bounded opaque World-path paint profile against the final
+    /// authored state. Meshes, text, lights and planar/overlay paths keep their
+    /// own appearance rules. Resource lookup is constant work per affected row.
+    pub fn world_path_style_is_supported(&self, resources: &crate::GeometryResourceArena) -> bool {
+        if self.spatial_composition_domain() != SemanticSpatialCompositionDomain::World
+            || matches!(
+                self.role,
+                SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D
+            )
+            || (self.spatial_material() != SemanticSpatialMaterial::CairoPath
+                && !matches!(
+                    self.transform.orientation,
+                    crate::SemanticOrientation::Spatial(_)
+                ))
+        {
+            return true;
+        }
+        let path = match self.content.geometry() {
+            Some(StoredGeometry::Resource(handle)) => {
+                matches!(
+                    resources.get(handle),
+                    Some(crate::GeometryResource::VectorPath(_))
+                )
+            }
+            Some(_) => true,
+            None => false,
+        };
+        if !path {
+            return true;
+        }
+        let paint_supported = |paint: Option<&crate::SemanticPaint>, opacity: f64| {
+            if !(0.0..=1.0).contains(&opacity) {
+                return false;
+            }
+            match paint {
+                None => true,
+                Some(crate::SemanticPaint::Resource(_)) => false,
+                Some(crate::SemanticPaint::Solid(color)) => {
+                    let alpha = f64::from(color.alpha) * opacity;
+                    [color.red, color.green, color.blue, color.alpha]
+                        .into_iter()
+                        .all(|channel| (0.0..=1.0).contains(&channel))
+                        && (alpha == 0.0 || alpha * self.style.object_opacity == 1.0)
+                }
+            }
+        };
+        (0.0..=1.0).contains(&self.style.object_opacity)
+            && self.style.stroke_width.is_finite()
+            && (0.0..=f64::from(f32::MAX)).contains(&self.style.stroke_width)
+            && paint_supported(self.style.fill.as_ref(), self.style.fill_opacity)
+            && paint_supported(self.style.stroke.as_ref(), self.style.stroke_opacity)
+    }
+
     /// Authored UV-cell identity for one leaf in a sampled Surface family.
     pub fn surface_uv_cell(&self) -> Option<[usize; 2]> {
         self.spatial_properties
