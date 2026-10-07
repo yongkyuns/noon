@@ -12,6 +12,44 @@ pub struct WasmManimGeometryOptions {
     pub(crate) options: noon::ManimGeometryOptions,
 }
 
+
+/// Two inert Line candidates for Manim's observable Cross VGroup members.
+#[wasm_bindgen]
+pub struct WasmManimCrossOptions {
+    first: Option<noon::ManimGeometryOptions>,
+    second: Option<noon::ManimGeometryOptions>,
+}
+
+impl WasmManimCrossOptions {
+    pub(crate) fn from_options(
+        [first, second]: [noon::ManimGeometryOptions; 2],
+    ) -> Self {
+        Self {
+            first: Some(first),
+            second: Some(second),
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl WasmManimCrossOptions {
+    #[wasm_bindgen(js_name = takeFirst)]
+    pub fn take_first(&mut self) -> Result<WasmManimGeometryOptions, JsValue> {
+        self.first
+            .take()
+            .map(WasmManimGeometryOptions::from_options)
+            .ok_or_else(|| js_error("Cross first Line candidate was already consumed"))
+    }
+
+    #[wasm_bindgen(js_name = takeSecond)]
+    pub fn take_second(&mut self) -> Result<WasmManimGeometryOptions, JsValue> {
+        self.second
+            .take()
+            .map(WasmManimGeometryOptions::from_options)
+            .ok_or_else(|| js_error("Cross second Line candidate was already consumed"))
+    }
+}
+
 #[wasm_bindgen]
 impl WasmManimGeometryOptions {
     #[wasm_bindgen(js_name = setZIndex)]
@@ -158,6 +196,13 @@ impl WasmManimGeometryOptions {
 
 #[wasm_bindgen]
 impl WasmManimGeometryOptions {
+    #[wasm_bindgen(js_name = cross)]
+    pub fn cross(scale_factor: f64) -> Result<WasmManimCrossOptions, JsValue> {
+        noon::ManimGeometryOptions::cross_lines(None, scale_factor)
+            .map(WasmManimCrossOptions::from_options)
+            .map_err(js_error)
+    }
+
     pub fn circle(radius: f64) -> Result<Self, JsValue> {
         noon::ManimGeometryOptions::circle(radius)
             .map(Self::from_options)
