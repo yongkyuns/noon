@@ -1,10 +1,102 @@
 // Same-run release artifacts for the product gate. Reuse the dev artifact contract.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { config, prepareArtifact, sourceSha, stamp, verify } from "./wasm-build.mjs";
+import { config, configuration, fileDigest, prepareArtifact, sourceSha, stamp, verify } from "./wasm-build.mjs";
+
+const lockPath = "Cargo.lock";
+const dependencyInputs = name => name === "Cargo.toml" || name === "rust-toolchain.toml"
+  || name.startsWith(".cargo/") || /^crates\/.+\/Cargo\.toml$/.test(name);
+
+function trackedLockfile(root) {
+  return commandOutput(root, "git", ["ls-files", "--", lockPath]) !== "";
+}
+
+async function assertSafeLockfile(root, { required = false } = {}) {
+  try {
+    const info = await lstat(path.join(root, lockPath));
+    assert.ok(!info.isSymbolicLink(), `refusing symlink ${lockPath} in ${root}`);
+    assert.ok(info.isFile(), `${lockPath} is not a regular file in ${root}`);
+    return true;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    assert.ok(!required, `missing ${lockPath} in ${root}`);
+    return false;
+  }
+}
+
+async function resolveCargoLockfile(root, runCargo) {
+  await runCargo(root, ["generate-lockfile"]);
+  await assertSafeLockfile(root, { required: true });
+}
+
+async function validateCargoLockfile(root, runCargo) {
+  const stdout = await runCargo(root, ["metadata", "--locked", "--no-deps", "--format-version", "1"]);
+  const metadata = JSON.parse(stdout);
+  assert.ok(Array.isArray(metadata.packages), `cargo metadata returned no package list for ${root}`);
+}
+
+async function dependencyConfiguration(root) {
+  const build = await configuration(root);
+  const inputs = Object.fromEntries(Object.entries(build.inputs).filter(([name]) => dependencyInputs(name)));
+  assert.ok(inputs["Cargo.toml"] && inputs["rust-toolchain.toml"],
+    `missing tracked dependency inputs in ${root}`);
+  return inputs;
+}
+
+// Resolve the baseline once, then reuse its ignored Cargo.lock only where the
+// tracked dependency inputs match. A differing input set gets an explicit,
+// independent resolution; every resulting lock is checked with --locked.
+export async function prepareProductDependencies(baselineRoot, targetRoots, options = {}) {
+  assert.ok(Array.isArray(targetRoots) && targetRoots.length > 0, "missing product dependency targets");
+  const runCargo = options.runCargo ?? ((root, args) => commandOutput(root, "cargo", args));
+  const baselineTracked = await trackedLockfile(baselineRoot);
+  await assertSafeLockfile(baselineRoot, { required: baselineTracked });
+  const baselineInputs = await dependencyConfiguration(baselineRoot);
+
+  if (!baselineTracked) {
+    console.log(`Resolving baseline dependency lock once: ${baselineRoot}`);
+    await resolveCargoLockfile(baselineRoot, runCargo);
+  } else {
+    console.log(`Preserving tracked baseline ${lockPath}: ${baselineRoot}`);
+  }
+  await assertSafeLockfile(baselineRoot, { required: true });
+  await validateCargoLockfile(baselineRoot, runCargo);
+  const baselineDigest = await fileDigest(baselineRoot, lockPath);
+  const results = [{ root: baselineRoot, mode: baselineTracked ? "tracked-preserved" : "resolved", lockDigest: baselineDigest }];
+
+  for (const targetRoot of targetRoots) {
+    const targetTracked = await trackedLockfile(targetRoot);
+    await assertSafeLockfile(targetRoot, { required: targetTracked });
+    const targetInputs = await dependencyConfiguration(targetRoot);
+    const inputsMatch = JSON.stringify(targetInputs) === JSON.stringify(baselineInputs);
+    let mode;
+
+    if (targetTracked) {
+      mode = "tracked-preserved";
+      if (!inputsMatch) {
+        console.log(`Dependency inputs differ; preserving tracked ${lockPath} and validating it without rewriting: ${targetRoot}`);
+      }
+    } else if (inputsMatch) {
+      console.log(`Reusing baseline dependency resolution for matching inputs: ${targetRoot}`);
+      await copyFile(path.join(baselineRoot, lockPath), path.join(targetRoot, lockPath));
+      mode = "reused-baseline";
+    } else {
+      console.log(`Dependency inputs differ; independently resolving ${lockPath}: ${targetRoot}`);
+      await resolveCargoLockfile(targetRoot, runCargo);
+      mode = "independently-resolved";
+    }
+
+    await assertSafeLockfile(targetRoot, { required: true });
+    await validateCargoLockfile(targetRoot, runCargo);
+    results.push({ root: targetRoot, mode, inputsMatchBaseline: inputsMatch,
+      lockDigest: await fileDigest(targetRoot, lockPath) });
+  }
+
+  return { baseline: baselineRoot, baselineTracked, baselineInputs, results };
+}
 
 export function productConfig(role) {
   assert.ok(["baseline", "candidate", "candidate-fixture"].includes(role), "invalid product artifact role");
@@ -95,6 +187,14 @@ export async function verifyProductArtifact(root, env, role) {
 }
 
 async function main() {
+  if (process.argv[2] === "dependencies") {
+    const [baseline, ...targets] = process.argv.slice(3);
+    assert.ok(baseline && targets.length > 0, "expected dependencies <baseline> <target> [target ...]");
+    const roots = [baseline, ...targets].map(root => path.resolve(root));
+    const prepared = await prepareProductDependencies(roots[0], roots.slice(1));
+    console.log(`Product dependency locks: ${JSON.stringify(prepared.results)}`);
+    return;
+  }
   if (process.argv[2] === "sources") {
     assert.ok(process.argv[3], "missing product candidate checkout");
     const sources = resolveProductSources(path.resolve(process.argv[3]), process.env);

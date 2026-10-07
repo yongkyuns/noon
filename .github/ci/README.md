@@ -223,6 +223,14 @@ event base remains provenance and is never substituted for the actual baseline.
 Comparison retries check out the producer's pinned commits and verify the recorded
 pair alongside package contents, so a moving PR ref cannot change the comparison.
 
+Before the first product build, the producer resolves the baseline Cargo lock once.
+It reuses that lock for checkouts whose tracked Cargo manifests, `.cargo` settings,
+and Rust toolchain pin match; changed dependency inputs are resolved independently
+and logged. Existing tracked `Cargo.lock` files are preserved. Every lock is checked
+with `cargo metadata --locked --no-deps`, so a reused lock that no longer validates
+fails rather than being silently regenerated. The renderer-smoke fixture and
+production candidate share the candidate checkout's prepared resolution.
+
 The accepted cumulative source remains pinned to `58135c40` in
 `product-performance-anchor.json`, independently of the immediate PR parent.
 Both source comparisons use the same validated manifest workload list and retain

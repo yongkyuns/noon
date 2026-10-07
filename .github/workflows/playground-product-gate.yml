@@ -137,13 +137,15 @@ jobs:
       - name: Install pinned wasm-opt
         uses: ./candidate/.github/actions/install-wasm-opt
 
+      - name: Resolve product dependency locks before builds
+        run: node candidate/.github/ci/product-artifact.mjs dependencies baseline anchor candidate
+
       - name: Build baseline production package
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
         run: |
           # Rust cache keys include cwd and CARGO_TARGET_DIR. Keep both stable,
           # but discard all Cargo fingerprints/artifacts before each source build.
-          (cd baseline && cargo generate-lockfile)
           node candidate/.github/ci/product-artifact.mjs prepare baseline baseline
           mv baseline .product-source
           trap 'mv .product-source baseline' EXIT
@@ -160,7 +162,6 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
           NOON_PRODUCT_BASE_SHA: ${{ steps.anchor.outputs.anchor-sha }}
         run: |
-          (cd anchor && cargo generate-lockfile)
           node candidate/.github/ci/product-artifact.mjs prepare baseline anchor
           mv anchor .product-source
           trap 'mv .product-source anchor' EXIT
@@ -192,7 +193,6 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
           NOON_RENDERER_SMOKE: "1"
         run: |
-          (cd candidate && cargo generate-lockfile)
           node candidate/.github/ci/product-artifact.mjs prepare candidate-fixture candidate
           mv candidate .product-source
           trap 'mv .product-source candidate' EXIT

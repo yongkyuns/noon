@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { productConfig, validateProductEnvironment, resolveProductSources,
-  prepareProductArtifact, stampProductArtifact, verifyProductArtifact } from "./product-artifact.mjs";
+  prepareProductArtifact, prepareProductDependencies, stampProductArtifact, verifyProductArtifact } from "./product-artifact.mjs";
 import { measure, prepare, prepareArtifact, sourceSha, stamp, trustedWriter,
   validateEnvironment, verify, packageSizes, summarizePackageSizes } from "./wasm-build.mjs";
 
@@ -109,6 +109,131 @@ test("product source CLI pins validated commits in Actions outputs and environme
     { env: { ...process.env, ...expected, GITHUB_OUTPUT: output, GITHUB_ENV: environment } });
   assert.equal(await readFile(output, "utf8"), `candidate-sha=${sources.candidate}\nbaseline-sha=${sources.baseline}\nhead-sha=${sources.head}\nevent-base-sha=${sources.eventBase}\n`);
   assert.equal(await readFile(environment, "utf8"), `NOON_PRODUCT_CANDIDATE_SHA=${sources.candidate}\nNOON_PRODUCT_BASE_SHA=${sources.baseline}\nNOON_PRODUCT_HEAD_SHA=${sources.head}\nNOON_PRODUCT_EVENT_BASE_SHA=${sources.eventBase}\n`);
+});
+
+function fakeCargo({ rejectMetadata } = {}) {
+  const calls = [];
+  let resolutions = 0;
+  return {
+    calls,
+    async runCargo(root, args) {
+      calls.push({ root, args });
+      if (args[0] === "generate-lockfile") {
+        resolutions += 1;
+        const version = resolutions === 1 ? "0.2.20" : "0.2.21";
+        await writeFile(path.join(root, "Cargo.lock"),
+          `version = 4\n# resolver selected thin-vec ${version}\n\n[[package]]\nname = "noon-web"\nversion = "0.1.0"\n`);
+        return "";
+      }
+      assert.deepEqual(args, ["metadata", "--locked", "--no-deps", "--format-version", "1"]);
+      if (rejectMetadata?.(root)) throw new Error("cargo metadata --locked rejected copied Cargo.lock");
+      return JSON.stringify({ packages: [] });
+    },
+  };
+}
+
+test("product dependency preparation reuses one baseline lock for matching inputs", async (t) => {
+  const { root, sources } = await productFixture(t);
+  const baseline = await mkdtemp(path.join(os.tmpdir(), "noon-product-lock-baseline-"));
+  t.after(() => rm(baseline, { recursive: true, force: true }));
+  execFileSync("git", ["clone", "--quiet", `file://${root}`, baseline]);
+  execFileSync("git", ["checkout", "--quiet", sources.baseline], { cwd: baseline });
+
+  const cargo = fakeCargo();
+  const prepared = await prepareProductDependencies(baseline, [root], { runCargo: cargo.runCargo });
+  const baselineLock = await readFile(path.join(baseline, "Cargo.lock"), "utf8");
+  assert.equal(cargo.calls.filter(call => call.args[0] === "generate-lockfile").length, 1,
+    "matching candidate inputs must not resolve dependencies a second time");
+  assert.equal(cargo.calls.filter(call => call.args[0] === "metadata").length, 2);
+  assert.ok(cargo.calls.filter(call => call.args[0] === "metadata")
+    .every(call => call.args.includes("--locked") && call.args.includes("--no-deps")));
+  assert.match(baselineLock, /thin-vec 0\.2\.20/);
+  assert.equal(await readFile(path.join(root, "Cargo.lock"), "utf8"), baselineLock);
+  assert.deepEqual(prepared.results.map(result => result.mode), ["resolved", "reused-baseline"]);
+});
+
+test("changed dependency manifests resolve independently", async (t) => {
+  const { root } = await fixture(t);
+  const baseline = await mkdtemp(path.join(os.tmpdir(), "noon-product-lock-baseline-"));
+  t.after(() => rm(baseline, { recursive: true, force: true }));
+  execFileSync("git", ["clone", "--quiet", `file://${root}`, baseline]);
+  await writeFile(path.join(root, "crates/noon-web/Cargo.toml"),
+    '[package]\nname = "noon-web"\nversion = "0.1.0"\n[package.metadata.ci]\nvariant = "candidate"\n');
+
+  const cargo = fakeCargo();
+  const prepared = await prepareProductDependencies(baseline, [root], { runCargo: cargo.runCargo });
+  assert.equal(cargo.calls.filter(call => call.args[0] === "generate-lockfile").length, 2);
+  assert.deepEqual(prepared.results.map(result => result.mode), ["resolved", "independently-resolved"]);
+  assert.equal(prepared.results[1].inputsMatchBaseline, false);
+  assert.notEqual(await readFile(path.join(baseline, "Cargo.lock"), "utf8"),
+    await readFile(path.join(root, "Cargo.lock"), "utf8"));
+});
+
+test("changed tracked Cargo configuration resolves independently", async (t) => {
+  const { root } = await fixture(t);
+  const target = await mkdtemp(path.join(os.tmpdir(), "noon-product-lock-target-"));
+  t.after(() => rm(target, { recursive: true, force: true }));
+  execFileSync("git", ["clone", "--quiet", `file://${root}`, target]);
+  await mkdir(path.join(target, ".cargo"), { recursive: true });
+  await writeFile(path.join(target, ".cargo/config.toml"), '[build]\nrustflags = ["--cfg", "product_candidate"]\n');
+  execFileSync("git", ["add", ".cargo/config.toml"], { cwd: target });
+  execFileSync("git", ["-c", "user.name=CI Test", "-c", "user.email=ci@example.invalid",
+    "commit", "-qm", "change cargo configuration"], { cwd: target });
+
+  const cargo = fakeCargo();
+  const prepared = await prepareProductDependencies(root, [target], { runCargo: cargo.runCargo });
+  assert.equal(cargo.calls.filter(call => call.args[0] === "generate-lockfile").length, 2);
+  assert.equal(prepared.results[1].inputsMatchBaseline, false);
+  assert.equal(prepared.results[1].mode, "independently-resolved");
+});
+
+test("tracked Cargo.lock files are preserved and validated without resolver writes", async (t) => {
+  const { root, git } = await fixture(t);
+  await writeFile(path.join(root, "Cargo.lock"),
+    'version = 4\n# authored lock\n\n[[package]]\nname = "noon-web"\nversion = "0.1.0"\n');
+  git("add", "Cargo.lock");
+  git("-c", "user.name=CI Test", "-c", "user.email=ci@example.invalid", "commit", "-qm", "track authored lock");
+  const before = await readFile(path.join(root, "Cargo.lock"), "utf8");
+  const cargo = fakeCargo();
+  const prepared = await prepareProductDependencies(root, [root], {
+    runCargo: cargo.runCargo,
+  });
+  assert.equal(cargo.calls.filter(call => call.args[0] === "generate-lockfile").length, 0);
+  assert.equal(cargo.calls.filter(call => call.args[0] === "metadata").length, 2);
+  assert.equal(await readFile(path.join(root, "Cargo.lock"), "utf8"), before);
+  assert.deepEqual(prepared.results.map(result => result.mode), ["tracked-preserved", "tracked-preserved"]);
+});
+
+test("symlink Cargo.lock is rejected before a reusable lock can be copied", async (t) => {
+  const { root } = await fixture(t);
+  const target = await mkdtemp(path.join(os.tmpdir(), "noon-product-lock-target-"));
+  t.after(() => rm(target, { recursive: true, force: true }));
+  execFileSync("git", ["clone", "--quiet", `file://${root}`, target]);
+  const sentinel = path.join(os.tmpdir(), `noon-product-lock-sentinel-${process.pid}`);
+  await writeFile(sentinel, "leave untouched\n");
+  t.after(() => rm(sentinel, { force: true }));
+  await symlink(sentinel, path.join(target, "Cargo.lock"));
+  const cargo = fakeCargo();
+  await assert.rejects(prepareProductDependencies(root, [target], {
+    runCargo: cargo.runCargo,
+  }), /refusing symlink Cargo\.lock/);
+  assert.equal(cargo.calls.filter(call => call.args[0] === "generate-lockfile").length, 1,
+    "only baseline resolution may precede target symlink rejection");
+  assert.equal(await readFile(sentinel, "utf8"), "leave untouched\n");
+});
+
+test("a copied lock that fails --locked metadata validation is not regenerated", async (t) => {
+  const { root } = await fixture(t);
+  const baseline = await mkdtemp(path.join(os.tmpdir(), "noon-product-lock-baseline-"));
+  t.after(() => rm(baseline, { recursive: true, force: true }));
+  execFileSync("git", ["clone", "--quiet", `file://${root}`, baseline]);
+  const cargo = fakeCargo({ rejectMetadata: checkout => checkout === root });
+  await assert.rejects(prepareProductDependencies(baseline, [root], { runCargo: cargo.runCargo }),
+    /rejected copied Cargo\.lock/);
+  assert.equal(cargo.calls.filter(call => call.args[0] === "generate-lockfile").length, 1,
+    "metadata failure must not fall back to another resolution");
+  assert.equal(cargo.calls.filter(call => call.args[0] === "metadata").length, 2);
+  assert.equal(await readFile(path.join(root, "Cargo.lock"), "utf8"), await readFile(path.join(baseline, "Cargo.lock"), "utf8"));
 });
 
 test("same source/configuration round-trips without Cargo in the consumer", async (t) => {
@@ -360,6 +485,20 @@ test("product gate pins the tested merge and retries the producer's exact source
   assert.match(consumer, /ref: \$\{\{ needs\.build\.outputs\.candidate-sha \}\}\n\s+fetch-depth: 2/);
   assert.match(consumer, /ref: \$\{\{ needs\.build\.outputs\.baseline-sha \}\}/);
   assert.doesNotMatch(consumer, /github\.event\.pull_request\.(base|head)\.sha|ref: \$\{\{ github\.sha/);
+});
+
+test("product gate resolves one matching dependency lock before its first package build", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const producer = workflow.slice(workflow.indexOf("  build:"), workflow.indexOf("  compare:"));
+  const resolve = producer.indexOf("- name: Resolve product dependency locks before builds");
+  const firstBuild = producer.indexOf("- name: Build baseline production package");
+  assert.ok(resolve >= 0 && firstBuild > resolve, "shared lock preparation must precede the first release build");
+  assert.match(producer.slice(resolve, firstBuild),
+    /product-artifact\.mjs dependencies baseline anchor candidate/);
+  assert.doesNotMatch(producer, /cargo generate-lockfile/,
+    "independent resolutions belong in the single preparation step, not serial build steps");
+  assert.match(producer, /Build candidate renderer-smoke fixture package[\s\S]*?prepare candidate-fixture candidate/);
+  assert.match(producer, /Build candidate production package[\s\S]*?prepare candidate candidate/);
 });
 
 test("product gate requires PNG comparison controls after dependency setup", async () => {
