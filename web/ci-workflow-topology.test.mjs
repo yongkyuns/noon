@@ -247,6 +247,13 @@ test("foreground matching has an explicit reference family without a broad prefi
   assert.equal(classifyWorkflow("foreground-unregistered.yml"), null);
 });
 
+test("native export is classified explicitly without exempting other native workflows", () => {
+  assert.ok(workflowFiles.includes("native-export-output.yml"));
+  assert.equal(classifyWorkflow("native-export-output.yml"), "native-host");
+  assert.equal(classifyWorkflow("native-export-unregistered.yml"), null);
+  assert.equal(classifyWorkflow("native-unregistered.yml"), null);
+});
+
 test("foreground qualification requires success from every evidence stage", async () => {
   const workflow = await readFile(new URL("foreground-matching-qualification.yml", workflowDir), "utf8");
   assert.match(workflow, /permissions:\n  contents: read/);
