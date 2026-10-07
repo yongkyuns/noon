@@ -107,9 +107,10 @@ fn parameter_mutation_touches_one_slot_and_preserves_other_parameters() {
     let result = tx.apply(&mut store).unwrap();
     assert_eq!(
         result.impacts(),
-        &[SemanticMutationImpact::EffectParameters {
+        &[SemanticMutationImpact::EffectParameter {
             owner,
-            effect: halo
+            effect: halo,
+            parameter: crate::GlowParameter::Intensity,
         }]
     );
     assert_eq!(store.last_mutation_stats().slots_written, 1);
@@ -155,16 +156,21 @@ fn failed_parameter_update_rolls_back_other_ordinary_edits() {
 }
 
 #[test]
-fn repeated_parameter_writes_reject_without_panicking() {
+fn overlapping_parameter_writes_reject_without_panicking() {
     let mut store = SemanticStore::new();
     let owner = object(&mut store);
     let halo = attach(&mut store, owner, "glow");
     let mut tx = SemanticMutationTransaction::new();
     tx.update_effect(halo, GlowUpdate::default().intensity(0.5));
-    tx.update_effect(halo, GlowUpdate::default().radius(Pixels(10.0)));
+    tx.update_effect(
+        halo,
+        GlowUpdate::default().radius(Pixels(10.0)).intensity(0.5),
+    );
     assert!(matches!(
         tx.apply(&mut store),
-        Err(SemanticMutationTransactionError::DuplicateTarget { .. })
+        Err(SemanticMutationTransactionError::DuplicateEffectParameter {
+            effect, parameter: crate::GlowParameter::Intensity, ..
+        }) if effect == halo
     ));
     assert_eq!(glow(&store, halo), Glow::default());
 }
@@ -318,4 +324,197 @@ fn cloned_store_and_direct_object_copy_keep_the_same_ownership_invariants() {
     assert!(!independent.has_effect_attachments());
     assert!(store.has_effect_attachments());
     assert!(store.node(original).is_some());
+}
+
+#[test]
+fn independent_parameter_updates_compose_in_one_ordinary_transaction() {
+    let mut store = SemanticStore::new();
+    let owner = object(&mut store);
+    let halo = attach(&mut store, owner, "glow");
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_property(
+        owner,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(2.0, 0.0, 0.0),
+    );
+    tx.update_effect(halo, GlowUpdate::default().intensity(1.4));
+    tx.update_effect(halo, GlowUpdate::default().radius(Pixels(12.0)));
+    tx.apply(&mut store).unwrap();
+    assert_eq!(glow(&store, halo).intensity(), 1.4);
+    assert_eq!(glow(&store, halo).radius(), crate::GlowRadius::Pixels(12.0));
+    assert_eq!(
+        store
+            .semantic_object_state_checked(owner)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        2.0
+    );
+    assert_eq!(store.last_mutation_stats().slots_written, 2);
+}
+
+#[test]
+fn dirty_parameter_impacts_exclude_explicit_unchanged_channels() {
+    let mut store = SemanticStore::new();
+    let owner = object(&mut store);
+    let halo = attach(&mut store, owner, "glow");
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(
+        halo,
+        GlowUpdate::default().intensity(0.35).radius(Pixels(12.0)),
+    );
+    tx.update_effect(halo, GlowUpdate::default().color(Color::WHITE));
+    let result = tx.apply(&mut store).unwrap();
+    assert_eq!(
+        result.impacts(),
+        &[SemanticMutationImpact::EffectParameter {
+            owner,
+            effect: halo,
+            parameter: crate::GlowParameter::Radius,
+        }]
+    );
+    assert_eq!(store.last_mutation_stats().slots_written, 1);
+}
+
+#[test]
+fn unchanged_explicit_write_still_conflicts_with_another_writer() {
+    let mut store = SemanticStore::new();
+    let owner = object(&mut store);
+    let halo = attach(&mut store, owner, "glow");
+    let revision = store.scene_revision();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(halo, GlowUpdate::default().intensity(0.35));
+    tx.update_effect(halo, GlowUpdate::default().intensity(0.35));
+    assert!(matches!(tx.apply(&mut store), Err(
+        SemanticMutationTransactionError::DuplicateEffectParameter {
+            index: 1, effect, parameter: crate::GlowParameter::Intensity,
+        }) if effect == halo));
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(glow(&store, halo), Glow::default());
+}
+
+#[test]
+fn empty_requests_own_no_channels_but_still_validate_identity() {
+    let mut store = SemanticStore::new();
+    let owner = object(&mut store);
+    let halo = attach(&mut store, owner, "glow");
+    let revision = store.scene_revision();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(halo, GlowUpdate::default());
+    tx.update_effect(halo, GlowUpdate::default());
+    assert!(tx.apply(&mut store).unwrap().impacts().is_empty());
+    assert_eq!(store.scene_revision(), revision);
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(halo, GlowUpdate::default());
+    tx.update_effect(halo, GlowUpdate::default().intensity(1.4));
+    tx.update_effect(halo, GlowUpdate::default());
+    tx.apply(&mut store).unwrap();
+    assert_eq!(glow(&store, halo).intensity(), 1.4);
+    store.remove_node(halo).unwrap();
+    let mut stale = SemanticMutationTransaction::new();
+    stale.update_effect(halo, GlowUpdate::default());
+    assert!(stale.apply(&mut store).is_err());
+}
+
+#[test]
+fn later_invalid_disjoint_parameter_rolls_back_the_complete_transaction() {
+    let mut store = SemanticStore::new();
+    let owner = object(&mut store);
+    let halo = attach(&mut store, owner, "glow");
+    let revision = store.scene_revision();
+    let original = store.semantic_object_state_checked(owner).unwrap().clone();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_property(
+        owner,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(2.0, 0.0, 0.0),
+    );
+    tx.update_effect(halo, GlowUpdate::default().intensity(1.4));
+    tx.update_effect(halo, GlowUpdate::default().radius(-1.0));
+    assert!(matches!(tx.apply(&mut store), Err(
+        SemanticMutationTransactionError::EffectParameter {
+            index: 2, effect, error: crate::GlowParameterError::InvalidRadius,
+        }) if effect == halo));
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(
+        store.semantic_object_state_checked(owner).unwrap(),
+        &original
+    );
+    assert_eq!(glow(&store, halo), Glow::default());
+}
+
+#[test]
+fn every_disjoint_parameter_order_preserves_earlier_updates() {
+    use crate::{GlowParameter, GlowRadius, GlowSource};
+    let updates = [
+        GlowUpdate::default().color(Color::RED),
+        GlowUpdate::default().radius(Pixels(12.0)),
+        GlowUpdate::default().intensity(1.4),
+        GlowUpdate::default().source(GlowSource::Silhouette),
+    ];
+    let parameters = [
+        GlowParameter::Color,
+        GlowParameter::Radius,
+        GlowParameter::Intensity,
+        GlowParameter::Source,
+    ];
+    let mut cases = 0;
+    for a in 0..4 {
+        for b in 0..4 {
+            for c in 0..4 {
+                for d in 0..4 {
+                    let order = [a, b, c, d];
+                    if order
+                        .iter()
+                        .enumerate()
+                        .any(|(i, value)| order[..i].contains(value))
+                    {
+                        continue;
+                    }
+                    let mut store = SemanticStore::new();
+                    let owner = object(&mut store);
+                    let halo = attach(&mut store, owner, "glow");
+                    let mut tx = SemanticMutationTransaction::new();
+                    for index in order {
+                        tx.update_effect(halo, updates[index]);
+                    }
+                    let result = tx.apply(&mut store).unwrap();
+                    let expected: Vec<_> = order
+                        .into_iter()
+                        .map(|index| SemanticMutationImpact::EffectParameter {
+                            owner,
+                            effect: halo,
+                            parameter: parameters[index],
+                        })
+                        .collect();
+                    assert_eq!(result.impacts(), expected);
+                    let value = glow(&store, halo);
+                    assert_eq!(value.color(), Color::RED);
+                    assert_eq!(value.radius(), GlowRadius::Pixels(12.0));
+                    assert_eq!(value.intensity(), 1.4);
+                    assert_eq!(value.source(), GlowSource::Silhouette);
+                    assert_eq!(store.last_mutation_stats().slots_written, 1);
+                    cases += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(cases, 24);
+}
+
+#[test]
+fn identical_parameter_names_on_different_attachments_do_not_conflict() {
+    let mut store = SemanticStore::new();
+    let owner = object(&mut store);
+    let first = attach(&mut store, owner, "glow");
+    let second = attach(&mut store, owner, "accent");
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(first, GlowUpdate::default().intensity(1.4));
+    tx.update_effect(second, GlowUpdate::default().intensity(0.1));
+    tx.apply(&mut store).unwrap();
+    assert_eq!(glow(&store, first).intensity(), 1.4);
+    assert_eq!(glow(&store, second).intensity(), 0.1);
+    assert_eq!(store.node(owner).unwrap().effect_ids(), &[first, second]);
+    assert_eq!(store.last_mutation_stats().slots_written, 2);
 }

@@ -631,6 +631,11 @@ impl From<SemanticMutationTransactionError> for AuthoringFailure {
                 Self::caused_by("transaction.animation_target", message, error.into())
             }
             E::Node { error, .. } => Self::caused_by("transaction.node", message, error.into()),
+            E::DuplicateEffectParameter { .. } => Self::new(
+                "invalid_input",
+                "transaction.duplicate_effect_parameter",
+                message,
+            ),
             E::InvalidEffectAttachment { .. } => Self::new(
                 "invalid_input",
                 "transaction.invalid_effect_attachment",
@@ -1014,6 +1019,21 @@ impl From<noon::SpatialCompositionError> for AuthoringFailure {
 mod tests {
     use super::*;
     use noon_core::SemanticNodeId;
+
+    #[test]
+    fn duplicate_effect_parameter_keeps_a_typed_language_boundary_error() {
+        let effect = SemanticNodeId::new(7, 3);
+        let error =
+            AuthoringFailure::from(SemanticMutationTransactionError::DuplicateEffectParameter {
+                index: 2,
+                effect,
+                parameter: noon_core::GlowParameter::Intensity,
+            });
+        assert_eq!(error.category, "invalid_input");
+        assert_eq!(error.code, "transaction.duplicate_effect_parameter");
+        assert!(error.message.contains("Intensity"));
+        assert!(error.message.contains("generation: 3"));
+    }
 
     #[test]
     fn pending_admission_error_preserves_typed_membership_diagnostic() {

@@ -339,3 +339,30 @@ fn parameter_samples_do_not_depend_on_call_order() {
     }
     assert_eq!(at(0.3), expected);
 }
+
+#[test]
+fn partial_request_enumerates_only_explicit_channels_in_schema_order() {
+    assert_eq!(GlowUpdate::default().parameters().count(), 0);
+    assert_eq!(
+        GlowUpdate::default()
+            .intensity(0.35)
+            .parameters()
+            .collect::<Vec<_>>(),
+        vec![GlowParameter::Intensity],
+    );
+    assert_eq!(
+        GlowUpdate::default()
+            .source(GlowSource::Painted)
+            .intensity(0.35)
+            .radius(0.15)
+            .color(Color::WHITE)
+            .parameters()
+            .collect::<Vec<_>>(),
+        vec![
+            GlowParameter::Color,
+            GlowParameter::Radius,
+            GlowParameter::Intensity,
+            GlowParameter::Source
+        ],
+    );
+}

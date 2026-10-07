@@ -1195,14 +1195,28 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 continue;
             }
             match mutation {
-                SemanticMutation::UpdateEffect { effect, .. } => {
-                    let owner = store
+                SemanticMutation::UpdateEffect { effect, update } => {
+                    let previous = store
                         .semantic_effect_state(effect)
-                        .expect("validated effect")
-                        .owner();
-                    store.replace_effect_definition(effect, preflight.staged_effects[&effect]);
+                        .expect("validated effect");
+                    let owner = previous.owner();
+                    let previous = previous.definition();
+                    let prepared = preflight.staged_effects[&effect];
+                    // Publish this mutation's disjoint channels in order. The
+                    // final value was validated before any semantic commit.
+                    let next = previous.update(update).expect("preflighted effect update");
+                    for parameter in update.parameters() {
+                        debug_assert!(!next.parameter_changed(prepared, parameter));
+                        if previous.parameter_changed(next, parameter) {
+                            impacts.push(SemanticMutationImpact::EffectParameter {
+                                owner,
+                                effect,
+                                parameter,
+                            });
+                        }
+                    }
+                    store.replace_effect_definition(effect, next);
                     written_slots.insert(effect);
-                    impacts.push(SemanticMutationImpact::EffectParameters { owner, effect });
                 }
                 SemanticMutation::SetSignal { signal, value } => {
                     let changed = store

@@ -88,7 +88,7 @@ pub enum GlowSource {
 }
 
 /// Parameters addressable by this finite schema. Attachment identity is separate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GlowParameter {
     Color,
     Radius,
@@ -96,7 +96,7 @@ pub enum GlowParameter {
     Source,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GlowParameterError {
     InvalidColor,
     InvalidRadius,
@@ -226,6 +226,19 @@ impl GlowUpdate {
     pub fn source(mut self, value: GlowSource) -> Self {
         self.source = Some(value);
         self
+    }
+
+    /// Schema-ordered explicit write channels, including unchanged values.
+    /// Empty patches own no channels. This iterator allocates no storage.
+    pub fn parameters(self) -> impl Iterator<Item = GlowParameter> {
+        [
+            GlowParameter::Color,
+            GlowParameter::Radius,
+            GlowParameter::Intensity,
+            GlowParameter::Source,
+        ]
+        .into_iter()
+        .filter(move |parameter| self.writes(*parameter))
     }
 
     pub const fn writes(self, parameter: GlowParameter) -> bool {

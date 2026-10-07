@@ -125,6 +125,23 @@ filters, unnamed attachments, effective effect queries, GlowPulse, ordinary effe
 animation/channel ownership, and Python wrappers remain future integration work.
 No native or browser setter silently skips unavailable rendering.
 
+### Parameter-addressed authored transactions
+
+Explicit write ownership is `(attachment identity, parameter)`, not the complete
+attachment. Two updates in the same ordinary semantic transaction may change
+intensity and radius independently, together with an object's translation. Two
+writers to the same parameter fail atomically even when they request equal values.
+Empty patches own no channels but still validate the attachment handle. Scalar,
+color, radius, and source writes retain the same typed validation rules.
+
+`GlowUpdate::parameters()` enumerates only explicitly supplied channels without
+allocation. Preflight composes disjoint updates against the staged value. Commit
+emits `SemanticMutationImpact::EffectParameter` only for changed parameters;
+unchanged explicit values still participate in conflict admission without dirtying
+unrelated parameters. Failures preserve all earlier ordinary/effect state and the
+scene revision. This is real authored-transaction behaviour, not yet runtime
+animation leases or effect rendering. Existing execution support guards remain.
+
 ## Revised creator-facing grammar (Python/composition design)
 
 

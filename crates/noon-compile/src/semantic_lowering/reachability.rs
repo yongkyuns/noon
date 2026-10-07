@@ -241,7 +241,7 @@ impl SemanticExecutionReachability {
                     self.remove_node(node, &mut journal);
                 }
                 SemanticMutationImpact::EffectAttachment { .. }
-                | SemanticMutationImpact::EffectParameters { .. }
+                | SemanticMutationImpact::EffectParameter { .. }
                 | SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }

@@ -691,13 +691,20 @@ pub(super) fn duplicate_mutation_error(
                 SemanticTransactionNodeRef::Existing(_) => None,
             })
         }
-        SemanticMutationKey::Effect(_) | SemanticMutationKey::Signal(_) => None,
+        SemanticMutationKey::EffectParameter { .. } | SemanticMutationKey::Signal(_) => None,
     };
     if let Some(node) = pending {
         return SemanticMutationTransactionError::DuplicatePendingMutation { index, node };
     }
     match key {
-        SemanticMutationKey::Effect(target) | SemanticMutationKey::Signal(target) => {
+        SemanticMutationKey::EffectParameter { effect, parameter } => {
+            SemanticMutationTransactionError::DuplicateEffectParameter {
+                index,
+                effect,
+                parameter,
+            }
+        }
+        SemanticMutationKey::Signal(target) => {
             SemanticMutationTransactionError::DuplicateTarget { index, target }
         }
         SemanticMutationKey::ObjectProperty {

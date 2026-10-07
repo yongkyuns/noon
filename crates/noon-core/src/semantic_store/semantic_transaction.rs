@@ -343,7 +343,7 @@ impl SemanticMutation {
 
     const fn key(&self) -> Option<SemanticMutationKey> {
         match self {
-            Self::UpdateEffect { effect, .. } => Some(SemanticMutationKey::Effect(*effect)),
+            Self::UpdateEffect { .. } => None, // each explicit parameter has its own key
             Self::SetSignal { signal, .. } => Some(SemanticMutationKey::Signal(*signal)),
             Self::AddScalarSignalTrack { .. } | Self::SetScalarSignalAt { .. } => None,
             Self::SetProperty {
@@ -416,7 +416,10 @@ impl SemanticMutation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum SemanticMutationKey {
-    Effect(SemanticNodeId),
+    EffectParameter {
+        effect: SemanticNodeId,
+        parameter: crate::GlowParameter,
+    },
     Signal(SemanticNodeId),
     ObjectProperty {
         object: SemanticTransactionNodeRef,
@@ -461,10 +464,13 @@ pub enum SemanticMutationImpact {
         owner: SemanticNodeId,
         effect: SemanticNodeId,
     },
-    /// Parameter-only edit: attachment identity and order did not change.
-    EffectParameters {
+    /// One changed parameter; attachment identity and order did not change.
+    /// Explicit writes of an unchanged value participate in conflict detection
+    /// but emit no dirty impact.
+    EffectParameter {
         owner: SemanticNodeId,
         effect: SemanticNodeId,
+        parameter: crate::GlowParameter,
     },
     ZIndex {
         node: SemanticNodeId,
@@ -2228,6 +2234,17 @@ impl SemanticMutationTransaction {
                 _ => {}
             }
 
+            if let SemanticMutation::UpdateEffect { effect, update } = mutation {
+                for parameter in update.parameters() {
+                    let key = SemanticMutationKey::EffectParameter {
+                        effect: *effect,
+                        parameter,
+                    };
+                    if !targets.insert(key) {
+                        return Err(duplicate_mutation_error(index, key));
+                    }
+                }
+            }
             if let Some(key) = mutation.key() {
                 let repeated_membership = matches!(
                     key,
@@ -3010,14 +3027,18 @@ impl SemanticMutationTransaction {
                     let state = store
                         .semantic_effect_state(*effect)
                         .map_err(|error| SemanticMutationTransactionError::Node { index, error })?;
-                    let next = state.definition().update(*update).map_err(|error| {
+                    let previous = staged_effects
+                        .get(effect)
+                        .copied()
+                        .unwrap_or_else(|| state.definition());
+                    let next = previous.update(*update).map_err(|error| {
                         SemanticMutationTransactionError::EffectParameter {
                             index,
                             effect: *effect,
                             error,
                         }
                     })?;
-                    changed.push(next != state.definition());
+                    changed.push(next != previous);
                     staged_effects.insert(*effect, next);
                 }
                 SemanticMutation::AddNode { token, creation } => {
@@ -3825,6 +3846,11 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    DuplicateEffectParameter {
+        index: usize,
+        effect: SemanticNodeId,
+        parameter: crate::GlowParameter,
+    },
     InvalidEffectAttachment {
         index: usize,
         reason: &'static str,
@@ -4240,6 +4266,7 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::DuplicateEffectParameter { index, effect, parameter } => write!(formatter, "mutation {index}: duplicate write to effect {effect:?} parameter {parameter:?}"),
             Self::InvalidEffectAttachment { index, reason } => write!(formatter, "mutation {index}: {reason}"),
             Self::EffectParameter { index, effect, error } => write!(formatter, "mutation {index}: effect {effect:?}: {error}"),
             Self::InvalidPendingGeometryPath => {

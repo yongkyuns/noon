@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::{SemanticNode, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticStoreError};
-use crate::{Glow, GlowParameterError, GlowUpdate};
+use crate::{Glow, GlowParameter, GlowParameterError, GlowUpdate};
 
 /// Finite built-in definitions; custom program/schema resources remain #1897 M4.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,6 +19,19 @@ impl From<Glow> for EffectDefinition {
 }
 
 impl EffectDefinition {
+    /// Compare only the supplied write channels against the prepared result.
+    /// Declaration identity and stack order are independent of parameter dirtiness.
+    pub(crate) fn parameter_changed(self, next: Self, parameter: GlowParameter) -> bool {
+        match (self, next) {
+            (Self::Glow(previous), Self::Glow(next)) => match parameter {
+                GlowParameter::Color => previous.color() != next.color(),
+                GlowParameter::Radius => previous.radius() != next.radius(),
+                GlowParameter::Intensity => previous.intensity() != next.intensity(),
+                GlowParameter::Source => previous.source() != next.source(),
+            },
+        }
+    }
+
     pub fn update(self, update: GlowUpdate) -> Result<Self, GlowParameterError> {
         match self {
             Self::Glow(value) => update.apply_to(value).map(Self::Glow),

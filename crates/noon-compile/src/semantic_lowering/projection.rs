@@ -103,7 +103,7 @@ impl SemanticExecutionIndex {
                     self.update_spatial_anchor_owner(store, node);
                 }
                 SemanticMutationImpact::EffectAttachment { .. }
-                | SemanticMutationImpact::EffectParameters { .. }
+                | SemanticMutationImpact::EffectParameter { .. }
                 | SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
