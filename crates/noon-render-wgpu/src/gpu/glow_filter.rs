@@ -40,6 +40,84 @@ pub struct GlowPixelBounds {
     pub max: [f64; 2],
 }
 
+
+impl GlowPixelBounds {
+    /// Project one filled, unstroked M1 circle/rectangle through the existing
+    /// effective 2D camera. Object nonuniform scale deforms the source, NOT
+    /// the Gaussian radius; that radius stays in output/world units.
+    pub fn projected_analytic(
+        geometry: &noon_core::GeometryRef,
+        transform: noon_core::Transform2D,
+        camera: super::Camera2D,
+        viewport: [u32; 2],
+    ) -> Result<Self, GlowPrepareError> {
+        if viewport.contains(&0)
+            || ![
+                camera.center.x,
+                camera.center.y,
+                camera.world_size.x,
+                camera.world_size.y,
+                transform.translation.x,
+                transform.translation.y,
+                transform.scale.x,
+                transform.scale.y,
+                transform.rotation,
+            ].into_iter().all(f32::is_finite)
+            || camera.world_size.x <= 0.0
+            || camera.world_size.y <= 0.0
+            || transform.scale.x == 0.0
+            || transform.scale.y == 0.0
+        {
+            return Err(GlowPrepareError::InvalidProjection);
+        }
+        let x_pixels_per_world = f64::from(viewport[0]) / f64::from(camera.world_size.x);
+        let y_pixels_per_world = f64::from(viewport[1]) / f64::from(camera.world_size.y);
+        let disparity = (x_pixels_per_world - y_pixels_per_world).abs()
+            / x_pixels_per_world.max(y_pixels_per_world);
+        if disparity > 1e-5 {
+            return Err(GlowPrepareError::InvalidProjection);
+        }
+        let (sin, cos) = f64::from(transform.rotation).sin_cos();
+        let sx = f64::from(transform.scale.x);
+        let sy = f64::from(transform.scale.y);
+        let (world_half_x, world_half_y) = match geometry {
+            noon_core::GeometryRef::Circle { radius } if radius.is_finite() && *radius > 0.0 => {
+                let radius = f64::from(*radius);
+                (radius * (sx * cos).hypot(sy * sin),
+                 radius * (sx * sin).hypot(sy * cos))
+            }
+            noon_core::GeometryRef::Rectangle { size }
+                if size.x.is_finite() && size.y.is_finite()
+                    && size.x > 0.0 && size.y > 0.0 => {
+                let half_x = f64::from(size.x) * 0.5;
+                let half_y = f64::from(size.y) * 0.5;
+                ((half_x * sx * cos).abs() + (half_y * sy * sin).abs(),
+                 (half_x * sx * sin).abs() + (half_y * sy * cos).abs())
+            }
+            noon_core::GeometryRef::Circle { .. }
+            | noon_core::GeometryRef::Rectangle { .. } => {
+                return Err(GlowPrepareError::InvalidSourceBounds);
+            }
+            _ => return Err(GlowPrepareError::UnsupportedCapture),
+        };
+        let screen_x = (f64::from(transform.translation.x) - f64::from(camera.center.x))
+            * x_pixels_per_world + f64::from(viewport[0]) * 0.5;
+        let screen_y = f64::from(viewport[1]) * 0.5
+            - (f64::from(transform.translation.y) - f64::from(camera.center.y))
+                * y_pixels_per_world;
+        let horizontal = world_half_x * x_pixels_per_world;
+        let vertical = world_half_y * y_pixels_per_world;
+        let bounds = Self {
+            min: [screen_x - horizontal, screen_y - vertical],
+            max: [screen_x + horizontal, screen_y + vertical],
+        };
+        if !bounds.min.into_iter().chain(bounds.max).all(f64::is_finite) {
+            return Err(GlowPrepareError::CaptureCoordinatesOutOfRange);
+        }
+        Ok(bounds)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GlowCaptureTile {
     pub origin: [i32; 2],
@@ -163,6 +241,7 @@ pub enum GlowPrepareError {
     MissingSilhouette,
     InvalidSourceBounds,
     CaptureCoordinatesOutOfRange,
+    InvalidProjection,
     CaptureSizeMismatch,
     ExtentExceedsDevice,
     ScratchBudgetExceeded,

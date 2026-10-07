@@ -240,3 +240,53 @@ fn capture_tile_accounts_for_silhouette_and_neutral_allocates_nothing() {
     assert_eq!(GlowCaptureTile::prepare(bounds, [100, 80],
         silhouette, 4096, 0), Ok(None));
 }
+
+#[test]
+fn analytic_projection_uses_output_pixels_for_rotated_scaled_shapes() {
+    use noon_core::{GeometryRef, Transform2D, Vec2};
+    let camera = super::super::Camera2D::new(
+        Vec2::ZERO, Vec2::new(20.0, 10.0)
+    ).unwrap();
+    let circle = GlowPixelBounds::projected_analytic(
+        &GeometryRef::circle(1.0), Transform2D::IDENTITY, camera, [200, 100]
+    ).unwrap();
+    assert_eq!(circle.min, [90.0, 40.0]);
+    assert_eq!(circle.max, [110.0, 60.0]);
+    let rotated = Transform2D {
+        scale: Vec2::new(-2.0, 0.5),
+        rotation: std::f32::consts::FRAC_PI_2,
+        ..Transform2D::IDENTITY
+    };
+    let ellipse = GlowPixelBounds::projected_analytic(
+        &GeometryRef::circle(1.0), rotated, camera, [200, 100]
+    ).unwrap();
+    assert!((ellipse.min[0] - 95.0).abs() < 1e-5);
+    assert!((ellipse.min[1] - 30.0).abs() < 1e-5);
+    let rectangle = GlowPixelBounds::projected_analytic(
+        &GeometryRef::rectangle(2.0, 4.0),
+        Transform2D { rotation: std::f32::consts::FRAC_PI_4, ..Transform2D::IDENTITY },
+        camera, [200, 100],
+    ).unwrap();
+    let radius = 10.0 * 3.0 * (std::f64::consts::FRAC_PI_4).cos();
+    assert!((rectangle.min[0] - (100.0 - radius)).abs() < 1e-5);
+    assert!((rectangle.min[1] - (50.0 - radius)).abs() < 1e-5);
+}
+
+#[test]
+fn analytic_projection_rejects_nonuniform_camera_and_bad_geometry() {
+    use noon_core::{GeometryRef, Transform2D, Vec2};
+    let camera = super::super::Camera2D::new(
+        Vec2::ZERO, Vec2::new(20.0, 10.0)
+    ).unwrap();
+    assert_eq!(GlowPixelBounds::projected_analytic(
+        &GeometryRef::circle(1.0), Transform2D::IDENTITY, camera, [100, 100],
+    ), Err(GlowPrepareError::InvalidProjection));
+    assert_eq!(GlowPixelBounds::projected_analytic(
+        &GeometryRef::circle(1.0),
+        Transform2D { scale: Vec2::ZERO, ..Transform2D::IDENTITY },
+        camera, [200, 100],
+    ), Err(GlowPrepareError::InvalidProjection));
+    assert_eq!(GlowPixelBounds::projected_analytic(
+        &GeometryRef::circle(0.0), Transform2D::IDENTITY, camera, [200, 100],
+    ), Err(GlowPrepareError::InvalidSourceBounds));
+}
