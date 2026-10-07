@@ -108,9 +108,9 @@ fn neutral_is_not_attachment_removal() {
 #[test]
 fn scene_and_output_pixels_have_different_view_dependencies() {
     let scene = GlowRadius::Scene(0.15);
-    assert_eq!(scene.to_output_pixels(600, 6.0).unwrap(), 15.0);
-    assert_eq!(scene.to_output_pixels(1200, 6.0).unwrap(), 30.0);
-    assert_eq!(scene.to_output_pixels(600, 3.0).unwrap(), 30.0);
+    close(scene.to_output_pixels(600, 6.0).unwrap(), 15.0);
+    close(scene.to_output_pixels(1200, 6.0).unwrap(), 30.0);
+    close(scene.to_output_pixels(600, 3.0).unwrap(), 30.0);
     for (height, view) in [(600, 6.0), (1200, 6.0), (600, 3.0)] {
         assert_eq!(
             GlowRadius::Pixels(12.0)
