@@ -152,11 +152,15 @@ class PhaseDSpatialPerformance(ThreeDScene):
             shade_in_3d=False,
         )
         self.add_world_mobjects(surface)
-        await self.play(
-            WorldTransformTo(
-                surface,
-                rotation=(math.cos(0.42), 0.0, math.sin(0.42), 0.0),
-            ),
+        # Surface is a retained family of UV cells, so this workload keeps
+        # the dense geometry/material fixed and measures its camera-only path.
+        await self.move_camera(
+            phi=0.96,
+            theta=-0.78,
+            gamma=0.05,
+            focal_distance=8.0,
+            zoom=0.98,
+            frame_center=(0.15, 0.0, 0.0),
             run_time=duration,
             rate_func=linear,
         )

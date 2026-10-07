@@ -205,7 +205,7 @@ try {
       gpuMode,
       includeSamples, includeRendererSamples, includeStageTimings,
       rendererMetricsSampling: "sparse",
-      runtimeBuildIdentityIncluded: includeRendererSamples,
+      runtimeBuildIdentityIncluded: results.every(({ report }) => report.runtimeBuild != null),
       diagnosticInstrumentationMayAffectTiming: includeRendererSamples || includeStageTimings,
     },
     workingTree,

@@ -126,6 +126,8 @@ class _WorldMobject(_base.Mobject):
 
     @property
     def world_transform(self):
+        if getattr(self, "_semantic_family_handle", None) is not None:
+            raise NotImplementedError("aggregate family world pose is unsupported")
         return _pose(self._world_call("worldTransform", "effectiveWorldTransform"))
 
     def get_center(self):
@@ -297,6 +299,8 @@ class WorldTransformTo:
                  scale=(1, 1, 1), **kwargs):
         if not isinstance(mobject, _base.Mobject):
             raise TypeError("WorldTransformTo requires a Mobject")
+        if getattr(mobject, "_semantic_family_handle", None) is not None:
+            raise TypeError("WorldTransformTo requires one Mobject, not a family")
         self.mobject = mobject
         self.endpoint = _world_transform_values(translation, rotation, scale)
         self.anim_args = dict(kwargs)

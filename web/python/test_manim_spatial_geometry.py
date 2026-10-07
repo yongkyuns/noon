@@ -293,7 +293,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         with patch.object(native, "_group_target_context", return_value=None):
             self.assertEqual(surface.get_center(), (1.0, 2.0, 3.0))
         handle.worldFamilyCenter.assert_called_once_with()
-        with self.assertRaisesRegex(NotImplementedError, "world transforms"):
+        with self.assertRaisesRegex(NotImplementedError, "aggregate family world pose"):
             _ = surface.world_transform
         for name in ("id", "geometry", "transform", "style"):
             with self.subTest(property=name), self.assertRaises(AttributeError):

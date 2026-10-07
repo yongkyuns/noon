@@ -114,6 +114,14 @@ class SpatialFacadeTests(unittest.TestCase):
         self.assertEqual(request.endpoint, (1, 2, 3, 1, 0, 0, 0, 1, 1, 1))
         self.assertEqual(request.anim_args, {"run_time": 2})
 
+    def test_world_endpoint_and_pose_query_reject_families_early(self):
+        family = object.__new__(spatial.Mesh3D)
+        family._semantic_family_handle = object()
+        with self.assertRaisesRegex(TypeError, "not a family"):
+            spatial.WorldTransformTo(family)
+        with self.assertRaisesRegex(NotImplementedError, "aggregate family world pose is unsupported"):
+            _ = family.world_transform
+
     def test_static_world_pose_routes_one_typed_endpoint_to_rust(self):
         scene = object.__new__(spatial.SpatialScene)
         mesh = object.__new__(spatial.Mesh3D)
