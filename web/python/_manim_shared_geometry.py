@@ -294,6 +294,84 @@ class BackgroundRectangle(SurroundingRectangle):
         self.corner_radius = corner_radius
 
 
+class Cross(_compat.VGroup):
+    """Manim Cross as an observable two-Line shared semantic family."""
+
+    def __init__(
+        self,
+        mobject: _base.Mobject | None = None,
+        stroke_color: _base.Color = _base.RED,
+        stroke_width: float = 6.0,
+        scale_factor: float = 1.0,
+        **kwargs: Any,
+    ) -> None:
+        if _shared._geometry_options is None or _shared._create_geometry_handle is None:
+            raise RuntimeError("Cross requires the shared browser geometry bridge")
+        scale = _shared._ir._finite_number("scale_factor", scale_factor)
+
+        if mobject is None:
+            pair = engine_call(_shared._geometry_options.cross, scale)
+        else:
+            if not isinstance(mobject, _base.Mobject):
+                raise TypeError("Cross target must be a Mobject")
+            if isinstance(mobject, _compat.Group):
+                source = _shape_matcher_target(mobject)
+                constructor = getattr(source, "beginCross", None)
+                if constructor is None:
+                    raise NotImplementedError(
+                        "Cross Group/VGroup targets require shared semantic family bounds"
+                    )
+                pair = engine_call(constructor, scale)
+            else:
+                target = _shared._handle_for(mobject)
+                if target is None:
+                    raise NotImplementedError(
+                        "Cross target requires current shared semantic geometry"
+                    )
+                context = _shared._live_constructor_context("Cross")
+                pair = (
+                    engine_call(target.beginCross, scale)
+                    if context is None
+                    else engine_call(context.beginCross, target, scale)
+                )
+
+        try:
+            candidates = [engine_call(pair.takeFirst), engine_call(pair.takeSecond)]
+        finally:
+            pair.free()
+
+        options = dict(kwargs)
+        z_index = _shared._ir._finite_number("z_index", options.pop("z_index", 0.0))
+        if options:
+            unsupported = ", ".join(sorted(options))
+            for candidate in candidates:
+                candidate.free()
+            raise TypeError(f"unsupported Cross constructor option(s): {unsupported}")
+
+        lines = []
+        try:
+            for index, candidate in enumerate(candidates):
+                _shared._apply_shared_constructor_options(
+                    candidate,
+                    {
+                        "stroke_color": stroke_color,
+                        "stroke_width": stroke_width,
+                    },
+                )
+                line = object.__new__(_compat.Line)
+                _shared._attach_geometry_options(line, candidate, f"Cross.line{index}")
+                lines.append(line)
+        except Exception:
+            for candidate in candidates[len(lines):]:
+                try:
+                    candidate.free()
+                except Exception:
+                    pass
+            raise
+
+        _compat.VGroup.__init__(self, *lines, z_index=z_index)
+
+
 class Underline(_compat.Line):
     """Manim Underline backed by the shared Rust line-matcher semantics."""
 
