@@ -11,7 +11,7 @@ import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { profileSource, validateProfile, localEditProfileSource, validateLocalEditProfile } from "./python-host-profile.mjs";
-import { qualifyProductMetrics } from "./paired-product-metrics.mjs";
+import { qualifyProductCohorts } from "./python-host-perf-product.mjs";
 import { diagnoseWorkerHistory, diagnoseControlledHistory } from "./python-host-perf-history.mjs";
 import { stringifyEvidence } from "./python-host-report.mjs";
 import { PERF_PROTOCOL as protocol, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
@@ -194,21 +194,13 @@ try {
       }
     }
   }
-  // Do not turn the old, loose 20% product threshold into a no-regression claim.
-  for (const cohort of ["", "camera/"]) {
-    const comparison = JSON.parse(await readFile(path.join(output, "..", cohort, "candidate/comparison.json"), "utf8"));
-    const { fps, render } = qualifyProductMetrics(comparison);
-    if (fps.status !== "pass") {
-      failures.push({ kind: fps.status === "regression" ? "product_fps" : "product_fps_inconclusive",
-        cohort, ...fps });
-    }
-    if (render !== null && render.status !== "pass") {
-      failures.push({ kind: "product_render_cost", cohort, ...render });
-    }
-    for (const [name, value] of Object.entries(comparison.latency)) {
-      if (value.candidateMs > value.baselineMs * 1.03 + 20) failures.push({ kind: "product_latency", cohort, name, ...value });
-    }
-  }
+  // Every manifest workload receives the same strict seven-pair qualification.
+  // The separate three-pair cumulative cohort is not a substitute for this one.
+  const productQualification = await qualifyProductCohorts(async directory =>
+    JSON.parse(await readFile(path.join(output, "..", directory, "candidate/comparison.json"), "utf8")));
+  failures.push(...productQualification.failures);
+  await writeFile(path.join(output, "product-qualification.json"),
+    stringifyEvidence(productQualification) + "\n");
   // Profiles are a separate diagnostic experiment AFTER every prescribed pair.
   // Their instrumented durations never enter rows/costs or acceptance ratios.
   for (const workload of protocol.workloads) {

@@ -21,6 +21,7 @@ const report = () => ({
   editRunMs: 60,
   fps: { effectiveFps: 60 },
   measurement: productMeasurement("parity-square-and-circle"),
+  source: { path: productMeasurement("parity-square-and-circle").sourcePath, sha256: "f".repeat(64) },
   runtimeIdentity: { sourceRevision: "a".repeat(40), buildId: "b".repeat(64) },
   screenshot: "intentionally-not-loaded.png",
   packageSizes: summarizePackageSizes(Object.fromEntries([
@@ -29,21 +30,24 @@ const report = () => ({
   ].map(name => [name, { sha256: "a".repeat(64), bytes: 100 }]))),
 });
 
-function cameraReport() {
+function cameraReport(exampleId = "showcase-camera-follows-path") {
   const input = report();
-  input.exampleId = "showcase-camera-follows-path";
+  input.exampleId = exampleId;
   input.measurement = productMeasurement(input.exampleId);
+  input.source.path = input.measurement.sourcePath;
+  const { windowStartSeconds: start, windowEndSeconds: end } = input.measurement;
+  const duration = end - start;
   input.fpsSamples = Array.from({ length: 13 }, (_, index) => ({
-    metricAt: index, rendererAt: 5_000 + index * 3200 / 12, frames: 100 + index * 16,
-    time: 3.7 + index * 3.2 / 12, session: 1, clockOriginMs: 10_000,
+    metricAt: index, rendererAt: 5_000 + index * duration * 1000 / 12, frames: 100 + index * 16,
+    time: start + index * duration / 12, session: 1, clockOriginMs: 10_000,
     phase: "source", ready: true, needsPresent: false, bufferedDeltas: 0,
     runInFlight: true, playbackControls: "unavailable",
     counters: { drawCalls: 2, instancesDrawn: 3, bytesUploaded: 64, geometryCacheMisses: 0,
       objectCount: 3, rendererRebuilds: 1, modeSwitches: 0 },
   }));
-  input.fps = sampleRendererFps(input.fpsSamples, 6.9, { warmupSeconds: 3.7 });
+  input.fps = sampleRendererFps(input.fpsSamples, end, { warmupSeconds: start });
   input.presentationSamples = Array.from({ length: 193 }, (_, index) => ({
-    session: 1, clockOriginMs: 10_000, sequence: index, presentedAtMs: 4_998 + index * 1000 / 60,
+    session: 1, clockOriginMs: 10_000, sequence: index, presentedAtMs: 4_998 + index * duration * 1000 / 192,
     applyMs: 0.1, renderMs: 1.2, ackPostMs: 0.01,
   }));
   input.presentationGaps = samplePresentationGaps(input.presentationSamples, input.fps);
@@ -390,3 +394,75 @@ test("pair six ordering error is rejected before image decoding", async () => {
     assert.match(result.stderr, /declared alternating order/);
   });
 });
+
+for (const [name, mutate, expected] of [
+  ["missing authored source", input => { delete input.source; }, /product source path changed/],
+  ["wrong authored path", input => { input.source.path = "python/examples/other.py"; }, /product source path changed/],
+  ["missing authored hash", input => { delete input.source.sha256; }, /product source hash is missing/],
+  ["different authored bytes", input => { input.source.sha256 = "e".repeat(64); }, /identical authored source/],
+]) {
+  test(name, async () => {
+    const candidate = report();
+    mutate(candidate);
+    await rejectsReport(report(), candidate, expected);
+  });
+}
+
+test("changing both source arms between pairs still fails provenance", async () => {
+  await withTempDirectory("noon-product-source-change-", async directory => {
+    await createCohort(directory, { mutateReport: (input, { index }) => {
+      if (index === 2) input.source.sha256 = "e".repeat(64);
+    } });
+    const result = await runCohort(directory);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /authored source changed between trials/);
+    assert.doesNotMatch(result.stderr, /ERR_MODULE_NOT_FOUND|pngjs/);
+  });
+});
+
+for (const example of ["showcase-first-scene", "showcase-raster-images", "showcase-bezier-paths"]) {
+  for (const pairCount of [3, 7]) {
+    test(`${example} compares all raw frame costs and images in ${pairCount} pairs`, imageTestOptions, async () => {
+      await withTempDirectory("noon-product-workload-pass-", async directory => {
+        await createCohort(directory, { pairCount, withImages: true, mutateReport: input => {
+          Object.assign(input, cameraReport(example), { screenshot: input.screenshot, runtimeIdentity: input.runtimeIdentity });
+        } });
+        const result = await runCohort(directory, {}, pairCount);
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, result.stderr);
+        const comparison = JSON.parse(await readFile(path.join(directory, "candidate/comparison.json")));
+        assert.equal(comparison.exampleId, example);
+        assert.equal(comparison.measurements.length, pairCount);
+        assert.equal(comparison.rendererCosts.at(-1).candidate.frameCount, 192);
+        assert.equal(comparison.visual.pairs.length, pairCount);
+      });
+    });
+  }
+
+  test(`${example} rejects a lost publication before image decoding`, async () => {
+    const candidate = cameraReport(example);
+    candidate.presentationSamples.splice(20, 1);
+    await rejectsReport(cameraReport(example), candidate, /cover every measured renderer frame/);
+  });
+
+  test(`${example} rejects seeded slowdown using recomputed raw FPS`, imageTestOptions, async () => {
+    await withTempDirectory("noon-product-workload-regression-", async directory => {
+      await createCohort(directory, { withImages: true, mutateReport: (input, { side }) => {
+        const measured = cameraReport(example);
+        if (side === "candidate") {
+          for (const sample of measured.fpsSamples) sample.rendererAt *= 2;
+          for (const sample of measured.presentationSamples) sample.presentedAtMs *= 2;
+          measured.fps = sampleRendererFps(measured.fpsSamples, measured.measurement.windowEndSeconds,
+            { warmupSeconds: measured.measurement.windowStartSeconds });
+          measured.presentationGaps = samplePresentationGaps(measured.presentationSamples, measured.fps);
+          measured.rendererCosts = sampleRendererCosts(measured.presentationSamples, measured.fpsSamples, measured.fps);
+        }
+        Object.assign(input, measured, { screenshot: input.screenshot, runtimeIdentity: input.runtimeIdentity });
+      } });
+      const result = await runCohort(directory);
+      assert.ifError(result.error);
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /effective FPS regressed/);
+    });
+  });
+}
