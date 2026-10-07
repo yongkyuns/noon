@@ -15,8 +15,51 @@ import noon as _base
 from noon import Mobject, Scene
 _ir = _base._ir
 
-OUT = (0.0, 0.0, 1.0)
-IN = (0.0, 0.0, -1.0)
+
+class _Direction3(tuple):
+    """Immutable three-component arithmetic for the Manim depth directions."""
+
+    __slots__ = ()
+
+    def __new__(cls, x, y, z):
+        return tuple.__new__(cls, (
+            _ir._finite_number("direction component", float(value)) for value in (x, y, z)
+        ))
+
+    def __getnewargs__(self):
+        return tuple(self)
+
+    @staticmethod
+    def _components(value):
+        if isinstance(value, _base.Vec2):
+            return (*value, 0.0)
+        components = tuple(value)
+        if len(components) != 3:
+            raise TypeError("direction arithmetic requires three components")
+        return tuple(float(component) for component in components)
+
+    def __add__(self, other):
+        return _Direction3(*(left + right for left, right in zip(self, self._components(other))))
+
+    def __sub__(self, other):
+        return _Direction3(*(left - right for left, right in zip(self, self._components(other))))
+
+    def __neg__(self):
+        return self * -1
+
+    def __mul__(self, scalar):
+        factor = float(scalar)
+        return _Direction3(*(component * factor for component in self))
+
+    def __rmul__(self, scalar):
+        return self * scalar
+
+    def __truediv__(self, scalar):
+        return self * (1 / float(scalar))
+
+
+OUT = _Direction3(0.0, 0.0, 1.0)
+IN = _Direction3(0.0, 0.0, -1.0)
 
 
 # Pinned ManimCE v0.21.0 Cairo presentation contract. Cairo converts

@@ -308,6 +308,17 @@ class SpatialFacadeTests(unittest.TestCase):
             self.assertIs(mesh.move_to((1, 2, 3)), mesh)
         handle.shiftWorld.assert_called_once_with(-9.0, 5.0, 1.0)
 
+    def test_world_light_placement_accepts_scaled_depth_constant(self):
+        from noon import IN
+
+        light = object.__new__(spatial._WorldMobject)
+        handle = Mock()
+        handle.worldCenter.return_value = [0.0, 0.0, 0.0]
+        with patch.object(spatial, "_handle_for", return_value=handle), \
+             patch.object(spatial, "_live_mutation_context", return_value=None):
+            self.assertIs(light.move_to(3 * IN), light)
+        handle.shiftWorld.assert_called_once_with(0.0, 0.0, -3.0)
+
     def test_family_move_to_uses_rust_authored_and_live_bounds_centers(self):
         family = Mock()
         family.worldFamilyCenter.return_value = [10.0, -3.0, 2.0]

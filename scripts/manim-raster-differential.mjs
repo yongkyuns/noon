@@ -686,6 +686,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
     if (fixture.id === "spatial-camera-labels-worker") {
       assertSpatialCameraLabelsFrame(debugFrame, sample.time);
     }
+    await writeFile(path.join(fixtureDir, `${sample.label}-frame.json`), `${JSON.stringify(debugFrame, null, 2)}\n`);
     captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
   }
   const completed = await page.evaluate((times) =>
@@ -835,9 +836,11 @@ async function compareAll(references, backendResults) {
     enforce,
     generatedAt: new Date().toISOString(),
     fixtures: [],
+    semanticFailures: [],
   };
   const enforcementFailures = [];
   const executionFailures = [];
+  const semanticFailures = report.semanticFailures;
 
   for (const fixture of manifest.fixtures) {
     const tolerance = resolveRasterTolerance(manifest, fixture);
@@ -858,33 +861,35 @@ async function compareAll(references, backendResults) {
         const referenceStats = pixelStats(referenceBuffer);
         const noonStats = pixelStats(actualBuffer);
         let foregroundCoverage;
-        if (fixture.id.startsWith("vector-space-lts-")) {
-          const oracle = capture.vectorOracle;
-          assert.ok(oracle, `${fixture.id}: missing captured Manim vector oracle`);
-          assertVectorSpaceFrame(capture.debugFrame, oracle, `${fixture.id}/${backend}@${capture.time}`);
-          // Full-viewport thin grids differ in Cairo/WGPU antialiasing. Keep a
-          // strict geometric guard so the edge-pixel budget cannot hide gaps.
-          foregroundCoverage = compareForegroundCoverage(
-            PNG.sync.read(referenceBuffer), PNG.sync.read(actualBuffer), {
-              background: referenceStats.background,
-              backgroundDistance: 24, neighborRadius: 1,
-              maxMismatchFraction: 0.001, maxBoundsDelta: 1,
-            },
-          );
-          assert.ok(foregroundCoverage.pass,
-            `${fixture.id}/${backend}@${capture.time}: foreground coverage ${JSON.stringify(foregroundCoverage)}`);
-        }
         let cameraProfileObservation = null;
-        if (fixture.camera_profile_observation === true) {
-          try {
+        let semanticObservationError = null;
+        try {
+          if (fixture.id.startsWith("vector-space-lts-")) {
+            const oracle = capture.vectorOracle;
+            assert.ok(oracle, `${fixture.id}: missing captured Manim vector oracle`);
+            assertVectorSpaceFrame(capture.debugFrame, oracle, `${fixture.id}/${backend}@${capture.time}`);
+            // Full-viewport thin grids differ in Cairo/WGPU antialiasing. Keep a
+            // strict geometric guard so the edge-pixel budget cannot hide gaps.
+            foregroundCoverage = compareForegroundCoverage(
+              PNG.sync.read(referenceBuffer), PNG.sync.read(actualBuffer), {
+                background: referenceStats.background,
+                backgroundDistance: 24, neighborRadius: 1,
+                maxMismatchFraction: 0.001, maxBoundsDelta: 1,
+              },
+            );
+            assert.ok(foregroundCoverage.pass,
+              `${fixture.id}/${backend}@${capture.time}: foreground coverage ${JSON.stringify(foregroundCoverage)}`);
+          }
+          if (fixture.camera_profile_observation === true) {
             assert.ok(capture.camera3dOracle,
               `${fixture.id}: missing selected Manim camera_3d reference frame`);
             cameraProfileObservation = compareEffective3DCamera(
               capture.debugFrame, capture.camera3dOracle,
             );
-          } catch (error) {
-            throw new Error(`${fixture.id}/${backend}@${capture.time}: ${error.message}`, { cause: error });
           }
+        } catch (error) {
+          semanticObservationError = `${fixture.id}/${backend}@${capture.time}: ${error.message}`;
+          semanticFailures.push(semanticObservationError);
         }
         const diff = comparePng(referenceBuffer, actualBuffer);
         const diffPath = path.join(
@@ -909,6 +914,7 @@ async function compareAll(references, backendResults) {
           noon: noonStats,
           debugFrame: capture.debugFrame,
           effectiveCameraProfile: cameraProfileObservation,
+          semanticObservationError,
           foregroundCoverage,
           boundsDelta: bboxDelta(referenceStats, noonStats),
           diff: {
@@ -962,6 +968,9 @@ async function compareAll(references, backendResults) {
           `categories=${categories.join("|") || "none"}`,
       );
     }
+  }
+  if (semanticFailures.length > 0) {
+    throw new Error(`Manim semantic observation failures (report: ${reportPath}):\n${semanticFailures.join("\n")}`);
   }
   if (executionFailures.length > 0) {
     throw new Error(`Shared raster execution failures (report: ${reportPath}):\n${executionFailures.join("\n")}`);
