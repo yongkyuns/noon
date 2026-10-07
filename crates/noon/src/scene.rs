@@ -614,9 +614,7 @@ impl Scene {
         b: f64,
     ) -> Result<Mobject, AuthoringError> {
         self.with_running_execution(|store, root, execution| {
-            crate::path_editing::publish_running_subcurve(
-                store, root, execution, source, a, b,
-            )
+            crate::path_editing::publish_running_subcurve(store, root, execution, source, a, b)
         })
     }
 
