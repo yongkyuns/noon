@@ -1,3 +1,4 @@
+use noon::integration::{PixelChannelOrder, PixelRowOrder, Rgba8ReadbackLayout};
 use noon_core::Vec2;
 use noon_render_wgpu::{
     text::TextDeviceMetrics, Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState,
@@ -14,6 +15,7 @@ pub struct Raster {
     text: RetainedTextGpuState,
     target: wgpu::Texture,
     readback: wgpu::Buffer,
+    layout: Rgba8ReadbackLayout,
     overlay: noon_render_wgpu::OverlayGpuState,
     pub last_scene_upload_bytes: usize,
     pub last_overlay_upload_bytes: usize,
@@ -21,6 +23,17 @@ pub struct Raster {
 }
 impl Raster {
     pub async fn new() -> Self {
+        Self::with_dimensions(SIZE, SIZE).await
+    }
+
+    pub async fn with_dimensions(width: u32, height: u32) -> Self {
+        let layout = Rgba8ReadbackLayout::new(
+            width,
+            height,
+            wgpu::COPY_BYTES_PER_ROW_ALIGNMENT,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -38,23 +51,18 @@ impl Raster {
             .await
             .unwrap();
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-        renderer.set_viewport(&device, &queue, SIZE, SIZE);
-        // The oracle explicitly uses an 8x8 world. Never compare it with the
-        // low-level renderer's unrelated default 2x2 camera.
-        renderer.set_camera(
-            &queue,
-            Camera2D::new(Vec2::ZERO, Vec2::new(WORLD_SIZE, WORLD_SIZE)).unwrap(),
-        );
-        assert_eq!(
-            renderer.camera().world_size,
-            Vec2::new(WORLD_SIZE, WORLD_SIZE)
-        );
+        renderer.set_viewport(&device, &queue, width, height);
+        // Preserve the oracle's 8-unit world height, expanding horizontal extent
+        // at non-square resolutions so text and geometry share uniform density.
+        let world_size = Vec2::new(WORLD_SIZE * width as f32 / height as f32, WORLD_SIZE);
+        renderer.set_camera(&queue, Camera2D::new(Vec2::ZERO, world_size).unwrap());
+        assert_eq!(renderer.camera().world_size, world_size);
         let text = renderer.create_retained_text_state(&device, &queue);
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("native raster qualification target"),
             size: wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -66,7 +74,7 @@ impl Raster {
         });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("native raster qualification readback"),
-            size: u64::from(SIZE * SIZE * 4),
+            size: layout.buffer_len() as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -78,6 +86,7 @@ impl Raster {
             text,
             target,
             readback,
+            layout,
             overlay: noon_render_wgpu::OverlayGpuState::default(),
             last_scene_upload_bytes: 0,
             last_overlay_upload_bytes: 0,
@@ -116,7 +125,7 @@ impl Raster {
             .prepare_publication(
                 &self.device,
                 publication,
-                TextDeviceMetrics::uniform(SIZE as f32 / WORLD_SIZE).unwrap(),
+                TextDeviceMetrics::uniform(self.layout.height() as f32 / WORLD_SIZE).unwrap(),
             )
             .unwrap();
         self.last_scene_repacked = prepared.geometry_stats().instances_repacked;
@@ -158,13 +167,13 @@ impl Raster {
                 buffer: &self.readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(SIZE * 4),
-                    rows_per_image: Some(SIZE),
+                    bytes_per_row: Some(self.layout.padded_bytes_per_row()),
+                    rows_per_image: Some(self.layout.height()),
                 },
             },
             wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
+                width: self.layout.width(),
+                height: self.layout.height(),
                 depth_or_array_layers: 1,
             },
         );
@@ -179,7 +188,12 @@ impl Raster {
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
         receiver.recv().unwrap().unwrap();
-        let pixels = self.readback.slice(..).get_mapped_range().unwrap().to_vec();
+        let pixels = {
+            let mapped = self.readback.slice(..).get_mapped_range().unwrap();
+            self.layout
+                .copy_rgba8(&mapped, PixelChannelOrder::Rgba, PixelRowOrder::TopToBottom)
+                .unwrap()
+        };
         self.readback.unmap();
         pixels
     }
