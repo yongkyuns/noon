@@ -46,10 +46,17 @@ fn invalid_capture_options_fail_before_gpu_creation_or_source_execution() {
     invalid.push(options);
     for options in invalid {
         let resumes = Rc::new(Cell::new(0));
-        let mut program = Scene::new().into_live_program(NeverRun(Rc::clone(&resumes))).unwrap();
+        let mut program = Scene::new()
+            .into_live_program(NeverRun(Rc::clone(&resumes)))
+            .unwrap();
         let mut callbacks = RustHostCallbackTable::new();
-        let result = capture_frames(&mut program, &mut callbacks, frame_options(), options,
-            |_| Ok::<_, Infallible>(()));
+        let result = capture_frames(
+            &mut program,
+            &mut callbacks,
+            frame_options(),
+            options,
+            |_| Ok::<_, Infallible>(()),
+        );
         assert!(matches!(result, Err(CaptureRunError::Capture(_))));
         assert_eq!(resumes.get(), 0);
     }
@@ -58,13 +65,20 @@ fn invalid_capture_options_fail_before_gpu_creation_or_source_execution() {
 #[test]
 fn pre_cancelled_capture_does_not_create_gpu_or_invoke_source() {
     let resumes = Rc::new(Cell::new(0));
-    let mut program = Scene::new().into_live_program(NeverRun(Rc::clone(&resumes))).unwrap();
+    let mut program = Scene::new()
+        .into_live_program(NeverRun(Rc::clone(&resumes)))
+        .unwrap();
     let options = CaptureOptions::new(65, 3);
     let token = options.cancellation.clone();
     token.cancel();
     assert!(options.cancellation.is_cancelled());
-    let result = capture_frames(&mut program, &mut RustHostCallbackTable::new(),
-        frame_options(), options, |_| Ok::<_, Infallible>(()));
+    let result = capture_frames(
+        &mut program,
+        &mut RustHostCallbackTable::new(),
+        frame_options(),
+        options,
+        |_| Ok::<_, Infallible>(()),
+    );
     assert!(matches!(result, Err(CaptureRunError::Cancelled)));
     assert_eq!(resumes.get(), 0);
 }
@@ -72,10 +86,20 @@ fn pre_cancelled_capture_does_not_create_gpu_or_invoke_source() {
 #[test]
 fn invalid_frame_bounds_fail_without_invoking_source() {
     let resumes = Rc::new(Cell::new(0));
-    let mut program = Scene::new().into_live_program(NeverRun(Rc::clone(&resumes))).unwrap();
-    let options = ExportFrameOptions { max_frames: 0, ..frame_options() };
-    let result = capture_frames(&mut program, &mut RustHostCallbackTable::new(),
-        options, CaptureOptions::new(65, 3), |_| Ok::<_, Infallible>(()));
+    let mut program = Scene::new()
+        .into_live_program(NeverRun(Rc::clone(&resumes)))
+        .unwrap();
+    let options = ExportFrameOptions {
+        max_frames: 0,
+        ..frame_options()
+    };
+    let result = capture_frames(
+        &mut program,
+        &mut RustHostCallbackTable::new(),
+        options,
+        CaptureOptions::new(65, 3),
+        |_| Ok::<_, Infallible>(()),
+    );
     assert!(matches!(result, Err(CaptureRunError::Sampling(_))));
     assert_eq!(resumes.get(), 0);
 }

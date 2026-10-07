@@ -26,19 +26,31 @@ pub(super) struct CaptureView {
 impl CaptureView {
     pub fn new(session: &ExecutionSession, options: &CaptureOptions) -> Result<Self, CaptureError> {
         // Never use inspection_camera(): viewer navigation is not authored output.
-        let camera = session.camera_2d()
-            .map_err(|e| CaptureError::View(e.to_string()))?.unwrap_or_default();
-        let insets = session.inset_2d_views().map_err(|e| CaptureError::View(e.to_string()))?;
+        let camera = session
+            .camera_2d()
+            .map_err(|e| CaptureError::View(e.to_string()))?
+            .unwrap_or_default();
+        let insets = session
+            .inset_2d_views()
+            .map_err(|e| CaptureError::View(e.to_string()))?;
         let aspect = options.width as f32 / options.height as f32;
-        let primary = camera.viewport_bounds(aspect)
+        let primary = camera
+            .viewport_bounds(aspect)
             .ok_or_else(|| CaptureError::View("invalid camera viewport".to_owned()))?;
         let mut bounds = Vec::with_capacity(1 + insets.len());
         bounds.push(primary);
         for inset in &insets {
-            bounds.push(inset.camera_bounds()
-                .ok_or_else(|| CaptureError::View("invalid inset camera".to_owned()))?);
+            bounds.push(
+                inset
+                    .camera_bounds()
+                    .ok_or_else(|| CaptureError::View("invalid inset camera".to_owned()))?,
+            );
         }
-        Ok(Self { camera, insets, bounds })
+        Ok(Self {
+            camera,
+            insets,
+            bounds,
+        })
     }
 }
 
@@ -57,7 +69,10 @@ impl GpuFault {
     }
 
     fn check(&self) -> Result<(), CaptureError> {
-        let first = self.0.lock().map_err(|_| CaptureError::gpu("GPU fault latch poisoned"))?;
+        let first = self
+            .0
+            .lock()
+            .map_err(|_| CaptureError::gpu("GPU fault latch poisoned"))?;
         match first.as_ref() {
             Some(message) => Err(CaptureError::Gpu(message.clone())),
             None => Ok(()),
@@ -95,34 +110,46 @@ impl NativeCapture {
             backends: options.backends,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
-        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: options.force_fallback_adapter,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        }).await.map_err(CaptureError::gpu)?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: options.force_fallback_adapter,
+                compatible_surface: None,
+                apply_limit_buckets: false,
+            })
+            .await
+            .map_err(CaptureError::gpu)?;
         let adapter_info = adapter.get_info();
-        let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("Noon headless capture device"),
-            ..Default::default()
-        }).await.map_err(CaptureError::gpu)?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("Noon headless capture device"),
+                ..Default::default()
+            })
+            .await
+            .map_err(CaptureError::gpu)?;
         let limits = device.limits();
         if options.width > limits.max_texture_dimension_2d
             || options.height > limits.max_texture_dimension_2d
             || layout.buffer_len() as u64 > limits.max_buffer_size
         {
-            return Err(CaptureError::Configuration("capture exceeds the device's enabled limits"));
+            return Err(CaptureError::Configuration(
+                "capture exceeds the device's enabled limits",
+            ));
         }
         let fault = GpuFault::default();
         let errors = fault.clone();
-        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| errors.record(format!("{error}"))));
+        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            errors.record(format!("{error}"))
+        }));
         let lost = fault.clone();
         device.set_device_lost_callback(move |reason, message| {
             lost.record(format!("device lost ({reason:?}): {message}"));
         });
 
         let mut pixels = Vec::new();
-        pixels.try_reserve_exact(layout.packed_len()).map_err(CaptureError::gpu)?;
+        pixels
+            .try_reserve_exact(layout.packed_len())
+            .map_err(CaptureError::gpu)?;
         pixels.resize(layout.packed_len(), 0);
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, options.width, options.height);
@@ -191,50 +218,65 @@ impl NativeCapture {
         let camera = view.camera;
         let width = self.layout.width();
         let height = self.layout.height();
-        let render_camera = Camera2D::new(camera.center, Vec2::new(
-            camera.height * width as f32 / height as f32, camera.height,
-        )).map_err(CaptureError::gpu)?;
+        let render_camera = Camera2D::new(
+            camera.center,
+            Vec2::new(camera.height * width as f32 / height as f32, camera.height),
+        )
+        .map_err(CaptureError::gpu)?;
         self.renderer.set_camera(&self.queue, render_camera);
         let density = height as f32 / camera.height;
-        let metrics = TextDeviceMetrics::uniform(density).and_then(|metrics| {
-            metrics.with_world_origin_pixels(Vec2::new(
-                width as f32 * 0.5 - camera.center.x * density,
-                height as f32 * 0.5 + camera.center.y * density,
-            ))
-        }).map_err(CaptureError::gpu)?;
-        self.renderer.prepare_spatial(&self.device, &self.queue, publication)
+        let metrics = TextDeviceMetrics::uniform(density)
+            .and_then(|metrics| {
+                metrics.with_world_origin_pixels(Vec2::new(
+                    width as f32 * 0.5 - camera.center.x * density,
+                    height as f32 * 0.5 + camera.center.y * density,
+                ))
+            })
             .map_err(CaptureError::gpu)?;
-        self.preparer.set_inset_views_active(!view.insets.is_empty());
-        self.renderer.set_inset_2d_views(&self.device, &self.queue, &mut self.text, &view.insets)
+        self.renderer
+            .prepare_spatial(&self.device, &self.queue, publication)
             .map_err(CaptureError::gpu)?;
-        let transient = self.preparer
+        self.preparer
+            .set_inset_views_active(!view.insets.is_empty());
+        self.renderer
+            .set_inset_2d_views(&self.device, &self.queue, &mut self.text, &view.insets)
+            .map_err(CaptureError::gpu)?;
+        let transient = self
+            .preparer
             .prepare_transient_presentations_visible(publication, visible)
             .map_err(CaptureError::gpu)?;
-        let prepared = self.preparer.prepare_planned_publication_visible(
-            &self.device, publication, visible, metrics,
-        ).map_err(CaptureError::gpu)?;
+        let prepared = self
+            .preparer
+            .prepare_planned_publication_visible(&self.device, publication, visible, metrics)
+            .map_err(CaptureError::gpu)?;
         let geometry_instances_repacked = prepared.geometry_stats().instances_repacked;
-        let retained_upload_bytes = self.renderer
+        let retained_upload_bytes = self
+            .renderer
             .upload_retained(&self.device, &self.queue, &prepared, &mut self.text)
             .bytes_uploaded();
         if !transient.slots.is_empty() {
-            self.renderer.upload_derived(&self.device, &self.queue, &transient);
+            self.renderer
+                .upload_derived(&self.device, &self.queue, &transient);
         }
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Noon capture frame"),
-        });
-        self.renderer.encode_retained_with_transient_presentations_and_overlay(
-            &mut encoder,
-            &self.view,
-            InteractiveRetainedFrame {
-                prepared: &prepared,
-                text: &self.text,
-                transient: Some(&transient),
-                overlay: &self.overlay,
-            },
-            self.clear,
-            None,
-        ).map_err(CaptureError::gpu)?;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Noon capture frame"),
+            });
+        self.renderer
+            .encode_retained_with_transient_presentations_and_overlay(
+                &mut encoder,
+                &self.view,
+                InteractiveRetainedFrame {
+                    prepared: &prepared,
+                    text: &self.text,
+                    transient: Some(&transient),
+                    overlay: &self.overlay,
+                },
+                self.clear,
+                None,
+            )
+            .map_err(CaptureError::gpu)?;
         if read_pixels {
             encoder.copy_texture_to_buffer(
                 self.target.as_image_copy(),
@@ -246,49 +288,73 @@ impl NativeCapture {
                         rows_per_image: Some(height),
                     },
                 },
-                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
             );
         }
         self.fault.check()?;
         let submission = self.queue.submit([encoder.finish()]);
         if read_pixels {
             self.read_pixels(submission)?;
-            self.readbacks = self.readbacks.checked_add(1)
+            self.readbacks = self
+                .readbacks
+                .checked_add(1)
                 .ok_or(CaptureError::Configuration("readback counter exhausted"))?;
         } else {
             self.wait(submission)?;
         }
-        self.renders = self.renders.checked_add(1)
+        self.renders = self
+            .renders
+            .checked_add(1)
             .ok_or(CaptureError::Configuration("render counter exhausted"))?;
-        Ok(CaptureWork { geometry_instances_repacked, retained_upload_bytes })
+        Ok(CaptureWork {
+            geometry_instances_repacked,
+            retained_upload_bytes,
+        })
     }
 
     fn wait(&self, submission: wgpu::SubmissionIndex) -> Result<(), CaptureError> {
-        self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(submission),
-            timeout: Some(self.wait_timeout),
-        }).map_err(CaptureError::gpu)?;
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: Some(self.wait_timeout),
+            })
+            .map_err(CaptureError::gpu)?;
         self.fault.check()
     }
 
     fn read_pixels(&mut self, submission: wgpu::SubmissionIndex) -> Result<(), CaptureError> {
         let (sender, receiver) = mpsc::sync_channel(1);
-        self.readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            // A failed/cancelled capture may already have dropped the receiver.
-            let _ = sender.send(result);
-        });
+        self.readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                // A failed/cancelled capture may already have dropped the receiver.
+                let _ = sender.send(result);
+            });
         let result = (|| {
             self.wait(submission)?;
             // The native Wait invokes mapping callbacks before returning. Never
             // block a second, unbounded recv after the bounded GPU wait.
-            receiver.try_recv().map_err(CaptureError::gpu)?.map_err(CaptureError::gpu)?;
-            let mapped = self.readback.slice(..).get_mapped_range().map_err(CaptureError::gpu)?;
-            self.layout.copy_rgba8_into(
-                &mapped,
-                PixelChannelOrder::Rgba,
-                PixelRowOrder::TopToBottom,
-                &mut self.pixels,
-            ).map_err(CaptureError::Pixels)
+            receiver
+                .try_recv()
+                .map_err(CaptureError::gpu)?
+                .map_err(CaptureError::gpu)?;
+            let mapped = self
+                .readback
+                .slice(..)
+                .get_mapped_range()
+                .map_err(CaptureError::gpu)?;
+            self.layout
+                .copy_rgba8_into(
+                    &mapped,
+                    PixelChannelOrder::Rgba,
+                    PixelRowOrder::TopToBottom,
+                    &mut self.pixels,
+                )
+                .map_err(CaptureError::Pixels)
         })();
         // Also cancel a pending map on error. The mapped view above is already
         // dropped on both branches, before the buffer can be reused or dropped.

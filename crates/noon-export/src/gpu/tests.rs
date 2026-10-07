@@ -15,7 +15,8 @@ fn native_capture_spatial_depth_and_device_loss() {
     let mut options = CaptureOptions::new(257, 129);
     options.backends = wgpu::Backends::VULKAN;
     options.force_fallback_adapter = true;
-    let mut gpu = pollster::block_on(NativeCapture::new(&options, options.layout().unwrap())).unwrap();
+    let mut gpu =
+        pollster::block_on(NativeCapture::new(&options, options.layout().unwrap())).unwrap();
     let mut session = noon::example_scenes::spatial_mesh::session().unwrap();
     for (time, front_is_red) in [(0.0, true), (2.0, false)] {
         session.seek(time).unwrap();
@@ -23,12 +24,19 @@ fn native_capture_spatial_depth_and_device_loss() {
         let query = session.query_viewports(&view.bounds);
         let visible = session.renderer_viewport_query(query).unwrap();
         let publication = session.take_renderer_publication();
-        gpu.render(&publication, &view, visible.object_indices(), true).unwrap();
+        gpu.render(&publication, &view, visible.object_indices(), true)
+            .unwrap();
         let center = &gpu.pixels()[(64 * 257 + 128) * 4..][..4];
         if front_is_red {
-            assert!(center[0] > center[2], "front red mesh must occlude the blue mesh: {center:?}");
+            assert!(
+                center[0] > center[2],
+                "front red mesh must occlude the blue mesh: {center:?}"
+            );
         } else {
-            assert!(center[2] > center[0], "blue mesh must occlude the moved red mesh: {center:?}");
+            assert!(
+                center[2] > center[0],
+                "blue mesh must occlude the moved red mesh: {center:?}"
+            );
         }
         assert_eq!(center[3], 255);
         assert_eq!(publication.frame().time, time);
@@ -40,5 +48,7 @@ fn native_capture_spatial_depth_and_device_loss() {
     let query = session.query_viewports(&view.bounds);
     let visible = session.renderer_viewport_query(query).unwrap();
     let publication = session.take_renderer_publication();
-    assert!(gpu.render(&publication, &view, visible.object_indices(), true).is_err());
+    assert!(gpu
+        .render(&publication, &view, visible.object_indices(), true)
+        .is_err());
 }

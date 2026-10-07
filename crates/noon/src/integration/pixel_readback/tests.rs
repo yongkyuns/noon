@@ -4,7 +4,12 @@ const LIMIT: u64 = 16 * 1024 * 1024;
 
 fn pixel(x: u32, y: u32) -> [u8; 4] {
     let alpha = [0, 1, 64, 128, 254, 255][((x + 2 * y) % 6) as usize];
-    [(x % 193) as u8, (y % 173) as u8, ((x + y) % 211) as u8, alpha]
+    [
+        (x % 193) as u8,
+        (y % 173) as u8,
+        ((x + y) % 211) as u8,
+        alpha,
+    ]
 }
 
 fn mapped_fixture(
@@ -26,8 +31,8 @@ fn mapped_fixture(
             if channels == PixelChannelOrder::Bgra {
                 encoded.swap(0, 2);
             }
-            let offset = source_y as usize * layout.padded_bytes_per_row() as usize
-                + x as usize * 4;
+            let offset =
+                source_y as usize * layout.padded_bytes_per_row() as usize + x as usize * 4;
             source[offset..offset + 4].copy_from_slice(&encoded);
         }
     }
@@ -79,13 +84,11 @@ fn widths_on_both_sides_of_copy_alignment_keep_exact_dimensions() {
         assert_eq!(layout.padded_bytes_per_row(), stride);
         assert_eq!(layout.buffer_len(), stride as usize * 3);
         assert_eq!(layout.packed_len(), width as usize * 3 * 4);
-        let (source, expected) = mapped_fixture(
-            layout,
-            PixelChannelOrder::Rgba,
-            PixelRowOrder::TopToBottom,
-        );
+        let (source, expected) =
+            mapped_fixture(layout, PixelChannelOrder::Rgba, PixelRowOrder::TopToBottom);
         assert_eq!(
-            layout.copy_rgba8(&source, PixelChannelOrder::Rgba, PixelRowOrder::TopToBottom)
+            layout
+                .copy_rgba8(&source, PixelChannelOrder::Rgba, PixelRowOrder::TopToBottom)
                 .unwrap(),
             expected
         );
@@ -99,7 +102,10 @@ fn budget_includes_padding_and_accepts_the_exact_limit() {
     for limit in [0, 65 * 3 * 4, 1535] {
         assert!(matches!(
             Rgba8ReadbackLayout::new(65, 3, 256, limit),
-            Err(PixelReadbackError::BufferLimit { requested: 1536, .. })
+            Err(PixelReadbackError::BufferLimit {
+                requested: 1536,
+                ..
+            })
         ));
     }
 }
@@ -125,7 +131,10 @@ fn channel_and_row_orders_normalize_non_square_images_without_color_conversion()
         for rows in [PixelRowOrder::TopToBottom, PixelRowOrder::BottomToTop] {
             let (source, expected) = mapped_fixture(layout, channels, rows);
             let original = source.clone();
-            assert_eq!(layout.copy_rgba8(&source, channels, rows).unwrap(), expected);
+            assert_eq!(
+                layout.copy_rgba8(&source, channels, rows).unwrap(),
+                expected
+            );
             assert_eq!(source, original);
         }
     }
@@ -135,13 +144,11 @@ fn channel_and_row_orders_normalize_non_square_images_without_color_conversion()
 fn one_pixel_and_single_rows_do_not_read_padding_as_pixels() {
     for (width, height) in [(1, 1), (1, 9), (17, 1)] {
         let layout = Rgba8ReadbackLayout::new(width, height, 256, LIMIT).unwrap();
-        let (source, expected) = mapped_fixture(
-            layout,
-            PixelChannelOrder::Bgra,
-            PixelRowOrder::BottomToTop,
-        );
+        let (source, expected) =
+            mapped_fixture(layout, PixelChannelOrder::Bgra, PixelRowOrder::BottomToTop);
         assert_eq!(
-            layout.copy_rgba8(&source, PixelChannelOrder::Bgra, PixelRowOrder::BottomToTop)
+            layout
+                .copy_rgba8(&source, PixelChannelOrder::Bgra, PixelRowOrder::BottomToTop)
                 .unwrap(),
             expected
         );
@@ -188,11 +195,8 @@ fn destination_length_errors_do_not_partially_copy() {
 #[test]
 fn owned_pixels_survive_source_buffer_reuse() {
     let layout = Rgba8ReadbackLayout::new(65, 3, 256, LIMIT).unwrap();
-    let (mut source, expected) = mapped_fixture(
-        layout,
-        PixelChannelOrder::Rgba,
-        PixelRowOrder::TopToBottom,
-    );
+    let (mut source, expected) =
+        mapped_fixture(layout, PixelChannelOrder::Rgba, PixelRowOrder::TopToBottom);
     let pixels = layout
         .copy_rgba8(&source, PixelChannelOrder::Rgba, PixelRowOrder::TopToBottom)
         .unwrap();
@@ -214,7 +218,12 @@ fn caller_owned_buffer_can_be_reused_without_growth() {
     for channels in [PixelChannelOrder::Rgba, PixelChannelOrder::Bgra] {
         let (source, expected) = mapped_fixture(layout, channels, PixelRowOrder::BottomToTop);
         layout
-            .copy_rgba8_into(&source, channels, PixelRowOrder::BottomToTop, &mut destination)
+            .copy_rgba8_into(
+                &source,
+                channels,
+                PixelRowOrder::BottomToTop,
+                &mut destination,
+            )
             .unwrap();
         assert_eq!(destination, expected);
         assert_eq!(destination.capacity(), capacity);
@@ -227,7 +236,8 @@ fn alpha_and_rgb_under_zero_alpha_are_not_silently_modified() {
     let layout = Rgba8ReadbackLayout::new(2, 1, 1, LIMIT).unwrap();
     let source = [19, 7, 233, 0, 199, 122, 13, 128];
     assert_eq!(
-        layout.copy_rgba8(&source, PixelChannelOrder::Rgba, PixelRowOrder::TopToBottom)
+        layout
+            .copy_rgba8(&source, PixelChannelOrder::Rgba, PixelRowOrder::TopToBottom)
             .unwrap(),
         source
     );

@@ -81,10 +81,18 @@ impl CaptureOptions {
             return Err(CaptureError::Configuration("unsupported capture backend"));
         }
         if self.gpu_wait_timeout.is_zero() {
-            return Err(CaptureError::Configuration("GPU wait timeout must be positive"));
+            return Err(CaptureError::Configuration(
+                "GPU wait timeout must be positive",
+            ));
         }
-        if self.background.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
-            return Err(CaptureError::Configuration("background RGB must be finite in [0, 1]"));
+        if self
+            .background
+            .iter()
+            .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+        {
+            return Err(CaptureError::Configuration(
+                "background RGB must be finite in [0, 1]",
+            ));
         }
         Rgba8ReadbackLayout::new(
             self.width,
@@ -157,8 +165,8 @@ where
     F: FnMut(CapturedFrame<'_>) -> Result<(), E>,
 {
     let layout = options.layout().map_err(CaptureRunError::Capture)?;
-    let mut export = ExportFrames::new(program, callbacks, frame_options)
-        .map_err(CaptureRunError::Sampling)?;
+    let mut export =
+        ExportFrames::new(program, callbacks, frame_options).map_err(CaptureRunError::Sampling)?;
     let result = (|| {
         if options.cancellation.is_cancelled() {
             return Err(CaptureRunError::Cancelled);
@@ -173,7 +181,9 @@ where
                 ExportFramesStatus::Progress => {}
                 ExportFramesStatus::PublicationPending(context) => {
                     capture_publication(&mut gpu, &mut export, &options, context, false)?;
-                    export.admit_endpoint(context).map_err(CaptureRunError::Sampling)?;
+                    export
+                        .admit_endpoint(context)
+                        .map_err(CaptureRunError::Sampling)?;
                 }
                 ExportFramesStatus::SampleReady(sample) => {
                     let work = capture_publication(
@@ -195,9 +205,12 @@ where
                             format: CapturePixelFormat::RendererRgba8UnormOpaque,
                             rgba: gpu.pixels(),
                             work,
-                        }).map_err(CaptureRunError::Consumer)?;
+                        })
+                        .map_err(CaptureRunError::Consumer)?;
                     }
-                    export.acknowledge_sample(sample).map_err(CaptureRunError::Sampling)?;
+                    export
+                        .acknowledge_sample(sample)
+                        .map_err(CaptureRunError::Sampling)?;
                 }
                 ExportFramesStatus::Complete(sampling) => {
                     return Ok(gpu.summary(sampling));
@@ -219,18 +232,31 @@ fn capture_publication<C: LiveContinuation, E>(
     expected: noon_core::PublicationContext,
     read_pixels: bool,
 ) -> Result<CaptureWork, CaptureRunError<C::Error, E>> {
-    let view = gpu::CaptureView::new(export.session(), options)
-        .map_err(CaptureRunError::Capture)?;
-    let queries = view.bounds.iter().copied()
-        .map(|bounds| export.query_viewport(bounds)).collect::<Vec<_>>();
-    let visibility = export.session().renderer_viewport_query_union(queries)
+    let view =
+        gpu::CaptureView::new(export.session(), options).map_err(CaptureRunError::Capture)?;
+    let queries = view
+        .bounds
+        .iter()
+        .copied()
+        .map(|bounds| export.query_viewport(bounds))
+        .collect::<Vec<_>>();
+    let visibility = export
+        .session()
+        .renderer_viewport_query_union(queries)
         .map_err(|e| CaptureRunError::Capture(CaptureError::View(e.to_string())))?;
-    let publication = export.take_renderer_publication().map_err(CaptureRunError::Sampling)?;
+    let publication = export
+        .take_renderer_publication()
+        .map_err(CaptureRunError::Sampling)?;
     if publication.context() != expected {
         return Err(CaptureRunError::Capture(CaptureError::PublicationMismatch));
     }
-    gpu.render(&publication, &view, visibility.object_indices(), read_pixels)
-        .map_err(CaptureRunError::Capture)
+    gpu.render(
+        &publication,
+        &view,
+        visibility.object_indices(),
+        read_pixels,
+    )
+    .map_err(CaptureRunError::Capture)
 }
 
 #[derive(Debug)]
@@ -255,7 +281,9 @@ impl fmt::Display for CaptureError {
             Self::Pixels(error) => error.fmt(f),
             Self::Gpu(message) => write!(f, "capture GPU failure: {message}"),
             Self::View(message) => write!(f, "capture view failure: {message}"),
-            Self::PublicationMismatch => f.write_str("capture publication changed before consumption"),
+            Self::PublicationMismatch => {
+                f.write_str("capture publication changed before consumption")
+            }
         }
     }
 }

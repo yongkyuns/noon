@@ -50,7 +50,9 @@ impl Rgba8ReadbackLayout {
         if !row_alignment.is_power_of_two() {
             return Err(PixelReadbackError::InvalidAlignment);
         }
-        let bytes_per_row = width.checked_mul(4).ok_or(PixelReadbackError::SizeOverflow)?;
+        let bytes_per_row = width
+            .checked_mul(4)
+            .ok_or(PixelReadbackError::SizeOverflow)?;
         let padded_bytes_per_row = bytes_per_row
             .checked_add(row_alignment - 1)
             .ok_or(PixelReadbackError::SizeOverflow)?
@@ -186,15 +188,23 @@ impl fmt::Display for PixelReadbackError {
         match self {
             Self::InvalidDimensions => f.write_str("readback dimensions must be positive"),
             Self::InvalidAlignment => f.write_str("row alignment must be a positive power of two"),
-            Self::SizeOverflow => f.write_str("readback size exceeds the representable buffer size"),
+            Self::SizeOverflow => {
+                f.write_str("readback size exceeds the representable buffer size")
+            }
             Self::BufferLimit { requested, limit } => {
-                write!(f, "readback needs {requested} bytes, exceeding the {limit}-byte limit")
+                write!(
+                    f,
+                    "readback needs {requested} bytes, exceeding the {limit}-byte limit"
+                )
             }
             Self::SourceLength { expected, actual } => {
                 write!(f, "mapped source has {actual} bytes; expected {expected}")
             }
             Self::DestinationLength { expected, actual } => {
-                write!(f, "packed destination has {actual} bytes; expected {expected}")
+                write!(
+                    f,
+                    "packed destination has {actual} bytes; expected {expected}"
+                )
             }
             Self::Allocation(error) => error.fmt(f),
         }

@@ -3,12 +3,12 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Write;
     use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
     use noon_export::{capture_frames, CaptureOptions};
+    use std::io::Write;
 
-    let (mut program, mut callbacks) = noon::example_scenes::following_graph_camera::program()
-        .map_err(std::io::Error::other)?;
+    let (mut program, mut callbacks) =
+        noon::example_scenes::following_graph_camera::program().map_err(std::io::Error::other)?;
     let options = ExportFrameOptions {
         frame_rate: FrameRate::new(30, 1)?,
         start_frame: 0,
@@ -18,11 +18,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         final_hold_seconds: 0.0,
     };
     let mut output = std::io::stdout().lock();
-    let summary = capture_frames(&mut program, &mut callbacks, options,
-        CaptureOptions::new(320, 180), |frame| output.write_all(frame.rgba))
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let summary = capture_frames(
+        &mut program,
+        &mut callbacks,
+        options,
+        CaptureOptions::new(320, 180),
+        |frame| output.write_all(frame.rgba),
+    )
+    .map_err(|error| std::io::Error::other(error.to_string()))?;
     output.flush()?;
-    eprintln!("{} frames captured on {:?}; no viewer", summary.sampling.frames, summary.adapter);
+    eprintln!(
+        "{} frames captured on {:?}; no viewer",
+        summary.sampling.frames, summary.adapter
+    );
     Ok(())
 }
 

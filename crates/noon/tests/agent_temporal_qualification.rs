@@ -98,7 +98,10 @@ fn native_temporal_translation_matches_published_states() {
                 "{width}x{height}, time {time}: y {centroid_y}, expected {expected_pixel_y}"
             );
             let repeated = raster.capture(&session.take_renderer_publication());
-            assert!(pixels == repeated, "repeat capture changed pixels at {time}");
+            assert!(
+                pixels == repeated,
+                "repeat capture changed pixels at {time}"
+            );
             assert_eq!(session.publication_context(), context);
             assert_eq!(
                 session.frame().time,

@@ -192,6 +192,11 @@ jobs:
             --lib --tests -- --include-ignored --nocapture --test-threads=1 \
             2>&1 | tee capture-proof/tests.log
 
+      - name: Check formatting and lint the native capture package
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p noon-export --all-features --all-targets -- -D warnings
+
       - name: Stream the normal Rust camera example without a viewer
         run: |
           env -u DISPLAY -u WAYLAND_DISPLAY cargo run --quiet -p noon-export \

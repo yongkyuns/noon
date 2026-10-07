@@ -4,9 +4,13 @@ use std::cell::RefCell;
 use std::convert::Infallible;
 use std::rc::Rc;
 
-use noon::integration::{ExportFrameOptions, ExportStop, FrameRate, HostCallbackId, SemanticMutationTransaction};
-use noon::{AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
-    LiveSessionError, Mobject, RateFunction, RustHostCallbackTable, Scene};
+use noon::integration::{
+    ExportFrameOptions, ExportStop, FrameRate, HostCallbackId, SemanticMutationTransaction,
+};
+use noon::{
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
+    LiveSessionError, Mobject, RateFunction, RustHostCallbackTable, Scene,
+};
 use noon_export::{capture_frames, Backends, CaptureOptions, CaptureRunError, CaptureSummary};
 
 struct Source {
@@ -25,8 +29,14 @@ impl LiveContinuation for Source {
         self.stage += 1;
         match stage {
             0 if !self.callback => Ok(ContinuationStep::Await(
-                live.declare_and_activate_transform_to(&self.object, &self.target,
-                    AnimationOptions::new().run_time(0.105).rate_func(RateFunction::Linear))?)),
+                live.declare_and_activate_transform_to(
+                    &self.object,
+                    &self.target,
+                    AnimationOptions::new()
+                        .run_time(0.105)
+                        .rate_func(RateFunction::Linear),
+                )?,
+            )),
             0 => Ok(ContinuationStep::Await(live.wait_segment(0.105)?)),
             1 => {
                 live.set_translation(&self.camera, 1.0, 0.5)?;
@@ -63,17 +73,34 @@ fn fixture(callback: bool) -> Fixture {
         let id = HostCallbackId::new(189_602);
         let mut tx = SemanticMutationTransaction::new();
         tx.add_updater(object.node_id(), id, 0.0, None);
-        tx.apply(&mut scene.integration_store().borrow_mut()).unwrap();
+        tx.apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let calls = Rc::clone(&trace);
-        callbacks.insert(id, move |context| {
-            calls.borrow_mut().push((context.time(), context.delta_time()));
-            let mut transform = context.target_state().transform;
-            transform.translation.x += (context.delta_time().powi(2) + 0.03) as f32;
-            context.set_target_transform(transform)
-        }).unwrap();
+        callbacks
+            .insert(id, move |context| {
+                calls
+                    .borrow_mut()
+                    .push((context.time(), context.delta_time()));
+                let mut transform = context.target_state().transform;
+                transform.translation.x += (context.delta_time().powi(2) + 0.03) as f32;
+                context.set_target_transform(transform)
+            })
+            .unwrap();
     }
-    let program = scene.into_live_program(Source { object, target, camera, callback, stage: 0 }).unwrap();
-    Fixture { program, callbacks, trace }
+    let program = scene
+        .into_live_program(Source {
+            object,
+            target,
+            camera,
+            callback,
+            stage: 0,
+        })
+        .unwrap();
+    Fixture {
+        program,
+        callbacks,
+        trace,
+    }
 }
 
 fn frames() -> ExportFrameOptions {
@@ -104,34 +131,68 @@ fn run(callback: bool, start: u64, hold: f64, delayed: bool) -> Run {
     let mut fixture = fixture(callback);
     let mut pixels = Vec::new();
     let mut buffer = None;
-    let options = ExportFrameOptions { start_frame: start, final_hold_seconds: hold, ..frames() };
-    let summary = capture_frames(&mut fixture.program, &mut fixture.callbacks, options,
-        software(257, 129), |frame| {
-            assert_eq!((frame.width, frame.height, frame.rgba.len()), (257, 129, 257 * 129 * 4));
+    let options = ExportFrameOptions {
+        start_frame: start,
+        final_hold_seconds: hold,
+        ..frames()
+    };
+    let summary = capture_frames(
+        &mut fixture.program,
+        &mut fixture.callbacks,
+        options,
+        software(257, 129),
+        |frame| {
+            assert_eq!(
+                (frame.width, frame.height, frame.rgba.len()),
+                (257, 129, 257 * 129 * 4)
+            );
             assert_eq!(frame.frame.pts, pixels.len() as u64);
-            assert_eq!(frame.frame.source_sample.index(), pixels.len() as u64 + start);
-            assert_eq!(frame.frame.source_sample.authored_time(), frame.observation.requested_time);
+            assert_eq!(
+                frame.frame.source_sample.index(),
+                pixels.len() as u64 + start
+            );
+            assert_eq!(
+                frame.frame.source_sample.authored_time(),
+                frame.observation.requested_time
+            );
             if !frame.frame.held {
-                assert_eq!(frame.observation.requested_time, frame.observation.published_time);
+                assert_eq!(
+                    frame.observation.requested_time,
+                    frame.observation.published_time
+                );
             }
             assert!(frame.rgba.chunks_exact(4).all(|p| p[3] == 255));
             if let Some(address) = buffer {
-                assert_eq!(frame.rgba.as_ptr(), address, "CPU output buffer was reallocated");
+                assert_eq!(
+                    frame.rgba.as_ptr(),
+                    address,
+                    "CPU output buffer was reallocated"
+                );
             }
             buffer = Some(frame.rgba.as_ptr());
             let trace = fixture.trace.borrow().clone();
             if delayed {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
-            assert_eq!(*fixture.trace.borrow(), trace, "sink latency advanced callbacks");
+            assert_eq!(
+                *fixture.trace.borrow(),
+                trace,
+                "sink latency advanced callbacks"
+            );
             pixels.push(frame.rgba.to_vec());
             Ok::<_, Infallible>(())
-        }).unwrap();
+        },
+    )
+    .unwrap();
     assert_eq!(summary.readbacks, summary.sampling.frames);
     assert!(summary.rendered_publications >= summary.readbacks);
     assert_eq!(summary.staging_buffer_bytes, 1280 * 129);
     let trace = fixture.trace.borrow().clone();
-    Run { pixels, trace, summary }
+    Run {
+        pixels,
+        trace,
+        summary,
+    }
 }
 
 fn centroid(pixels: &[u8], width: usize) -> (f64, f64) {
@@ -149,11 +210,15 @@ fn centroid(pixels: &[u8], width: usize) -> (f64, f64) {
 }
 
 fn proof(name: &str, pixels: &[u8], width: usize, height: usize) {
-    let Some(dir) = std::env::var_os("NOON_CAPTURE_PROOF_DIR") else { return; };
+    let Some(dir) = std::env::var_os("NOON_CAPTURE_PROOF_DIR") else {
+        return;
+    };
     let dir = std::path::PathBuf::from(dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut ppm = format!("P6\n{width} {height}\n255\n").into_bytes();
-    for p in pixels.chunks_exact(4) { ppm.extend_from_slice(&p[..3]); }
+    for p in pixels.chunks_exact(4) {
+        ppm.extend_from_slice(&p[..3]);
+    }
     std::fs::write(dir.join(format!("{name}.ppm")), ppm).unwrap();
 }
 
@@ -165,7 +230,10 @@ fn native_capture_preserves_timing_pixels_crops_holds_and_backpressure() {
         let slow = run(callback, 0, 0.0, true);
         let crop = run(callback, 4, 0.0, false);
         let held = run(callback, 0, 0.1, false);
-        assert_eq!((full.pixels.len(), crop.pixels.len(), held.pixels.len()), (10, 6, 13));
+        assert_eq!(
+            (full.pixels.len(), crop.pixels.len(), held.pixels.len()),
+            (10, 6, 13)
+        );
         assert_eq!(full.pixels, slow.pixels);
         assert_eq!(crop.pixels, full.pixels[4..]);
         assert_eq!(held.pixels[..10], full.pixels);
@@ -179,10 +247,23 @@ fn native_capture_preserves_timing_pixels_crops_holds_and_backpressure() {
             assert!((x - (128.0 + 129.0 / 6.0)).abs() <= 1.0);
             assert!((y - (64.0 + 1.5 * 129.0 / 6.0)).abs() <= 1.0);
         }
-        assert!(full.pixels[0] != full.pixels[4], "camera/motion did not change output");
+        assert!(
+            full.pixels[0] != full.pixels[4],
+            "camera/motion did not change output"
+        );
         assert_eq!(full.summary.sampling.frames, 10);
-        proof(&format!("callback-{callback}-first"), &full.pixels[0], 257, 129);
-        proof(&format!("callback-{callback}-hold"), &held.pixels[12], 257, 129);
+        proof(
+            &format!("callback-{callback}-first"),
+            &full.pixels[0],
+            257,
+            129,
+        );
+        proof(
+            &format!("callback-{callback}-hold"),
+            &held.pixels[12],
+            257,
+            129,
+        );
     }
 }
 
@@ -191,19 +272,35 @@ fn native_capture_preserves_timing_pixels_crops_holds_and_backpressure() {
 fn native_capture_consumer_failure_and_cancellation_stop_without_more_callbacks() {
     let mut failed = fixture(true);
     let mut delivered = 0;
-    let result = capture_frames(&mut failed.program, &mut failed.callbacks, frames(),
-        software(65, 33), |_| {
+    let result = capture_frames(
+        &mut failed.program,
+        &mut failed.callbacks,
+        frames(),
+        software(65, 33),
+        |_| {
             delivered += 1;
             Err("intentional sink failure")
-        });
-    assert!(matches!(result, Err(CaptureRunError::Consumer("intentional sink failure"))));
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(CaptureRunError::Consumer("intentional sink failure"))
+    ));
     assert_eq!(delivered, 1);
     assert_eq!(failed.program.session().frame().time, 0.0);
     let mut cancelled = fixture(true);
     let options = software(65, 33);
     let token = options.cancellation.clone();
-    let result = capture_frames(&mut cancelled.program, &mut cancelled.callbacks, frames(),
-        options, |_| { token.cancel(); Ok::<_, Infallible>(()) });
+    let result = capture_frames(
+        &mut cancelled.program,
+        &mut cancelled.callbacks,
+        frames(),
+        options,
+        |_| {
+            token.cancel();
+            Ok::<_, Infallible>(())
+        },
+    );
     assert!(matches!(result, Err(CaptureRunError::Cancelled)));
     assert_eq!(cancelled.program.session().frame().time, 0.0);
     // A fresh run after either failure must remain healthy.
@@ -218,16 +315,28 @@ fn native_capture_composes_shared_text_image_transients_and_zoomed_views() {
         let (mut program, mut callbacks) =
             noon::example_scenes::moving_zoomed_scene_around::program().unwrap();
         let mut pixels = Vec::new();
-        let options = ExportFrameOptions { frame_rate: FrameRate::new(2, 1).unwrap(), ..frames() };
-        let summary = capture_frames(&mut program, &mut callbacks, options,
-            software(320, 180), |frame| {
+        let options = ExportFrameOptions {
+            frame_rate: FrameRate::new(2, 1).unwrap(),
+            ..frames()
+        };
+        let summary = capture_frames(
+            &mut program,
+            &mut callbacks,
+            options,
+            software(320, 180),
+            |frame| {
                 assert_eq!(frame.frame.pts, pixels.len() as u64);
                 assert_eq!(frame.rgba.len(), 320 * 180 * 4);
                 assert!(frame.rgba.chunks_exact(4).all(|p| p[3] == 255));
-                assert!(frame.rgba.chunks_exact(4).any(|p| p[0] > 32 || p[1] > 32 || p[2] > 32));
+                assert!(frame
+                    .rgba
+                    .chunks_exact(4)
+                    .any(|p| p[0] > 32 || p[1] > 32 || p[2] > 32));
                 pixels.push(frame.rgba.to_vec());
                 Ok::<_, Infallible>(())
-            }).unwrap();
+            },
+        )
+        .unwrap();
         assert_eq!(summary.sampling.frames, 24);
         pixels
     };
@@ -236,6 +345,11 @@ fn native_capture_composes_shared_text_image_transients_and_zoomed_views() {
     assert_eq!(first, second);
     assert!(first[0] != first[3]);
     for index in [0, 3, 5, 8, 15, 23] {
-        proof(&format!("zoom-text-image-{index:02}"), &first[index], 320, 180);
+        proof(
+            &format!("zoom-text-image-{index:02}"),
+            &first[index],
+            320,
+            180,
+        );
     }
 }
