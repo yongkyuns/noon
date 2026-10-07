@@ -180,3 +180,63 @@ fn separate_scopes_share_programs_but_not_textures_or_dirty_state() {
 
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 mod pixels;
+
+#[test]
+fn padded_capture_preserves_offscreen_halo_and_skips_truly_invisible_source() {
+    let bounds = GlowPixelBounds { min: [-8.0, 20.0], max: [-4.0, 24.0] };
+    let tile = GlowCaptureTile::prepare(bounds, [100, 80], parameters(2.0), 4096, 1_000_000)
+        .unwrap().expect("offscreen geometry contributes visible halo");
+    assert_eq!(tile.support_radius, 6);
+    assert_eq!(tile.origin, [-15, 13]);
+    assert_eq!(tile.size, [18, 18]);
+    assert_eq!(tile.viewport_origin, [0, 13]);
+    assert_eq!(tile.local_origin, [15, 0]);
+    assert_eq!(tile.visible_size, [3, 18]);
+    assert_eq!(tile.capture_and_scratch_bytes, 18 * 18 * 16);
+    let far = GlowPixelBounds { min: [-80.0, 20.0], max: [-70.0, 24.0] };
+    assert_eq!(GlowCaptureTile::prepare(far, [100, 80], parameters(2.0),
+        4096, 1_000_000), Ok(None));
+}
+
+#[test]
+fn capture_tile_rejects_invalid_bounds_projection_and_memory() {
+    let bounds = GlowPixelBounds { min: [5.0, 5.0], max: [10.0, 10.0] };
+    let params = parameters(2.0);
+    assert_eq!(GlowCaptureTile::prepare(bounds, [0, 80], params, 4096, 1_000_000),
+        Err(GlowPrepareError::Parameter(GlowParameterError::InvalidView)));
+    for invalid in [
+        GlowPixelBounds { min: [f64::NAN, 0.0], max: [10.0, 10.0] },
+        GlowPixelBounds { min: [10.0, 0.0], max: [10.0, 10.0] },
+        GlowPixelBounds { min: [0.0, 0.0], max: [f64::INFINITY, 10.0] },
+    ] {
+        assert_eq!(GlowCaptureTile::prepare(invalid, [100, 80], params, 4096,
+            1_000_000), Err(GlowPrepareError::InvalidSourceBounds));
+    }
+    assert_eq!(GlowCaptureTile::prepare(
+        GlowPixelBounds { min: [3.0e15, 5.0], max: [3.0e15 + 2.0, 10.0] },
+        [100, 80], params, 4096, 1_000_000,
+    ), Err(GlowPrepareError::CaptureCoordinatesOutOfRange));
+    assert_eq!(GlowCaptureTile::prepare(bounds, [100, 80], params, 4, 1_000_000),
+        Err(GlowPrepareError::ExtentExceedsDevice));
+    assert_eq!(GlowCaptureTile::prepare(bounds, [100, 80], params, 4096, 1),
+        Err(GlowPrepareError::ScratchBudgetExceeded));
+}
+
+#[test]
+fn capture_tile_accounts_for_silhouette_and_neutral_allocates_nothing() {
+    let bounds = GlowPixelBounds { min: [1.0, 1.0], max: [3.0, 3.0] };
+    let painted = GlowCaptureTile::prepare(bounds, [100, 80],
+        parameters(2.0), 4096, 1_000_000).unwrap().unwrap();
+    let mut silhouette = parameters(2.0);
+    silhouette.definition = GlowUpdate::default().source(GlowSource::Silhouette)
+        .apply_to(silhouette.definition).unwrap();
+    let other = GlowCaptureTile::prepare(bounds, [100, 80], silhouette,
+        4096, 1_000_000).unwrap().unwrap();
+    assert_eq!(other.size, painted.size);
+    assert_eq!(other.capture_and_scratch_bytes * 4,
+        painted.capture_and_scratch_bytes * 5);
+    silhouette.definition = GlowUpdate::default().intensity(0.0)
+        .apply_to(silhouette.definition).unwrap();
+    assert_eq!(GlowCaptureTile::prepare(bounds, [100, 80],
+        silhouette, 4096, 0), Ok(None));
+}

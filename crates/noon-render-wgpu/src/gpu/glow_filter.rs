@@ -29,6 +29,117 @@ pub struct GlowCapture<'a> {
     pub revision: u64,
 }
 
+
+/** Conservative source capture tile in final physical output pixels.
+ * The caller supplies projected shape bounds, including its painted stroke.
+ * Negative origins are valid: offscreen geometry can contribute a halo.
+ */
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlowPixelBounds {
+    pub min: [f64; 2],
+    pub max: [f64; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlowCaptureTile {
+    pub origin: [i32; 2],
+    pub size: [u32; 2],
+    pub viewport_origin: [u32; 2],
+    pub local_origin: [u32; 2],
+    pub visible_size: [u32; 2],
+    pub support_radius: u32,
+    /// Conservative aggregate: source RGBA8 + 3 filter images RGBA8,
+    /// plus one silhouette mask RGBA8 only in silhouette mode.
+    pub capture_and_scratch_bytes: u64,
+}
+
+impl GlowCaptureTile {
+    /// Check before any GPU allocation. Return None only for validated
+    /// neutral contributions or tiles whose entire halo misses the output.
+    pub fn prepare(
+        bounds: GlowPixelBounds,
+        viewport: [u32; 2],
+        parameters: GlowParameters,
+        maximum_texture_dimension: u32,
+        memory_budget_bytes: u64,
+    ) -> Result<Option<Self>, GlowPrepareError> {
+        let sigma = GlowUniform::validate(parameters)?;
+        if viewport.contains(&0) {
+            return Err(GlowPrepareError::Parameter(GlowParameterError::InvalidView));
+        }
+        if !bounds.min.into_iter().chain(bounds.max).all(f64::is_finite)
+            || (0..2).any(|axis| bounds.min[axis] >= bounds.max[axis])
+        {
+            return Err(GlowPrepareError::InvalidSourceBounds);
+        }
+        if parameters.definition.is_neutral() || parameters.scope_opacity == 0.0 {
+            return Ok(None);
+        }
+        let support_radius = (3.0 * sigma).ceil() as u32;
+        let padding = f64::from(support_radius) + 1.0; // analytic AA footprint
+        let mut start = [0_i64; 2];
+        let mut end = [0_i64; 2];
+        for axis in 0..2 {
+            let left = (bounds.min[axis] - padding).floor();
+            let right = (bounds.max[axis] + padding).ceil();
+            if !left.is_finite()
+                || !right.is_finite()
+                || left < f64::from(i32::MIN)
+                || right > f64::from(i32::MAX)
+            {
+                return Err(GlowPrepareError::CaptureCoordinatesOutOfRange);
+            }
+            start[axis] = left as i64;
+            end[axis] = right as i64;
+        }
+        let visible_start = [start[0].max(0), start[1].max(0)];
+        let visible_end = [
+            end[0].min(i64::from(viewport[0])),
+            end[1].min(i64::from(viewport[1])),
+        ];
+        if (0..2).any(|axis| visible_end[axis] <= visible_start[axis]) {
+            return Ok(None);
+        }
+        let width = end[0] - start[0];
+        let height = end[1] - start[1];
+        if width <= 0
+            || height <= 0
+            || width > i64::from(maximum_texture_dimension)
+            || height > i64::from(maximum_texture_dimension)
+        {
+            return Err(GlowPrepareError::ExtentExceedsDevice);
+        }
+        let size = [width as u32, height as u32];
+        let cost_per_pixel: u64 = if parameters.definition.source() == GlowSource::Silhouette {
+            20
+        } else {
+            16
+        };
+        let bytes = u64::from(size[0])
+            .checked_mul(u64::from(size[1]))
+            .and_then(|pixels| pixels.checked_mul(cost_per_pixel))
+            .ok_or(GlowPrepareError::ScratchBudgetExceeded)?;
+        if bytes > memory_budget_bytes {
+            return Err(GlowPrepareError::ScratchBudgetExceeded);
+        }
+        Ok(Some(Self {
+            origin: [start[0] as i32, start[1] as i32],
+            size,
+            viewport_origin: [visible_start[0] as u32, visible_start[1] as u32],
+            local_origin: [
+                (visible_start[0] - start[0]) as u32,
+                (visible_start[1] - start[1]) as u32,
+            ],
+            visible_size: [
+                (visible_end[0] - visible_start[0]) as u32,
+                (visible_end[1] - visible_start[1]) as u32,
+            ],
+            support_radius,
+            capture_and_scratch_bytes: bytes,
+        }))
+    }
+}
+
 /// Effective values supplied by the normal renderer preparation boundary.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlowParameters {
@@ -50,6 +161,8 @@ pub enum GlowPrepareError {
     RadiusExceedsProfile,
     UnsupportedCapture,
     MissingSilhouette,
+    InvalidSourceBounds,
+    CaptureCoordinatesOutOfRange,
     CaptureSizeMismatch,
     ExtentExceedsDevice,
     ScratchBudgetExceeded,

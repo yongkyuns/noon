@@ -7,7 +7,8 @@ use noon_runtime::{FrameChanges, FrameState};
 mod derived_display;
 mod glow_filter;
 pub use glow_filter::{
-    GlowCapture, GlowFilter, GlowParameters, GlowPrepareError, GlowRasterStats, GlowScope,
+    GlowCapture, GlowCaptureTile, GlowFilter, GlowParameters, GlowPixelBounds, GlowPrepareError,
+    GlowRasterStats, GlowScope,
 };
 mod overlay;
 mod path_batching;
