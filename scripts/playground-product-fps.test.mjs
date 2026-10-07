@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
 
 function sample({
@@ -323,5 +324,63 @@ for (const [name, mutate, expected] of [
     const data = costFixture();
     mutate(data);
     assert.throws(() => sampleRendererCosts(data.samples, data.frameSamples, data.fps), expected);
+  });
+}
+
+
+for (const id of ["showcase-first-scene", "showcase-raster-images", "showcase-bezier-paths"]) {
+  test(`${id} window agrees with unmodified Python play/wait boundaries`, async () => {
+    const protocol = productMeasurement(id);
+    const manifest = JSON.parse(await readFile(new URL("../web/python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
+    const entry = manifest.entries.find(entry => entry.id === id);
+    assert.equal(entry.path, protocol.sourcePath);
+    assert.equal(entry.duration, protocol.sourceEndSeconds);
+    const source = await readFile(new URL(`../web/${protocol.sourcePath}`, import.meta.url), "utf8");
+    // Parse only top-level construct operations; no execution or guessed regex
+    // arithmetic. These particular existing scenes declare every play duration.
+    const parser = spawnSync("python3", ["-c", `import ast,json,sys
+module=ast.parse(sys.stdin.read())
+construct=next(n for c in module.body if isinstance(c,ast.ClassDef) for n in c.body if isinstance(n,ast.FunctionDef) and n.name=='construct')
+timeline=[]; time=0
+for stmt in construct.body:
+    node=stmt.value if isinstance(stmt,ast.Expr) else None
+    if not isinstance(node,ast.Call) or not isinstance(node.func,ast.Attribute) or not isinstance(node.func.value,ast.Name) or node.func.value.id!='self': continue
+    kind=node.func.attr
+    if kind not in ('play','wait'): continue
+    value=next(k.value for k in node.keywords if k.arg=='run_time') if kind=='play' else node.args[0]
+    seconds=ast.literal_eval(value)
+    timeline.append(dict(kind=kind,start=time,end=time+seconds))
+    time+=seconds
+print(json.dumps(timeline))`], { input: source, encoding: "utf8" });
+    assert.equal(parser.status, 0, parser.stderr);
+    const timeline = JSON.parse(parser.stdout);
+    const near = (a, b) => Math.abs(a - b) < 1e-9;
+    assert.ok(near(timeline.at(-1).end, protocol.sourceEndSeconds));
+    const window = timeline.filter(beat => beat.start < protocol.windowEndSeconds - 1e-9 &&
+      beat.end > protocol.windowStartSeconds + 1e-9);
+    assert.ok(window.length > 0);
+    assert.ok(window.every(beat => beat.kind === "play"), "never count an idle wait as animation");
+    assert.ok(near(window[0].start, protocol.windowStartSeconds));
+    assert.ok(near(window.at(-1).end, protocol.windowEndSeconds));
+    const hold = timeline.find(beat => near(beat.start, protocol.windowEndSeconds));
+    assert.equal(hold.kind, "wait");
+    assert.ok(near(hold.end - hold.start, protocol.endpointHoldSeconds));
+    assert.equal(protocol.gapClock, "renderer-publication-submission");
+  });
+
+  test(`${id} scores its declared window and rejects an uncovered endpoint`, () => {
+    const protocol = productMeasurement(id);
+    const samples = observations({ startTime: protocol.windowStartSeconds, endTime: protocol.windowEndSeconds,
+      startFrames: 100, endFrames: 220, startAt: 5_000, endAt: 7_000 });
+    const options = { warmupSeconds: protocol.windowStartSeconds };
+    const fps = sampleRendererFps(samples, protocol.windowEndSeconds, options);
+    const held = sampleRendererFps([...samples, sample({ metricAt: 1000,
+      rendererAt: 7_500, frames: 220, time: protocol.windowEndSeconds }),
+      sample({ metricAt: 1001, rendererAt: 10_000, frames: 400, time: protocol.sourceEndSeconds,
+        phase: "endpoint" })], protocol.windowEndSeconds, options);
+    assert.equal(fps.effectiveFps, 60);
+    assert.deepEqual(held, { ...fps, observationCount: fps.observationCount + 2 });
+    assert.throws(() => sampleRendererFps(samples.slice(0, -1), protocol.windowEndSeconds, options),
+      /no settled renderer epoch covered/);
   });
 }

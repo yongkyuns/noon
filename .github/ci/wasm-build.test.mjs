@@ -376,10 +376,11 @@ test("product camera measurements reuse the restored packages and fixed alternat
   const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
   const measurements = workflow.slice(workflow.indexOf("      - name: Measure three alternating product pairs"),
     workflow.indexOf("      - name: Upload product regression evidence"));
-  assert.match(measurements, /for noon_example in parity-square-and-circle showcase-camera-follows-path/);
+  assert.match(measurements, /product-performance-anchor.mjs cohorts/);
+  assert.match(measurements, /read -r noon_example noon_directory/);
   assert.match(measurements, /for noon_pair in 1 2 3/);
   assert.match(measurements, /NOON_PRODUCT_EXAMPLE="\$noon_example"/);
-  assert.match(measurements, /product-gate\/camera\/candidate --pairs 3/);
+  assert.match(measurements, /"\$noon_root\/\$noon_directory\/candidate" --pairs 3/);
   assert.doesNotMatch(measurements, /build-web-demo|cargo |wasm-pack/);
 });
 

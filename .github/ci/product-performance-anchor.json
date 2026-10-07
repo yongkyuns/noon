@@ -5,6 +5,9 @@
   "policy": "same-run-alternating-pairs",
   "workloads": [
     "parity-square-and-circle",
-    "showcase-camera-follows-path"
+    "showcase-camera-follows-path",
+    "showcase-first-scene",
+    "showcase-raster-images",
+    "showcase-bezier-paths"
   ]
 }
