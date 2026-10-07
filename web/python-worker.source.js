@@ -1057,55 +1057,26 @@ function retireSemanticContext(token, entry) {
   }
 }
 
-async function prepareAuthoringDependencies(pyodide, source) {
-  // Explicit user imports use Pyodide's ordinary resolver. Local/stdlib imports
-  // remain cheap, while lockfile packages load only when source requests them.
+async function runAuthoringSource(pyodide, source, context) {
+  // Resolve explicit imports first through Pyodide's ordinary package loader.
+  // Then detect Manim's implicit top-level aliases with Python's own AST and
+  // bind only the real optional modules that this source actually references.
   await pyodide.loadPackagesFromImports(source);
-
-  // Manim also exports a few optional modules implicitly from its top-level
-  // namespace (initially `np` -> NumPy). Detect those names with Python's own
-  // parser, then bind the real module before the user's `from noon import *`
-  // executes. Nothing here runs on playback or the render path.
-  const dictConstructor = pyodide.globals.get("dict");
-  const globals = dictConstructor();
-  dictConstructor.destroy();
-  globals.set("__noon_dependency_source", source);
-  try {
-    const requiredJson = pyodide.runPython(
-      `
-import _manim_namespace
-_manim_namespace.required_packages_json(__noon_dependency_source)
-`,
-      { globals },
-    );
-    const requiredPackages = JSON.parse(requiredJson);
-    if (requiredPackages.length === 0) return;
-
+  const requiredPackages = JSON.parse(pyodide.runPython(
+    `import _manim_namespace\n_manim_namespace.required_packages_json(${JSON.stringify(source)})`,
+  ));
+  if (requiredPackages.length > 0) {
     const requiredPackagesJson = JSON.stringify(requiredPackages);
-    globals.set("__noon_required_packages_json", requiredPackagesJson);
-    const missingJson = pyodide.runPython(
-      `
-_manim_namespace.missing_packages_json(__noon_required_packages_json)
-`,
-      { globals },
-    );
-    const missingPackages = JSON.parse(missingJson);
+    const missingPackages = JSON.parse(pyodide.runPython(
+      `import _manim_namespace\n_manim_namespace.missing_packages_json(${JSON.stringify(requiredPackagesJson)})`,
+    ));
     if (missingPackages.length > 0) {
       await pyodide.loadPackage(missingPackages);
     }
     pyodide.runPython(
-      `
-_manim_namespace.bind_loaded_packages_json(__noon_required_packages_json)
-`,
-      { globals },
+      `import _manim_namespace\n_manim_namespace.bind_loaded_packages_json(${JSON.stringify(requiredPackagesJson)})`,
     );
-  } finally {
-    globals.destroy();
   }
-}
-
-async function runAuthoringSource(pyodide, source, context) {
-  await prepareAuthoringDependencies(pyodide, source);
 
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
