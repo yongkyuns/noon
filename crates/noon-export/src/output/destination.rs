@@ -18,13 +18,15 @@ pub(super) struct Destination {
 }
 
 fn private_directory(path: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
+        fs::DirBuilder::new().mode(0o700).create(path)
     }
-    builder.create(path)
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
+    }
 }
 
 impl Destination {
@@ -76,7 +78,7 @@ impl Destination {
             OutputFormat::Mp4 => {
                 let video = self.work.join("video.mp4");
                 if fs::metadata(&video)?.len() == 0 { return Err(io::Error::other("encoder wrote no video")); }
-                File::open(&video)?.sync_all()?;
+                File::options().read(true).write(true).open(&video)?.sync_all()?;
                 if self.overwrite {
                     // Explicit replacement only; no remove-then-rename gap.
                     fs::rename(&video, &self.path)?;
@@ -89,7 +91,8 @@ impl Destination {
             OutputFormat::PngSequence => {
                 let directory = self.work.join("frames");
                 for index in 0..frames {
-                    let file = File::open(directory.join(format!("frame-{index:010}.png")))?;
+                    let file = File::options().read(true).write(true)
+                        .open(directory.join(format!("frame-{index:010}.png")))?;
                     if file.metadata()?.len() == 0 { return Err(io::Error::other("empty PNG output")); }
                     file.sync_all()?;
                 }

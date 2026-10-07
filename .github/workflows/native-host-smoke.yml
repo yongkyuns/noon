@@ -188,9 +188,16 @@ jobs:
       - name: Qualify native offscreen capture and failure recovery
         run: |
           set -o pipefail
-          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
-            --lib --tests -- --include-ignored --nocapture --test-threads=1 \
-            2>&1 | tee capture-proof/tests.log
+          # Preserve all original capture cases without depending on FFmpeg.
+          # Encoder-dependent ignored cases run in native-export-output.yml.
+          {
+            env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+              --lib --tests -- --nocapture --test-threads=1
+            env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+              --lib gpu::tests:: -- --include-ignored --nocapture --test-threads=1
+            env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+              --test capture -- --include-ignored --nocapture --test-threads=1
+          } 2>&1 | tee capture-proof/tests.log
 
       - name: Check formatting and lint the native capture package
         run: |

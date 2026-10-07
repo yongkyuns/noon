@@ -57,7 +57,7 @@ impl OutputOptions {
             || rate.numerator() > i32::MAX as u32 || rate.denominator() > i32::MAX as u32 {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid encoder dimensions, rate, quality or deadline"));
         }
-        if self.format == OutputFormat::Mp4 && (width % 2 != 0 || height % 2 != 0) {
+        if self.format == OutputFormat::Mp4 && (!width.is_multiple_of(2) || !height.is_multiple_of(2)) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "YUV420p needs even dimensions; use PNG for odd sizes"));
         }
         if self.format == OutputFormat::PngSequence && self.overwrite {
@@ -104,8 +104,10 @@ pub fn export_file<C: LiveContinuation>(
         .map_err(FileExportError::Output)?;
     // Validation does not resume or mutate the source. Do not create files for an
     // invalid run, nor discover a missing codec only after executing user code.
-    drop(ExportFrames::new(program, callbacks, frame_options)
-        .map_err(|e| FileExportError::Capture(CaptureRunError::Sampling(e)))?);
+    {
+        let _validation = ExportFrames::new(program, callbacks, frame_options)
+            .map_err(|e| FileExportError::Capture(CaptureRunError::Sampling(e)))?;
+    }
     if capture_options.cancellation.is_cancelled() {
         return Err(FileExportError::Capture(CaptureRunError::Cancelled));
     }
@@ -180,6 +182,11 @@ impl FileSink {
         let result = (|| {
             if self.failed || frame.frame.pts != self.frames
                 || frame.frame.source_sample.time_base() != self.rate.time_base()
+                || frame.observation.requested_time != frame.frame.source_sample.authored_time()
+                || !frame.observation.published_time.is_finite()
+                || frame.observation.published_time < 0.0
+                || frame.observation.published_time > frame.observation.requested_time
+                || (!frame.frame.held && frame.observation.published_time != frame.observation.requested_time)
                 || frame.width != self.width || frame.height != self.height
                 || frame.format != CapturePixelFormat::RendererRgba8UnormOpaque
                 || frame.rgba.len() != self.bytes
