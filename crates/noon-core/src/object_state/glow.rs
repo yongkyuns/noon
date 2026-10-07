@@ -272,10 +272,14 @@ impl GlowUpdate {
     pub fn prepare(self, captured: Glow) -> Result<PreparedGlowUpdate, GlowParameterError> {
         let target = self.apply_to(captured)?;
         if !captured.radius.same_unit(target.radius) {
-            return Err(GlowParameterError::DiscreteTransition(GlowParameter::Radius));
+            return Err(GlowParameterError::DiscreteTransition(
+                GlowParameter::Radius,
+            ));
         }
         if captured.source != target.source {
-            return Err(GlowParameterError::DiscreteTransition(GlowParameter::Source));
+            return Err(GlowParameterError::DiscreteTransition(
+                GlowParameter::Source,
+            ));
         }
         Ok(PreparedGlowUpdate {
             captured,

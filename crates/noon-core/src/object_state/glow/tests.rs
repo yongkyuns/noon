@@ -286,7 +286,10 @@ fn existing_lag_and_duration_rescaling_feed_parameter_sampling() {
     for (time, expected) in [(2.0, 0.35), (6.0, 0.775), (10.0, 1.2)] {
         let sample = map.evaluate_f64(time / schedule.run_time);
         assert!(sample.begun);
-        close(prepared.sample(sample.alpha).unwrap().intensity.unwrap(), expected);
+        close(
+            prepared.sample(sample.alpha).unwrap().intensity.unwrap(),
+            expected,
+        );
     }
 }
 
