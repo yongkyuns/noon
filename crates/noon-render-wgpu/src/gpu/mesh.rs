@@ -149,7 +149,6 @@ pub(super) struct SpatialGpuState {
     light_object: Option<usize>,
     light: Option<PointLight>,
     point_lit_draws: usize,
-    cairo_mesh_draws: usize,
     meshes: HashMap<GeometryResourceHandle, ResidentMesh>,
     mesh_instances: BTreeMap<GeometryResourceHandle, InstanceRanges>,
     depth_ordered_draws: BTreeSet<usize>,
@@ -571,7 +570,18 @@ impl SpatialGpuState {
                         .mesh
                         .cairo_appearance()
                         .ok_or(SpatialPrepareError::MissingCairoAppearance(*index))?;
-                    let value = cairo::Uniform::lower(appearance)?;
+                    let fallback;
+                    let geometry = if let Some(geometry) = new_meshes.get(&draw.handle) {
+                        geometry
+                    } else {
+                        fallback = boundary::fill_geometry(&draw.mesh)?;
+                        &fallback
+                    };
+                    let value = cairo::Uniform::lower(
+                        appearance,
+                        draw.mesh.positions(),
+                        &geometry.vertices,
+                    )?;
                     if size_of::<cairo::Uniform>() > device.limits().max_buffer_size as usize {
                         return Err(SpatialPrepareError::BufferLimit);
                     }
@@ -718,15 +728,6 @@ impl SpatialGpuState {
         let mut released = BTreeSet::new();
         for (index, staged) in staged {
             let previous = self.draws.remove(&index);
-            if previous
-                .as_ref()
-                .is_some_and(|draw| is_cairo(draw.material))
-            {
-                self.cairo_mesh_draws -= 1;
-            }
-            if staged.as_ref().is_some_and(|draw| is_cairo(draw.material)) {
-                self.cairo_mesh_draws += 1;
-            }
             let same_membership = previous
                 .as_ref()
                 .zip(staged.as_ref())
@@ -1015,8 +1016,8 @@ impl SpatialGpuState {
         !self.draws.is_empty() || self.paths.is_active()
     }
 
-    pub fn requires_antialiasing(&self) -> bool {
-        self.paths.is_active() || self.cairo_mesh_draws > 0
+    pub fn has_active_paths(&self) -> bool {
+        self.paths.is_active()
     }
 
     pub fn encode(
@@ -1565,7 +1566,10 @@ fn pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth24Plus,
-            depth_write_enabled: Some(!transparent),
+            // Cairo faces composite filtered coverage in cached camera order.
+            // Their partial pixels must not occlude subsequent faces; native
+            // opaque geometry still supplies the shared depth occluders.
+            depth_write_enabled: Some(!transparent && !cairo),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: Default::default(),
             bias: if boundary {

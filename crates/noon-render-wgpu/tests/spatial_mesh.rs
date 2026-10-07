@@ -605,9 +605,9 @@ fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
         )
         .unwrap();
         assert_eq!(initial.resident_meshes, 1);
-        // Authored vertices/triangles and one lighting uniform. Ordinary mesh
-        // vertex/instance layouts stay intact.
-        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 96);
+        // Authored vertices/triangles and one retained appearance uniform.
+        // Ordinary mesh vertex/instance layouts stay intact.
+        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 368);
         // Independent analytic stops: clamp(.8 + .5) = 1; .8 + .5/27.
         // At the center their midpoint is .909259..., not clamp(1.059259...).
         let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
@@ -2092,6 +2092,22 @@ fn cairo_boundary_test_scene_with_straight_controls(
     curved_fill: bool,
     straight_controls: bool,
 ) -> (SceneInstance, noon_core::ObjectId) {
+    let (store, surface_node) =
+        cairo_boundary_test_store(with_occluder, sloped_unlit, curved_fill, straight_controls);
+    let mut index = SemanticExecutionIndex::new();
+    let (compiled, _) = lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .into_parts();
+    let surface_object = index.execution_object_id(surface_node).unwrap();
+    (SceneInstance::new(compiled), surface_object)
+}
+
+fn cairo_boundary_test_store(
+    with_occluder: bool,
+    sloped_unlit: bool,
+    curved_fill: bool,
+    straight_controls: bool,
+) -> (SemanticStore, noon_core::SemanticNodeId) {
     assert!(!(with_occluder && (sloped_unlit || curved_fill)));
     assert!(!(sloped_unlit && curved_fill));
     let mut store = SemanticStore::new();
@@ -2209,12 +2225,7 @@ fn cairo_boundary_test_scene_with_straight_controls(
     light.set_role(SemanticObjectRole::PointLight3D);
     attach(&mut store, light);
 
-    let mut index = SemanticExecutionIndex::new();
-    let (compiled, _) = lower_semantic_execution(&store, &mut index)
-        .unwrap()
-        .into_parts();
-    let surface_object = index.execution_object_id(surface_node).unwrap();
-    (SceneInstance::new(compiled), surface_object)
+    (store, surface_node)
 }
 
 #[test]
@@ -2320,6 +2331,132 @@ fn cairo_sampled_fill_conserves_white_area_across_subpixel_translations() {
                 );
             }
         }
+        // Surface cells can be narrower than a pixel near a silhouette or
+        // cone tip. Their two opposite edges must filter together, rather
+        // than treating the cell as an unbounded half-plane.
+        for (width_pixels, angle) in [
+            (0.25_f64, 0.0),
+            (0.5, 0.0),
+            (1.0, 0.0),
+            (0.25, std::f64::consts::FRAC_PI_4),
+            (0.5, std::f64::consts::FRAC_PI_2 - 0.001),
+        ] {
+            let transform = SemanticWorldTransform3D::new(
+                SemanticVec3::new(0.5 / 32.0, 0.0, 0.0),
+                noon_core::SemanticRotation3D::from_axis_angle(
+                    SemanticVec3::new(0.0, 0.0, 1.0),
+                    angle,
+                )
+                .unwrap(),
+                SemanticVec3::new(width_pixels / 32.0, 1.0, 1.0),
+            )
+            .unwrap();
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                    object: surface_object,
+                    transform: transform.into(),
+                })
+                .unwrap();
+            let (stats, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut scene,
+                &target,
+            )
+            .unwrap();
+            assert_eq!(stats.geometry_bytes, 0);
+            let area = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|rgba| f64::from(rgba[0]) / 255.0)
+                .sum::<f64>();
+            eprintln!(
+                "Cairo thin-cell area: width_px={width_pixels:.2} angle={angle:.6} red={area:.4}"
+            );
+            assert!(
+                (area - width_pixels * 32.0).abs() <= 1.0,
+                "Cairo thin-cell area: width_px={width_pixels:.2}, area={area:.4}, expected={}",
+                width_pixels * 32.0
+            );
+        }
+    });
+}
+
+#[test]
+fn adjacent_cairo_cells_blend_independent_pixel_coverage_without_reupload() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping adjacent Cairo fill qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
+        renderer.set_camera(&queue, camera);
+        let mut preparer = FramePreparer::new();
+        let (mut store, original) = cairo_boundary_test_store(false, false, false, true);
+        let mut cell = store
+            .semantic_object_state_checked(original)
+            .unwrap()
+            .clone();
+        cell.style = opaque_style(Color::WHITE);
+        store.detach_semantic_object(original).unwrap();
+        // Both cells share one immutable mesh. Their common boundary passes
+        // through the center of a pixel, where each covers exactly one half.
+        for x in [-0.5, 0.5] {
+            cell.transform.translation.x = x + 0.5 / 32.0;
+            attach(&mut store, cell.clone());
+        }
+        let mut index = SemanticExecutionIndex::new();
+        let (compiled, _) = lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        let mut scene = SceneInstance::new(compiled);
+        let (first, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(first.resident_meshes, 1);
+        assert_eq!(first.resident_instances, 2);
+        let common_edge = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        eprintln!("adjacent Cairo half-pixel edge: {common_edge:?}");
+        // Cairo paints independent face coverage with source-over: .5 over
+        // .5 gives .75. A geometric sample union incorrectly produces white.
+        for channel in &common_edge[..3] {
+            assert!(
+                (190..=193).contains(channel),
+                "adjacent Cairo coverage: {common_edge:?}"
+            );
+        }
+        assert_eq!(common_edge[3], 255);
+        assert_eq!(pixel(&pixels, WIDTH / 2 - 4, HEIGHT / 2), [255; 4]);
+        assert_eq!(pixel(&pixels, WIDTH / 2 + 4, HEIGHT / 2), [255; 4]);
+        let (clean, repeated) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(clean.bytes_uploaded(), 0);
+        assert_eq!(clean.rows_visited, 0);
+        assert_eq!(repeated, pixels);
     });
 }
 

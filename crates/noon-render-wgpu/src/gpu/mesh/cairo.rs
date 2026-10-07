@@ -4,16 +4,37 @@
 
 use super::{create_buffer_with_data, pipeline, PipelineKind, SpatialPrepareError};
 use bytemuck::{Pod, Zeroable};
-use noon_core::CairoSurfaceAppearance;
+use noon_core::{CairoSurfaceAppearance, SemanticVec3};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(super) struct Uniform {
     points_and_spans: [[f32; 4]; 6],
+    center: [f32; 4],
+    perimeter: [[f32; 4]; 16],
 }
 
 impl Uniform {
-    pub(super) fn lower(value: &CairoSurfaceAppearance) -> Result<Self, SpatialPrepareError> {
+    pub(super) fn lower(
+        value: &CairoSurfaceAppearance,
+        positions: &[SemanticVec3],
+        vertices: &[super::Vertex],
+    ) -> Result<Self, SpatialPrepareError> {
+        let center = super::boundary::face_center(positions);
+        let mut perimeter = [[0.0; 4]; 16];
+        let count = if value.boundary_controls.is_some() {
+            let points = vertices
+                .get(1..)
+                .filter(|points| (3..=perimeter.len()).contains(&points.len()))
+                .ok_or(SpatialPrepareError::UnrepresentableVertex)?;
+            for (output, vertex) in perimeter.iter_mut().zip(points) {
+                let [x, y, z] = vertex.position;
+                *output = [x, y, z, 1.0];
+            }
+            points.len()
+        } else {
+            0
+        };
         let result = Self {
             points_and_spans: [
                 value.p0,
@@ -24,11 +45,20 @@ impl Uniform {
                 value.span_p3_p6,
             ]
             .map(|p| [p.x as f32, p.y as f32, p.z as f32, 0.0]),
+            center: [
+                center.x as f32,
+                center.y as f32,
+                center.z as f32,
+                count as f32,
+            ],
+            perimeter,
         };
         if result
             .points_and_spans
             .iter()
             .flatten()
+            .chain(result.center.iter())
+            .chain(result.perimeter.iter().flatten())
             .all(|v| v.is_finite())
         {
             Ok(result)
@@ -79,6 +109,8 @@ impl Pipelines {
                     include_str!("../spatial_math.wgsl"),
                     "\n",
                     include_str!("../cairo_lighting.wgsl"),
+                    "\n",
+                    include_str!("../../polygon_coverage.wgsl"),
                     "\n",
                     include_str!("cairo.wgsl")
                 )
@@ -154,14 +186,21 @@ mod tests {
             span_p3_p6: SemanticVec3::new(0., -1., 0.),
             boundary_controls: None,
         };
-        assert_eq!(std::mem::size_of::<Uniform>(), 96);
+        assert_eq!(std::mem::size_of::<Uniform>(), 368);
         assert_eq!(std::mem::size_of::<super::super::Vertex>(), 24);
         assert_eq!(std::mem::size_of::<super::super::Instance>(), 128);
-        let uniform = Uniform::lower(&value).unwrap();
+        let positions = [SemanticVec3::ZERO, SemanticVec3::new(1., 1., 0.)];
+        let uniform = Uniform::lower(&value, &positions, &[]).unwrap();
         assert_eq!(uniform.points_and_spans[1], [1., 1., 0., 0.]);
+        value.boundary_controls = Some([[SemanticVec3::ZERO; 2]; 4]);
+        assert_eq!(
+            Uniform::lower(&value, &positions, &[]),
+            Err(SpatialPrepareError::UnrepresentableVertex)
+        );
+        value.boundary_controls = None;
         value.p6.x = f64::MAX;
         assert_eq!(
-            Uniform::lower(&value),
+            Uniform::lower(&value, &positions, &[]),
             Err(SpatialPrepareError::UnrepresentableVertex)
         );
     }

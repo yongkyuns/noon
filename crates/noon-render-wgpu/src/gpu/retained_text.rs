@@ -3794,10 +3794,10 @@ impl GpuRenderer {
             finalize,
         } = options;
         let scene_view = self.presentation.scene_view(view);
-        // Spatial paths and Cairo faces precede this painter stream, so they are
-        // absent from render_items but still require the multisampled target.
+        // Spatial paths precede this painter stream, so they are absent from
+        // render_items but still require the shared multisampled target.
         let sample_count =
-            retained_sample_count(prepared.render_items, self.spatial.requires_antialiasing());
+            retained_sample_count(prepared.render_items, self.spatial.has_active_paths());
         let inset_stats =
             self.encode_inset_captures(encoder, prepared, text_state, sample_count)?;
         let spatial_stats = self.encode_spatial(encoder, scene_view, clear_color, sample_count);

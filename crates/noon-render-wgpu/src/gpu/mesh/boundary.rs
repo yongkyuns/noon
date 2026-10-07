@@ -183,7 +183,7 @@ fn segment_count(from: SemanticVec3, controls: Option<[SemanticVec3; 2]>, to: Se
     })
 }
 
-fn face_center(points: &[SemanticVec3]) -> SemanticVec3 {
+pub(super) fn face_center(points: &[SemanticVec3]) -> SemanticVec3 {
     points.iter().fold(SemanticVec3::ZERO, |center, point| {
         SemanticVec3::new(
             center.x + point.x / points.len() as f64,
