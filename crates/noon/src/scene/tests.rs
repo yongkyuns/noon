@@ -568,3 +568,106 @@ fn scene_path_alignment_rejects_foreign_before_resource_or_frame_publication() {
     );
     assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
 }
+
+
+#[test]
+fn scene_owned_subcurve_requires_running_execution_and_preserves_atomicity() {
+    let mut scene = Scene::new();
+    let mut source = scene.line((0.0, 0.0), (8.0, 0.0)).unwrap();
+    source.shift(2.0, 3.0).unwrap();
+    source.set_z_index(2.5).unwrap();
+    scene.add(&source).unwrap();
+
+    let cold_revision = scene.revision();
+    let cold_resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+    let cold_error = scene.subcurve(&source, 0.25, 0.75).unwrap_err();
+    assert!(matches!(
+        cold_error,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+    assert_eq!(scene.revision(), cold_revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        cold_resources
+    );
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let source_before = source.state().unwrap();
+    let resources_before = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    let selected = scene.subcurve(&source, 0.25, 0.75).unwrap();
+    assert!(!scene
+        .owned_execution()
+        .semantic_object_is_reachable(selected.node_id()));
+    let selected_query = selected.path_query().unwrap();
+    assert_eq!(selected_query.start().unwrap(), (4.0, 3.0));
+    assert_eq!(selected_query.end().unwrap(), (8.0, 3.0));
+    assert_eq!(selected.state().unwrap().style, source_before.style);
+    assert_eq!(
+        selected.state().unwrap().presentation().z_index,
+        source_before.presentation().z_index
+    );
+    assert_eq!(source.state().unwrap(), source_before);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources_before + 1
+    );
+
+    let rejection_revision = scene.revision();
+    let rejection_resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+    assert!(scene.subcurve(&source, f64::NAN, 0.75).is_err());
+    let foreign = Scene::new().line((0.0, 0.0), (1.0, 0.0)).unwrap();
+    assert!(matches!(
+        scene.subcurve(&foreign, 0.25, 0.75),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+    assert_eq!(scene.revision(), rejection_revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        rejection_resources
+    );
+
+    let full_resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+    let full = scene.subcurve(&source, 0.0, 1.0).unwrap();
+    assert_eq!(full.state().unwrap().content, source_before.content);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        full_resources,
+        "full-range running copies reuse immutable source content"
+    );
+}
