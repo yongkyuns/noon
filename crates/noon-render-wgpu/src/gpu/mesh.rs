@@ -1586,9 +1586,10 @@ fn pipeline(
             stencil: Default::default(),
             bias: if boundary {
                 wgpu::DepthBiasState {
-                    // Cover f32 depth-plane interpolation roundoff without
-                    // a slope offset that can expose hidden geometry.
-                    constant: -4,
+                    // Cover cross-backend f32 plane/interpolation roundoff.
+                    // A fixed depth-unit margin stays independent of slope;
+                    // a slope offset can expose hidden geometry.
+                    constant: -16,
                     slope_scale: 0.0,
                     clamp: 0.0,
                 }

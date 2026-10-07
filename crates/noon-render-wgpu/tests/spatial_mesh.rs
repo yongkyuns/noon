@@ -2084,7 +2084,9 @@ fn cairo_boundary_test_scene(
         );
         let mut occluder = SemanticObjectState::new(StoredGeometry::Resource(occluder_handle));
         occluder.style = opaque_style(Color::GREEN);
-        occluder.transform.translation.z = 1.0;
+        // Keep the foreground very close to the border's face. Its coverage
+        // must survive the boundary's small depth-roundoff margin.
+        occluder.transform.translation.z = 0.001;
         attach(&mut store, occluder);
     }
 
@@ -2191,13 +2193,14 @@ fn cairo_mesh_boundary_has_fractional_subpixel_coverage_and_respects_occlusion()
             &target,
         )
         .unwrap();
+        let sloped_profile: Vec<_> = (77..=82).map(|x| pixel(&pixels, x, 64)).collect();
         for x in [79, 80] {
             let edge_pixel = pixel(&pixels, x, 64);
             assert!(
                 edge_pixel[..3]
                     .iter()
                     .all(|channel| (1..255).contains(channel)),
-                "sloped unlit mesh keeps fractional white boundary coverage at ({x},64): {edge_pixel:?}"
+                "sloped unlit mesh keeps fractional white boundary coverage at ({x},64): {edge_pixel:?}; scanline {sloped_profile:?}"
             );
         }
 
