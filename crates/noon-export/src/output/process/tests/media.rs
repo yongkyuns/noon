@@ -31,14 +31,7 @@ fn frame_pixels(width: u32, height: u32, index: u64) -> Vec<u8> {
     pixels
 }
 
-fn encode(
-    directory: &Path,
-    rate: FrameRate,
-    width: u32,
-    height: u32,
-    png: bool,
-    pipelined: bool,
-) {
+fn encode(directory: &Path, rate: FrameRate, width: u32, height: u32, png: bool, pipelined: bool) {
     fs::create_dir(directory).unwrap();
     let options = if png {
         OutputOptions::png_sequence(directory)
@@ -116,7 +109,10 @@ fn verify_timing(path: &Path, rate: FrameRate) -> Vec<u64> {
         if key == "pts" {
             pts.push(value.parse::<u64>().unwrap());
         } else {
-            assert!(stream.insert(key, value).is_none(), "duplicate stream field");
+            assert!(
+                stream.insert(key, value).is_none(),
+                "duplicate stream field"
+            );
         }
     }
     let p = rate.numerator();
@@ -164,7 +160,10 @@ fn pipelined_mp4_matches_serial_decoded_frames_and_every_timestamp() {
         let frame_bytes = width as usize * height as usize * 4;
         assert_eq!(expected.len(), FRAMES as usize * frame_bytes);
         assert_eq!(actual.len(), expected.len());
-        assert!(actual == expected, "pipeline changed decoded {p}/{q} pixels");
+        assert!(
+            actual == expected,
+            "pipeline changed decoded {p}/{q} pixels"
+        );
         // Ensure the oracle really distinguishes successive frames: a frozen or
         // repeated-frame fixture must not certify a pipeline's order.
         for index in 1..FRAMES as usize {

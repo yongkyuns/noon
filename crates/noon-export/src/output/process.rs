@@ -140,7 +140,10 @@ impl Encoder {
 
     fn check_wait(&self, start: Instant) -> io::Result<()> {
         if self.cancellation.is_cancelled() {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "export cancelled"));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "export cancelled",
+            ));
         }
         if start.elapsed() >= self.timeout {
             return Err(io::Error::new(
@@ -178,18 +181,28 @@ impl Encoder {
         }
         self.check_wait(Instant::now())?;
         if pixels.len() != self.frame_bytes {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "wrong raw frame length"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "wrong raw frame length",
+            ));
         }
         self.collect_ready()?;
         if self.buffers.is_empty() {
             self.wait_one()?;
         }
-        let mut buffer = self.buffers.pop().ok_or_else(|| io::Error::other("encoder pool exhausted"))?;
+        let mut buffer = self
+            .buffers
+            .pop()
+            .ok_or_else(|| io::Error::other("encoder pool exhausted"))?;
         buffer.copy_from_slice(pixels);
         let sequence = self.next_sequence;
-        let next_sequence = sequence.checked_add(1).ok_or_else(|| io::Error::other("encoder sequence exhausted"))?;
+        let next_sequence = sequence
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("encoder sequence exhausted"))?;
         let started = Instant::now();
-        self.input.as_ref().ok_or_else(|| io::Error::other("encoder input closed"))?
+        self.input
+            .as_ref()
+            .ok_or_else(|| io::Error::other("encoder input closed"))?
             .try_send((sequence, buffer))
             .map_err(|_| io::Error::other("encoder writer stopped or input invariant failed"))?;
         self.pending.push_back(Pending { sequence, started });
@@ -198,15 +211,23 @@ impl Encoder {
     }
 
     fn accept_reply(&mut self, reply: Reply) -> io::Result<()> {
-        let pending = self.pending.pop_front().ok_or_else(|| io::Error::other("unsolicited encoder reply"))?;
+        let pending = self
+            .pending
+            .pop_front()
+            .ok_or_else(|| io::Error::other("unsolicited encoder reply"))?;
         if reply.sequence != pending.sequence || reply.pixels.len() != self.frame_bytes {
-            return Err(io::Error::other("encoder reply does not match the oldest frame"));
+            return Err(io::Error::other(
+                "encoder reply does not match the oldest frame",
+            ));
         }
         reply.result?;
         // Compare actual I/O completion, not the time the caller collects the
         // reply: a long source callback must not time out already completed I/O.
         if reply.completed.duration_since(pending.started) >= self.timeout {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "encoder I/O deadline exceeded"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "encoder I/O deadline exceeded",
+            ));
         }
         self.buffers.push(reply.pixels);
         Ok(())
@@ -231,7 +252,10 @@ impl Encoder {
     fn wait_one(&mut self) -> io::Result<()> {
         loop {
             if self.cancellation.is_cancelled() {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "export cancelled"));
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "export cancelled",
+                ));
             }
             match self.replies.try_recv() {
                 Ok(reply) => return self.accept_reply(reply),
@@ -240,7 +264,10 @@ impl Encoder {
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
-            let pending = self.pending.front().ok_or_else(|| io::Error::other("no encoder write pending"))?;
+            let pending = self
+                .pending
+                .front()
+                .ok_or_else(|| io::Error::other("no encoder write pending"))?;
             self.check_wait(pending.started)?;
             let remaining = self.timeout.saturating_sub(pending.started.elapsed());
             match self.replies.recv_timeout(POLL.min(remaining)) {
@@ -285,7 +312,9 @@ impl Encoder {
         self.active = false;
         let diagnostics = self.join_threads()?;
         if !status.success() {
-            return Err(io::Error::other(format!("FFmpeg exited {status}: {diagnostics}")));
+            return Err(io::Error::other(format!(
+                "FFmpeg exited {status}: {diagnostics}"
+            )));
         }
         Ok(diagnostics)
     }
@@ -293,7 +322,9 @@ impl Encoder {
     fn join_threads(&mut self) -> io::Result<String> {
         let writer_ok = self.writer.take().map(|thread| thread.join()).transpose();
         let diagnostics = match self.stderr.take() {
-            Some(thread) => thread.join().map_err(|_| io::Error::other("diagnostic worker panicked"))??,
+            Some(thread) => thread
+                .join()
+                .map_err(|_| io::Error::other("diagnostic worker panicked"))??,
             None => Vec::new(),
         };
         writer_ok.map_err(|_| io::Error::other("encoder writer panicked"))?;

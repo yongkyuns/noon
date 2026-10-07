@@ -28,7 +28,9 @@ impl Fixture {
 
     fn command(&self, name: &str) -> Command {
         let mut command = Command::new("python3");
-        command.args(["-c", r#"
+        command.args([
+            "-c",
+            r#"
 import fcntl, pathlib, sys, time
 # Make the outstanding-write assertions independent of the runner pipe size.
 fcntl.fcntl(0, fcntl.F_SETPIPE_SZ, 4096)
@@ -42,7 +44,8 @@ with (root / (name + '.raw')).open('wb') as output:
         if not data:
             break
         output.write(data)
-"#]);
+"#,
+        ]);
         command.arg(&self.0).arg(name);
         command
     }
@@ -65,7 +68,10 @@ impl Drop for Fixture {
 fn wait_for(path: &Path) {
     let start = Instant::now();
     while !path.exists() {
-        assert!(start.elapsed() < Duration::from_secs(10), "process fixture did not start");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "process fixture did not start"
+        );
         thread::sleep(Duration::from_millis(1));
     }
 }
@@ -76,8 +82,12 @@ fn two_buffers_overlap_blocked_input_and_match_serial_bytes() {
     let fixture = Fixture::new();
     let cancellation = CaptureCancellation::default();
     let mut encoder = Encoder::new(
-        &mut fixture.command("pipeline"), BYTES, cancellation.clone(), Duration::from_secs(10),
-    ).unwrap();
+        &mut fixture.command("pipeline"),
+        BYTES,
+        cancellation.clone(),
+        Duration::from_secs(10),
+    )
+    .unwrap();
     fixture.ready("pipeline");
     let addresses: Vec<_> = encoder.buffers.iter().map(|b| b.as_ptr()).collect();
     let mut pixels = vec![17; BYTES];
@@ -98,13 +108,20 @@ fn two_buffers_overlap_blocked_input_and_match_serial_bytes() {
     }
     encoder.drain().unwrap();
     assert_eq!(encoder.buffers.len(), FRAME_BUFFERS);
-    assert!(encoder.buffers.iter().all(|b| addresses.contains(&b.as_ptr())));
+    assert!(encoder
+        .buffers
+        .iter()
+        .all(|b| addresses.contains(&b.as_ptr())));
     encoder.finish().unwrap();
 
     fixture.release("serial");
     let mut serial = Encoder::new(
-        &mut fixture.command("serial"), BYTES, cancellation, Duration::from_secs(10),
-    ).unwrap();
+        &mut fixture.command("serial"),
+        BYTES,
+        cancellation,
+        Duration::from_secs(10),
+    )
+    .unwrap();
     for value in [17, 34, 51, 68, 85] {
         pixels.fill(value);
         serial.write(&pixels).unwrap();
@@ -125,8 +142,12 @@ fn two_buffers_overlap_blocked_input_and_match_serial_bytes() {
 fn a_full_pipeline_blocks_a_third_frame_instead_of_allocating_or_dropping() {
     let fixture = Fixture::new();
     let mut encoder = Encoder::new(
-        &mut fixture.command("blocked"), BYTES, CaptureCancellation::default(), Duration::from_secs(10),
-    ).unwrap();
+        &mut fixture.command("blocked"),
+        BYTES,
+        CaptureCancellation::default(),
+        Duration::from_secs(10),
+    )
+    .unwrap();
     fixture.ready("blocked");
     encoder.enqueue(&vec![1; BYTES]).unwrap();
     encoder.enqueue(&vec![2; BYTES]).unwrap();
@@ -137,7 +158,10 @@ fn a_full_pipeline_blocks_a_third_frame_instead_of_allocating_or_dropping() {
     for pending in &mut encoder.pending {
         pending.started = Instant::now();
     }
-    assert_eq!(encoder.enqueue(&vec![3; BYTES]).unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert_eq!(
+        encoder.enqueue(&vec![3; BYTES]).unwrap_err().kind(),
+        io::ErrorKind::TimedOut
+    );
     assert!(!encoder.active);
     assert!(encoder.reaped);
     assert_eq!(encoder.next_sequence, 2);
@@ -148,8 +172,12 @@ fn a_full_pipeline_blocks_a_third_frame_instead_of_allocating_or_dropping() {
 fn finish_drains_both_outstanding_frames_before_sending_eof() {
     let fixture = Fixture::new();
     let mut encoder = Encoder::new(
-        &mut fixture.command("finish"), BYTES, CaptureCancellation::default(), Duration::from_secs(10),
-    ).unwrap();
+        &mut fixture.command("finish"),
+        BYTES,
+        CaptureCancellation::default(),
+        Duration::from_secs(10),
+    )
+    .unwrap();
     fixture.ready("finish");
     encoder.enqueue(&vec![71; BYTES]).unwrap();
     encoder.enqueue(&vec![72; BYTES]).unwrap();
@@ -169,15 +197,22 @@ fn cancelling_two_outstanding_writes_does_not_deadlock_on_reply_capacity() {
     let fixture = Fixture::new();
     let cancellation = CaptureCancellation::default();
     let mut encoder = Encoder::new(
-        &mut fixture.command("cancel"), BYTES, cancellation.clone(), Duration::from_secs(10),
-    ).unwrap();
+        &mut fixture.command("cancel"),
+        BYTES,
+        cancellation.clone(),
+        Duration::from_secs(10),
+    )
+    .unwrap();
     fixture.ready("cancel");
     encoder.enqueue(&vec![0; BYTES]).unwrap();
     encoder.enqueue(&vec![0; BYTES]).unwrap();
     assert_eq!(encoder.pending.len(), FRAME_BUFFERS);
     cancellation.cancel();
     let start = Instant::now();
-    assert_eq!(encoder.finish().unwrap_err().kind(), io::ErrorKind::Interrupted);
+    assert_eq!(
+        encoder.finish().unwrap_err().kind(),
+        io::ErrorKind::Interrupted
+    );
     assert!(start.elapsed() < Duration::from_secs(10));
 }
 
@@ -186,15 +221,24 @@ fn cancelling_two_outstanding_writes_does_not_deadlock_on_reply_capacity() {
 fn successful_child_exit_cannot_hide_a_failed_outstanding_write() {
     let fixture = Fixture::new();
     let mut command = Command::new("python3");
-    command.args(["-c", r#"
+    command
+        .args([
+            "-c",
+            r#"
 import os, pathlib, sys
 os.close(0)
 pathlib.Path(sys.argv[1]).write_text('ready')
 sys.exit(0)
-"#]).arg(fixture.0.join("closed.ready"));
+"#,
+        ])
+        .arg(fixture.0.join("closed.ready"));
     let mut encoder = Encoder::new(
-        &mut command, BYTES, CaptureCancellation::default(), Duration::from_secs(10),
-    ).unwrap();
+        &mut command,
+        BYTES,
+        CaptureCancellation::default(),
+        Duration::from_secs(10),
+    )
+    .unwrap();
     fixture.ready("closed");
     // Submission may observe disconnection immediately or the write reply later.
     // Neither case can turn into a successful finished output.
