@@ -2,8 +2,7 @@
 //! not a successful skip. Synthetic effective frame inputs exercise the existing
 //! primitive renderer, not Scene lowering, Python binding, or physical performance.
 use super::*;
-use crate::gpu::{Camera2D, GpuRenderer};
-use crate::FramePreparer;
+use crate::{Camera2D, FramePreparer, GpuRenderer};
 use noon_core::{GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D, Vec2};
 use noon_runtime::{FrameObjectState, FrameState};
 use std::time::Duration;
@@ -119,7 +118,14 @@ fn compare_pixels(device: &wgpu::Device, queue: &wgpu::Queue, scope: &GlowScope,
     source: &[u8], mask: &[u8], size: [u32; 2], params: GlowParameters) {
     let sigma = params.definition.radius().to_output_pixels(params.output_height,
         params.world_view_height).unwrap();
+    let length = size[0] as usize * size[1] as usize * 4;
+    assert_eq!(source.len(), length);
+    assert_eq!(mask.len(), length);
+    assert!(mask.chunks_exact(4).any(|pixel| pixel[3] != 0),
+        "source capture must not make the Gaussian test vacuous");
     let expected = reference(mask, size, sigma);
+    assert!(expected.iter().any(|&value| value > 1e-5),
+        "reference signal must exceed the comparison tolerance");
     let resources = scope.resources.as_ref().unwrap();
     let packed = readback(device, queue, &resources.vertical.texture);
     let actual = readback(device, queue, scope.output().unwrap());
@@ -167,6 +173,9 @@ fn native_gaussian_pixels_and_retained_updates() {
             Color::rgba(0.31, 0.57, 0.83, alpha), translation);
         let silhouette = primitive_capture(&device, &queue, size, rectangle, Color::WHITE, translation);
         let source_pixels = readback(&device, &queue, &source.texture);
+        let source_has_alpha = source_pixels.chunks_exact(4).any(|pixel| pixel[3] != 0);
+        assert_eq!(source_has_alpha, alpha > 0.0,
+            "the ordinary renderer must supply the intended painted source");
         let mask_pixels = if mode == GlowSource::Painted { source_pixels.clone() }
             else { readback(&device, &queue, &silhouette.texture) };
         let mut scope = GlowScope::default();

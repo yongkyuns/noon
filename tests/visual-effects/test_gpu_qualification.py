@@ -1,0 +1,41 @@
+"""Control-flow/parser checks only; these are not GPU execution evidence."""
+import unittest
+
+from qualify_gpu_operator import TEST, qualified
+
+
+class QualificationAdmission(unittest.TestCase):
+    def test_exact_success_required(self):
+        log = f"test {TEST} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;"
+        self.assertTrue(qualified(0, log))
+        self.assertFalse(qualified(1, log))
+        self.assertFalse(qualified(0, log.replace(TEST, "unrelated_test")))
+        self.assertFalse(qualified(0, log.replace("1 passed", "0 passed")))
+        self.assertFalse(qualified(0, log.replace("0 ignored", "1 ignored")))
+
+    def test_only_measured_mask_failure_qualifies_mutation(self):
+        log = (
+            f"test {TEST} ... FAILED\n"
+            "Gaussian mask exceeds frozen tolerance: 0.002\n"
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored;"
+        )
+        self.assertTrue(qualified(101, log, negative=True))
+        self.assertFalse(qualified(0, log, negative=True))
+        self.assertFalse(qualified(-1, log, negative=True))
+        self.assertFalse(qualified(101, log.replace(TEST, "other"), negative=True))
+        for failure in ("no adapter", "compile error E0603", "assertion failed"):
+            self.assertFalse(qualified(101, log.replace(
+                "Gaussian mask exceeds frozen tolerance: 0.002", failure
+            ), negative=True))
+
+    def test_missing_or_ignored_test_does_not_pass(self):
+        for code in (0, 1, 101):
+            for negative in (False, True):
+                self.assertFalse(qualified(code, "", negative=negative))
+                self.assertFalse(qualified(code,
+                    f"{TEST}\ntest result: ok. 0 passed; 0 failed; 1 ignored;",
+                    negative=negative))
+
+
+if __name__ == "__main__":
+    unittest.main()

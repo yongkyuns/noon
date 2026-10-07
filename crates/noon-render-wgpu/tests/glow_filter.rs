@@ -7,7 +7,7 @@
 //! from this operator-only entrypoint.
 
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
-use noon_render_wgpu::{gpu, FramePreparer};
+use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer};
 
 #[path = "../src/gpu/glow_filter.rs"]
 pub mod glow_filter;
