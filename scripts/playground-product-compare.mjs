@@ -4,8 +4,6 @@ import path from "node:path";
 import { summarizeSamples } from "../web/frame-metrics.js";
 import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
 import { summarizePackageSizes } from "../.github/ci/wasm-build.mjs";
-import { isDeepStrictEqual } from "node:util";
-const cumulativeAnchor = JSON.parse(await readFile(new URL("./playground-product-anchor.json", import.meta.url), "utf8"));
 
 const [baselineDirArg, candidateDirArg, mode, count] = process.argv.slice(2);
 assert.ok(baselineDirArg && candidateDirArg &&
@@ -91,104 +89,6 @@ const [baseline, candidate] = statistics.map((stats, side) => ({
   ...Object.fromEntries(metricKeys.map(key => [key, stats[key].mean])),
   fps: { effectiveFps: stats.fps.mean },
 }));
-
-function cumulativeTrend(anchor, workloadId, reports, measuredStatistics) {
-  const workload = anchor.workloads[workloadId];
-  const reasons = [];
-  const current = reports[0];
-  if (pairCount !== 3) reasons.push("current comparison is not the prescribed three-pair cohort");
-  if (workload === undefined) reasons.push("anchor has no matching workload");
-  if (!isDeepStrictEqual(current.runtime, anchor.runtime)) {
-    reasons.push("device, backend, browser, or runtime configuration differs from the anchor");
-  }
-  if (workload !== undefined) {
-    const { version: anchorVersion, ...anchorMeasurement } = workload.measurement;
-    const { version: currentVersion, ...currentMeasurement } = current.measurement;
-    if (anchorVersion !== anchor.protocolCompatibility.anchorProtocolVersion ||
-        currentVersion !== anchor.protocolCompatibility.currentProtocolVersion ||
-        !isDeepStrictEqual(anchorMeasurement, currentMeasurement)) {
-      reasons.push("measurement windows or protocol semantics differ from the anchor");
-    }
-  }
-  const anchorFps = workload === undefined ? null : summarizeSamples(workload.fpsObservations);
-  const anchorLatency = workload === undefined ? null : Object.fromEntries(metricKeys.map(key =>
-    [key, summarizeSamples(workload.latencyObservations.map(sample => sample[key]))]));
-  const currentLatencyObservations = Object.fromEntries(["parentBaseline", "candidate"].map((side, sideIndex) =>
-    [side, pairs.map(pair => Object.fromEntries(metricKeys.map(key =>
-      [key, pair.reports[sideIndex][key]])))]));
-  const currentLatency = Object.fromEntries(["parentBaseline", "candidate"].map(side =>
-    [side, Object.fromEntries(metricKeys.map(key =>
-      [key, summarizeSamples(currentLatencyObservations[side].map(sample => sample[key]))]))]));
-  const anchorGapObservations = workload?.presentationGapObservations ?? null;
-  const currentGapObservations = Object.fromEntries(["parentBaseline", "candidate"].map((side, sideIndex) =>
-    [side, pairs.map(pair => pair.reports[sideIndex].presentationGaps ?? null)]));
-  const gapKeys = ["min", "p50", "p95", "p99", "max", "mean"];
-  const anchorGapsValid = anchorGapObservations === null ||
-    (Array.isArray(anchorGapObservations) && anchorGapObservations.length === 3 &&
-      anchorGapObservations.every(sample => sample?.clock === workload.measurement.gapClock &&
-        gapKeys.every(key => Number.isFinite(sample.intervalMs?.[key]))));
-  const currentGapsValid = workload?.measurement.gapClock === null ||
-    ["parentBaseline", "candidate"].every(side => currentGapObservations[side].length === 3 &&
-      currentGapObservations[side].every(sample => sample?.clock === workload?.measurement.gapClock &&
-        gapKeys.every(key => Number.isFinite(sample.intervalMs?.[key]))));
-  const frameGapStatus = workload?.measurement.gapClock === null
-    ? "not-collected-for-workload"
-    : anchorGapsValid && currentGapsValid ? "comparable" : "unavailable";
-  const summarizeGaps = observations => observations === null ? null : Object.fromEntries(gapKeys.map(key =>
-    [key, summarizeSamples(observations.map(sample => sample.intervalMs[key]))]));
-  const anchorGapStatistics = anchorGapsValid ? summarizeGaps(anchorGapObservations) : null;
-  const currentGapStatistics = Object.fromEntries(["parentBaseline", "candidate"].map(side =>
-    [side, currentGapsValid && workload?.measurement.gapClock !== null
-      ? summarizeGaps(currentGapObservations[side]) : null]));
-  return {
-    policy: "descriptive-only",
-    gateApplied: false,
-    anchor: {
-      id: anchor.anchorId,
-      provenance: anchor.provenance,
-      runtime: anchor.runtime,
-    },
-    protocolCompatibility: {
-      statement: anchor.protocolCompatibility.statement,
-      verifiedEquivalentFields: anchor.protocolCompatibility.verifiedEquivalentFields,
-      anchorVersion: anchor.protocolCompatibility.anchorProtocolVersion,
-      currentVersion: anchor.protocolCompatibility.currentProtocolVersion,
-    },
-    workload: workloadId,
-    status: reasons.length === 0 ? "comparable" : "not-comparable",
-    reasons,
-    anchorObservations: workload?.fpsObservations ?? null,
-    anchorStatistics: { fps: anchorFps, latency: anchorLatency, presentationGaps: anchorGapStatistics },
-    currentIdentities: {
-      parentBaseline: reports[0].runtimeIdentity,
-      candidate: reports[1].runtimeIdentity,
-    },
-    currentObservations: {
-      parentBaseline: pairs.map(pair => pair.reports[0].fps.effectiveFps),
-      candidate: pairs.map(pair => pair.reports[1].fps.effectiveFps),
-    },
-    latencyObservations: currentLatencyObservations,
-    latencyStatistics: currentLatency,
-    presentationGapObservations: { anchor: anchorGapObservations, ...currentGapObservations },
-    presentationGapStatus: frameGapStatus,
-    presentationGapStatistics: { anchor: anchorGapStatistics, ...currentGapStatistics },
-    ratios: reasons.length === 0 ? {
-      fps: {
-        parentBaseline: measuredStatistics[0].fps.mean / anchorFps.mean,
-        candidate: measuredStatistics[1].fps.mean / anchorFps.mean,
-      },
-      latency: Object.fromEntries(["parentBaseline", "candidate"].map(side => [side,
-        Object.fromEntries(metricKeys.map(key =>
-          [key, currentLatency[side][key].mean / anchorLatency[key].mean]))])),
-      presentationGaps: frameGapStatus === "comparable" ? Object.fromEntries(
-        ["parentBaseline", "candidate"].map(side => [side,
-          Object.fromEntries(gapKeys.map(key => [key,
-            currentGapStatistics[side][key].mean / anchorGapStatistics[key].mean]))])) : null,
-    } : null,
-  };
-}
-const cumulativeAnchorTrend = cumulativeTrend(cumulativeAnchor, candidate.exampleId,
-  pairs[0].reports, statistics);
 
 function threshold(name, fallback) {
   const raw = process.env[name] ?? fallback;
@@ -298,7 +198,6 @@ const comparison = {
     baseline: reports[0].rendererCosts ?? null, candidate: reports[1].rendererCosts ?? null })),
   costStatistics,
   packageSizes: { baseline: baseline.packageSizes, candidate: candidate.packageSizes },
-  cumulativeAnchorTrend,
   visual: { pairs: visualPairs, worstDiffRatio: visualDiffRatio },
   failures,
 };
@@ -317,18 +216,6 @@ for (const [name, before, after] of latency) {
   console.log(`| ${name} | ${before.toFixed(0)} ms | ${after.toFixed(0)} ms |`);
 }
 console.log(`| Effective FPS | ${baselineFps.toFixed(1)} | ${candidateFps.toFixed(1)} |`);
-if (cumulativeAnchorTrend.status === "comparable") {
-  console.log(`| FPS ratio to pinned ${cumulativeAnchor.anchorId} | ` +
-    `${cumulativeAnchorTrend.ratios.fps.parentBaseline.toFixed(3)} | ` +
-    `${cumulativeAnchorTrend.ratios.fps.candidate.toFixed(3)} |`);
-  if (cumulativeAnchorTrend.presentationGapStatus === "comparable") {
-    console.log(`| Renderer frame-gap p95 ratio to pinned ${cumulativeAnchor.anchorId} | ` +
-      `${cumulativeAnchorTrend.ratios.presentationGaps.parentBaseline.p95.toFixed(3)} | ` +
-      `${cumulativeAnchorTrend.ratios.presentationGaps.candidate.p95.toFixed(3)} |`);
-  }
-} else {
-  console.log(`Cumulative anchor trend not comparable: ${cumulativeAnchorTrend.reasons.join("; ")}`);
-}
 if (costStatistics !== null) {
   for (const [key, label] of [["applyMs", "Delta apply CPU wall"], ["renderMs", "Render call CPU wall"],
     ["ackPostMs", "Acknowledgment post CPU wall"]]) {

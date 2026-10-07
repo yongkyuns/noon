@@ -1417,9 +1417,9 @@ or Manim-qualified behavior until fresh paired and backend evidence is recorded:
 - `VectorScene.add_vector` has an animated shared-Rust path. Linear
   Transformation Scene supports coordinates, transformables, coordinate
   labels, and bounded faded-vector history through shared semantic operations.
-- Performance tooling includes a cumulative anchor and five representative
-  workload instrumentation cases. This adds no new measured performance
-  result or physical-device 60 FPS evidence.
+- Performance tooling reuses the same-run cumulative Product Gate anchor and
+  includes five representative workload instrumentation cases. This adds no new
+  measured performance result or physical-device 60 FPS evidence.
 
 ### Remaining capability and qualification
 
@@ -1433,7 +1433,7 @@ this overview is not another implementation checklist.
 | Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE camera/3D examples. Qualify their exact source, effective state, timing/replay and raster/depth/compositing behavior; related Noon-profile Rust/Python pairs are not a full Manim pass. |
 | Common 3D rendering and defaults | #1879 owns qualification for implemented Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image cases. Native point lighting remains distinct from Cairo compatibility; general intersecting transparency remains separate. |
 | Geometry, axes and vector-space breadth | #1879 owns qualification for implemented primitive ranges/orientations/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers. These use shared semantic objects, resources and animations; they remain pending paired qualification. |
-| Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. Branch instrumentation now includes an anchor and five workloads, but supplies no new measured or physical-device 60 FPS evidence. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
+| Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. Branch instrumentation reuses the same-run Product Gate anchor and adds five workloads, but supplies no new measured or physical-device 60 FPS evidence. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
 
 Exact `FollowingGraphCamera` source/state/raster qualification was merged in
 [#1882](https://github.com/yongkyuns/noon/pull/1882). Its callback replay remains

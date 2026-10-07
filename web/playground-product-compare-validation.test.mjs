@@ -4,20 +4,17 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { summarizeSamples } from "./frame-metrics.js";
 import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "../scripts/playground-product-fps.mjs";
 import { summarizePackageSizes } from "../.github/ci/wasm-build.mjs";
 
 const command = new URL("../scripts/playground-product-compare.mjs", import.meta.url);
 const pairCountArgs = ["--pairs", "3"];
-const pinnedAnchor = JSON.parse(await readFile(
-  new URL("../scripts/playground-product-anchor.json", import.meta.url), "utf8"));
 const imageTestOptions = { skip: process.env.NOON_PRODUCT_IMAGE_TESTS === "1"
   ? false : "PNG controls run in Product Gate after dependency setup" };
 const report = () => ({
   schemaVersion: 2,
   exampleId: "parity-square-and-circle",
-  runtime: structuredClone(pinnedAnchor.runtime),
+  runtime: { backend: "webgpu" },
   shellReadyMs: 100,
   coldRunMs: 200,
   warmRunMs: 50,
@@ -229,109 +226,6 @@ test("three noisy alternating pairs pass and retain every report and dispersion"
     assert.equal(comparison.statistics.baseline.fps.min, 59);
     assert.equal(comparison.statistics.baseline.fps.max, 62);
     assert.notEqual(comparison.statistics.baseline.fps.mean, comparison.statistics.candidate.fps.mean);
-  });
-});
-
-test("comparable cohorts report descriptive ratios to the pinned package anchor", imageTestOptions, async () => {
-  await withTempDirectory("noon-product-cohort-anchor-", async directory => {
-    await createCohort(directory, { withImages: true });
-    const result = await runCohort(directory);
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    const comparison = JSON.parse(await readFile(path.join(directory, "candidate", "comparison.json")));
-    const trend = comparison.cumulativeAnchorTrend;
-    assert.equal(trend.status, "comparable");
-    assert.equal(trend.policy, "descriptive-only");
-    assert.equal(trend.gateApplied, false);
-    assert.equal(trend.anchor.provenance.runtimeIdentity.sourceRevision,
-      "a0b80070348871be4e48781c8053bdd51a12e3bf");
-    assert.equal(trend.anchor.provenance.runtimeIdentity.buildId,
-      "88f0465b7ebb3f985086de345ca2a3d91a1bfab2c71d38ee45472840c5b7c66f");
-    assert.equal(trend.anchor.provenance.measurementArtifact.sha256,
-      "a4408e616d3dfed1ade235cf57a691902930412f15ea351e6bfcb3fb18675c4b");
-    assert.deepEqual(trend.anchorObservations, pinnedAnchor.workloads[report().exampleId].fpsObservations);
-    assert.deepEqual(trend.anchorStatistics.fps,
-      summarizeSamples(pinnedAnchor.workloads[report().exampleId].fpsObservations));
-    assert.equal(trend.currentObservations.parentBaseline.length, 3);
-    assert.equal(trend.currentObservations.candidate.length, 3);
-    assert.ok(Math.abs(trend.ratios.fps.parentBaseline -
-      comparison.statistics.baseline.fps.mean / trend.anchorStatistics.fps.mean) < 1e-12);
-    assert.ok(Math.abs(trend.ratios.fps.candidate -
-      comparison.statistics.candidate.fps.mean / trend.anchorStatistics.fps.mean) < 1e-12);
-    assert.equal(trend.anchorStatistics.latency.coldRunMs.mean,
-      summarizeSamples(pinnedAnchor.workloads[report().exampleId].latencyObservations.map(run => run.coldRunMs)).mean);
-    assert.ok(Math.abs(trend.ratios.latency.candidate.coldRunMs -
-      trend.latencyStatistics.candidate.coldRunMs.mean /
-        trend.anchorStatistics.latency.coldRunMs.mean) < 1e-12);
-    assert.match(trend.protocolCompatibility.statement, /v3 to v4/);
-    assert.deepEqual(trend.protocolCompatibility.verifiedEquivalentFields,
-      ["clock", "sampler", "preparation", "windowStartSeconds", "windowEndSeconds",
-        "endpointHoldSeconds", "sourceEndSeconds", "gapClock"]);
-    assert.equal(comparison.failures.length, 0, "the descriptive anchor must not add a gate");
-  });
-});
-
-test("browser mismatch reports an incomparable anchor without ratios", imageTestOptions, async () => {
-  await withTempDirectory("noon-product-cohort-anchor-config-", async directory => {
-    await createCohort(directory, { withImages: true, mutateReport: input => {
-      input.runtime.browserVersion = "different-browser";
-    } });
-    const result = await runCohort(directory);
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    const comparison = JSON.parse(await readFile(path.join(directory, "candidate", "comparison.json")));
-    const trend = comparison.cumulativeAnchorTrend;
-    assert.equal(trend.status, "not-comparable");
-    assert.match(trend.reasons.join("; "), /browser/);
-    assert.equal(trend.ratios, null);
-  });
-});
-
-for (const [label, change] of [
-  ["different", runtime => { runtime.runnerPlatform = "darwin"; }],
-  ["missing", runtime => { delete runtime.runnerPlatform; }],
-]) {
-  test(`${label} runner platform makes the anchor incomparable`, imageTestOptions, async () => {
-    await withTempDirectory("noon-product-cohort-anchor-platform-", async directory => {
-      await createCohort(directory, { withImages: true, mutateReport: input => change(input.runtime) });
-      const result = await runCohort(directory);
-      assert.ifError(result.error);
-      assert.equal(result.status, 0, result.stderr);
-      const comparison = JSON.parse(await readFile(path.join(directory, "candidate", "comparison.json")));
-      const trend = comparison.cumulativeAnchorTrend;
-      assert.equal(trend.status, "not-comparable");
-      assert.match(trend.reasons.join("; "), /runtime configuration/);
-      assert.equal(trend.ratios, null);
-    });
-  });
-}
-
-test("camera anchor trend retains renderer frame-gap distributions", imageTestOptions, async () => {
-  await withTempDirectory("noon-product-cohort-camera-anchor-", async directory => {
-    await createCohort(directory, { withImages: true, mutateReport: input => {
-      const screenshot = input.screenshot;
-      const identity = input.runtimeIdentity;
-      const { label, pair, startedAtMs, finishedAtMs } = input;
-      Object.assign(input, cameraReport(), {
-        screenshot, runtimeIdentity: identity, label, pair, startedAtMs, finishedAtMs,
-      });
-    } });
-    const result = await runCohort(directory);
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    const comparison = JSON.parse(await readFile(path.join(directory, "candidate", "comparison.json")));
-    const trend = comparison.cumulativeAnchorTrend;
-    assert.equal(trend.status, "comparable");
-    assert.equal(trend.presentationGapStatus, "comparable");
-    assert.equal(trend.presentationGapObservations.anchor.length, 3);
-    assert.equal(trend.presentationGapStatistics.anchor.p95.mean,
-      summarizeSamples(pinnedAnchor.workloads["showcase-camera-follows-path"]
-        .presentationGapObservations.map(run => run.intervalMs.p95)).mean);
-    assert.ok(Math.abs(trend.ratios.presentationGaps.candidate.p95 -
-      trend.presentationGapStatistics.candidate.p95.mean /
-        trend.presentationGapStatistics.anchor.p95.mean) < 1e-12);
-    assert.equal(trend.latencyObservations.candidate.length, 3);
-    assert.ok(Number.isFinite(trend.ratios.latency.candidate.coldRunMs));
   });
 });
 
