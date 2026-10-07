@@ -18,7 +18,9 @@ remains the executable proof of the supported M0 subset.
 M0's four design/reference deliverables are separate from the later runtime and
 GPU implementation gates in #1897. Required PR checks and human acceptance remain
 separate from this recorded review. No rendered-glow, direct-seek, pulse-lifecycle,
-Python-binding or physical-performance result follows from declaration tests.
+cross-host binding execution or physical-performance result follows from declaration tests.
+The separate leaf-adapter section records implemented binding source and its
+validation boundary without reclassifying the future-feature review programs.
 
 ## Implemented shared Rust boundary
 
@@ -127,7 +129,8 @@ are explicit limitations, not claims of supported live animation or restoration.
 
 The actual attachment slice is leaf-only and named. Family propagation, composed
 filters, unnamed attachments, effective effect queries, GlowPulse, ordinary effect
-animation/channel ownership, and Python wrappers remain future integration work.
+animation/channel ownership, and effective Python queries remain future integration work.
+The leaf declaration adapter is implemented below; effect execution remains gated.
 No native or browser setter silently skips unavailable rendering.
 
 ### Parameter-addressed authored transactions
@@ -146,6 +149,60 @@ unchanged explicit values still participate in conflict admission without dirtyi
 unrelated parameters. Failures preserve all earlier ordinary/effect state and the
 scene revision. This is real authored-transaction behaviour, not yet runtime
 animation leases or effect rendering. Existing execution support guards remain.
+
+## Implemented Python declaration adapter
+
+`Glow`, `Pixels`, and `EffectHandle` are exported from `noon`, through its existing
+lazy public-export mechanism. The supported calling convention is **`from noon
+import Glow, Pixels`**, not `from noon.effects import ...`: the current Python API
+is a module, not a package. This follows the existing top-level shape/style/native
+extension convention without inventing an import alias or subpackage. Rust retains
+its idiomatic `noon::effects` module; import spelling need not be identical.
+
+`web/python/_noon_effects.py` owns signatures, numeric/type coercion and fluent
+receiver returns only. `Glow` holds an immutable Rust definition, not a Python
+parameter dictionary. `EffectHandle.authored_definition` asks its Rust handle for
+a checked authored value each time; it is deliberately not named an effective
+runtime getter. Copies of a reference preserve that reference; copies of an owning
+Mobject remain independent through Rust's existing copy operation. Failed writes
+have no Python rollback implementation. Temporary argument objects are freed on
+both success and failure; Python wrapper collection never removes an attachment.
+
+`set_glow`, `add_effect`, `get_effect`, `set_effect`, `remove_effect`, and
+`remove_glow` route to the existing object handle or the existing live context.
+Names versus explicit handles select distinct typed boundary calls so stale/foreign
+handles cannot silently resolve by name. `None` is an omitted setter/constructor
+field, like ordinary optional style arguments; unknown keywords, strings/booleans
+as numbers, and unsupported schemas fail. Rust owns numeric ranges/defaults and
+source parsing. The bridge validates RGBA before narrowing f64 to the shared f32
+Color so out-of-range inputs cannot become valid through rounding.
+
+The existing `.animate` builder calls these normal target methods unchanged:
+`dot.animate.shift(RIGHT * 2).set_glow(intensity=1.4).set_effect("accent", intensity=.6)`.
+There is no custom effect builder, timing helper, Python attachment registry or
+per-frame effect callback. This specifies declaration routing, not proven cross-host playback.
+
+Omitted scope denotes a leaf binding in this slice. Explicit `each`, `composed`,
+and `view` scopes and group receivers remain unsupported; there is no implicit
+`family` broadcast or many-owner handle. This preserves the scope decisions below.
+
+The complete paired leaf example is
+`web/python/examples/effect_authoring_contract.py`, alongside the native Rust
+example of the same name. It verifies source/target independence, named updates,
+pixel units, stale-handle rejection and explicit effect-execution rejection. After
+removing the declarations, its normal wait exercises ordinary source continuation.
+The existing `shared-authoring-smoke.mjs` runs it through actual Pyodide/WASM/Rust;
+its final no-effect frame is **not** an enabled-glow visual reference. Success must
+be recorded from the real browser run, not inferred from the mocked routing tests.
+Native CPython execution is not claimed by this existing Pyodide host adapter.
+
+Native Rust tests compare parsed adapter inputs to direct Rust values/authoring,
+and exercise the real live-session publication guard without changing time,
+identity or revision on rejection. Python unit tests isolate routing, return values,
+coercion and cleanup using spies; they do not implement a fake effect scene as
+parity evidence. Group/composed/view scope and callback mutations still reject
+explicitly before a raw authored write. Temporary `GlowPulse` remains unexported
+until ordinary runtime activation/ownership exists.
 
 ## First-glow calling conventions
 
@@ -172,7 +229,8 @@ ordinary animation names. The current frontend is the module `noon.py`, not a
 `noon.effects` module. Rust uses its existing `noon::effects` module. These are
 idiomatic namespaces over the same operations, not different effects engines.
 Do not add new names to the Manim compatibility export inventory as if ManimCE
-already defined them. Python exports/bindings are an M1 implementation task.
+already defined them. The leaf declaration exports/bindings below are implemented;
+`GlowPulse`, effective queries, group/view scopes and effect execution remain later.
 
 `Glow` describes values; `GlowPulse` describes a timed action. Python appearance
 parameters are keyword-only. On setters, `None` means omitted/preserve, like
@@ -504,6 +562,11 @@ cargo test -p noon-core --lib semantic_store::effects
 cargo test -p noon --no-default-features --lib effect_authoring
 cargo run -p noon --no-default-features --example effect_authoring_contract
 cargo test -p noon-core --doc
+cargo test -p noon-web --all-features --lib authoring_effects
+cargo test -p noon-web --all-features --lib canonical_authoring_scene::effects
+python3 -m unittest discover -s web/python -p test_noon_effects.py -v
+# Requires the actual browser package/Pyodide host, not Python routing mocks:
+node scripts/shared-authoring-smoke.mjs
 python3 -m unittest discover -s tests/visual-effects -p 'test_*.py' -v
 rustfmt --edition 2021 --check tests/visual-effects/authoring_review.rs
 node --test .github/ci/visual-effects-reference.test.mjs

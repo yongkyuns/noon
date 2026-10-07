@@ -30,6 +30,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(scene.execution_session().is_err());
     scene.remove_effect(&dot, &original)?;
     assert!(original.authored_definition().is_err());
+    let EffectDefinition::Glow(independent) = target.get_effect("glow")?.authored_definition()?;
+    assert_eq!(independent.intensity(), 1.4);
+    scene.remove_effect(&dot, "accent")?;
+    target.remove_glow()?;
+    target.remove_effect("accent")?;
+    // As in the Python pair, rejection must not poison ordinary continuation.
+    scene.wait(0.1)?;
+    assert_eq!(scene.time(), 0.1);
+    assert!(scene.execution_session().is_ok());
     println!("Rust effect declaration/copy checks passed; GPU effects remain unavailable.");
     Ok(())
 }
