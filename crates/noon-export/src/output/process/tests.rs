@@ -201,3 +201,5 @@ sys.exit(0)
     let _ = encoder.enqueue(&vec![17; BYTES]);
     assert!(encoder.finish().is_err());
 }
+
+mod media;
