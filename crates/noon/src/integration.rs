@@ -21,6 +21,14 @@
 //! rather than overwriting its publication revision or treating old frames as new.
 //!
 
+mod forward_sample;
+mod frame_grid;
+
+pub use forward_sample::{
+    ForwardSample, ForwardSampleError, ForwardSampleStatus, SampleObservation,
+};
+pub use frame_grid::{FrameGrid, FrameGridError, FrameRate, FrameSample};
+
 /// Conversion from Manim Cairo pixel stroke widths to Noon scene units.
 pub const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
 
