@@ -66,6 +66,10 @@ pub use provisional::{
 /// rather than being conflated with a value update.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutation {
+    UpdateEffect {
+        effect: SemanticNodeId,
+        update: crate::GlowUpdate,
+    },
     SetSignal {
         signal: SemanticNodeId,
         value: SemanticSignalValue,
@@ -277,6 +281,11 @@ impl SemanticMutation {
             }
             Self::RemoveNode { node } => vec![*node],
             Self::AddAnimation { animation, .. } => animation.intent().node_references().collect(),
+            Self::AddNode {
+                creation: SemanticNodeCreation::Effect { owner, .. },
+                ..
+            } => vec![*owner],
+            Self::UpdateEffect { effect, .. } => vec![(*effect).into()],
             Self::SetSignal { .. }
             | Self::AddScalarSignalTrack { .. }
             | Self::SetScalarSignalAt { .. }
@@ -298,6 +307,7 @@ impl SemanticMutation {
     /// space without reserving or manufacturing semantic identity before preflight.
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
+            Self::UpdateEffect { effect, .. } => Some(*effect),
             Self::SetSignal { signal, .. } => Some(*signal),
             Self::AddScalarSignalTrack { signal, .. } => Some(*signal),
             Self::SetScalarSignalAt { signal, .. } => Some(*signal),
@@ -333,6 +343,7 @@ impl SemanticMutation {
 
     const fn key(&self) -> Option<SemanticMutationKey> {
         match self {
+            Self::UpdateEffect { effect, .. } => Some(SemanticMutationKey::Effect(*effect)),
             Self::SetSignal { signal, .. } => Some(SemanticMutationKey::Signal(*signal)),
             Self::AddScalarSignalTrack { .. } | Self::SetScalarSignalAt { .. } => None,
             Self::SetProperty {
@@ -405,6 +416,7 @@ impl SemanticMutation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum SemanticMutationKey {
+    Effect(SemanticNodeId),
     Signal(SemanticNodeId),
     ObjectProperty {
         object: SemanticTransactionNodeRef,
@@ -444,6 +456,16 @@ pub(super) enum SemanticMutationKey {
 /// is introduced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SemanticMutationImpact {
+    /// Structural attachment/order/lifetime change on one owner.
+    EffectAttachment {
+        owner: SemanticNodeId,
+        effect: SemanticNodeId,
+    },
+    /// Parameter-only edit: attachment identity and order did not change.
+    EffectParameters {
+        owner: SemanticNodeId,
+        effect: SemanticNodeId,
+    },
     ZIndex {
         node: SemanticNodeId,
     },
@@ -555,6 +577,7 @@ pub struct SemanticMutationTransaction {
 
 pub(super) struct SemanticTransactionPreflight {
     changed: Vec<bool>,
+    staged_effects: HashMap<SemanticNodeId, crate::EffectDefinition>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
     staged_spatial_anchors: HashMap<SemanticTransactionNodeRef, SemanticTransactionNodeRef>,
@@ -589,6 +612,32 @@ impl Default for SemanticMutationTransaction {
 }
 
 impl SemanticMutationTransaction {
+    /// Create an ordered named appearance attachment using the ordinary allocator.
+    /// This initial semantic slice supports leaf owners only; renderer admission
+    /// remains separately gated until effect lowering is available.
+    pub fn create_effect(
+        &mut self,
+        owner: impl Into<SemanticTransactionNodeRef>,
+        name: impl Into<std::sync::Arc<str>>,
+        definition: impl Into<crate::EffectDefinition>,
+    ) -> SemanticLocalNodeToken {
+        self.create_node(SemanticNodeCreation::Effect {
+            owner: owner.into(),
+            name: name.into(),
+            definition: definition.into(),
+        })
+    }
+
+    pub fn update_effect(
+        &mut self,
+        effect: SemanticNodeId,
+        update: crate::GlowUpdate,
+    ) -> &mut Self {
+        self.mutations
+            .push(SemanticMutation::UpdateEffect { effect, update });
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -1943,6 +1992,19 @@ impl SemanticMutationTransaction {
         // any pending dependency therefore invalidates its parent declarations
         // transitively in one forward pass.
         for mutation in &self.mutations {
+            if let SemanticMutation::AddNode {
+                token,
+                creation:
+                    SemanticNodeCreation::Effect {
+                        owner: SemanticTransactionNodeRef::Pending(owner),
+                        ..
+                    },
+            } = mutation
+            {
+                if removed_pending.contains(owner) {
+                    removed_pending.insert(*token);
+                }
+            }
             let SemanticMutation::AddAnimation { token, animation } = mutation else {
                 continue;
             };
@@ -1985,6 +2047,9 @@ impl SemanticMutationTransaction {
         let mut family_edges = FamilyEdgePreflight::default();
         let mut pending_sources = HashSet::new();
         let mut staged_objects = HashMap::new();
+        let mut staged_effects = HashMap::new();
+        let mut effect_names = HashSet::new();
+        let mut available_pending_owners = HashSet::new();
         let mut staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject> =
             HashMap::new();
         let mut staged_family_z = HashMap::new();
@@ -2941,7 +3006,76 @@ impl SemanticMutationTransaction {
                 } => {
                     changed.push(family_edges.reorder(&catalog, *family, *member, *before, index)?);
                 }
+                SemanticMutation::UpdateEffect { effect, update } => {
+                    let state = store
+                        .semantic_effect_state(*effect)
+                        .map_err(|error| SemanticMutationTransactionError::Node { index, error })?;
+                    let next = state.definition().update(*update).map_err(|error| {
+                        SemanticMutationTransactionError::EffectParameter {
+                            index,
+                            effect: *effect,
+                            error,
+                        }
+                    })?;
+                    changed.push(next != state.definition());
+                    staged_effects.insert(*effect, next);
+                }
                 SemanticMutation::AddNode { token, creation } => {
+                    if let SemanticNodeCreation::Effect { owner, name, .. } = creation {
+                        catalog.ensure_object(*owner, index)?;
+                        if name.is_empty() {
+                            return Err(
+                                SemanticMutationTransactionError::InvalidEffectAttachment {
+                                    index,
+                                    reason: "effect name is empty",
+                                },
+                            );
+                        }
+                        match owner {
+                            SemanticTransactionNodeRef::Existing(owner) => {
+                                if removed_nodes.contains(owner) {
+                                    return Err(SemanticMutationTransactionError::NodeCreationUsesRemovedNode { index, node: *owner });
+                                }
+                                if !removed_pending.contains(token)
+                                    && store
+                                        .effect_by_name(*owner, name)
+                                        .map_err(|error| SemanticMutationTransactionError::Node {
+                                            index,
+                                            error,
+                                        })?
+                                        .is_some_and(|effect| !removed_nodes.contains(&effect))
+                                {
+                                    return Err(
+                                        SemanticMutationTransactionError::InvalidEffectAttachment {
+                                            index,
+                                            reason: "duplicate effect name",
+                                        },
+                                    );
+                                }
+                            }
+                            SemanticTransactionNodeRef::Pending(owner) => {
+                                if !available_pending_owners.contains(owner) {
+                                    return Err(
+                                        SemanticMutationTransactionError::InvalidEffectAttachment {
+                                            index,
+                                            reason: "effect owner must precede its attachment",
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        if !removed_pending.contains(token)
+                            && !effect_names.insert((*owner, name.clone()))
+                        {
+                            return Err(
+                                SemanticMutationTransactionError::InvalidEffectAttachment {
+                                    index,
+                                    reason: "duplicate effect name in transaction",
+                                },
+                            );
+                        }
+                    }
+                    available_pending_owners.insert(*token);
                     preflight_add_node(
                         store,
                         creation,
@@ -2981,7 +3115,8 @@ impl SemanticMutationTransaction {
                                 .or_insert_with(|| state.clone());
                         }
                         SemanticNodeCreation::Family { .. }
-                        | SemanticNodeCreation::Signal { .. } => {}
+                        | SemanticNodeCreation::Signal { .. }
+                        | SemanticNodeCreation::Effect { .. } => {}
                     }
                     changed.push(!removed_pending.contains(token));
                 }
@@ -3098,6 +3233,7 @@ impl SemanticMutationTransaction {
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_pending_paths.retain(|token, _| !removed_pending.contains(token));
         let preflight = SemanticTransactionPreflight {
+            staged_effects,
             staged_family_z,
             changed,
             staged_objects,
@@ -3689,6 +3825,15 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    InvalidEffectAttachment {
+        index: usize,
+        reason: &'static str,
+    },
+    EffectParameter {
+        index: usize,
+        effect: SemanticNodeId,
+        error: crate::GlowParameterError,
+    },
     /// A transaction-local vector path contains a non-finite coordinate.
     InvalidPendingGeometryPath,
     /// A callback/resource batch exceeded its bounded pending path working set.
@@ -4095,6 +4240,8 @@ pub enum SemanticMutationTransactionError {
 impl std::fmt::Display for SemanticMutationTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidEffectAttachment { index, reason } => write!(formatter, "mutation {index}: {reason}"),
+            Self::EffectParameter { index, effect, error } => write!(formatter, "mutation {index}: effect {effect:?}: {error}"),
             Self::InvalidPendingGeometryPath => {
                 formatter.write_str("pending geometry path contains non-finite coordinates")
             }

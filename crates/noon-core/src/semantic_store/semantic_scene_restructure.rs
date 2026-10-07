@@ -1011,7 +1011,9 @@ fn target_node_checked(
     let is_target = match node.kind() {
         SemanticNodeKind::Family(_) => true,
         SemanticNodeKind::AuthoringObject => node.semantic_object_state().is_some(),
-        SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => false,
+        SemanticNodeKind::Signal(_)
+        | SemanticNodeKind::Animation(_)
+        | SemanticNodeKind::Effect(_) => false,
     };
     if !is_target {
         return Err(SemanticSceneOperationError::NotSemanticAuthoringNode(id));

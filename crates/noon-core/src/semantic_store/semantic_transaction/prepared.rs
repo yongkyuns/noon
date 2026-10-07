@@ -641,6 +641,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 Some(
                     SemanticNodeCreation::PendingPathObject { .. }
                     | SemanticNodeCreation::Family { .. }
+                    | SemanticNodeCreation::Effect { .. }
                     | SemanticNodeCreation::Signal { .. },
                 ) => Err(SemanticTransactionReadError::NotObject(object)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
@@ -875,6 +876,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 Some(
                     SemanticNodeCreation::Object { .. }
                     | SemanticNodeCreation::PendingPathObject { .. }
+                    | SemanticNodeCreation::Effect { .. }
                     | SemanticNodeCreation::Signal { .. },
                 ) => Err(SemanticTransactionReadError::NotFamily(family)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
@@ -1152,7 +1154,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     if !planned_nodes.contains_key(token) {
                         continue;
                     }
-                    let (node, source_identity) = commit_add_node(store, creation.clone());
+                    let (node, source_identity) =
+                        commit_add_node(store, creation.clone(), &committed_nodes);
                     assert_eq!(
                         planned_nodes.get(token),
                         Some(&node),
@@ -1160,6 +1163,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     );
                     committed_nodes.insert(*token, node);
                     written_slots.insert(node);
+                    if let Some(effect) = store
+                        .node(node)
+                        .and_then(crate::SemanticNode::semantic_effect_state)
+                    {
+                        written_slots.insert(effect.owner());
+                    }
                     if let Some(source_identity) = source_identity {
                         pending_source_assignments.push((node, source_identity));
                     }
@@ -1186,6 +1195,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 continue;
             }
             match mutation {
+                SemanticMutation::UpdateEffect { effect, .. } => {
+                    let owner = store
+                        .semantic_effect_state(effect)
+                        .expect("validated effect")
+                        .owner();
+                    store.replace_effect_definition(effect, preflight.staged_effects[&effect]);
+                    written_slots.insert(effect);
+                    impacts.push(SemanticMutationImpact::EffectParameters { owner, effect });
+                }
                 SemanticMutation::SetSignal { signal, value } => {
                     let changed = store
                         .set_semantic_signal_source(signal, SemanticSignalSource::Input(value))
@@ -1555,6 +1573,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 SemanticMutation::AddNode { token, .. } => {
                     let node = committed_nodes[&token];
                     impacts.push(SemanticMutationImpact::NodeAdded { node });
+                    if let Some(effect) = store
+                        .node(node)
+                        .and_then(crate::SemanticNode::semantic_effect_state)
+                    {
+                        impacts.push(SemanticMutationImpact::EffectAttachment {
+                            owner: effect.owner(),
+                            effect: node,
+                        });
+                    }
                 }
                 SemanticMutation::AddAnimation { token, .. } => {
                     let animation = committed_nodes[&token];
@@ -1577,6 +1604,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.extend(outcome.written_slots().iter().copied());
                     for effect in outcome.effects() {
                         match effect {
+                            SemanticRemoveNodeEffect::EffectAttachmentChanged { owner, effect } => {
+                                impacts.push(SemanticMutationImpact::EffectAttachment {
+                                    owner: *owner,
+                                    effect: *effect,
+                                });
+                            }
                             SemanticRemoveNodeEffect::NodeRemoved(node) => {
                                 impacts.push(SemanticMutationImpact::NodeRemoved { node: *node });
                             }

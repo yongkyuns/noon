@@ -6,11 +6,14 @@ acceptance specification and reference-fixture description, not another roadmap.
 Inspection base: `9028672c1691d3a318c87da50e8b08e0802245f0`. The subsequent API
 review checked the unchanged public authoring hooks at `6f7b7f008c45288bf3b92a417078b907d5e4ef5c`.
 
-**Status: partial M0, not an accepted API freeze.** The shared Rust parameter
-contract described below is implemented. Public object/Scene/live attachment
-operations, Python bindings, actual animation activation/ownership, GPU rendering
-and host parity are not implemented by these fixtures. Passing a parameter test
-must not be reported as an end-to-end scene, seek, pulse-lifecycle or GPU pass.
+**Status: partial M0, not an accepted API freeze.** Shared Rust parameters and
+real authored leaf attachments now exist in the normal SemanticStore. Rust Scene,
+Mobject and target-copy operations are implemented; their tests exercise actual
+transactions, identity, mutation, copying and retirement. Effect execution, Python
+bindings, actual animation activation/ownership and GPU rendering remain unavailable.
+Running-scene publication and execution bootstrap fail explicitly rather than
+accepting an invisible effect. No rendering, seek or pulse-lifecycle pass follows
+from these declaration tests.
 
 ## Implemented shared Rust boundary
 
@@ -55,7 +58,75 @@ explicit capture, discrete rejection and omitted-field preservation. They are
 parameter/timing-component tests, not `Scene::play` or Runtime lifecycle tests.
 The positive rustdoc checks exports; a compile-fail rustdoc rejects boolean intensity.
 
-## Revised creator-facing grammar (not implemented yet)
+## Implemented Rust attachment and target-editing surface
+
+`semantic_store/effects.rs` owns ordered names and definitions. Attachments are a
+non-renderable variant of the **existing generational semantic node arena**, not
+new IDs, fake drawable objects, child-family nodes or a second scene registry.
+`create_effect` and `update_effect` extend the ordinary transaction vocabulary;
+preflight validates names, owner references, values and duplicate writes before
+commit. Removing an owner retires its attachments through the retained reverse
+reference index. Removing/re-adding a name never revives a stale handle.
+
+`Scene::set_glow`, `add_effect`, `get_effect`, `set_effect`, `remove_effect` and
+`remove_glow` now exist. Mobject target/pre-execution edits use the same checked
+preparation. Names and exact handles are distinct selectors; a foreign or stale
+handle cannot fall back to name lookup. `EffectHandle::authored_definition` is
+explicitly an authored observation, not an effective-runtime getter. Dropping the
+wrapper does not detach the binding. Rust mutation results follow existing checked
+Scene/Mobject conventions rather than pretending Python return syntax is mandatory.
+
+The following is a runnable Rust contract example, not a proposed signature or
+mock scene. Its complete source is `crates/noon/examples/effect_authoring_contract.rs`:
+
+```rust
+use noon::{AnimationOptions, Scene};
+use noon::effects::GlowUpdate;
+
+fn authored_contract() -> Result<(), Box<dyn std::error::Error>> {
+    let mut scene = Scene::new();
+    let dot = scene.circle(0.08)?;
+    scene.add(&dot)?;
+    scene.set_glow(&dot, GlowUpdate::default().intensity(0.25))?;
+    let mut target = dot.target_editor()?;
+    target.shift(2.0, 0.0)?;
+    target.set_effect("glow", GlowUpdate::default().intensity(1.4))?;
+    let movement = scene.declare_transform_to(
+        &dot, &target, AnimationOptions::new().run_time(1.5),
+    )?;
+    assert_eq!(movement.options()?.run_time, Some(1.5));
+    assert_ne!(dot.get_effect("glow")?.node_id(), target.get_effect("glow")?.node_id());
+    assert!(scene.execution_session().is_err()); // explicitly unavailable before M1
+    Ok(())
+}
+```
+
+Ordinary object/target/family copying creates independent attachment identities
+inside the same transaction; aliased leaves are copied once. Names and order are
+retained. Unrelated geometry/layout and painter membership are unchanged.
+Nonstructural parameter changes emit `EffectParameters`, distinct from structural
+`EffectAttachment` impacts, and touch one attachment slot. Name lookup/removal is
+linear in that owner's effect count, not total scene size. Nodes without effects
+allocate no attachment collection. The store maintains an allocator-derived count
+for constant-time capability rejection, not a second collection/identity authority.
+
+**Current unsupported boundary:** the M0 compiler rejects execution of an
+**effect-bearing store**, even for neutral attachments or detached target copies.
+This deliberately conservative O(1) guard prevents appearance from being silently
+discarded; M1 must replace it with real effect lowering rather than remove it
+without implementation. Live setters use the ordinary publication path and reject
+new effect requests before changing either semantic or runtime publication.
+State-only `become`/replacement is also rejected while effect declarations exist;
+its capture currently has no attachment correspondence. Those conservative gates
+are explicit limitations, not claims of supported live animation or restoration.
+
+The actual attachment slice is leaf-only and named. Family propagation, composed
+filters, unnamed attachments, effective effect queries, GlowPulse, ordinary effect
+animation/channel ownership, and Python wrappers remain future integration work.
+No native or browser setter silently skips unavailable rendering.
+
+## Revised creator-facing grammar (Python/composition design)
+
 
 The ordinary API stays object-centred. Do not make effect handles another required
 kind of animated scene object or introduce `play_effect`, `GlowTo` or `AnimateGlow`.
@@ -123,13 +194,12 @@ is .6 at 2.8 and exactly 0 at 3.0. Explicit removal retires the binding without
 advancing time. The source resumes only after the normal completion barrier.
 No per-frame Python callback is needed for deterministic effects.
 
-The Rust scene counterpart must use the same filled, unstroked circle and values.
-It extends `Scene::set_glow`, `target_editor().set_glow`, ordinary
-`declare_transform_to`, `DeclaredAnimation`, and the current Scene/live
-continuation path. Do not publish a cold `declare_animation` directly against a
-running store. Scene setters, declaration publication, actual sampled effective
-observations and mixed-feature source continuation remain named implementation
-gaps. The Rust value example above is not a substitute for that executable scene.
+The future rendered Rust counterpart must use the same filled, unstroked circle
+and values. The declaration-only Rust example now exercises real `Scene::set_glow`,
+target editing and `declare_transform_to`, but it does not yet play this animation.
+Do not publish a cold `declare_animation` directly against a running store.
+Runtime parameter channels, actual effective observations, temporary pulse lifecycle
+and mixed-feature source continuation remain implementation gaps.
 
 ### Mixed-content/group review specimen
 
@@ -333,7 +403,9 @@ wrong units, ignored updates, bad alpha/extra transfer, frame-count phase and
 stale restoration. Those are oracle-level defects, not production shader/driver
 injection. Repeated pure samples do not demonstrate actual Runtime seek. The new
 Rust suite separately exercises real shared value/timing components; neither
-suite claims that those components have been attached to a live Scene yet.
+suite by itself proves live effect playback. The additional Rust authoring tests
+exercise actual attachment transactions and public target operations, with explicit
+negative admission at execution/publication boundaries.
 
 Use exact IDs/order/events/endpoints; normalized floating operator buffers have
 absolute error<=1e-5, encoded RGBA8 <=2/255 per channel over the entire expanded
@@ -349,6 +421,9 @@ Commands (success must be recorded from actual runs, not inferred):
 
 ```sh
 cargo test -p noon-core --lib object_state::glow
+cargo test -p noon-core --lib semantic_store::effects
+cargo test -p noon --no-default-features --lib effect_authoring
+cargo run -p noon --no-default-features --example effect_authoring_contract
 cargo test -p noon-core --doc
 python3 -m unittest discover -s tests/visual-effects -p 'test_*.py' -v
 node --test .github/ci/visual-effects-reference.test.mjs
@@ -398,14 +473,14 @@ passes, targets, global scan or unconditional time updates.
 | Existing owner | Reuse / missing prerequisite |
 | --- | --- |
 | `noon-core::object_state::glow` | Implemented typed values, validation and partial interpolation; not an attachment registry |
-| SemanticStore and canonical transactions | Still need attachment identity/order, atomic creation/removal/copy and parameter updates; no second allocator |
+| SemanticStore and canonical transactions | Implemented named leaf attachment identity/order, atomic creation/removal/copy and partial updates in the existing arena; generic scope/program resources remain later |
 | `animation/timeline.rs`, composition and time maps | Reuse shared timing. Existing scalar `Property::Appearance` is NOT an effect map; add finite parameter-channel addressing |
-| Scene/live/target and effective capture | Still need coherent public setters and target capture; no raw cold helper on a running store |
+| Scene/live/target and effective capture | Implemented authored setters, handles, independent object/target/family copies; live execution rejects unsupported effects, and effect channels/capture/cleanup remain later |
 | Runtime/session | Still need actual activation, write leases, ownership-safe pulse cleanup, seek and wake/sleep |
 | Python authoring adapters | Only coercion/signatures/return values/exception mapping; no Python effects state or interpolation |
 | Retained renderer, presentation/inset and Cairo colour | Minimal primitive mask/filter work, safe source bounds and local parameter updates; no new renderer |
 | Existing native/web/offscreen hosts | Same semantic/runtime path, capability queries and resource-generation recovery |
 
 M0 remains incomplete until the creator-facing Rust/Python contract and supported
-composition/lifecycle boundaries are qualified. The new Rust code is a useful
-shared prerequisite, not a substitute for those missing operations or M1 rendering.
+composition/lifecycle boundaries are qualified. The authored Rust surface is now executable and tested,
+but is not a substitute for effective-channel/lifecycle integration or M1 rendering.

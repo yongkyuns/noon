@@ -115,6 +115,16 @@ impl std::error::Error for UnsupportedAuthoringOperation {}
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    EffectStateReplacementUnavailable,
+    GlowParameter(noon_core::GlowParameterError),
+    EffectNotFound {
+        owner: noon_core::SemanticNodeId,
+        name: String,
+    },
+    EffectOwnerMismatch {
+        effect: noon_core::SemanticNodeId,
+        owner: noon_core::SemanticNodeId,
+    },
     #[cfg(feature = "image-decode")]
     ImageDecode(crate::ImageDecodeError),
     /// Immutable raster resource validation failed.
@@ -140,13 +150,25 @@ pub enum AuthoringError {
     /// An object references a missing or stale text resource.
     MissingTextResource(noon_core::TextResourceHandle),
     /// The named input is non-finite or cannot be represented as f32.
-    InvalidRenderNumber { name: String, value: f64 },
+    InvalidRenderNumber {
+        name: String,
+        value: f64,
+    },
     /// The named input must be strictly positive.
-    NonPositiveNumber { name: String, value: f64 },
+    NonPositiveNumber {
+        name: String,
+        value: f64,
+    },
     /// The named opacity is outside the inclusive unit interval.
-    InvalidOpacity { name: String, value: f64 },
+    InvalidOpacity {
+        name: String,
+        value: f64,
+    },
     /// At least one validated ellipse dimension is nonpositive.
-    InvalidEllipseDimensions { width: f64, height: f64 },
+    InvalidEllipseDimensions {
+        width: f64,
+        height: f64,
+    },
     /// Geometry contains non-finite values.
     NonFiniteGeometry,
     /// Flattened XY point input has an incomplete coordinate pair.
@@ -170,7 +192,10 @@ pub enum AuthoringError {
     /// A color gradient requires at least one reference color.
     EmptyColorGradient,
     /// A member-indexed family operation supplied a value vector of the wrong length.
-    FamilyMemberValueCount { expected: usize, actual: usize },
+    FamilyMemberValueCount {
+        expected: usize,
+        actual: usize,
+    },
     /// A layout direction has zero length.
     ZeroDirection,
     /// Line matching received non-finite endpoints.
@@ -219,7 +244,9 @@ pub enum AuthoringError {
     /// A detached-only tracker operation was requested after association.
     AlreadyScopedTracker(noon_core::SemanticNodeId),
     /// A native input declaration received an empty name.
-    EmptyInputName { kind: String },
+    EmptyInputName {
+        kind: String,
+    },
     /// This operation requires an unsupported payload or capability.
     Unsupported(UnsupportedAuthoringOperation),
     /// The semantic operation rejected a node, family, or membership request.
@@ -262,6 +289,10 @@ pub enum AuthoringError {
 impl std::fmt::Display for AuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::GlowParameter(error) => error.fmt(f),
+            Self::EffectStateReplacementUnavailable => f.write_str("effect-bearing state replacement requires the effect lifecycle profile"),
+            Self::EffectNotFound { owner, name } => write!(f, "object {owner:?} has no effect named {name:?}"),
+            Self::EffectOwnerMismatch { effect, owner } => write!(f, "effect {effect:?} does not belong to object {owner:?}"),
             #[cfg(feature = "image-decode")]
             Self::ImageDecode(error) => error.fmt(f),
             Self::ImageResource(error) => error.fmt(f),
@@ -389,6 +420,7 @@ impl std::error::Error for AuthoringError {
         match self {
             #[cfg(feature = "image-decode")]
             Self::ImageDecode(error) => Some(error),
+            Self::GlowParameter(error) => Some(error),
             Self::ImageResource(error) => Some(error),
             Self::FamilyPairing(error) => Some(error),
             Self::Semantic(error) => Some(error),
@@ -519,5 +551,11 @@ impl From<noon_core::SemanticStoreError> for AuthoringError {
 impl From<noon_core::SemanticFamilyPairingError> for AuthoringError {
     fn from(error: noon_core::SemanticFamilyPairingError) -> Self {
         Self::FamilyPairing(error)
+    }
+}
+
+impl From<noon_core::GlowParameterError> for AuthoringError {
+    fn from(error: noon_core::GlowParameterError) -> Self {
+        Self::GlowParameter(error)
     }
 }

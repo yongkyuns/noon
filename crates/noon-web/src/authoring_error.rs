@@ -142,6 +142,20 @@ impl From<AuthoringError> for AuthoringFailure {
     fn from(error: AuthoringError) -> Self {
         let message = error.to_string();
         match error {
+            AuthoringError::GlowParameter(_) => {
+                Self::new("invalid_input", "effect.invalid_parameter", message)
+            }
+            AuthoringError::EffectNotFound { .. } => {
+                Self::new("invalid_input", "effect.not_found", message)
+            }
+            AuthoringError::EffectOwnerMismatch { .. } => {
+                Self::new("foreign_handle", "effect.foreign_owner", message)
+            }
+            AuthoringError::EffectStateReplacementUnavailable => Self::new(
+                "unsupported_operation",
+                "effect.state_replacement_unavailable",
+                message,
+            ),
             AuthoringError::ForeignStore => {
                 Self::new("foreign_handle", "authoring.foreign_store", message)
             }
@@ -595,6 +609,8 @@ impl From<SemanticStoreError> for AuthoringFailure {
         let (category, code) = match &error {
             E::UnknownNode(_) => ("stale_handle", "store.unknown_node"),
             E::NotFamily(_) => ("invalid_input", "store.not_family"),
+            E::NotEffect(_) => ("invalid_input", "store.not_effect"),
+            E::EffectCannotBeMember(_) => ("invalid_input", "store.effect_not_painter_member"),
             E::NotFamilyMember { .. } => ("invalid_input", "store.not_family_member"),
             E::FamilyCycle { .. } => ("invalid_input", "store.family_cycle"),
             E::DuplicateSourceIdentity(_) => ("invalid_input", "store.duplicate_source_identity"),
@@ -615,6 +631,14 @@ impl From<SemanticMutationTransactionError> for AuthoringFailure {
                 Self::caused_by("transaction.animation_target", message, error.into())
             }
             E::Node { error, .. } => Self::caused_by("transaction.node", message, error.into()),
+            E::InvalidEffectAttachment { .. } => Self::new(
+                "invalid_input",
+                "transaction.invalid_effect_attachment",
+                message,
+            ),
+            E::EffectParameter { .. } => {
+                Self::new("invalid_input", "effect.invalid_parameter", message)
+            }
             E::NonFinitePropertyValue { .. } => Self::new(
                 "invalid_input",
                 "transaction.non_finite_property_value",
@@ -1234,5 +1258,34 @@ mod tests {
             .unwrap();
         assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
         assert_eq!(execution.frame().objects[1], before.objects[1]);
+    }
+    #[test]
+    fn effect_errors_project_shared_causes_without_text_matching() {
+        use noon::effects::{Glow, GlowUpdate};
+        let mut scene = noon::Scene::new();
+        let object = scene.circle(0.08).unwrap();
+        scene.set_glow(&object, GlowUpdate::default()).unwrap();
+        let invalid = scene
+            .set_glow(&object, GlowUpdate::default().intensity(-1.0))
+            .unwrap_err();
+        let projected = AuthoringFailure::from(invalid);
+        assert_eq!(projected.category, "invalid_input");
+        assert_eq!(
+            projected.cause.as_ref().unwrap().code,
+            "effect.invalid_parameter"
+        );
+        let duplicate = scene
+            .add_effect(&object, Glow::default(), "glow")
+            .unwrap_err();
+        let projected = AuthoringFailure::from(duplicate);
+        assert_eq!(projected.category, "invalid_input");
+        assert_eq!(
+            projected.cause.as_ref().unwrap().code,
+            "transaction.invalid_effect_attachment"
+        );
+        let handle = object.get_effect("glow").unwrap();
+        scene.remove_glow(&object).unwrap();
+        let stale = handle.authored_definition().unwrap_err();
+        assert_eq!(AuthoringFailure::from(stale).category, "stale_handle");
     }
 }

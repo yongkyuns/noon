@@ -133,7 +133,9 @@ impl SemanticStore {
                 | (SemanticNodeKind::AuthoringObject, SemanticNodeKind::Family(_)) => {
                     Err(SemanticFamilyPairingError::TopologyMismatch { source, target })
                 }
-                (SemanticNodeKind::Signal(_), _)
+                (SemanticNodeKind::Effect(_), _)
+                | (_, SemanticNodeKind::Effect(_))
+                | (SemanticNodeKind::Signal(_), _)
                 | (SemanticNodeKind::Animation(_), _)
                 | (_, SemanticNodeKind::Signal(_))
                 | (_, SemanticNodeKind::Animation(_)) => {
@@ -216,7 +218,9 @@ impl SemanticStore {
                         collect(store, member, seen, leaves, include_families)?;
                     }
                 }
-                SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => {}
+                SemanticNodeKind::Signal(_)
+                | SemanticNodeKind::Animation(_)
+                | SemanticNodeKind::Effect(_) => {}
             }
             Ok(())
         }

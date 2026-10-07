@@ -150,7 +150,9 @@ impl SemanticStore {
         let is_target = match node.kind() {
             SemanticNodeKind::Family(_) => true,
             SemanticNodeKind::AuthoringObject => node.semantic_object_state().is_some(),
-            SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => false,
+            SemanticNodeKind::Signal(_)
+            | SemanticNodeKind::Animation(_)
+            | SemanticNodeKind::Effect(_) => false,
         };
         if !is_target {
             return Err(SemanticSceneOperationError::NotSemanticAuthoringNode(id));
@@ -197,7 +199,25 @@ impl SemanticStore {
             .expect("semantic object identity validated above")
             .host_updaters()
             .to_vec();
+        let effects = self
+            .node(id)
+            .expect("validated source")
+            .effect_ids()
+            .iter()
+            .map(|&effect| {
+                let effect = self
+                    .semantic_effect_state(effect)
+                    .expect("source attachment is live");
+                (
+                    std::sync::Arc::<str>::from(effect.name()),
+                    effect.definition(),
+                )
+            })
+            .collect::<Vec<_>>();
         let copy = self.insert_semantic_object(state);
+        for (name, definition) in effects {
+            self.insert_semantic_effect(copy, name, definition);
+        }
         self.node_mut(copy)
             .expect("newly inserted semantic copy exists")
             .host_updaters_mut()
