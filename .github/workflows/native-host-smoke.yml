@@ -203,7 +203,7 @@ jobs:
           test -s "$PNG"
           ffmpeg -v error -i "$MP4" -f null -
           ffprobe -v error -select_streams v:0 -count_frames \
-            -show_entries stream=codec_name,width,height,r_frame_rate,nb_read_frames \
+            -show_entries stream=codec_name,width,height,r_frame_rate,nb_read_frames,color_range,color_space,color_transfer,color_primaries \
             -of json "$MP4" > capture-proof/output/ffprobe-stream.json
           ffprobe -v error -select_streams v:0 -show_frames \
             -show_entries frame=best_effort_timestamp_time -of csv=p=0 "$MP4" \
@@ -225,6 +225,10 @@ jobs:
           assert int(stream["width"]) == 160 and int(stream["height"]) == 90, stream
           assert stream["r_frame_rate"] == "30000/1001", stream
           assert int(stream["nb_read_frames"]) == 90, stream
+          assert stream["color_range"] == "tv", stream
+          assert stream["color_space"] == "bt709", stream
+          assert stream["color_transfer"] == "bt709", stream
+          assert stream["color_primaries"] == "bt709", stream
           times = [float(x.strip().split(",")[0]) for x in (root / "ffprobe-times.txt").read_text().splitlines() if x.strip()]
           assert len(times) == 90, len(times)
           step = float(Fraction(1001, 30000))
