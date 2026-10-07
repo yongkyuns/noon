@@ -460,6 +460,18 @@ fn validate_mutations(
     prepared: Option<&PreparedSemanticMutationTransaction<'_>>,
 ) -> Result<(), SemanticPublicationLoweringError> {
     for (position, mutation) in mutations.iter().enumerate() {
+        // Do not publish an accepted-but-invisible appearance into a running
+        // scene. This explicit declaration-only gate is removed by #1897 M1.
+        if matches!(
+            mutation,
+            SemanticMutation::UpdateEffect { .. }
+                | SemanticMutation::AddNode {
+                    creation: noon_core::SemanticNodeCreation::Effect { .. },
+                    ..
+                }
+        ) {
+            return Err(SemanticPublicationLoweringError::UnsupportedMutation { index: position });
+        }
         let ordinary = matches!(
             mutation,
             SemanticMutation::SetProperty { .. }
@@ -1086,7 +1098,9 @@ fn collect_existing_exit_leaves(
                 collect_existing_exit_leaves(store, member, reachability, seen, leaves)?;
             }
         }
-        SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => {}
+        SemanticNodeKind::Signal(_)
+        | SemanticNodeKind::Animation(_)
+        | SemanticNodeKind::Effect(_) => {}
     }
     Ok(())
 }

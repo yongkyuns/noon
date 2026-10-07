@@ -14,6 +14,19 @@ const [javascript, declarations, wasm, wasmStats] = await Promise.all([
 ]);
 
 const expectedJavascriptSurface = [
+  // Generated bindings must match the optional Python effects facade. Checking
+  // the exact class token avoids mistaking WasmGlowUpdate for WasmGlow.
+  "export class WasmGlow {",
+  "export class WasmGlowUpdate {",
+  "export class WasmEffectHandle {",
+  "authoredDefinition()",
+  "setGlow(",
+  "getEffect(",
+  "setEffectHandle(",
+  "removeEffectHandle(",
+  "liveSetGlow(",
+  "liveSetEffectHandle(",
+  "liveRemoveEffectHandle(",
   "export class WasmAuthoringStore",
   "createManimCircle(",
   "createManimText(",

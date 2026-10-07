@@ -79,7 +79,17 @@ mod dashed_line_authoring;
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
 mod dimension_fit;
+mod effect_authoring;
 mod effective_capture;
+
+/// Checked effect declarations. M0 supports authored leaf attachments and target
+/// editing only; execution fails explicitly until the rendering profile lands.
+pub mod effects {
+    pub use crate::effect_authoring::{EffectHandle, EffectSelector};
+    pub use noon_core::{
+        EffectDefinition, Glow, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
+    };
+}
 mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;

@@ -594,6 +594,7 @@ impl<'a> TransactionNodeCatalog<'a> {
                     PendingSemanticNode::Creation(
                         SemanticNodeCreation::PendingPathObject { .. }
                         | SemanticNodeCreation::Family { .. }
+                        | SemanticNodeCreation::Effect { .. }
                         | SemanticNodeCreation::Signal { .. },
                     )
                     | PendingSemanticNode::Animation(_) => {
@@ -690,12 +691,19 @@ pub(super) fn duplicate_mutation_error(
                 SemanticTransactionNodeRef::Existing(_) => None,
             })
         }
-        SemanticMutationKey::Signal(_) => None,
+        SemanticMutationKey::EffectParameter { .. } | SemanticMutationKey::Signal(_) => None,
     };
     if let Some(node) = pending {
         return SemanticMutationTransactionError::DuplicatePendingMutation { index, node };
     }
     match key {
+        SemanticMutationKey::EffectParameter { effect, parameter } => {
+            SemanticMutationTransactionError::DuplicateEffectParameter {
+                index,
+                effect,
+                parameter,
+            }
+        }
         SemanticMutationKey::Signal(target) => {
             SemanticMutationTransactionError::DuplicateTarget { index, target }
         }
