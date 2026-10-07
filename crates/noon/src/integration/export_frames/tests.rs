@@ -123,10 +123,7 @@ fn drive(
                 let trace_before = fixture.trace.borrow().clone();
                 if delayed {
                     for _ in 0..7 {
-                        assert_eq!(
-                            export.advance()?,
-                            ExportFramesStatus::SampleReady(sample)
-                        );
+                        assert_eq!(export.advance()?, ExportFramesStatus::SampleReady(sample));
                     }
                 }
                 let publication = export.take_renderer_publication()?;
@@ -295,7 +292,9 @@ fn zero_duration_requires_explicit_hold_and_never_invents_one_frame() {
     let (frames, summary) = drive(&mut held, config, false).unwrap();
     assert_eq!(frames.len(), 3);
     assert_eq!(summary.source_end, Some(0.0));
-    assert!(frames.iter().all(|f| f.held && f.actual == 0.0 && f.x == 7.0));
+    assert!(frames
+        .iter()
+        .all(|f| f.held && f.actual == 0.0 && f.x == 7.0));
 }
 
 #[test]
@@ -388,10 +387,7 @@ fn cancellation_and_wrong_acknowledgements_do_not_advance_source() {
                 export.acknowledge_sample(sample),
                 Err(ExportFramesError::Inactive)
             ));
-            assert!(matches!(
-                export.advance(),
-                Err(ExportFramesError::Inactive)
-            ));
+            assert!(matches!(export.advance(), Err(ExportFramesError::Inactive)));
             assert_eq!(*fixture.trace.borrow(), trace);
             return;
         }
