@@ -22,6 +22,7 @@ const exactFamilies = new Map([
   ["test-coverage.yml", "coverage"],
   ["platform-release.yml", "platform-release"],
   ["native-host-smoke.yml", "native-host"],
+  ["native-export-output.yml", "native-host"],
   ["pages.yml", "deployment"],
   ["fuzz.yml", "fuzz"],
   ["branch-cleanup-once.yml", "maintenance"],
@@ -243,6 +244,13 @@ test("architecture diagrams stay a read-only check with independently preserved 
 test("foreground matching has an explicit reference family without a broad prefix exemption", () => {
   assert.equal(classifyWorkflow("foreground-matching-qualification.yml"), "manim");
   assert.equal(classifyWorkflow("foreground-unregistered.yml"), null);
+});
+
+test("native export is classified explicitly without exempting other native workflows", () => {
+  assert.ok(workflowFiles.includes("native-export-output.yml"));
+  assert.equal(classifyWorkflow("native-export-output.yml"), "native-host");
+  assert.equal(classifyWorkflow("native-export-unregistered.yml"), null);
+  assert.equal(classifyWorkflow("native-unregistered.yml"), null);
 });
 
 test("foreground qualification requires success from every evidence stage", async () => {

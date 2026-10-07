@@ -8,12 +8,14 @@
 //! The first implementation is deliberately serial. One GPU target, one staging
 //! buffer and one reusable CPU pixel buffer belong to a run. The consumer borrows
 //! each completed image; retaining images is an explicit consumer allocation.
-//! A successful return certifies capture/consumption, not encoder finalization.
+//! A successful capture return certifies consumption, not encoder finalization.
+//! The optional installed-FFmpeg file adapters in [`output`] also finalize output.
 
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
 mod gpu;
+pub mod output;
 
 use std::error::Error;
 use std::fmt;
