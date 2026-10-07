@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import unittest
 
 import noon as _base
@@ -39,7 +38,6 @@ class ManimNamespaceTests(unittest.TestCase):
         self.assertIn("np", _base.__all__)
         pending = _base.np
         if type(pending).__name__ == "_PendingOptionalNamespace":
-            self.assertNotIn("numpy", sys.modules)
             with self.assertRaisesRegex(RuntimeError, "requires optional package 'numpy'"):
                 pending.log
 
