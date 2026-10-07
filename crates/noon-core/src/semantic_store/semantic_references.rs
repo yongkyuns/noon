@@ -12,6 +12,7 @@ use super::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticReferenceKind {
     SignalDependency,
+    EffectOwner,
     SignalBinding {
         property: SemanticObjectProperty,
     },
@@ -41,6 +42,10 @@ impl SemanticIncomingReference {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticRemoveNodeEffect {
     NodeRemoved(SemanticNodeId),
+    EffectAttachmentChanged {
+        owner: SemanticNodeId,
+        effect: SemanticNodeId,
+    },
     ForegroundMembersChanged {
         scope: SemanticNodeId,
     },
@@ -300,7 +305,8 @@ impl SemanticStore {
                     | SemanticReferenceKind::ForegroundMember
                     | SemanticReferenceKind::Inset2DCameraFrame => {}
                     SemanticReferenceKind::SpatialAnchorFamily => {}
-                    SemanticReferenceKind::SignalDependency
+                    SemanticReferenceKind::EffectOwner
+                    | SemanticReferenceKind::SignalDependency
                     | SemanticReferenceKind::AnimationTarget
                     | SemanticReferenceKind::AnimationTargetState
                     | SemanticReferenceKind::AnimationChild
@@ -466,7 +472,8 @@ impl SemanticStore {
                         outcome.written_slots.insert(scope);
                     }
                 }
-                SemanticReferenceKind::SignalDependency
+                SemanticReferenceKind::EffectOwner
+                | SemanticReferenceKind::SignalDependency
                 | SemanticReferenceKind::AnimationTarget
                 | SemanticReferenceKind::AnimationTargetState
                 | SemanticReferenceKind::AnimationChild
@@ -484,6 +491,16 @@ impl SemanticStore {
             .node(id)
             .expect("node remains live until its reverse referrers are cleaned")
             .clone();
+        if let Some(effect) = node.semantic_effect_state() {
+            let owner = effect.owner();
+            self.unlink_effect(id, owner);
+            if self.node(owner).is_some() {
+                outcome.written_slots.insert(owner);
+                outcome
+                    .effects
+                    .push(SemanticRemoveNodeEffect::EffectAttachmentChanged { owner, effect: id });
+            }
+        }
         record_direct_remove_writes(&node, &mut outcome.written_slots);
         self.remove_node(id)?;
         visiting.remove(&id);
@@ -559,6 +576,9 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
     }
 
     match node.kind() {
+        SemanticNodeKind::Effect(state) => {
+            references.push((state.owner(), SemanticReferenceKind::EffectOwner))
+        }
         SemanticNodeKind::Signal(state) => {
             if let SemanticSignalSource::Derived(expression) = state.source() {
                 collect_signal_dependencies(expression, &mut references);

@@ -25,6 +25,10 @@ mod authoring_composite;
 mod authoring_coordinates;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_composite::WasmCompositeRows;
+#[cfg(any(target_arch = "wasm32", test))]
+mod authoring_effects;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_effects::*;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;

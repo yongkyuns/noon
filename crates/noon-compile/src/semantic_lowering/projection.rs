@@ -102,7 +102,9 @@ impl SemanticExecutionIndex {
                     self.object_ids.remove(&node);
                     self.update_spatial_anchor_owner(store, node);
                 }
-                SemanticMutationImpact::SignalValue { .. }
+                SemanticMutationImpact::EffectAttachment { .. }
+                | SemanticMutationImpact::EffectParameter { .. }
+                | SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectTransform { .. }
@@ -275,6 +277,12 @@ impl SemanticExecutionIndex {
         store: &SemanticStore,
         roots: impl IntoIterator<Item = SemanticNodeId>,
     ) -> Result<SemanticExecutionProjection, SemanticLoweringError> {
+        // M0 supports authored effect declarations, not effect execution yet.
+        // Include detached target copies so Transform cannot silently drop their
+        // appearance. M1 replaces this O(1) profile gate with typed effect lowering.
+        if store.has_effect_attachments() {
+            return Err(SemanticLoweringError::EffectExecutionUnavailable);
+        }
         let roots = roots.into_iter().collect::<Vec<_>>();
         let mut pending = Vec::new();
         let mut seen = HashSet::new();
@@ -458,6 +466,7 @@ impl std::fmt::Display for SemanticExecutionField {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticLoweringError {
+    EffectExecutionUnavailable,
     Store(SemanticStoreError),
     SceneOperation(noon_core::SemanticSceneOperationError),
     /// A visible object leaf came from a migration-only legacy/state-less path
@@ -519,6 +528,7 @@ impl From<noon_core::SemanticSceneOperationError> for SemanticLoweringError {
 impl std::fmt::Display for SemanticLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EffectExecutionUnavailable => formatter.write_str("effect declarations cannot execute before the effect rendering profile is implemented"),
             Self::Store(error) => error.fmt(formatter),
             Self::SceneOperation(error) => error.fmt(formatter),
             Self::MissingSemanticObjectState(id) => write!(
