@@ -1394,7 +1394,7 @@ impl GpuRenderer {
         });
         ordered_render_sample_count(
             prepared.path_batches,
-            self.spatial.has_active_paths() || visible_derived_paths,
+            self.spatial.requires_antialiasing() || visible_derived_paths,
         )
     }
 

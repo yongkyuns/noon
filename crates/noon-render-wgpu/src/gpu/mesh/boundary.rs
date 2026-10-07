@@ -90,28 +90,22 @@ pub(super) fn vertices(mesh: &MeshResource) -> Result<Vec<EdgeVertex>, SpatialPr
 pub(super) struct FillGeometry {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
-    pub coverage: Option<Vec<f32>>,
 }
 
-/// Cairo face fans share the retained border subdivision. A single scalar per
-/// vertex permits pixel-area edge coverage without widening ordinary vertices
-/// or deriving geometry again when the camera moves.
+/// Cairo face fans share the retained border subdivision.
 pub(super) fn fill_geometry(mesh: &MeshResource) -> Result<FillGeometry, SpatialPrepareError> {
     let corners = super::lower_vertices(mesh)?;
     let Some(appearance) = mesh.cairo_appearance() else {
         return Ok(FillGeometry {
             vertices: corners,
             indices: mesh.indices().to_vec(),
-            coverage: None,
         });
     };
     let Some(controls) = appearance.boundary_controls else {
         // Non-sampled Cairo faces retain their authored triangle topology.
-        let coverage = vec![1.; corners.len()];
         return Ok(FillGeometry {
             vertices: corners,
             indices: mesh.indices().to_vec(),
-            coverage: Some(coverage),
         });
     };
     let points = mesh.positions();
@@ -146,13 +140,7 @@ pub(super) fn fill_geometry(mesh: &MeshResource) -> Result<FillGeometry, Spatial
     for point in 1..count {
         indices.extend([0, point, if point + 1 == count { 1 } else { point + 1 }]);
     }
-    let mut coverage = vec![0.; vertices.len()];
-    coverage[0] = 1.;
-    Ok(FillGeometry {
-        vertices,
-        indices,
-        coverage: Some(coverage),
-    })
+    Ok(FillGeometry { vertices, indices })
 }
 
 fn topology(mesh: &MeshResource) -> BTreeMap<(u32, u32), (u32, u32)> {
@@ -255,7 +243,6 @@ mod tests {
         let fill = fill_geometry(&quad).unwrap();
         assert_eq!(fill.vertices.len(), 4);
         assert_eq!(fill.indices, quad.indices());
-        assert!(fill.coverage.is_none());
         let degenerate =
             MeshResource::new(vec![SemanticVec3::ZERO; 3], None, vec![0, 1, 2]).unwrap();
         assert!(vertices(&degenerate).unwrap().is_empty());
@@ -293,7 +280,6 @@ mod tests {
         let fill = fill_geometry(&plain_cairo).unwrap();
         assert_eq!(fill.vertices.len(), 4);
         assert_eq!(fill.indices, quad.indices());
-        assert_eq!(fill.coverage.as_deref(), Some([1.; 4].as_slice()));
         assert_eq!(
             vertices(
                 &quad

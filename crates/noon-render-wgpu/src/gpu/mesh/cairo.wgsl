@@ -16,7 +16,6 @@ struct CairoOutput {
     @location(2) @interpolate(flat) first_color: vec4<f32>,
     @location(3) @interpolate(flat) last_color: vec4<f32>,
     @location(4) @interpolate(flat) boundary_line: vec4<f32>,
-    @location(5) coverage_coordinate: vec2<f32>,
 };
 fn cairo_output(position: vec4<f32>, world: mat4x4<f32>, color: vec4<f32>) -> CairoOutput {
     let start_world = (world * cairo_geometry.p0).xyz + world[3].xyz;
@@ -36,17 +35,12 @@ fn cairo_output(position: vec4<f32>, world: mat4x4<f32>, color: vec4<f32>) -> Ca
     result.first_color = cairo_color(color, start_world, n0);
     result.last_color = cairo_color(color, end_world, n1);
     result.boundary_line = vec4<f32>(0.0);
-    // Reconstruct linear screen interpolation using ordinary perspective
-    // varyings, which also works on WebGL without noperspective extensions.
-    result.coverage_coordinate = vec2<f32>(position.w);
     return result;
 }
-@vertex fn vs_cairo(input: VertexInput, @location(12) coverage: f32) -> CairoOutput {
+@vertex fn vs_cairo(input: VertexInput) -> CairoOutput {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
-    var result = cairo_output(camera.view_projection * world * vec4<f32>(input.position, 1.0),
+    return cairo_output(camera.view_projection * world * vec4<f32>(input.position, 1.0),
         world, input.color);
-    result.coverage_coordinate.x *= coverage;
-    return result;
 }
 @vertex fn vs_cairo_boundary(input: EdgeInput) -> CairoOutput {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
@@ -66,15 +60,9 @@ fn cairo_fragment_color(input: CairoOutput) -> vec4<f32> {
 }
 
 @fragment fn fs_cairo(input: CairoOutput) -> @location(0) vec4<f32> {
-    let color = cairo_fragment_color(input);
-    let coordinate = input.coverage_coordinate.x / max(input.coverage_coordinate.y, 1e-8);
-    let gradient = vec2<f32>(dpdx(coordinate), dpdy(coordinate));
-    let magnitude = length(gradient);
-    var coverage = 1.0;
-    if magnitude > 1e-8 {
-        coverage = pixel_normal_cdf(coordinate / magnitude, gradient / magnitude);
-    }
-    return vec4<f32>(color.rgb, color.a * coverage);
+    // Geometry coverage is resolved by the shared four-sample target. A second
+    // analytic mask here clips pixel area at the unexpanded face perimeter.
+    return cairo_fragment_color(input);
 }
 @fragment fn fs_cairo_boundary(input: CairoOutput) -> @location(0) vec4<f32> {
     let color = cairo_fragment_color(input);

@@ -93,7 +93,6 @@ struct ResidentMesh {
     users: usize,
     boundary: Option<(wgpu::Buffer, u32)>,
     cairo: Option<wgpu::BindGroup>,
-    cairo_coverage: Option<wgpu::Buffer>,
 }
 #[derive(Debug)]
 struct Draw {
@@ -150,6 +149,7 @@ pub(super) struct SpatialGpuState {
     light_object: Option<usize>,
     light: Option<PointLight>,
     point_lit_draws: usize,
+    cairo_mesh_draws: usize,
     meshes: HashMap<GeometryResourceHandle, ResidentMesh>,
     mesh_instances: BTreeMap<GeometryResourceHandle, InstanceRanges>,
     depth_ordered_draws: BTreeSet<usize>,
@@ -547,10 +547,6 @@ impl SpatialGpuState {
                     let limit = device.limits().max_buffer_size as usize;
                     if size_of_val(geometry.vertices.as_slice()) > limit
                         || size_of_val(geometry.indices.as_slice()) > limit
-                        || geometry
-                            .coverage
-                            .as_ref()
-                            .is_some_and(|coverage| size_of_val(coverage.as_slice()) > limit)
                         || u32::try_from(geometry.indices.len()).is_err()
                     {
                         return Err(SpatialPrepareError::BufferLimit);
@@ -653,17 +649,6 @@ impl SpatialGpuState {
         for (handle, geometry) in new_meshes {
             let vertex_bytes = bytemuck::cast_slice(&geometry.vertices);
             let index_bytes = bytemuck::cast_slice(&geometry.indices);
-            let coverage = geometry.coverage.map(|coverage| {
-                let bytes = bytemuck::cast_slice(&coverage);
-                stats.geometry_bytes += bytes.len();
-                create_buffer_with_data(
-                    device,
-                    queue,
-                    Some("Noon immutable Cairo edge coverage"),
-                    bytes,
-                    wgpu::BufferUsages::VERTEX,
-                )
-            });
             self.meshes.insert(
                 handle,
                 ResidentMesh {
@@ -685,7 +670,6 @@ impl SpatialGpuState {
                     users: 0,
                     boundary: None,
                     cairo: None,
-                    cairo_coverage: coverage,
                 },
             );
             stats.geometry_bytes += vertex_bytes.len() + index_bytes.len();
@@ -734,6 +718,15 @@ impl SpatialGpuState {
         let mut released = BTreeSet::new();
         for (index, staged) in staged {
             let previous = self.draws.remove(&index);
+            if previous
+                .as_ref()
+                .is_some_and(|draw| is_cairo(draw.material))
+            {
+                self.cairo_mesh_draws -= 1;
+            }
+            if staged.as_ref().is_some_and(|draw| is_cairo(draw.material)) {
+                self.cairo_mesh_draws += 1;
+            }
             let same_membership = previous
                 .as_ref()
                 .zip(staged.as_ref())
@@ -1022,8 +1015,8 @@ impl SpatialGpuState {
         !self.draws.is_empty() || self.paths.is_active()
     }
 
-    pub fn has_active_paths(&self) -> bool {
-        self.paths.is_active()
+    pub fn requires_antialiasing(&self) -> bool {
+        self.paths.is_active() || self.cairo_mesh_draws > 0
     }
 
     pub fn encode(
@@ -1105,13 +1098,6 @@ impl SpatialGpuState {
                         false,
                     ));
                     pass.set_bind_group(1, mesh.cairo.as_ref().expect("Cairo appearance"), &[]);
-                    pass.set_vertex_buffer(
-                        2,
-                        mesh.cairo_coverage
-                            .as_ref()
-                            .expect("Cairo coverage")
-                            .slice(..),
-                    );
                 } else {
                     pass.set_pipeline(if sample_count == 1 {
                         &gpu.transparent_pipeline
@@ -1524,7 +1510,6 @@ fn pipeline(
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
     const EDGE: [wgpu::VertexAttribute; 4] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 10 => Float32x2, 11 => Float32x3];
-    const COVERAGE: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![12 => Float32];
     const INSTANCE: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
         5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1553,11 +1538,6 @@ fn pipeline(
                     array_stride: size_of::<Instance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &INSTANCE,
-                }),
-                (cairo && !boundary).then_some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<f32>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &COVERAGE,
                 }),
             ],
         },

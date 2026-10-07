@@ -605,9 +605,9 @@ fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
         )
         .unwrap();
         assert_eq!(initial.resident_meshes, 1);
-        // Authored vertices/triangles, constant Cairo coverage scalars and one
-        // lighting uniform. Ordinary mesh vertex/instance layouts stay intact.
-        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 4 * 4 + 96);
+        // Authored vertices/triangles and one lighting uniform. Ordinary mesh
+        // vertex/instance layouts stay intact.
+        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 96);
         // Independent analytic stops: clamp(.8 + .5) = 1; .8 + .5/27.
         // At the center their midpoint is .909259..., not clamp(1.059259...).
         let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
@@ -2078,6 +2078,20 @@ fn cairo_boundary_test_scene(
     sloped_unlit: bool,
     curved_fill: bool,
 ) -> (SceneInstance, noon_core::ObjectId) {
+    cairo_boundary_test_scene_with_straight_controls(
+        with_occluder,
+        sloped_unlit,
+        curved_fill,
+        false,
+    )
+}
+
+fn cairo_boundary_test_scene_with_straight_controls(
+    with_occluder: bool,
+    sloped_unlit: bool,
+    curved_fill: bool,
+    straight_controls: bool,
+) -> (SceneInstance, noon_core::ObjectId) {
     assert!(!(with_occluder && (sloped_unlit || curved_fill)));
     assert!(!(sloped_unlit && curved_fill));
     let mut store = SemanticStore::new();
@@ -2119,10 +2133,10 @@ fn cairo_boundary_test_scene(
             span_p12_p0: SemanticVec3::new(0.0, 1.0, 0.0),
             span_p9_p6: SemanticVec3::new(-1.0, 0.0, 0.0),
             span_p3_p6: SemanticVec3::new(0.0, -1.0, 0.0),
-            boundary_controls: curved_fill.then_some([
+            boundary_controls: (curved_fill || straight_controls).then_some([
                 [
-                    SemanticVec3::new(-1.0 / 6.0, -1.5, 0.0),
-                    SemanticVec3::new(1.0 / 6.0, -1.5, 0.0),
+                    SemanticVec3::new(-1.0 / 6.0, if curved_fill { -1.5 } else { -0.5 }, 0.0),
+                    SemanticVec3::new(1.0 / 6.0, if curved_fill { -1.5 } else { -0.5 }, 0.0),
                 ],
                 [
                     SemanticVec3::new(0.5, -1.0 / 6.0, 0.0),
@@ -2201,6 +2215,112 @@ fn cairo_boundary_test_scene(
         .into_parts();
     let surface_object = index.execution_object_id(surface_node).unwrap();
     (SceneInstance::new(compiled), surface_object)
+}
+
+#[test]
+fn cairo_sampled_fill_conserves_white_area_across_subpixel_translations() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let adapter = instance
+            .request_adapter(&Default::default())
+            .await
+            .expect("Cairo sampled fill area probe requires a GPU adapter");
+        eprintln!("Cairo sampled fill adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
+        renderer.set_camera(&queue, camera);
+        let mut preparer = FramePreparer::new();
+        let (mut scene, surface_object) =
+            cairo_boundary_test_scene_with_straight_controls(false, false, false, true);
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: surface_object,
+                style: noon_core::Style {
+                    fill: Some(Color::WHITE),
+                    stroke: None,
+                    stroke_width: 0.0,
+                    opacity: 1.0,
+                    ..noon_core::Style::default()
+                },
+            })
+            .unwrap();
+
+        let mut observations = Vec::new();
+        for subpixel_pixels in [0.0_f64, 0.25, 0.5, 0.75] {
+            let transform = SemanticWorldTransform3D::new(
+                SemanticVec3::new(subpixel_pixels / 32.0, 0.0, 0.0),
+                noon_core::SemanticRotation3D::IDENTITY,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap();
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                    object: surface_object,
+                    transform: transform.into(),
+                })
+                .unwrap();
+            let (_, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut scene,
+                &target,
+            )
+            .unwrap();
+            let mut area = [0.0; 3];
+            for rgba in pixels.chunks_exact(4) {
+                for channel in 0..3 {
+                    area[channel] += f64::from(rgba[channel]) / 255.0;
+                }
+            }
+            let [red_area, green_area, blue_area] = area;
+            let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+            eprintln!(
+                "Cairo sampled fill area: x_shift_px={subpixel_pixels:.2} red={red_area:.4} green={green_area:.4} blue={blue_area:.4} center_rgba={center:?}"
+            );
+            let fractional_edge_pixels = pixels
+                .chunks_exact(4)
+                .filter(|rgba| rgba[0] > 0 && rgba[0] < 255)
+                .count();
+            eprintln!(
+                "Cairo sampled fill fractional edge pixels: x_shift_px={subpixel_pixels:.2} count={fractional_edge_pixels}"
+            );
+            observations.push((
+                subpixel_pixels,
+                red_area,
+                green_area,
+                blue_area,
+                center,
+                fractional_edge_pixels,
+            ));
+        }
+        assert_eq!(observations.len(), 4);
+        for (subpixel, red, green, blue, center, fractional_edge_pixels) in &observations {
+            assert_eq!(
+                *center, [255; 4],
+                "white fill center at x shift {subpixel:.2}px"
+            );
+            assert!(
+                (red - 1024.0).abs() <= 2.0
+                    && (green - 1024.0).abs() <= 2.0
+                    && (blue - 1024.0).abs() <= 2.0,
+                "white fill area at x shift {subpixel:.2}px: RGB integrated pixel areas were {red:.4}, {green:.4}, {blue:.4}; expected 1024 within 2"
+            );
+            if *subpixel > 0.0 {
+                assert!(
+                    *fractional_edge_pixels > 0,
+                    "white fill at x shift {subpixel:.2}px has no fractional edge pixels"
+                );
+            }
+        }
+    });
 }
 
 #[test]
