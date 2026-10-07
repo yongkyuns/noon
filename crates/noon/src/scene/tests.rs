@@ -569,7 +569,6 @@ fn scene_path_alignment_rejects_foreign_before_resource_or_frame_publication() {
     assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
 }
 
-
 #[test]
 fn scene_owned_subcurve_requires_running_execution_and_preserves_atomicity() {
     let mut scene = Scene::new();
