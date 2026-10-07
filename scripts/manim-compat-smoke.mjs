@@ -509,15 +509,40 @@ try {
       } catch (error) {
         patchError = String(error);
       }
+      const coldNamespace = await client.run(`
+from noon import *
+import sys
+assert "numpy" not in sys.modules
+assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
+assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
+result = Scene()
+`);
+      const numpyNamespace = await client.run(`
+from noon import *
+import sys
+assert np.__name__ == "numpy"
+assert "numpy" in sys.modules
+value = float(np.log(np.e))
+assert abs(value - 1.0) < 1e-12
+result = Scene()
+`);
       const result = await client.run(
         "import noon\nassert not hasattr(noon, 'PatchBatch')\nresult = noon.Scene()",
       );
-      return { patchError, sharedScene: Boolean(result.semanticExecution), terminated: client.terminated };
+      return {
+        patchError,
+        coldNamespace: Boolean(coldNamespace.semanticExecution),
+        numpyNamespace: Boolean(numpyNamespace.semanticExecution),
+        sharedScene: Boolean(result.semanticExecution),
+        terminated: client.terminated,
+      };
     } finally {
       client.terminate();
     }
   });
   assert.match(sceneOnlyAuthoring.patchError, /Python authoring result must be a noon.Scene/);
+  assert.equal(sceneOnlyAuthoring.coldNamespace, true, "cold star-import authoring must not load NumPy");
+  assert.equal(sceneOnlyAuthoring.numpyNamespace, true, "implicit np must resolve to real NumPy before execution");
   assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
   assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");
 
