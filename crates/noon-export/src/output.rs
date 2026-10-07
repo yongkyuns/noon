@@ -912,6 +912,27 @@ mod tests {
     }
 
     #[test]
+    fn publication_replaces_directories_transactionally() {
+        let root = temp_root("publish-directory");
+        let destination = root.join("frames");
+        let source = root.join("new-frames");
+        fs::create_dir(&destination).unwrap();
+        fs::create_dir(&source).unwrap();
+        fs::write(destination.join("old.txt"), b"old").unwrap();
+        fs::write(source.join("new.txt"), b"new").unwrap();
+        publish_path(&source, &destination, true).unwrap();
+        assert!(!source.exists());
+        assert!(!destination.join("old.txt").exists());
+        assert_eq!(fs::read(destination.join("new.txt")).unwrap(), b"new");
+        assert!(
+            fs::read_dir(&root)
+                .unwrap()
+                .all(|entry| !entry.unwrap().file_name().to_string_lossy().contains(".noon-backup-"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn failed_encoder_spawn_does_not_replace_destination() {
         let root = temp_root("spawn");
         let destination = root.join("scene.mp4");

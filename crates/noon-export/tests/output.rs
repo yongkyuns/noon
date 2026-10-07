@@ -153,6 +153,40 @@ fn native_png_and_ffmpeg_outputs_finalize_without_partial_publication() {
     assert!(broken_result.is_err());
     assert!(!broken.exists(), "failed encoder published a partial MP4");
 
+    let cancelled = root.join("cancelled.mp4");
+    let (mut cancelled_program, mut cancelled_callbacks) = following();
+    let mut cancelled_capture = software(160, 90);
+    cancelled_capture.cancellation.cancel();
+    let mut cancelled_options = FfmpegMp4Options::new(&cancelled);
+    cancelled_options.executable = ffmpeg();
+    let cancelled_result = capture_mp4_ffmpeg(
+        &mut cancelled_program,
+        &mut cancelled_callbacks,
+        frame_options(FrameRate::new(2, 1).unwrap()),
+        cancelled_capture,
+        cancelled_options,
+    );
+    assert!(cancelled_result.is_err());
+    assert!(!cancelled.exists(), "cancelled export published an MP4");
+    assert_eq!(cancelled_program.session().frame().time, 0.0);
+
+    let replaced = root.join("replaced.mp4");
+    std::fs::write(&replaced, b"old-output").unwrap();
+    let (mut replaced_program, mut replaced_callbacks) = following();
+    let mut replaced_options = FfmpegMp4Options::new(&replaced);
+    replaced_options.executable = ffmpeg();
+    replaced_options.overwrite = true;
+    let replaced_summary = capture_mp4_ffmpeg(
+        &mut replaced_program,
+        &mut replaced_callbacks,
+        frame_options(FrameRate::new(1, 1).unwrap()),
+        software(64, 64),
+        replaced_options,
+    )
+    .unwrap();
+    assert_eq!(replaced_summary.capture.sampling.frames, 3);
+    assert_ne!(std::fs::read(&replaced).unwrap(), b"old-output");
+
     assert!(
         scratch_entries(&root).is_empty(),
         "temporary output paths leaked after success/failure"
