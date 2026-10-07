@@ -162,10 +162,10 @@ fn planar_fan_center(vertices: &[Vertex], original: [f32; 3]) -> ([f32; 3], bool
         .collect();
     let mut normal = [0.0; 3];
     for (a, b) in points.iter().zip(points.iter().cycle().skip(1)) {
-        for axis in 0..3 {
+        for (axis, component) in normal.iter_mut().enumerate() {
             let u = (axis + 1) % 3;
             let v = (axis + 2) % 3;
-            normal[axis] += a[u] * b[v] - a[v] * b[u];
+            *component += a[u] * b[v] - a[v] * b[u];
         }
     }
     let axis = (0..3)
