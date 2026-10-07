@@ -22,11 +22,7 @@ class SpatialCircleScreenStroke(ThreeDScene):
             rotation=(0.9747941070689433, 0.0, 0.22310636213174545, 0.0),
             scale=(1.1, 0.7, 1.0),
         )
-        await self.play(
-            CameraProfileTo(
-                self.camera,
-                (0.8, -0.1, 0.2, 5.0, 1.1, 8.0, 0.3, 0.0, 0.0),
-            ),
-            run_time=1,
-            rate_func=linear,
+        await self.move_camera(
+            phi=0.8, theta=-0.1, gamma=0.2, zoom=1.1,
+            frame_center=(0.3, 0, 0), run_time=1, rate_func=linear,
         )

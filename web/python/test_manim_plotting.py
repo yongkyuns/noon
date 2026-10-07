@@ -193,6 +193,59 @@ class PlottingAdapterTests(unittest.TestCase):
             self.assertIs(plotting._three_d_axis_label_object("x"), tex)
         make_math.assert_called_once_with("x")
 
+    def test_three_d_axis_reconciles_rust_owned_pieces_and_keeps_known_wrappers(self):
+        shaft_handle = _handle(10)
+        tick_handles = [_handle(11), _handle(12)]
+        tick_family_handle = _family_handle(13, [(tick_handles[0], False),
+                                                  (tick_handles[1], False)])
+        tip_handle = _handle(14)
+        cairo_piece_handles = [
+            SimpleNamespace(semanticSlot=18, semanticGeneration=0),
+            SimpleNamespace(semanticSlot=19, semanticGeneration=0),
+        ]
+        axis_handle = _family_handle(15, [
+            (shaft_handle, False), (tick_family_handle, True),
+            (tip_handle, False), *[(piece, False) for piece in cairo_piece_handles],
+        ])
+        axis_handle.coordinateShaft = Mock(return_value=shaft_handle)
+        axis_handle.coordinateTicks = Mock(return_value=tick_family_handle)
+        axis_handle.coordinateTickObjects = Mock(return_value=tick_handles)
+
+        created_leaves = {}
+        created_families = {}
+        real_leaf = plotting._leaf
+        real_family = plotting._family
+
+        def capture_leaf(handle, kind=plotting._compat.Line):
+            member = real_leaf(handle, kind)
+            key = plotting._shared._family_wrapper_key(member)
+            created_leaves[key] = member
+            return member
+
+        def capture_family(wrapper, handle, members):
+            family = real_family(wrapper, handle, members)
+            created_families[plotting._shared._family_wrapper_key(family)] = family
+            return family
+
+        axis = object.__new__(plotting.NumberLine)
+        with patch.object(plotting, "_leaf", side_effect=capture_leaf), \
+             patch.object(plotting, "_family", side_effect=capture_family):
+            result = plotting._attach_three_d_axis(axis, axis_handle, tip_handle)
+
+        self.assertIs(result, axis)
+        self.assertIs(axis.shaft, created_leaves["10:1"])
+        self.assertIs(axis.ticks, created_families["13:1"])
+        self.assertIs(axis.tip, created_leaves["14:1"])
+        self.assertIs(axis.ticks.submobjects[0], created_leaves["11:1"])
+        self.assertIs(axis.ticks.submobjects[1], created_leaves["12:1"])
+        self.assertEqual(
+            [plotting._shared._family_wrapper_key(member) for member in axis.submobjects],
+            ["10:1", "13:1", "14:1", "18:0", "19:0"],
+        )
+        for key, piece in zip(("18:0", "19:0"), cairo_piece_handles):
+            self.assertIn(key, axis._semantic_member_wrappers)
+            self.assertIs(axis._semantic_member_wrappers[key]._semantic_handle, piece)
+
     def setUp(self):
         self.array_bridge = patch.object(plotting, "_to_js", lambda values: values)
         self.array_bridge.start()

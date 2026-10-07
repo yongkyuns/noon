@@ -646,7 +646,7 @@ impl WasmSurfaceSamplingPlan {
         }
         let grid = self
             .plan
-            .finish_samples(flattened_surface_samples(points, normals))
+            .finish_unlit_samples(flattened_surface_samples(points, normals))
             .map_err(|e| invalid("spatial.invalid_surface_samples", e))?;
         let cell_count = grid.plan().cell_count();
         let mut options = Vec::with_capacity(cell_count);

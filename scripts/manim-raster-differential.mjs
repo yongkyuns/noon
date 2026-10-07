@@ -10,6 +10,7 @@ import playwright from "playwright";
 import pngjs from "pngjs";
 import {
   browserArgs,
+  compareEffective3DCamera,
   dominantImageRgba,
   directStaticObservation,
   rasterFixtureSource,
@@ -94,6 +95,9 @@ for (const backend of backends) {
 assert.equal(reference.version, "0.21.0", "raster oracle must stay pinned to ManimCE 0.21.0");
 assert.equal(reference.renderer, "cairo", "initial raster oracle is defined against Cairo");
 for (const fixture of manifest.fixtures) {
+  assert.ok(fixture.camera_profile_observation === undefined
+    || typeof fixture.camera_profile_observation === "boolean",
+  `${fixture.id}: camera_profile_observation must be boolean when specified`);
   assert.ok(
     fixtureSourceFor(fixture).includes("from manim import *"),
     `${fixture.id}: canonical source must import real Manim`,
@@ -426,6 +430,13 @@ async function renderManimReferences() {
 
     const samples = sampleFrames(frameTimes, fixture, semanticFixture, frameFiles.length);
     for (const sample of samples) {
+      if (fixture.camera_profile_observation === true) {
+        const semanticFrame = sample.referenceKind === "terminal"
+          ? semanticFixture.terminal_state : semanticFixture.frames[sample.frameIndex];
+        assert.ok(semanticFrame?.camera_3d,
+          `${fixture.id}/${sample.label}: missing exact-frame Manim camera_3d observation`);
+        sample.camera3dOracle = semanticFrame.camera_3d;
+      }
       const outputPath = path.join(frameDir, `${sample.label}.png`);
       const image = sample.referenceKind === "terminal"
         ? await readFile(semanticFixture.terminal_png.path)
@@ -863,6 +874,18 @@ async function compareAll(references, backendResults) {
           assert.ok(foregroundCoverage.pass,
             `${fixture.id}/${backend}@${capture.time}: foreground coverage ${JSON.stringify(foregroundCoverage)}`);
         }
+        let cameraProfileObservation = null;
+        if (fixture.camera_profile_observation === true) {
+          try {
+            assert.ok(capture.camera3dOracle,
+              `${fixture.id}: missing selected Manim camera_3d reference frame`);
+            cameraProfileObservation = compareEffective3DCamera(
+              capture.debugFrame, capture.camera3dOracle,
+            );
+          } catch (error) {
+            throw new Error(`${fixture.id}/${backend}@${capture.time}: ${error.message}`, { cause: error });
+          }
+        }
         const diff = comparePng(referenceBuffer, actualBuffer);
         const diffPath = path.join(
           artifactRoot,
@@ -885,6 +908,7 @@ async function compareAll(references, backendResults) {
           reference: referenceStats,
           noon: noonStats,
           debugFrame: capture.debugFrame,
+          effectiveCameraProfile: cameraProfileObservation,
           foregroundCoverage,
           boundsDelta: bboxDelta(referenceStats, noonStats),
           diff: {

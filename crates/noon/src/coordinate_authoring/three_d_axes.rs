@@ -423,7 +423,7 @@ impl ManimThreeDAxes {
             shift_label_onto_default_frame(&layout, &mut delta);
             let label_center = layout.critical_point(0.0, 0.0);
             let label_center =
-                SemanticVec3::new(label_center.0 + delta.0, label_center.1 + delta.1, 0.0);
+                SemanticVec3::new(label_center.0 + delta.0, label_center.1 + delta.1, anchor.z);
             let rotation =
                 noon_core::SemanticRotation3D::from_axis_angle(rotation_axis, rotation_angle)
                     .ok_or(CoordinateAuthoringError::InvalidOptions(
@@ -476,7 +476,7 @@ impl ManimThreeDAxes {
                 let placed_translation = SemanticVec3::new(
                     planar.translation.x + delta.0,
                     planar.translation.y + delta.1,
-                    0.0,
+                    anchor.z,
                 );
                 let relative = sub(placed_translation, label_center);
                 let translation = add(
@@ -748,6 +748,20 @@ fn prepare_three_d_axes(
         let axis_rotation = noon_core::SemanticRotation3D::from_axis_angle(axis, angle).ok_or(
             CoordinateAuthoringError::InvalidOptions("invalid axis orientation"),
         )?;
+        // Manim rotates the Z axis into OUT, then applies its default
+        // z_normal=DOWN roll. This also places its ticks and tip in XZ.
+        let axis_rotation = if index == 2 {
+            noon_core::SemanticRotation3D::from_axis_angle(
+                SemanticVec3::new(0.0, 0.0, 1.0),
+                -std::f64::consts::FRAC_PI_2,
+            )
+            .and_then(|roll| roll.compose(axis_rotation))
+            .ok_or(CoordinateAuthoringError::InvalidOptions(
+                "invalid axis orientation",
+            ))?
+        } else {
+            axis_rotation
+        };
         let zero_coordinate = clamp_zero(range);
         let zero_distance =
             ((zero_coordinate - range[0]) / (range[1] - range[0])) * length - length * 0.5;
@@ -1036,7 +1050,7 @@ mod tests {
         let store_rc = Rc::clone(axes.family().integration_store());
         let groups = three_axis_members(axes.family()).unwrap();
         let store = store_rc.borrow();
-        for group_id in groups {
+        for (index, group_id) in groups.into_iter().enumerate() {
             let group = store.node(group_id).unwrap();
             let ticks = group.next_member(group.first_member().unwrap()).unwrap();
             let tip_id = group
@@ -1051,6 +1065,25 @@ mod tests {
                 tip.spatial_composition_domain(),
                 SemanticSpatialCompositionDomain::World
             );
+            if index == 2 {
+                let rotation = tip.transform.world_transform().unwrap().rotation;
+                for (source, expected) in [
+                    (
+                        SemanticVec3::new(1.0, 0.0, 0.0),
+                        SemanticVec3::new(0.0, 0.0, 1.0),
+                    ),
+                    (
+                        SemanticVec3::new(0.0, 1.0, 0.0),
+                        SemanticVec3::new(1.0, 0.0, 0.0),
+                    ),
+                    (
+                        SemanticVec3::new(0.0, 0.0, 1.0),
+                        SemanticVec3::new(0.0, 1.0, 0.0),
+                    ),
+                ] {
+                    assert_vec3_near(rotation.rotate_vector(source).unwrap(), expected);
+                }
+            }
         }
     }
 
@@ -1402,9 +1435,14 @@ mod tests {
             (
                 center.0 + anchor.x - corner.0 + 0.1 * direction.0,
                 center.1 + anchor.y - corner.1 + 0.1 * direction.1,
+                anchor.z,
             )
         });
 
+        assert!(
+            (expected_centers[1].2 - 1.0).abs() < 1e-5,
+            "the Z label belongs at the positive axis endpoint"
+        );
         axes.create_axis_label_targets(
             &[
                 (1, crate::MobjectTarget::Family(&y_family)),
@@ -1458,7 +1496,7 @@ mod tests {
                     SemanticVec3::new(
                         center_xy.0 + relative.x,
                         center_xy.1 + relative.y,
-                        relative.z,
+                        center_xy.2 + relative.z,
                     ),
                 );
                 assert_eq!(world.rotation, expected_orientation);
@@ -1474,7 +1512,7 @@ mod tests {
                     (min.y + max.y) * 0.5,
                     (min.z + max.z) * 0.5,
                 ),
-                SemanticVec3::new(center_xy.0, center_xy.1, 0.0),
+                SemanticVec3::new(center_xy.0, center_xy.1, center_xy.2),
             );
         }
     }

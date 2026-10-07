@@ -110,6 +110,23 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
             let opacity = object.style.opacity * object.appearance;
             let spatial = object.spatial.as_deref().map(|state| {
                 let world = state.world;
+                let camera_profile = object.camera_profile().map(|(profile, near, far)| {
+                    json!({
+                        "phi": profile.phi,
+                        "theta": profile.theta,
+                        "gamma": profile.gamma,
+                        "focal_distance": profile.focal_distance,
+                        "zoom": profile.zoom,
+                        "frame_height": profile.frame_height,
+                        "frame_center": [
+                            profile.frame_center.x,
+                            profile.frame_center.y,
+                            profile.frame_center.z,
+                        ],
+                        "near": near,
+                        "far": far,
+                    })
+                });
                 let projection = state.camera_projection.map(|projection| match projection {
                     noon_core::SemanticProjection3D::Perspective {
                         vertical_fov_radians,
@@ -132,6 +149,7 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                     "rotation_wxyz": world.rotation.components(),
                     "scale": [world.scale.x, world.scale.y, world.scale.z],
                     "camera_projection": projection,
+                    "camera_profile": camera_profile,
                     "material": match state.material {
                         noon_core::SemanticSpatialMaterial::Unlit => "unlit",
                         noon_core::SemanticSpatialMaterial::PointLit => "point_lit",
@@ -245,6 +263,36 @@ mod tests {
         assert_eq!(value["objects"][0]["center"][0], 0.25);
         assert_eq!(value["objects"][0]["center"][1], 0.125);
         assert_eq!(program.session().publication_context(), before);
+    }
+
+    #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+    #[test]
+    fn debug_capture_reports_effective_unwrapped_three_d_camera_profile() {
+        let mut session = crate::example_scenes::spatial_three_d_axes::session().unwrap();
+        session.advance_to(0.5).unwrap();
+        let publication = session.publication_context();
+
+        let value = execution_frame_value(&session);
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(value["time"], 0.5);
+        let profile = value["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|object| object["spatial"]["camera_profile"].as_object())
+            .expect("the effective profiled camera row is diagnosed");
+        let close =
+            |key: &str, expected: f64| (profile[key].as_f64().unwrap() - expected).abs() < 1.0e-12;
+        assert!(close("phi", 0.7));
+        assert!(close("theta", -0.65));
+        assert!(close("gamma", 0.1));
+        assert!(close("focal_distance", 5.0));
+        assert!(close("zoom", 1.05));
+        assert!(close("frame_height", 8.0));
+        assert_eq!(profile["frame_center"].as_array().unwrap().len(), 3);
+        assert!((profile["frame_center"][0].as_f64().unwrap() - 0.15).abs() < 1.0e-12);
+        assert!(close("near", 0.1));
+        assert!(close("far", 100.0));
     }
 
     #[test]

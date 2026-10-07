@@ -303,6 +303,28 @@ impl UvSurfacePlan {
     where
         I: IntoIterator<Item = SurfaceSample>,
     {
+        self.finish_samples_with_policy(samples, false)
+    }
+
+    /// Validate samples for an unlit surface-cell family. Derived zero normals
+    /// are allowed only at vertices with no usable incident area; the whole
+    /// grid must still contain at least one usable normal. Caller-supplied
+    /// normals retain the strict `finish_samples` validation.
+    pub fn finish_unlit_samples<I>(self, samples: I) -> Result<SurfaceGrid, SurfaceError>
+    where
+        I: IntoIterator<Item = SurfaceSample>,
+    {
+        self.finish_samples_with_policy(samples, true)
+    }
+
+    fn finish_samples_with_policy<I>(
+        self,
+        samples: I,
+        allow_degenerate_vertices: bool,
+    ) -> Result<SurfaceGrid, SurfaceError>
+    where
+        I: IntoIterator<Item = SurfaceSample>,
+    {
         let mut positions = Vec::with_capacity(self.vertex_count);
         let mut supplied_normals = Vec::with_capacity(self.vertex_count);
         let mut normals_present = None;
@@ -343,6 +365,8 @@ impl UvSurfacePlan {
         let indices = grid_indices(self.resolution)?;
         let normals = if normals_present == Some(true) {
             supplied_normals
+        } else if allow_degenerate_vertices {
+            derive_normals_allow_degenerate(&positions, &indices)?
         } else {
             derive_normals(&positions, &indices)?
         };
@@ -675,6 +699,64 @@ fn cairo_handle_input(start: f64, end: f64, handle_ratio: f64, at_end: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unlit_samples_allow_only_isolated_degenerate_vertices() {
+        let plan = UvSurfacePlan::new([0.0, 1.0], [0.0, 1.0], [1, 1]).unwrap();
+        // The first triangle collapses at the UV origin; the second remains
+        // nondegenerate, so only vertex 0 has no usable incident area.
+        let collapsed_corner = [
+            SemanticVec3::ZERO,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::ZERO,
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ];
+        let samples = || collapsed_corner.into_iter().map(SurfaceSample::position);
+        assert_eq!(
+            plan.finish_samples(samples()),
+            Err(SurfaceError::DegenerateNormal)
+        );
+
+        let grid = plan.finish_unlit_samples(samples()).unwrap();
+        assert_eq!(grid.normals()[0], SemanticVec3::ZERO);
+        assert!(grid.normals()[1..]
+            .iter()
+            .all(|normal| *normal != SemanticVec3::ZERO));
+        let mesh = grid.into_mesh_resource().unwrap();
+        assert!(
+            !mesh.has_usable_normals(),
+            "PointLit admission rejects zero vertex normals"
+        );
+
+        let all_collapsed = || {
+            std::iter::repeat(SurfaceSample::position(SemanticVec3::ZERO)).take(plan.vertex_count())
+        };
+        assert_eq!(
+            plan.finish_unlit_samples(all_collapsed()),
+            Err(SurfaceError::DegenerateNormal)
+        );
+
+        let supplied_bad_normal = || {
+            collapsed_corner
+                .into_iter()
+                .enumerate()
+                .map(|(index, position)| {
+                    SurfaceSample::with_normal(
+                        position,
+                        if index == 0 {
+                            SemanticVec3::ZERO
+                        } else {
+                            SemanticVec3::new(0.0, 0.0, 1.0)
+                        },
+                    )
+                })
+        };
+        assert_eq!(
+            plan.finish_unlit_samples(supplied_bad_normal()),
+            Err(SurfaceError::DegenerateNormal),
+            "the unlit policy does not relax authored normal validation",
+        );
+    }
 
     #[test]
     fn resolution_counts_cells_and_preserves_uv_order() {

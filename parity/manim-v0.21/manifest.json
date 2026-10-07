@@ -974,6 +974,7 @@
     },
     {
       "id": "spatial-camera-labels-direct",
+      "camera_profile_observation": true,
       "scene": "SpatialCameraLabels",
       "source": "parity/manim-v0.21/spatial_camera_labels.py",
       "direct_factory": "createDirectSpatialCameraLabelsSmokeRenderer",
@@ -993,6 +994,7 @@
     },
     {
       "id": "spatial-camera-labels-worker",
+      "camera_profile_observation": true,
       "scene": "SpatialCameraLabels",
       "source": "parity/manim-v0.21/spatial_camera_labels.py",
       "noon_source": "web/python/examples/noon_spatial_camera_labels.py",
@@ -1012,6 +1014,7 @@
     },
     {
       "id": "spatial-three-d-axes-direct",
+      "camera_profile_observation": true,
       "expected_object_count": 98,
       "scene": "SpatialThreeDAxes",
       "source": "parity/manim-v0.21/spatial_three_d_axes.py",
@@ -1031,6 +1034,7 @@
     },
     {
       "id": "spatial-three-d-axes-worker",
+      "camera_profile_observation": true,
       "expected_object_count": 98,
       "scene": "SpatialThreeDAxes",
       "source": "parity/manim-v0.21/spatial_three_d_axes.py",
@@ -1050,6 +1054,7 @@
     },
     {
       "id": "spatial-circle-screen-stroke-direct",
+      "camera_profile_observation": true,
       "expected_object_count": 2,
       "scene": "SpatialCircleScreenStroke",
       "source": "parity/manim-v0.21/spatial_three_d_axes_circle_stroke.py",
@@ -1069,6 +1074,7 @@
     },
     {
       "id": "spatial-circle-screen-stroke-worker",
+      "camera_profile_observation": true,
       "expected_object_count": 2,
       "scene": "SpatialCircleScreenStroke",
       "source": "parity/manim-v0.21/spatial_three_d_axes_circle_stroke.py",
@@ -1160,6 +1166,7 @@
     },
     {
       "id": "spatial-surface-sphere-torus-direct",
+      "camera_profile_observation": true,
       "scene": "CairoSphereTorus",
       "source": "parity/manim-v0.21/spatial_surface.py",
       "expected_duration": 1.0,
@@ -1179,6 +1186,7 @@
     },
     {
       "id": "spatial-surface-sphere-torus-worker",
+      "camera_profile_observation": true,
       "scene": "CairoSphereTorus",
       "source": "parity/manim-v0.21/spatial_surface.py",
       "expected_duration": 1.0,
@@ -1270,6 +1278,7 @@
     },
     {
       "id": "spatial-cairo-cube-prism-direct",
+      "camera_profile_observation": true,
       "scene": "SpatialCairoCubePrism",
       "source": "parity/manim-v0.21/spatial_primitives.py",
       "direct_factory": "createDirectSpatialCairoCubePrismSmokeRenderer",
@@ -1289,6 +1298,7 @@
     },
     {
       "id": "spatial-cairo-cube-prism-worker",
+      "camera_profile_observation": true,
       "scene": "SpatialCairoCubePrism",
       "source": "parity/manim-v0.21/spatial_primitives.py",
       "noon_source": "web/python/examples/noon_spatial_primitives.py",
@@ -1308,6 +1318,7 @@
     },
     {
       "id": "spatial-cairo-cylinder-cone-caps-direct",
+      "camera_profile_observation": true,
       "scene": "SpatialCairoCylinderConeCaps",
       "source": "parity/manim-v0.21/spatial_primitives.py",
       "direct_factory": "createDirectSpatialCairoCylinderConeCapsSmokeRenderer",
@@ -1327,6 +1338,7 @@
     },
     {
       "id": "spatial-cairo-cylinder-cone-caps-worker",
+      "camera_profile_observation": true,
       "scene": "SpatialCairoCylinderConeCaps",
       "source": "parity/manim-v0.21/spatial_primitives.py",
       "noon_source": "web/python/examples/noon_spatial_primitives.py",

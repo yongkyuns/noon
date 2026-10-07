@@ -617,7 +617,7 @@ def _attach_three_d_axis(wrapper, handle, tip_handle):
     if tip_handle is not None:
         wrapper.tip = _leaf(tip_handle, _compat.VMobject)
         members.append(wrapper.tip)
-    return _family(wrapper, handle, members)
+    return _coordinate_family(wrapper, handle, members)
 
 
 class ThreeDAxes(_compat.Group):

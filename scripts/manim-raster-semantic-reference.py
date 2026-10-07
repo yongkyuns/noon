@@ -173,6 +173,22 @@ def _object_state(mobject: Any, index: int) -> dict[str, Any]:
     }
 
 
+def _three_d_camera_state(camera: ThreeDCamera) -> dict[str, Any]:
+    """Read the effective pinned Manim 3D camera without changing scene state."""
+    frame_center = np.asarray(camera.frame_center, dtype=float).reshape(-1)
+    light_source = np.asarray(camera.light_source.points[0], dtype=float).reshape(-1)
+    return {
+        "phi": float(camera.get_phi()),
+        "theta": float(camera.get_theta()),
+        "gamma": float(camera.get_gamma()),
+        "zoom": float(camera.get_zoom()),
+        "focal_distance": float(camera.get_focal_distance()),
+        "frame_height": float(camera.frame_height),
+        "frame_center": [float(value) for value in frame_center[:3]],
+        "light_source": [float(value) for value in light_source[:3]],
+    }
+
+
 def _scene_state(
     scene: Any,
     frame_index: int,
@@ -196,6 +212,10 @@ def _scene_state(
             "center": [float(center[0]), float(center[1])],
             "height": float(scene.camera.frame.height),
         }
+    if isinstance(scene, ThreeDScene):
+        # Use Manim's own current trackers and camera-owned points; keep the 2D
+        # camera observation above unchanged for MovingCameraScene fixtures.
+        state["camera_3d"] = _three_d_camera_state(scene.camera)
     oracle_state = getattr(scene, "noon_oracle_state", None)
     if callable(oracle_state):
         state["oracle"] = oracle_state()

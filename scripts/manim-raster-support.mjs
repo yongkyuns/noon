@@ -447,3 +447,75 @@ export function compareEffectiveFrames(actual, expected) {
   compare(actual, expected, "frame");
   return maximumAbsoluteError;
 }
+
+const EFFECTIVE_CAMERA_3D_FIELDS = [
+  "phi", "theta", "gamma", "focal_distance", "zoom", "frame_height", "frame_center",
+];
+const DEFAULT_MANIM_POINT_LIGHT = [-7, -9, 10];
+
+function requireFiniteVector(value, length, label) {
+  if (!Array.isArray(value) || value.length !== length
+      || value.some(component => typeof component !== "number" || !Number.isFinite(component))) {
+    throw new Error(`${label}: expected ${length} finite numeric components`);
+  }
+}
+
+/** Compare one exact Manim 3D semantic frame to one Noon debug frame. */
+export function compareEffective3DCamera(debugFrame, expectedCamera3d) {
+  if (!debugFrame || !Array.isArray(debugFrame.objects)) {
+    throw new Error("camera profile: missing Noon debug-frame objects");
+  }
+  if (!expectedCamera3d || typeof expectedCamera3d !== "object") {
+    throw new Error("camera profile: missing exact Manim camera_3d observation");
+  }
+  for (const field of EFFECTIVE_CAMERA_3D_FIELDS) {
+    const value = expectedCamera3d[field];
+    if (field === "frame_center") requireFiniteVector(value, 3, `Manim camera ${field}`);
+    else if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`Manim camera ${field}: expected a finite number`);
+    }
+  }
+  requireFiniteVector(expectedCamera3d.light_source, 3, "Manim camera light_source");
+
+  const cameraRows = debugFrame.objects.filter(row => row.present
+    && row.spatial?.camera_profile != null);
+  if (cameraRows.length !== 1) {
+    throw new Error(`camera profile: expected one present profiled camera row; found ${cameraRows.length}`);
+  }
+  const actual = cameraRows[0].spatial.camera_profile;
+  if (!actual || typeof actual !== "object") throw new Error("camera profile: malformed Noon observation");
+  const near = actual.near;
+  const far = actual.far;
+  if (typeof near !== "number" || !Number.isFinite(near)
+      || typeof far !== "number" || !Number.isFinite(far) || near >= far) {
+    throw new Error("camera profile: Noon clipping planes must be finite and ordered");
+  }
+  for (const field of EFFECTIVE_CAMERA_3D_FIELDS) {
+    const value = actual[field];
+    if (field === "frame_center") requireFiniteVector(value, 3, `Noon camera ${field}`);
+    else if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`Noon camera ${field}: expected a finite number`);
+    }
+  }
+  const expectedProfile = Object.fromEntries(
+    EFFECTIVE_CAMERA_3D_FIELDS.map(field => [field, expectedCamera3d[field]]),
+  );
+  const actualProfile = Object.fromEntries(
+    EFFECTIVE_CAMERA_3D_FIELDS.map(field => [field, actual[field]]),
+  );
+  const cameraError = compareEffectiveFrames(actualProfile, expectedProfile);
+
+  const lightRows = debugFrame.objects.filter(row => row.present && row.spatial?.point_light === true);
+  let lightError = 0;
+  if (lightRows.length === 0) {
+    lightError = compareEffectiveFrames(expectedCamera3d.light_source, DEFAULT_MANIM_POINT_LIGHT);
+  } else {
+    if (lightRows.length !== 1) {
+      throw new Error(`camera profile: expected at most one present point-light row; found ${lightRows.length}`);
+    }
+    const translation = lightRows[0].spatial.translation;
+    requireFiniteVector(translation, 3, "Noon point-light translation");
+    lightError = compareEffectiveFrames(translation, expectedCamera3d.light_source);
+  }
+  return { maximumAbsoluteError: Math.max(cameraError, lightError), lightObserved: lightRows.length === 1 };
+}
