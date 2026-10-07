@@ -134,7 +134,7 @@ impl Rgba8ReadbackLayout {
             let start = source_y * stride;
             output.copy_from_slice(&source[start..start + row_bytes]);
             if channels == PixelChannelOrder::Bgra {
-                for pixel in output.chunks_exact_mut(4) {
+                for pixel in output.as_chunks_mut::<4>().0 {
                     pixel.swap(0, 2);
                 }
             }
