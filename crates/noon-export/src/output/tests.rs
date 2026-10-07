@@ -199,7 +199,7 @@ fn png_sink_roundtrips_odd_size_bytes_and_records_fractional_timing() {
 #[ignore = "requires FFmpeg; selected by native output gate"]
 fn rejected_frames_poison_output_and_never_publish() {
     let root = Temp::new();
-    for bad in 0..3 {
+    for bad in 0..12 {
         let path = root.0.join(format!("bad-{bad}.mp4"));
         let mut sink = FileSink::new(
             OutputOptions::mp4(&path),
@@ -217,7 +217,32 @@ fn rejected_frames_poison_output_and_never_publish() {
             pixels.pop();
         }
         let index = if bad == 0 { 1 } else { 0 };
-        assert!(sink.write(frame(&pixels, 4, 4, index)).is_err());
+        let mut invalid = frame(&pixels, 4, 4, index);
+        match bad {
+            3 => invalid.observation.requested_time = 0.01,
+            4 => invalid.observation.published_time = f64::NAN,
+            5 => invalid.observation.published_time = f64::INFINITY,
+            6 => invalid.observation.published_time = -1.0,
+            7 => invalid.observation.published_time = 1.0,
+            8 => {
+                // A crop may rebase PTS, but a dynamic sample cannot reuse an
+                // older published state. Only an explicit terminal hold can.
+                let next = FrameGrid::new(rate(), 0.0).unwrap().sample(1).unwrap();
+                invalid.frame.source_sample = next;
+                invalid.observation.requested_time = next.authored_time();
+            }
+            9 => {
+                let wrong_rate = FrameRate::new(30, 1).unwrap();
+                invalid.frame.source_sample =
+                    FrameGrid::new(wrong_rate, 0.0).unwrap().sample(0).unwrap();
+            }
+            10 => invalid.width = 5,
+            11 => invalid.height = 5,
+            _ => {}
+        }
+        assert!(sink.write(invalid).is_err(), "invalid input case {bad}");
+        // Rejection is terminal, even if the next supplied sample is valid.
+        assert!(sink.write(frame(&[255; 64], 4, 4, 0)).is_err());
         assert!(sink.finish(1).is_err());
         assert!(!path.exists());
     }
