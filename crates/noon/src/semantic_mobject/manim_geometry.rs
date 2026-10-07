@@ -375,3 +375,66 @@ fn manim_filled_path_style() -> SemanticStyle {
     style.stroke_width = 0.0;
     style
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line_endpoints(options: &ManimGeometryOptions) -> (Vec2, Vec2) {
+        match &options.geometry {
+            GeometryRef::Line { start, end } => (*start, *end),
+            other => panic!("expected retained Line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cross_defaults_are_two_distinct_manim_lines() {
+        let [first, second] = ManimGeometryOptions::cross_lines(None, 1.0).unwrap();
+        assert_eq!(
+            line_endpoints(&first),
+            (Vec2::new(-1.0, 1.0), Vec2::new(1.0, -1.0))
+        );
+        assert_eq!(
+            line_endpoints(&second),
+            (Vec2::new(1.0, 1.0), Vec2::new(-1.0, -1.0))
+        );
+        for line in [&first, &second] {
+            assert_eq!(line.style.stroke, Some(SemanticPaint::Solid(Color::RED)));
+            assert_eq!(line.style.stroke_width, 0.06);
+            assert_eq!(line.style.stroke_width_mode, StrokeWidthMode::ScreenSpace);
+            assert_eq!(line.style.fill_opacity, 0.0);
+        }
+    }
+
+    #[test]
+    fn cross_replaces_target_bounds_then_scales_about_center() {
+        let bounds = Bounds2D64 {
+            min_x: -1.0,
+            min_y: 1.0,
+            max_x: 3.0,
+            max_y: 3.0,
+        };
+        let [first, second] = ManimGeometryOptions::cross_lines(Some(bounds), 1.5).unwrap();
+        assert_eq!(
+            line_endpoints(&first),
+            (Vec2::new(-2.0, 3.5), Vec2::new(4.0, 0.5))
+        );
+        assert_eq!(
+            line_endpoints(&second),
+            (Vec2::new(4.0, 3.5), Vec2::new(-2.0, 0.5))
+        );
+    }
+
+    #[test]
+    fn cross_rejects_non_finite_inputs_before_publication() {
+        assert!(ManimGeometryOptions::cross_lines(None, f64::NAN).is_err());
+        let invalid = Bounds2D64 {
+            min_x: 2.0,
+            min_y: 0.0,
+            max_x: 1.0,
+            max_y: 1.0,
+        };
+        assert!(ManimGeometryOptions::cross_lines(Some(invalid), 1.0).is_err());
+    }
+}
