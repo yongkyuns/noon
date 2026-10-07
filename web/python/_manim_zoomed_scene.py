@@ -131,7 +131,10 @@ class ZoomedScene(_camera.MovingCameraScene):
             camera_frame_stroke_width=self.zoomed_camera_config[
                 "default_frame_stroke_width"
             ],
-            image_frame_stroke_width=self.image_frame_stroke_width,
+            # Manim 0.21's ZoomedScene.setup() calls add_display_frame()
+            # without this historical constructor option, so
+            # ImageMobjectFromCamera's default display-frame width (3) applies.
+            image_frame_stroke_width=3.0,
             capture_own_display=self._capture_own_display,
         )
         self.zoomed_camera = zoomed_camera

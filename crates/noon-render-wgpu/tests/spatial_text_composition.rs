@@ -7,7 +7,7 @@ use noon_core::{
     TrackValues, Vec2, WorldTransformTrackEndpoint,
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
-use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer};
+use noon_render_wgpu::{Camera2D, FramePreparer, GpuRenderer, RetainedFramePreparer};
 use noon_runtime::SceneInstance;
 use noon_typst::{compile_typst_resource, TypstMode};
 
@@ -185,6 +185,135 @@ fn render(
         "FixedFrame text issues real glyph draws"
     );
     (target.read(device, queue, encoder), spatial)
+}
+
+#[test]
+fn retained_world_paths_preserve_direct_edge_coverage_with_and_without_hud() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping spatial edge-coverage regression: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut store = SemanticStore::new();
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera
+            .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+                height: 8.0,
+                near: 0.1,
+                far: 30.0,
+            }))
+            .unwrap();
+        camera.transform.translation = SemanticVec3::new(0.0, 0.0, 8.0);
+        attach(&mut store, camera);
+
+        // The subpixel diagonal makes losing multisampling observable. The HUD
+        // occupies a separate region, so it cannot legitimately change this path.
+        let mut line = SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::new(-3.0, -1.13),
+            end: Vec2::new(3.0, 1.37),
+        });
+        line.transform.orientation =
+            noon_core::SemanticOrientation::Spatial(noon_core::SemanticRotation3D::IDENTITY);
+        line.style.fill = None;
+        line.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        line.style.stroke_width = 0.075;
+        attach(&mut store, line);
+
+        let text = compile_typst_resource("HUD", TypstMode::Markup).unwrap();
+        let bounds = text.resource.bounds;
+        let handle = store
+            .import_text_resource(text.resource, &text.fonts, &text.geometry)
+            .unwrap();
+        let mut hud = fitted_text(
+            handle,
+            bounds,
+            SemanticVec3::new(-3.0, -3.0, 0.0),
+            [1.0, 0.3],
+        );
+        hud.set_spatial_composition_domain(SemanticSpatialCompositionDomain::FixedFrame)
+            .unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        let mut images = Vec::new();
+        for (retained_pass, with_hud) in [(false, false), (true, false), (true, true)] {
+            if with_hud {
+                attach(&mut store, hud.clone());
+            }
+            let (compiled, _) = lower_semantic_execution(&store, &mut index)
+                .unwrap()
+                .into_parts();
+            let mut runtime = SceneInstance::new(compiled);
+            let publication = runtime.take_renderer_publication();
+            let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+            renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            renderer.set_camera(
+                &queue,
+                Camera2D::new(Vec2::ZERO, Vec2::new(12.0, 8.0)).unwrap(),
+            );
+            let spatial = renderer
+                .prepare_spatial(&device, &queue, &publication)
+                .unwrap();
+            assert_eq!(
+                spatial.resident_instances, 1,
+                "the fixture draws a World path"
+            );
+            if !retained_pass {
+                let mut preparer = FramePreparer::new();
+                let prepared = preparer.prepare(publication.frame());
+                renderer.upload(&device, &queue, &prepared);
+                let mut encoder = device.create_command_encoder(&Default::default());
+                renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);
+                images.push(target.read(&device, &queue, encoder));
+                continue;
+            }
+            let mut retained = RetainedFramePreparer::new();
+            let visible: Vec<_> = (0..publication.frame().objects.len()).collect();
+            retained
+                .prepare_transient_presentations_visible(&publication, &visible)
+                .unwrap();
+            let prepared = retained
+                .prepare_planned_publication_visible(
+                    &device,
+                    &publication,
+                    &visible,
+                    TextDeviceMetrics::uniform(16.0).unwrap(),
+                )
+                .unwrap();
+            let mut text_state = renderer.create_retained_text_state(&device, &queue);
+            renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let stats = renderer
+                .encode_retained(
+                    &mut encoder,
+                    &target.view,
+                    &prepared,
+                    &text_state,
+                    wgpu::Color::BLACK,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(stats.text.draw_calls > 0, with_hud);
+            images.push(target.read(&device, &queue, encoder));
+        }
+        assert!(non_black_pixels(&images[0], 40, 152, 40, 88) > 40);
+        assert!(non_black_pixels(&images[2], 32, 64, 104, 120) > 5);
+        for retained_image in &images[1..] {
+            let changed_world_pixels = (40..88)
+                .flat_map(|y| (40..152).map(move |x| (x, y)))
+                .filter(|&(x, y)| pixel(&images[0], x, y) != pixel(retained_image, x, y))
+                .count();
+            assert_eq!(
+                changed_world_pixels, 0,
+                "retained World paths must preserve direct edge coverage"
+            );
+        }
+    });
 }
 
 #[test]
