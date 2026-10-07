@@ -5,6 +5,10 @@ use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};
 
 mod derived_display;
+mod glow_filter;
+pub use glow_filter::{
+    GlowCapture, GlowFilter, GlowParameters, GlowPrepareError, GlowRasterStats, GlowScope,
+};
 mod overlay;
 mod path_batching;
 mod presentation;

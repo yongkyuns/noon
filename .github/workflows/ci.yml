@@ -126,7 +126,7 @@ jobs:
       - name: Test qualification admission
         run: python3 -m unittest discover -s tests/visual-effects -p test_gpu_qualification.py -v
       - name: Test glow resource and kernel contracts
-        run: cargo test -p noon-render-wgpu --test glow_filter
+        run: cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Preserve native glow qualification evidence

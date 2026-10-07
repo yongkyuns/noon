@@ -15,7 +15,7 @@ import subprocess
 import time
 from pathlib import Path
 
-TEST = "glow_filter::tests::pixels::native_gaussian_pixels_and_retained_updates"
+TEST = "gpu::glow_filter::tests::pixels::native_gaussian_pixels_and_retained_updates"
 PASS = re.compile(r"test result: ok\. 1 passed; 0 failed; 0 ignored;")
 FAIL = re.compile(r"test result: FAILED\. 0 passed; 1 failed; 0 ignored;")
 ORIGINAL = "let bits = u32(round(clamp(value, 0.0, 1.0) * 16777215.0));"
@@ -40,7 +40,7 @@ def sha256(content: bytes) -> str:
 
 def run_stage(root: Path, output: Path, name: str, negative: bool) -> dict:
     command = [
-        "cargo", "test", "-p", "noon-render-wgpu", "--test", "glow_filter",
+        "cargo", "test", "-p", "noon-render-wgpu", "--lib",
         TEST, "--", "--ignored", "--exact", "--nocapture",
     ]
     started = time.monotonic()
