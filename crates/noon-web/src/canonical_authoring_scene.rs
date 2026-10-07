@@ -987,6 +987,45 @@ impl CanonicalAuthoringScene {
         noon::ManimGeometryOptions::boolean_geometry(operation, operands).map_err(Into::into)
     }
 
+    /// Cross observes one coherent target layout and returns two inert Line candidates.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_cross(
+        &mut self,
+        handle: &noon::Mobject,
+        scale_factor: f64,
+    ) -> Result<[noon::ManimGeometryOptions; 2], AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
+            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                .with_message("mobject belongs to another authoring store"));
+        }
+        handle.validate().map_err(AuthoringFailure::from)?;
+        let mut bounds = handle
+            .layout_bounds()
+            .map_err(AuthoringFailure::from)?
+            .unwrap_or_else(|| {
+                let point = handle
+                    .state()
+                    .expect("validated mobject state remains readable")
+                    .transform
+                    .translation;
+                noon_core::Bounds2D64::point(point.x, point.y)
+            });
+        if self.identities.contains_key(&handle.node_id()) {
+            let (x, y, width, height) = self.mobject_layout(handle)?;
+            bounds = noon_core::Bounds2D64 {
+                min_x: x - width * 0.5,
+                max_x: x + width * 0.5,
+                min_y: y - height * 0.5,
+                max_y: y + height * 0.5,
+            };
+        }
+        noon::ManimGeometryOptions::cross_lines(Some(bounds), scale_factor)
+            .map_err(AuthoringFailure::from)
+    }
+
     /// Inert bounds-dependent construction observes this runtime for bound targets,
     /// while fresh detached targets retain their shared authored layout.
     #[cfg(any(target_arch = "wasm32", test))]
@@ -6678,6 +6717,18 @@ mod wasm {
                     &operands.objects,
                 )
                 .map(crate::WasmManimGeometryOptions::from_options)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = beginCross)]
+        pub fn begin_cross(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            scale_factor: f64,
+        ) -> Result<crate::authoring_geometry::WasmManimCrossOptions, JsValue> {
+            self.inner
+                .begin_cross(handle.semantic_mobject(), scale_factor)
+                .map(crate::authoring_geometry::WasmManimCrossOptions::from_options)
                 .map_err(typed_js_error)
         }
 
