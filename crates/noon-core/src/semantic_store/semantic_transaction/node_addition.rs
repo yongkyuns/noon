@@ -135,6 +135,12 @@ pub enum SemanticNodeCreation {
     Signal {
         state: SemanticSignalState,
     },
+    /// Non-renderable attachment; owner must precede it when both are pending.
+    Effect {
+        owner: super::SemanticTransactionNodeRef,
+        name: std::sync::Arc<str>,
+        definition: crate::EffectDefinition,
+    },
 }
 
 impl SemanticNodeCreation {
@@ -196,7 +202,7 @@ impl SemanticNodeCreation {
             | Self::Family {
                 source_identity: source,
             } => *source = Some(source_identity),
-            Self::Signal { .. } => {}
+            Self::Signal { .. } | Self::Effect { .. } => {}
         }
         self
     }
@@ -210,7 +216,7 @@ impl SemanticNodeCreation {
                 source_identity, ..
             }
             | Self::Family { source_identity } => source_identity.as_ref(),
-            Self::Signal { .. } => None,
+            Self::Signal { .. } | Self::Effect { .. } => None,
         }
     }
 }
@@ -320,7 +326,9 @@ pub(super) fn preflight_add_node(
                 }
             }
         }
-        SemanticNodeCreation::Family { .. } | SemanticNodeCreation::Signal { .. } => {}
+        SemanticNodeCreation::Family { .. }
+        | SemanticNodeCreation::Signal { .. }
+        | SemanticNodeCreation::Effect { .. } => {}
     }
 
     Ok(())
@@ -358,6 +366,7 @@ pub(super) fn validate_spatial_material_resource(
 pub(super) fn commit_add_node(
     store: &mut SemanticStore,
     creation: SemanticNodeCreation,
+    committed: &std::collections::HashMap<super::SemanticLocalNodeToken, SemanticNodeId>,
 ) -> (SemanticNodeId, Option<SourceIdentity>) {
     match creation {
         SemanticNodeCreation::Object {
@@ -371,5 +380,16 @@ pub(super) fn commit_add_node(
             (store.insert_family(), source_identity)
         }
         SemanticNodeCreation::Signal { state } => (store.insert_semantic_signal_state(state), None),
+        SemanticNodeCreation::Effect {
+            owner,
+            name,
+            definition,
+        } => {
+            let owner = match owner {
+                super::SemanticTransactionNodeRef::Existing(id) => id,
+                super::SemanticTransactionNodeRef::Pending(token) => committed[&token],
+            };
+            (store.insert_semantic_effect(owner, name, definition), None)
+        }
     }
 }

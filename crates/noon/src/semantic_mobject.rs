@@ -580,7 +580,16 @@ impl Mobject {
     }
 
     pub fn copy_handle(&self) -> Result<Self, AuthoringError> {
-        Self::new(Rc::clone(&self.store), self.state()?)
+        let mut transaction = SemanticMutationTransaction::new();
+        let copied = transaction.create_node(SemanticNodeCreation::object(self.state()?));
+        self.store
+            .borrow()
+            .copy_effects_into(self.id, copied, &mut transaction)?;
+        let result = transaction.apply(&mut self.store.borrow_mut())?;
+        let id = result
+            .resolve(copied)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(copied))?;
+        Self::from_node(Rc::clone(&self.store), id)
     }
     pub fn target_editor(&self) -> Result<Self, AuthoringError> {
         self.copy_handle()

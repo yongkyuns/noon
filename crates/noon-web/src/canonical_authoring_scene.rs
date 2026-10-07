@@ -1,3 +1,5 @@
+#[cfg(any(target_arch = "wasm32", test))]
+mod effects;
 mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]

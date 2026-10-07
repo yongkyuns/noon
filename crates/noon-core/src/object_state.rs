@@ -1,5 +1,11 @@
-//! Numeric validation shared by typed execution objects and track endpoints.
+//! Typed appearance values and numeric validation for object/track state.
 use crate::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2};
+
+mod glow;
+pub use glow::{
+    Glow, GlowParameter, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
+    PreparedGlowUpdate,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectStateField {

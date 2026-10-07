@@ -6,6 +6,8 @@ mod camera_profile;
 #[cfg(any(target_arch = "wasm32", test))]
 mod coordinates;
 #[cfg(any(target_arch = "wasm32", test))]
+mod effects;
+#[cfg(any(target_arch = "wasm32", test))]
 mod graph;
 #[cfg(target_arch = "wasm32")]
 mod matrix;

@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "contract": "glow-encoded-ldr-v1",
+  "status": "reference-only; production and device qualification pending",
+  "inspection_base": "9028672c1691d3a318c87da50e8b08e0802245f0",
+  "quality": {"name": "reference", "scale": 1, "support_sigma": 3, "adaptive": false},
+  "portable_limits": {"sigma_pixels_max": 64, "intensity_max": 8},
+  "views": [[1152, 648], [2304, 1296], [1920, 1080]],
+  "operator_tolerance": {"float_absolute": 0.00001, "rgba8_absolute": 0.00784313725490196, "same_backend_neutral": "exact"},
+  "cohort": {
+    "owner_issue": 1653,
+    "pairs": [["baseline", "candidate"], ["candidate", "baseline"], ["baseline", "candidate"]],
+    "cold_passes_before_each_trial": 1,
+    "warmup_frames": 30,
+    "measured_frames": 540,
+    "minimum_authored_horizon_seconds": 10,
+    "aggregation": "arithmetic mean of all three trials; report all raw samples and dispersion",
+    "selective_retries": false
+  },
+  "ordinary_product_thresholds": {"fps_ratio": 0.8, "latency_ratio": 1.25, "latency_slack_ms": 350, "diff_ratio": 0.015},
+  "enabled_effect_targets": {
+    "refresh_hz": 60,
+    "p95_frame_gap_ms": 20,
+    "p99_frame_gap_ms": 33.4,
+    "gap_over_25ms_fraction": 0.02,
+    "input_to_present_p95_ms": 50,
+    "desktop_extra_scratch_bytes": 67108864,
+    "mobile_extra_scratch_bytes": 33554432,
+    "intensity_edit_pipeline_compiles": 0,
+    "intensity_edit_geometry_rebuilds": 0,
+    "intensity_edit_unrelated_dirty_objects": 0,
+    "warmed_fixed_topology_new_scratch_allocations": 0
+  },
+  "targets": [
+    {"device": "Intel MacBook Pro / Radeon Pro 5300M", "profiles": ["native Metal", "Chromium WebGPU", "Chromium WebGL2"], "purpose": "physical performance and correctness", "qualified": false},
+    {"device": "iPhone 14 Pro", "profiles": ["Safari available portable raster backend"], "purpose": "physical mobile performance and correctness; no connected device assumed", "qualified": false},
+    {"device": "GitHub Linux software GPU", "profiles": ["WebGPU", "WebGL2"], "purpose": "correctness and controlled regression only", "qualified": false}
+  ],
+  "corpus": [
+    {"id": "G0", "case": "absent, zero-intensity, zero-radius and removed glow on ordinary Product scenes", "promotion": "M1"},
+    {"id": "G1", "case": "circle/rectangle motion plus glow, fractional positions, transparent silhouette, viewport-edge halo", "promotion": "M1"},
+    {"id": "G2", "case": "pulse, delayed activation, conflict, live supersession, copy/restore, detach/re-add and repeat input", "promotion": "M2"},
+    {"id": "G3", "case": "mixed text/path/inline image, nested ordered groups; interleaved/aliased isolation rejection", "promotion": "M3"},
+    {"id": "G4", "case": "1 and 100 active glows among 600 static objects, radius change and 1000 attach/remove cycles", "promotion": "M3"},
+    {"id": "G5", "case": "authored output-view bloom and external ScanBand schema fixture; failed shader replacement", "promotion": "M4"},
+    {"id": "G6", "case": "same-time offscreen versus interactive captures, rewind, resize and device loss", "promotion": "M5"}
+  ]
+}
