@@ -578,6 +578,44 @@ run in the normal full Rust gate. The bounded Python reference stays in existing
 `.github/ci/*.test.mjs` discovery and the local check entrypoint. Do not add a
 parallel workflow/framework or mark missing execution as a test pass.
 
+## Real Pyodide binding qualification without a browser
+
+`shared-authoring-pyodide-contract.mjs` runs the same checked-in
+`effect_authoring_contract.py` fixture against the **actual generated bindings,
+WASM Rust authoring store and pinned Pyodide interpreter**. This is not the facade
+routing suite: invalid values, duplicate names, source/target isolation, exact-owner
+and stale references, startup rejection, cleanup and subsequent live rejection
+all cross the language boundary. Factories match the worker's typed operations;
+there is no mock effect store or replacement Python implementation.
+
+```sh
+# First generate web/pkg from this source, with the repository's pinned tools.
+NOON_PYODIDE_ROOT=/path/to/pinned/pyodide/full \
+NOON_EFFECT_REPORT=/path/to/effects-binding-result.json \
+node scripts/shared-authoring-pyodide-contract.mjs
+```
+
+The supplied runtime directory must contain the worker's pinned interpreter and
+its NumPy dependency. An absent path or version mismatch fails; there is no
+successful skip. The generated package checker requires the effect value/handle
+exports and authored/live methods, so a stale package without the new bindings
+cannot pass just because the Python sources exist. No new product dependency,
+workflow or renderer is required for this optional host test.
+
+This path calls the complete fixture's construct directly and uses the existing
+Rust `ordinaryWait` synchronous completion. It does **not** qualify JSPI, portable
+source rewriting, worker ownership transfer, browser presentation, pixel identity,
+GPU execution or a native CPython adapter. Those remain with the existing browser
+and native-host suites. In particular, rejected effect execution followed by a
+successful plain wait is not evidence that a glow was rendered.
+
+A useful mutation control bypasses `_noon_effects._call`'s live context and calls
+the raw authored handle instead. The fixture's post-wait unsupported-operation
+assertion must fail; restore the exact source and require it to pass. Separately,
+removing the exact `WasmGlow` class export must make `check-web-package.mjs` fail
+without confusing `WasmGlowUpdate` for that missing class. Preserve red/green logs
+and source/package hashes; these are correctness controls, not performance runs.
+
 ## Qualification baseline and implementation handoff
 
 `qualification.json` retains the exact G0-G6 corpus, reference quality, views,
