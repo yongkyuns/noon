@@ -978,6 +978,7 @@ _PUBLIC_EXPORTS = {
     "RoundedRectangle": "_manim_shared_geometry",
     "SurroundingRectangle": "_manim_shared_geometry",
     "BackgroundRectangle": "_manim_shared_geometry",
+    "Cross": "_manim_shared_geometry",
     "Underline": "_manim_shared_geometry",
     "Union": "_manim_shared_geometry",
     "Intersection": "_manim_shared_geometry",

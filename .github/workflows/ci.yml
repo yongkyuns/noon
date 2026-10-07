@@ -16,6 +16,8 @@ on:
       - "scripts/composition-authoring-smoke.mjs"
       - "scripts/shared-authoring-smoke.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/manim-shape-matcher-current-bounds.mjs"
+      - "crates/noon-web/src/manim_shape_matcher_handle_bridge.rs"
       - "web/python/**"
       - "web/semantic-engine-endpoint.js"
       - "crates/noon-web/src/canonical_authoring_scene*"
@@ -151,6 +153,8 @@ jobs:
         run: node scripts/deterministic-replay-smoke.mjs
       - name: Test Manim-style Python compatibility
         run: node scripts/manim-compat-smoke.mjs
+      - name: Test current Rust and Python shape-matcher bounds
+        run: node scripts/manim-shape-matcher-current-bounds.mjs
       - name: Test Manim composition authoring
         run: node scripts/composition-authoring-smoke.mjs
       - name: Test executable Manim tutorial corpus

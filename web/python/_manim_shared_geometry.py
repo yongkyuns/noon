@@ -203,17 +203,23 @@ def _shape_matcher_target(target: object):
     if not isinstance(target, _base.Mobject):
         raise TypeError("shape matcher target must be a Mobject")
     if isinstance(target, _compat.Group):
-        shared = _shared._shared_family_layout(target)
-        if shared is None:
+        if not _shared._is_shared_family(target):
             raise NotImplementedError(
                 "shape matcher Group/VGroup targets require shared semantic family bounds"
             )
-        return shared
+        return _shared._group_layout_observation(target)
     handle = _shared._handle_for(target)
     if handle is None:
         raise NotImplementedError(
             "shape matcher target requires current shared semantic geometry"
         )
+    if _shared._is_bound(target):
+        observation = _shared._bound_layout_observation(target)
+        if observation is None:
+            raise NotImplementedError(
+                "shape matcher bound target requires current shared runtime layout"
+            )
+        return observation
     return handle
 
 
@@ -292,6 +298,46 @@ class BackgroundRectangle(SurroundingRectangle):
         _shared._attach_geometry_options(self, candidate, "BackgroundRectangle")
         self.buff = buff
         self.corner_radius = corner_radius
+
+
+class Cross(_compat.VGroup):
+    """ManimCE v0.21 Cross as a true two-Line shared semantic family."""
+
+    def __init__(
+        self,
+        mobject: _base.Mobject | None = None,
+        stroke_color: _base.Color = _base.RED,
+        stroke_width: float = 6.0,
+        scale_factor: float = 1.0,
+        **kwargs: Any,
+    ) -> None:
+        if _shared._create_geometry_handle is None or _shared._geometry_options is None:
+            raise RuntimeError("Cross requires the shared browser geometry bridge")
+        scale_value = _shared._ir._finite_number("scale_factor", scale_factor)
+        stroke_value = _shared._ir._finite_number("stroke_width", stroke_width)
+        source = None if mobject is None else _shape_matcher_target(mobject)
+        leaf_options = dict(kwargs)
+        z_index = _shared._ir._finite_number("z_index", leaf_options.pop("z_index", 0.0))
+
+        members = []
+        for index in range(2):
+            candidate = (
+                engine_call(_shared._geometry_options.crossLine, index, scale_value)
+                if source is None
+                else engine_call(source.beginCrossLine, index, scale_value)
+            )
+            options = dict(leaf_options)
+            options["stroke_width"] = stroke_value
+            _shared._apply_shared_constructor_options(candidate, options)
+            _apply_candidate_color(candidate, stroke_color)
+            line = object.__new__(_compat.Line)
+            _shared._attach_geometry_options(line, candidate, "Cross")
+            members.append(line)
+
+        _compat.VGroup.__init__(self, *members, z_index=z_index)
+        self.stroke_color = stroke_color
+        self.stroke_width = stroke_value
+        self.scale_factor = scale_value
 
 
 class Underline(_compat.Line):

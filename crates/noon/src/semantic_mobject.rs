@@ -155,6 +155,54 @@ impl ManimGeometryOptions {
         Ok(options)
     }
 
+    /// Prepare the two ordinary Line leaves that make up ManimCE v0.21 Cross.
+    ///
+    /// The public Cross wrapper is a VGroup of these two independent semantic
+    /// objects. Rust owns target-bound observation and endpoint geometry; language
+    /// adapters only wrap the returned inert options and create the semantic family.
+    pub fn cross_lines(
+        bounds: Option<Bounds2D64>,
+        scale_factor: f64,
+    ) -> Result<[Self; 2], AuthoringError> {
+        let scale_factor = authoring_render_f64("cross scale_factor", scale_factor)?;
+        let (center_x, center_y, half_width, half_height) = match bounds {
+            Some(bounds) => {
+                for (name, value) in [
+                    ("bounds.min_x", bounds.min_x),
+                    ("bounds.min_y", bounds.min_y),
+                    ("bounds.max_x", bounds.max_x),
+                    ("bounds.max_y", bounds.max_y),
+                ] {
+                    authoring_render_f64(name, value)?;
+                }
+                if bounds.max_x < bounds.min_x || bounds.max_y < bounds.min_y {
+                    return Err(AuthoringError::UnorderedBounds(bounds));
+                }
+                (
+                    (bounds.min_x + bounds.max_x) * 0.5,
+                    (bounds.min_y + bounds.max_y) * 0.5,
+                    bounds.width() * 0.5 * scale_factor,
+                    bounds.height() * 0.5 * scale_factor,
+                )
+            }
+            None => (0.0, 0.0, scale_factor, scale_factor),
+        };
+        Ok([
+            Self::line(
+                center_x - half_width,
+                center_y + half_height,
+                center_x + half_width,
+                center_y - half_height,
+            )?,
+            Self::line(
+                center_x + half_width,
+                center_y + half_height,
+                center_x - half_width,
+                center_y - half_height,
+            )?,
+        ])
+    }
+
     fn new(geometry: GeometryRef, style: SemanticStyle) -> Self {
         Self {
             geometry,

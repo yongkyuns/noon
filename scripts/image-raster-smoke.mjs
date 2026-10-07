@@ -127,6 +127,13 @@ try {
       const page = await context.newPage();
       page.on('pageerror', error => console.error('Python page:', error));
       page.on('console', message => { if(message.type() === 'error') console.error('Python console:', message.text()); });
+      // Preserve the cause of a strict 30s preview timeout without retrying,
+      // increasing the limit, or mistaking missing network assets for a raster diff.
+      page.on('requestfailed', request => {
+        if (/pyodide|noon_web|python-worker/.test(request.url())) {
+          console.error('Python dependency request failed:', request.url(), request.failure());
+        }
+      });
       await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
       await page.evaluate(() => {
         const canvas = document.querySelector('#scene');
@@ -134,7 +141,25 @@ try {
         canvas.style.width = canvas.style.height = '256px';
       });
       await page.waitForFunction(() => window.noonHostRaster);
-      const loaded = await page.evaluate(source => window.noonHostRaster.load(source, 4), source);
+      const loadStarted = performance.now();
+      let loaded;
+      try {
+        loaded = await page.evaluate(source => window.noonHostRaster.load(source, 4), source);
+      } catch (error) {
+        let previewStatus = null;
+        try { previewStatus = await page.evaluate(() => window.noonHostRaster?.status() ?? null); }
+        catch (statusError) { previewStatus = { inspectionError: String(statusError) }; }
+        const diagnostic = {
+          kind: 'python-preview-load-failure',
+          backend,
+          elapsedMs: Math.round(performance.now() - loadStarted),
+          message: String(error),
+          previewStatus,
+        };
+        reports.push(diagnostic);
+        console.error('Python preview load diagnostics:', JSON.stringify(diagnostic));
+        throw error;
+      }
       console.log('Python loaded:', JSON.stringify(loaded));
       for (const [i, time] of times.entries()) {
         const metrics = await page.evaluate(({i, times}) => window.noonHostRaster.renderThrough(i, times), {i, times});
