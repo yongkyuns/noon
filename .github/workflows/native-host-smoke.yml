@@ -148,6 +148,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
       WGPU_BACKEND: vulkan
       NOON_CAPTURE_PROOF_DIR: ${{ github.workspace }}/capture-proof/pixels
+      NOON_PNG_PROOF_DIR: ${{ github.workspace }}/capture-proof/png
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -192,10 +193,35 @@ jobs:
             --lib --tests -- --include-ignored --nocapture --test-threads=1 \
             2>&1 | tee capture-proof/tests.log
 
+      - name: Independently validate finalized PNG sequence
+        run: |
+          python3 - <<'PY'
+          import os
+          import struct
+          from pathlib import Path
+
+          root = Path(os.environ["NOON_PNG_PROOF_DIR"]) / "sequence"
+          files = sorted(root.glob("frame_*.png"))
+          assert len(files) == 9, len(files)
+          assert files[0].name == "frame_000000.png"
+          assert files[-1].name == "frame_000008.png"
+          for path in (files[0], files[-1]):
+              data = path.read_bytes()
+              assert data[:8] == b"\x89PNG\r\n\x1a\n"
+              length = struct.unpack(">I", data[8:12])[0]
+              assert length == 13 and data[12:16] == b"IHDR"
+              width, height, depth, color, compression, filtering, interlace = struct.unpack(
+                  ">IIBBBBB", data[16:29]
+              )
+              assert (width, height, depth, color) == (65, 33, 8, 6)
+              assert (compression, filtering, interlace) == (0, 0, 0)
+          PY
+
       - name: Check formatting and lint the native capture package
         run: |
           cargo fmt --all -- --check
           cargo clippy -p noon-export --all-features --all-targets -- -D warnings
+          cargo check -p noon-export --no-default-features --features png --lib
 
       - name: Stream the normal Rust camera example without a viewer
         run: |

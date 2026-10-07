@@ -60,6 +60,30 @@ overwrite), without a non-atomic copy fallback. Unsupported filesystems return a
 error. Cleanup is best effort after filesystem failure; crash-durable directory
 publication and hostile concurrent filesystem mutation are not promised.
 
+## PNG sequence export
+
+Enable the optional `png` feature:
+
+```sh
+cargo run --release -p noon-export --features png \
+  --example export_png -- frames
+```
+
+`png::export_png_sequence` consumes the same scheduled captured frames as video
+export. Each RGBA frame is encoded to a numbered PNG inside a private sibling
+staging directory. The requested output directory appears only after the whole
+sequence succeeds. Existing directories are rejected before source execution by
+default; explicit overwrite defers replacement until final publication and
+attempts rollback if replacement fails. Cancellation/encoding failure removes
+staging on drop. The v1 directory publication uses same-filesystem rename and
+does not promise crash durability or protection against hostile concurrent
+filesystem mutation during the final rename.
+
+The PNG adapter preserves the captured opaque RGBA byte values and accepts odd
+dimensions; it does not perform the H.264 YCbCr conversion.
+
+## H.264 profile details
+
 The profile is opaque H.264/yuv420p. Dimensions must be positive and even; the
 adapter does not silently resize or crop. Captured renderer RGB bytes are treated
 as sRGB-coded, converted from full-range RGB to limited-range BT.709 YCbCr, and

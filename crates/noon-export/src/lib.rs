@@ -16,6 +16,8 @@
 mod gpu;
 #[cfg(feature = "ffmpeg")]
 pub mod video;
+#[cfg(feature = "png")]
+pub mod png;
 
 use std::error::Error;
 use std::fmt;
