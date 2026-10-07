@@ -650,10 +650,11 @@ fn probe_libx264(executable: &Path) -> Result<(), FfmpegMp4Error> {
             stderr_truncated: false,
         });
     }
-    let found = String::from_utf8_lossy(&output)
-        .lines()
-        .flat_map(str::split_ascii_whitespace)
-        .any(|token| token == "libx264");
+    let found = String::from_utf8_lossy(&output).lines().any(|line| {
+        let mut fields = line.split_ascii_whitespace();
+        let _flags = fields.next();
+        fields.next() == Some("libx264")
+    });
     if !found {
         return Err(FfmpegMp4Error::EncoderUnavailable);
     }
