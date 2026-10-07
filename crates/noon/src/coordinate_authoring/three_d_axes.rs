@@ -1095,7 +1095,7 @@ mod tests {
                 tip.spatial_composition_domain(),
                 SemanticSpatialCompositionDomain::World
             );
-            assert_eq!(tip.style.stroke_width, 2.0);
+            assert_eq!(tip.style.stroke_width, 0.02);
             if index == 2 {
                 let rotation = tip.transform.world_transform().unwrap().rotation;
                 for (source, expected) in [
