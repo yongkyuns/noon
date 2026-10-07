@@ -50,16 +50,16 @@ function interpreter({ load, execute, requiredPackages = [], missingPackages } =
       },
     },
     runPython(script, { globals }) {
-      if (script.includes("required_packages_json")) {
+      if (script.includes("_manim_namespace.required_packages_json(")) {
         events.push(["implicit-required", globals.values.get("__noon_dependency_source")]);
         return JSON.stringify(requiredPackages);
       }
-      if (script.includes("missing_packages_json")) {
+      if (script.includes("_manim_namespace.missing_packages_json(")) {
         const requested = JSON.parse(globals.values.get("__noon_required_packages_json"));
         events.push(["implicit-missing", requested]);
         return JSON.stringify(missingPackages ?? requested);
       }
-      if (script.includes("bind_loaded_packages_json")) {
+      if (script.includes("_manim_namespace.bind_loaded_packages_json(")) {
         const requested = JSON.parse(globals.values.get("__noon_required_packages_json"));
         events.push(["implicit-bind", requested]);
         return undefined;
