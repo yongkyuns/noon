@@ -103,6 +103,15 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
         self.program.session()
     }
 
+    /// Query the existing runtime-owned spatial cache without advancing time,
+    /// invoking callbacks, consuming a publication or admitting a continuation.
+    pub fn query_viewport(
+        &mut self,
+        bounds: noon_core::Rect,
+    ) -> crate::integration::ExecutionViewportQuery {
+        self.program.query_viewport(bounds)
+    }
+
     fn observation(&self) -> SampleObservation {
         SampleObservation {
             requested_time: self.requested_time,
