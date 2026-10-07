@@ -124,4 +124,192 @@ fn native_temporal_translation_matches_published_states() {
             );
         }
     }
+    qualify_export_sampling_pixels();
+}
+
+// Couple the real retained raster path to P1 without promoting this software-GPU
+// fixture into a production host. Endpoint/prefix images are consumed, not output.
+fn qualify_export_sampling_pixels() {
+    use std::{cell::RefCell, rc::Rc};
+
+    use noon::integration::{
+        ExportFrameOptions, ExportFrameSummary, ExportFrames, ExportFramesStatus, ExportStop,
+        FrameRate, HostCallbackId, SemanticMutationTransaction,
+    };
+    use noon::{ContinuationStep, LiveContinuation, LiveSession, LiveSessionError, Mobject};
+
+    struct Source {
+        object: Mobject,
+        stage: usize,
+    }
+
+    impl LiveContinuation for Source {
+        type Error = LiveSessionError;
+
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            let stage = self.stage;
+            self.stage += 1;
+            match stage {
+                0 => Ok(ContinuationStep::Await(live.wait_segment(0.105)?)),
+                1 => Ok(ContinuationStep::Await(live.wait_segment(0.207)?)),
+                _ => {
+                    live.set_translation(&self.object, 2.0, -1.0)?;
+                    Ok(ContinuationStep::Finished)
+                }
+            }
+        }
+    }
+
+    struct Capture {
+        pts: u64,
+        source_index: u64,
+        requested: f64,
+        published: f64,
+        held: bool,
+        pixels: Vec<u8>,
+    }
+
+    struct Run {
+        frames: Vec<Capture>,
+        trace: Vec<(f64, f64)>,
+        summary: ExportFrameSummary,
+    }
+
+    fn capture_run(start_frame: u64, hold: f64) -> Run {
+        let mut scene = Scene::new();
+        let mut object = scene.square(1.0).unwrap();
+        object.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
+        object.set_stroke_width(0.0).unwrap();
+        object.set_translation(-2.0, 1.0).unwrap();
+        scene.add(&object).unwrap();
+        let callback = HostCallbackId::new(189_604);
+        let mut registration = SemanticMutationTransaction::new();
+        registration.add_updater(object.node_id(), callback, 0.0, None);
+        registration
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let trace = Rc::new(RefCell::new(Vec::new()));
+        let callback_trace = Rc::clone(&trace);
+        let mut callbacks = noon::RustHostCallbackTable::new();
+        callbacks
+            .insert(callback, move |context| {
+                callback_trace
+                    .borrow_mut()
+                    .push((context.time(), context.delta_time()));
+                let mut transform = context.target_state().transform;
+                transform.translation.x += (context.delta_time().powi(2) + 0.03) as f32;
+                context.set_target_transform(transform)
+            })
+            .unwrap();
+        let mut program = scene
+            .into_live_program(Source { object, stage: 0 })
+            .unwrap();
+        let options = ExportFrameOptions {
+            frame_rate: FrameRate::new(30, 1).unwrap(),
+            start_frame,
+            stop: ExportStop::SourceEnd,
+            max_frames: 32,
+            max_transitions_per_sample: 32,
+            final_hold_seconds: hold,
+        };
+        let mut export = ExportFrames::new(&mut program, &mut callbacks, options).unwrap();
+        let mut raster = pollster::block_on(Raster::with_dimensions(257, 129));
+        let mut frames = Vec::new();
+        for _ in 0..1_000 {
+            match export.advance().unwrap() {
+                ExportFramesStatus::Progress => {}
+                ExportFramesStatus::PublicationPending(context) => {
+                    {
+                        let publication = export.take_renderer_publication().unwrap();
+                        assert_eq!(publication.context(), context);
+                        drop(raster.capture(&publication));
+                    }
+                    export.admit_endpoint(context).unwrap();
+                }
+                ExportFramesStatus::SampleReady(sample) => {
+                    let trace_before = trace.borrow().clone();
+                    let pixels = {
+                        let publication = export.take_renderer_publication().unwrap();
+                        assert_eq!(publication.context(), sample.observation.publication);
+                        raster.capture(&publication)
+                    };
+                    assert_eq!(*trace.borrow(), trace_before, "capture invoked a callback");
+                    assert_eq!(
+                        export.session().frame().time,
+                        sample.observation.published_time
+                    );
+                    if let Some(frame) = sample.frame {
+                        assert_eq!(
+                            frame.source_sample.authored_time(),
+                            sample.observation.requested_time
+                        );
+                        assert_eq!(pixels.len(), 257 * 129 * 4);
+                        frames.push(Capture {
+                            pts: frame.pts,
+                            source_index: frame.source_sample.index(),
+                            requested: sample.observation.requested_time,
+                            published: sample.observation.published_time,
+                            held: frame.held,
+                            pixels,
+                        });
+                    }
+                    export.acknowledge_sample(sample).unwrap();
+                }
+                ExportFramesStatus::Complete(summary) => {
+                    assert_eq!(summary.frames, frames.len() as u64);
+                    let trace = trace.borrow().clone();
+                    return Run {
+                        frames,
+                        trace,
+                        summary,
+                    };
+                }
+            }
+        }
+        panic!("real-GPU export fixture exhausted its cooperative step budget");
+    }
+
+    let full = capture_run(0, 0.0);
+    let crop = capture_run(4, 0.0);
+    let held = capture_run(0, 0.1);
+    assert_eq!(
+        (full.frames.len(), crop.frames.len(), held.frames.len()),
+        (10, 6, 13)
+    );
+    assert_eq!(full.trace, crop.trace);
+    assert_eq!(full.trace, held.trace);
+    for (index, frame) in full.frames.iter().enumerate() {
+        assert_eq!(frame.pts, index as u64);
+        assert_eq!(frame.source_index, index as u64);
+        assert_eq!(frame.requested, index as f64 / 30.0);
+        assert_eq!(frame.published, frame.requested);
+        assert!(!frame.held);
+        assert!(
+            frame.pixels == held.frames[index].pixels,
+            "hold changed prefix pixels"
+        );
+    }
+    for (index, (actual, expected)) in crop.frames.iter().zip(&full.frames[4..]).enumerate() {
+        assert_eq!(actual.pts, index as u64);
+        assert_eq!(actual.source_index, expected.source_index);
+        assert_eq!(actual.requested, expected.requested);
+        assert_eq!(actual.published, expected.published);
+        assert!(
+            actual.pixels == expected.pixels,
+            "crop pixels differ at {index}"
+        );
+    }
+    let source_end = held.summary.source_end.unwrap();
+    for frame in &held.frames[10..] {
+        assert!(frame.held && frame.requested > source_end);
+        assert_eq!(frame.published, source_end);
+        assert!(
+            frame.pixels == held.frames[10].pixels,
+            "terminal hold changed pixels"
+        );
+        let (x, y) = blue_centroid(&frame.pixels, 257, 129);
+        assert!((x - (128.0 + 2.0 * 129.0 / 8.0)).abs() <= 1.0);
+        assert!((y - (64.0 + 129.0 / 8.0)).abs() <= 1.0);
+    }
+    eprintln!("native export: 10 full / 6 cropped / 13 held frames; identical callback traces");
 }
