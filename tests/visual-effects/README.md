@@ -6,14 +6,19 @@ acceptance specification and reference-fixture description, not another roadmap.
 Inspection base: `9028672c1691d3a318c87da50e8b08e0802245f0`. The subsequent API
 review checked the unchanged public authoring hooks at `6f7b7f008c45288bf3b92a417078b907d5e4ef5c`.
 
-**Status: partial M0, not an accepted API freeze.** Shared Rust parameters and
-real authored leaf attachments now exist in the normal SemanticStore. Rust Scene,
-Mobject and target-copy operations are implemented; their tests exercise actual
-transactions, identity, mutation, copying and retirement. Effect execution, Python
-bindings, actual animation activation/ownership and GPU rendering remain unavailable.
-Running-scene publication and execution bootstrap fail explicitly rather than
-accepting an invisible effect. No rendering, seek or pulse-lifecycle pass follows
-from these declaration tests.
+**M0 design review:** the named leaf-glow contract below is the implementation
+baseline. This is a design decision, not enabled effects or a merge qualification.
+The authored Rust subset is implemented and tested through the actual shared
+owners. The complete paired source review is in `authoring_review.py` and
+`authoring_review.rs`; it includes proposed M1–M4 operations and is **syntax-checked,
+not executed as a supported cross-language product**. Do not add mock operations
+to make those sources appear to run. The existing native declaration example
+remains the executable proof of the supported M0 subset.
+
+M0's four design/reference deliverables are separate from the later runtime and
+GPU implementation gates in #1897. Required PR checks and human acceptance remain
+separate from this recorded review. No rendered-glow, direct-seek, pulse-lifecycle,
+Python-binding or physical-performance result follows from declaration tests.
 
 ## Implemented shared Rust boundary
 
@@ -104,7 +109,7 @@ fn authored_contract() -> Result<(), Box<dyn std::error::Error>> {
 Ordinary object/target/family copying creates independent attachment identities
 inside the same transaction; aliased leaves are copied once. Names and order are
 retained. Unrelated geometry/layout and painter membership are unchanged.
-Nonstructural parameter changes emit `EffectParameters`, distinct from structural
+Nonstructural parameter changes emit `EffectParameter`, distinct from structural
 `EffectAttachment` impacts, and touch one attachment slot. Name lookup/removal is
 linear in that owner's effect count, not total scene size. Nodes without effects
 allocate no attachment collection. The store maintains an allocator-derived count
@@ -142,8 +147,7 @@ unrelated parameters. Failures preserve all earlier ordinary/effect state and th
 scene revision. This is real authored-transaction behaviour, not yet runtime
 animation leases or effect rendering. Existing execution support guards remain.
 
-## Revised creator-facing grammar (Python/composition design)
-
+## First-glow calling conventions
 
 The ordinary API stays object-centred. Do not make effect handles another required
 kind of animated scene object or introduce `play_effect`, `GlowTo` or `AnimateGlow`.
@@ -162,9 +166,39 @@ This supersedes the earlier handle-returning `add_effect`, `obj.effect(...)`, an
 handle-centric `.animate.set(...)` examples. Python setters return their receiver.
 Rust follows existing checked Scene/LiveSession and target-editor conventions;
 copying Python's fluent syntax is not a reason to bypass live publication.
-New Noon effects live in one discoverable Noon-native namespace; they are not
-asserted to be existing ManimCE effects or added to compatibility exports blindly.
-`noon.effects` remains the proposed Python namespace, not a module shipped here.
+Python imports use **`from noon import Glow, GlowPulse, Pixels`**, alongside
+ordinary animation names. The current frontend is the module `noon.py`, not a
+`noon` package; do not require a new package hierarchy or inject a synthetic
+`noon.effects` module. Rust uses its existing `noon::effects` module. These are
+idiomatic namespaces over the same operations, not different effects engines.
+Do not add new names to the Manim compatibility export inventory as if ManimCE
+already defined them. Python exports/bindings are an M1 implementation task.
+
+`Glow` describes values; `GlowPulse` describes a timed action. Python appearance
+parameters are keyword-only. On setters, `None` means omitted/preserve, like
+ordinary style setters; on initial construction it selects the documented default.
+Rust's `GlowUpdate` expresses the same distinction with `Option`. Boolean, string
+numbers, nonfinite numbers and unknown keys are rejected, not coerced permissively.
+The operator reference's narrow scalar parser is not the shipping wrapper parser.
+Names are required, case-sensitive nonempty strings. The first slice has no
+anonymous-stack append or rename API. Creation, query and update are distinct:
+`add_effect` never upserts; `set_effect` requires a binding; only `set_glow` upserts.
+
+`get_effect(name)` resolves **only the exact receiver's attachment**, never its
+children, parents, original copy or aliases. Rust target editors use the copied
+binding's name/handle; a source handle is a wrong-owner error on that target.
+Python `.animate.set_effect("accent", ...)` resolves source identity and target
+correspondence in shared Rust. It must preserve the source generation: removing
+and re-adding `accent` before activation cannot redirect an old animation to the
+replacement. No recursive getter, list-or-handle return, or last-name-wins rule.
+The first animated surface uses names; arbitrary raw-handle remapping behind
+`.animate` is not implicitly promised. Static handle updates remain generation-safe.
+
+Current `EffectHandle::authored_definition()` is explicitly an authored query.
+The proposed Python handle `get_parameters()` observes a coherent effective value
+once execution is supported (authored value before bootstrap); Rust live queries
+use the existing live/session owner, not an effect handle's private runtime.
+Returned parameter records are observations, never independently mutable scene state.
 
 ### Manim comparison and intentional extensions
 
@@ -186,83 +220,81 @@ of those behaviours. Keep precise disjoint-channel support a tested Noon extensi
 do not infer it from Manim's warning against separate simultaneous method
 animations of the same object.
 
-### Introductory Python review specimen
+### Existing appearance composition
 
-```python
-from noon import Circle, Scene, RIGHT, linear
-from noon.effects import GlowPulse
+`set_fill`/`set_stroke` and their ordinary target edits keep ownership of paint,
+including the existing `SemanticPaint` gradient model. A local procedural paint
+must extend that same appearance-value seam rather than introduce unrelated
+`set_shader`, raw-uniform or material-only animation APIs. A filter such as Glow
+operates on source output and therefore uses an attachment. The author chooses
+appearance and scope; whether the renderer needs one draw or extra passes stays
+an implementation detail. Custom program/schema resources remain M4 and must use
+the same parameter/composition contract; the current closed Glow enum is not
+claimed to be that external-extension proof.
 
-class LuminousExplanation(Scene):
-    def construct(self):
-        dot = Circle(radius=0.08).set_fill("#FFFFFF", opacity=1).set_stroke(width=0)
-        dot.set_glow(radius=0.15, intensity=0.35)
-        self.add(dot)
-        self.play(dot.animate.shift(RIGHT * 2).set_glow(intensity=1.2),
-                  run_time=1.5, rate_func=linear)
-        self.play(GlowPulse(dot, intensity=2.0), run_time=0.6)
-        self.wait(0.5)
-        self.play(dot.animate.set_glow(intensity=0.0), run_time=0.4, rate_func=linear)
-        dot.remove_glow()
-```
+### Complete paired source review
 
-At t=0/.75/1.5, x=0/1/2 and intensity=.35/.775/1.2. The pulse captures 1.2 at
-activation, reaches 2 at 1.8 and restores 1.2 at 2.1. Wait ends at 2.6, intensity
-is .6 at 2.8 and exactly 0 at 3.0. Explicit removal retires the binding without
-advancing time. The source resumes only after the normal completion barrier.
-No per-frame Python callback is needed for deterministic effects.
+`authoring_review.py` and `authoring_review.rs` each contain **both complete
+programs**. Proposed operations are marked with their implementation milestone.
+Python uses sequential `play`/`wait`; Rust uses normal `LiveContinuation` and
+`ContinuationStep::Await`. Neither source invents per-frame dispatch, a shader
+clock, renderer resources, `Scene.seek`, or an effects-specific playback loop.
+The Rust review uses the existing declaration-and-activation naming convention
+for its proposed pulse/parameter leaves. It must not publish the cold
+`Scene::declare_animation` helper into an already-running store.
 
-The future rendered Rust counterpart must use the same filled, unstroked circle
-and values. The declaration-only Rust example now exercises real `Scene::set_glow`,
-target editing and `declare_transform_to`, but it does not yet play this animation.
-Do not publish a cold `declare_animation` directly against a running store.
-Runtime parameter channels, actual effective observations, temporary pulse lifecycle
-and mixed-feature source continuation remain implementation gaps.
+| Program / checkpoint after normal logical completion | Expected state in both languages |
+| --- | --- |
+| Luminous, t=0 / .75 / 1.5 | x=0 / 1 / 2; intensity=.35 / .775 / 1.2 |
+| Luminous pulse, t=1.8 / 2.1 | intensity=2 / 1.2; capture is 1.2, not its declaration-time .35 |
+| Luminous wait/fade, t=2.6 / 2.8 / 3.0 | intensity=1.2 / .6 / 0; source continuation then removes `glow` without advancing time |
+| Mixed parallel, t=1.5 | dot x=2, glow=1.2; title accent=1.4 |
+| Mixed pulse, t=1.8 / 2.1 | dot glow=2 / 1.2; other attachments unchanged |
+| Mixed succession, t=2.6 / 3.1 | scan phase=1, then dot glow=.5; live group-halo edit sets .25 at 3.1 |
+| Mixed view, t=3.6 / 3.75 / 3.9 | bloom intensity=.5 / .25 / 0; source then removes bloom, group-halo, scan and click binding |
 
-### Mixed-content/group review specimen
+The mixed fixture pins Text("Signal"), regular DejaVu Sans Mono at 48 points,
+three path points (-2,-1), (0,1), (2,-1), white two-unit stroke/no fill, and the
+inline straight 2x2 RGBA8 bytes. Image height is one scene unit; both dots have
+radius .08, opaque white fill and no stroke. The nested group is displayed, while
+the separate aliased family is for query/copy review and is not also isolated.
+The new actual Rust mixed-content test uses text/path/image/nested aliases to
+check independent leaf attachments and unchanged source membership; it does
+**not** claim that the proposed group filter or custom effect renders.
 
-```python
-import numpy as np
-from noon import Circle, Group, ImageMobject, Scene, Text, VMobject, UP, linear
-from noon.effects import Glow, GlowPulse, Pixels
-from effect_fixture import ScanBand
+The external M4 `effect_fixture.ScanBand` contract remains: local normalized x,
+width in (0,1], phase in [0,1], yellow band where abs(x-phase)<=width/2, clipped by
+source alpha. Width=.2, phase=.5, x=0/.5/1 gives mask 0/1/0. Independently
+supersample discontinuous edges. Bloom's HDR mathematics and the custom
+shader/resource ABI remain M4; this review fixes their **calling convention**,
+not unspecified HDR output or an already-extensible production enum.
 
-class MixedExpression(Scene):
-    def construct(self):
-        title = Text("Signal").shift(UP * 2)
-        path = VMobject().set_points_as_corners([(-2, -1, 0), (0, 1, 0), (2, -1, 0)])
-        image = ImageMobject(np.array([[[255, 0, 0, 255], [0, 0, 255, 0]],
-                                     [[0, 255, 0, 128], [255, 255, 255, 255]]],
-                                    dtype=np.uint8))
-        dot = Circle(radius=0.08)
-        inner = Group(path, image)
-        group = Group(inner, dot)
-        self.add(group, title)
-        group.add_effect(Glow(radius=Pixels(12)), name="accent", scope="composed")
-        title.add_effect(ScanBand(width=0.2, phase=0.0), name="scan")
-        self.play(group.animate.set_effect("accent", intensity=1.4),
-                  run_time=1.0, rate_func=linear)
-        self.play(title.animate.shift(UP).set_effect("scan", phase=1.0),
-                  run_time=1.0, rate_func=linear)
-        self.play(GlowPulse(dot, intensity=2.0), run_time=0.6)
-        group.set_effect("accent", intensity=0.25)
-        self.wait(0.5)
-        group.remove_effect("accent")
-```
+**View scope decision:** use the existing authored camera frame:
+`self.camera.frame.add_effect(Bloom(...), name="bloom", scope="view")` and
+`self.camera.frame.animate.set_effect("bloom", ...)`. Rust obtains the same
+semantic controller with existing `Scene::camera_frame()` before adding objects.
+The review uses `MovingCameraScene`; it does not pretend every Manim Scene has
+an animatable Camera or that `Scene.animate` exists. The scope means the camera's
+composed authored output, **not the invisible frame rectangle's paint or opacity**.
+The controller's motion changes the view through the ordinary camera path.
+An ambiguous camera shared by multiple distinct authored views is rejected in
+the initial view profile; multiple hosts rendering the same authored view are not
+such ambiguity. No new ordinary `output_view()` object is required.
 
-Both Python blocks are syntax-checked review specimens, not executable support.
-Pin regular DejaVu Sans Mono at 48 points, source paint, image sizing and those
-exact 2x2 bytes in the future native Rust/Python pair. The Rust source fixture uses
-ordinary `Scene::text`, paths, `image_rgba8` and family operations, not an effects
-scene builder. `effect_fixture.ScanBand` is a future external extension fixture,
-not an available package: normalized local x, width in (0,1], phase in [0,1], yellow
-band where abs(x-phase)<=width/2, clipped by source alpha. At width=.2, phase=.5,
-x=0/.5/1 gives mask 0/1/0. Independently supersample its discontinuous edges.
+**Live/input/seek review:** register animation intent with `on_click(target,
+animation)`; `None` clears that one binding. A new registration atomically replaces
+it, rather than accumulating hidden listeners. Rust follows the same intent via
+`Option<&DeclaredAnimation>`. Implementation extends existing shared admission,
+not Python event-driven uniform writes. During the mixed authored intensity write,
+a click is suppressed. During its wait it captures .5; clicks at interaction times
+0 and .2 start only one .6-second pulse, restoring .5 at .6. A new click at .7 may
+activate again. Seek/reload retires transient interaction invocations.
 
-Scene/output effects must have the same parameter and timing grammar, but the
-creator-facing Scene entry is still under review. This revision removes the
-unjustified requirement to call `output_view()` in ordinary scripts; it does not
-replace it with an equally unqualified scene `.animate` API. HDR Bloom mathematics,
-custom WGSL/resource ABI and the outside-central-dispatch extension proof remain M4.
+Forward/rewind tests are host-controlled comparisons at the same authored time
+and publication phase. An endpoint sample before source continuation may still
+have a neutral attachment that the subsequent continuation removes; do not compare
+those as identical phases. Effect sampling uses the same rational authored-time
+input as other properties; transport latency/frame count does not select its phase.
 
 ## Identity, family scope and lifecycle requirements
 
@@ -273,13 +305,28 @@ Additional names are independent and painter-ordered. Omitted fields preserve
 current values; an empty patch creates documented defaults only when no binding
 exists. An empty patch on an existing binding is a no-op.
 
-Family treatment and composed filtering are different. Default `scope="family"`
-means the existing unique render-leaf family semantics; on a leaf it means that
-leaf. `scope="composed"` explicitly means filtering one composed painter result.
-The same scope option must exist on the convenience operation, with generic and
-canonical equivalence. Scope is structural, not animatable. Switching scope
-requires explicit removal/re-attachment rather than silent conversion.
-Do not redefine Group/VGroup deduplication or layout just to simplify filtering.
+**Scope and group decision:** the first supported named glow binds one leaf.
+Later group attachment creation must explicitly request `scope="each"` or
+`scope="composed"`; omitted scope on a new group binding is an error, not an
+implicit isolation or a style-family broadcast. Each choice creates **one binding
+on that exact group**, so `group.get_effect(name)` still returns one handle and
+`group.animate.set_effect(name, ...)` edits its parameters normally.
+`each` treats each unique current displayed leaf independently with those shared
+parameters; `composed` treats one composed painter result. Neither choice rewrites
+leaf attachment state. Independent leaf effects precede group treatment.
+Ordinary Manim-style `set_fill`/`set_stroke` family propagation is unchanged; it
+is deliberately not used to fake a many-owner effect handle. Authors can also
+explicitly attach independent effects to chosen leaves, as the current Rust test
+and API already permit.
+
+Scope is fixed at binding creation. Later parameter setters do not repeat or
+change it; convenience `set_glow` updates the existing canonical binding's scope.
+New group canonical bindings also require explicit scope. Initial group stacks
+must not mix `each` and `composed`: loss of source separation is not silently
+resolved by reordering passes. Membership changes use existing shared family
+semantics and atomic validation, with alias leaves processed once. Scope support,
+its typed Rust options and family target overloads are M3/M4 work; no supported
+leaf call changes meaning as a consequence of this review.
 
 For initial composed support, validate actual painter-contiguous isolation.
 External interleaving or unsupported cross-scope aliasing fails before publication;
@@ -292,8 +339,11 @@ attachment order is observable and filters need not commute.
 
 An absent-to-present animated glow begins only at activation, from intensity zero
 and validated target/default values for other fields; a constructed builder has
-no live effect. At ordinary completion requested target values persist. Removing
-an attachment is structural: animate to neutral, then remove. Copy creates
+no live effect. Ordinary completion persists the **sampled endpoint under the chosen
+time map**, not unconditionally the requested target. In particular a returning rate restores
+the captured scalar value; a newly introduced ordinary binding may persist neutral
+until explicitly removed. This is distinct from GlowPulse's temporary lifecycle.
+Removing an attachment is structural: animate to neutral, then remove. Copy creates
 independent attachment identities/values and shares immutable program inputs.
 Target copies retain correspondence; unsupported stack/program transitions fail
 before playback. Save/restore includes order/parameters; restoring a retired
@@ -310,8 +360,11 @@ A rate override replaces the amplitude map; a non-returning map may be discontin
 at the required lifecycle restoration. Completion restores only still-owned
 channels. An introduced temporary binding is removed only if its generation and
 temporary ownership remain valid. A persistent live edit adopts it, supersedes
-its touched channels, and prevents whole-attachment cleanup. Zero duration admits
-and completes once without a leaked attachment or visible peak. Ordinary FadeOut
+its touched channels, and prevents whole-attachment cleanup. Timed glow/pulse
+animations require finite **positive** duration through the same ordinary option
+resolver. Zero/negative/nonfinite duration fails before allocation
+or publication. Use the untimed setter for an immediate change; do not introduce
+an effects-only zero-duration admission/completion path. Ordinary FadeOut
 must remove source and attached output together; intensity is not object opacity.
 
 Click-triggered GlowPulse must extend the existing shared native action/admission
@@ -404,6 +457,15 @@ M1; broader source/group pass planning stays in M3, in the existing renderer.
 
 ## References, negative controls and evidence
 
+The first glow uses the shared option precedence: animation defaults, then
+animation-local options (including `.animate(...)`), then explicit `play` overrides.
+Its normal target-animation defaults remain one second and Smooth; GlowPulse uses
+one second and ThereAndBack unless overridden. Current supported bounded shared
+rate functions are the initial surface; arbitrary host rate callables/unbounded
+overshoot are not secretly accepted or clamped by the glow sampler. Generic
+parameter/pulse leaves reject Transform-only path-arc options through the normal
+resolver. A motion-plus-glow Transform retains its existing path-arc contract.
+
 The independent Python `reference.py` has no product imports. It evaluates a slow
 direct 2D sum with doubles, unlike a production separable/multiresolution blur.
 For sigma=1/sqrt(2 ln2), unnormalized taps are 2^(-k^2); the hand-derived 1D taps
@@ -443,6 +505,7 @@ cargo test -p noon --no-default-features --lib effect_authoring
 cargo run -p noon --no-default-features --example effect_authoring_contract
 cargo test -p noon-core --doc
 python3 -m unittest discover -s tests/visual-effects -p 'test_*.py' -v
+rustfmt --edition 2021 --check tests/visual-effects/authoring_review.rs
 node --test .github/ci/visual-effects-reference.test.mjs
 bash scripts/check.sh fast
 ```
@@ -498,6 +561,8 @@ passes, targets, global scan or unconditional time updates.
 | Retained renderer, presentation/inset and Cairo colour | Minimal primitive mask/filter work, safe source bounds and local parameter updates; no new renderer |
 | Existing native/web/offscreen hosts | Same semantic/runtime path, capability queries and resource-generation recovery |
 
-M0 remains incomplete until the creator-facing Rust/Python contract and supported
-composition/lifecycle boundaries are qualified. The authored Rust surface is now executable and tested,
-but is not a substitute for effective-channel/lifecycle integration or M1 rendering.
+The M0 source review, first-glow decisions, independent references and reuse
+inventory are recorded here. Actual execution tests of those decisions belong to
+the named implementation promotions, not to a mock scene added to satisfy a test.
+M0 merge still requires applicable repository CI; neither this review nor old-head
+performance evidence establishes a current-head merge pass.

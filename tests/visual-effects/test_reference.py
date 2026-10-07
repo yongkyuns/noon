@@ -2,7 +2,6 @@
 import ast
 import json
 import math
-import re
 from pathlib import Path
 import unittest
 
@@ -215,11 +214,26 @@ class NegativeControls(unittest.TestCase):
 
 class FixtureIntegrity(unittest.TestCase):
     def test_python_review_specimens_parse_without_importing_proposed_api(self):
-        blocks = re.findall(r"```python\n(.*?)```", (HERE / "README.md").read_text(), re.S)
-        self.assertEqual(len(blocks), 2)
-        for code in blocks:
-            tree = ast.parse(code)
-            self.assertTrue(any(isinstance(node, ast.ClassDef) for node in tree.body))
+        # Source/grammar integrity only. No mocked Scene or product effects run.
+        tree = ast.parse((HERE / "authoring_review.py").read_text())
+        self.assertEqual({node.name for node in tree.body if isinstance(node, ast.ClassDef)},
+                         {"LuminousExplanation", "MixedEffectsReview"})
+        imports = [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+        self.assertFalse(any(node.module == "noon.effects" for node in imports))
+        noon_names = {alias.name for node in imports if node.module == "noon"
+                      for alias in node.names}
+        self.assertTrue({"Glow", "GlowPulse", "Pixels", "AnimationGroup", "Succession"} <= noon_names)
+
+    def test_paired_review_is_not_mislabelled_as_shipping_implementation(self):
+        python_source = (HERE / "authoring_review.py").read_text()
+        rust_source = (HERE / "authoring_review.rs").read_text()
+        self.assertIn("NOT an enabled/shipping example", python_source)
+        self.assertIn("NOT a compiled shipping example", rust_source)
+        for name in ("LuminousExplanation", "MixedEffectsReview"):
+            self.assertIn("impl LiveContinuation for " + name, rust_source)
+        self.assertIn("effect_authoring_contract.rs", rust_source)
+        self.assertIn("scope=\"view\"", python_source)
+        self.assertIn("EffectScope::View", rust_source)
 
     def test_qualification_manifest_is_explicitly_not_measurement_evidence(self):
         protocol = json.loads((HERE / "qualification.json").read_text())

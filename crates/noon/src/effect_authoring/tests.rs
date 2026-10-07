@@ -230,3 +230,5 @@ fn state_only_replacement_fails_before_losing_attachment_correspondence() {
     assert_eq!(scene.revision(), revision);
     assert!(source.get_effect("glow").is_ok());
 }
+
+mod contract;
