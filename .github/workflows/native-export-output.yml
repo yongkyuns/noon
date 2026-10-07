@@ -64,6 +64,11 @@ jobs:
           sudo apt-get install -y ffmpeg mesa-vulkan-drivers libvulkan1
           ffmpeg -version > output-proof/ffmpeg.txt
           ffprobe -version > output-proof/ffprobe.txt
+      - name: Verify media checker rejects corrupted proofs in all Python modes
+        run: |
+          python3 scripts/test_verify_native_export.py
+          python3 -O scripts/test_verify_native_export.py
+          python3 -OO scripts/test_verify_native_export.py
       - name: Test capture and output, including process failures
         run: |
           set -o pipefail

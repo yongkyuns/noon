@@ -17,39 +17,61 @@ def run(args: list[str]) -> bytes:
     return result.stdout
 
 
+# These tests are executable validation, not debug-only Python assertions.
+# A disabled assertion under -O/-OO would silently certify a corrupted movie.
+EXPECTED_CASES = {
+    'camera-30': (30, 1, 320, 180, 90, 'true'),
+    'camera-2997': (30_000, 1_001, 320, 180, 90, 'false'),
+    'camera-5994': (60_000, 1_001, 320, 180, 180, 'false'),
+}
+
+
+class VerificationError(RuntimeError):
+    """The proof corpus violates its independently pinned export contract."""
+
+
+def require(condition: bool, description: object) -> None:
+    if not condition:
+        raise VerificationError(str(description))
+
+
 def verify(root: Path) -> list[dict]:
     reports = []
     rows = list(csv.DictReader((root / 'cases.tsv').open(), delimiter='\t'))
-    assert len(rows) == 3, 'incomplete proof corpus'
+    require(len(rows) == len(EXPECTED_CASES) and
+            {row['name'] for row in rows} == set(EXPECTED_CASES),
+            'missing, duplicated or unexpected export proof cases')
     for row in rows:
         name = row['name']
         p, q, width, height, count = (int(row[k]) for k in ('p', 'q', 'width', 'height', 'frames'))
+        require((p, q, width, height, count, row['png']) == EXPECTED_CASES[name],
+                f'{name}: proof frame rate, dimensions, count or PNG selection changed')
         video = root / f'{name}.mp4'
         probe = json.loads(run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_frames',
             '-show_streams', '-show_frames', '-of', 'json', str(video)]))
         (stream,) = probe['streams']
-        assert stream['codec_name'] == 'h264'
-        assert (stream['width'], stream['height']) == (width, height)
-        assert stream['pix_fmt'] == 'yuv420p'
-        assert Fraction(stream['r_frame_rate']) == Fraction(p, q)
-        assert Fraction(stream['avg_frame_rate']) == Fraction(p, q)
-        assert Fraction(stream['time_base']) == Fraction(1, p)
-        assert int(stream['nb_read_frames']) == count
-        assert int(stream['start_pts']) == 0
-        assert int(stream['duration_ts']) == count * q
-        assert [int(f['pts']) for f in probe['frames']] == [i * q for i in range(count)]
-        assert stream['color_range'] == 'tv'
-        assert stream['color_space'] == 'bt709'
-        assert stream['color_primaries'] == 'bt709'
-        assert stream['color_transfer'] == 'iec61966-2-1'
+        require(stream['codec_name'] == 'h264', "video proof failed: stream['codec_name'] == 'h264'")
+        require((stream['width'], stream['height']) == (width, height), "video proof failed: (stream['width'], stream['height']) == (width, height)")
+        require(stream['pix_fmt'] == 'yuv420p', "video proof failed: stream['pix_fmt'] == 'yuv420p'")
+        require(Fraction(stream['r_frame_rate']) == Fraction(p, q), "video proof failed: Fraction(stream['r_frame_rate']) == Fraction(p, q)")
+        require(Fraction(stream['avg_frame_rate']) == Fraction(p, q), "video proof failed: Fraction(stream['avg_frame_rate']) == Fraction(p, q)")
+        require(Fraction(stream['time_base']) == Fraction(1, p), "video proof failed: Fraction(stream['time_base']) == Fraction(1, p)")
+        require(int(stream['nb_read_frames']) == count, "video proof failed: int(stream['nb_read_frames']) == count")
+        require(int(stream['start_pts']) == 0, "video proof failed: int(stream['start_pts']) == 0")
+        require(int(stream['duration_ts']) == count * q, "video proof failed: int(stream['duration_ts']) == count * q")
+        require([int(f['pts']) for f in probe['frames']] == [i * q for i in range(count)], "video proof failed: [int(f['pts']) for f in probe['frames']] == [i * q for i in range(count)]")
+        require(stream['color_range'] == 'tv', "video proof failed: stream['color_range'] == 'tv'")
+        require(stream['color_space'] == 'bt709', "video proof failed: stream['color_space'] == 'bt709'")
+        require(stream['color_primaries'] == 'bt709', "video proof failed: stream['color_primaries'] == 'bt709'")
+        require(stream['color_transfer'] == 'iec61966-2-1', "video proof failed: stream['color_transfer'] == 'iec61966-2-1'")
         raw_path = root / f'{name}.rgba'
         reference = raw_path.read_bytes()
         frame_bytes = width * height * 4
-        assert len(reference) == count * frame_bytes
+        require(len(reference) == count * frame_bytes, "video proof failed: len(reference) == count * frame_bytes")
         decoded = run(['ffmpeg', '-v', 'error', '-nostdin', '-i', str(video), '-frames:v', str(count + 1),
             '-vf', 'scale=in_range=limited:out_range=full:in_color_matrix=bt709,format=rgba',
             '-fps_mode', 'passthrough', '-f', 'rawvideo', 'pipe:1'])
-        assert len(decoded) == len(reference)
+        require(len(decoded) == len(reference), "video proof failed: len(decoded) == len(reference)")
         errors, active_errors, hashes = [], [], []
         for i in range(count):
             expected = memoryview(reference)[i * frame_bytes:(i + 1) * frame_bytes]
@@ -60,10 +82,10 @@ def verify(root: Path) -> list[dict]:
                 if max(expected[j:j + 3]) > 12:
                     active_sum += sum(abs(expected[j + c] - actual[j + c]) for c in range(3))
                     active_count += 3
-            assert active_count > 0, f'{name}: empty oracle frame {i}'
+            require(active_count > 0, f'{name}: empty oracle frame {i}')
             active_error = active_sum / active_count
-            assert error <= 3.0, (name, i, 'RGBA mean error', error)
-            assert active_error <= 25.0, (name, i, 'foreground RGB mean error', active_error)
+            require(error <= 3.0, (name, i, 'RGBA mean error', error))
+            require(active_error <= 25.0, (name, i, 'foreground RGB mean error', active_error))
             errors.append(error)
             active_errors.append(active_error)
             hashes.append(hashlib.sha256(expected).hexdigest())
@@ -71,22 +93,22 @@ def verify(root: Path) -> list[dict]:
         if row['png'] == 'true':
             directory = root / f'{name}-png' / 'frames'
             files = sorted(directory.glob('frame-*.png'))
-            assert [f.name for f in files] == [f'frame-{i:010}.png' for i in range(count)]
+            require([f.name for f in files] == [f'frame-{i:010}.png' for i in range(count)], "video proof failed: [f.name for f in files] == [f'frame-{i:010}.png' for i in range(count)]")
             pixels = run(['ffmpeg', '-v', 'error', '-framerate', f'{p}/{q}', '-start_number', '0',
                 '-i', str(directory / 'frame-%010d.png'), '-frames:v', str(count + 1),
                 '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'])
-            assert pixels == reference, 'PNG sequence is not byte-identical to the independent capture'
+            require(pixels == reference, 'PNG sequence is not byte-identical to the independent capture')
             manifest = (directory / 'timing.tsv').read_text().splitlines()
-            assert manifest[0] == f'# noon-rgba8-v1 fps={p}/{q} width={width} height={height}'
-            assert manifest[-1] == f'# complete frames={count}'
+            require(manifest[0] == f'# noon-rgba8-v1 fps={p}/{q} width={width} height={height}', "video proof failed: manifest[0] == f'# noon-rgba8-v1 fps={p}/{q} width={width} height={height}'")
+            require(manifest[-1] == f'# complete frames={count}', "video proof failed: manifest[-1] == f'# complete frames={count}'")
             samples = list(csv.DictReader(manifest[1:-1], delimiter='\t'))
-            assert len(samples) == count
+            require(len(samples) == count, "video proof failed: len(samples) == count")
             for i, sample in enumerate(samples):
-                assert int(sample['pts']) == i == int(sample['source_index'])
-                assert abs(float(sample['requested_time']) - float(Fraction(i * q, p))) < 1e-14
-                assert sample['published_time'] == sample['requested_time']
-                assert sample['held'] == 'false'
-            assert not (directory.parent / '.incomplete').exists()
+                require(int(sample['pts']) == i == int(sample['source_index']), "video proof failed: int(sample['pts']) == i == int(sample['source_index'])")
+                require(abs(float(sample['requested_time']) - float(Fraction(i * q, p))) < 1e-14, "video proof failed: abs(float(sample['requested_time']) - float(Fraction(i * q, p))) < 1e-14")
+                require(sample['published_time'] == sample['requested_time'], "video proof failed: sample['published_time'] == sample['requested_time']")
+                require(sample['held'] == 'false', "video proof failed: sample['held'] == 'false'")
+            require(not (directory.parent / '.incomplete').exists(), "video proof failed: not (directory.parent / '.incomplete').exists()")
             png_identical = True
         report = {'name': name, 'frames': count, 'fps': f'{p}/{q}', 'time_base': f'1/{p}',
             'duration_ticks': count * q, 'decoded_all_frames': True, 'max_rgba_mean_error': max(errors),
