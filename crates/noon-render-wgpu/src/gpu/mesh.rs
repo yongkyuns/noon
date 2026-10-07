@@ -1030,7 +1030,6 @@ impl SpatialGpuState {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
-        resolve: Option<&wgpu::TextureView>,
         clear: wgpu::Color,
         sample_count: u32,
     ) -> DrawStats {
@@ -1040,7 +1039,7 @@ impl SpatialGpuState {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: color,
             depth_slice: None,
-            resolve_target: resolve,
+            resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(clear),
                 store: wgpu::StoreOp::Store,
