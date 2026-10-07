@@ -569,7 +569,6 @@ fn scene_path_alignment_rejects_foreign_before_resource_or_frame_publication() {
     assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
 }
 
-
 #[test]
 fn scene_subcurve_requires_running_and_captures_effective_state() {
     let mut scene = Scene::new();
@@ -597,13 +596,12 @@ fn scene_subcurve_requires_running_and_captures_effective_state() {
         .unwrap();
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
-    let segment = {
+    {
         let mut live = scene.owned_live();
         let segment = live.play_animation(&animation).unwrap();
         live.advance_segment_to(segment, 2.0).unwrap();
         live.complete_segment(segment).unwrap();
-        segment
-    };
+    }
     scene.owned_execution_mut().seek(1.0).unwrap();
 
     let selected = scene.subcurve(&source, 0.25, 0.75).unwrap();
@@ -638,6 +636,4 @@ fn scene_subcurve_requires_running_and_captures_effective_state() {
             .len(),
         resources
     );
-
-    let _ = segment;
 }
