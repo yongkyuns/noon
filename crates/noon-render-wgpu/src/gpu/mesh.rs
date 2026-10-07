@@ -5,7 +5,7 @@
 mod boundary;
 mod cairo;
 
-use super::spatial_path::{SpatialPathError, SpatialPathGpuState};
+use super::spatial_path::{DrawId, SpatialPathError, SpatialPathGpuState};
 use super::{create_buffer_with_data, DrawStats};
 use bytemuck::{Pod, Zeroable};
 use noon_core::{
@@ -112,6 +112,21 @@ struct StagedDraw {
     center: SemanticVec3,
     stroke: Option<Instance>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum DepthDraw {
+    Mesh(usize),
+    Path(DrawId),
+}
+
+impl DepthDraw {
+    fn order_key(self) -> (usize, u32) {
+        match self {
+            Self::Mesh(row) => (row, 0),
+            Self::Path(id) => (id.row, id.item),
+        }
+    }
+}
 #[derive(Debug)]
 struct GpuState {
     device: wgpu::Device,
@@ -152,7 +167,7 @@ pub(super) struct SpatialGpuState {
     meshes: HashMap<GeometryResourceHandle, ResidentMesh>,
     mesh_instances: BTreeMap<GeometryResourceHandle, InstanceRanges>,
     depth_ordered_draws: BTreeSet<usize>,
-    depth_order: Vec<usize>,
+    depth_order: Vec<DepthDraw>,
     stroked_draws: BTreeSet<usize>,
     instances: Vec<Instance>,
     free_instances: Vec<usize>,
@@ -722,8 +737,9 @@ impl SpatialGpuState {
             stats.geometry_bytes += bytes.len();
         }
         let mut dirty_strokes = Vec::new();
-        let mut depth_order_changed =
-            matrix != self.camera_matrix || changes.has_painter_order_change();
+        let mut depth_order_changed = matrix != self.camera_matrix
+            || changes.has_painter_order_change()
+            || path_stats.depth_order_changed;
         let mut dirty = BTreeSet::new();
         let mut released = BTreeSet::new();
         for (index, staged) in staged {
@@ -819,10 +835,19 @@ impl SpatialGpuState {
             }
         }
         if depth_order_changed {
-            self.depth_order = self.depth_ordered_draws.iter().copied().collect();
+            self.depth_order = self
+                .depth_ordered_draws
+                .iter()
+                .copied()
+                .map(DepthDraw::Mesh)
+                .chain(self.paths.depth_draws().map(DepthDraw::Path))
+                .collect();
             if let Some(camera) = cameras.values().next() {
-                let depth = |index: usize| {
-                    let p = self.draws[&index].center;
+                let depth = |draw: DepthDraw| {
+                    let p = match draw {
+                        DepthDraw::Mesh(index) => self.draws[&index].center,
+                        DepthDraw::Path(id) => self.paths.depth_center(id),
+                    };
                     camera
                         .orientation
                         .inverse()
@@ -836,10 +861,14 @@ impl SpatialGpuState {
                 // Camera looks along -Z: more negative view Z is drawn first.
                 self.depth_order.sort_by(|a, b| {
                     depth(*a).total_cmp(&depth(*b)).then_with(|| {
-                        let rank = |index: &usize| {
-                            self.paths.painter_rank(*index).unwrap_or(*index as u32)
+                        let rank = |draw: &DepthDraw| {
+                            let row = draw.order_key().0;
+                            self.paths.painter_rank(row).unwrap_or(row as u32)
                         };
-                        rank(a).cmp(&rank(b)).then(a.cmp(b))
+                        rank(a)
+                            .cmp(&rank(b))
+                            .then(a.order_key().cmp(&b.order_key()))
+                            .then(a.cmp(b))
                     })
                 });
             }
@@ -1087,8 +1116,25 @@ impl SpatialGpuState {
             }
         }
         // Opaque world paths populate depth before translucent faces blend.
-        draw_calls += self.paths.encode(&mut pass, sample_count);
-        for &index in &self.depth_order {
+        draw_calls += self.paths.encode(
+            &mut pass,
+            sample_count,
+            noon_core::SemanticSpatialCompositionDomain::World,
+        );
+        let mut using_path_pipeline = false;
+        for &item in &self.depth_order {
+            let index = match item {
+                DepthDraw::Mesh(index) => index,
+                DepthDraw::Path(id) => {
+                    if !using_path_pipeline {
+                        self.paths.bind_depth_pipeline(&mut pass, sample_count);
+                        using_path_pipeline = true;
+                    }
+                    draw_calls += self.paths.encode_depth_draw(&mut pass, id);
+                    continue;
+                }
+            };
+            using_path_pipeline = false;
             let draw = &self.draws[&index];
             let mesh = &self.meshes[&draw.handle];
             if self.instances[draw.instance].color[3] > 0.0 {
@@ -1119,6 +1165,11 @@ impl SpatialGpuState {
             }
             draw_calls += self.encode_boundary(&mut pass, gpu, draw, sample_count);
         }
+        draw_calls += self.paths.encode(
+            &mut pass,
+            sample_count,
+            noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
+        );
         DrawStats {
             draw_calls,
             instances_drawn: self.draws.len() + self.paths.draw_count(),

@@ -1335,6 +1335,14 @@ profiles. General intersecting transparent solids remain outside the profile.
 
 Cairo World-path miter joins use Cairo's 10× limit; the ordinary World-path
 profile retains its 4× limit. ThreeDAxes inherits Cairo miter joins on its tips.
+Straight screen-space Cairo butt strokes derive box-filter pixel coverage from
+their projected endpoints and existing width conversion. Curves, other caps,
+fixed-orientation paths and depth-clipped endpoints retain their existing coverage.
+Cairo World paths share the cached camera-depth order with Cairo and translucent
+mesh faces, testing opaque world depth without writing it. Authored painter
+order breaks depth ties. Retained path bounds supply the ordering center. Clean
+and color-only frames reuse the order; geometry and pose changes update the
+retained center. Fixed-orientation paths retain painter order after world draws.
 
 Spatial mesh-object `get_center()` and default affine pivots share Rust's bounds convention:
 the world bounds of the retained local AABB. They read the current effective pose
