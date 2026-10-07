@@ -61,6 +61,21 @@ class PhaseDSpatialPerformanceTests(unittest.TestCase):
                 parsed = self.validate_context(case["context"])
                 self.assertGreaterEqual(parsed["duration"], 8.0)
                 self.assertLessEqual(parsed["duration"], 10.0)
+                self.assertGreaterEqual(case["minimumObjects"], 1)
+                self.assertIs(case["sourceContinuation"], True)
+
+    def test_spatial_source_uses_worker_class_discovery(self):
+        tree = ast.parse(SOURCE.read_text())
+        scene_class = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                           and node.name == "PhaseDSpatialPerformance")
+        self.assertTrue(any(isinstance(base, ast.Name) and base.id == "ThreeDScene"
+                            for base in scene_class.bases))
+        self.assertTrue(any(isinstance(node, ast.AsyncFunctionDef) and node.name == "construct"
+                            for node in scene_class.body))
+        self.assertFalse(any(isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+            isinstance(target, ast.Name) and target.id == "result"
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        ) for node in tree.body), "explicit result suppresses worker scene-class discovery")
 
     def test_defaults_and_upper_bounds_are_explicit(self):
         self.assertEqual(

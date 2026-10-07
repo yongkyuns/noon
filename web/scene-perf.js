@@ -72,13 +72,16 @@ try {
     rejectAttached = reject;
   });
   let attaching = false;
-  async function attach(descriptor, isContinuation) {
+  async function attach(descriptor, isContinuation, duration) {
     if (attaching) return;
     attaching = true;
     if (!descriptor) throw new Error("scene profiler requires shared semantic execution");
     continuation = isContinuation;
     const ready = await execution.startSemanticExecution(descriptor, {
       authoringClient: client,
+      loopDurationSeconds: isContinuation
+        ? Math.max(duration, (warmupFrames + measuredFrames) / targetHz)
+        : duration > 0 ? duration : (warmupFrames + measuredFrames) / targetHz,
       transportMode,
       ...(sharedSlotCapacity === undefined ? {} : { sharedSlotCapacity }),
       ...(continuation ? { pacing: "external_samples" } : { initiallyPaused: true }),
@@ -88,10 +91,10 @@ try {
   // Source execution may remain suspended across play/wait. Attach to its
   // existing session, then let exact samples advance Rust's continuation lane.
   void client.run(source, context, {
-    onSemanticContinuation: (registration) => attach(registration.semanticExecution, true),
+    onSemanticContinuation: (registration) => attach(registration.semanticExecution, true, registration.duration),
   }).then(async (result) => {
     completedSource = result;
-    await attach(result.semanticExecution, false);
+    await attach(result.semanticExecution, false, result.duration);
   }).catch((error) => {
     failSource(error);
     rejectAttached(error);

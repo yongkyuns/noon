@@ -1327,6 +1327,9 @@ Surface gradients and six-face Cube/Prism materials are implemented slices but
 remain pending raster qualification. General intersecting transparent solids
 remain outside the profile.
 
+Cairo World-path miter joins use Cairo's 10× limit; the ordinary World-path
+profile retains its 4× limit. ThreeDAxes inherits Cairo miter joins on its tips.
+
 Spatial mesh-object `get_center()` and default affine pivots share Rust's bounds convention:
 the world bounds of the retained local AABB. They read the current effective pose
 for attached live objects and the authored pose for detached objects. A geometric

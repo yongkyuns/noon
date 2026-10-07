@@ -47,7 +47,7 @@ struct VertexOutput {
     @location(1) opacity: f32,
 };
 
-fn path_vertex(input: VertexInput) -> VertexOutput {
+fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
     let local_point = vec4<f32>(input.local, 0.0, 1.0);
     var clip = camera.view_projection * world * local_point;
@@ -88,7 +88,7 @@ fn path_vertex(input: VertexInput) -> VertexOutput {
             } else if kind == 3.0 {
                 let miter = stable_unit(previous_normal + next_normal);
                 let denominator = dot(miter, previous_normal);
-                if denominator > 1e-6 && 0.5 / denominator <= 2.0 {
+                if denominator > 1e-6 && 0.5 / denominator <= half_miter_limit {
                     offset = miter * (0.5 / denominator);
                 } else {
                     // The over-limit miter vertex collapses to the bevel edge.
@@ -147,7 +147,7 @@ fn path_vertex(input: VertexInput) -> VertexOutput {
 }
 
 @vertex fn vs_main(input: VertexInput) -> VertexOutput {
-    return path_vertex(input);
+    return path_vertex(input, 2.0);
 }
 
 @fragment

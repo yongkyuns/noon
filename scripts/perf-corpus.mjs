@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { evaluateBudget } from "./perf-corpus-budget.mjs";
+import { evaluateBudget, validateRuntimeExpectations } from "./perf-corpus-budget.mjs";
 import {
   browserArgs, classifyBrowserGpuDiagnostics, rendererGpuQualification,
 } from "./manim-raster-support.mjs";
@@ -93,6 +93,9 @@ try {
       throw new Error(`${definition.id}: ${await page.locator("#status").textContent()}`);
     }
     const report = await page.evaluate(() => window.__NOON_SCENE_PERF__);
+    const runtimeExpectations = validateRuntimeExpectations(report, definition);
+    assert.ok(runtimeExpectations.passed,
+      `${definition.id}: runtime expectations failed: ${runtimeExpectations.failures.join("; ")}`);
     assert.equal(report.environment?.rendererBackend, backend === "webgpu" ? "WebGPU" : "WebGL2",
       `${definition.id}: observed renderer backend does not match requested ${backend}`);
     const gpuQualification = gpuMode === null ? null : rendererGpuQualification(

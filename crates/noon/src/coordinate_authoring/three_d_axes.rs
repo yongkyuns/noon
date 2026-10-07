@@ -14,10 +14,10 @@ use noon_core::{
 
 /// Supported linear ThreeDAxes request. Ranges are `[min, max, step]`; lengths
 /// are world-space units. Defaults match pinned Manim v0.21 at frame height 8.
-/// The z normal is fixed to +Z; axis piece count and directional light are
-/// bounded, while arbitrary axis configs, TeX compilation, and custom tip
-/// shapes remain outside this slice. Label strings/families arrive as retained
-/// text.
+/// The Z axis points along +Z with Manim's default DOWN roll. Axis piece count
+/// and directional light are bounded, while arbitrary axis configs, TeX
+/// compilation, and custom tip shapes remain outside this slice. Label strings
+/// and families arrive as retained text.
 #[derive(Clone, Debug)]
 pub struct ManimThreeDAxesOptions {
     pub x_range: [f64; 3],
@@ -927,6 +927,8 @@ fn three_d_axis_style() -> SemanticStyle {
     let mut style = default_axis_style();
     style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
     style.stroke_cap = noon_core::StrokeCap::Butt;
+    // Cairo's AUTO join uses the context's default miter, including tip outlines.
+    style.stroke_join = noon_core::StrokeJoin::Miter;
     style
 }
 
@@ -1096,6 +1098,7 @@ mod tests {
                 SemanticSpatialCompositionDomain::World
             );
             assert_eq!(tip.style.stroke_width, 0.02);
+            assert_eq!(tip.style.stroke_join, noon_core::StrokeJoin::Miter);
             if index == 2 {
                 let rotation = tip.transform.world_transform().unwrap().rotation;
                 for (source, expected) in [

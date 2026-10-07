@@ -973,6 +973,99 @@ fn fixed_orientation_miter_preserves_frame_geometry_with_anisotropic_clip_scale(
 }
 
 #[test]
+fn cairo_path_miter_keeps_acute_tip_while_ordinary_path_keeps_its_limit() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo miter qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        for cairo in [false, true] {
+            let mut store = SemanticStore::new();
+            let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+            camera.set_role(SemanticObjectRole::Camera3D);
+            camera
+                .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+                    height: 8.0,
+                    near: 0.1,
+                    far: 30.0,
+                }))
+                .unwrap();
+            camera.transform.translation.z = 5.0;
+            attach(&mut store, camera);
+            let handle = store
+                .insert_geometry_path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::new(-0.5, -1.0))
+                        .line_to(noon_core::Vec2::new(0.0, 1.5))
+                        .line_to(noon_core::Vec2::new(0.5, -1.0)),
+                )
+                .unwrap();
+            let mut path = SemanticObjectState::new(StoredGeometry::Resource(handle));
+            path.style = SemanticStyle {
+                fill: None,
+                stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+                stroke_width: 0.5,
+                stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+                stroke_join: noon_core::StrokeJoin::Miter,
+                stroke_cap: noon_core::StrokeCap::Butt,
+                ..SemanticStyle::default()
+            };
+            path.transform = SemanticWorldTransform3D::new(
+                SemanticVec3::ZERO,
+                noon_core::SemanticRotation3D::IDENTITY,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap()
+            .into();
+            if cairo {
+                path.set_spatial_material(SemanticSpatialMaterial::CairoPath);
+                path.set_cairo_path_appearance(noon_core::SemanticCairoPathAppearance {
+                    sheen_factor: 0.0,
+                    gradient_direction: None,
+                })
+                .unwrap();
+                let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+                light.set_role(SemanticObjectRole::PointLight3D);
+                light.transform.translation.z = 5.0;
+                attach(&mut store, light);
+            }
+            attach(&mut store, path);
+            let (compiled, _) =
+                lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
+                    .unwrap()
+                    .into_parts();
+            let mut runtime = SceneInstance::new(compiled);
+            let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+            renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            renderer.set_camera(
+                &queue,
+                Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(8.0, 8.0)).unwrap(),
+            );
+            let (_, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut FramePreparer::new(),
+                &mut runtime,
+                &target,
+            )
+            .unwrap();
+            // The apex is at pixel y=40. Its incident slopes give an outer
+            // miter distance 0.25*sqrt(26), or 20.4 pixels at 16 pixels/unit.
+            // That lies between the ordinary 4x and Cairo 10x miter limits.
+            assert_eq!(pixel(&pixels, WIDTH / 2, 24)[0] > 128, cairo);
+            assert!(pixel(&pixels, WIDTH / 2 - 7, 75)[0] > 128);
+        }
+    });
+}
+
+#[test]
 fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();

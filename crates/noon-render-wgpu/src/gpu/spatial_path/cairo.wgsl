@@ -48,7 +48,8 @@ struct CairoPathOutput {
     let sheen = vec4<f32>(clamp(base.rgb + vec3<f32>(cairo_path.metadata.x),
         vec3<f32>(0.0), vec3<f32>(1.0)), base.a);
     var result: CairoPathOutput;
-    result.position = path_vertex(input).position;
+    // Cairo uses a 10x miter limit; this offset measures half the full miter.
+    result.position = path_vertex(input, 5.0).position;
     result.start = (a.xy / a.w * vec2<f32>(1.0, -1.0) + vec2<f32>(1.0)) * boundary_metrics.xy * 0.5;
     result.end = (b.xy / b.w * vec2<f32>(1.0, -1.0) + vec2<f32>(1.0)) * boundary_metrics.xy * 0.5;
     result.first_color = cairo_color(base, a_world, n0);

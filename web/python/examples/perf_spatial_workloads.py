@@ -203,6 +203,3 @@ class PhaseDSpatialPerformance(ThreeDScene):
             run_time=duration,
             rate_func=linear,
         )
-
-
-result = PhaseDSpatialPerformance()

@@ -21,3 +21,16 @@ export function evaluateBudget(report, budget) {
     checks,
   };
 }
+
+export function validateRuntimeExpectations(report, definition) {
+  const failures = [];
+  if (Number.isSafeInteger(definition.minimumObjects) &&
+      (!Number.isSafeInteger(report.scene?.objects) || report.scene.objects < definition.minimumObjects)) {
+    failures.push(`objects ${report.scene?.objects ?? "unavailable"} < ${definition.minimumObjects}`);
+  }
+  if (typeof definition.sourceContinuation === "boolean" &&
+      report.execution?.sourceContinuation !== definition.sourceContinuation) {
+    failures.push(`sourceContinuation ${report.execution?.sourceContinuation ?? "unavailable"} != ${definition.sourceContinuation}`);
+  }
+  return { passed: failures.length === 0, failures };
+}
