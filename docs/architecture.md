@@ -1300,10 +1300,11 @@ ranges, axial directions and end options for bounded primitives. Cairo-style
 Surface, solid-face, axis-piece, and World-path appearances are implemented as
 distinct retained material profiles; native point lighting remains a separate
 explicit profile. Unsupported option combinations still reject instead of
-silently substituting another result. These recently added defaults and
-appearance slices remain unqualified until their paired and backend evidence is
-recorded. The opaque indexed-mesh profile remains available without cell-family
-overhead.
+silently substituting another result. The bounded extensions below have paired
+Rust/Python and backend qualification in
+[#1891](https://github.com/yongkyuns/noon/pull/1891); this does not qualify the
+untouched camera examples owned by #254. The opaque indexed-mesh profile remains
+available without cell-family overhead.
 
 Sampled `Surface` cell families retain UV roles on ordinary semantic mesh
 objects. The default `shade_in_3d=True` path records Cairo-compatible endpoint
@@ -1323,9 +1324,8 @@ individual triangle or canonical quad cells. Opaque world geometry populates
 depth first; translucent and Cairo cells paint each fill and border together in
 camera-depth order, with authored painter order breaking ties. Color-only cell
 changes preserve that cached order. Cairo-compatible
-Surface gradients and six-face Cube/Prism materials are implemented slices but
-remain pending raster qualification. General intersecting transparent solids
-remain outside the profile.
+Surface gradients and six-face Cube/Prism materials have pinned, bounded raster
+profiles. General intersecting transparent solids remain outside the profile.
 
 Cairo World-path miter joins use Cairo's 10× limit; the ordinary World-path
 profile retains its 4× limit. ThreeDAxes inherits Cairo miter joins on its tips.
@@ -1385,11 +1385,11 @@ ticks, tips, Cairo-shaded shaft pieces, and retained text-label placement throug
 its label methods. Checked `c2p`/`p2c` helpers derive coordinates from authored
 or effective axis families. The `labels=` constructor option and richer custom
 tip shapes remain unsupported. The current axis appearance/configuration slice
-is implemented but awaits pinned raster qualification. Shared vector-space
+has pinned, bounded raster qualification. Shared vector-space
 implementations include animated `VectorScene.add_vector`, matrix transforms,
 coordinate labels, and bounded faded-vector history. These use the existing
-families and animation channels; the newer breadth remains pending paired
-qualification and does not add a separate coordinate or scene model.
+families and animation channels, with paired qualification for the bounded
+operations below. They do not add a separate coordinate or scene model.
 
 These profiles do not claim complete Manim API compatibility. In particular,
 custom Surface materials, general intersecting transparency, unsupported
@@ -1399,11 +1399,12 @@ surface until their owning capability and paired qualification are added.
 The JS/TypeScript facade is an independent optional frontend track (D6); it is
 not a required Phase D 3D exit criterion.
 
-#### Implemented extensions awaiting qualification
+#### Qualified bounded extensions
 
-The current implementation includes these bounded extensions beyond the
-previously qualified profiles. Their presence does not promote them to supported
-or Manim-qualified behavior until fresh paired and backend evidence is recorded:
+Paired Rust/Python execution, pinned Manim profiles and WebGPU/WebGL raster
+checks qualify these bounded extensions. The profile-specific limits and
+unsupported inputs remain part of the contract; they do not establish full
+Manim compatibility:
 
 - Sphere, Cylinder, Cone, and Torus use checked parameter ranges; Cylinder and
   Cone also accept finite nonzero axial directions and bounded open-end options.
@@ -1422,9 +1423,12 @@ or Manim-qualified behavior until fresh paired and backend evidence is recorded:
 - `VectorScene.add_vector` has an animated shared-Rust path. Linear
   Transformation Scene supports coordinates, transformables, coordinate
   labels, and bounded faded-vector history through shared semantic operations.
-- Performance tooling reuses the same-run cumulative Product Gate anchor and
-  includes five representative workload instrumentation cases. This adds no new
-  measured performance result or physical-device 60 FPS evidence.
+
+Performance tooling reuses the same-run cumulative Product Gate anchor and
+includes five representative workload instrumentation cases. Runtime assertions
+require real scene objects and source continuation; opt-in raw timestamps retain
+the measured frame gaps. Functional instrumentation checks provide no
+physical-device 60 FPS evidence.
 
 ### Remaining capability and qualification
 
@@ -1436,8 +1440,8 @@ this overview is not another implementation checklist.
 | Workstream | Remaining outcome and owner |
 | --- | --- |
 | Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE camera/3D examples. Qualify their exact source, effective state, timing/replay and raster/depth/compositing behavior; related Noon-profile Rust/Python pairs are not a full Manim pass. |
-| Common 3D rendering and defaults | #1879 owns qualification for implemented Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image cases. Native point lighting remains distinct from Cairo compatibility; general intersecting transparency remains separate. |
-| Geometry, axes and vector-space breadth | #1879 owns qualification for implemented primitive ranges/orientations/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers. These use shared semantic objects, resources and animations; they remain pending paired qualification. |
+| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. Exact camera examples remain owned by #254; native point lighting remains distinct from Cairo compatibility, and general intersecting transparency remains separate. |
+| Geometry, axes and vector-space breadth | #1879 records the qualified bounded primitive ranges/orientations/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers in #1891. Further options require their own selected capability and paired evidence. |
 | Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. Branch instrumentation reuses the same-run Product Gate anchor and adds five workloads, but supplies no new measured or physical-device 60 FPS evidence. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
 
 Exact `FollowingGraphCamera` source/state/raster qualification was merged in

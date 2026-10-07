@@ -139,7 +139,7 @@ try {
     firstMeasuredTime ??= lastSampleTime;
     const advanceRoundTripMs = performance.now() - started;
     cadence.record(timestamp, advanceRoundTripMs);
-    samples?.push({ sceneTime: lastSampleTime, advanceRoundTripMs });
+    samples?.push({ sceneTime: lastSampleTime, frameTimestampMs: timestamp, advanceRoundTripMs });
     if (stageTimingSamples !== null) {
       stageTimingSamples.push({
         sceneTime: lastSampleTime,
