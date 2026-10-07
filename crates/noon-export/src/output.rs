@@ -6,7 +6,7 @@
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
@@ -364,7 +364,6 @@ struct FfmpegMp4Sink {
     height: u32,
     rate: FrameRate,
     next_pts: u64,
-    finished: bool,
 }
 
 impl FfmpegMp4Sink {
@@ -480,7 +479,6 @@ impl FfmpegMp4Sink {
             height,
             rate,
             next_pts: 0,
-            finished: false,
         })
     }
 
@@ -515,7 +513,7 @@ impl FfmpegMp4Sink {
             .ok_or(FfmpegMp4Error::FrameMismatch("FFmpeg process is absent"))?
             .wait()
             .map_err(|error| FfmpegMp4Error::io("wait for FFmpeg", error))?;
-        self.child.take();
+        drop(self.child.take());
         let stderr = self.join_stderr()?;
         if !status.success() {
             return Err(process_failed(status, stderr));
@@ -529,7 +527,6 @@ impl FfmpegMp4Sink {
         }
         publish_path(&self.temp_file, &self.options.path, self.options.overwrite)
             .map_err(|error| map_ffmpeg_publish_error(error, &self.options.path))?;
-        self.finished = true;
         Ok(NativeOutputSummary {
             capture,
             path: self.options.path.clone(),
@@ -760,6 +757,7 @@ fn validate_leaf_component(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+#[derive(Debug)]
 enum PublishError {
     InvalidDestination,
     Exists,
@@ -901,13 +899,15 @@ mod tests {
         let mut options = FfmpegMp4Options::new(&destination);
         options.overwrite = true;
         options.executable = root.join("definitely-not-ffmpeg");
-        let error = FfmpegMp4Sink::new(
+        let error = match FfmpegMp4Sink::new(
             options,
             64,
             64,
             FrameRate::new(30, 1).unwrap(),
-        )
-        .unwrap_err();
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("missing FFmpeg executable unexpectedly started"),
+        };
         assert!(matches!(error, FfmpegMp4Error::Spawn { .. }));
         assert_eq!(fs::read(&destination).unwrap(), b"old");
         fs::remove_dir_all(root).unwrap();
