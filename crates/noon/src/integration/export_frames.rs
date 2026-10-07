@@ -189,6 +189,15 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
         self.sample.session()
     }
 
+    /// Query visibility through the original session-owned spatial index. This
+    /// does not advance the source or consume/acknowledge the current sample.
+    pub fn query_viewport(
+        &mut self,
+        bounds: noon_core::Rect,
+    ) -> crate::integration::ExecutionViewportQuery {
+        self.sample.query_viewport(bounds)
+    }
+
     /// At most one underlying cooperative step; no wall-clock pacing.
     pub fn advance(&mut self) -> Result<ExportFramesStatus, ExportFramesError<C::Error>> {
         if self.failed {

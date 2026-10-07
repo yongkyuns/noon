@@ -7,6 +7,7 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/noon-native/**"
+      - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
       - "crates/noon-compile/**"
@@ -19,6 +20,7 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/noon-native/**"
+      - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
       - "crates/noon-compile/**"
@@ -134,4 +136,89 @@ jobs:
         with:
           name: native-selection-pixels
           path: selection-proof/
+          retention-days: 14
+
+  headless-capture:
+    name: Rust scene capture without a display server
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      WGPU_BACKEND: vulkan
+      NOON_CAPTURE_PROOF_DIR: ${{ github.workspace }}/capture-proof/pixels
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+          mkdir -p capture-proof
+          git rev-parse HEAD > capture-proof/tested-commit.txt
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-capture-cargo-sources-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-capture-cargo-sources-
+
+      - name: Install software Vulkan without a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+
+      - name: Verify native capture does not depend on a window or language host
+        run: |
+          set -o pipefail
+          cargo tree -p noon-export --edges normal --prefix none > capture-proof/dependencies.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          forbidden = {'noon-native', 'noon-web', 'winit', 'pyo3', 'wasm-bindgen', 'web-sys', 'js-sys'}
+          packages = {line.split()[0] for line in Path('capture-proof/dependencies.txt').read_text().splitlines() if line.strip()}
+          assert not packages.intersection(forbidden), packages.intersection(forbidden)
+          PY
+
+      - name: Qualify native offscreen capture and failure recovery
+        run: |
+          set -o pipefail
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+            --lib --tests -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee capture-proof/tests.log
+
+      - name: Check formatting and lint the native capture package
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p noon-export --all-features --all-targets -- -D warnings
+
+      - name: Stream the normal Rust camera example without a viewer
+        run: |
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo run --quiet -p noon-export \
+            --example capture_frames > capture-proof/example.rgba 2> capture-proof/example.log
+          python3 - <<'PY'
+          from pathlib import Path
+          output = Path('capture-proof/example.rgba')
+          assert output.stat().st_size == 90 * 320 * 180 * 4, output.stat().st_size
+          output.unlink()
+          PY
+
+      - name: Retain pinned formatter diagnostics without changing tested code
+        if: always()
+        run: |
+          mkdir -p capture-proof
+          cargo fmt --all
+          git diff --binary > capture-proof/rustfmt.patch
+
+      - name: Retain native capture evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-export-capture
+          path: capture-proof/
           retention-days: 14

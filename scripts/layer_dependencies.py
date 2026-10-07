@@ -11,11 +11,11 @@ import sys
 # Normal, build and dev dependencies obey the same direction. A test-only or
 # optional upward edge still couples an engine owner to a later layer/host.
 FORBIDDEN = {
-    "noon-core": {"noon-compile", "noon-runtime", "noon-render-wgpu", "noon-native", "noon-web", "noon"},
-    "noon-compile": {"noon-runtime", "noon-render-wgpu", "noon-native", "noon-web", "noon"},
-    "noon-runtime": {"noon-render-wgpu", "noon-native", "noon-web", "noon"},
-    "noon-render-wgpu": {"noon-native", "noon-web", "noon"},
-    "noon": {"noon-native", "noon-web"},
+    "noon-core": {"noon-compile", "noon-runtime", "noon-render-wgpu", "noon-native", "noon-export", "noon-web", "noon"},
+    "noon-compile": {"noon-runtime", "noon-render-wgpu", "noon-native", "noon-export", "noon-web", "noon"},
+    "noon-runtime": {"noon-render-wgpu", "noon-native", "noon-export", "noon-web", "noon"},
+    "noon-render-wgpu": {"noon-native", "noon-export", "noon-web", "noon"},
+    "noon": {"noon-native", "noon-export", "noon-web"},
 }
 
 
