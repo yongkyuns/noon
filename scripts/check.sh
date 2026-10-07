@@ -34,10 +34,12 @@ fmt_lint() {
 }
 
 fast_tests() {
+  python3 tests/visual-effects/test_reference.py -v
   cargo test --workspace --all-features --lib --no-fail-fast
 }
 
 all_tests() {
+  python3 tests/visual-effects/test_reference.py -v
   cargo test --workspace --all-features --lib --tests --bins --no-fail-fast
   cargo test --workspace --all-features --doc --no-fail-fast
 }
@@ -64,9 +66,6 @@ if (( $# > 2 )); then
   usage >&2
   exit 2
 fi
-
-# Bounded independent mathematical contracts; no compiler or product imports.
-python3 tests/visual-effects/test_reference.py -v
 
 # Every public validation mode runs the same guards before compiling anything.
 bash scripts/check-architecture.sh "${2-origin/master}"
