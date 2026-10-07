@@ -37,53 +37,86 @@ impl Encoder {
         buffer.resize(bytes, 0);
         let (input, receiver) = mpsc::sync_channel::<Vec<u8>>(1);
         let (reply, replies) = mpsc::sync_channel(1);
-        let child = command.stdin(Stdio::piped()).stdout(Stdio::null())
-            .stderr(Stdio::piped()).spawn()?;
+        let child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()?;
         let mut encoder = Self {
-            child, input: Some(input), replies, writer: None, stderr: None,
-            buffer: Some(buffer), cancellation, timeout, active: true, reaped: false,
+            child,
+            input: Some(input),
+            replies,
+            writer: None,
+            stderr: None,
+            buffer: Some(buffer),
+            cancellation,
+            timeout,
+            active: true,
+            reaped: false,
         };
-        let mut stdin = encoder.child.stdin.take()
+        let mut stdin = encoder
+            .child
+            .stdin
+            .take()
             .ok_or_else(|| io::Error::other("encoder has no input pipe"))?;
-        let mut stderr = encoder.child.stderr.take()
+        let mut stderr = encoder
+            .child
+            .stderr
+            .take()
             .ok_or_else(|| io::Error::other("encoder has no diagnostic pipe"))?;
-        encoder.stderr = Some(thread::Builder::new().name("noon-encoder-stderr".into())
-            .spawn(move || {
-                let mut tail = VecDeque::with_capacity(STDERR_LIMIT);
-                let mut chunk = [0; 8192];
-                loop {
-                    match stderr.read(&mut chunk) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            for &byte in &chunk[..n] {
-                                if tail.len() == STDERR_LIMIT { tail.pop_front(); }
-                                tail.push_back(byte);
+        encoder.stderr = Some(
+            thread::Builder::new()
+                .name("noon-encoder-stderr".into())
+                .spawn(move || {
+                    let mut tail = VecDeque::with_capacity(STDERR_LIMIT);
+                    let mut chunk = [0; 8192];
+                    loop {
+                        match stderr.read(&mut chunk) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                for &byte in &chunk[..n] {
+                                    if tail.len() == STDERR_LIMIT {
+                                        tail.pop_front();
+                                    }
+                                    tail.push_back(byte);
+                                }
                             }
+                            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                            Err(e) => return Err(e),
                         }
-                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                        Err(e) => return Err(e),
                     }
-                }
-                Ok(tail.into_iter().collect())
-            })?);
-        encoder.writer = Some(thread::Builder::new().name("noon-encoder-input".into())
-            .spawn(move || {
-                while let Ok(pixels) = receiver.recv() {
-                    let result = stdin.write_all(&pixels);
-                    let failed = result.is_err();
-                    if reply.send((result, pixels)).is_err() || failed { break; }
-                }
-                // Closing stdin is the encoder's EOF/flush signal.
-            })?);
+                    Ok(tail.into_iter().collect())
+                })?,
+        );
+        encoder.writer = Some(
+            thread::Builder::new()
+                .name("noon-encoder-input".into())
+                .spawn(move || {
+                    while let Ok(pixels) = receiver.recv() {
+                        let result = stdin.write_all(&pixels);
+                        let failed = result.is_err();
+                        if reply.send((result, pixels)).is_err() || failed {
+                            break;
+                        }
+                    }
+                    // Closing stdin is the encoder's EOF/flush signal.
+                })?,
+        );
         Ok(encoder)
     }
 
     fn check_wait(&self, start: Instant) -> io::Result<()> {
         if self.cancellation.is_cancelled() {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "export cancelled"));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "export cancelled",
+            ));
         }
         if start.elapsed() >= self.timeout {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "encoder I/O deadline exceeded"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "encoder I/O deadline exceeded",
+            ));
         }
         Ok(())
     }
@@ -93,28 +126,45 @@ impl Encoder {
         if let Err(error) = result {
             self.active = false;
             let diagnostics = self.abort();
-            return Err(io::Error::new(error.kind(), format!("{error}; {diagnostics}")));
+            return Err(io::Error::new(
+                error.kind(),
+                format!("{error}; {diagnostics}"),
+            ));
         }
         Ok(())
     }
 
     fn write_inner(&mut self, pixels: &[u8]) -> io::Result<()> {
-        if !self.active { return Err(io::Error::other("encoder is inactive")); }
+        if !self.active {
+            return Err(io::Error::other("encoder is inactive"));
+        }
         let start = Instant::now();
         self.check_wait(start)?;
-        let mut buffer = self.buffer.take().ok_or_else(|| io::Error::other("frame already in flight"))?;
+        let mut buffer = self
+            .buffer
+            .take()
+            .ok_or_else(|| io::Error::other("frame already in flight"))?;
         if buffer.len() != pixels.len() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "wrong raw frame length"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "wrong raw frame length",
+            ));
         }
         buffer.copy_from_slice(pixels);
         // There is at most ONE unacknowledged frame. The bounded channel is empty
         // here; no source state or callback ever moves to this worker.
-        self.input.as_ref().ok_or_else(|| io::Error::other("encoder input closed"))?
-            .send(buffer).map_err(|_| io::Error::other("encoder writer stopped"))?;
+        self.input
+            .as_ref()
+            .ok_or_else(|| io::Error::other("encoder input closed"))?
+            .send(buffer)
+            .map_err(|_| io::Error::other("encoder writer stopped"))?;
         loop {
             self.check_wait(start)?;
             match self.replies.recv_timeout(POLL) {
-                Ok((result, buffer)) => { self.buffer = Some(buffer); return result; }
+                Ok((result, buffer)) => {
+                    self.buffer = Some(buffer);
+                    return result;
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(io::Error::other("encoder writer disconnected"));
@@ -124,19 +174,25 @@ impl Encoder {
     }
 
     pub fn finish(mut self) -> io::Result<String> {
-        if !self.active { return Err(io::Error::other("cannot finish a failed encoder")); }
+        if !self.active {
+            return Err(io::Error::other("cannot finish a failed encoder"));
+        }
         self.input.take();
         let start = Instant::now();
         let status = loop {
             self.check_wait(start)?;
-            if let Some(status) = self.child.try_wait()? { break status; }
+            if let Some(status) = self.child.try_wait()? {
+                break status;
+            }
             thread::sleep(POLL);
         };
         self.reaped = true;
         self.active = false;
         let diagnostics = self.join_threads()?;
         if !status.success() {
-            return Err(io::Error::other(format!("FFmpeg exited {status}: {diagnostics}")));
+            return Err(io::Error::other(format!(
+                "FFmpeg exited {status}: {diagnostics}"
+            )));
         }
         Ok(diagnostics)
     }
@@ -144,7 +200,9 @@ impl Encoder {
     fn join_threads(&mut self) -> io::Result<String> {
         let writer_ok = self.writer.take().map(|thread| thread.join()).transpose();
         let diagnostics = match self.stderr.take() {
-            Some(thread) => thread.join().map_err(|_| io::Error::other("diagnostic worker panicked"))??,
+            Some(thread) => thread
+                .join()
+                .map_err(|_| io::Error::other("diagnostic worker panicked"))??,
             None => Vec::new(),
         };
         writer_ok.map_err(|_| io::Error::other("encoder writer panicked"))?;
