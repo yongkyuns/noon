@@ -271,7 +271,7 @@ jobs:
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
     env:
       NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
       NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
@@ -407,10 +407,10 @@ jobs:
         run: |
           # Fixed before measurement: B/C, C/B, B/C. Every run is retained;
           # a failed run fails the cohort rather than selecting another sample.
-          # Reuse the exact same two packages for both existing gallery lessons.
-          for noon_example in parity-square-and-circle showcase-camera-follows-path; do
-            noon_evidence="browser-smoke-artifacts/product-gate"
-            if [[ "$noon_example" == showcase-camera-follows-path ]]; then noon_evidence="$noon_evidence/camera"; fi
+          # Reuse the same immutable packages for every declared workload.
+          noon_workloads="$(node .github/ci/product-performance-anchor.mjs cohorts)"
+          while IFS=$'\t' read -r noon_example noon_directory; do
+            noon_evidence="browser-smoke-artifacts/product-gate/$noon_directory"
             for noon_pair in 1 2 3; do
               noon_order="baseline candidate"
               if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
@@ -427,7 +427,7 @@ jobs:
                   node scripts/playground-product-e2e.mjs
               done
             done
-          done
+          done <<< "$noon_workloads"
 
       - name: Measure three alternating cumulative-anchor pairs
         working-directory: candidate
@@ -437,9 +437,9 @@ jobs:
           # Use the identical prescribed cohort against the pinned accepted source.
           # The anchor report deliberately uses the comparator's baseline role so
           # the exact same fail-closed comparison code and thresholds are reused.
-          for noon_example in parity-square-and-circle showcase-camera-follows-path; do
-            noon_evidence="browser-smoke-artifacts/product-gate/cumulative"
-            if [[ "$noon_example" == showcase-camera-follows-path ]]; then noon_evidence="$noon_evidence/camera"; fi
+          noon_workloads="$(node .github/ci/product-performance-anchor.mjs cohorts)"
+          while IFS=$'\t' read -r noon_example noon_directory; do
+            noon_evidence="browser-smoke-artifacts/product-gate/cumulative/$noon_directory"
             for noon_pair in 1 2 3; do
               noon_order="anchor candidate"
               if [[ "$noon_pair" == 2 ]]; then noon_order="candidate anchor"; fi
@@ -458,7 +458,7 @@ jobs:
                   node scripts/playground-product-e2e.mjs
               done
             done
-          done
+          done <<< "$noon_workloads"
 
       - name: Compare product behavior
         working-directory: candidate
@@ -468,19 +468,28 @@ jobs:
           NOON_PRODUCT_MIN_FPS_RATIO: "0.80"
           NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO: "0.015"
         run: |
-          node scripts/playground-product-compare.mjs \
-            browser-smoke-artifacts/product-gate/baseline \
-            browser-smoke-artifacts/product-gate/candidate --pairs 3
-          node scripts/playground-product-compare.mjs \
-            browser-smoke-artifacts/product-gate/camera/baseline \
-            browser-smoke-artifacts/product-gate/camera/candidate --pairs 3
-          printf '\nCumulative pinned-anchor comparisons (%s):\n' "$NOON_PRODUCT_ANCHOR_SHA"
-          node scripts/playground-product-compare.mjs \
-            browser-smoke-artifacts/product-gate/cumulative/anchor \
-            browser-smoke-artifacts/product-gate/cumulative/candidate --pairs 3
-          node scripts/playground-product-compare.mjs \
-            browser-smoke-artifacts/product-gate/cumulative/camera/anchor \
-            browser-smoke-artifacts/product-gate/cumulative/camera/candidate --pairs 3
+          # Evaluate every complete cohort even if an earlier comparison failed.
+          # Failure remains blocking; no sample is retried, omitted, or replaced.
+          noon_workloads="$(node .github/ci/product-performance-anchor.mjs cohorts)"
+          noon_failed=0
+          for noon_scope in adjacent cumulative; do
+            noon_root="browser-smoke-artifacts/product-gate"
+            noon_baseline=baseline
+            if [[ "$noon_scope" == cumulative ]]; then
+              noon_root="$noon_root/cumulative"
+              noon_baseline=anchor
+              printf '\nCumulative pinned-anchor comparisons (%s):\n' "$NOON_PRODUCT_ANCHOR_SHA"
+            fi
+            while IFS=$'\t' read -r noon_example noon_directory; do
+              printf '\n%s / %s\n' "$noon_scope" "$noon_example"
+              if ! node scripts/playground-product-compare.mjs \
+                "$noon_root/$noon_directory/$noon_baseline" \
+                "$noon_root/$noon_directory/candidate" --pairs 3; then
+                noon_failed=1
+              fi
+            done <<< "$noon_workloads"
+          done
+          exit "$noon_failed"
 
       - name: Upload product regression evidence
         if: always()
