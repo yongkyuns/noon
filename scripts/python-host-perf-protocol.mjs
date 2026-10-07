@@ -1,6 +1,8 @@
 // Qualification inputs/statistics only, not an engine or a runtime scheduler.
 import assert from "node:assert/strict";
 
+// scoredWorkerWarmups conditions the exact fresh worker that is measured; it is
+// intentionally distinct from any historical/global warmup sequence.
 export const PERF_PROTOCOL = Object.freeze({ pairs: 7, warmups: 2, scoredWorkerWarmups: 1, workerLifetime: "fresh-per-pair-warmed", objects: 600,
   localEdits: 2048, segments: 32, callbacks: 4, samples: 60, sampleHz: 48,
   modes: ["async", "portable", "jspi"], workloads: ["deterministic", "segments", "callbacks"],
