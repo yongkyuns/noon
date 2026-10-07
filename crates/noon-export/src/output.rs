@@ -332,12 +332,7 @@ impl FileSink {
             .take()
             .ok_or_else(|| io::Error::other("encoder is inactive"))?
             .finish()?;
-        if self.cancellation.is_cancelled() {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "export cancelled before publication",
-            ));
-        }
+        check_publication_cancellation(&self.cancellation)?;
         if let Some(mut manifest) = self.manifest.take() {
             writeln!(manifest, "# complete frames={}", self.frames)?;
             manifest.flush()?;
@@ -347,8 +342,21 @@ impl FileSink {
             .destination
             .take()
             .ok_or_else(|| io::Error::other("output already published"))?
-            .publish(self.frames)?;
+            .publish(self.frames, || {
+                check_publication_cancellation(&self.cancellation)
+            })?;
         Ok((path, self.options.format, diagnostics))
+    }
+}
+
+fn check_publication_cancellation(cancellation: &CaptureCancellation) -> io::Result<()> {
+    if cancellation.is_cancelled() {
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "export cancelled before publication",
+        ))
+    } else {
+        Ok(())
     }
 }
 

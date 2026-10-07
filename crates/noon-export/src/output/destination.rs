@@ -105,7 +105,15 @@ impl Destination {
         ))
     }
 
-    pub fn publish(mut self, frames: u64) -> io::Result<PathBuf> {
+    /// Poll cancellation between file operations and immediately before the
+    /// atomic publication. A running filesystem call cannot be interrupted;
+    /// publication wins a cancellation that arrives after the final check.
+    pub fn publish(
+        mut self,
+        frames: u64,
+        mut check_cancelled: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<PathBuf> {
+        check_cancelled()?;
         if frames == 0 {
             return Err(io::Error::other("refusing to publish empty output"));
         }
@@ -120,6 +128,7 @@ impl Destination {
                     .write(true)
                     .open(&video)?
                     .sync_all()?;
+                check_cancelled()?;
                 if self.overwrite {
                     // Explicit replacement only; no remove-then-rename gap.
                     fs::rename(&video, &self.path)?;
@@ -132,6 +141,7 @@ impl Destination {
             OutputFormat::PngSequence => {
                 let directory = self.work.join("frames");
                 for index in 0..frames {
+                    check_cancelled()?;
                     let file = File::options()
                         .read(true)
                         .write(true)
@@ -143,6 +153,7 @@ impl Destination {
                 }
                 // The outer directory is this export's exclusive reservation.
                 // The manifest moves with the completed frames in ONE rename.
+                check_cancelled()?;
                 fs::rename(&directory, self.path.join("frames"))?;
             }
         }

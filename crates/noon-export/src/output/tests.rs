@@ -56,7 +56,7 @@ fn mp4_publication_is_no_clobber_even_when_destination_appears_late() {
     fs::write(work.join("video.mp4"), b"candidate").unwrap();
     fs::write(&path, b"concurrent owner").unwrap();
     assert_eq!(
-        destination.publish(1).unwrap_err().kind(),
+        destination.publish(1, || Ok(())).unwrap_err().kind(),
         io::ErrorKind::AlreadyExists
     );
     assert_eq!(fs::read(&path).unwrap(), b"concurrent owner");
@@ -78,7 +78,7 @@ fn abort_preserves_old_video_and_only_successful_explicit_overwrite_replaces_it(
     assert_eq!(fs::read(&path).unwrap(), b"old");
     let destination = Destination::new(&options).unwrap();
     fs::write(destination.work.join("video.mp4"), b"complete").unwrap();
-    destination.publish(1).unwrap();
+    destination.publish(1, || Ok(())).unwrap();
     assert_eq!(fs::read(&path).unwrap(), b"complete");
 }
 
@@ -107,7 +107,7 @@ fn png_completed_frames_and_manifest_are_published_together() {
     let frames = destination.work.join("frames");
     fs::write(frames.join("frame-0000000000.png"), b"fixture").unwrap();
     fs::write(frames.join("timing.tsv"), b"complete").unwrap();
-    destination.publish(1).unwrap();
+    destination.publish(1, || Ok(())).unwrap();
     assert!(!path.join(".incomplete").exists());
     assert_eq!(
         fs::read(path.join("frames/timing.tsv")).unwrap(),
@@ -324,4 +324,101 @@ fn encoder_flush_timeout_and_cancellation_do_not_report_success() {
         encoder.write(&[0; 16]).unwrap_err().kind(),
         io::ErrorKind::Interrupted
     );
+}
+
+#[test]
+fn mp4_cancellation_after_file_sync_never_publishes_or_replaces_output() {
+    for overwrite in [false, true] {
+        for cancel_at in [1, 2] {
+            let root = Temp::new();
+            let path = root.0.join("cancelled.mp4");
+            let mut options = OutputOptions::mp4(&path);
+            options.overwrite = overwrite;
+            if overwrite {
+                fs::write(&path, b"previous movie").unwrap();
+            }
+            let destination = Destination::new(&options).unwrap();
+            let work = destination.work.clone();
+            fs::write(work.join("video.mp4"), b"completed candidate").unwrap();
+            let cancellation = CaptureCancellation::default();
+            let mut checks = 0;
+            let result = destination.publish(1, || {
+                checks += 1;
+                // Check 2 occurs after the real file sync, before either form
+                // of atomic publication. No wall-clock race is needed here.
+                if checks == cancel_at {
+                    cancellation.cancel();
+                }
+                check_publication_cancellation(&cancellation)
+            });
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+            assert_eq!(checks, cancel_at);
+            assert!(!work.exists());
+            if overwrite {
+                assert_eq!(fs::read(&path).unwrap(), b"previous movie");
+            } else {
+                assert!(!path.exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn png_cancellation_during_sync_or_at_commit_abandons_the_entire_bundle() {
+    // Entry, before each of three file syncs, and immediately before rename.
+    // Thus cases 3/4/5 cancel after some/all real syncs have completed.
+    for cancel_at in 1..=5 {
+        let root = Temp::new();
+        let path = root.0.join("cancelled-images");
+        let destination = Destination::new(&OutputOptions::png_sequence(&path)).unwrap();
+        let work = destination.work.clone();
+        let frames = work.join("frames");
+        for index in 0..3 {
+            fs::write(frames.join(format!("frame-{index:010}.png")), b"fixture").unwrap();
+        }
+        fs::write(frames.join("timing.tsv"), b"complete manifest").unwrap();
+        let cancellation = CaptureCancellation::default();
+        let mut checks = 0;
+        let result = destination.publish(3, || {
+            checks += 1;
+            assert!(!path.join("frames").exists());
+            if checks == cancel_at {
+                cancellation.cancel();
+            }
+            check_publication_cancellation(&cancellation)
+        });
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(checks, cancel_at);
+        assert!(!work.exists());
+        assert!(!path.exists());
+        assert_eq!(fs::read_dir(&root.0).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn uncancelled_publication_checks_do_not_change_png_output_or_manifest() {
+    let root = Temp::new();
+    let path = root.0.join("images");
+    let destination = Destination::new(&OutputOptions::png_sequence(&path)).unwrap();
+    let frames = destination.work.join("frames");
+    fs::write(frames.join("frame-0000000000.png"), b"fixture").unwrap();
+    fs::write(frames.join("timing.tsv"), b"complete manifest").unwrap();
+    let cancellation = CaptureCancellation::default();
+    let mut checks = 0;
+    destination
+        .publish(1, || {
+            checks += 1;
+            check_publication_cancellation(&cancellation)
+        })
+        .unwrap();
+    assert_eq!(checks, 3);
+    assert_eq!(
+        fs::read(path.join("frames/frame-0000000000.png")).unwrap(),
+        b"fixture"
+    );
+    assert_eq!(
+        fs::read(path.join("frames/timing.tsv")).unwrap(),
+        b"complete manifest"
+    );
+    assert!(!path.join(".incomplete").exists());
 }
