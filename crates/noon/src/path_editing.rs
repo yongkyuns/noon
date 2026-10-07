@@ -332,6 +332,47 @@ pub(crate) fn created_subcurve_id(
     *node
 }
 
+/// Create one detached subcurve from a running Scene publication.
+///
+/// This is the single running orchestration path used by Scene and the
+/// compatibility LiveSession facade. Validation and resource admission precede
+/// effective capture; immutable path admission and semantic node creation then
+/// share one rollback scope.
+pub(crate) fn publish_running_subcurve(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    source: &Mobject,
+    a: f64,
+    b: f64,
+) -> Result<Mobject, AuthoringError> {
+    if !Rc::ptr_eq(store, source.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    source.validate()?;
+    require_running_path_resource_admission(store, root, execution)?;
+    let captured = crate::effective_capture::capture_mobject_state(store, execution, source)?;
+
+    let mut store_guard = store.borrow_mut();
+    let (mut state, path) = prepare_subcurve(&store_guard, &captured, a, b)?;
+    let mut publish = |store: &mut SemanticStore, state| {
+        execution
+            .apply_semantic_transaction_at_root(store, root, subcurve_creation(state))
+            .map_err(AuthoringError::from)
+    };
+    let result = if let Some(path) = path {
+        store_guard.with_geometry_path(path, |store, handle| {
+            state.content = StoredGeometry::Resource(handle).into();
+            publish(store, state)
+        })?
+    } else {
+        publish(&mut store_guard, state)?
+    };
+    let id = created_subcurve_id(&result);
+    drop(store_guard);
+    Mobject::from_node(Rc::clone(store), id)
+}
+
 impl Mobject {
     /// Create a detached copy of this path's interval, preserving paint/priority.
     /// Closed paths allow a > b to select across the seam; open paths require
