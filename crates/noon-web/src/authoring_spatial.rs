@@ -720,7 +720,7 @@ impl WasmAuthoringStore {
     #[wasm_bindgen(js_name = createMeshFamily)]
     pub fn create_mesh_family(
         &self,
-        mut candidate: WasmMeshFamilyOptions,
+        candidate: WasmMeshFamilyOptions,
     ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
         let surface = candidate.has_surface_roles();
         let (meshes, paths) = candidate.into_parts()?;
