@@ -603,6 +603,23 @@ impl Scene {
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
+    /// Create a detached copy of one selected interval from the current effective
+    /// path state. This operation requires Scene-owned execution; cold callers use
+    /// `Mobject::subcurve` for authored-state copies instead of silently substituting
+    /// authored geometry for a live query.
+    pub fn subcurve(
+        &mut self,
+        source: &Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<Mobject, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::path_editing::publish_running_subcurve(
+                store, root, execution, source, a, b,
+            )
+        })
+    }
+
     /// Align two persistent paths using authored state while cold and one coherent
     /// effective Runtime publication while running. Resource admission and publication
     /// stay owned by this Scene; no borrowed LiveSession facade is created.
