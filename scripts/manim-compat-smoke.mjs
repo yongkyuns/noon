@@ -800,13 +800,17 @@ try {
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     spatialMeshAdaptersSource,
   );
-  assert.equal(spatialMeshAdapters.metrics.objectCount, 18,
-    "solid adapters must retain six Cube/Prism faces, five indexed meshes, and one camera");
+  assert.equal(spatialMeshAdapters.metrics.objectCount, 148,
+    "solid adapters must retain UV side cells, three Circle caps, and one camera");
   assert.ok(spatialMeshAdapters.metrics.presentedFrames > 0);
   assert.ok(spatialMeshAdapters.metrics.drawCalls > 0,
     "mesh adapters must reach the real retained renderer");
   const meshRows = spatialMeshAdapters.frame.objects.filter(object => object.spatial?.draw_kind === "mesh");
-  assert.equal(meshRows.length, 17);
+  assert.equal(meshRows.length, 144);
+  const capRows = spatialMeshAdapters.frame.objects.filter(object =>
+    object.spatial?.draw_kind === "planar" && !object.spatial.camera_projection);
+  assert.equal(capRows.length, 3, "capped primitives must retain ordinary Circle leaves");
+  assert.ok(capRows.every(object => object.spatial.composition_domain === "world"));
   assert.equal(spatialMeshAdapters.frame.objects.filter(object => object.spatial?.camera_projection).length, 1);
   assert.ok(meshRows.every(object => object.spatial?.composition_domain === "world"),
     "the worker frame must retain mesh draw kinds rather than flattening adapters to planar paths");
