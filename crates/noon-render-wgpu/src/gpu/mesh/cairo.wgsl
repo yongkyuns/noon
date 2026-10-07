@@ -177,15 +177,15 @@ fn cairo_fragment_color(input: CairoOutput) -> vec4<f32> {
                 cairo_perimeter_point(input, 2u) - origin,
                 cairo_perimeter_point(input, 3u) - origin, 4u);
         } else {
-            // Sum signed triangle intersections, once per face. Opposite edges
-            // of subpixel cells and internal fan diagonals filter together.
+            // Integrate the complete perimeter once. Opposite edges of subpixel
+            // cells and concave regions filter together without fan clipping.
             var area = 0.0;
-            for (var index = 1u; index < 15u; index += 1u) {
-                if index + 1u >= count { break; }
-                let b = cairo_perimeter_point(input, index) - origin;
-                let c = cairo_perimeter_point(input, index + 1u) - origin;
-                area += sign(cairo_cross(b - a, c - a))
-                    * polygon_pixel_coverage(a, b, c, vec2<f32>(0.0), 3u);
+            var previous = cairo_perimeter_point(input, count - 1u) - origin;
+            for (var index = 0u; index < 16u; index += 1u) {
+                if index >= count { break; }
+                let point = cairo_perimeter_point(input, index) - origin;
+                area += polygon_edge_pixel_area(previous, point);
+                previous = point;
             }
             coverage = clamp(abs(area), 0.0, 1.0);
         }

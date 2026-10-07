@@ -1319,7 +1319,10 @@ per curved edge. Resource bounds retain the perimeter control hull so world
 bounds and depth ordering include the curves. The renderer derives these buffers
 once. Sampled Cairo fills filter their complete projected face with the shared
 polygon pixel-coverage kernel, including subpixel cells; their screen fringe
-stays within padded face bounds. Border quads retain analytic pixel coverage
+stays within padded face bounds. Curved fills integrate signed perimeter edges
+over the pixel box once, without clipping every fan triangle. Complex concavity
+beyond the retained fan profile remains unqualified under #1879.
+Border quads retain analytic pixel coverage
 and screen-space extrusion during camera movement. Ordinary mesh vertex and
 instance layouts remain unchanged. Cairo-only scenes need no multisample target.
 Translucency is bounded to
