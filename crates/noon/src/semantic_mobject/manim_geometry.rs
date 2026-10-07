@@ -152,6 +152,83 @@ impl ManimGeometryOptions {
         options.set_translation((bounds.min_x + bounds.max_x) * 0.5, bounds.min_y - buff)?;
         Ok(options)
     }
+
+
+    /// Construct the two retained Line children of ManimCE's Cross.
+    ///
+    /// Geometry is prepared as two independent semantic candidates so the public
+    /// wrapper can expose the observable VGroup/Line family contract without
+    /// frontend-owned point or bounds math.
+    pub fn cross_lines(
+        bounds: Option<Bounds2D64>,
+        scale_factor: f64,
+    ) -> Result<[Self; 2], AuthoringError> {
+        let scale = authoring_render_f64("scale_factor", scale_factor)?;
+        let (center_x, center_y, half_width, half_height) = match bounds {
+            Some(bounds) => {
+                for (name, value) in [
+                    ("bounds.min_x", bounds.min_x),
+                    ("bounds.min_y", bounds.min_y),
+                    ("bounds.max_x", bounds.max_x),
+                    ("bounds.max_y", bounds.max_y),
+                ] {
+                    authoring_render_f64(name, value)?;
+                }
+                if bounds.max_x < bounds.min_x || bounds.max_y < bounds.min_y {
+                    return Err(AuthoringError::UnorderedBounds(bounds));
+                }
+                (
+                    (bounds.min_x + bounds.max_x) * 0.5,
+                    (bounds.min_y + bounds.max_y) * 0.5,
+                    bounds.width() * 0.5 * scale,
+                    bounds.height() * 0.5 * scale,
+                )
+            }
+            None => (0.0, 0.0, scale, scale),
+        };
+
+        let point = |name: &str, x: f64, y: f64| -> Result<Vec2, AuthoringError> {
+            Ok(Vec2::new(
+                finite_f32(&format!("{name}.x"), x)?,
+                finite_f32(&format!("{name}.y"), y)?,
+            ))
+        };
+        let mut style = manim_style(Color::RED);
+        style.stroke_width = 0.06;
+
+        Ok([
+            Self::new(
+                GeometryRef::line(
+                    point(
+                        "cross.first.start",
+                        center_x - half_width,
+                        center_y + half_height,
+                    )?,
+                    point(
+                        "cross.first.end",
+                        center_x + half_width,
+                        center_y - half_height,
+                    )?,
+                ),
+                style.clone(),
+            ),
+            Self::new(
+                GeometryRef::line(
+                    point(
+                        "cross.second.start",
+                        center_x + half_width,
+                        center_y + half_height,
+                    )?,
+                    point(
+                        "cross.second.end",
+                        center_x - half_width,
+                        center_y - half_height,
+                    )?,
+                ),
+                style,
+            ),
+        ])
+    }
 }
 
 impl Mobject {
