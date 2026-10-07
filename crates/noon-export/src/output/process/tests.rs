@@ -114,7 +114,6 @@ fn two_buffers_overlap_blocked_input_and_match_serial_bytes() {
         .all(|b| addresses.contains(&b.as_ptr())));
     encoder.finish().unwrap();
 
-    fixture.release("serial");
     let mut serial = Encoder::new(
         &mut fixture.command("serial"),
         BYTES,
@@ -122,6 +121,10 @@ fn two_buffers_overlap_blocked_input_and_match_serial_bytes() {
         Duration::from_secs(10),
     )
     .unwrap();
+    // Like the pipeline, wait until the child has resized its empty pipe.
+    // Writing earlier can make F_SETPIPE_SZ fail with EBUSY before comparison.
+    fixture.ready("serial");
+    fixture.release("serial");
     for value in [17, 34, 51, 68, 85] {
         pixels.fill(value);
         serial.write(&pixels).unwrap();
