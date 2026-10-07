@@ -161,7 +161,7 @@ fn run(callback: bool, start: u64, hold: f64, delayed: bool) -> Run {
                     frame.observation.published_time
                 );
             }
-            assert!(frame.rgba.chunks_exact(4).all(|p| p[3] == 255));
+            assert!(frame.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
             if let Some(address) = buffer {
                 assert_eq!(
                     frame.rgba.as_ptr(),
@@ -199,7 +199,7 @@ fn centroid(pixels: &[u8], width: usize) -> (f64, f64) {
     let mut count = 0.0;
     let mut x = 0.0;
     let mut y = 0.0;
-    for (i, p) in pixels.chunks_exact(4).enumerate() {
+    for (i, p) in pixels.as_chunks::<4>().0.iter().enumerate() {
         let weight = f64::from(p[2].saturating_sub(p[0].max(p[1])));
         count += weight;
         x += (i % width) as f64 * weight;
@@ -216,7 +216,7 @@ fn proof(name: &str, pixels: &[u8], width: usize, height: usize) {
     let dir = std::path::PathBuf::from(dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut ppm = format!("P6\n{width} {height}\n255\n").into_bytes();
-    for p in pixels.chunks_exact(4) {
+    for p in pixels.as_chunks::<4>().0 {
         ppm.extend_from_slice(&p[..3]);
     }
     std::fs::write(dir.join(format!("{name}.ppm")), ppm).unwrap();
@@ -327,10 +327,12 @@ fn native_capture_composes_shared_text_image_transients_and_zoomed_views() {
             |frame| {
                 assert_eq!(frame.frame.pts, pixels.len() as u64);
                 assert_eq!(frame.rgba.len(), 320 * 180 * 4);
-                assert!(frame.rgba.chunks_exact(4).all(|p| p[3] == 255));
+                assert!(frame.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
                 assert!(frame
                     .rgba
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|p| p[0] > 32 || p[1] > 32 || p[2] > 32));
                 pixels.push(frame.rgba.to_vec());
                 Ok::<_, Infallible>(())
