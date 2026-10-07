@@ -69,6 +69,26 @@ pub struct PackedStyle {
     pub stroke_enabled: u32,
 }
 
+impl PackedStyle {
+    /// Exact, conservative source-over eligibility using effective packed paint.
+    /// No epsilon: every nonzero alpha remains eligible, including tiny fades.
+    pub(crate) fn may_contribute_color(self) -> bool {
+        if !self.opacity.is_finite()
+            || !self.stroke_width.is_finite()
+            || !self
+                .fill
+                .iter()
+                .chain(self.stroke.iter())
+                .all(|v| v.is_finite())
+        {
+            return true;
+        }
+        self.opacity != 0.0
+            && ((self.fill_enabled != 0 && self.fill[3] != 0.0)
+                || (self.stroke_enabled & 1 != 0 && self.stroke[3] != 0.0))
+    }
+}
+
 impl From<Style> for PackedStyle {
     fn from(value: Style) -> Self {
         let (fill, fill_enabled) = pack_optional_color(value.fill);
@@ -179,7 +199,7 @@ pub struct PreparedOrderedRenderBatchRef<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
     pub batch_count: usize,
-    /// Live primitive instances referenced by the current submission projection.
+    /// Present resident primitive instances, before zero-contribution suppression.
     /// Retained packed arrays may be larger while absent rows remain resident.
     pub instance_count: usize,
     pub unsupported_count: usize,
@@ -272,6 +292,8 @@ pub struct PreparedFrame<'a> {
     slots: &'a [PreparedSlot],
     slot_presences: &'a [bool],
     complete_submission: bool,
+    zero_contribution: &'a [render_order::ZeroContributionRanges; 5],
+    mega_path_offsets: &'a [u32],
 }
 
 /// Packed geometry state for one exact source-frame row.
@@ -456,7 +478,9 @@ impl PreparedFrame<'_> {
             instance_dirty: dirty_ranges
                 .iter()
                 .any(|range| range.contains(&instance_index)),
-            submission_membership: self.complete_submission.then_some(true),
+            submission_membership: self.complete_submission.then(|| {
+                slot.may_contribute_color(self.circles, self.rectangles, self.lines, self.paths)
+            }),
         })
     }
 }
@@ -475,6 +499,29 @@ enum PreparedSlot {
         reveal_head: Option<usize>,
     },
     Unsupported(usize),
+}
+
+impl PreparedSlot {
+    fn may_contribute_color(
+        self,
+        circles: &[CircleInstance],
+        rectangles: &[RectangleInstance],
+        lines: &[LineInstance],
+        paths: &[PathInstance],
+    ) -> bool {
+        match self {
+            Self::Absent | Self::Unsupported(_) => false,
+            Self::Circle(index) => circles[index].style.may_contribute_color(),
+            Self::Rectangle(index) => rectangles[index].style.may_contribute_color(),
+            Self::Line(index) => lines[index].style.may_contribute_color(),
+            Self::Path {
+                index, reveal_head, ..
+            } => {
+                paths[index].style.may_contribute_color()
+                    || reveal_head.is_some_and(|head| lines[head].style.may_contribute_color())
+            }
+        }
+    }
 }
 
 const fn prepared_slot_instance_count(slot: PreparedSlot) -> usize {
@@ -574,6 +621,8 @@ pub struct FramePreparer {
     // Stable slices in the immutable packed mega index stream. A live-edited
     // path is detached rather than forcing a whole-stream rewrite.
     mega_path_segments: Vec<Option<Range<u32>>>,
+    mega_path_offsets: Vec<u32>,
+    zero_contribution: [render_order::ZeroContributionRanges; 5],
     mega_path_detached: Vec<bool>,
     render_batches: Vec<OrderedRenderBatch>,
     render_chunks: Vec<PreparedRenderChunk>,
@@ -919,6 +968,7 @@ impl FramePreparer {
         normalize_dirty_ranges(&mut self.path_index_dirty_ranges);
         normalize_dirty_ranges(&mut self.mega_path_instance_dirty_ranges);
         normalize_dirty_ranges(&mut self.mega_path_index_dirty_ranges);
+        self.sync_zero_contribution();
 
         // Incremental path replacements can create one CPU tessellation per
         // content version. Compact only after crossing a high-water mark, and
@@ -1461,6 +1511,7 @@ impl FramePreparer {
         self.slots.clear();
         self.slot_presences.clear();
         self.active_instance_count = 0;
+        self.zero_contribution = Default::default();
         self.clear_dirty_ranges();
 
         let mut path_groups = Vec::<PathGroup>::new();
@@ -1633,6 +1684,7 @@ impl FramePreparer {
         if !self.paths.is_empty() {
             self.path_dirty_ranges.push(0..self.paths.len());
         }
+        self.sync_zero_contribution();
         self.initialized = true;
         self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
 
@@ -1851,6 +1903,8 @@ impl FramePreparer {
             slots: &self.slots,
             slot_presences: &self.slot_presences,
             complete_submission: true,
+            zero_contribution: &self.zero_contribution,
+            mega_path_offsets: &self.mega_path_offsets,
         }
     }
 
@@ -1953,7 +2007,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 33] {
+    fn capacities(&self) -> [usize; 34] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -1971,6 +2025,7 @@ impl FramePreparer {
             self.mega_path_vertex_instances.capacity(),
             self.mega_path_batches.capacity(),
             self.mega_path_segments.capacity(),
+            self.mega_path_offsets.capacity(),
             self.mega_path_detached.capacity(),
             self.mega_path_instance_dirty_ranges.capacity(),
             self.mega_path_index_dirty_ranges.capacity(),

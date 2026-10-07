@@ -22,8 +22,8 @@ use presentation::PresentationBridge;
 pub use raster_image_prepare::RasterImagePrepareError;
 
 use crate::{
-    CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedDerivedDisplay,
-    PreparedFrame, RectangleInstance, RenderPrimitive,
+    CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathInstance, PathVertex,
+    PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
@@ -1664,6 +1664,34 @@ impl GpuRenderer {
         single_sample_analytics: bool,
         binding: &mut Option<GeometryBinding>,
     ) -> DrawStats {
+        let mut stats = DrawStats::default();
+        for instance_range in prepared.contributing_instance_ranges(&resolved.batch) {
+            let segment = ResolvedOrderedBatch {
+                batch: OrderedRenderBatch {
+                    primitive: resolved.batch.primitive,
+                    instance_range,
+                },
+                mega: resolved.mega.clone(),
+            };
+            stats += self.draw_contributing_ordered_batch(
+                pass,
+                prepared,
+                &segment,
+                single_sample_analytics,
+                binding,
+            );
+        }
+        stats
+    }
+
+    fn draw_contributing_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+    ) -> DrawStats {
         let batch = &resolved.batch;
         let (next, pipeline, vertices, instances, indices) = match batch.primitive {
             RenderPrimitive::Circle => (
@@ -1760,11 +1788,15 @@ impl GpuRenderer {
             }
             RenderPrimitive::MegaPath { .. } => {
                 let mega = resolved.mega.as_ref().expect("resolved mega metadata");
-                pass.draw_indexed(mega.index_range.clone(), 0, 0..1);
-                return DrawStats {
-                    draw_calls: 1,
-                    instances_drawn: mega.path_count,
-                };
+                let mut stats = DrawStats::default();
+                for (index_range, path_count) in
+                    prepared.contributing_mega_index_ranges(mega.index_range.clone())
+                {
+                    pass.draw_indexed(index_range, 0, 0..1);
+                    stats.draw_calls += 1;
+                    stats.instances_drawn += path_count;
+                }
+                return stats;
             }
             _ => pass.draw(0..6, batch.instance_range.clone()),
         }
@@ -1779,41 +1811,7 @@ impl GpuRenderer {
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &PreparedFrame<'_>,
     ) -> DrawStats {
-        let mut stats = DrawStats::default();
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-
-        if !prepared.circles.is_empty() {
-            let count = u32::try_from(prepared.circles.len())
-                .expect("circle instance count exceeds wgpu draw limits");
-            pass.set_pipeline(&self.circle_pipeline);
-            pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
-            pass.draw(0..6, 0..count);
-            stats.draw_calls += 1;
-            stats.instances_drawn += prepared.circles.len();
-        }
-
-        if !prepared.rectangles.is_empty() {
-            let count = u32::try_from(prepared.rectangles.len())
-                .expect("rectangle instance count exceeds wgpu draw limits");
-            pass.set_pipeline(&self.rectangle_pipeline);
-            pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
-            pass.draw(0..6, 0..count);
-            stats.draw_calls += 1;
-            stats.instances_drawn += prepared.rectangles.len();
-        }
-
-        if !prepared.lines.is_empty() {
-            let count = u32::try_from(prepared.lines.len())
-                .expect("line instance count exceeds wgpu draw limits");
-            pass.set_pipeline(&self.line_pipeline);
-            pass.set_vertex_buffer(1, self.line_buffer.slice(..));
-            pass.draw(0..6, 0..count);
-            stats.draw_calls += 1;
-            stats.instances_drawn += prepared.lines.len();
-        }
-
-        stats
+        self.draw_ordered(pass, prepared, false)
     }
 
     pub const fn circle_capacity_bytes(&self) -> usize {

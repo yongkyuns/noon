@@ -1071,6 +1071,14 @@ Required renderer properties:
 - no synchronous GPU-to-CPU readback on the normal frame/input/host-callback path;
 - WebGPU and supported fallback backends must agree semantically and visually within reviewed tolerances.
 
+Zero-contribution geometry is suppressed only at shared GPU draw submission,
+using an exact derived index of effective packed paint. Semantic presence, resident
+slots and source painter anchors remain intact, including anchors for independently
+visible transient effects. Only dirty packed rows update the coalesced exclusion
+index; clean frames do not scan instances or rebuild painter order. Packed unique
+paths use index spans at existing mesh boundaries. Opacity restoration uses the
+current publication; no visibility epsilon or host-side camera workaround exists.
+
 `noon-render-wgpu` owns reusable retained GPU rendering. It may own renderer camera uniforms, GPU viewport dimensions, retained GPU resources, preparation/upload logic, command encoding, and renderer-local caches.
 
 It should not own platform/application lifecycle simply to make one target convenient. In particular, the reusable renderer is not the authority for:
