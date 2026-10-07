@@ -29,7 +29,6 @@ pub struct GlowCapture<'a> {
     pub revision: u64,
 }
 
-
 /** Conservative source capture tile in final physical output pixels.
  * The caller supplies projected shape bounds, including its painted stroke.
  * Negative origins are valid: offscreen geometry can contribute a halo.
@@ -39,7 +38,6 @@ pub struct GlowPixelBounds {
     pub min: [f64; 2],
     pub max: [f64; 2],
 }
-
 
 impl GlowPixelBounds {
     /// Project one filled, unstroked M1 circle/rectangle through the existing
@@ -62,7 +60,9 @@ impl GlowPixelBounds {
                 transform.scale.x,
                 transform.scale.y,
                 transform.rotation,
-            ].into_iter().all(f32::is_finite)
+            ]
+            .into_iter()
+            .all(f32::is_finite)
             || camera.world_size.x <= 0.0
             || camera.world_size.y <= 0.0
             || transform.scale.x == 0.0
@@ -83,25 +83,29 @@ impl GlowPixelBounds {
         let (world_half_x, world_half_y) = match geometry {
             noon_core::GeometryRef::Circle { radius } if radius.is_finite() && *radius > 0.0 => {
                 let radius = f64::from(*radius);
-                (radius * (sx * cos).hypot(sy * sin),
-                 radius * (sx * sin).hypot(sy * cos))
+                (
+                    radius * (sx * cos).hypot(sy * sin),
+                    radius * (sx * sin).hypot(sy * cos),
+                )
             }
             noon_core::GeometryRef::Rectangle { size }
-                if size.x.is_finite() && size.y.is_finite()
-                    && size.x > 0.0 && size.y > 0.0 => {
+                if size.x.is_finite() && size.y.is_finite() && size.x > 0.0 && size.y > 0.0 =>
+            {
                 let half_x = f64::from(size.x) * 0.5;
                 let half_y = f64::from(size.y) * 0.5;
-                ((half_x * sx * cos).abs() + (half_y * sy * sin).abs(),
-                 (half_x * sx * sin).abs() + (half_y * sy * cos).abs())
+                (
+                    (half_x * sx * cos).abs() + (half_y * sy * sin).abs(),
+                    (half_x * sx * sin).abs() + (half_y * sy * cos).abs(),
+                )
             }
-            noon_core::GeometryRef::Circle { .. }
-            | noon_core::GeometryRef::Rectangle { .. } => {
+            noon_core::GeometryRef::Circle { .. } | noon_core::GeometryRef::Rectangle { .. } => {
                 return Err(GlowPrepareError::InvalidSourceBounds);
             }
             _ => return Err(GlowPrepareError::UnsupportedCapture),
         };
         let screen_x = (f64::from(transform.translation.x) - f64::from(camera.center.x))
-            * x_pixels_per_world + f64::from(viewport[0]) * 0.5;
+            * x_pixels_per_world
+            + f64::from(viewport[0]) * 0.5;
         let screen_y = f64::from(viewport[1]) * 0.5
             - (f64::from(transform.translation.y) - f64::from(camera.center.y))
                 * y_pixels_per_world;
@@ -288,8 +292,7 @@ impl GlowUniform {
         if sigma > MAX_SIGMA {
             return Err(GlowPrepareError::RadiusExceedsProfile);
         }
-        if !parameters.scope_opacity.is_finite()
-            || !(0.0..=1.0).contains(&parameters.scope_opacity)
+        if !parameters.scope_opacity.is_finite() || !(0.0..=1.0).contains(&parameters.scope_opacity)
         {
             return Err(GlowPrepareError::InvalidScopeOpacity);
         }
@@ -402,7 +405,9 @@ impl GlowScope {
     /// Neutral treatment returns None: use the ordinary path, not a copied image.
     pub fn output(&self) -> Option<&wgpu::Texture> {
         if self.active {
-            self.resources.as_ref().map(|resource| &resource.output.texture)
+            self.resources
+                .as_ref()
+                .map(|resource| &resource.output.texture)
         } else {
             None
         }
@@ -410,7 +415,9 @@ impl GlowScope {
 
     pub fn output_view(&self) -> Option<&wgpu::TextureView> {
         if self.active {
-            self.resources.as_ref().map(|resource| &resource.output.view)
+            self.resources
+                .as_ref()
+                .map(|resource| &resource.output.view)
         } else {
             None
         }
@@ -503,9 +510,10 @@ impl GlowFilter {
             .resources
             .as_ref()
             .is_none_or(|resources| resources.size != size);
-        let sources_changed = scope.resources.as_ref().is_none_or(|resources| {
-            resources.source != *capture.source || resources.mask != *mask
-        });
+        let sources_changed = scope
+            .resources
+            .as_ref()
+            .is_none_or(|resources| resources.source != *capture.source || resources.mask != *mask);
         if recreate {
             scope.resources = Some(programs.resources(device, capture.source, mask, size));
             stats.texture_allocations = 3;
@@ -517,7 +525,10 @@ impl GlowFilter {
             stats.bind_group_creations = 2;
         }
         let resources = scope.resources.as_ref().expect("prepared scope resources");
-        let kernel_changed = scope.uniform.as_ref().is_none_or(|old| !old.same_kernel(&uniform));
+        let kernel_changed = scope
+            .uniform
+            .as_ref()
+            .is_none_or(|old| !old.same_kernel(&uniform));
         if recreate || kernel_changed {
             queue.write_buffer(&resources.uniform, 0, bytemuck::bytes_of(&uniform));
             stats.bytes_uploaded = size_of::<GlowUniform>();
@@ -561,15 +572,30 @@ impl GlowFilter {
         let programs = self.programs.as_ref().expect("active scope programs");
         let resources = scope.resources.as_ref().expect("active scope resources");
         if scope.blur_dirty {
-            encode_pass(encoder, &resources.horizontal.view, &programs.horizontal,
-                &resources.horizontal_binding, "Noon glow horizontal mask");
-            encode_pass(encoder, &resources.vertical.view, &programs.vertical,
-                &resources.vertical_binding, "Noon glow vertical mask");
+            encode_pass(
+                encoder,
+                &resources.horizontal.view,
+                &programs.horizontal,
+                &resources.horizontal_binding,
+                "Noon glow horizontal mask",
+            );
+            encode_pass(
+                encoder,
+                &resources.vertical.view,
+                &programs.vertical,
+                &resources.vertical_binding,
+                "Noon glow vertical mask",
+            );
             stats.blur_passes = 2;
         }
         if scope.output_dirty {
-            encode_pass(encoder, &resources.output.view, &programs.composite,
-                &resources.composite_binding, "Noon glow source-over-halo");
+            encode_pass(
+                encoder,
+                &resources.output.view,
+                &programs.composite,
+                &resources.composite_binding,
+                "Noon glow source-over-halo",
+            );
             stats.composite_passes = 1;
         }
         scope.blur_dirty = false;
@@ -579,11 +605,15 @@ impl GlowFilter {
 }
 
 fn validate_capture(texture: &wgpu::Texture) -> Result<(), GlowPrepareError> {
-    if !matches!(texture.format(), wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm)
-        || texture.dimension() != wgpu::TextureDimension::D2
+    if !matches!(
+        texture.format(),
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+    ) || texture.dimension() != wgpu::TextureDimension::D2
         || texture.depth_or_array_layers() != 1
         || texture.sample_count() != 1
-        || !texture.usage().contains(wgpu::TextureUsages::TEXTURE_BINDING)
+        || !texture
+            .usage()
+            .contains(wgpu::TextureUsages::TEXTURE_BINDING)
     {
         return Err(GlowPrepareError::UnsupportedCapture);
     }
@@ -685,7 +715,13 @@ impl Programs {
         let horizontal = pipeline(&blur_layout, "fs_horizontal");
         let vertical = pipeline(&blur_layout, "fs_vertical");
         let composite = pipeline(&composite_layout, "fs_composite");
-        Self { blur_layout, composite_layout, horizontal, vertical, composite }
+        Self {
+            blur_layout,
+            composite_layout,
+            horizontal,
+            vertical,
+            composite,
+        }
     }
 
     fn resources(
@@ -708,12 +744,23 @@ impl Programs {
         let mask_view = mask.create_view(&wgpu::TextureViewDescriptor::default());
         let horizontal_binding = binding(device, &self.blur_layout, &uniform, &[&mask_view]);
         let vertical_binding = binding(device, &self.blur_layout, &uniform, &[&horizontal.view]);
-        let composite_binding = binding(device, &self.composite_layout, &uniform,
-            &[&source_view, &vertical.view]);
+        let composite_binding = binding(
+            device,
+            &self.composite_layout,
+            &uniform,
+            &[&source_view, &vertical.view],
+        );
         Resources {
-            size, horizontal, vertical, output, uniform,
-            horizontal_binding, vertical_binding, composite_binding,
-            source: source.clone(), mask: mask.clone(),
+            size,
+            horizontal,
+            vertical,
+            output,
+            uniform,
+            horizontal_binding,
+            vertical_binding,
+            composite_binding,
+            source: source.clone(),
+            mask: mask.clone(),
         }
     }
 
@@ -726,10 +773,14 @@ impl Programs {
     ) {
         let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
         let mask_view = mask.create_view(&wgpu::TextureViewDescriptor::default());
-        resources.horizontal_binding = binding(device, &self.blur_layout,
-            &resources.uniform, &[&mask_view]);
-        resources.composite_binding = binding(device, &self.composite_layout,
-            &resources.uniform, &[&source_view, &resources.vertical.view]);
+        resources.horizontal_binding =
+            binding(device, &self.blur_layout, &resources.uniform, &[&mask_view]);
+        resources.composite_binding = binding(
+            device,
+            &self.composite_layout,
+            &resources.uniform,
+            &[&source_view, &resources.vertical.view],
+        );
         resources.source = source.clone();
         resources.mask = mask.clone();
     }
@@ -742,7 +793,10 @@ fn binding(
     images: &[&wgpu::TextureView],
 ) -> wgpu::BindGroup {
     let mut entries = Vec::with_capacity(images.len() + 1);
-    entries.push(wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 0,
+        resource: uniform.as_entire_binding(),
+    });
     for (index, &view) in images.iter().enumerate() {
         entries.push(wgpu::BindGroupEntry {
             binding: index as u32 + 1,
@@ -750,7 +804,9 @@ fn binding(
         });
     }
     device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Noon retained glow binding"), layout, entries: &entries,
+        label: Some("Noon retained glow binding"),
+        layout,
+        entries: &entries,
     })
 }
 
