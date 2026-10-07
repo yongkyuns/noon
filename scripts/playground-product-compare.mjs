@@ -35,13 +35,15 @@ for (let index = 1; index <= pairCount; index += 1) {
     const measurement = productMeasurement(report.exampleId);
     assert.deepEqual(report.measurement, measurement,
     `${name} product measurement protocol changed`);
+    assert.equal(report.source?.path, measurement.sourcePath, `${name} product source path changed`);
+    assert.match(report.source?.sha256 ?? "", /^[0-9a-f]{64}$/, `${name} product source hash is missing`);
     if (measurement.gapClock !== null) {
       const fps = sampleRendererFps(report.fpsSamples, measurement.windowEndSeconds, {
         warmupSeconds: measurement.windowStartSeconds,
       });
-      assert.deepEqual(report.fps, fps, `${name} camera FPS does not match raw renderer observations`);
+      assert.deepEqual(report.fps, fps, `${name} product FPS does not match raw renderer observations`);
       assert.deepEqual(report.presentationGaps, samplePresentationGaps(report.presentationSamples, fps),
-        `${name} camera frame gaps do not match raw presentation observations`);
+        `${name} product frame gaps do not match raw presentation observations`);
       assert.deepEqual(report.rendererCosts, sampleRendererCosts(report.presentationSamples, report.fpsSamples, fps),
         `${name} renderer costs do not match raw renderer observations`);
     }
@@ -58,6 +60,8 @@ for (let index = 1; index <= pairCount; index += 1) {
       assert.ok(Number.isFinite(report.startedAtMs) && Number.isFinite(report.finishedAtMs) &&
         report.finishedAtMs > report.startedAtMs, "product run interval is invalid");
       if (index > 1) {
+        assert.deepEqual(report.source, pairs[0].reports[side].source,
+          `${name} authored source changed between trials`);
         assert.deepEqual(report.runtimeIdentity, pairs[0].reports[side].runtimeIdentity,
           `${name} product package changed between trials`);
         assert.deepEqual(report.packageSizes, pairs[0].reports[side].packageSizes,
@@ -70,6 +74,7 @@ for (let index = 1; index <= pairCount; index += 1) {
     }
   }
   assert.equal(reports[1].exampleId, reports[0].exampleId, "product reports must use the same example");
+  assert.deepEqual(reports[1].source, reports[0].source, "product reports must execute identical authored source");
   assert.equal(reports[1].runtime.backend, reports[0].runtime.backend, "candidate changed the renderer backend");
   assert.deepEqual(reports[1].runtime, reports[0].runtime, "product browser/runtime configuration changed");
   pairs.push({ directories, reports });

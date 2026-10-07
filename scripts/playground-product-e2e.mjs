@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -367,24 +368,19 @@ try {
   assert.equal(shell.executionMode, null, "page shell entered an execution mode before Run");
   assert.equal(shell.controls, false, "page shell allocated playback controls before Run");
 
-  // Both packages execute the same authored fixture.
+  // All source arms execute the same candidate-owned fixture bytes. In
+  // particular, an older anchor's gallery cannot silently substitute its source.
+  let authoredSource = await readFile(path.join(repoRoot, "web", measurement.sourcePath), "utf8");
   if (exampleId === "parity-square-and-circle") {
-    // Extend the animation and expose its endpoint before session handoff.
-    await page.evaluate(({ durationSeconds, holdSeconds }) => {
-      const editor = document.querySelector("#python-scene-source");
-      if (!(editor instanceof HTMLTextAreaElement)) throw new Error("scene editor is unavailable");
-      const updated = editor.value.replace(
-        "self.play(Create(circle), Create(square))",
-        `self.play(Create(circle), Create(square), run_time=${durationSeconds})\n        self.wait(${holdSeconds})`,
-      );
-      if (updated === editor.value) throw new Error("product first-pass fixture was not found");
-      editor.value = updated;
-    }, { durationSeconds: measurement.windowEndSeconds, holdSeconds: measurement.endpointHoldSeconds });
-  } else {
-    // Use the current curated lesson verbatim on both release packages.
-    const source = await readFile(path.join(repoRoot, "web/python/examples/showcase_camera_follows_path.py"), "utf8");
-    await page.locator("#python-scene-source").evaluate((editor, source) => { editor.value = source; }, source);
+    // Preserve the established square/circle duration and endpoint hold.
+    const target = "self.play(Create(circle), Create(square))";
+    assert.equal(authoredSource.split(target).length, 2, "product first-pass fixture was not found exactly once");
+    authoredSource = authoredSource.replace(target,
+      `self.play(Create(circle), Create(square), run_time=${measurement.windowEndSeconds})\n        self.wait(${measurement.endpointHoldSeconds})`);
   }
+  await page.locator("#python-scene-source").evaluate((editor, source) => { editor.value = source; }, authoredSource);
+  const source = { path: measurement.sourcePath,
+    sha256: createHash("sha256").update(authoredSource).digest("hex") };
 
   const cold = await runAndMeasure(page);
   assert.equal(cold.state.backend, "WebGL2", `expected WebGL2 product path, got ${cold.state.backend}`);
@@ -433,6 +429,7 @@ try {
     finishedAtMs: Date.now(),
     runtimeIdentity: JSON.parse(await readFile(path.join(siteRoot, "web/runtime-build-identity.json"), "utf8")),
     measurement,
+    source,
     shellReadyMs,
     shell,
     coldRunMs: cold.milliseconds,
@@ -473,7 +470,7 @@ try {
       `${fps.effectiveFps.toFixed(1)} FPS, ${visual.changedPixels} visible pixels`,
   );
   if (presentationGaps !== null) {
-    console.log(`Camera following ${measurement.windowStartSeconds}–${measurement.windowEndSeconds} s: ` +
+    console.log(`${exampleId} ${measurement.windowStartSeconds}–${measurement.windowEndSeconds} s: ` +
       `submission gaps p95 ${presentationGaps.intervalMs.p95.toFixed(1)} ms, ` +
       `max ${presentationGaps.intervalMs.max.toFixed(1)} ms, ` +
       `${presentationGaps.cadence.longFrames}/${presentationGaps.intervalCount} intervals ≥25 ms`);

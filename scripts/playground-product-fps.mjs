@@ -7,15 +7,34 @@ const END_TOLERANCE_SECONDS = 0.001;
 // Explicit workloads, using the same source and window on both packages. These
 // are test protocols, not an alternative runtime clock or benchmark registry.
 export function productMeasurement(exampleId) {
-  const common = { version: 4, clock: "renderer-sampled", sampler: "renderer-only",
+  const common = { version: 5, clock: "renderer-sampled", sampler: "renderer-only",
     preparation: "completed-cold-pass" };
   switch (exampleId) {
     case "parity-square-and-circle":
-      return { ...common, windowStartSeconds: 1, windowEndSeconds: 4,
+      return { ...common, sourcePath: "python/examples/manim_parity_square_and_circle.py",
+        windowStartSeconds: 1, windowEndSeconds: 4,
         endpointHoldSeconds: 0.5, sourceEndSeconds: 4.5, gapClock: null };
     case "showcase-camera-follows-path":
-      return { ...common, windowStartSeconds: 3.7, windowEndSeconds: 6.9,
+      return { ...common, sourcePath: "python/examples/showcase_camera_follows_path.py",
+        windowStartSeconds: 3.7, windowEndSeconds: 6.9,
         endpointHoldSeconds: 0.4, sourceEndSeconds: 9.8,
+        gapClock: "renderer-publication-submission" };
+    // Continuous existing-source segments only. The following static hold
+    // exposes the exact endpoint, but never contributes to scored FPS.
+    case "showcase-first-scene":
+      return { ...common, sourcePath: "python/examples/showcase_first_scene.py",
+        windowStartSeconds: 2.6, windowEndSeconds: 6.8,
+        endpointHoldSeconds: 1.2, sourceEndSeconds: 8,
+        gapClock: "renderer-publication-submission" };
+    case "showcase-raster-images":
+      return { ...common, sourcePath: "python/examples/showcase_raster_images.py",
+        windowStartSeconds: 3.4, windowEndSeconds: 6.4,
+        endpointHoldSeconds: 1.2, sourceEndSeconds: 7.6,
+        gapClock: "renderer-publication-submission" };
+    case "showcase-bezier-paths":
+      return { ...common, sourcePath: "python/examples/showcase_bezier_paths.py",
+        windowStartSeconds: 1.4, windowEndSeconds: 3.4,
+        endpointHoldSeconds: 0.7, sourceEndSeconds: 9.5,
         gapClock: "renderer-publication-submission" };
     default:
       throw new Error(`unsupported product measurement example: ${exampleId}`);
