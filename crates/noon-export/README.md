@@ -1,70 +1,67 @@
-# Native frame capture
+# Native frame and video export
 
-`noon-export` is the native offscreen GPU/output integration boundary. It depends
-on the shared Noon engine and retained WGPU renderer, not on `noon-native`'s
-window/event loop or any Python/browser host. The separate package keeps native
-capture usable without a window-system dependency and keeps GPU/process output
-out of the language-neutral authoring/runtime crates.
+`noon-export` is the native offscreen GPU/output boundary. It uses Noon's shared
+semantic/runtime path and retained WGPU renderer without depending on
+`noon-native`'s window event loop, Python, WASM, or browser infrastructure.
 
-`capture_frames` accepts a fresh `LiveProgram`, its Rust callback table, the shared
-`ExportFrameOptions`, native `CaptureOptions`, and a fallible frame consumer.
-The consumer receives requested/published time, source index, rebased PTS and
-borrowed tightly packed RGBA bytes. Callback and consumer closures need not be
-`Send`. The source remains sequential; consumer latency cannot change scene time.
+## Built-in output paths
 
-One renderer, target, staging buffer and CPU output buffer are reused during a
-run. The initial implementation waits for each GPU submission before continuing.
-Required semantic-endpoint and prefix publications are rendered but not output.
-An explicit final hold freezes the terminal image without executing updaters.
-The shared range policy currently supports frame-aligned crop starts only.
+`capture_frames` is the low-level frame consumer API.
 
-Capture uses the full production retained composition path, including effective
-authored camera, indexed visibility, text/images, transient presentations,
-secondary views and spatial passes. Viewer inspection and selection are excluded.
-The initial output profile is opaque, top-down `Rgba8Unorm` renderer bytes. This
-is not an implicit linear/sRGB, video range/matrix, or alpha-video conversion.
+`capture_png_sequence` writes numbered PNGs into a sibling scratch directory and
+publishes the directory only after every frame succeeds.
 
-## Raw output example
+`capture_mp4_ffmpeg` streams exactly one raw RGBA frame per shared output PTS to
+an external FFmpeg process using H.264/libx264 and yuv420p. The shared rational
+frame rate is passed directly to the rawvideo input. FFmpeg stderr is drained
+continuously with bounded retention; stdin is closed and the process/muxer must
+finish successfully before the temporary MP4 is published.
 
-The example streams the existing Rust `FollowingGraphCamera` program at 320x180,
-30 FPS to stdout. Diagnostics go to stderr. No window or browser is started:
+Existing output is preserved unless overwrite is explicitly enabled. Failed
+capture, encoding, or muxing removes scratch output instead of publishing a
+partial file.
+
+The current video profile requires positive even dimensions and an FFmpeg build
+that advertises `libx264`. There is no realtime pacing or screen recording.
+
+### MP4
+
+```sh
+cargo run --release -p noon-export --example export_mp4 -- scene.mp4
+```
+
+### PNG sequence
+
+```sh
+cargo run --release -p noon-export --example export_png -- frames
+```
+
+### Raw RGBA
 
 ```sh
 cargo run --release -p noon-export --example capture_frames > scene.rgba
 ```
 
-For a diagnostic video, use an FFmpeg build with libx264:
+The output clock is independent of rendering speed. Semantic endpoint
+publications and cropped-prefix samples are consumed by the retained renderer but
+are not emitted as video frames. Explicit terminal holds freeze the final image
+without invoking updaters again.
 
-```sh
-set -o pipefail
-cargo run --quiet --release -p noon-export --example capture_frames | \
-  ffmpeg -nostdin -n -f rawvideo -pixel_format rgba -video_size 320x180 \
-    -framerate 30 -i pipe:0 -an -c:v libx264 -pix_fmt yuv420p scene.mp4
-```
+## Color and alpha
 
-This pipeline is an explicit external consumer, not the planned production
-encoder adapter. Encoder capability checks, color qualification, independent
-video validation and atomic file finalization remain #1896 P3/P6. In particular,
-a nonzero pipeline exit must not be treated as a successful exported file.
-
-`CaptureCancellation` is cooperative. Each GPU wait has a finite timeout, but
-GPU initialization, synchronous source callbacks and consumer calls cannot be
-preempted by this API. Errors abandon the run rather than retrying consumed
-publications. Start a fresh source/run after failure. A successful capture summary
-does not certify that an external encoder has flushed or finalized its file.
+The capture profile is opaque, top-down `Rgba8Unorm` renderer bytes over the
+configured background. PNG stores those bytes directly. FFmpeg performs the
+selected H.264/yuv420p conversion. Broader HDR, alpha-video, and cross-platform
+color-management profiles remain future work.
 
 ## Qualification
 
 ```sh
 cargo test -p noon-export --all-features --lib --tests
-# Requires a real/software Vulkan device; no virtual display is used:
 env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
   --lib --tests -- --include-ignored --nocapture --test-threads=1
 ```
 
-GPU assertions cover odd dimensions, first/last frames, stateful crops, delayed
-consumers, terminal holds, camera changes, the shared text/image/zoomed-view
-example, spatial depth, cancellation, consumer errors and device loss. The Native
-Host Smoke workflow selects these tests and retains pixel evidence. Test results
-and remaining qualification are tracked in #1904 and #1896, not inferred from the
-presence of test code. No export speedup over Manim is claimed here.
+Native CI additionally installs FFmpeg, decodes the generated MP4, checks exact
+decoded frame count, rational timestamps, dimensions/rate, validates PNG output,
+and retains output evidence. Performance versus Manim remains P6 work.

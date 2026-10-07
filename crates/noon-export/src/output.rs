@@ -148,7 +148,6 @@ struct PngSequenceSink {
     width: u32,
     height: u32,
     next_pts: u64,
-    published: bool,
 }
 
 impl PngSequenceSink {
@@ -163,13 +162,17 @@ impl PngSequenceSink {
             .map_err(|error| map_publish_error(error, &options.directory))?;
         let scratch = ScratchDir::new(&options.directory, "png")
             .map_err(|error| PngSequenceError::io("create PNG scratch directory", error))?;
+        if options.directory.exists() && !options.directory.is_dir() {
+            return Err(PngSequenceError::InvalidConfiguration(
+                "existing PNG destination is not a directory",
+            ));
+        }
         Ok(Self {
             options,
             scratch,
             width,
             height,
             next_pts: 0,
-            published: false,
         })
     }
 
@@ -219,19 +222,10 @@ impl PngSequenceSink {
             self.options.overwrite,
         )
         .map_err(|error| map_publish_error(error, &self.options.directory))?;
-        self.published = true;
         Ok(NativeOutputSummary {
             capture,
             path: self.options.directory.clone(),
         })
-    }
-}
-
-impl Drop for PngSequenceSink {
-    fn drop(&mut self) {
-        if self.published {
-            self.scratch.disarm();
-        }
     }
 }
 
@@ -272,6 +266,7 @@ pub enum FfmpegMp4Error {
         action: &'static str,
         source: io::Error,
     },
+    EncoderUnavailable,
     ProcessFailed {
         status: Option<i32>,
         stderr: String,
@@ -296,6 +291,9 @@ impl fmt::Display for FfmpegMp4Error {
                 write!(f, "cannot start {}: {source}", executable.display())
             }
             Self::Io { action, source } => write!(f, "{action}: {source}"),
+            Self::EncoderUnavailable => {
+                f.write_str("FFmpeg does not advertise the required libx264 encoder")
+            }
             Self::ProcessFailed {
                 status,
                 stderr,
@@ -393,6 +391,12 @@ impl FfmpegMp4Sink {
         }
         validate_destination(&options.path, options.overwrite)
             .map_err(|error| map_ffmpeg_publish_error(error, &options.path))?;
+        if options.path.exists() && !options.path.is_file() {
+            return Err(FfmpegMp4Error::InvalidConfiguration(
+                "existing MP4 destination is not a file",
+            ));
+        }
+        probe_libx264(&options.executable)?;
         let scratch = ScratchDir::new(&options.path, "mp4")
             .map_err(|error| FfmpegMp4Error::io("create MP4 scratch directory", error))?;
         let temp_file = scratch.path.join("encoded.mp4");
@@ -450,10 +454,21 @@ impl FfmpegMp4Sink {
                 "FFmpeg stderr was not piped",
             ))?;
         let max_stderr_bytes = options.max_stderr_bytes;
-        let stderr = thread::Builder::new()
+        let stderr = match thread::Builder::new()
             .name("noon-ffmpeg-stderr".to_owned())
             .spawn(move || drain_stderr(stderr, max_stderr_bytes))
-            .map_err(|error| FfmpegMp4Error::io("spawn FFmpeg stderr drain", error))?;
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                drop(stdin);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(FfmpegMp4Error::io(
+                    "spawn FFmpeg stderr drain",
+                    error,
+                ));
+            }
+        };
         Ok(Self {
             options,
             scratch,
@@ -540,9 +555,6 @@ impl Drop for FfmpegMp4Sink {
         if let Some(handle) = self.stderr.take() {
             let _ = handle.join();
         }
-        if self.finished {
-            self.scratch.disarm();
-        }
     }
 }
 
@@ -566,6 +578,69 @@ fn drain_stderr(mut stderr: impl Read, limit: usize) -> io::Result<StderrCapture
         truncated |= keep != count;
     }
     Ok(StderrCapture { bytes, truncated })
+}
+
+fn probe_libx264(executable: &Path) -> Result<(), FfmpegMp4Error> {
+    const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+    let mut child = Command::new(executable)
+        .arg("-hide_banner")
+        .arg("-encoders")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|source| FfmpegMp4Error::Spawn {
+            executable: executable.to_owned(),
+            source,
+        })?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or(FfmpegMp4Error::InvalidConfiguration(
+            "FFmpeg capability stdout was not piped",
+        ))?;
+    let mut found = false;
+    let mut total = 0_usize;
+    let mut carry = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let count = stdout
+            .read(&mut buffer)
+            .map_err(|error| FfmpegMp4Error::io("read FFmpeg encoder list", error))?;
+        if count == 0 {
+            break;
+        }
+        total = total.saturating_add(count);
+        if total > OUTPUT_LIMIT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(FfmpegMp4Error::InvalidConfiguration(
+                "FFmpeg encoder listing exceeded the probe byte limit",
+            ));
+        }
+        carry.extend_from_slice(&buffer[..count]);
+        if carry.windows(b"libx264".len()).any(|window| window == b"libx264") {
+            found = true;
+        }
+        if carry.len() > 32 {
+            let drain = carry.len() - 32;
+            carry.drain(..drain);
+        }
+    }
+    let status = child
+        .wait()
+        .map_err(|error| FfmpegMp4Error::io("wait for FFmpeg encoder probe", error))?;
+    if !status.success() {
+        return Err(FfmpegMp4Error::ProcessFailed {
+            status: status.code(),
+            stderr: "FFmpeg encoder capability probe failed".to_owned(),
+            stderr_truncated: false,
+        });
+    }
+    if !found {
+        return Err(FfmpegMp4Error::EncoderUnavailable);
+    }
+    Ok(())
 }
 
 fn process_failed(status: ExitStatus, stderr: StderrCapture) -> FfmpegMp4Error {
@@ -607,7 +682,6 @@ fn validate_captured_frame(
 
 struct ScratchDir {
     path: PathBuf,
-    armed: bool,
 }
 
 impl ScratchDir {
@@ -630,7 +704,7 @@ impl ScratchDir {
                 std::process::id()
             ));
             match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path, armed: true }),
+                Ok(()) => return Ok(Self { path }),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             }
@@ -641,16 +715,11 @@ impl ScratchDir {
         ))
     }
 
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
 }
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        if self.armed {
-            let _ = fs::remove_dir_all(&self.path);
-        }
+        let _ = fs::remove_dir_all(&self.path);
     }
 }
 
@@ -729,9 +798,21 @@ fn publish_path(source: &Path, destination: &Path, overwrite: bool) -> Result<()
     let backup = unique_backup_path(destination)?;
     fs::rename(destination, &backup).map_err(PublishError::Io)?;
     match fs::rename(source, destination) {
-        Ok(()) => {
-            remove_any(&backup).map_err(PublishError::Io)?;
-            Ok(())
+        Ok(()) => match remove_any(&backup) {
+            Ok(()) => Ok(()),
+            Err(cleanup) => {
+                let restore_new = fs::rename(destination, source);
+                let restore_old = fs::rename(&backup, destination);
+                match (restore_new, restore_old) {
+                    (Ok(()), Ok(())) => Err(PublishError::Io(cleanup)),
+                    (new_result, old_result) => Err(PublishError::Io(io::Error::new(
+                        cleanup.kind(),
+                        format!(
+                            "published output but could not remove backup ({cleanup}); rollback new={new_result:?}, old={old_result:?}"
+                        ),
+                    ))),
+                }
+            }
         }
         Err(error) => {
             let rollback = fs::rename(&backup, destination);

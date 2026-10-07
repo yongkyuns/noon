@@ -147,7 +147,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       WGPU_BACKEND: vulkan
-      NOON_CAPTURE_PROOF_DIR: ${{ github.workspace }}/capture-proof/pixels
+      NOON_CAPTURE_PROOF_DIR: ${{ github.workspace }}/capture-proof/pixels\n      NOON_OUTPUT_PROOF_DIR: ${{ github.workspace }}/capture-proof/output
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -172,7 +172,7 @@ jobs:
       - name: Install software Vulkan without a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 ffmpeg\n          ffmpeg -hide_banner -encoders | grep -q libx264
 
       - name: Verify native capture does not depend on a window or language host
         run: |
@@ -191,6 +191,53 @@ jobs:
           env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
             --lib --tests -- --include-ignored --nocapture --test-threads=1 \
             2>&1 | tee capture-proof/tests.log
+
+      - name: Independently validate finalized PNG and MP4 outputs
+        run: |
+          set -o pipefail
+          MP4="capture-proof/output/files/following.mp4"
+          PNG="capture-proof/output/files/frames/frame_000000.png"
+          test -s "$MP4"
+          test -s "$PNG"
+          ffmpeg -v error -i "$MP4" -f null -
+          ffprobe -v error -select_streams v:0 -count_frames \
+            -show_entries stream=codec_name,width,height,r_frame_rate,nb_read_frames \
+            -of json "$MP4" > capture-proof/output/ffprobe-stream.json
+          ffprobe -v error -select_streams v:0 -show_frames \
+            -show_entries frame=best_effort_timestamp_time -of csv=p=0 "$MP4" \
+            > capture-proof/output/ffprobe-times.txt
+          ffprobe -v error -select_streams v:0 \
+            -show_entries stream=codec_name,width,height -of json "$PNG" \
+            > capture-proof/output/ffprobe-png.json
+          ffmpeg -v error -i "$PNG" -frames:v 1 -f rawvideo -pix_fmt rgb24 \
+            capture-proof/output/png-first.rgb
+          ffmpeg -v error -i "$MP4" -frames:v 1 -f rawvideo -pix_fmt rgb24 \
+            capture-proof/output/mp4-first.rgb
+          python3 - <<'PY'
+          import json
+          from fractions import Fraction
+          from pathlib import Path
+          root = Path("capture-proof/output")
+          stream = json.loads((root / "ffprobe-stream.json").read_text())["streams"][0]
+          assert stream["codec_name"] == "h264", stream
+          assert int(stream["width"]) == 160 and int(stream["height"]) == 90, stream
+          assert stream["r_frame_rate"] == "30000/1001", stream
+          assert int(stream["nb_read_frames"]) == 90, stream
+          times = [float(x.strip().split(",")[0]) for x in (root / "ffprobe-times.txt").read_text().splitlines() if x.strip()]
+          assert len(times) == 90, len(times)
+          step = float(Fraction(1001, 30000))
+          for i, actual in enumerate(times):
+              assert abs(actual - i * step) < 2e-5, (i, actual, i * step)
+          png = json.loads((root / "ffprobe-png.json").read_text())["streams"][0]
+          assert png["codec_name"] == "png" and int(png["width"]) == 160 and int(png["height"]) == 90, png
+          png_rgb = (root / "png-first.rgb").read_bytes()
+          mp4_rgb = (root / "mp4-first.rgb").read_bytes()
+          assert len(png_rgb) == len(mp4_rgb) == 160 * 90 * 3
+          mae = sum(abs(a-b) for a,b in zip(png_rgb, mp4_rgb)) / len(png_rgb)
+          assert mae < 8.0, mae
+          (root / "png-first.rgb").unlink()
+          (root / "mp4-first.rgb").unlink()
+          PY
 
       - name: Check formatting and lint the native capture package
         run: |
