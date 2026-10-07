@@ -14,6 +14,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 mod gpu;
+mod output;
+
+pub use output::{
+    capture_mp4_ffmpeg, capture_png_sequence, FfmpegMp4Error, FfmpegMp4Options,
+    NativeOutputError, NativeOutputSummary, PngSequenceError, PngSequenceOptions,
+};
 
 use std::error::Error;
 use std::fmt;
