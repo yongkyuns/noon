@@ -735,7 +735,10 @@ mod tests {
         );
 
         let all_collapsed = || {
-            std::iter::repeat(SurfaceSample::position(SemanticVec3::ZERO)).take(plan.vertex_count())
+            std::iter::repeat_n(
+                SurfaceSample::position(SemanticVec3::ZERO),
+                plan.vertex_count(),
+            )
         };
         assert_eq!(
             plan.finish_unlit_samples(all_collapsed()),

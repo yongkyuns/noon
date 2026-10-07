@@ -65,6 +65,21 @@ pub struct MeshBounds3D {
     pub max: SemanticVec3,
 }
 
+fn mesh_bounds(points: impl IntoIterator<Item = SemanticVec3>) -> MeshBounds3D {
+    let mut points = points.into_iter();
+    let mut min = points.next().expect("validated nonempty mesh positions");
+    let mut max = min;
+    for point in points {
+        min.x = min.x.min(point.x);
+        min.y = min.y.min(point.y);
+        min.z = min.z.min(point.z);
+        max.x = max.x.max(point.x);
+        max.y = max.y.max(point.y);
+        max.z = max.z.max(point.z);
+    }
+    MeshBounds3D { min, max }
+}
+
 /// Immutable indexed triangle data validated before it enters a resource arena.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshResource {
@@ -120,22 +135,13 @@ impl MeshResource {
             });
         }
 
-        let mut min = positions[0];
-        let mut max = positions[0];
-        for point in &positions[1..] {
-            min.x = min.x.min(point.x);
-            min.y = min.y.min(point.y);
-            min.z = min.z.min(point.z);
-            max.x = max.x.max(point.x);
-            max.y = max.y.max(point.y);
-            max.z = max.z.max(point.z);
-        }
+        let bounds = mesh_bounds(positions.iter().copied());
         Ok(Self {
             positions,
             normals,
             has_usable_normals,
             indices,
-            bounds: MeshBounds3D { min, max },
+            bounds,
             cairo_appearance: None,
         })
     }
@@ -157,6 +163,15 @@ impl MeshResource {
         {
             return Err(MeshResourceError::InvalidCairoBoundaryTopology);
         }
+        // Cubic paths stay inside the convex hull of their anchors and controls.
+        // Retain that conservative extent once for world bounds and depth ordering.
+        // Rebuild from anchors so replacing appearance can also shrink the bounds.
+        self.bounds = mesh_bounds(
+            self.positions
+                .iter()
+                .copied()
+                .chain(appearance.boundary_controls.into_iter().flatten().flatten()),
+        );
         self.cairo_appearance = Some(Box::new(appearance));
         Ok(self)
     }
@@ -365,6 +380,54 @@ mod tests {
             canonical.with_cairo_appearance(non_finite),
             Err(MeshResourceError::NonFiniteCairoAppearance)
         );
+    }
+
+    #[test]
+    fn curved_perimeter_bounds_include_controls_and_shrink_when_replaced() {
+        let plain = MeshResource::new(
+            vec![
+                SemanticVec3::ZERO,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::new(1.0, 1.0, 0.0),
+                SemanticVec3::new(0.0, 1.0, 0.0),
+            ],
+            None,
+            vec![0, 1, 2, 0, 2, 3],
+        )
+        .unwrap();
+        let appearance = CairoSurfaceAppearance {
+            p0: SemanticVec3::ZERO,
+            p6: SemanticVec3::ZERO,
+            span_p3_p0: SemanticVec3::ZERO,
+            span_p12_p0: SemanticVec3::ZERO,
+            span_p9_p6: SemanticVec3::ZERO,
+            span_p3_p6: SemanticVec3::ZERO,
+            boundary_controls: Some([
+                [
+                    SemanticVec3::new(-2.0, 0.0, 3.0),
+                    SemanticVec3::new(4.0, 2.0, -1.0),
+                ],
+                [SemanticVec3::ZERO; 2],
+                [SemanticVec3::ZERO; 2],
+                [SemanticVec3::ZERO; 2],
+            ]),
+        };
+        let curved = plain.clone().with_cairo_appearance(appearance).unwrap();
+        assert_eq!(
+            curved.bounds(),
+            MeshBounds3D {
+                min: SemanticVec3::new(-2.0, 0.0, -1.0),
+                max: SemanticVec3::new(4.0, 2.0, 3.0),
+            }
+        );
+        assert_eq!(curved.positions(), plain.positions());
+        let straight = curved
+            .with_cairo_appearance(CairoSurfaceAppearance {
+                boundary_controls: None,
+                ..appearance
+            })
+            .unwrap();
+        assert_eq!(straight.bounds(), plain.bounds());
     }
 
     #[test]
