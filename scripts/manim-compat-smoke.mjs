@@ -167,6 +167,12 @@ async function waitForServer() {
 
 const foundationSource = `
 from noon import *
+import sys
+
+# Optional Manim namespace packages must stay off the ordinary cold authoring path.
+assert "numpy" not in sys.modules
+assert PURE_RED.red == 1.0 and PURE_RED.green == 0.0 and PURE_RED.blue == 0.0
+assert PURE_GREEN.red == 0.0 and PURE_GREEN.green == 1.0 and PURE_GREEN.blue == 0.0
 
 class Demo(Scene):
     def construct(self):
@@ -202,6 +208,21 @@ class Demo(Scene):
         self.play(circle.animate.set_y(1.5), run_time=0.4, rate_func=linear)
         self.play(FadeIn(Circle(radius=0.2, color=GREEN)), run_time=0.25)
 
+`;
+
+const lazyNamespaceSource = `
+from noon import *
+import sys
+
+assert "numpy" in sys.modules
+assert np.__name__ == "numpy"
+value = float(np.log(np.e))
+assert abs(value - 1.0) < 1e-12
+assert PURE_CYAN.red == 0.0 and PURE_CYAN.green == 1.0 and PURE_CYAN.blue == 1.0
+
+class LazyNamespace(Scene):
+    def construct(self):
+        self.add(Circle(radius=0.2, color=PURE_RED).shift(RIGHT * value))
 `;
 
 // Ordinary groups use the same shared family lifecycle as Text families.
@@ -655,6 +676,20 @@ try {
   assert.ok(foundation.metrics.presentedFrames > 0);
   assert.ok(Math.abs(foundation.frame.objects[0].center[1] - 1.5) < 1e-6);
   assert.ok(foundation.frame.objects.slice(0, 2).every(object => object.reveal === 1));
+
+  const lazyNamespace = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    lazyNamespaceSource,
+  );
+  assert.equal(lazyNamespace.metrics.objectCount, 1, "implicit np source must author normally");
+  assert.ok(
+    lazyNamespace.metrics.presentedFrames > 0,
+    "implicit np source must render after lazy NumPy binding",
+  );
+  assert.ok(
+    Math.abs(lazyNamespace.frame.objects[0].center[0] - 1.0) < 1e-6,
+    "real NumPy result must drive ordinary shared geometry",
+  );
 
   const groupFades = await page.evaluate(
     pythonSource => window.noonManimCompat.runLive(pythonSource), groupFadeSource,
