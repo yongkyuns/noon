@@ -275,7 +275,8 @@ pub fn program() -> Result<(LiveProgram<MovingZoomedSceneAround>, RustHostCallba
             display_width: 6.0,
             zoom_factor: 0.3,
             camera_frame_stroke_width: 3.0,
-            image_frame_stroke_width: 20.0,
+            // Manim ignores its historical image_frame_stroke_width argument;
+            // the display frame keeps the default width of 3.
             ..ZoomedSceneOptions::default()
         })
         .map_err(message)?;

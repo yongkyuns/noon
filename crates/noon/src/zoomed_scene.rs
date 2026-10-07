@@ -26,6 +26,9 @@ pub struct ZoomedSceneOptions {
     pub camera_frame_start: Vec2,
     pub zoom_factor: f64,
     pub camera_frame_stroke_width: f64,
+    /// Actual authored stroke width for the inset display border. The thin
+    /// Manim compatibility facade retains Manim 0.21's historical constructor
+    /// field as an attribute, but that field is inert during setup.
     pub image_frame_stroke_width: f64,
     pub capture_own_display: bool,
 }

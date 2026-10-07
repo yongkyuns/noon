@@ -1303,7 +1303,7 @@ explicit profile. Unsupported option combinations still reject instead of
 silently substituting another result. The bounded extensions below have paired
 Rust/Python and backend qualification in
 [#1891](https://github.com/yongkyuns/noon/pull/1891); this does not qualify the
-untouched camera examples owned by #254. The opaque indexed-mesh profile remains
+untouched camera examples recorded in #254 and owned by #1879. The opaque indexed-mesh profile remains
 available without cell-family overhead.
 
 Sampled `Surface` cell families retain UV roles on ordinary semantic mesh
@@ -1439,14 +1439,17 @@ this overview is not another implementation checklist.
 
 | Workstream | Remaining outcome and owner |
 | --- | --- |
-| Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE camera/3D examples. Qualify their exact source, effective state, timing/replay and raster/depth/compositing behavior; related Noon-profile Rust/Python pairs are not a full Manim pass. |
-| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. Exact camera examples remain owned by #254; native point lighting remains distinct from Cairo compatibility, and general intersecting transparency remains separate. |
+| Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE camera/3D examples. Qualify their exact source, effective state, timing/replay and raster/depth/compositing behavior; related Noon-profile Rust/Python pairs are not a full Manim pass. #254 records dispositions; #1879 owns unresolved implementations. |
+| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. It also owns the unresolved exact camera implementations recorded in #254; native point lighting remains distinct from Cairo compatibility, and general intersecting transparency remains separate. |
 | Geometry, axes and vector-space breadth | #1879 records the qualified bounded primitive ranges/orientations/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers in #1891. Further options require their own selected capability and paired evidence. |
-| Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. Branch instrumentation reuses the same-run Product Gate anchor and adds five workloads, but supplies no new measured or physical-device 60 FPS evidence. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
+| Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. The existing corpus and same-run Product Gate anchor cover five spatial workloads. #1900 records three alternating Mac baseline/candidate pairs; occasional long frames and means below the strict 60 FPS requirement remain unqualified. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
 
 Exact `FollowingGraphCamera` source/state/raster qualification was merged in
 [#1882](https://github.com/yongkyuns/noon/pull/1882). Its callback replay remains
-explicitly denied, and the other six required camera cases remain unresolved.
+explicitly denied. [#1900](https://github.com/yongkyuns/noon/pull/1900)
+qualifies the exact `ThreeDLightSourcePosition` source, effective light/camera
+state and raster on both WebGPU and WebGL. The other five required camera cases
+remain unresolved under #1879; #254 retains the per-case evidence and dispositions.
 Straight-Line World-stroke and axes-label qualification can proceed beside
 physical-device pacing attribution. Independent
 geometry/vector-space batches need not wait for general transparency or all

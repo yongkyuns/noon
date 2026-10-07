@@ -165,7 +165,7 @@ class Override(ZoomedScene):
                 zoomed_camera_frame_starting_position=noon.Vec2(-0.5, 0.25),
                 zoom_factor=0.2,
                 zoomed_camera_config={"default_frame_stroke_width": 4},
-                image_frame_stroke_width=5,
+                image_frame_stroke_width=20,
             )
             scene.setup()
             self.assertEqual(captured["display_height"], 2.0)
@@ -174,7 +174,8 @@ class Override(ZoomedScene):
             self.assertEqual(captured["camera_frame_start"], noon.Vec2(-0.5, 0.25))
             self.assertEqual(captured["zoom_factor"], 0.2)
             self.assertEqual(captured["camera_frame_stroke_width"], 4.0)
-            self.assertEqual(captured["image_frame_stroke_width"], 5.0)
+            self.assertEqual(scene.image_frame_stroke_width, 20.0)
+            self.assertEqual(captured["image_frame_stroke_width"], 3.0)
             self.assertIs(scene.zoomed_display.display_frame, scene.zoomed_display)
             self.assertEqual(scene.get_zoom_factor(), 0.375)
             scene.activate_zooming()
