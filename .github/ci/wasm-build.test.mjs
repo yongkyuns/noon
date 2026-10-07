@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { productConfig, validateProductEnvironment, resolveProductSources,
   prepareProductArtifact, prepareProductDependencies, stampProductArtifact, verifyProductArtifact } from "./product-artifact.mjs";
-import { measure, prepare, prepareArtifact, sourceSha, stamp, trustedWriter,
+import { configuration, measure, prepare, prepareArtifact, sourceSha, stamp, trustedWriter,
   validateEnvironment, verify, packageSizes, summarizePackageSizes } from "./wasm-build.mjs";
 
 const env = { RUNNER_OS: "Linux", RUNNER_ARCH: "X64" };
@@ -125,9 +125,9 @@ function fakeCargo({ rejectMetadata } = {}) {
           `version = 4\n# resolver selected thin-vec ${version}\n\n[[package]]\nname = "noon-web"\nversion = "0.1.0"\n`);
         return "";
       }
-      assert.deepEqual(args, ["metadata", "--locked", "--no-deps", "--format-version", "1"]);
+      assert.deepEqual(args, ["metadata", "--locked", "--format-version", "1"]);
       if (rejectMetadata?.(root)) throw new Error("cargo metadata --locked rejected copied Cargo.lock");
-      return JSON.stringify({ packages: [] });
+      return JSON.stringify({ packages: [], resolve: { nodes: [] } });
     },
   };
 }
@@ -146,7 +146,7 @@ test("product dependency preparation reuses one baseline lock for matching input
     "matching candidate inputs must not resolve dependencies a second time");
   assert.equal(cargo.calls.filter(call => call.args[0] === "metadata").length, 2);
   assert.ok(cargo.calls.filter(call => call.args[0] === "metadata")
-    .every(call => call.args.includes("--locked") && call.args.includes("--no-deps")));
+    .every(call => call.args.includes("--locked") && !call.args.includes("--no-deps")));
   assert.match(baselineLock, /thin-vec 0\.2\.20/);
   assert.equal(await readFile(path.join(root, "Cargo.lock"), "utf8"), baselineLock);
   assert.deepEqual(prepared.results.map(result => result.mode), ["resolved", "reused-baseline"]);
@@ -234,6 +234,66 @@ test("a copied lock that fails --locked metadata validation is not regenerated",
     "metadata failure must not fall back to another resolution");
   assert.equal(cargo.calls.filter(call => call.args[0] === "metadata").length, 2);
   assert.equal(await readFile(path.join(root, "Cargo.lock"), "utf8"), await readFile(path.join(baseline, "Cargo.lock"), "utf8"));
+});
+
+test("offline Cargo validation rejects an incomplete local dependency lock without rewriting it", async (t) => {
+  const { root, git, put } = await fixture(t);
+  const { toolchain } = await configuration(fileURLToPath(new URL("../../", import.meta.url)));
+  await put("rust-toolchain.toml", `[toolchain]\nchannel = "${toolchain}"\n`);
+  await put("Cargo.toml", '[workspace]\nmembers = ["crates/noon-web", "crates/local-helper"]\nresolver = "2"\n');
+  await put("crates/noon-web/Cargo.toml", '[package]\nname = "noon-web"\nversion = "0.1.0"\n[dependencies]\nlocal-helper = { path = "../local-helper" }\n');
+  await put("crates/local-helper/Cargo.toml", '[package]\nname = "local-helper"\nversion = "0.1.0"\n');
+  await put("crates/local-helper/src/lib.rs", "pub fn value() -> u32 { 1 }\n");
+  git("add", "Cargo.toml", "rust-toolchain.toml", "crates");
+  git("-c", "user.name=CI Test", "-c", "user.email=ci@example.invalid", "commit", "-qm", "add offline path dependency");
+
+  const baseline = await mkdtemp(path.join(os.tmpdir(), "noon-product-lock-baseline-"));
+  const target = await mkdtemp(path.join(os.tmpdir(), "noon-product-lock-target-"));
+  t.after(() => Promise.all([
+    rm(baseline, { recursive: true, force: true }),
+    rm(target, { recursive: true, force: true }),
+  ]));
+  for (const checkout of [baseline, target]) {
+    execFileSync("git", ["clone", "--quiet", "file://" + root, checkout]);
+  }
+
+  const cargoCalls = [];
+  const runCargo = async (checkout, args) => {
+    cargoCalls.push({ checkout, args });
+    const result = spawnSync("cargo", args, {
+      cwd: checkout,
+      encoding: "utf8",
+      env: { ...process.env, CARGO_NET_OFFLINE: "true" },
+    });
+    assert.equal(result.status, 0, "cargo " + args.join(" ") + " failed: " + (result.stderr || result.error));
+    return result.stdout;
+  };
+
+  const prepared = await prepareProductDependencies(baseline, [target], { runCargo });
+  assert.deepEqual(prepared.results.map(result => result.mode), ["resolved", "reused-baseline"]);
+  assert.deepEqual(cargoCalls.filter(call => call.args[0] === "metadata").map(call => call.args), [
+    ["metadata", "--locked", "--format-version", "1"],
+    ["metadata", "--locked", "--format-version", "1"],
+  ]);
+  const baselineLock = await readFile(path.join(baseline, "Cargo.lock"), "utf8");
+  assert.match(baselineLock, /name = "local-helper"/);
+  assert.equal(await readFile(path.join(target, "Cargo.lock"), "utf8"), baselineLock);
+
+  for (const checkout of [baseline, target]) execFileSync("git", ["add", "Cargo.lock"], { cwd: checkout });
+  const incompleteLock = baselineLock.replace(
+    /\n\[\[package\]\]\nname = "local-helper"\nversion = "0\.1\.0"\n/, "\n");
+  assert.notEqual(incompleteLock, baselineLock, "fixture lock must contain a removable local package entry");
+  await writeFile(path.join(target, "Cargo.lock"), incompleteLock);
+  execFileSync("git", ["add", "Cargo.lock"], { cwd: target });
+  const beforeRejectedValidation = cargoCalls.length;
+
+  await assert.rejects(prepareProductDependencies(baseline, [target], { runCargo }),
+    /cargo metadata --locked.*failed|lock file.*needs to be updated/i);
+  assert.equal(cargoCalls.length - beforeRejectedValidation, 2,
+    "the second pass should validate baseline and target without resolving again");
+  assert.ok(cargoCalls.slice(beforeRejectedValidation).every(call => call.args[0] === "metadata"));
+  assert.equal(await readFile(path.join(target, "Cargo.lock"), "utf8"), incompleteLock,
+    "failed validation must leave the copied lock byte-for-byte unchanged");
 });
 
 test("same source/configuration round-trips without Cargo in the consumer", async (t) => {

@@ -33,9 +33,11 @@ async function resolveCargoLockfile(root, runCargo) {
 }
 
 async function validateCargoLockfile(root, runCargo) {
-  const stdout = await runCargo(root, ["metadata", "--locked", "--no-deps", "--format-version", "1"]);
+  const stdout = await runCargo(root, ["metadata", "--locked", "--format-version", "1"]);
   const metadata = JSON.parse(stdout);
   assert.ok(Array.isArray(metadata.packages), `cargo metadata returned no package list for ${root}`);
+  assert.ok(metadata.resolve && Array.isArray(metadata.resolve.nodes),
+    `cargo metadata returned no dependency resolution for ${root}`);
 }
 
 async function dependencyConfiguration(root) {
@@ -123,7 +125,10 @@ export function validateProductEnvironment(env, role) {
 }
 
 function commandOutput(root, command, args) {
-  const result = spawnSync(command, args, { cwd: root, encoding: "utf8" });
+  // Full workspace metadata exceeds Node's default 1 MiB capture buffer.
+  const result = spawnSync(command, args, {
+    cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024,
+  });
   assert.equal(result.status, 0, `${command} failed: ${result.stderr || result.error}`);
   return result.stdout.trim();
 }
