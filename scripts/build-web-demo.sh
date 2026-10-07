@@ -71,6 +71,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/composition-authoring-smoke.mjs
   node --check scripts/reactive-authoring-smoke.mjs
   node --check scripts/shared-authoring-smoke.mjs
+  node --check scripts/shared-authoring-pyodide-contract.mjs
   node --check scripts/paired-authoring-qualification.mjs
   node --check scripts/special-camera-qualification.mjs
   node --check scripts/plotting-qualification.mjs

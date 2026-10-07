@@ -8,6 +8,8 @@ const source = await readFile(new URL("../scripts/playground-product-e2e.mjs", i
 const pairSource = await readFile(new URL("../scripts/playground-product-pair.mjs", import.meta.url), "utf8");
 assert.match(source, /NOON_PRODUCT_BROWSER_WS_ENDPOINT/);
 assert.match(source, /chromium\.connect\(browserWsEndpoint\)/);
+assert.match(source, /await context\?\.close\(\);\s*(?:\/\/[^\n]*\n\s*)*await browser\?\.close\(\)/);
+assert.doesNotMatch(source, /if \(browserWsEndpoint === null\) await browser\?\.close/);
 assert.match(source, /browserArgs\("webgl"\)/);
 assert.match(source, /sharedBrowserProcess: browserWsEndpoint !== null/);
 assert.match(pairSource, /chromium\.launchServer/);
@@ -15,6 +17,9 @@ assert.match(pairSource, /browserArgs\("webgl"\)/);
 assert.match(pairSource, /productPairOrder\(pairIndex\)/);
 assert.match(pairSource, /NOON_PRODUCT_BROWSER_WS_ENDPOINT: browserServer\.wsEndpoint\(\)/);
 assert.match(pairSource, /await browserServer\.close\(\)/);
+assert.match(pairSource, /setTimeout\(/);
+assert.match(pairSource, /child\.kill\("SIGTERM"\)/);
+assert.match(pairSource, /if \(timedOut\)/);
 assert.doesNotMatch(pairSource, /retry|best[- ]of/i);
 
 assert.match(source, /const measurement = productMeasurement\(exampleId\);/);

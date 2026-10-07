@@ -54,7 +54,7 @@ pub(crate) fn js_error(error: impl Into<AuthoringFailure>) -> wasm_bindgen::JsVa
 mod tests {
     use super::*;
     use noon::{AuthoringError, ExecutionSessionPublicationError, LiveSessionError};
-    use noon_core::{SemanticNodeId, SemanticSceneOperationError};
+    use noon_core::{SemanticMutationTransactionError, SemanticNodeId, SemanticSceneOperationError};
     use std::error::Error;
 
     #[test]
@@ -300,5 +300,50 @@ mod tests {
             .unwrap();
         assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
         assert_eq!(execution.frame().objects[1], before.objects[1]);
+    }
+
+    #[test]
+    fn duplicate_effect_parameter_keeps_a_typed_language_boundary_error() {
+        let effect = SemanticNodeId::new(7, 3);
+        let error =
+            AuthoringFailure::from(SemanticMutationTransactionError::DuplicateEffectParameter {
+                index: 2,
+                effect,
+                parameter: noon_core::GlowParameter::Intensity,
+            });
+        assert_eq!(error.category, "invalid_input");
+        assert_eq!(error.code, "transaction.duplicate_effect_parameter");
+        assert!(error.message.contains("Intensity"));
+        assert!(error.message.contains("generation: 3"));
+    }
+
+    #[test]
+    fn effect_errors_project_shared_causes_without_text_matching() {
+        use noon::effects::{Glow, GlowUpdate};
+        let mut scene = noon::Scene::new();
+        let object = scene.circle(0.08).unwrap();
+        scene.set_glow(&object, GlowUpdate::default()).unwrap();
+        let invalid = scene
+            .set_glow(&object, GlowUpdate::default().intensity(-1.0))
+            .unwrap_err();
+        let projected = AuthoringFailure::from(invalid);
+        assert_eq!(projected.category, "invalid_input");
+        assert_eq!(
+            projected.cause.as_ref().unwrap().code,
+            "effect.invalid_parameter"
+        );
+        let duplicate = scene
+            .add_effect(&object, Glow::default(), "glow")
+            .unwrap_err();
+        let projected = AuthoringFailure::from(duplicate);
+        assert_eq!(projected.category, "invalid_input");
+        assert_eq!(
+            projected.cause.as_ref().unwrap().code,
+            "transaction.invalid_effect_attachment"
+        );
+        let handle = object.get_effect("glow").unwrap();
+        scene.remove_glow(&object).unwrap();
+        let stale = handle.authored_definition().unwrap_err();
+        assert_eq!(AuthoringFailure::from(stale).category, "stale_handle");
     }
 }

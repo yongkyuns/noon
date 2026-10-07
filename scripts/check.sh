@@ -34,10 +34,12 @@ fmt_lint() {
 }
 
 fast_tests() {
+  python3 tests/visual-effects/test_reference.py -v
   cargo test --workspace --all-features --lib --no-fail-fast
 }
 
 all_tests() {
+  python3 tests/visual-effects/test_reference.py -v
   cargo test --workspace --all-features --lib --tests --bins --no-fail-fast
   cargo test --workspace --all-features --doc --no-fail-fast
 }

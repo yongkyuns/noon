@@ -42,7 +42,9 @@ pub use semantic_scene_restructure::{
     SemanticSceneMembershipRequest,
 };
 
+mod effects;
 mod semantic_declarations;
+pub use effects::*;
 
 mod semantic_signals;
 pub use semantic_signals::*;
@@ -355,6 +357,8 @@ pub enum SemanticNodeKind {
     /// Authored animation declaration using the same scene-global generational
     /// identity allocator as every other semantic entity.
     Animation(SemanticAnimationState),
+    /// Non-renderable appearance attachment in this same generational arena.
+    Effect(SemanticEffectState),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -397,6 +401,12 @@ pub struct SemanticNode {
     /// families/Line components. It is Semantic Scene state, not wrapper or
     /// renderer state.
     graph_declaration: Option<SemanticGraphDeclaration>,
+    /// Ordered attachment identities; absent effects allocate no collection.
+    /// Boxing the Vec header keeps every effect-free node to one pointer of
+    /// overhead rather than three words. The first attachment pays the extra
+    /// header allocation; structural edits then reuse the Vec capacity.
+    #[allow(clippy::box_collection)]
+    effects: Option<Box<Vec<SemanticNodeId>>>,
 }
 
 impl SemanticNode {
@@ -609,6 +619,9 @@ pub struct SemanticStore {
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
     live_nodes: usize,
+    // Derived cardinality, maintained at allocator insertion/retirement. It lets
+    // the declaration-only effect profile reject execution without scene scans.
+    effect_nodes: usize,
     scene_head: Option<SemanticNodeId>,
     scene_tail: Option<SemanticNodeId>,
     scene_nodes: usize,
@@ -713,6 +726,7 @@ impl Clone for SemanticStore {
             slots,
             free_head: self.free_head,
             live_nodes: self.live_nodes,
+            effect_nodes: self.effect_nodes,
             scene_head: self.scene_head,
             scene_tail: self.scene_tail,
             scene_nodes: self.scene_nodes,
@@ -977,6 +991,7 @@ impl SemanticStore {
     }
 
     fn insert_kind(&mut self, kind: SemanticNodeKind) -> SemanticNodeId {
+        self.effect_nodes += usize::from(matches!(kind, SemanticNodeKind::Effect(_)));
         let id = self
             .preview_node_allocations()
             .next()
@@ -1003,6 +1018,7 @@ impl SemanticStore {
             scoped_signals: BTreeSet::new(),
             foreground_members: Vec::new(),
             graph_declaration: None,
+            effects: None,
         });
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {
@@ -1180,6 +1196,12 @@ impl SemanticStore {
     /// Identity, source identity and family relationships are preserved. The
     /// operation writes only this node and the former tail node, if any.
     pub fn attach_to_scene(&mut self, id: SemanticNodeId) -> Result<bool, SemanticStoreError> {
+        if matches!(
+            self.node(id).map(SemanticNode::kind),
+            Some(SemanticNodeKind::Effect(_))
+        ) {
+            return Err(SemanticStoreError::EffectCannotBeMember(id));
+        }
         let membership = self
             .node(id)
             .ok_or(SemanticStoreError::UnknownNode(id))?
@@ -1460,6 +1482,12 @@ impl SemanticStore {
         if self.node(member).is_none() {
             return Err(SemanticStoreError::UnknownNode(member));
         }
+        if matches!(
+            self.node(member).map(SemanticNode::kind),
+            Some(SemanticNodeKind::Effect(_))
+        ) {
+            return Err(SemanticStoreError::EffectCannotBeMember(member));
+        }
         if family == member {
             return Err(SemanticStoreError::FamilyCycle { family, member });
         }
@@ -1599,9 +1627,19 @@ impl SemanticStore {
             .node(id)
             .ok_or(SemanticStoreError::UnknownNode(id))?
             .clone();
+        let mut writes = 0;
+        for &effect in node.effect_ids() {
+            if self.node(effect).is_some() {
+                self.remove_node(effect)?;
+                writes += self.last_mutation.slots_written;
+            }
+        }
+        if let Some(effect) = node.semantic_effect_state() {
+            self.unlink_effect(id, effect.owner());
+            writes += usize::from(self.node(effect.owner()).is_some());
+        }
         self.unregister_semantic_references_for_owner(id);
 
-        let mut writes = 0;
         if node.is_scene_owned() {
             self.detach_from_scene(id)?;
             writes += self.last_mutation.slots_written;
@@ -1633,6 +1671,7 @@ impl SemanticStore {
 
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");
+        self.effect_nodes -= usize::from(matches!(removed.kind, SemanticNodeKind::Effect(_)));
         slot.generation = slot
             .generation
             .checked_add(1)
@@ -1710,6 +1749,8 @@ impl SemanticStore {
 pub enum SemanticStoreError {
     UnknownNode(SemanticNodeId),
     NotFamily(SemanticNodeId),
+    NotEffect(SemanticNodeId),
+    EffectCannotBeMember(SemanticNodeId),
     NotFamilyMember {
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -1730,6 +1771,10 @@ impl std::fmt::Display for SemanticStoreError {
                 id.slot(),
                 id.generation()
             ),
+            Self::NotEffect(id) => write!(formatter, "semantic node {id:?} is not an effect"),
+            Self::EffectCannotBeMember(id) => {
+                write!(formatter, "effect {id:?} is not painter membership")
+            }
             Self::NotFamily(id) => write!(
                 formatter,
                 "semantic node {}:{} is not a family",

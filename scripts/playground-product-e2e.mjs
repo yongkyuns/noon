@@ -470,7 +470,9 @@ try {
   throw error;
 } finally {
   await context?.close();
-  if (browserWsEndpoint === null) await browser?.close();
+  // Browser.close() disconnects this client when connected via launchServer;
+  // without it the Node child never exits even after writing its report.
+  await browser?.close();
   server.kill("SIGTERM");
   await serverClosed;
 }

@@ -209,6 +209,10 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             SemanticNodeCreation::object(state)
         };
         let pending = transaction.create_node(creation);
+        store
+            .borrow()
+            .copy_effects_into(id, pending, &mut transaction)
+            .map_err(AuthoringError::from)?;
         if let Some(z) = family_z {
             transaction.set_z_index(pending, z);
         }

@@ -53,10 +53,26 @@ async function runSide(role, position) {
   };
   await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [e2eScript], { env, stdio: "inherit" });
-    child.once("error", reject);
+    let timedOut = false;
+    // Fail closed on a hung trial instead of holding the entire 90-minute
+    // qualification job. This watchdog never retries or replaces a sample.
+    const watchdog = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, 180_000);
+    child.once("error", (error) => {
+      clearTimeout(watchdog);
+      reject(error);
+    });
     child.once("exit", (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new Error(`product ${role} failed for pair ${pairIndex}: ${signal ?? `exit ${code}`}`));
+      clearTimeout(watchdog);
+      if (timedOut) {
+        reject(new Error(`product ${role} did not exit within 180s in pair ${pairIndex}`));
+      } else if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`product ${role} failed for pair ${pairIndex}: ${signal ?? `exit ${code}`}`));
+      }
     });
   });
 }

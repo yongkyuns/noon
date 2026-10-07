@@ -145,6 +145,20 @@ impl From<AuthoringError> for AuthoringFailure {
     fn from(error: AuthoringError) -> Self {
         let message = error.to_string();
         match error {
+            AuthoringError::GlowParameter(_) => {
+                Self::new("invalid_input", "effect.invalid_parameter", message)
+            }
+            AuthoringError::EffectNotFound { .. } => {
+                Self::new("invalid_input", "effect.not_found", message)
+            }
+            AuthoringError::EffectOwnerMismatch { .. } => {
+                Self::new("foreign_handle", "effect.foreign_owner", message)
+            }
+            AuthoringError::EffectStateReplacementUnavailable => Self::new(
+                "unsupported_operation",
+                "effect.state_replacement_unavailable",
+                message,
+            ),
             AuthoringError::ForeignStore => {
                 Self::new("foreign_handle", "authoring.foreign_store", message)
             }
@@ -604,6 +618,8 @@ impl From<SemanticStoreError> for AuthoringFailure {
         let (category, code) = match &error {
             E::UnknownNode(_) => ("stale_handle", "store.unknown_node"),
             E::NotFamily(_) => ("invalid_input", "store.not_family"),
+            E::NotEffect(_) => ("invalid_input", "store.not_effect"),
+            E::EffectCannotBeMember(_) => ("invalid_input", "store.effect_not_painter_member"),
             E::NotFamilyMember { .. } => ("invalid_input", "store.not_family_member"),
             E::FamilyCycle { .. } => ("invalid_input", "store.family_cycle"),
             E::DuplicateSourceIdentity(_) => ("invalid_input", "store.duplicate_source_identity"),
@@ -624,6 +640,19 @@ impl From<SemanticMutationTransactionError> for AuthoringFailure {
                 Self::caused_by("transaction.animation_target", message, error.into())
             }
             E::Node { error, .. } => Self::caused_by("transaction.node", message, error.into()),
+            E::DuplicateEffectParameter { .. } => Self::new(
+                "invalid_input",
+                "transaction.duplicate_effect_parameter",
+                message,
+            ),
+            E::InvalidEffectAttachment { .. } => Self::new(
+                "invalid_input",
+                "transaction.invalid_effect_attachment",
+                message,
+            ),
+            E::EffectParameter { .. } => {
+                Self::new("invalid_input", "effect.invalid_parameter", message)
+            }
             E::NonFinitePropertyValue { .. } => Self::new(
                 "invalid_input",
                 "transaction.non_finite_property_value",

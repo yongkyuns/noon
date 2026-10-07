@@ -75,39 +75,22 @@ impl LiveSession<'_> {
             .map_err(LiveSessionError::from)
     }
 
-    /// Copy a selected interval from one coherent effective publication.
+    /// Compatibility forwarding for the Scene-owned running subcurve operation.
     pub fn subcurve(
         &mut self,
         source: &Mobject,
         a: f64,
         b: f64,
     ) -> Result<Mobject, LiveSessionError> {
-        self.require_mobject(source)?;
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let captured = self.capture_mobject_state(source)?;
-        let mut store = self.store.borrow_mut();
-        let (mut state, path) = crate::path_editing::prepare_subcurve(&store, &captured, a, b)?;
-        let mut publish = |store: &mut noon_core::SemanticStore, state| {
-            self.session
-                .apply_semantic_transaction_at_root(
-                    store,
-                    self.root,
-                    crate::path_editing::subcurve_creation(state),
-                )
-                .map_err(LiveSessionError::from)
-        };
-        let result = if let Some(path) = path {
-            store.with_geometry_path(path, |store, handle| {
-                state.content = noon_core::StoredGeometry::Resource(handle).into();
-                publish(store, state)
-            })?
-        } else {
-            publish(&mut store, state)?
-        };
-        let id = crate::path_editing::created_subcurve_id(&result);
-        drop(store);
-        Mobject::from_node(Rc::clone(self.store), id).map_err(LiveSessionError::from)
+        crate::path_editing::publish_running_subcurve(
+            self.store,
+            self.root,
+            self.session,
+            source,
+            a,
+            b,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     pub fn set_points_smoothly(

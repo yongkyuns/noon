@@ -464,6 +464,30 @@ class Mobject:
     def set_color(self, color: Color) -> Mobject:
         return _callback_operations()._canonical_set_color(self, color)
 
+    def set_glow(self, *, color=None, radius=None, intensity=None, source=None, scope=None) -> Mobject:
+        from _noon_effects import set_glow
+        return set_glow(self, color=color, radius=radius, intensity=intensity, source=source, scope=scope)
+
+    def add_effect(self, definition, *, name, scope=None) -> Mobject:
+        from _noon_effects import add_effect
+        return add_effect(self, definition, name=name, scope=scope)
+
+    def get_effect(self, name):
+        from _noon_effects import get_effect
+        return get_effect(self, name)
+
+    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None) -> Mobject:
+        from _noon_effects import set_effect
+        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source)
+
+    def remove_effect(self, selector) -> Mobject:
+        from _noon_effects import remove_effect
+        return remove_effect(self, selector)
+
+    def remove_glow(self) -> Mobject:
+        from _noon_effects import remove_glow
+        return remove_glow(self)
+
     def set_fill(self, color: Color | None = None, opacity: float | None = None) -> Mobject:
         return _callback_operations()._canonical_set_fill(self, color, opacity)
 
@@ -928,6 +952,9 @@ _PUBLIC_EXPORTS = {
     "VMobject": "_manim_compat",
     "SVGMobject": "_manim_svg",
     "ImageMobject": "_manim_image",
+    "Glow": "_noon_effects",
+    "Pixels": "_noon_effects",
+    "EffectHandle": "_noon_effects",
     "Mesh3D": "_noon_spatial",
     "SpatialScene": "_noon_spatial",
     "ThreeDScene": "_noon_spatial",
@@ -1014,6 +1041,9 @@ def __dir__():
 
 
 __all__ = [
+    "Glow",
+    "Pixels",
+    "EffectHandle",
     "NoonError",
     "NoonErrorCause",
     "NoonValueError",

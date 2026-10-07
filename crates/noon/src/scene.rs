@@ -617,6 +617,23 @@ impl Scene {
         left.align_points(right)
     }
 
+    /// Create one detached subcurve from the current coherent effective source state.
+    ///
+    /// Running execution is required because authored-only subcurve creation remains
+    /// available directly on Mobject::subcurve. Resource admission, effective
+    /// capture, immutable geometry installation, and semantic node publication stay
+    /// behind the Scene-owned running publication boundary.
+    pub fn subcurve(
+        &mut self,
+        source: &Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<Mobject, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::path_editing::publish_running_subcurve(store, root, execution, source, a, b)
+        })
+    }
+
     /// Observe one family's effective Runtime layout without creating a borrowed
     /// LiveSession control facade. Cold Scenes fail explicitly rather than returning
     /// authored bounds as if they were an effective publication.
