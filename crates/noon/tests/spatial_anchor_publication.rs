@@ -50,10 +50,7 @@ fn removing_anchor_family_publishes_cleared_spatial_state_to_running_runtime() {
     for object in [left_object, right_object] {
         let row = &execution.frame().objects[row_index(&execution, object)];
         let spatial = row.spatial.as_deref().unwrap();
-        assert_eq!(
-            spatial.fixed_orientation_anchor_family,
-            Some(family.node_id())
-        );
+        assert_eq!(spatial.spatial_anchor_family, Some(family.node_id()));
         assert!(spatial.fixed_orientation_center.is_some());
     }
 
@@ -80,7 +77,7 @@ fn removing_anchor_family_publishes_cleared_spatial_state_to_running_runtime() {
             spatial.composition_domain,
             SemanticSpatialCompositionDomain::FixedOrientation
         );
-        assert_eq!(spatial.fixed_orientation_anchor_family, None);
+        assert_eq!(spatial.spatial_anchor_family, None);
         assert!(spatial.fixed_orientation_center.is_some());
     }
 }

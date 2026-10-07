@@ -37,7 +37,10 @@ impl fmt::Display for ArrowVectorFieldAuthoringError {
                 write!(formatter, "static vector-field authoring failed: {error}")
             }
             Self::InvalidColorConfiguration(reason) => {
-                write!(formatter, "invalid static vector-field color configuration: {reason}")
+                write!(
+                    formatter,
+                    "invalid static vector-field color configuration: {reason}"
+                )
             }
             Self::NonFiniteColorSchemeOutput { sample_index } => write!(
                 formatter,

@@ -2,12 +2,12 @@
 
 use crate::{AuthoringError, DeclaredAnimation, Mobject, MobjectFamily, Scene};
 use noon_core::{
-    Color, GeometryResource, MeshResource, SemanticCamera3D, SemanticMutationTransaction,
-    SemanticNodeCreation, SemanticObjectRole, SemanticObjectState, SemanticPaint,
-    SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D, StoredGeometry,
-    StrokeWidthMode,
+    Color, GeometryResource, MeshResource, SemanticCairoPathAppearance, SemanticCamera3D,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectRole, SemanticObjectState,
+    SemanticPaint, SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D,
+    StoredGeometry, StrokeWidthMode,
 };
-use noon_geometry::SurfaceGrid;
+use noon_geometry::{CairoSurfaceGrid, SurfaceGrid};
 use std::{rc::Rc, sync::Arc};
 
 /// Inert mesh constructor input. Generation/sampling happens once before admission;
@@ -19,6 +19,105 @@ pub struct MeshOptions {
     pub style: SemanticStyle,
     pub material: SemanticSpatialMaterial,
     pub surface_uv_cell: Option<[usize; 2]>,
+}
+
+/// One retained path member composed atomically with spatial mesh cells.
+/// Used for analytic caps whose geometry and paint remain ordinary shared paths.
+#[derive(Clone, Debug)]
+pub struct SpatialPathOptions {
+    path: noon_core::VectorPath,
+    transform: SemanticWorldTransform3D,
+    style: SemanticStyle,
+    material: SemanticSpatialMaterial,
+    cairo_appearance: Option<SemanticCairoPathAppearance>,
+}
+
+impl SpatialPathOptions {
+    pub fn circle(
+        radius: f64,
+        transform: SemanticWorldTransform3D,
+        fill_color: Color,
+        shade_in_3d: bool,
+    ) -> Result<Self, AuthoringError> {
+        let radius = if radius.is_finite() && radius > 0.0 && radius <= f32::MAX as f64 {
+            radius as f32
+        } else {
+            return Err(AuthoringError::NonFiniteGeometry);
+        };
+        if radius <= 0.0 {
+            return Err(AuthoringError::NonFiniteGeometry);
+        }
+        if fill_color.alpha != 0.0 && fill_color.alpha != 1.0 {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::SpatialPathOpacity,
+            ));
+        }
+        let path = noon_geometry::canonical_outline_path(&noon_core::GeometryRef::circle(radius))
+            .ok_or(AuthoringError::NonFiniteGeometry)?;
+        // A Manim Circle shaded as a 3D VMobject keeps its default zero sheen
+        // and derives its endpoint gradient from its own retained path bounds.
+        let cairo_appearance = shade_in_3d.then_some(SemanticCairoPathAppearance::default());
+        Ok(Self {
+            path,
+            transform,
+            style: SemanticStyle {
+                fill: Some(SemanticPaint::Solid(fill_color)),
+                stroke: None,
+                stroke_width: 0.0,
+                ..SemanticStyle::default()
+            },
+            material: if shade_in_3d {
+                SemanticSpatialMaterial::CairoPath
+            } else {
+                SemanticSpatialMaterial::Unlit
+            },
+            cairo_appearance,
+        })
+    }
+}
+
+enum SpatialFamilyMember {
+    Mesh(MeshOptions),
+    Path(SpatialPathOptions),
+}
+
+type SpatialFamilyStateFactory =
+    Box<dyn FnOnce(noon_core::GeometryResourceHandle) -> SemanticObjectState>;
+
+impl SpatialFamilyMember {
+    fn into_resource(self) -> (GeometryResource, SpatialFamilyStateFactory) {
+        match self {
+            Self::Mesh(options) => {
+                let (resource, make_state) = options.into_resource();
+                (resource, Box::new(make_state))
+            }
+            Self::Path(options) => {
+                let SpatialPathOptions {
+                    path,
+                    transform,
+                    style,
+                    material,
+                    cairo_appearance,
+                } = options;
+                let state = move |handle| {
+                    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+                    state.transform = transform.into();
+                    state.style = style;
+                    state.set_spatial_material(material);
+                    if let Some(appearance) = cairo_appearance {
+                        state
+                            .set_cairo_path_appearance(appearance)
+                            .expect("validated Cairo path appearance");
+                    }
+                    state
+                };
+                (
+                    GeometryResource::VectorPath(Arc::new(path)),
+                    Box::new(state),
+                )
+            }
+        }
+    }
 }
 
 impl MeshOptions {
@@ -93,7 +192,7 @@ pub struct SurfaceOptions {
     pub stroke_color: Color,
     pub stroke_width: f64,
     pub stroke_opacity: f64,
-    pub point_lit: bool,
+    pub material: SemanticSpatialMaterial,
 }
 
 impl Default for SurfaceOptions {
@@ -106,20 +205,21 @@ impl Default for SurfaceOptions {
             // units used by Noon (0.01 scene units per pixel).
             stroke_width: 0.005,
             stroke_opacity: 1.0,
-            point_lit: true,
+            material: SemanticSpatialMaterial::PointLit,
         }
     }
 }
 
-/// A normal semantic family of sampled cells. Cell UV roles are stored on the
-/// semantic leaves and are recovered from current shared family membership.
+/// A shared semantic family of sampled cells and optional ordinary members.
+/// Cell UV roles are recovered from current shared family membership.
 #[derive(Clone, Debug)]
 pub struct SurfaceFamily {
     family: MobjectFamily,
 }
 
 impl SurfaceFamily {
-    /// Wrap an existing family only when every leaf carries a semantic UV role.
+    /// Wrap a family with at least one valid semantic UV cell. Ordinary
+    /// non-cell leaves remain members but are excluded from checkerboard edits.
     pub fn from_family(family: MobjectFamily) -> Result<Self, AuthoringError> {
         family.validate()?;
         let leaves = family
@@ -134,11 +234,20 @@ impl SurfaceFamily {
         }
         let store = family.integration_store();
         let borrowed = store.borrow();
+        let mut cell_count = 0;
         for leaf in leaves {
             let state = borrowed
                 .semantic_object_state_checked(leaf)
                 .map_err(AuthoringError::from)?;
-            validate_surface_leaf(&borrowed, state)?;
+            if state.surface_uv_cell().is_some() {
+                validate_surface_leaf(&borrowed, state)?;
+                cell_count += 1;
+            }
+        }
+        if cell_count == 0 {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::SurfaceCellRole,
+            ));
         }
         drop(borrowed);
         Ok(Self { family })
@@ -185,10 +294,10 @@ impl SurfaceFamily {
             let state = borrowed
                 .semantic_object_state_checked(leaf)
                 .map_err(AuthoringError::from)?;
+            let Some([u, v]) = state.surface_uv_cell() else {
+                continue;
+            };
             validate_surface_leaf(&borrowed, state)?;
-            let [u, v] = state.surface_uv_cell().ok_or(AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::SurfaceCellRole,
-            ))?;
             let previous = state.style.clone();
             let mut style = previous.clone();
             style.fill = Some(SemanticPaint::Solid(if (u % 2 + v % 2) % 2 == 0 {
@@ -261,7 +370,8 @@ fn validate_surface_leaf(
     // v-low/u-high diagonal. UV metadata on an arbitrary mesh is insufficient.
     if mesh.positions().len() != 4
         || mesh.normals().is_none_or(|normals| normals.len() != 4)
-        || !mesh.has_usable_normals()
+        || (state.spatial_material() == SemanticSpatialMaterial::PointLit
+            && !mesh.has_usable_normals())
         || mesh.indices() != [0, 1, 3, 1, 2, 3]
     {
         return Err(AuthoringError::Unsupported(
@@ -273,12 +383,24 @@ fn validate_surface_leaf(
 
 fn surface_mesh_options(
     cell: noon_geometry::SurfaceCell,
+    cairo_appearance: Option<noon_core::CairoSurfaceAppearance>,
     options: SurfaceOptions,
 ) -> Result<MeshOptions, AuthoringError> {
     let [u, v] = cell.uv_cell;
     let mesh = cell
         .into_mesh_resource()
         .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let mesh = if let Some(appearance) = cairo_appearance {
+        mesh.with_cairo_appearance(appearance)
+            .map_err(|_| AuthoringError::NonFiniteGeometry)?
+    } else {
+        if options.material == SemanticSpatialMaterial::CairoSurface {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::CairoSurfaceAppearanceRequired,
+            ));
+        }
+        mesh
+    };
     let mut result = MeshOptions::new(mesh);
     result.style = SemanticStyle {
         fill: Some(SemanticPaint::Solid(if (u % 2 + v % 2) % 2 == 0 {
@@ -293,12 +415,17 @@ fn surface_mesh_options(
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         ..SemanticStyle::default()
     };
-    result.material = if options.point_lit {
-        SemanticSpatialMaterial::PointLit
-    } else {
-        SemanticSpatialMaterial::Unlit
-    };
+    result.material = options.material;
     Ok(result)
+}
+
+fn validate_surface_options(options: SurfaceOptions) -> Result<(), AuthoringError> {
+    validate_unit_interval("fill opacity", options.fill_opacity)?;
+    validate_unit_interval("stroke opacity", options.stroke_opacity)?;
+    if !options.stroke_width.is_finite() || options.stroke_width < 0.0 {
+        return Err(AuthoringError::NegativeStrokeWidth(options.stroke_width));
+    }
+    Ok(())
 }
 
 pub(crate) fn publish_mesh_creation(
@@ -311,8 +438,12 @@ pub(crate) fn publish_mesh_creation(
 ) -> Result<noon_core::SemanticNodeId, AuthoringError> {
     let (resource, make_state) = options.into_resource();
     store.with_geometry_resources([resource], |store, handles| {
+        let state = make_state(handles[0]);
+        if state.surface_uv_cell().is_some() {
+            validate_surface_leaf(store, &state)?;
+        }
         let mut transaction = SemanticMutationTransaction::new();
-        let object = transaction.create_node(SemanticNodeCreation::object(make_state(handles[0])));
+        let object = transaction.create_node(SemanticNodeCreation::object(state));
         publish(store, transaction)?
             .resolve(object)
             .ok_or(AuthoringError::UnresolvedCreatedNode(object))
@@ -327,14 +458,58 @@ pub(crate) fn publish_mesh_family(
         SemanticMutationTransaction,
     ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError>,
 ) -> Result<noon_core::SemanticNodeId, AuthoringError> {
-    let (resources, constructors): (Vec<_>, Vec<_>) =
-        options.into_iter().map(MeshOptions::into_resource).unzip();
+    publish_meshes_and_paths_family(store, options, Vec::new(), publish)
+}
+
+pub(crate) fn publish_meshes_and_paths_family(
+    store: &mut noon_core::SemanticStore,
+    meshes: Vec<MeshOptions>,
+    paths: Vec<SpatialPathOptions>,
+    publish: impl FnOnce(
+        &mut noon_core::SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<noon_core::SemanticNodeId, AuthoringError> {
+    let mut members = meshes
+        .into_iter()
+        .map(SpatialFamilyMember::Mesh)
+        .collect::<Vec<_>>();
+    members.extend(paths.into_iter().map(SpatialFamilyMember::Path));
+    publish_spatial_family(store, members, publish)
+}
+
+fn publish_spatial_family(
+    store: &mut noon_core::SemanticStore,
+    members: Vec<SpatialFamilyMember>,
+    publish: impl FnOnce(
+        &mut noon_core::SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<noon_core::SemanticNodeId, AuthoringError> {
+    let (resources, constructors): (Vec<_>, Vec<_>) = members
+        .into_iter()
+        .map(SpatialFamilyMember::into_resource)
+        .unzip();
     store.with_geometry_resources(resources, |store, handles| {
         let mut transaction = SemanticMutationTransaction::new();
         let family = transaction.create_node(SemanticNodeCreation::family());
         for (make_state, handle) in constructors.into_iter().zip(handles) {
-            let face = transaction.create_node(SemanticNodeCreation::object(make_state(*handle)));
+            let is_path = matches!(
+                store.geometry_resources().get(*handle),
+                Some(GeometryResource::VectorPath(_))
+            );
+            let state = make_state(*handle);
+            if state.surface_uv_cell().is_some() {
+                validate_surface_leaf(store, &state)?;
+            }
+            let face = transaction.create_node(SemanticNodeCreation::object(state));
             transaction.add_member(family, face);
+            if is_path {
+                transaction.set_spatial_composition_domain(
+                    face,
+                    noon_core::SemanticSpatialCompositionDomain::World,
+                );
+            }
         }
         publish(store, transaction)?
             .resolve(family)
@@ -403,6 +578,27 @@ impl Scene {
         )
     }
 
+    /// Read the center of a family's coherent effective world-space bounds.
+    /// Detached live leaves use authored poses after session provenance checks.
+    pub fn effective_world_family_center(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<SemanticVec3, AuthoringError> {
+        let target = crate::MobjectTarget::Family(family);
+        let session = self.running_execution();
+        crate::world_affine::target_world_center_with(
+            self.integration_store(),
+            target,
+            |store, node, state| match session {
+                Some(session) => effective_world_or_authored(session, store, node),
+                None => state
+                    .transform
+                    .world_transform()
+                    .ok_or(AuthoringError::NonFiniteObjectState),
+            },
+        )
+    }
+
     /// Admit one detached mesh through the Scene-owned atomic resource publication.
     pub fn mesh(&mut self, options: MeshOptions) -> Result<Mobject, AuthoringError> {
         let node = self.with_semantic_publication(|store, publish| {
@@ -423,6 +619,69 @@ impl Scene {
         MobjectFamily::from_node(Rc::clone(self.integration_store()), node)
     }
 
+    /// Admit mesh cells and retained path members through one Scene-owned
+    /// atomic resource and semantic publication.
+    pub fn mesh_family_with_paths(
+        &mut self,
+        meshes: Vec<MeshOptions>,
+        paths: Vec<SpatialPathOptions>,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let node = self.with_semantic_publication(|store, publish| {
+            publish_meshes_and_paths_family(store, meshes, paths, publish)
+        })?;
+        MobjectFamily::from_node(Rc::clone(self.integration_store()), node)
+    }
+
+    /// Publish a rectangular prism as six immutable, individually ordered face
+    /// meshes in one ordinary semantic family transaction. `fill_opacity` is
+    /// retained per face for the renderer's existing depth-sorted alpha path.
+    pub fn prism_face_family(
+        &mut self,
+        size: SemanticVec3,
+        fill_color: Color,
+        fill_opacity: f64,
+        shade_in_3d: bool,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        validate_unit_interval("fill opacity", fill_opacity)?;
+        let faces = if shade_in_3d {
+            noon_geometry::prism_faces_cairo(size)
+        } else {
+            noon_geometry::prism_faces(size)
+        }
+        .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+        let options = faces
+            .into_iter()
+            .map(|geometry| {
+                let mut mesh = MeshOptions::new(geometry);
+                mesh.style.fill = Some(SemanticPaint::Solid(fill_color));
+                mesh.style.fill_opacity = fill_opacity;
+                mesh.style.stroke = None;
+                mesh.style.stroke_width = 0.0;
+                if shade_in_3d {
+                    mesh.material = SemanticSpatialMaterial::CairoSurface;
+                }
+                mesh
+            })
+            .collect();
+        self.mesh_family(options)
+    }
+
+    /// Publish a cube through the same six-face family path as a prism.
+    pub fn cube_face_family(
+        &mut self,
+        side_length: f64,
+        fill_color: Color,
+        fill_opacity: f64,
+        shade_in_3d: bool,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        self.prism_face_family(
+            SemanticVec3::new(side_length, side_length, side_length),
+            fill_color,
+            fill_opacity,
+            shade_in_3d,
+        )
+    }
+
     /// Publish an already sampled UV grid as ordinary semantic mesh leaves,
     /// retaining its UV roles for later atomic checkerboard changes.
     pub fn surface_family(
@@ -430,18 +689,71 @@ impl Scene {
         grid: SurfaceGrid,
         options: SurfaceOptions,
     ) -> Result<SurfaceFamily, AuthoringError> {
-        validate_unit_interval("fill opacity", options.fill_opacity)?;
-        validate_unit_interval("stroke opacity", options.stroke_opacity)?;
-        if !options.stroke_width.is_finite() || options.stroke_width < 0.0 {
-            return Err(AuthoringError::NegativeStrokeWidth(options.stroke_width));
-        }
+        validate_surface_options(options)?;
         let mut meshes = Vec::with_capacity(grid.plan().cell_count());
         for cell in grid.cells() {
             let uv_cell = cell.uv_cell;
-            meshes.push(surface_mesh_options(cell, options)?.with_surface_uv_cell(uv_cell));
+            meshes.push(surface_mesh_options(cell, None, options)?.with_surface_uv_cell(uv_cell));
         }
         let family = self.mesh_family(meshes)?;
         SurfaceFamily::from_family(family)
+    }
+
+    /// Publish Manim-Cairo sampled UV cells with their immutable endpoint and
+    /// span metadata. This material remains distinct from native PointLit.
+    pub fn surface_cairo_family(
+        &mut self,
+        grid: CairoSurfaceGrid,
+        options: SurfaceOptions,
+    ) -> Result<SurfaceFamily, AuthoringError> {
+        validate_surface_options(options)?;
+        if options.material != SemanticSpatialMaterial::CairoSurface {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::CairoSurfaceAppearanceRequired,
+            ));
+        }
+        let mut meshes = Vec::with_capacity(grid.grid().plan().cell_count());
+        for (cell, appearance) in grid.cells() {
+            let uv_cell = cell.uv_cell;
+            meshes.push(
+                surface_mesh_options(cell, Some(appearance), options)?
+                    .with_surface_uv_cell(uv_cell),
+            );
+        }
+        let family = self.mesh_family(meshes)?;
+        SurfaceFamily::from_family(family)
+    }
+
+    /// Publish Cairo Surface cells and retained cap paths in one resource and
+    /// semantic transaction. Only mesh members carry UV-cell roles.
+    pub fn surface_cairo_family_with_paths(
+        &mut self,
+        grid: CairoSurfaceGrid,
+        options: SurfaceOptions,
+        paths: Vec<SpatialPathOptions>,
+    ) -> Result<SurfaceFamily, AuthoringError> {
+        validate_surface_options(options)?;
+        if options.material != SemanticSpatialMaterial::CairoSurface {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::CairoSurfaceAppearanceRequired,
+            ));
+        }
+        let mut members = Vec::with_capacity(grid.grid().plan().cell_count() + paths.len());
+        for (cell, appearance) in grid.cells() {
+            let uv_cell = cell.uv_cell;
+            members.push(SpatialFamilyMember::Mesh(
+                surface_mesh_options(cell, Some(appearance), options)?
+                    .with_surface_uv_cell(uv_cell),
+            ));
+        }
+        members.extend(paths.into_iter().map(SpatialFamilyMember::Path));
+        let node = self.with_semantic_publication(|store, publish| {
+            publish_spatial_family(store, members, publish)
+        })?;
+        SurfaceFamily::from_family(MobjectFamily::from_node(
+            Rc::clone(self.integration_store()),
+            node,
+        )?)
     }
 
     /// Atomically recolor a sampled Surface through the owning Scene. The same
@@ -607,6 +919,22 @@ impl MobjectFamily {
         let node = publish_mesh_family(&mut store.borrow_mut(), options, |store, transaction| {
             transaction.apply(store).map_err(AuthoringError::from)
         })?;
+        Self::from_node(store, node)
+    }
+
+    /// Cold-author a single shared family containing sampled mesh cells and
+    /// retained path members under one resource and semantic publication.
+    pub fn from_meshes_and_paths(
+        store: Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        meshes: Vec<MeshOptions>,
+        paths: Vec<SpatialPathOptions>,
+    ) -> Result<Self, AuthoringError> {
+        let node = publish_meshes_and_paths_family(
+            &mut store.borrow_mut(),
+            meshes,
+            paths,
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )?;
         Self::from_node(store, node)
     }
 }

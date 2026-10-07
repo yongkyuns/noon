@@ -179,18 +179,19 @@
     },
     {
       "id": "showcase-linear-algebra", "title": "Swap coordinates with a matrix",
-      "lesson": "Apply the same linear transformation twice and follow a yellow vector as its coordinates swap and return.",
+      "lesson": "Grow a yellow vector on a labeled plane, then swap its coordinates twice. Faded copies show the earlier directions.",
       "primary_feature": "linear-algebra-transformations", "category": "Geometry and layout",
       "path": "python/examples/showcase_linear_algebra.py",
-      "features": ["LinearTransformationScene", "Vector", "ApplyMatrix", "symmetric axis swap", "deterministic replay"],
-      "duration": 7.5, "thumbnail_time": 7.25,
+      "features": ["LinearTransformationScene", "GrowArrow", "coordinate labels", "ghost vectors", "ApplyMatrix", "deterministic replay"],
+      "duration": 8.5, "thumbnail_time": 8.25,
       "thumbnail": "thumbnails/showcase/showcase-linear-algebra.png",
-      "thumbnail_alt": "A yellow vector on a number plane after two coordinate swaps return it to its starting direction",
-      "still_intervals": [[0.0, 0.5], [3.5, 4.0], [7.0, 7.5]],
+      "thumbnail_alt": "A yellow vector on a labeled number plane, with faded vectors showing the earlier coordinate swaps",
+      "still_intervals": [[1.0, 1.5], [4.5, 5.0], [8.0, 8.5]],
       "beats": [
-        {"time": 0.5, "label": "Start with (2, 1)"},
-        {"time": 3.5, "label": "Swap x and y"},
-        {"time": 7.0, "label": "Swap back to the start"}
+        {"time": 0.6, "label": "Grow the vector"},
+        {"time": 1.5, "label": "Start with (2, 1)"},
+        {"time": 4.5, "label": "Swap x and y"},
+        {"time": 8.0, "label": "Swap back to the start"}
       ],
       "playback_capability": "deterministic-retained-replay"
     },

@@ -7,6 +7,6 @@ For a code-reading view of the current implementation, use [`type-map.md`](type-
 Additional focused documentation:
 
 - [`mobile-web-rendering.md`](mobile-web-rendering.md) — mobile/browser rendering constraints and decisions.
-- [`phase-a-parallel-work-tracks.md`](phase-a-parallel-work-tracks.md), [`phase-b-parallel-work-tracks.md`](phase-b-parallel-work-tracks.md), [`phase-c-parallel-work-tracks.md`](phase-c-parallel-work-tracks.md), [`phase-d-parallel-work-tracks.md`](phase-d-parallel-work-tracks.md) — scoped development work-track notes. These do not replace `architecture.md` as the architecture authority.
+- [`phase-a-parallel-work-tracks.md`](phase-a-parallel-work-tracks.md), [`phase-b-parallel-work-tracks.md`](phase-b-parallel-work-tracks.md), and [`phase-c-parallel-work-tracks.md`](phase-c-parallel-work-tracks.md) — scoped development work-track notes. For Phase D, use [`architecture.md`](architecture.md) and the owning issues [#1879](https://github.com/yongkyuns/noon/issues/1879), [#254](https://github.com/yongkyuns/noon/issues/254), and [#1653](https://github.com/yongkyuns/noon/issues/1653).
 
 Reader diagrams in this directory keep the `.d2` source beside the checked-in `.svg` preview. Update the D2 source first when implementation types or crate handoffs move.

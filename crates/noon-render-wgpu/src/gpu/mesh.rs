@@ -3,6 +3,7 @@
 //! already encoded/submitted work when resource references are dropped here.
 
 mod boundary;
+mod cairo;
 
 use super::spatial_path::{SpatialPathError, SpatialPathGpuState};
 use super::{create_buffer_with_data, DrawStats};
@@ -47,6 +48,7 @@ pub enum SpatialPrepareError {
     MissingPointLight,
     MultiplePointLights,
     PointLitMeshNeedsNormals(usize),
+    MissingCairoAppearance(usize),
     SpatialPath(SpatialPathError),
     BufferLimit,
     StalePublication,
@@ -90,6 +92,8 @@ struct ResidentMesh {
     index_count: u32,
     users: usize,
     boundary: Option<(wgpu::Buffer, u32)>,
+    cairo: Option<wgpu::BindGroup>,
+    cairo_coverage: Option<wgpu::Buffer>,
 }
 #[derive(Debug)]
 struct Draw {
@@ -112,6 +116,9 @@ struct StagedDraw {
 #[derive(Debug)]
 struct GpuState {
     device: wgpu::Device,
+    camera_layout: wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+    cairo: Option<cairo::Pipelines>,
     viewport: [u32; 2],
     pipeline: wgpu::RenderPipeline,
     pipeline_msaa: wgpu::RenderPipeline,
@@ -145,8 +152,8 @@ pub(super) struct SpatialGpuState {
     point_lit_draws: usize,
     meshes: HashMap<GeometryResourceHandle, ResidentMesh>,
     mesh_instances: BTreeMap<GeometryResourceHandle, InstanceRanges>,
-    transparent_draws: BTreeSet<usize>,
-    transparent_order: Vec<usize>,
+    depth_ordered_draws: BTreeSet<usize>,
+    depth_order: Vec<usize>,
     stroked_draws: BTreeSet<usize>,
     instances: Vec<Instance>,
     free_instances: Vec<usize>,
@@ -399,6 +406,11 @@ impl SpatialGpuState {
                         if spatial.material == SemanticSpatialMaterial::PointLit {
                             validate_point_lit_normals(mesh, index)?;
                         }
+                        if spatial.material == SemanticSpatialMaterial::CairoSurface
+                            && mesh.cairo_appearance().is_none()
+                        {
+                            return Err(SpatialPrepareError::MissingCairoAppearance(index));
+                        }
                         let color = object.style.fill.unwrap_or(noon_core::Color::TRANSPARENT);
                         let alpha = color.alpha * object.style.opacity * object.appearance;
                         if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
@@ -407,7 +419,7 @@ impl SpatialGpuState {
                         // Object-depth ordering is well-defined for a retained
                         // face family. Arbitrary multi-face translucent meshes
                         // require a different ordering contract and remain rejected.
-                        if alpha > 0.0 && alpha < 1.0 && !single_face(mesh) {
+                        if alpha > 0.0 && alpha < 1.0 && !mesh.is_single_face() {
                             return Err(SpatialPrepareError::TransparentMesh(index));
                         }
                         let stroke = object
@@ -419,7 +431,11 @@ impl SpatialGpuState {
                                 let mut result = instance(
                                     spatial.world,
                                     [color.red, color.green, color.blue, alpha],
-                                    SemanticSpatialMaterial::Unlit,
+                                    if spatial.material == SemanticSpatialMaterial::CairoSurface {
+                                        spatial.material
+                                    } else {
+                                        SemanticSpatialMaterial::Unlit
+                                    },
                                 )
                                 .ok_or(SpatialPrepareError::InvalidWorld(index))?;
                                 let scale = match object.style.stroke_width_mode {
@@ -527,15 +543,43 @@ impl SpatialGpuState {
             if let Some(draw) = draw {
                 if !self.meshes.contains_key(&draw.handle) && !new_meshes.contains_key(&draw.handle)
                 {
-                    let vertices = lower_vertices(&draw.mesh)?;
+                    let geometry = boundary::fill_geometry(&draw.mesh)?;
                     let limit = device.limits().max_buffer_size as usize;
-                    if size_of_val(vertices.as_slice()) > limit
-                        || size_of_val(draw.mesh.indices()) > limit
-                        || u32::try_from(draw.mesh.indices().len()).is_err()
+                    if size_of_val(geometry.vertices.as_slice()) > limit
+                        || size_of_val(geometry.indices.as_slice()) > limit
+                        || geometry
+                            .coverage
+                            .as_ref()
+                            .is_some_and(|coverage| size_of_val(coverage.as_slice()) > limit)
+                        || u32::try_from(geometry.indices.len()).is_err()
                     {
                         return Err(SpatialPrepareError::BufferLimit);
                     }
-                    new_meshes.insert(draw.handle, (vertices, draw.mesh.clone()));
+                    new_meshes.insert(draw.handle, geometry);
+                }
+            }
+        }
+        let mut new_cairo = HashMap::new();
+        for (index, draw) in &staged {
+            if let Some(draw) = draw
+                .as_ref()
+                .filter(|draw| draw.material == SemanticSpatialMaterial::CairoSurface)
+            {
+                if !self
+                    .meshes
+                    .get(&draw.handle)
+                    .is_some_and(|mesh| mesh.cairo.is_some())
+                    && !new_cairo.contains_key(&draw.handle)
+                {
+                    let appearance = draw
+                        .mesh
+                        .cairo_appearance()
+                        .ok_or(SpatialPrepareError::MissingCairoAppearance(*index))?;
+                    let value = cairo::Uniform::lower(appearance)?;
+                    if size_of::<cairo::Uniform>() > device.limits().max_buffer_size as usize {
+                        return Err(SpatialPrepareError::BufferLimit);
+                    }
+                    new_cairo.insert(draw.handle, value);
                 }
             }
         }
@@ -595,9 +639,9 @@ impl SpatialGpuState {
             self.paths.commit(
                 device,
                 queue,
-                &gpu.camera,
+                &gpu.camera_layout,
+                &gpu.camera_group,
                 format,
-                super::PATH_SAMPLE_COUNT,
                 path_plan,
             )
         } else {
@@ -606,9 +650,20 @@ impl SpatialGpuState {
         stats.geometry_bytes += path_stats.geometry_bytes;
         stats.instance_bytes += path_stats.instance_bytes;
         stats.camera_bytes += path_stats.camera_bytes;
-        for (handle, (vertices, mesh)) in new_meshes {
-            let vertex_bytes = bytemuck::cast_slice(&vertices);
-            let index_bytes = bytemuck::cast_slice(mesh.indices());
+        for (handle, geometry) in new_meshes {
+            let vertex_bytes = bytemuck::cast_slice(&geometry.vertices);
+            let index_bytes = bytemuck::cast_slice(&geometry.indices);
+            let coverage = geometry.coverage.map(|coverage| {
+                let bytes = bytemuck::cast_slice(&coverage);
+                stats.geometry_bytes += bytes.len();
+                create_buffer_with_data(
+                    device,
+                    queue,
+                    Some("Noon immutable Cairo edge coverage"),
+                    bytes,
+                    wgpu::BufferUsages::VERTEX,
+                )
+            });
             self.meshes.insert(
                 handle,
                 ResidentMesh {
@@ -626,12 +681,27 @@ impl SpatialGpuState {
                         index_bytes,
                         wgpu::BufferUsages::INDEX,
                     ),
-                    index_count: mesh.indices().len() as u32,
+                    index_count: geometry.indices.len() as u32,
                     users: 0,
                     boundary: None,
+                    cairo: None,
+                    cairo_coverage: coverage,
                 },
             );
             stats.geometry_bytes += vertex_bytes.len() + index_bytes.len();
+        }
+        if !new_cairo.is_empty() {
+            let gpu = self.gpu.as_mut().expect("Cairo draws require GPU state");
+            let pipelines = gpu.cairo.get_or_insert_with(|| {
+                cairo::Pipelines::new(device, &gpu.camera_layout, gpu.format)
+            });
+            for (handle, appearance) in new_cairo {
+                self.meshes
+                    .get_mut(&handle)
+                    .expect("staged Cairo resource")
+                    .cairo = Some(pipelines.retain(device, queue, appearance));
+                stats.geometry_bytes += size_of::<cairo::Uniform>();
+            }
         }
         for (handle, edges) in new_boundaries {
             let bytes = bytemuck::cast_slice(&edges);
@@ -658,7 +728,7 @@ impl SpatialGpuState {
             stats.geometry_bytes += bytes.len();
         }
         let mut dirty_strokes = Vec::new();
-        let mut transparent_changed =
+        let mut depth_order_changed =
             matrix != self.camera_matrix || changes.has_painter_order_change();
         let mut dirty = BTreeSet::new();
         let mut released = BTreeSet::new();
@@ -668,21 +738,28 @@ impl SpatialGpuState {
                 .as_ref()
                 .zip(staged.as_ref())
                 .is_some_and(|(old, new)| old.handle == new.handle);
-            transparent_changed |= previous.as_ref().is_some_and(|draw| draw.transparent)
-                || staged.as_ref().is_some_and(|draw| draw.transparent);
-            self.transparent_draws.remove(&index);
+            depth_order_changed |= previous
+                .as_ref()
+                .filter(|draw| uses_depth_order(draw.material, draw.transparent))
+                .map(|draw| draw.center)
+                != staged
+                    .as_ref()
+                    .filter(|draw| uses_depth_order(draw.material, draw.transparent))
+                    .map(|draw| draw.center);
+            self.depth_ordered_draws.remove(&index);
             self.stroked_draws.remove(&index);
             let same_opaque_membership =
                 previous
                     .as_ref()
                     .zip(staged.as_ref())
                     .is_some_and(|(old, new)| {
-                        old.handle == new.handle && !old.transparent && !new.transparent
+                        old.handle == new.handle
+                            && !uses_depth_order(old.material, old.transparent)
+                            && !uses_depth_order(new.material, new.transparent)
                     });
-            if let Some(old) = previous
-                .as_ref()
-                .filter(|old| !old.transparent && !same_opaque_membership)
-            {
+            if let Some(old) = previous.as_ref().filter(|old| {
+                !uses_depth_order(old.material, old.transparent) && !same_opaque_membership
+            }) {
                 self.mesh_instances
                     .get_mut(&old.handle)
                     .expect("resident opaque group")
@@ -712,14 +789,15 @@ impl SpatialGpuState {
                         .expect("staged mesh")
                         .users += 1;
                 }
-                if !staged.transparent && !same_opaque_membership {
+                if !uses_depth_order(staged.material, staged.transparent) && !same_opaque_membership
+                {
                     self.mesh_instances
                         .entry(staged.handle)
                         .or_default()
                         .insert(slot);
                 }
-                if staged.transparent {
-                    self.transparent_draws.insert(index);
+                if uses_depth_order(staged.material, staged.transparent) {
+                    self.depth_ordered_draws.insert(index);
                 }
                 if let Some(stroke) = staged.stroke {
                     self.stroked_draws.insert(index);
@@ -746,8 +824,8 @@ impl SpatialGpuState {
                 self.mesh_instances.remove(&handle);
             }
         }
-        if transparent_changed {
-            self.transparent_order = self.transparent_draws.iter().copied().collect();
+        if depth_order_changed {
+            self.depth_order = self.depth_ordered_draws.iter().copied().collect();
             if let Some(camera) = cameras.values().next() {
                 let depth = |index: usize| {
                     let p = self.draws[&index].center;
@@ -762,7 +840,7 @@ impl SpatialGpuState {
                         .map_or(f64::INFINITY, |p| p.z)
                 };
                 // Camera looks along -Z: more negative view Z is drawn first.
-                self.transparent_order.sort_by(|a, b| {
+                self.depth_order.sort_by(|a, b| {
                     depth(*a).total_cmp(&depth(*b)).then_with(|| {
                         let rank = |index: &usize| {
                             self.paths.painter_rank(*index).unwrap_or(*index as u32)
@@ -804,7 +882,11 @@ impl SpatialGpuState {
                 2.0 / camera.world_size.x,
                 2.0 / camera.world_size.y,
             ];
-            if !self.stroked_draws.is_empty() && gpu.boundary_metrics_value != Some(metrics) {
+            if (!self.stroked_draws.is_empty()
+                || gpu.cairo.is_some()
+                || self.paths.has_cairo_draws())
+                && gpu.boundary_metrics_value != Some(metrics)
+            {
                 queue.write_buffer(&gpu.boundary_metrics, 0, bytemuck::cast_slice(&metrics));
                 gpu.boundary_metrics_value = Some(metrics);
                 stats.camera_bytes += size_of_val(&metrics);
@@ -902,11 +984,27 @@ impl SpatialGpuState {
         if *count == 0 {
             return 0;
         }
-        pass.set_pipeline(if sample_count == 1 {
-            &gpu.boundary_pipeline
+        if is_cairo(draw.material) {
+            pass.set_pipeline(gpu.cairo.as_ref().expect("Cairo pipelines").select(
+                sample_count,
+                true,
+                true,
+            ));
+            pass.set_bind_group(
+                1,
+                self.meshes[&draw.handle]
+                    .cairo
+                    .as_ref()
+                    .expect("Cairo appearance"),
+                &[],
+            );
         } else {
-            &gpu.boundary_pipeline_msaa
-        });
+            pass.set_pipeline(if sample_count == 1 {
+                &gpu.boundary_pipeline
+            } else {
+                &gpu.boundary_pipeline_msaa
+            });
+        }
         pass.set_bind_group(0, &gpu.camera_group, &[]);
         pass.set_vertex_buffer(0, vertices.slice(..));
         pass.set_vertex_buffer(
@@ -922,6 +1020,10 @@ impl SpatialGpuState {
 
     pub fn is_active(&self) -> bool {
         !self.draws.is_empty() || self.paths.is_active()
+    }
+
+    pub fn has_active_paths(&self) -> bool {
+        self.paths.is_active()
     }
 
     pub fn encode(
@@ -975,6 +1077,7 @@ impl SpatialGpuState {
             pass.set_vertex_buffer(1, gpu.instances.slice(..));
             for (handle, ranges) in &self.mesh_instances {
                 let mesh = &self.meshes[handle];
+                pass.set_bind_group(0, &gpu.camera_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 for (start, end) in ranges.iter() {
@@ -985,21 +1088,37 @@ impl SpatialGpuState {
         }
         for &index in &self.stroked_draws {
             let draw = &self.draws[&index];
-            if !draw.transparent {
+            if !uses_depth_order(draw.material, draw.transparent) {
                 draw_calls += self.encode_boundary(&mut pass, gpu, draw, sample_count);
             }
         }
         // Opaque world paths populate depth before translucent faces blend.
         draw_calls += self.paths.encode(&mut pass, sample_count);
-        for &index in &self.transparent_order {
+        for &index in &self.depth_order {
             let draw = &self.draws[&index];
             let mesh = &self.meshes[&draw.handle];
             if self.instances[draw.instance].color[3] > 0.0 {
-                pass.set_pipeline(if sample_count == 1 {
-                    &gpu.transparent_pipeline
+                if is_cairo(draw.material) {
+                    pass.set_pipeline(gpu.cairo.as_ref().expect("Cairo pipelines").select(
+                        sample_count,
+                        draw.transparent,
+                        false,
+                    ));
+                    pass.set_bind_group(1, mesh.cairo.as_ref().expect("Cairo appearance"), &[]);
+                    pass.set_vertex_buffer(
+                        2,
+                        mesh.cairo_coverage
+                            .as_ref()
+                            .expect("Cairo coverage")
+                            .slice(..),
+                    );
                 } else {
-                    &gpu.transparent_pipeline_msaa
-                });
+                    pass.set_pipeline(if sample_count == 1 {
+                        &gpu.transparent_pipeline
+                    } else {
+                        &gpu.transparent_pipeline_msaa
+                    });
+                }
                 pass.set_bind_group(0, &gpu.camera_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_vertex_buffer(1, gpu.instances.slice(..));
@@ -1081,6 +1200,16 @@ fn lower_matrix(values: [f64; 16]) -> Option<[f32; 16]> {
         .all(|value| value.is_finite())
         .then_some(result)
 }
+// Cairo faces paint each fill and border together from back to front. Reuse
+// the existing depth-order cache; ordinary opaque meshes remain instanced.
+fn uses_depth_order(material: SemanticSpatialMaterial, transparent: bool) -> bool {
+    transparent || is_cairo(material)
+}
+
+fn is_cairo(material: SemanticSpatialMaterial) -> bool {
+    material == SemanticSpatialMaterial::CairoSurface
+}
+
 fn instance(
     world: SemanticWorldTransform3D,
     color: [f32; 4],
@@ -1101,7 +1230,11 @@ fn instance(
         // this attribute, so use a zero reciprocal for collapsed axes; PointLit
         // poses are rejected before staging and therefore always have a true
         // inverse-transpose normal basis.
-        let reciprocal = if scale == 0. { 0. } else { 1. / scale };
+        let reciprocal = if material != SemanticSpatialMaterial::PointLit || scale == 0. {
+            0.
+        } else {
+            1. / scale
+        };
         normals[i] = [
             (axis.x * reciprocal) as f32,
             (axis.y * reciprocal) as f32,
@@ -1132,26 +1265,6 @@ fn validate_point_lit_normals(
         return Err(SpatialPrepareError::PointLitMeshNeedsNormals(object_index));
     }
     Ok(())
-}
-fn single_face(mesh: &MeshResource) -> bool {
-    match (mesh.positions().len(), mesh.indices().len()) {
-        (3, 3) => {
-            let mut indices = [mesh.indices()[0], mesh.indices()[1], mesh.indices()[2]];
-            indices.sort_unstable();
-            indices == [0, 1, 2]
-        }
-        (4, 6) => {
-            let indices = mesh.indices();
-            let mut first = [indices[0], indices[1], indices[2]];
-            let mut second = [indices[3], indices[4], indices[5]];
-            first.sort_unstable();
-            second.sort_unstable();
-            first.windows(2).all(|p| p[0] != p[1])
-                && second.windows(2).all(|p| p[0] != p[1])
-                && first.iter().filter(|i| second.contains(i)).count() == 2
-        }
-        _ => false,
-    }
 }
 fn lower_vertices(mesh: &MeshResource) -> Result<Vec<Vertex>, SpatialPrepareError> {
     mesh.positions()
@@ -1273,10 +1386,33 @@ impl GpuState {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Noon retained mesh shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("mesh.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("mesh.wgsl"),
+                    "\n",
+                    include_str!("spatial_math.wgsl")
+                )
+                .into(),
+            ),
         });
-        let pipeline_msaa = pipeline(device, &pipeline_layout, &shader, format, 4, false, false);
-        let opaque_pipeline = pipeline(device, &pipeline_layout, &shader, format, 1, false, false);
+        let pipeline_msaa = pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            format,
+            4,
+            false,
+            PipelineKind::Mesh,
+        );
+        let opaque_pipeline = pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            format,
+            1,
+            false,
+            PipelineKind::Mesh,
+        );
         let instances = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Noon empty mesh instances"),
             size: 4,
@@ -1285,6 +1421,9 @@ impl GpuState {
         });
         Self {
             device: device.clone(),
+            camera_layout: layout.clone(),
+            format,
+            cairo: None,
             viewport,
             pipeline: opaque_pipeline,
             pipeline_msaa,
@@ -1295,7 +1434,7 @@ impl GpuState {
                 format,
                 1,
                 true,
-                false,
+                PipelineKind::Mesh,
             ),
             transparent_pipeline_msaa: pipeline(
                 device,
@@ -1304,9 +1443,17 @@ impl GpuState {
                 format,
                 4,
                 true,
-                false,
+                PipelineKind::Mesh,
             ),
-            boundary_pipeline: pipeline(device, &pipeline_layout, &shader, format, 1, true, true),
+            boundary_pipeline: pipeline(
+                device,
+                &pipeline_layout,
+                &shader,
+                format,
+                1,
+                true,
+                PipelineKind::Boundary,
+            ),
             boundary_pipeline_msaa: pipeline(
                 device,
                 &pipeline_layout,
@@ -1314,7 +1461,7 @@ impl GpuState {
                 format,
                 4,
                 true,
-                true,
+                PipelineKind::Boundary,
             ),
             boundary_metrics,
             boundary_metrics_value: None,
@@ -1354,6 +1501,14 @@ fn depth(device: &wgpu::Device, viewport: [u32; 2], count: u32) -> wgpu::Texture
         })
         .create_view(&wgpu::TextureViewDescriptor::default())
 }
+#[derive(Clone, Copy)]
+enum PipelineKind {
+    Mesh,
+    Boundary,
+    CairoMesh,
+    CairoBoundary,
+}
+
 fn pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -1361,12 +1516,15 @@ fn pipeline(
     format: wgpu::TextureFormat,
     count: u32,
     transparent: bool,
-    boundary: bool,
+    kind: PipelineKind,
 ) -> wgpu::RenderPipeline {
+    let boundary = matches!(kind, PipelineKind::Boundary | PipelineKind::CairoBoundary);
+    let cairo = matches!(kind, PipelineKind::CairoMesh | PipelineKind::CairoBoundary);
     const VERTEX: [wgpu::VertexAttribute; 2] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-    const EDGE: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 10 => Float32x2];
+    const EDGE: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 10 => Float32x2, 11 => Float32x3];
+    const COVERAGE: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![12 => Float32];
     const INSTANCE: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
         5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1374,7 +1532,12 @@ fn pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some(if boundary { "vs_boundary" } else { "vs_main" }),
+            entry_point: Some(match kind {
+                PipelineKind::Mesh => "vs_main",
+                PipelineKind::Boundary => "vs_boundary",
+                PipelineKind::CairoMesh => "vs_cairo",
+                PipelineKind::CairoBoundary => "vs_cairo_boundary",
+            }),
             compilation_options: Default::default(),
             buffers: &[
                 Some(wgpu::VertexBufferLayout {
@@ -1391,15 +1554,28 @@ fn pipeline(
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &INSTANCE,
                 }),
+                (cairo && !boundary).then_some(wgpu::VertexBufferLayout {
+                    array_stride: size_of::<f32>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &COVERAGE,
+                }),
             ],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(if boundary { "fs_boundary" } else { "fs_main" }),
+            entry_point: Some(if cairo && boundary {
+                "fs_cairo_boundary"
+            } else if cairo {
+                "fs_cairo"
+            } else if boundary {
+                "fs_boundary"
+            } else {
+                "fs_main"
+            }),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: transparent.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: (transparent || cairo).then_some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -1414,7 +1590,10 @@ fn pipeline(
             stencil: Default::default(),
             bias: if boundary {
                 wgpu::DepthBiasState {
-                    constant: -1,
+                    // Cover cross-backend f32 plane/interpolation roundoff.
+                    // A fixed depth-unit margin stays independent of slope;
+                    // a slope offset can expose hidden geometry.
+                    constant: -16,
                     slope_scale: 0.0,
                     clamp: 0.0,
                 }

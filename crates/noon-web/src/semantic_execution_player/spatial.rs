@@ -51,11 +51,12 @@ impl super::SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_mesh_family(
+    pub(crate) fn live_create_mesh_family_with_paths(
         &mut self,
-        options: Vec<MeshOptions>,
+        meshes: Vec<MeshOptions>,
+        paths: Vec<noon::SpatialPathOptions>,
     ) -> Result<MobjectFamily, AuthoringFailure> {
-        self.with_live_session(|live| live.create_mesh_family(options))
+        self.with_live_session(|live| live.create_mesh_family_with_paths(meshes, paths))
     }
 
     pub(crate) fn live_effective_world_transform(
@@ -70,6 +71,14 @@ impl super::SemanticExecutionPlayer {
         object: &Mobject,
     ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
         self.with_live_session(|live| live.effective_world_center(object))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_world_family_center(
+        &mut self,
+        family: &MobjectFamily,
+    ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_world_family_center(family))
     }
 
     pub(crate) fn live_set_world_transform(
@@ -127,9 +136,20 @@ mod wasm {
             &mut self,
             candidate: crate::WasmMeshFamilyOptions,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-            self.live_create_mesh_family(candidate.options)
-                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
-                .map_err(js_error)
+            let surface = candidate.has_surface_roles();
+            let (meshes, paths) = candidate.into_parts()?;
+            let family = self
+                .live_create_mesh_family_with_paths(meshes, paths)
+                .map_err(js_error)?;
+            if surface {
+                noon::SurfaceFamily::from_family(family)
+                    .map(crate::WasmAuthoringFamilyHandle::from_surface_family)
+                    .map_err(js_error)
+            } else {
+                Ok(crate::WasmAuthoringFamilyHandle::from_semantic_family(
+                    family,
+                ))
+            }
         }
 
         #[wasm_bindgen(js_name = effectiveWorldTransform)]
@@ -176,6 +196,16 @@ mod wasm {
                 WorldAffineEdit::Shift(noon_core::SemanticVec3::new(x, y, z)),
             )
             .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = effectiveWorldFamilyCenter)]
+        pub fn effective_world_family_center(
+            &mut self,
+            family: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<Vec<f64>, JsValue> {
+            self.live_effective_world_family_center(family.semantic_family_ref())
+                .map(|center| vec![center.x, center.y, center.z])
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = rotateWorld)]

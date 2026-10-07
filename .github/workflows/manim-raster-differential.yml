@@ -18,6 +18,12 @@ on:
       - "crates/noon/src/example_scenes/spatial_camera_labels.rs"
       - "crates/noon/src/example_scenes/spatial_three_d_axes.rs"
       - "crates/noon/src/example_scenes/vector_space.rs"
+      - "crates/noon/src/example_scenes/vector_space_features.rs"
+      - "crates/noon/src/text_authoring/semantic/decimal_labels.rs"
+      - "crates/noon-runtime/src/lib.rs"
+      - "crates/noon-core/src/animation/timeline.rs"
+      - "crates/noon-compile/src/transform.rs"
+      - "crates/noon-compile/src/semantic_lowering/animation_payload/affine.rs"
       - "crates/noon/src/coordinate_authoring/three_d_axes.rs"
       - "crates/noon/src/vector_space_authoring.rs"
       - "crates/noon/src/matrix_authoring.rs"
@@ -25,6 +31,7 @@ on:
       - "crates/noon-web/src/direct_execution_smoke.rs"
       - "crates/noon-web/src/authoring_matrix.rs"
       - "crates/noon-web/src/authoring_arrow.rs"
+      - "crates/noon-web/src/authoring_number_labels.rs"
       - "crates/noon-web/src/canonical_authoring_scene/wasm/matrix_family.rs"
       - "crates/noon-native/examples/spatial_surface.rs"
       - "crates/noon-native/examples/spatial_primitives.rs"
@@ -32,15 +39,21 @@ on:
       - "crates/noon-native/examples/spatial_camera_labels.rs"
       - "crates/noon-geometry/src/surface.rs"
       - "crates/noon-geometry/src/solids.rs"
+      - "crates/noon-geometry/src/tessellation.rs"
       - "crates/noon-core/src/spatial3d.rs"
       - "crates/noon-core/src/resources/mesh.rs"
       - "web/python/examples/noon_spatial_surface.py"
       - "web/python/examples/noon_spatial_primitives.py"
       - "web/python/_manim_spatial_geometry.py"
       - "web/python/examples/noon_spatial_camera_labels.py"
-      - "web/python/examples/noon_spatial_three_d_axes.py"
+      - "web/python/examples/noon_spatial_three_d_axes*.py"
       - "web/python/examples/noon_vector_space.py"
+      - "web/python/examples/noon_vector_space_features.py"
       - "web/python/_manim_vector_space.py"
+      - "web/python/_manim_number_plane.py"
+      - "web/python/_manim_number_labels.py"
+      - "web/python/_manim_numbers.py"
+      - "web/python-worker.source.js"
       - "web/python/test_manim_vector_space.py"
       - "web/python/_noon_spatial.py"
       - "web/python/test_noon_spatial.py"
@@ -57,8 +70,9 @@ on:
       - "parity/manim-v0.21/spatial_primitives.py"
       - "parity/manim-v0.21/spatial_surface.py"
       - "parity/manim-v0.21/spatial_camera_labels.py"
-      - "parity/manim-v0.21/spatial_three_d_axes.py"
+      - "parity/manim-v0.21/spatial_three_d_axes*.py"
       - "parity/manim-v0.21/vector_space.py"
+      - "parity/manim-v0.21/vector_space_features.py"
       - "parity/manim-v0.21/core-examples/**"
       - "web/semantic-preview-session*"
       - "web/manim-raster-host.js"
@@ -103,7 +117,7 @@ jobs:
       - name: Validate raster ratchet policy
         run: |
           node scripts/manim-raster-policy.test.mjs
-          node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-server.test.mjs scripts/shared-playback-raster-config.test.mjs
+          node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-semantic-state.test.mjs scripts/manim-raster-server.test.mjs scripts/shared-playback-raster-config.test.mjs
       - name: Validate preview session lifecycle and authoring context
         run: node --test web/semantic-preview-session.test.mjs web/semantic-preview-context.test.mjs
       - name: Validate capture-to-artifact contract
@@ -156,7 +170,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
         with:
           tool: wasm-pack@0.15.0
           fallback: none

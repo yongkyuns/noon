@@ -2397,6 +2397,7 @@ pub(super) fn lower_transform_channels(
             to: 1.0,
             geometry: prepared,
             render_transform,
+            source_transform: from.transform,
         },
     });
     Ok(channels)

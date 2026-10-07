@@ -1606,6 +1606,32 @@ def _canonical_family_fade_animation(
     return family, leaves, direction
 
 
+def _canonical_arrow_grow_animation(scene: _base.Scene, animation: object):
+    """Classify GrowArrow while leaving leaf order/admission to Rust."""
+    growing = sys.modules.get("_manim_growing")
+    arrow_module = sys.modules.get("_manim_arrow")
+    if growing is None or arrow_module is None or not isinstance(
+        animation, growing.GrowArrow
+    ):
+        return None
+    target = animation.mobject
+    if not isinstance(target, arrow_module.Arrow):
+        raise NotImplementedError("shared GrowArrow supports retained Arrow targets only")
+    family_handle = getattr(target, "_semantic_family_handle", None)
+    arrow_handle = getattr(target, "_semantic_arrow_handle", None)
+    if family_handle is None or arrow_handle is None:
+        raise NotImplementedError("GrowArrow requires a shared semantic Arrow")
+    leaves = _compat._leaf_mobjects(target)
+    if not leaves or any(
+        not isinstance(member, _base.Mobject)
+        or getattr(member, "_semantic_handle", None) is None
+        or member._scene is not None
+        for member in leaves
+    ):
+        raise NotImplementedError("GrowArrow requires detached shared Arrow leaves")
+    return target, arrow_handle, leaves
+
+
 def _canonical_create_animation(
     scene: _base.Scene, animation: object
 ) -> _base.Mobject | None:
@@ -2486,6 +2512,31 @@ def _build_canonical_composition_candidate(
                         )
             else:
                 removals.extend(leaves)
+            return
+        arrow_grow = _canonical_arrow_grow_animation(self, animation)
+        if arrow_grow is not None:
+            family, arrow_handle, leaves = arrow_grow
+            child = _canonical_affine_options(
+                animation,
+                child_kwargs,
+                builder_args=dict(getattr(animation, "anim_args", {})),
+                allow_family_lag=True,
+            )
+            if child is None:
+                raise NotImplementedError("unsupported shared GrowArrow options")
+            builder.appendFamilyArrowGrow(
+                arrow_handle,
+                float(child.run_time),
+                str(child.rate_func),
+                float(child.lag_ratio),
+            )
+            family_registrations.append(family)
+            for member in leaves:
+                reservation = reserve(member)
+                if not reservation.reuse_existing_identity:
+                    builder.appendFamilyArrowGrowEntering(
+                        str(reservation.object.id), member._semantic_handle
+                    )
             return
         family_write = _canonical_text_family_write_animation(self, animation)
         if family_write is not None:

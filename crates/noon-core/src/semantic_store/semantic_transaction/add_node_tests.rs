@@ -1,5 +1,8 @@
 use super::*;
-use crate::{SemanticNodeResidency, SourceIdentity, StoredGeometry, Vec2, VectorPath};
+use crate::{
+    MeshResource, SemanticNodeResidency, SemanticSpatialMaterial, SemanticVec3, SourceIdentity,
+    StoredGeometry, Vec2, VectorPath,
+};
 
 fn object_state(radius: f32) -> SemanticObjectState {
     SemanticObjectState::new(StoredGeometry::Circle { radius })
@@ -133,6 +136,131 @@ fn unavailable_geometry_resource_is_rejected_before_node_allocation() {
         assert_eq!(store.len(), before_len);
         assert_eq!(store.last_mutation_stats().slots_written, 0);
     }
+}
+
+#[test]
+fn cairo_surface_material_requires_its_retained_mesh_appearance() {
+    let mut store = SemanticStore::new();
+    let mesh = MeshResource::new(
+        vec![
+            SemanticVec3::ZERO,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ],
+        None,
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    let handle = store.geometry_resources.insert_mesh(mesh);
+    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    state.set_spatial_material(SemanticSpatialMaterial::CairoSurface);
+    state.set_surface_uv_cell(Some([0, 0]));
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_node(SemanticNodeCreation::object(state));
+
+    assert_eq!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index: 0 })
+    );
+    assert_eq!(store.len(), 0);
+}
+
+#[test]
+fn cairo_path_material_checks_creation_and_content_replacement_atomically() {
+    let mut store = SemanticStore::new();
+    let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    state.set_spatial_material(SemanticSpatialMaterial::CairoPath);
+    let mut transaction = SemanticMutationTransaction::new();
+    let token = transaction.create_node(SemanticNodeCreation::object(state.clone()));
+    let result = transaction.apply(&mut store).unwrap();
+    let object = result.resolve(token).unwrap();
+    let mesh = MeshResource::new(
+        vec![
+            SemanticVec3::ZERO,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ],
+        None,
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    let handle = store.geometry_resources.insert_mesh(mesh);
+    let revision = store.scene_revision();
+    let before = store.semantic_object_state_checked(object).unwrap().clone();
+    let mut replacement = SemanticMutationTransaction::new();
+    replacement.replace_content(object, StoredGeometry::Resource(handle));
+    assert_eq!(
+        replacement.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index: 0 })
+    );
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(
+        store.semantic_object_state_checked(object).unwrap(),
+        &before
+    );
+
+    state.content = StoredGeometry::Resource(handle).into();
+    let mut creation = SemanticMutationTransaction::new();
+    creation.add_node(SemanticNodeCreation::object(state));
+    assert_eq!(
+        creation.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index: 0 })
+    );
+    assert_eq!(store.len(), 1);
+}
+
+#[test]
+fn cairo_face_material_uses_geometry_appearance_without_checkerboard_uv_roles() {
+    let mut store = SemanticStore::new();
+    let appearance = crate::CairoSurfaceAppearance {
+        p0: SemanticVec3::ZERO,
+        p6: SemanticVec3::ZERO,
+        span_p3_p0: SemanticVec3::ZERO,
+        span_p12_p0: SemanticVec3::ZERO,
+        span_p9_p6: SemanticVec3::ZERO,
+        span_p3_p6: SemanticVec3::ZERO,
+        boundary_controls: None,
+    };
+    let mesh = MeshResource::new(
+        vec![
+            SemanticVec3::ZERO,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ],
+        None,
+        vec![0, 1, 2],
+    )
+    .unwrap()
+    .with_cairo_appearance(appearance)
+    .unwrap();
+    let handle = store.geometry_resources.insert_mesh(mesh);
+    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    state.set_spatial_material(SemanticSpatialMaterial::CairoSurface);
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_node(SemanticNodeCreation::object(state));
+
+    transaction.apply(&mut store).unwrap();
+    assert_eq!(store.len(), 1);
+
+    let multi_face = MeshResource::new(vec![SemanticVec3::ZERO; 5], None, vec![0, 1, 2, 2, 3, 4])
+        .unwrap()
+        .with_cairo_appearance(appearance)
+        .unwrap();
+    let handle = store.geometry_resources.insert_mesh(multi_face);
+    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    state.set_spatial_material(SemanticSpatialMaterial::CairoSurface);
+    state.set_surface_uv_cell(Some([0, 0]));
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_node(SemanticNodeCreation::object(state));
+    assert_eq!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidSpatialMaterialResource { index: 0 })
+    );
+    assert_eq!(
+        store.len(),
+        1,
+        "UV roles cannot bypass face topology admission"
+    );
 }
 
 #[test]

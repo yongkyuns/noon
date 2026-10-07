@@ -344,7 +344,7 @@ impl SceneInstance {
 
     /// Publish a coherent effective-only frame change.
     pub(crate) fn publish_effective_change(&mut self) {
-        self.flush_fixed_orientation_anchor_changes();
+        self.flush_spatial_anchor_changes();
         let next = self
             .publication
             .frame_epoch()
@@ -357,7 +357,7 @@ impl SceneInstance {
     /// effective frame context. Authored scene revision remains pinned to the
     /// semantic snapshot from which this session was built.
     pub(crate) fn publish_execution_change(&mut self) {
-        self.flush_fixed_orientation_anchor_changes();
+        self.flush_spatial_anchor_changes();
         let execution = self
             .publication
             .execution_revision()

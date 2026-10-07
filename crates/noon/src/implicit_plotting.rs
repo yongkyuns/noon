@@ -392,7 +392,9 @@ mod tests {
                     }
                 };
                 assert!(
-                    points.iter().all(|p| (value(p) - expected[fixed]).abs() < 0.025),
+                    points
+                        .iter()
+                        .all(|p| (value(p) - expected[fixed]).abs() < 0.025),
                     "mapped contour drift: range={x_range:?} transformed={transformed} smooth={use_smoothing} points={points:?}"
                 );
                 let varying = |point: &Vec2| {

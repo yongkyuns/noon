@@ -8,6 +8,14 @@ import _manim_number_plane as number_plane
 
 
 class NumberPlaneAdapterTests(TestCase):
+    def test_format_precision_tracks_manims_float_range_step(self):
+        precision = number_plane._coordinate_decimal_places
+        self.assertEqual(precision((-2, 2, 1)), 1)
+        self.assertEqual(precision((-2.0, 2.0, 1.0)), 1)
+        self.assertEqual(precision((-2, 2, 0.25)), 2)
+        self.assertEqual(precision((-2, 2, 0.125)), 3)
+        self.assertEqual(precision(None), 1)
+
     def setUp(self):
         self.addCleanup(patch.stopall)
         self.options = Mock(name="inert-options")

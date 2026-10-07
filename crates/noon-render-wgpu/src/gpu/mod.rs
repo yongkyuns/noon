@@ -1349,7 +1349,7 @@ impl GpuRenderer {
             SecondaryViewport::new(secondary.camera, secondary.destination, self.viewport_size)?;
         }
         if !secondary_viewports.is_empty()
-            && Self::secondary_viewport_requires_multisampling(prepared, presentations)
+            && self.scene_render_sample_count(prepared, presentations) != 1
         {
             return Err(SecondaryViewportError::MultisampledContentUnsupported);
         }
@@ -1375,17 +1375,21 @@ impl GpuRenderer {
         Ok(stats)
     }
 
-    fn secondary_viewport_requires_multisampling(
+    fn scene_render_sample_count(
+        &self,
         prepared: &PreparedFrame<'_>,
         presentations: Option<&PreparedDerivedDisplay>,
-    ) -> bool {
-        ordered_render_sample_count(prepared.path_batches) != 1
-            || presentations.is_some_and(|presentations| {
-                presentations
-                    .path_batches
-                    .iter()
-                    .any(|batch| !batch.index_range.is_empty())
-            })
+    ) -> u32 {
+        let visible_derived_paths = presentations.is_some_and(|presentations| {
+            presentations
+                .path_batches
+                .iter()
+                .any(|batch| !batch.index_range.is_empty())
+        });
+        ordered_render_sample_count(
+            prepared.path_batches,
+            self.spatial.has_active_paths() || visible_derived_paths,
+        )
     }
 
     fn encode_secondary_viewport_validated(
@@ -1486,16 +1490,7 @@ impl GpuRenderer {
             finalize,
         } = options;
         let scene_view = self.presentation.scene_view(view);
-        let sample_count = if derived.is_some_and(|presentations| {
-            presentations
-                .path_batches
-                .iter()
-                .any(|batch| !batch.index_range.is_empty())
-        }) {
-            PATH_SAMPLE_COUNT
-        } else {
-            ordered_render_sample_count(prepared.path_batches)
-        };
+        let sample_count = self.scene_render_sample_count(prepared, derived);
         let spatial_stats = self.encode_spatial(encoder, scene_view, clear_color, sample_count);
         let load = if self.spatial.is_active() {
             wgpu::LoadOp::Load
@@ -1945,10 +1940,11 @@ fn create_pipeline(
     })
 }
 
-fn ordered_render_sample_count(path_batches: &[PathBatch]) -> u32 {
-    if path_batches
-        .iter()
-        .any(|batch| !batch.index_range.is_empty())
+fn ordered_render_sample_count(path_batches: &[PathBatch], other_visible_paths: bool) -> u32 {
+    if other_visible_paths
+        || path_batches
+            .iter()
+            .any(|batch| !batch.index_range.is_empty())
     {
         PATH_SAMPLE_COUNT
     } else {
@@ -2453,21 +2449,28 @@ mod tests {
 
     #[test]
     fn analytic_only_rendering_avoids_multisampling_but_visible_paths_keep_it() {
-        assert_eq!(ordered_render_sample_count(&[]), 1);
+        assert_eq!(ordered_render_sample_count(&[], false), 1);
+        assert_eq!(ordered_render_sample_count(&[], true), PATH_SAMPLE_COUNT);
         assert_eq!(
-            ordered_render_sample_count(&[PathBatch {
-                index_range: 0..0,
-                instance_range: 0..1,
-                polygon_coverage: false,
-            }]),
+            ordered_render_sample_count(
+                &[PathBatch {
+                    index_range: 0..0,
+                    instance_range: 0..1,
+                    polygon_coverage: false,
+                }],
+                false
+            ),
             1
         );
         assert_eq!(
-            ordered_render_sample_count(&[PathBatch {
-                index_range: 0..3,
-                instance_range: 0..1,
-                polygon_coverage: false,
-            }]),
+            ordered_render_sample_count(
+                &[PathBatch {
+                    index_range: 0..3,
+                    instance_range: 0..1,
+                    polygon_coverage: false,
+                }],
+                false
+            ),
             PATH_SAMPLE_COUNT
         );
     }

@@ -2,8 +2,8 @@
 use crate::AuthoringError;
 use crate::{
     semantic_mobject::{
-        edit_color, edit_fill_color, edit_fill_opacity, edit_manim_opacity, edit_stroke_color,
-        edit_stroke_opacity, edit_stroke_width, PaintStyleEdit,
+        edit_color, edit_fade, edit_fill_color, edit_fill_opacity, edit_manim_opacity,
+        edit_stroke_color, edit_stroke_opacity, edit_stroke_width, PaintStyleEdit,
     },
     Color, Mobject, MobjectFamily,
 };
@@ -168,7 +168,7 @@ impl MobjectFamily {
         {
             Ok(pairs) => pairs,
             Err(noon_core::SemanticFamilyPairingError::Empty) => {
-                return Ok(SemanticMutationTransaction::new())
+                return Ok(SemanticMutationTransaction::new());
             }
             Err(error) => return Err(AuthoringError::from(error).into()),
         };
@@ -236,6 +236,23 @@ impl MobjectFamily {
     /// Set enabled fill/stroke opacity, preserving the object-composite multiplier.
     pub fn set_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
         self.edit_style(|style| edit_manim_opacity(style, opacity))
+    }
+
+    /// Multiply enabled fill and stroke alpha, matching Manim's `fade`.
+    pub fn fade(&self, darkness: f64) -> Result<(), AuthoringError> {
+        self.fade_transaction(darkness)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    /// Prepare one validated paint transaction so authored and live owners
+    /// publish the same family fade semantics.
+    pub(crate) fn fade_transaction(
+        &self,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.style_transaction(|style| edit_fade(style, darkness))
     }
 
     fn edit_style(

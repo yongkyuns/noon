@@ -3,13 +3,52 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { sampleRasterFrames } from "./manim-raster-support.mjs";
+import { resolveRasterReferenceSamples, sampleRasterFrames, selectDirectReplayCapture, directStaticObservation } from "./manim-raster-support.mjs";
 import { resolveRasterTolerance } from "./manim-raster-policy.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+function rasterWorkflowIncludes(workflow, relativePath) {
+  const pullRequest = workflow.split("\n  push:", 1)[0];
+  const patterns = Array.from(pullRequest.matchAll(/^\s+- "([^"\n]+)"$/gm), match => match[1]);
+  return patterns.some(pattern => path.matchesGlob(relativePath, pattern));
+}
+
 const referenceTimes = Array.from({ length: 66 }, (_, index) => index / 30);
 const fractions = [0, 0.25, 0.5, 0.75, 1];
+
+test("static observations reject unexplained stalls and continuous animation", () => {
+  const idle = { presented: false, time: 0, wake: { cadence: "idle", presentNow: false } };
+  assert.equal(directStaticObservation(idle, 0.5, "frozen-hold"), "seek");
+  assert.equal(directStaticObservation(idle, 0.5, "sequence"), null);
+  assert.equal(directStaticObservation({ ...idle, time: 0.5 }, 0.5, "sequence"), "retained");
+  assert.equal(directStaticObservation({ ...idle, time: 1 }, 0.5, "frozen-hold"), null);
+  const timer = { ...idle, wake: { cadence: "timer", presentNow: false, delayMs: 500 } };
+  assert.equal(directStaticObservation(timer, 0.5, "sequence"), "seek");
+  for (const wake of [
+    { cadence: "animation-frame", presentNow: false },
+    { cadence: "timer", presentNow: false, delayMs: 0 },
+    { cadence: "timer", presentNow: false, delayMs: NaN },
+    { cadence: "idle", presentNow: true },
+  ]) assert.equal(directStaticObservation({ ...idle, wake }, 0.5, "frozen-hold"), null);
+  assert.equal(directStaticObservation({ ...idle, time: NaN }, 0.5, "frozen-hold"), null);
+});
+
+test("direct replay prefers a true forward interior and labels static-only repeats", () => {
+  const staticA = { time: 0.5, observationMode: "static-hold-seek" };
+  const forward = { time: 1.5, observationMode: "forward" };
+  assert.deepEqual(selectDirectReplayCapture([staticA, forward], 2), {
+    capture: forward, replayMode: "direct-seek-replay",
+  });
+  assert.deepEqual(selectDirectReplayCapture([staticA, { time: 1.5, observationMode: "static-hold-seek" }], 2), {
+    capture: staticA, replayMode: "static-hold-observation-repeat",
+  });
+  assert.equal(selectDirectReplayCapture([
+    staticA, { time: 1.5, observationMode: "unclassified" },
+  ], 2), null);
+  assert.equal(selectDirectReplayCapture([{ time: 0, observationMode: "forward" }], 2), null);
+  assert.equal(selectDirectReplayCapture([{ time: 0.5, observationMode: "forward" }], 0), null);
+});
 
 test("fraction sampling retains the existing rounded-frame contract", () => {
   const samples = sampleRasterFrames(referenceTimes, fractions);
@@ -30,6 +69,114 @@ test("one frozen hold cannot supply a fabricated post-cleanup frame", () => {
   const materialized = [...Array.from({ length: 60 }, (_, i) => i / 30), 2];
   assert.throws(() => sampleRasterFrames(materialized, fractions, [2, 2.1]),
     /no reference frame at requested logical time 2.1/);
+});
+
+test("zero-duration terminal state resolves only against one independently observed PNG", () => {
+  const terminal = { time: 0, frame_index: 0, animation_time: 0, objects: [{ type: "Sphere" }] };
+  const samples = resolveRasterReferenceSamples([], [0], {
+    logicalDuration: 0, terminalState: terminal, pngFrameCount: 1, semanticFrames: [],
+  });
+  assert.deepEqual(samples, [{ frameIndex: 0, time: 0, requestedTime: 0, materializedTime: 0,
+    terminalState: false, referenceKind: "sequence", label: "frame-0000" }]);
+  assert.deepEqual(resolveRasterReferenceSamples([], undefined, {
+    logicalDuration: 0, terminalState: terminal, pngFrameCount: 1,
+    semanticFrames: [], sampleFractions: fractions,
+  }), samples, "fraction sampling of a single static PNG collapses to t=0");
+  const independent = resolveRasterReferenceSamples([], [0], {
+    logicalDuration: 0, terminalState: terminal, terminalPng: { path: "/tmp/terminal.png" },
+    pngFrameCount: 1, semanticFrames: [],
+  });
+  assert.equal(independent[0].referenceKind, "terminal");
+  assert.equal(independent[0].frameIndex, null);
+  const terminalOnly = resolveRasterReferenceSamples([], [0], {
+    logicalDuration: 0, terminalState: terminal, terminalPng: { path: "/tmp/terminal.png" },
+    pngFrameCount: 0, semanticFrames: [],
+  });
+  assert.equal(terminalOnly[0].referenceKind, "terminal");
+  assert.equal(terminalOnly[0].frameIndex, null);
+  for (const options of [
+    { logicalDuration: 0, terminalState: terminal, pngFrameCount: 0, semanticFrames: [] },
+    { logicalDuration: 0, terminalState: terminal, pngFrameCount: 2, semanticFrames: [] },
+    { logicalDuration: 1, terminalState: terminal, pngFrameCount: 1, semanticFrames: [] },
+  ]) assert.throws(() => resolveRasterReferenceSamples([], [0], options));
+});
+
+test("fraction sampling remains the default and records requested and materialized times", () => {
+  const samples = resolveRasterReferenceSamples(referenceTimes, undefined, {
+    logicalDuration: 65 / 30, terminalState: { time: 65 / 30 },
+    pngFrameCount: referenceTimes.length, semanticFrames: [], sampleFractions: fractions,
+  });
+  assert.deepEqual(samples.map(({ frameIndex, time, requestedTime, materializedTime }) =>
+    [frameIndex, time, requestedTime, materializedTime]), [
+    [0, 0, 0, 0], [16, 16 / 30, 16 / 30, 16 / 30],
+    [33, 33 / 30, 33 / 30, 33 / 30], [49, 49 / 30, 49 / 30, 49 / 30],
+    [65, 65 / 30, 65 / 30, 65 / 30],
+  ]);
+  assert.throws(() => resolveRasterReferenceSamples([0, 1.1], undefined, {
+    logicalDuration: 1, terminalState: { time: 1 }, pngFrameCount: 2,
+    semanticFrames: [], sampleFractions: fractions,
+  }), /out-of-range/);
+});
+
+test("logical endpoint reuses the last PNG only when terminal visuals match exactly", () => {
+  const frames = [{ time: 0, frame_index: 0, animation_time: 0, objects: [{ center: [0, 0] }] },
+    { time: 1, frame_index: 1, animation_time: 1, objects: [{ center: [1, 0] }] }];
+  const terminal = { time: 2, frame_index: 2, animation_time: 0, objects: [{ center: [1, 0] }] };
+  const samples = resolveRasterReferenceSamples([0, 1], [2], {
+    logicalDuration: 2, terminalState: terminal, pngFrameCount: 2, semanticFrames: frames,
+  });
+  assert.deepEqual(samples, [{ frameIndex: 1, time: 2, requestedTime: 2, materializedTime: 1,
+    terminalState: true, referenceKind: "sequence", label: "frame-0001-terminal" }]);
+  const endpointPair = resolveRasterReferenceSamples([0, 1], [1, 2], {
+    logicalDuration: 2, terminalState: terminal, pngFrameCount: 2, semanticFrames: frames,
+  });
+  assert.deepEqual(endpointPair.map(({ frameIndex, time, label }) => [frameIndex, time, label]), [
+    [1, 1, "frame-0001"], [1, 2, "frame-0001-terminal"],
+  ]);
+  assert.equal(new Set(endpointPair.map(sample => sample.label)).size, endpointPair.length,
+    "terminal and materialized observations cannot overwrite the same PNG artifact");
+  assert.throws(() => resolveRasterReferenceSamples([0, 1], [2.5], {
+    logicalDuration: 3, terminalState: { ...terminal, time: 3 },
+    pngFrameCount: 2, semanticFrames: frames,
+  }), /no reference frame at requested logical time 2.5/);
+  assert.throws(() => resolveRasterReferenceSamples([0, 1], [2], {
+    logicalDuration: 2, terminalState: { ...terminal, objects: [{ center: [1.01, 0] }] },
+    pngFrameCount: 2, semanticFrames: frames,
+  }), /no reference frame at requested logical time 2/);
+  const nested = [{ time: 0, frame_index: 0, payload: { time: 0, value: 1 } },
+    { time: 1, frame_index: 1, payload: { time: 1, value: 1 } }];
+  assert.throws(() => resolveRasterReferenceSamples([0, 1], [2], {
+    logicalDuration: 2, terminalState: { time: 2, payload: { time: 0, value: 1 } },
+    pngFrameCount: 2, semanticFrames: nested,
+  }), /no reference frame at requested logical time 2/,
+  "nested time fields remain part of visible semantic state");
+});
+
+test("interior frozen-hold times map only through recorded half-open intervals", () => {
+  const frames = [0, 1, 2].map((time, frame_index) => ({
+    time, frame_index, animation_time: time, objects: [{ value: frame_index }],
+  }));
+  const frozenIntervals = [{ frame_index: 2, start_time: 2, end_time: 3 }];
+  const samples = resolveRasterReferenceSamples([0, 1, 2], [2, 2.5, 3], {
+    logicalDuration: 3, terminalState: { time: 3, objects: [{ value: 2 }] },
+    terminalPng: { path: "/tmp/terminal.png" }, frozenIntervals,
+    pngFrameCount: 3, semanticFrames: frames,
+  });
+  assert.deepEqual(samples.map(({ frameIndex, time, materializedTime, referenceKind, label }) =>
+    [frameIndex, time, materializedTime, referenceKind, label]), [
+    [2, 2, 2, "sequence", "frame-0002"],
+    [2, 2.5, 2, "frozen-hold", "frame-0002-hold-2_5"],
+    [null, 3, 3, "terminal", "frame-0002-terminal"],
+  ]);
+  assert.throws(() => resolveRasterReferenceSamples([0, 1, 2], [2.5], {
+    logicalDuration: 3, terminalState: { time: 3 }, pngFrameCount: 3,
+    semanticFrames: frames, frozenIntervals: [],
+  }), /no reference frame at requested logical time 2.5/);
+  assert.throws(() => resolveRasterReferenceSamples([0, 1, 2], [2.5], {
+    logicalDuration: 3, terminalState: { time: 3 }, pngFrameCount: 3,
+    semanticFrames: frames,
+    frozenIntervals: [{ frame_index: 1, start_time: 1, end_time: 2.4 }],
+  }), /no reference frame at requested logical time 2.5/);
 });
 
 test("a missing contract boundary fails instead of selecting a nearby frame", () => {
@@ -86,10 +233,149 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
   assert.match(workerSource, /checkerboard_colors=False[\s\S]*stroke_width=0[\s\S]*shade_in_3d=False/,
     "the fixture opts into geometry/material settings that the retained mesh lane supports");
 
+  const cairoDirect = manifest.fixtures.find(fixture => fixture.id === "spatial-surface-cairo-direct");
+  const cairoWorker = manifest.fixtures.find(fixture => fixture.id === "spatial-surface-cairo-worker");
+  assert.ok(cairoDirect?.direct_factory, "default Cairo Surface uses direct typed execution");
+  assert.ok(cairoWorker?.noon_source, "default Cairo Surface uses the Python worker");
+  assert.equal(cairoDirect.source, direct.source);
+  assert.equal(cairoWorker.source, direct.source);
+  assert.equal(cairoWorker.noon_source, worker.noon_source);
+  assert.equal(cairoDirect.scene, "CairoSpatialSurface");
+  assert.equal(cairoWorker.scene, cairoDirect.scene);
+  assert.equal(cairoDirect.expected_duration, 0);
+  assert.equal(cairoWorker.expected_duration, 0);
+  assert.deepEqual(cairoDirect.sample_times, [0]);
+  assert.deepEqual(cairoWorker.sample_times, cairoDirect.sample_times);
+  assert.equal(cairoDirect.expected_object_count, 65);
+  assert.equal(cairoWorker.expected_object_count, 65);
+  const cairoReference = await readFile(path.join(repoRoot, cairoDirect.source), "utf8");
+  const cairoWorkerSource = await readFile(path.join(repoRoot, cairoWorker.noon_source), "utf8");
+  const nativeSource = await readFile(
+    path.join(repoRoot, "crates/noon/src/example_scenes/spatial_surface.rs"), "utf8",
+  );
+  assert.match(nativeSource, /UvSurfacePlan::new\(\[-1\.0, 1\.0\], \[-1\.0, 1\.0\], \[8, 8\]\)/,
+    "direct Rust samples the same bounded 8×8 UV domain");
+  assert.match(nativeSource, /sample_cairo\(\|u, v\|\s*SemanticVec3::new\(u, v, 0\.35 \* \(u \* u \+ v \* v\)\)\s*\)/,
+    "direct Rust uses the same nonlinear Cairo control-point callback");
+  assert.match(nativeSource, /material: SemanticSpatialMaterial::CairoSurface/,
+    "direct Rust selects the distinct Cairo Surface material");
+  for (const [label, source] of [["reference", cairoReference], ["worker", cairoWorkerSource]]) {
+    const fixture = source.split("class CairoSpatialSurface", 2)[1]?.split(/\nclass\s/)[0];
+    assert.ok(fixture, `${label}: missing CairoSpatialSurface`);
+    assert.match(fixture, /Surface\([\s\S]*?u_range=\(-1, 1\)[\s\S]*?v_range=\(-1, 1\)[\s\S]*?resolution=\(8, 8\)/,
+      `${label}: bounded Surface dimensions match the direct Rust case`);
+    assert.match(fixture, /0\.35\s*\*\s*\(u\s*\*\s*u\s*\+\s*v\s*\*\s*v\)/,
+      `${label}: callback matches the nonlinear capability fixture`);
+    assert.doesNotMatch(fixture, /shade_in_3d\s*=\s*False|checkerboard_colors\s*=|stroke_width\s*=/,
+      `${label}: uses pinned Surface defaults for shading, checkerboard, and border`);
+    assert.doesNotMatch(fixture, /self\.(?:play|wait)\(/,
+      `${label}: the static appearance case has zero authored duration`);
+  }
+
+  const sphereTorusDirect = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-surface-sphere-torus-direct",
+  );
+  const sphereTorusWorker = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-surface-sphere-torus-worker",
+  );
+  assert.ok(sphereTorusDirect?.direct_factory,
+    "paired default Sphere/Torus uses the direct typed scene factory");
+  assert.ok(sphereTorusWorker?.noon_source,
+    "paired default Sphere/Torus uses the Python worker");
+  assert.equal(sphereTorusDirect.scene, "CairoSphereTorus");
+  assert.equal(sphereTorusWorker.scene, sphereTorusDirect.scene);
+  assert.equal(sphereTorusDirect.expected_object_count, 865);
+  assert.equal(sphereTorusWorker.expected_object_count, 865);
+  assert.equal(sphereTorusDirect.expected_duration, 1);
+  assert.equal(sphereTorusWorker.expected_duration, 1);
+  assert.deepEqual(sphereTorusDirect.sample_times, [0, 0.5, 29 / 30]);
+  assert.deepEqual(sphereTorusWorker.sample_times, sphereTorusDirect.sample_times);
+  assert.equal(sphereTorusDirect.source, direct.source);
+  assert.equal(sphereTorusWorker.source, direct.source);
+  assert.equal(sphereTorusWorker.noon_source, worker.noon_source);
+  const solidsWorkerSource = await readFile(path.join(repoRoot, sphereTorusWorker.noon_source), "utf8");
+  const referenceSolids = cairoReference.split("class CairoSphereTorus", 2)[1];
+  const workerSolids = solidsWorkerSource.split("class CairoSphereTorus", 2)[1];
+  for (const [label, source] of [["reference", referenceSolids], ["worker", workerSolids]]) {
+    assert.ok(source, `${label}: missing default Sphere/Torus scene`);
+    assert.match(source, /Sphere\(center=\(-1\.2, 0, 0\), radius=0\.6\)/,
+      `${label}: uses the pinned default-resolution Sphere at the selected center`);
+    assert.match(source, /Torus\(major_radius=0\.6, minor_radius=0\.2\)/,
+      `${label}: uses the pinned default-resolution Torus`);
+    assert.match(source, /phi=0\.6, theta=-1\.2[\s\S]*?focal_distance=5, zoom=1/,
+      `${label}: starts from the shared camera profile`);
+    assert.match(source, /(?:phi=0\.8, theta=-0\.1, gamma=0\.2|\(0\.8, -0\.1, 0\.2, 5\.0, 1\.1, 8\.0, 0\.3, 0\.0, 0\.0\))[\s\S]*?run_time=1/,
+      `${label}: moves the camera for one second`);
+    assert.doesNotMatch(source, /resolution\s*=|checkerboard_colors\s*=|stroke_width\s*=|shade_in_3d\s*=/,
+      `${label}: leaves resolution and Surface shading/stroke defaults intact`);
+  }
+  assert.match(workerSolids, /Torus\([\s\S]*?\.shift\(\(1\.2, 0, 0\)\)/,
+    "worker separates the torus from the sphere without changing its geometry");
+  assert.match(referenceSolids, /Torus\([\s\S]*?\.shift\(\(1\.2, 0, 0\)\)/,
+    "reference separates the torus from the sphere without changing its geometry");
+  const nativeSphereTorus = nativeSource.split("pub fn cairo_sphere_torus_scene", 2)[1];
+  assert.ok(nativeSphereTorus, "direct Rust defines the paired Cairo Surface scene");
+  assert.match(nativeSphereTorus, /\[24, 12\]/,
+    "direct Rust uses Manim's pinned Cairo Sphere resolution");
+  assert.match(nativeSphereTorus, /\[24, 24\]/,
+    "direct Rust uses Manim's pinned Cairo Torus resolution");
+  assert.match(nativeSphereTorus, /SemanticSpatialMaterial::CairoSurface/,
+    "both native meshes use retained Cairo Surface appearance resources");
+  assert.match(nativeSphereTorus, /declare_camera_profile_move[\s\S]*?run_time\(1\.0\)/,
+    "direct Rust animates the camera for the paired one-second fixture");
+
+  const coneDirect = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-surface-cone-bodies-direct",
+  );
+  const coneWorker = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-surface-cone-bodies-worker",
+  );
+  assert.equal(coneDirect?.direct_factory, "createDirectSpatialSurfaceConeBodiesSmokeRenderer");
+  assert.equal(coneWorker?.noon_source, worker.noon_source);
+  assert.equal(coneDirect.scene, "CairoConeBodies");
+  assert.equal(coneWorker.scene, coneDirect.scene);
+  assert.equal(coneDirect.expected_duration, 0);
+  assert.equal(coneWorker.expected_duration, 0);
+  assert.equal(coneDirect.expected_object_count, 2049);
+  assert.equal(coneWorker.expected_object_count, 2049);
+  assert.deepEqual(coneDirect.sample_times, [0]);
+  assert.deepEqual(coneWorker.sample_times, coneDirect.sample_times);
+  assert.equal(coneDirect.source, direct.source);
+  assert.equal(coneWorker.source, direct.source);
+  const coneReference = cairoReference.split("class CairoConeBodies", 2)[1];
+  const coneWorkerSource = solidsWorkerSource.split("class CairoConeBodies", 2)[1];
+  for (const [label, source] of [["reference", coneReference], ["worker", coneWorkerSource]]) {
+    assert.ok(source, `${label}: missing Cone body scene`);
+    assert.match(source, /Cone\(\)\.shift\(\(-1\.25, 0, 0\)\)/,
+      `${label}: includes the pinned default-resolution default Cone`);
+    assert.match(source, /Cone\([\s\S]*?base_radius=0\.8, height=1\.4, direction=(?:np\.array\(\[1, 2, 2\]\)|\(1, 2, 2\)), u_min=0\.2/,
+      `${label}: includes the tilted partial radial Cone`);
+    assert.doesNotMatch(source, /resolution\s*=|checkerboard_colors\s*=|stroke_width\s*=|shade_in_3d\s*=/,
+      `${label}: preserves pinned Cone/Surface resolution and appearance defaults`);
+    assert.doesNotMatch(source, /self\.(?:play|wait)\(/,
+      `${label}: fixture remains static`);
+  }
+  const nativeConeScene = nativeSource.split("pub fn cairo_cone_bodies_scene", 2)[1];
+  assert.ok(nativeConeScene, "direct Rust defines the paired Cairo Cone body scene");
+  assert.match(nativeConeScene, /\[32, 32\]/,
+    "direct Rust uses the pinned 32x32 Cone Surface resolution");
+  assert.match(nativeConeScene, /0\.8,\s*1\.4,\s*0\.2/,
+    "direct Rust includes the partial radial body");
+  assert.match(nativeConeScene, /SemanticSpatialMaterial::CairoSurface/,
+    "direct Rust uses retained Cairo appearance metadata");
+  assert.match(nativeConeScene, /WorldAffineEdit::Rotate/,
+    "direct Rust authors tilted direction using the shared family transform");
+  const directExecutionSource = await readFile(
+    path.join(repoRoot, "crates/noon-web/src/direct_execution_smoke.rs"), "utf8",
+  );
+  assert.match(directExecutionSource, /createDirectSpatialSurfaceConeBodiesSmokeRenderer/,
+    "the manifest factory is exported by the existing direct execution host");
+
   const selectedPaths = [
     direct.source,
     worker.noon_source,
     "crates/noon/src/example_scenes/spatial_surface.rs",
+    "crates/noon-web/src/direct_execution_smoke.rs",
     "crates/noon-native/examples/spatial_surface.rs",
     "crates/noon-geometry/src/surface.rs",
     "crates/noon-geometry/src/solids.rs",
@@ -101,12 +387,12 @@ test("spatial surface fixtures and their sources trigger raster qualification", 
   ];
   for (const relativePath of selectedPaths) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster CI workflow`);
   }
 });
 
-test("Line3D and explicit triangular mesh fixtures use the existing paired raster harness", async () => {
+test("Line3D, triangle, and translucent Prism fixtures use the existing paired raster harness", async () => {
   const manifest = JSON.parse(await readFile(
     path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8",
   ));
@@ -120,12 +406,16 @@ test("Line3D and explicit triangular mesh fixtures use the existing paired raste
   assert.equal(direct.source, "parity/manim-v0.21/spatial_primitives.py");
   assert.equal(worker.source, direct.source);
   assert.equal(worker.noon_source, "web/python/examples/noon_spatial_primitives.py");
-  assert.equal(direct.expected_object_count, 5);
-  assert.equal(worker.expected_object_count, 5);
+  assert.equal(direct.expected_object_count, 14);
+  assert.equal(worker.expected_object_count, 14);
 
   const workerSource = await readFile(path.join(repoRoot, worker.noon_source), "utf8");
   assert.match(workerSource, /\bLine3D\(/);
-  assert.match(workerSource, /Mesh3D\.polyhedron\(/);
+  assert.match(workerSource, /Prism\(/);
+  assert.match(workerSource, /fill_opacity=0\.75/);
+  assert.match(workerSource, /show_ends=False/);
+  assert.match(workerSource, /show_base=False/);
+  assert.match(workerSource, /u_range=\(PI \/ 4, 3 \* PI \/ 4\), v_range=\(PI \/ 6, 5 \* PI \/ 6\)/);
   assert.match(workerSource, /checkerboard_colors=False[\s\S]*stroke_width=0[\s\S]*shade_in_3d=False/,
     "public Line3D selects geometry, opacity, stroke, and shading defaults supported by its mesh profile");
   for (const relativePath of [
@@ -138,7 +428,60 @@ test("Line3D and explicit triangular mesh fixtures use the existing paired raste
     "web/python/_noon_spatial.py",
   ]) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
+      `${relativePath} must trigger the existing raster CI workflow`);
+  }
+});
+
+test("default Cylinder ends and capped Cone use the existing paired raster harness", async () => {
+  const manifest = JSON.parse(await readFile(
+    path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8",
+  ));
+  const workflow = await readFile(
+    path.join(repoRoot, ".github/workflows/manim-raster-differential.yml"), "utf8",
+  );
+  const direct = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-cairo-cylinder-cone-caps-direct",
+  );
+  const worker = manifest.fixtures.find(
+    fixture => fixture.id === "spatial-cairo-cylinder-cone-caps-worker",
+  );
+  assert.equal(direct?.scene, "SpatialCairoCylinderConeCaps");
+  assert.equal(direct?.direct_factory,
+    "createDirectSpatialCairoCylinderConeCapsSmokeRenderer");
+  assert.equal(worker?.scene, direct.scene);
+  assert.equal(worker?.source, direct.source);
+  assert.equal(worker?.noon_source, "web/python/examples/noon_spatial_primitives.py");
+  assert.equal(direct.expected_duration, 1.0);
+  assert.equal(worker.expected_duration, direct.expected_duration);
+  assert.equal(direct.expected_object_count, 710);
+  assert.equal(worker.expected_object_count, direct.expected_object_count);
+  assert.deepEqual(direct.sample_times, [0, 0.5, 0.9666666666666667]);
+  assert.deepEqual(worker.sample_times, direct.sample_times);
+
+  const reference = await readFile(path.join(repoRoot, direct.source), "utf8");
+  const workerSource = await readFile(path.join(repoRoot, worker.noon_source), "utf8");
+  const referenceCase = reference.split("class SpatialCairoCylinderConeCaps", 2)[1];
+  const workerCase = workerSource.split("class SpatialCairoCylinderConeCaps", 2)[1];
+  for (const [label, source] of [["pinned Manim", referenceCase], ["Python worker", workerCase]]) {
+    assert.ok(source, `${label} class exists`);
+    assert.match(source, /cylinder\s*=\s*Cylinder\(\)/,
+      `${label} includes an actual default Cylinder`);
+    assert.match(source, /direction=.*(?:\[|\()1,\s*2,\s*1(?:\]|\))/,
+      `${label} includes an arbitrary-axis Cylinder`);
+    assert.match(source, /show_base=True/,
+      `${label} includes a capped Cone`);
+    assert.match(source, /self\.(?:add|add_world_mobjects)\(cylinder, oriented_cylinder, cone\)/);
+  }
+  for (const relativePath of [
+    direct.source,
+    worker.noon_source,
+    "crates/noon/src/example_scenes/spatial_primitives.rs",
+    "crates/noon-web/src/direct_execution_smoke.rs",
+    "web/python/_manim_spatial_geometry.py",
+  ]) {
+    await readFile(path.join(repoRoot, relativePath));
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster CI workflow`);
   }
 });
@@ -168,7 +511,7 @@ test("mixed camera-label fixtures enroll the direct and Python worker sources", 
     "crates/noon-web/src/direct_execution_smoke.rs",
   ]) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster CI workflow`);
   }
 });
@@ -185,9 +528,33 @@ test("ThreeDAxes direct and worker fixtures enroll source, timing, and Rust coor
   assert.equal(direct?.direct_factory, "createDirectSpatialThreeDAxesSmokeRenderer");
   assert.equal(worker?.noon_source, "web/python/examples/noon_spatial_three_d_axes.py");
   assert.equal(direct.source, "parity/manim-v0.21/spatial_three_d_axes.py");
+  assert.equal(direct.expected_object_count, 98);
+  assert.equal(worker.expected_object_count, 98);
   assert.deepEqual(direct.sample_times, [0, 0.5, 0.9666666666666667]);
   assert.deepEqual(worker.sample_times, direct.sample_times);
   assert.deepEqual(worker.raster_tolerance, direct.raster_tolerance);
+
+  const nativeSource = await readFile(path.join(repoRoot, "crates/noon/src/example_scenes/spatial_three_d_axes.rs"), "utf8");
+  const referenceSource = await readFile(path.join(repoRoot, direct.source), "utf8");
+  const workerSource = await readFile(path.join(repoRoot, worker.noon_source), "utf8");
+  assert.match(nativeSource, /axis_overrides\[0\]\.tips = Some\(false\)/);
+  assert.match(nativeSource, /tipless X axis keeps both endpoint ticks/);
+  assert.match(referenceSource, /include_tip": False/);
+  assert.match(workerSource, /include_tip": False/);
+  assert.match(nativeSource, /stroke_width = Some\(0\.04\)/);
+  assert.match(referenceSource, /stroke_width": 4/);
+  assert.match(workerSource, /stroke_width": 4/);
+  assert.match(referenceSource, /z_axis_config=\{"color": BLUE\}/);
+  assert.match(workerSource, /z_axis_config=\{"color": BLUE\}/);
+  assert.match(referenceSource, /axes\.get_axis_labels\(/);
+  assert.match(workerSource, /axes\.get_axis_labels\(/);
+  assert.match(nativeSource, /create_axis_label_targets/);
+  for (const source of [nativeSource, referenceSource, workerSource]) {
+    assert.match(source, /tick_size.*0\.15|tick_size: Some\(0\.15\)/);
+    assert.match(source, /RED/);
+    assert.match(source, /GREEN/);
+    assert.match(source, /BLUE/);
+  }
 
   for (const relativePath of [
     direct.source,
@@ -197,7 +564,7 @@ test("ThreeDAxes direct and worker fixtures enroll source, timing, and Rust coor
     "crates/noon-web/src/direct_execution_smoke.rs",
   ]) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster CI workflow`);
   }
 });
@@ -215,8 +582,8 @@ test("VectorScene/LTS matrix fixture pairs native and Python ordinary timelines"
   assert.equal(worker?.noon_source, "web/python/examples/noon_vector_space.py");
   assert.equal(direct.source, "parity/manim-v0.21/vector_space.py");
   assert.equal(worker.source, direct.source);
-  assert.equal(direct.expected_duration, 3);
-  assert.deepEqual(direct.sample_times, [0, 1.5, 2.966666666666667]);
+  assert.equal(direct.expected_duration, 4);
+  assert.deepEqual(direct.sample_times, [0, 0.5, 1, 2.5, 3.966666666666667]);
   assert.deepEqual(worker.sample_times, direct.sample_times);
   assert.deepEqual(direct.raster_tolerance, {
     max_bounds_delta_px: 1, max_differing_ratio: 0.04,
@@ -237,7 +604,45 @@ test("VectorScene/LTS matrix fixture pairs native and Python ordinary timelines"
     "web/python/test_manim_vector_space.py",
   ]) {
     await readFile(path.join(repoRoot, relativePath));
-    assert.ok(workflow.includes(`"${relativePath}"`),
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
       `${relativePath} must trigger the existing raster workflow`);
+  }
+});
+
+test("focused LTS feature slice pairs native and Python coordinate and ghost behavior", async () => {
+  const manifest = JSON.parse(await readFile(
+    path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8",
+  ));
+  const workflow = await readFile(
+    path.join(repoRoot, ".github/workflows/manim-raster-differential.yml"), "utf8",
+  );
+  const direct = manifest.fixtures.find(fixture => fixture.id === "lts-feature-slice-direct");
+  const worker = manifest.fixtures.find(fixture => fixture.id === "lts-feature-slice-worker");
+  assert.equal(direct?.direct_factory, "createDirectVectorSpaceFeaturesRenderer");
+  assert.equal(direct.requires_latex, true, "direct coordinate labels use real TeX");
+  assert.equal(worker.requires_latex, true, "prepare TeX before Python scene setup");
+  assert.equal(worker?.noon_source, "web/python/examples/noon_vector_space_features.py");
+  assert.equal(direct.source, "parity/manim-v0.21/vector_space_features.py");
+  assert.equal(worker.source, direct.source);
+  assert.equal(direct.expected_duration, 1.5);
+  assert.deepEqual(direct.sample_times,
+    [0, 0.25, 0.25 + 8 / 30, 0.75, 1, 1 + 8 / 30, 44 / 30]);
+  assert.deepEqual(worker.sample_times, direct.sample_times);
+  for (const relativePath of [
+    direct.source,
+    worker.noon_source,
+    "crates/noon/src/example_scenes/vector_space_features.rs",
+    "crates/noon/src/text_authoring/semantic/decimal_labels.rs",
+    "crates/noon-web/src/authoring_number_labels.rs",
+    "web/python/_manim_numbers.py",
+    "web/python-worker.source.js",
+    "crates/noon-web/src/direct_execution_smoke.rs",
+    "web/python/_manim_vector_space.py",
+    "web/python/_manim_number_plane.py",
+    "web/python/_manim_number_labels.py",
+  ]) {
+    await readFile(path.join(repoRoot, relativePath));
+    assert.ok(rasterWorkflowIncludes(workflow, relativePath),
+      `${relativePath} must trigger the existing raster CI workflow`);
   }
 });

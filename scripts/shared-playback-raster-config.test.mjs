@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { rasterFixtureSource } from "./manim-raster-support.mjs";
+import { rasterFixtureSource, resolveSharedPlaybackSamples } from "./manim-raster-support.mjs";
 
 const source = await readFile(new URL("./shared-playback-raster.mjs", import.meta.url), "utf8");
 // Execute the real configuration boundary, without importing Playwright or
@@ -87,6 +87,66 @@ test("focused manifest retains the existing oracle-identity assertion", async ()
     { ...oracle, frame_rate: 60 }), /dense raster reference configuration changed/);
 });
 
+test("sparse playback maps rounded logical samples through canonical materialized frame times", () => {
+  const fixture = { id: "rounded", expected_duration: 1.5,
+    sample_times: [0.5166666666666666, 1.4666666666666666] };
+  const semanticFixture = {
+    frame_count: 3,
+    frames: [{ time: 0 }, { time: 0.5166666666666668 }, { time: 1.4666666666666668 }],
+    frozen_intervals: [],
+  };
+  const samples = resolveSharedPlaybackSamples({
+    fixture,
+    semanticFixture,
+    pngFrameCount: 3,
+    denseSamples: [
+      { time: fixture.sample_times[0], materializedTime: semanticFixture.frames[1].time,
+        frameIndex: 1, referenceKind: "sequence" },
+      { time: fixture.sample_times[1], materializedTime: semanticFixture.frames[2].time,
+        frameIndex: 2, referenceKind: "sequence" },
+    ],
+  });
+  assert.deepEqual(samples.map(({ frameIndex, time, materializedTime, label }) =>
+    [frameIndex, time, materializedTime, label]), [
+    [1, fixture.sample_times[0], semanticFixture.frames[1].time, "frame-0001"],
+    [2, fixture.sample_times[1], semanticFixture.frames[2].time, "frame-0002"],
+  ]);
+});
+
+test("sparse playback preserves terminal labels and rejects dense samples outside the resolver contract", () => {
+  const fixture = { id: "terminal", expected_duration: 0, sample_times: [0] };
+  const semanticFixture = { frame_count: 0, frames: [], frozen_intervals: [],
+    terminal_state: { time: 0 }, terminal_png: { path: "terminal.png" } };
+  const resolved = resolveSharedPlaybackSamples({
+    fixture, semanticFixture, pngFrameCount: 0,
+    denseSamples: [{ time: 0, materializedTime: 0, frameIndex: null, referenceKind: "terminal" }],
+  });
+  assert.equal(resolved[0].label, "frame-0000-terminal");
+  assert.throws(() => resolveSharedPlaybackSamples({
+    fixture, semanticFixture, pngFrameCount: 0,
+    denseSamples: [{ time: 0, materializedTime: 0, frameIndex: 0, referenceKind: "sequence" }],
+  }), /dense sample 0 disagrees with canonical terminal resolution/);
+});
+
+test("sparse playback resolves held logical checkpoints to their recorded reference frame", () => {
+  const fixture = { id: "hold", expected_duration: 2, sample_times: [1.25] };
+  const semanticFixture = {
+    frame_count: 3,
+    frames: [{ time: 0 }, { time: 0.5 }, { time: 1 }],
+    frozen_intervals: [{ frame_index: 2, start_time: 1, end_time: 1.5 }],
+  };
+  const [sample] = resolveSharedPlaybackSamples({
+    fixture, semanticFixture, pngFrameCount: 3,
+    denseSamples: [{ time: 1.25, materializedTime: 1, frameIndex: 2, referenceKind: "frozen-hold" }],
+  });
+  assert.deepEqual([sample.label, sample.frameIndex, sample.time, sample.materializedTime],
+    ["frame-0002-hold-1_25", 2, 1.25, 1]);
+  assert.throws(() => resolveSharedPlaybackSamples({
+    fixture, semanticFixture: { ...semanticFixture, frozen_intervals: [] }, pngFrameCount: 3,
+    denseSamples: [{ time: 1.25, materializedTime: 1, frameIndex: 2, referenceKind: "frozen-hold" }],
+  }), /no reference frame at requested logical time 1\.25/);
+});
+
 test("selected fixtures without dense evidence still fail rather than being skipped", async () => {
   const result = await load();
   const functionStart = source.indexOf("async function qualifyFixture(");
@@ -102,7 +162,7 @@ test("shared playback passes fixture preparation metadata through the canonical 
   const functionEnd = source.indexOf("\nconst results =", functionStart);
   assert.ok(functionStart >= 0 && functionEnd > functionStart, "playback qualification boundary moved");
   const qualify = new AsyncFunction(
-    "assert", "baseline", "reference", "path", "repoRoot", "manifest", "readFile", "rasterFixtureSource", "page", "fixture", "baseUrl",
+    "assert", "baseline", "reference", "path", "repoRoot", "manifest", "readFile", "rasterFixtureSource", "resolveSharedPlaybackSamples", "page", "fixture", "baseUrl",
     `${source.slice(functionStart, functionEnd)}\nreturn qualifyFixture(page, fixture, "webgpu");`,
   );
   const loadedSources = [];
@@ -125,12 +185,13 @@ test("shared playback passes fixture preparation metadata through the canonical 
     async filename => {
       sourceReads.push(filename);
       return "from manim import *\nclass Example(Scene): pass\n";
-    }, rasterFixtureSource, page];
+    }, rasterFixtureSource, () => [{ time: 0, frameIndex: 0, referenceKind: "sequence", label: "frame-0000" }], page];
   const plain = { id: "plain", scene: "Example", expected_duration: 1 };
   const latex = { ...plain, id: "latex", requires_latex: true };
   const worker = { ...plain, id: "worker", source: "reference.py", noon_source: "worker.py" };
   for (const fixture of [plain, latex, worker]) {
-    baseline.fixtures = [{ ...fixture, expectedDuration: 1, backends: { webgpu: { samples: [{}] } } }];
+    baseline.fixtures = [{ ...fixture, expectedDuration: 1, manim: { frameCount: 1 },
+      backends: { webgpu: { samples: [{}] } } }];
     reference.fixtures = [{ id: fixture.id, frame_count: 1, frames: [{ time: 0 }] }];
     await assert.rejects(qualify(...dependencies, fixture, "http://example.test"), stopAfterLoad);
   }

@@ -10,9 +10,9 @@ use std::rc::Rc;
 
 /// Small native configuration for the retained LTS building blocks.
 ///
-/// The two plane option sets are deliberately independent. Coordinate labels,
-/// animation wrappers, and ghost-vector histories remain ordinary caller-owned
-/// semantic objects rather than state on this helper.
+/// The two plane option sets are deliberately independent. Animation state is
+/// ordinary shared-session state; this helper retains only semantic family
+/// handles, including caller-enrolled transformables.
 #[derive(Clone, Debug)]
 pub struct LinearTransformationOptions {
     pub background_plane: Option<ManimNumberPlaneOptions>,
@@ -75,6 +75,7 @@ pub struct LinearTransformationAuthoring {
     basis_vectors: Option<MobjectFamily>,
     basis_arrows: Vec<ManimArrow>,
     vectors: Vec<ManimArrow>,
+    transformable_mobjects: Vec<MobjectFamily>,
 }
 
 impl LinearTransformationAuthoring {
@@ -98,6 +99,106 @@ impl LinearTransformationAuthoring {
         &self.basis_arrows
     }
 
+    pub fn transformable_mobjects(&self) -> &[MobjectFamily] {
+        &self.transformable_mobjects
+    }
+
+    /// Enroll an ordinary semantic family for later matrix targets. Only its
+    /// stable family identity is retained; Rust remains the geometry source.
+    pub fn add_transformable_mobject(
+        &mut self,
+        scene: &mut Scene,
+        family: &MobjectFamily,
+    ) -> Result<(), AuthoringError> {
+        if !Rc::ptr_eq(family.integration_store(), scene.integration_store()) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        family.validate()?;
+        if self
+            .transformable_mobjects
+            .iter()
+            .any(|known| known.node_id() == family.node_id())
+        {
+            return Ok(());
+        }
+        // Reuse the exact matrix target validator before registering or copying
+        // anything. It rejects Arrow and other unsupported content fail-closed.
+        let store = family.integration_store().borrow();
+        crate::matrix_authoring::prepare_apply_matrix_family(
+            &store,
+            family,
+            &[1.0, 0.0, 0.0, 1.0],
+            2,
+            2,
+            (0.0, 0.0),
+        )?;
+        drop(store);
+        scene.add_many(&[MobjectTarget::from(family)])?;
+        self.transformable_mobjects.push(family.clone());
+        Ok(())
+    }
+
+    /// Build detached ordinary path-family targets for enrolled objects.
+    /// Arrow families are intentionally handled by the endpoint-aware Arrow
+    /// target path instead of pointwise path editing.
+    pub fn transformable_matrix_target_family(
+        &self,
+        scene: &Scene,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about: (f64, f64),
+    ) -> Result<Option<MobjectFamily>, AuthoringError> {
+        if self.transformable_mobjects.is_empty() {
+            return Ok(None);
+        }
+        // Validate every source/matrix before allocating any detached copies.
+        // The subsequent copy+matrix pass then cannot leave partial targets for
+        // malformed input or unsupported family content.
+        for source in &self.transformable_mobjects {
+            if !Rc::ptr_eq(source.integration_store(), scene.integration_store()) {
+                return Err(AuthoringError::ForeignStore);
+            }
+            let store = source.integration_store().borrow();
+            crate::matrix_authoring::prepare_apply_matrix_family(
+                &store, source, values, rows, columns, about,
+            )?;
+        }
+        let targets = self
+            .transformable_mobjects
+            .iter()
+            .map(|source| {
+                let copy = source.copy_family()?;
+                let target = copy.root().clone();
+                target.apply_matrix(values, rows, columns, about.0, about.1)?;
+                Ok(target)
+            })
+            .collect::<Result<Vec<_>, AuthoringError>>()?;
+        let members = targets.iter().map(MobjectTarget::from).collect::<Vec<_>>();
+        Ok(Some(MobjectFamily::create(
+            Rc::clone(scene.integration_store()),
+            &members,
+        )?))
+    }
+
+    /// Add one faded semantic copy as an ordinary scene family. Callers stage
+    /// matrix targets first so an invalid transform cannot leave a ghost behind.
+    pub fn add_ghost_mobject(
+        &self,
+        scene: &mut Scene,
+        source: &MobjectFamily,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        if !Rc::ptr_eq(source.integration_store(), scene.integration_store()) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        source.validate()?;
+        let copy = source.copy_family()?;
+        let ghost = copy.root().clone();
+        ghost.fade(0.7)?;
+        scene.add_many(&[MobjectTarget::from(&ghost)])?;
+        Ok(ghost)
+    }
+
     /// Add a tracked vector anchored at the origin, matching VectorScene's
     /// coordinate input. The regular Arrow constructor owns shaft and tip.
     pub fn add_vector(
@@ -115,6 +216,20 @@ impl LinearTransformationAuthoring {
         }
         self.vectors.push(vector);
         Ok(self.vectors.last().expect("just appended vector"))
+    }
+
+    /// Construct an origin vector without enrolling it yet, for a shared
+    /// `LiveSession::declare_and_activate_arrow_grow` entrance.
+    pub fn add_animated_vector(
+        &mut self,
+        scene: &mut Scene,
+        x: f64,
+        y: f64,
+        color: Color,
+    ) -> Result<ManimArrow, CoordinateAuthoringError> {
+        let vector = create_colored_vector(scene, x, y, color)?;
+        self.vectors.push(vector.clone());
+        Ok(vector)
     }
 
     /// Apply a planar matrix to the foreground grid. Vector targets are
@@ -310,6 +425,7 @@ impl Scene {
             basis_vectors,
             basis_arrows,
             vectors: Vec::new(),
+            transformable_mobjects: Vec::new(),
         })
     }
 }
@@ -335,6 +451,152 @@ fn add_basis_vector(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caller_transformables_are_identity_deduplicated_and_targeted_through_shared_families() {
+        let mut scene = Scene::new();
+        let mut setup = scene
+            .linear_transformation_setup(&LinearTransformationOptions {
+                background_plane: None,
+                foreground_plane: None,
+                show_basis_vectors: false,
+            })
+            .unwrap();
+        let circle = scene.circle(0.5).unwrap();
+        let mut circle = circle;
+        circle.shift(2.0, 1.0).unwrap();
+        let family = scene.family(&[MobjectTarget::from(&circle)]).unwrap();
+        family.set_opacity(0.5).unwrap();
+        setup
+            .add_transformable_mobject(&mut scene, &family)
+            .unwrap();
+        setup
+            .add_transformable_mobject(&mut scene, &family)
+            .unwrap();
+        assert_eq!(setup.transformable_mobjects().len(), 1);
+
+        let store = Rc::clone(scene.integration_store());
+        let before_failed_target = {
+            let store = store.borrow();
+            (store.len(), store.geometry_resources().len())
+        };
+        assert!(setup
+            .transformable_matrix_target_family(
+                &scene,
+                &[1.0, f64::NAN, 0.0, 1.0],
+                2,
+                2,
+                (0.0, 0.0),
+            )
+            .is_err());
+        let after_failed_target = {
+            let store = store.borrow();
+            (store.len(), store.geometry_resources().len())
+        };
+        assert_eq!(after_failed_target, before_failed_target);
+
+        let target = setup
+            .transformable_matrix_target_family(&scene, &[0.0, -1.0, 1.0, 0.0], 2, 2, (0.0, 0.0))
+            .unwrap()
+            .unwrap();
+        let leaf_state = |family: &MobjectFamily| {
+            let borrowed = store.borrow();
+            let node = borrowed.ordered_leaf_nodes(family.node_id()).unwrap()[0];
+            borrowed
+                .semantic_object_state_checked(node)
+                .unwrap()
+                .clone()
+        };
+        let source_state = leaf_state(&family);
+        let target_state = leaf_state(&target);
+        assert_ne!(source_state, target_state);
+
+        let ghost = setup.add_ghost_mobject(&mut scene, &family).unwrap();
+        let source_style = leaf_state(&family).style;
+        let ghost_style = leaf_state(&ghost).style;
+        if source_style.fill.is_some() {
+            assert!((ghost_style.fill_opacity - source_style.fill_opacity * 0.3).abs() < 1e-6);
+        }
+        if source_style.stroke.is_some() {
+            assert!((ghost_style.stroke_opacity - source_style.stroke_opacity * 0.3).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn transformable_enrollment_rejects_foreign_colliding_and_arrow_families() {
+        let mut left_scene = Scene::new();
+        let mut left = left_scene
+            .linear_transformation_setup(&LinearTransformationOptions {
+                background_plane: None,
+                foreground_plane: None,
+                show_basis_vectors: false,
+            })
+            .unwrap();
+        let left_circle = left_scene.circle(0.5).unwrap();
+        let left_family = left_scene
+            .family(&[MobjectTarget::from(&left_circle)])
+            .unwrap();
+        left.add_transformable_mobject(&mut left_scene, &left_family)
+            .unwrap();
+        let mut foreign_scene = Scene::new();
+        let foreign_circle = foreign_scene.circle(0.5).unwrap();
+        let foreign = foreign_scene
+            .family(&[MobjectTarget::from(&foreign_circle)])
+            .unwrap();
+        assert_eq!(left_family.node_id(), foreign.node_id());
+        assert!(left
+            .add_transformable_mobject(&mut left_scene, &foreign)
+            .is_err());
+        assert_eq!(left.transformable_mobjects().len(), 1);
+
+        let population = |scene: &Scene| {
+            let store = scene.integration_store().borrow();
+            (
+                store.len(),
+                store.geometry_resources().len(),
+                store.scene_revision(),
+            )
+        };
+        let before = (population(&left_scene), population(&foreign_scene));
+        assert!(matches!(
+            left.transformable_matrix_target_family(
+                &foreign_scene,
+                &[1.0, 0.0, 0.0, 1.0],
+                2,
+                2,
+                (0.0, 0.0),
+            ),
+            Err(AuthoringError::ForeignStore)
+        ));
+        assert!(matches!(
+            left.add_ghost_mobject(&mut left_scene, &foreign),
+            Err(AuthoringError::ForeignStore)
+        ));
+        assert_eq!(
+            before,
+            (population(&left_scene), population(&foreign_scene))
+        );
+
+        let arrow = left_scene
+            .manim_arrow(ManimArrowOptions::vector(1.0, 0.0).unwrap())
+            .unwrap();
+        let arrow_family = left_scene
+            .family(&[MobjectTarget::from(arrow.family())])
+            .unwrap();
+        let before = {
+            let store = left_scene.integration_store().borrow();
+            (store.len(), store.geometry_resources().len())
+        };
+        assert!(left
+            .add_transformable_mobject(&mut left_scene, &arrow_family)
+            .is_err());
+        let after = {
+            let store = left_scene.integration_store().borrow();
+            (store.len(), store.geometry_resources().len())
+        };
+        assert_eq!(after, before);
+        assert_eq!(left.transformable_mobjects().len(), 1);
+    }
 
     #[test]
     fn linear_transformation_defaults_compose_retained_planes_and_basis_arrows() {
@@ -424,6 +686,100 @@ mod tests {
             state.style.stroke,
             Some(SemanticPaint::Solid(Color::from_hex(0xFFFF00)))
         );
+    }
+
+    #[test]
+    fn arrow_grow_uses_atomic_shared_family_lifecycle_and_rejects_attached_targets() {
+        use crate::{AnimationOptions, RateFunction};
+
+        let mut scene = Scene::new();
+        let mut setup = scene
+            .linear_transformation_setup(&LinearTransformationOptions {
+                background_plane: None,
+                foreground_plane: None,
+                show_basis_vectors: false,
+            })
+            .unwrap();
+        let vector = setup
+            .add_animated_vector(&mut scene, 2.0, 1.0, Color::from_hex(0xFFFF00))
+            .unwrap();
+        let authored_shaft =
+            noon_compile::lower_semantic_visual_values(&vector.shaft().state().unwrap())
+                .unwrap()
+                .0;
+        let authored_tip =
+            noon_compile::lower_semantic_visual_values(&vector.end_tip().state().unwrap())
+                .unwrap()
+                .0;
+        let endpoints = vector.manim_endpoints().unwrap();
+        assert!(endpoints.start.0.abs() < 1e-6 && endpoints.start.1.abs() < 1e-6);
+        assert!((endpoints.end.0 - 2.0).abs() < 1e-6);
+        assert!((endpoints.end.1 - 1.0).abs() < 1e-6);
+        let mut session = scene.execution_session().unwrap();
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_arrow_grow(
+                &vector,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Smooth),
+            )
+            .unwrap();
+        let shaft_id = session
+            .execution_object_id(vector.shaft().node_id())
+            .unwrap();
+        let tip_id = session
+            .execution_object_id(vector.end_tip().node_id())
+            .unwrap();
+        let initial = session.frame().clone();
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, 0.5)
+            .unwrap();
+        let middle = session.frame().clone();
+        let transform = |frame: &noon_runtime::FrameState, id| {
+            frame
+                .objects
+                .iter()
+                .find(|row| row.id == id)
+                .unwrap()
+                .transform
+        };
+        for (object_id, authored) in [(shaft_id, authored_shaft), (tip_id, authored_tip)] {
+            let mid = transform(&middle, object_id);
+            assert!((mid.scale.x - 0.5).abs() < 1e-6);
+            assert!((mid.scale.y - 0.5).abs() < 1e-6);
+            assert!((mid.translation.x - authored.translation.x * 0.5).abs() < 1e-6);
+            assert!((mid.translation.y - authored.translation.y * 0.5).abs() < 1e-6);
+        }
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, 1.0)
+            .unwrap();
+        scene.live(&mut session).complete_segment(segment).unwrap();
+        let endpoint = session.frame().clone();
+        assert_ne!(initial, middle);
+        assert_ne!(middle, endpoint);
+        assert_eq!(transform(&endpoint, shaft_id), authored_shaft);
+        assert_eq!(transform(&endpoint, tip_id), authored_tip);
+
+        let mut sought = session;
+        sought.seek(0.5).unwrap();
+        assert_eq!(sought.frame(), &middle);
+        sought.seek(1.0).unwrap();
+        assert_eq!(sought.frame(), &endpoint);
+
+        let mut attached_scene = Scene::new();
+        let attached = attached_scene.add_vector(2.0, 1.0).unwrap();
+        let mut attached_session = attached_scene.execution_session().unwrap();
+        let before = attached_session.frame().clone();
+        let revision = attached_scene.revision();
+        assert!(attached_scene
+            .live(&mut attached_session)
+            .declare_and_activate_arrow_grow(&attached, AnimationOptions::new().run_time(1.0),)
+            .is_err());
+        assert_eq!(attached_session.frame(), &before);
+        assert_eq!(attached_scene.revision(), revision);
     }
 
     #[test]

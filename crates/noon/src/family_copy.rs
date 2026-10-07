@@ -179,7 +179,7 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
                     return Err(AuthoringError::from(
                         noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(id),
                     )
-                    .into())
+                    .into());
                 }
             }
         };

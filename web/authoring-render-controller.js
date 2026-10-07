@@ -149,7 +149,16 @@ export function createAuthoringRenderController(host) {
             renderSubstageProfiling = true;
             renderer?.setRenderSubstageProfiling(true);
           }
-          respond(message.requestId, { type: "metrics", metrics: currentMetrics() });
+          {
+            const metrics = currentMetrics();
+            if (message.includeGpuIdentity === true) {
+              if (renderer === null || typeof renderer.rendererAdapterInfo !== "function") {
+                throw new Error("renderer GPU identity diagnostics are unavailable");
+              }
+              metrics.rendererGpuIdentity = JSON.parse(renderer.rendererAdapterInfo());
+            }
+            respond(message.requestId, { type: "metrics", metrics });
+          }
           return;
         case "stop":
           stop();

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const runtimeIdentity = JSON.parse(await readFile(path.join(root, "web/runtime-build-identity.json"), "utf8"));
+const manifest = JSON.parse(await readFile(path.join(root, "benchmarks/performance-scenes.json"), "utf8"));
 const artifact = path.resolve(root, process.env.NOON_SCENE_PERF_REPORT ?? "browser-smoke-artifacts/scene-perf-report.json");
 const server = await serveRepository(root, Number(process.env.NOON_SCENE_PERF_PORT ?? 4193));
 const browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs("webgpu") });
@@ -16,6 +18,14 @@ try {
     { name: "sparse-renderer-metrics", frames: 40, hz: 60, objects: 3, continuation: true, includeRendererSamples: true, rendererMetricsSampling: "sparse" },
     { name: "static", warmup: 0, includeSamples: true, source: "from noon import Scene, Circle\nresult = Scene()\nresult.add(Circle(0.5))", objects: 1, continuation: false },
     { name: "predeclared-endpoint", sourcePath: "./python/examples/painter_order_overlap.py", warmup: 0, frames: 4, hz: 2, objects: 3, continuation: false, duration: 1, measured: 2 },
+    { name: "predeclared-ten-second", warmup: 0, frames: 12, hz: 1,
+      source: "from noon import Scene, Circle\nresult = Scene()\nresult.add(Circle(0.5))\nresult.declare_wait(10)",
+      objects: 1, continuation: false, duration: 10, measured: 10 },
+    ...manifest.cases.filter(definition => definition.id.startsWith("spatial-")).map(definition => ({
+      name: definition.id, sourcePath: definition.source, context: definition.context,
+      warmup: 0, frames: 5, hz: 1, minObjects: definition.minimumObjects,
+      continuation: definition.sourceContinuation, lastMeasuredTime: 5,
+    })),
     { name: "empty", source: "from noon import Scene\nresult = Scene()", objects: 0, continuation: false },
     { name: "source-error", source: 'raise ValueError("profile source failure")', error: "profile source failure" },
     { name: "continuation-error", source: 'from noon import Scene\nclass Failure(Scene):\n    def construct(self):\n        self.wait(0.1)\n        raise ValueError("profile continuation failure")', hz: 1, error: "profile continuation failure" },
@@ -24,7 +34,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
     try {
       if (spec.source) await page.route("**/python/demo_scene.py", route => route.fulfill({ contentType: "text/plain", body: spec.source }));
-      await page.goto(`${server.baseUrl}/web/scene-perf.html?source=${encodeURIComponent(spec.sourcePath ?? "./python/demo_scene.py")}&warmup=${spec.warmup ?? 1}&frames=${spec.frames ?? 2}&targetHz=${spec.hz ?? 60}&includeSamples=${spec.includeSamples ? 1 : 0}&includeRendererSamples=${spec.includeRendererSamples ? 1 : 0}&rendererMetricsSampling=${spec.rendererMetricsSampling ?? "dense"}`);
+      await page.goto(`${server.baseUrl}/web/scene-perf.html?source=${encodeURIComponent(spec.sourcePath ?? "./python/demo_scene.py")}&context=${encodeURIComponent(JSON.stringify(spec.context ?? {}))}&warmup=${spec.warmup ?? 1}&frames=${spec.frames ?? 2}&targetHz=${spec.hz ?? 60}&includeSamples=${spec.includeSamples ? 1 : 0}&includeRendererSamples=${spec.includeRendererSamples ? 1 : 0}&rendererMetricsSampling=${spec.rendererMetricsSampling ?? "dense"}`);
       await page.waitForFunction(() => ["complete", "error"].includes(document.querySelector("#status")?.dataset.state), null, { timeout: 60000 });
       const result = await page.evaluate(() => ({ state: document.querySelector("#status").dataset.state, status: document.querySelector("#status").value, report: window.__NOON_SCENE_PERF__ }));
       if (spec.error) {
@@ -35,12 +45,21 @@ try {
         assert.equal(result.report.schemaVersion, 2);
         assert.equal(result.report.execution.mode, "semantic");
         assert.equal(result.report.execution.sourceContinuation, spec.continuation);
-        assert.equal(result.report.scene.objects, spec.objects);
+        if (spec.objects !== undefined) assert.equal(result.report.scene.objects, spec.objects);
+        if (spec.minObjects !== undefined) assert.ok(result.report.scene.objects >= spec.minObjects,
+          `${spec.name}: expected at least ${spec.minObjects} authored objects, got ${result.report.scene.objects}`);
+        assert.deepEqual(result.report.runtimeBuild, runtimeIdentity,
+          `${spec.name}: ordinary and diagnostic runs must identify the served package`);
+        assert.deepEqual(result.report.environment.backingResolution,
+          await page.locator("#scene").evaluate(canvas => [canvas.width, canvas.height]));
         assert.ok(result.report.cadence.frames > 0);
         if (spec.duration !== undefined) {
           assert.equal(result.report.execution.authoredDuration, spec.duration);
           assert.equal(result.report.execution.lastMeasuredTime, spec.duration);
           assert.equal(result.report.cadence.frames, spec.measured);
+        }
+        if (spec.lastMeasuredTime !== undefined) {
+          assert.equal(result.report.execution.lastMeasuredTime, spec.lastMeasuredTime);
         }
         assert.ok(result.report.pipeline.advanceRoundTripMs.p95 >= 0);
         assert.equal(result.report.setup.warmupFrames, spec.warmup ?? 1);
@@ -49,8 +68,6 @@ try {
           assert.ok(result.report.samples.every(sample => Number.isFinite(sample.advanceRoundTripMs)));
         } else assert.equal(result.report.samples, undefined);
         if (spec.includeRendererSamples) {
-          assert.match(result.report.runtimeBuild.buildId, /^[0-9a-f]{64}$/);
-          assert.match(result.report.runtimeBuild.sourceRevision, /^[0-9a-f]{40}$/);
           assert.ok(result.report.rendererSamples.length > 0);
           const substageSamples = result.report.rendererSubstageSamples;
           assert.ok(substageSamples.length > 0);
@@ -79,7 +96,11 @@ try {
           assert.ok(stageSamples.every(sample =>
             Number.isFinite(sample.applyMs) && Number.isFinite(sample.renderMs) &&
             Number.isFinite(sample.receiveToPresentMs) && Number.isFinite(sample.ackPostMs)));
-        } else assert.equal(result.report.rendererPublicationStageSamples, undefined);
+        } else {
+          assert.equal(result.report.rendererSamples, undefined);
+          assert.equal(result.report.rendererPublicationStageSamples, undefined);
+          assert.equal(result.report.rendererSubstageSamples, undefined);
+        }
         assert.equal(result.report.cpu, undefined);
         assert.equal(result.report.setup.serializationMs, undefined);
       }

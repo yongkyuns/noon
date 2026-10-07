@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-The default catalog contains fourteen authored lessons. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
+The default catalog manifest currently lists twenty-one authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
 
 The original `example-gallery.js` reference implementation moves unchanged to `example-gallery-reference.js`. A small facade routes the default and explicit showcase requests to their own manifest. It does not introduce a new scene model, authoring worker, execution session, renderer, or playback implementation. Legacy example IDs and explicit manifest callers retain their old path.
 
@@ -43,11 +43,17 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | Match by shape | Geometry matching despite changed order | Duplicate-key and unmatched edge cases |
 | Accumulate or step through | Ordered visibility comparison | Smoothing away discrete semantics |
 | Words and equations | Text, emphasis, real mathematics | Full LaTeX parity |
+| Draw a LaTeX equation | Create compiled MathTex glyphs and a fraction bar | Full LaTeX feature parity |
 | Functions and samples | Function/sample overlay and legend | Pretending samples are measured data |
+| A surface in three dimensions | Inspect a point-lit surface while the camera, light, marker, and fixed labels move | General material/transparency parity |
+| Coordinates in three dimensions | Place a marker with ThreeDAxes.c2p and inspect it from two camera angles | Nonlinear axes or arbitrary label options |
+| Swap coordinates with a matrix | Apply a matrix to a vector and compare faded earlier directions | General object-history or matrix-display parity |
 | Relationships that follow motion | ValueTracker-driven dots and their attached connector | dt-driven integrators and input callbacks |
+| Follow a moving point | Move a point along a fixed curve while the camera follows it, then restore the full graph | Arbitrary callback replay |
 | Redraw from animated values | Two bounded `always_redraw` producers rebuild a circle and rectangle from animated values | Manually mutating existing objects with updaters |
 | Pixels in the scene | Recognizable array-backed raster | 2x2 alpha/resource-reuse fixture |
 | Select a shape | Animated introduction plus source-declared Rust-owned click Indicate | Legacy session-selection overlay behavior or wheel zoom |
+| Move a shape | Select and drag a declared target to translate it | General pointer-driven transforms |
 
 The reference `noon-pointer-selection` example remains the legacy session-selection overlay: its manifest declares `pointer-fill-selection`, and the existing playground configures it after authoring completes. The curated `showcase-pointer-selection` lesson instead declares `on_click(..., Indicate(...))` in Python, lowers that typed binding through Rust, and has no manifest interaction policy or host callback. Its poster is captured after a real click, then after the Indicate animation restores the baseline automatically; a background click must leave the image unchanged.
 
@@ -86,7 +92,7 @@ Live review retains an unseeked first-pass image and state before any replay att
 
 ## Remaining coverage and migration
 
-The fourteen lessons are intentionally not exhaustive. Current master already has paired Rust/Python examples for matrix transforms and display, tables, graphs, moving cameras, implicit and synchronized/gapped plotting, and foreground membership. Reuse those sources and qualifications when developing further editorial lessons; do not duplicate their semantic implementations or describe them as missing Phase B support. Additional authored learning homes include:
+The twenty-one curated lessons are intentionally not exhaustive. Current master already has paired Rust/Python examples for matrix transforms and display, tables, graphs, moving cameras, implicit and synchronized/gapped plotting, and foreground membership. Reuse those sources and qualifications when developing further editorial lessons; do not duplicate their semantic implementations or describe them as missing Phase B support. Additional authored learning homes include:
 
 - Qualify real replacement/copy animation APIs before adding them; explicit copy-and-Transform is not a substitute claim.
 - Pivot/easing distinctions, multi-contour vector paths, and SVG import/morphing.

@@ -250,6 +250,11 @@ pub(crate) enum SemanticCompositionRequest {
         direction: SemanticFadeDirection,
         options: AnimationOptions,
     },
+    FamilyArrowGrow {
+        target: SemanticNodeId,
+        endpoint: noon_core::SemanticAffineLifecycleEndpoint,
+        options: AnimationOptions,
+    },
     TextWrite {
         target: SemanticNodeId,
         reverse_member_order: bool,
@@ -339,6 +344,7 @@ impl SemanticCompositionRequest {
             | Self::FamilyDrawBorderThenFill { target, .. }
             | Self::FamilySubsetDisplay { target, .. }
             | Self::FamilyFade { target, .. }
+            | Self::FamilyArrowGrow { target, .. }
             | Self::TextWrite { target, .. }
             | Self::FamilyTextWrite { target, .. }
             | Self::TextReveal { target, .. }
@@ -2727,6 +2733,52 @@ impl ExecutionSession {
                         )
                     })
                     .collect();
+                let mut composition_options = *options;
+                composition_options.introducer = None;
+                composition_options.remover = None;
+                Ok(declaration.create_animation_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    children,
+                    composition_options,
+                ))
+            }
+            SemanticCompositionRequest::FamilyArrowGrow {
+                target,
+                endpoint,
+                options,
+            } => {
+                if options.introducer.is_some_and(|value| !value)
+                    || options.remover.is_some_and(|value| value)
+                    || options.path_arc.is_some_and(|value| value != 0.0)
+                {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "Arrow growth requires an introducing affine lifecycle without a path arc"
+                            .into(),
+                    ));
+                }
+                let leaves = self.require_family_fade_target(
+                    store,
+                    root,
+                    *target,
+                    SemanticFadeDirection::In,
+                )?;
+                if !admitted.insert((*target).into()) {
+                    return Err(ExecutionSessionAnimationError::CreateTarget {
+                        target: *target,
+                        error: ExecutionSessionCreateError::DuplicateTarget,
+                    });
+                }
+                let children = leaves
+                    .into_iter()
+                    .map(|leaf| {
+                        declaration.create_affine_lifecycle_animation(
+                            leaf,
+                            SemanticAffineLifecycleDirection::IntroduceFrom,
+                            *endpoint,
+                            AnimationOptions::new().rate_func(RateFunction::Linear),
+                        )
+                    })
+                    .collect::<Vec<_>>();
                 let mut composition_options = *options;
                 composition_options.introducer = None;
                 composition_options.remover = None;

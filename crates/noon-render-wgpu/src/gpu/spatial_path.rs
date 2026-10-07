@@ -4,6 +4,8 @@
 //! The spatial renderer owns the resulting buffers and updates only compact
 //! per-object pose data for ordinary world motion.
 
+mod cairo;
+
 use super::create_buffer_with_data;
 use super::retained_text::{
     append_transformed_path, resolved_text_vector_style, transform_path, variation_fingerprint,
@@ -27,6 +29,11 @@ pub(super) struct SpatialPathVertex {
     pub position: [f32; 2],
     /// 0 is fill, 1 is stroke, matching `noon_geometry::PathSurface`.
     pub surface: u32,
+    /// Retained straight centerline tangent and cap/body offsets. Both are zero
+    /// for ordinary local tessellation; screen strokes expand after projection.
+    pub tangent: [f32; 2],
+    pub extrusion: [f32; 2],
+    pub stroke_metadata: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -48,6 +55,7 @@ type FixedOrientationOrderKey = (u32, u32, usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct Specialization {
     pub stroke_width: u32,
+    pub screen_stroke: bool,
     pub stroke_join: noon_core::StrokeJoin,
     pub stroke_cap: noon_core::StrokeCap,
     pub fill: bool,
@@ -75,7 +83,7 @@ struct PathInstance {
     opacity: f32,
     fixed_orientation: u32,
     fixed_anchor: [f32; 3],
-    padding: u32,
+    screen_stroke_width: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -104,15 +112,19 @@ pub(super) struct SpatialPathGpuState {
     /// Rebuild only when the publication reports an order change.
     painter_ranks: HashMap<usize, u32>,
     painter_ranks_initialized: bool,
+    clip_scale_users: usize,
     paths: HashMap<PathKey, ResidentPath>,
     instances: Vec<PathInstance>,
     free_instances: Vec<usize>,
     gpu: Option<PathGpuState>,
     outlines: GlyphOutlineCache,
+    cairo: Option<Box<cairo::State>>,
 }
 
 #[derive(Debug)]
 struct PathGpuState {
+    camera_layout: wgpu::BindGroupLayout,
+    fixed_camera_layout: wgpu::BindGroupLayout,
     camera_group: wgpu::BindGroup,
     fixed_camera_group: wgpu::BindGroup,
     fixed_camera: wgpu::Buffer,
@@ -132,41 +144,25 @@ struct FixedCameraUniform {
     _padding: [f32; 2],
 }
 
+const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    0 => Float32x2, 1 => Uint32, 11 => Float32x2, 12 => Float32x2, 14 => Float32x3
+];
+const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
+    2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
+    6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3, 13 => Float32
+];
+
 impl PathGpuState {
     fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        camera_buffer: &wgpu::Buffer,
+        camera_layout: &wgpu::BindGroupLayout,
+        camera_group: &wgpu::BindGroup,
         format: wgpu::TextureFormat,
         sample_count: u32,
     ) -> Self {
-        const VERTEX: [wgpu::VertexAttribute; 2] =
-            wgpu::vertex_attr_array![0 => Float32x2, 1 => Uint32];
-        const INSTANCE: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
-            2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
-            6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3
-        ];
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Noon spatial path camera layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(64),
-                },
-                count: None,
-            }],
-        });
-        let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Noon spatial path camera"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
+        let layout = camera_layout.clone();
+        let camera_group = camera_group.clone();
         let fixed_camera_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Noon spatial path fixed-orientation camera layout"),
@@ -219,8 +215,9 @@ impl PathGpuState {
             format,
             1,
             true,
-            &VERTEX,
-            &INSTANCE,
+            &PATH_VERTEX_ATTRIBUTES,
+            &PATH_INSTANCE_ATTRIBUTES,
+            false,
         );
         let world_pipeline_msaa = spatial_path_pipeline(
             device,
@@ -229,8 +226,9 @@ impl PathGpuState {
             format,
             sample_count,
             true,
-            &VERTEX,
-            &INSTANCE,
+            &PATH_VERTEX_ATTRIBUTES,
+            &PATH_INSTANCE_ATTRIBUTES,
+            false,
         );
         let fixed_pipeline = spatial_path_pipeline(
             device,
@@ -239,8 +237,9 @@ impl PathGpuState {
             format,
             1,
             false,
-            &VERTEX,
-            &INSTANCE,
+            &PATH_VERTEX_ATTRIBUTES,
+            &PATH_INSTANCE_ATTRIBUTES,
+            false,
         );
         let fixed_pipeline_msaa = spatial_path_pipeline(
             device,
@@ -249,8 +248,9 @@ impl PathGpuState {
             format,
             sample_count,
             false,
-            &VERTEX,
-            &INSTANCE,
+            &PATH_VERTEX_ATTRIBUTES,
+            &PATH_INSTANCE_ATTRIBUTES,
+            false,
         );
         let instances = create_buffer_with_data(
             device,
@@ -260,6 +260,8 @@ impl PathGpuState {
             wgpu::BufferUsages::VERTEX,
         );
         Self {
+            camera_layout: layout,
+            fixed_camera_layout,
             camera_group,
             fixed_camera_group,
             fixed_camera,
@@ -284,6 +286,7 @@ fn spatial_path_pipeline(
     depth: bool,
     vertex_attributes: &'static [wgpu::VertexAttribute],
     instance_attributes: &'static [wgpu::VertexAttribute],
+    cairo: bool,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(if depth {
@@ -294,7 +297,7 @@ fn spatial_path_pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(if cairo { "vs_cairo" } else { "vs_main" }),
             compilation_options: Default::default(),
             buffers: &[
                 Some(wgpu::VertexBufferLayout {
@@ -311,7 +314,7 @@ fn spatial_path_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(if cairo { "fs_cairo" } else { "fs_main" }),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -350,6 +353,7 @@ fn spatial_path_pipeline(
 pub(super) struct PathPlan {
     staged: Vec<(DrawId, Option<StagedPath>)>,
     new_paths: HashMap<PathKey, TessellatedSpatialPath>,
+    new_cairo_geometry: HashMap<PathKey, noon_geometry::CairoPathGeometry>,
     needed: usize,
     capacity: usize,
     camera_clip_scale: [f32; 2],
@@ -368,6 +372,7 @@ struct StagedPath {
     instance: PathInstance,
     domain: Domain,
     painter_rank: u32,
+    cairo: Option<Box<cairo::Uniform>>,
 }
 
 #[derive(Debug)]
@@ -385,6 +390,12 @@ impl SpatialPathGpuState {
 
     pub(super) fn draw_count(&self) -> usize {
         self.draws.len()
+    }
+
+    pub(super) fn has_cairo_draws(&self) -> bool {
+        self.cairo
+            .as_deref()
+            .is_some_and(|state| !state.draws.is_empty())
     }
 
     pub(super) fn draw_indices(&self) -> impl Iterator<Item = usize> {
@@ -420,13 +431,20 @@ impl SpatialPathGpuState {
 
     fn publish_draw(&mut self, id: DrawId, draw: PathDraw) {
         let previous = self.draws.insert(id, draw);
+        self.clip_scale_users -= usize::from(previous.is_some_and(Self::uses_clip_scale));
+        self.clip_scale_users += usize::from(Self::uses_clip_scale(draw));
         self.update_fixed_order(id, previous.as_ref(), Some(&draw));
     }
 
     fn remove_draw(&mut self, id: DrawId) -> Option<PathDraw> {
         let previous = self.draws.remove(&id)?;
+        self.clip_scale_users -= usize::from(Self::uses_clip_scale(previous));
         self.update_fixed_order(id, Some(&previous), None);
         Some(previous)
+    }
+
+    fn uses_clip_scale(draw: PathDraw) -> bool {
+        draw.domain == Domain::FixedOrientation || draw.key.specialization.screen_stroke
     }
 
     fn row_draw_ids(&self, row: usize) -> impl Iterator<Item = DrawId> + '_ {
@@ -473,6 +491,7 @@ impl SpatialPathGpuState {
     ) -> Result<PathPlan, SpatialPathError> {
         let mut staged = Vec::with_capacity(indices.len());
         let mut new_paths = HashMap::new();
+        let mut new_cairo_geometry = HashMap::new();
         let camera_clip_scale = [2.0 / camera.world_size.x, 2.0 / camera.world_size.y];
         if !camera_clip_scale
             .iter()
@@ -497,7 +516,10 @@ impl SpatialPathGpuState {
             }) else {
                 continue;
             };
-            if spatial.material != SemanticSpatialMaterial::Unlit {
+            if !matches!(
+                spatial.material,
+                SemanticSpatialMaterial::Unlit | SemanticSpatialMaterial::CairoPath
+            ) {
                 return Err(SpatialPathError::UnsupportedMaterial);
             }
             if frame.reveal(index) != 1.0 || frame.morph(index) != 0.0 {
@@ -578,6 +600,32 @@ impl SpatialPathGpuState {
                     },
                     None => path_key(geometry.as_ref(), resources, style, index as u64)?,
                 };
+                let cairo = if spatial.material == SemanticSpatialMaterial::CairoPath {
+                    let appearance = spatial
+                        .cairo_path_appearance
+                        .as_deref()
+                        .ok_or(SpatialPathError::UnsupportedMaterial)?;
+                    let geometry_metadata = if let Some(corners) = self
+                        .cairo
+                        .as_deref()
+                        .and_then(|state| state.geometry.get(&keyed))
+                        .or_else(|| new_cairo_geometry.get(&keyed))
+                    {
+                        *corners
+                    } else {
+                        let path = local_path(geometry.as_ref(), resources)?;
+                        let corners = noon_geometry::cairo_path_geometry(&path)
+                            .ok_or(SpatialPathError::UnsupportedGeometry)?;
+                        new_cairo_geometry.insert(keyed, corners);
+                        corners
+                    };
+                    Some(Box::new(cairo::Uniform::lower(
+                        geometry_metadata,
+                        appearance,
+                    )?))
+                } else {
+                    None
+                };
                 if !self.paths.contains_key(&keyed) && !new_paths.contains_key(&keyed) {
                     let path = tessellate(
                         geometry.as_ref(),
@@ -601,7 +649,11 @@ impl SpatialPathGpuState {
                     opacity: object_alpha,
                     fixed_orientation: u32::from(fixed),
                     fixed_anchor: [anchor.x as f32, anchor.y as f32, anchor.z as f32],
-                    padding: 0,
+                    screen_stroke_width: if screen_stroke(style) {
+                        style.stroke_width
+                    } else {
+                        0.0
+                    },
                 };
                 if instance
                     .fill
@@ -620,6 +672,7 @@ impl SpatialPathGpuState {
                         instance,
                         domain: spatial.composition_domain,
                         painter_rank,
+                        cairo,
                     }),
                 ));
             }
@@ -684,6 +737,7 @@ impl SpatialPathGpuState {
         Ok(PathPlan {
             staged,
             new_paths,
+            new_cairo_geometry,
             needed,
             capacity,
             camera_clip_scale,
@@ -716,9 +770,9 @@ impl SpatialPathGpuState {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        camera_buffer: &wgpu::Buffer,
+        camera_layout: &wgpu::BindGroupLayout,
+        camera_group: &wgpu::BindGroup,
         format: wgpu::TextureFormat,
-        sample_count: u32,
         plan: PathPlan,
     ) -> PathUploadStats {
         let mut stats = PathUploadStats::default();
@@ -755,14 +809,53 @@ impl SpatialPathGpuState {
             self.gpu = Some(PathGpuState::new(
                 device,
                 queue,
-                camera_buffer,
+                camera_layout,
+                camera_group,
                 format,
-                sample_count,
+                super::PATH_SAMPLE_COUNT,
             ));
+        }
+        if !plan.new_cairo_geometry.is_empty()
+            || plan
+                .staged
+                .iter()
+                .any(|(_, draw)| draw.as_ref().is_some_and(|draw| draw.cairo.is_some()))
+        {
+            let state = self.cairo.get_or_insert_with(Default::default);
+            state.geometry.extend(plan.new_cairo_geometry);
+            if state.pipelines.is_none() {
+                state.pipelines = Some(cairo::Pipelines::new(
+                    device,
+                    self.gpu.as_ref().expect("spatial path GPU state"),
+                    format,
+                    super::PATH_SAMPLE_COUNT,
+                ));
+            }
         }
         let mut dirty = BTreeSet::new();
         let mut released = HashSet::new();
         for (draw_id, staged) in plan.staged {
+            if let Some(state) = self.cairo.as_deref_mut() {
+                if let Some(value) = staged.as_ref().and_then(|draw| draw.cairo.as_deref()) {
+                    if let Some(draw) = state.draws.get_mut(&draw_id) {
+                        if draw.value != *value {
+                            queue.write_buffer(&draw.buffer, 0, bytemuck::bytes_of(value));
+                            draw.value = *value;
+                            stats.instance_bytes += std::mem::size_of::<cairo::Uniform>();
+                        }
+                    } else {
+                        let draw = state
+                            .pipelines
+                            .as_ref()
+                            .expect("Cairo path pipelines")
+                            .retain(device, queue, *value);
+                        state.draws.insert(draw_id, draw);
+                        stats.instance_bytes += std::mem::size_of::<cairo::Uniform>();
+                    }
+                } else {
+                    state.draws.remove(&draw_id);
+                }
+            }
             let previous = self.draws.get(&draw_id).copied();
             let same_path = previous
                 .as_ref()
@@ -803,6 +896,9 @@ impl SpatialPathGpuState {
         for key in released {
             if self.paths.get(&key).is_some_and(|path| path.users == 0) {
                 self.paths.remove(&key);
+                if let Some(state) = self.cairo.as_deref_mut() {
+                    state.geometry.remove(&key);
+                }
             }
         }
         let gpu = self.gpu.as_mut().expect("spatial path GPU state");
@@ -826,12 +922,7 @@ impl SpatialPathGpuState {
                 stats.instance_bytes += std::mem::size_of::<PathInstance>();
             }
         }
-        if self
-            .draws
-            .values()
-            .any(|draw| draw.domain == Domain::FixedOrientation)
-            && gpu.fixed_camera_scale != plan.camera_clip_scale
-        {
+        if self.clip_scale_users > 0 && gpu.fixed_camera_scale != plan.camera_clip_scale {
             queue.write_buffer(
                 &gpu.fixed_camera,
                 0,
@@ -870,11 +961,34 @@ impl SpatialPathGpuState {
             });
             match domain {
                 Domain::World => {
-                    for draw in self
+                    let mut using_cairo = false;
+                    for (id, draw) in self
                         .draws
-                        .values()
-                        .filter(|draw| draw.domain == Domain::World)
+                        .iter()
+                        .filter(|(_, draw)| draw.domain == Domain::World)
                     {
+                        let cairo_draw =
+                            self.cairo.as_deref().and_then(|state| state.draws.get(id));
+                        if using_cairo != cairo_draw.is_some() {
+                            if cairo_draw.is_some() {
+                                let pipelines = self
+                                    .cairo
+                                    .as_deref()
+                                    .and_then(|state| state.pipelines.as_ref())
+                                    .expect("Cairo path pipelines");
+                                pass.set_pipeline(&pipelines.world[usize::from(sample_count != 1)]);
+                            } else {
+                                pass.set_pipeline(if sample_count == 1 {
+                                    &gpu.world_pipeline
+                                } else {
+                                    &gpu.world_pipeline_msaa
+                                });
+                            }
+                            using_cairo = cairo_draw.is_some();
+                        }
+                        if let Some(appearance) = cairo_draw {
+                            pass.set_bind_group(2, &appearance.binding, &[]);
+                        }
                         draw_calls += encode_path_draw(pass, &self.paths, draw);
                     }
                 }
@@ -890,6 +1004,27 @@ impl SpatialPathGpuState {
             }
         }
         draw_calls
+    }
+}
+
+fn local_path<'a>(
+    geometry: &'a GeometryRef,
+    resources: &'a dyn GeometryResourceLookup,
+) -> Result<Cow<'a, noon_core::VectorPath>, SpatialPathError> {
+    match geometry {
+        GeometryRef::External(id) => {
+            let handle = resources
+                .current_handle(*id)
+                .ok_or(SpatialPathError::MissingPathResource)?;
+            let Some(GeometryResource::VectorPath(path)) = resources.get(handle) else {
+                return Err(SpatialPathError::UnsupportedGeometry);
+            };
+            Ok(Cow::Borrowed(path.as_ref()))
+        }
+        GeometryRef::VectorPath(path) => Ok(Cow::Borrowed(path)),
+        _ => noon_geometry::canonical_outline_path(geometry)
+            .map(Cow::Owned)
+            .ok_or(SpatialPathError::MissingGeometry),
     }
 }
 
@@ -916,7 +1051,6 @@ pub enum SpatialPathError {
     MissingPathResource,
     UnsupportedGeometry,
     UnsupportedImage,
-    UnsupportedScreenSpaceStroke,
     UnsupportedMorph,
     UnsupportedAnimation,
     UnsupportedMaterial,
@@ -937,12 +1071,6 @@ fn path_key(
     identity: u64,
 ) -> Result<PathKey, SpatialPathError> {
     let style = visible_path_style(style);
-    if style.stroke.is_some()
-        && style.stroke_width > 0.0
-        && style.stroke_width_mode != StrokeWidthMode::ScaleWithObject
-    {
-        return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
-    }
     if !style.stroke_width.is_finite() || style.stroke_width < 0.0 {
         return Err(SpatialPathError::InvalidStyle);
     }
@@ -976,24 +1104,19 @@ fn path_key(
     };
     Ok(PathKey {
         source,
-        specialization: Specialization {
-            stroke_width: if style.stroke.is_some() {
-                style.stroke_width.to_bits()
-            } else {
-                0.0_f32.to_bits()
-            },
-            stroke_join: style.stroke_join,
-            stroke_cap: style.stroke_cap,
-            fill: style.fill.is_some(),
-            stroke: style.stroke.is_some() && style.stroke_width > 0.0,
-        },
+        specialization: specialization(style),
     })
 }
 
 fn specialization(style: Style) -> Specialization {
     Specialization {
+        screen_stroke: screen_stroke(style),
         stroke_width: if style.stroke.is_some() {
-            style.stroke_width.to_bits()
+            if screen_stroke(style) {
+                1.0_f32.to_bits()
+            } else {
+                style.stroke_width.to_bits()
+            }
         } else {
             0.0_f32.to_bits()
         },
@@ -1002,6 +1125,12 @@ fn specialization(style: Style) -> Specialization {
         fill: style.fill.is_some(),
         stroke: style.stroke.is_some() && style.stroke_width > 0.0,
     }
+}
+
+fn screen_stroke(style: Style) -> bool {
+    style.stroke.is_some()
+        && style.stroke_width > 0.0
+        && style.stroke_width_mode == StrokeWidthMode::ScreenSpace
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1261,30 +1390,12 @@ pub(super) fn tessellate(
 ) -> Result<TessellatedSpatialPath, SpatialPathError> {
     validate_style(style, object_alpha * style.opacity, domain)?;
     let style = visible_path_style(style);
-    if style.stroke.is_some()
-        && style.stroke_width > 0.0
-        && style.stroke_width_mode != StrokeWidthMode::ScaleWithObject
+    if screen_stroke(style)
+        && matches!(geometry, GeometryRef::Circle { radius } if !radius.is_finite() || *radius <= 0.0)
     {
-        return Err(SpatialPathError::UnsupportedScreenSpaceStroke);
+        return Err(SpatialPathError::UnrepresentableVertex);
     }
-    let source = match geometry {
-        GeometryRef::External(id) => {
-            let handle = resources
-                .current_handle(*id)
-                .ok_or(SpatialPathError::MissingPathResource)?;
-            let Some(GeometryResource::VectorPath(path)) = resources.get(handle) else {
-                return Err(SpatialPathError::UnsupportedGeometry);
-            };
-            (Some(handle), path.as_ref().clone())
-        }
-        GeometryRef::VectorPath(path) => (None, path.clone()),
-        _ => {
-            let path = noon_geometry::canonical_outline_path(geometry)
-                .ok_or(SpatialPathError::MissingGeometry)?;
-            (None, path)
-        }
-    };
-    let (_, path) = source;
+    let path = local_path(geometry, resources)?;
     if path.morph_target().is_some() {
         return Err(SpatialPathError::UnsupportedMorph);
     }
@@ -1292,30 +1403,115 @@ pub(super) fn tessellate(
     let stroke = style.stroke.is_some() && style.stroke_width > 0.0;
     let mesh = noon_geometry::tessellate_styled_with_fill(
         &path,
-        if stroke { style.stroke_width } else { 0.0 },
+        if screen_stroke(style) && matches!(geometry, GeometryRef::Line { .. }) {
+            1.0
+        } else if screen_stroke(style) {
+            0.0
+        } else if stroke {
+            style.stroke_width
+        } else {
+            0.0
+        },
         style.stroke_join,
         style.stroke_cap,
         fill,
     )
     .map_err(|_| SpatialPathError::Tessellation)?;
-    let vertices: Vec<SpatialPathVertex> = mesh
+    let path_stroke_frames = if screen_stroke(style) {
+        match geometry {
+            GeometryRef::Line { .. } => None,
+            GeometryRef::Circle { .. } => Some(
+                noon_geometry::tessellate_screen_stroke(&path, style.stroke_join, style.stroke_cap)
+                    .map_err(|_| SpatialPathError::Tessellation)?,
+            ),
+            _ => Some(
+                noon_geometry::tessellate_projected_screen_stroke(
+                    &path,
+                    style.stroke_join,
+                    style.stroke_cap,
+                )
+                .map_err(|_| SpatialPathError::Tessellation)?,
+            ),
+        }
+    } else {
+        None
+    };
+    let line = if screen_stroke(style) && matches!(geometry, GeometryRef::Line { .. }) {
+        let GeometryRef::Line { start, end } = geometry else {
+            unreachable!("screen stroke was checked above")
+        };
+        let delta = *end - *start;
+        let length = delta.length();
+        if !length.is_finite() || length <= 0.0 {
+            return Err(SpatialPathError::UnrepresentableVertex);
+        }
+        Some((*start, delta / length, length))
+    } else {
+        None
+    };
+    let mut vertices: Vec<SpatialPathVertex> = mesh
         .vertices
         .into_iter()
-        .map(|vertex| SpatialPathVertex {
-            position: [vertex.position.x, vertex.position.y],
-            surface: crate::pack_path_surface(vertex.surface, 1.0),
+        .map(|vertex| {
+            let mut output = SpatialPathVertex {
+                position: [vertex.position.x, vertex.position.y],
+                surface: crate::pack_path_surface(vertex.surface, 1.0),
+                tangent: [0.0; 2],
+                extrusion: [0.0; 2],
+                stroke_metadata: [0.0; 3],
+            };
+            if let Some((start, tangent, length)) =
+                line.filter(|_| vertex.surface == noon_geometry::PathSurface::Stroke)
+            {
+                let perpendicular = Vec2::new(-tangent.y, tangent.x);
+                let delta = vertex.position - start;
+                let along = (delta.x * tangent.x + delta.y * tangent.y).clamp(0.0, length);
+                let center = start + tangent * along;
+                let offset = vertex.position - center;
+                output.position = [center.x, center.y];
+                output.tangent = [tangent.x, tangent.y];
+                output.extrusion = [
+                    offset.x * tangent.x + offset.y * tangent.y,
+                    offset.x * perpendicular.x + offset.y * perpendicular.y,
+                ];
+            }
+            output
         })
         .collect();
-    if vertices
-        .iter()
-        .any(|vertex| vertex.position.iter().any(|value| !value.is_finite()))
-    {
+    let mut indices = mesh.indices;
+    if let Some(frames) = path_stroke_frames {
+        let offset = u32::try_from(vertices.len()).map_err(|_| SpatialPathError::BufferLimit)?;
+        vertices.extend(frames.vertices.into_iter().map(|vertex| SpatialPathVertex {
+            position: [vertex.position.x, vertex.position.y],
+            surface: crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0),
+            tangent: [vertex.tangent.x, vertex.tangent.y],
+            extrusion: [vertex.extrusion.x, vertex.extrusion.y],
+            stroke_metadata: vertex.metadata,
+        }));
+        indices.extend(
+            frames
+                .indices
+                .into_iter()
+                .map(|index| {
+                    index
+                        .checked_add(offset)
+                        .ok_or(SpatialPathError::BufferLimit)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    if vertices.iter().any(|vertex| {
+        vertex
+            .position
+            .iter()
+            .chain(vertex.tangent.iter())
+            .chain(vertex.extrusion.iter())
+            .chain(vertex.stroke_metadata.iter())
+            .any(|value| !value.is_finite())
+    }) {
         return Err(SpatialPathError::UnrepresentableVertex);
     }
-    Ok(TessellatedSpatialPath {
-        vertices,
-        indices: mesh.indices,
-    })
+    Ok(TessellatedSpatialPath { vertices, indices })
 }
 
 #[cfg(test)]
@@ -1361,10 +1557,13 @@ mod tests {
             stroke: Some(noon_core::Color::BLACK),
             ..style
         };
-        assert_eq!(
-            tessellate(&geometry, &resources, screen_stroke, 1.0, Domain::World).unwrap_err(),
-            SpatialPathError::UnsupportedScreenSpaceStroke
-        );
+        let screen_mesh =
+            tessellate(&geometry, &resources, screen_stroke, 1.0, Domain::World).unwrap();
+        assert!(screen_mesh.indices.len() > mesh.indices.len());
+        assert!(screen_mesh.vertices.iter().any(|vertex| {
+            vertex.surface == crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0)
+                && vertex.tangent != [0.0; 2]
+        }));
         // A filled Dot has no stroke to expand. Its unused constructor width
         // mode must not reject an otherwise supported World path.
         let filled = Style {
@@ -1382,6 +1581,241 @@ mod tests {
         assert_eq!(
             tessellate(&geometry, &resources, style, 0.5, Domain::World).unwrap_err(),
             SpatialPathError::NonOpaqueStyle
+        );
+    }
+
+    #[test]
+    fn straight_screen_strokes_retain_centerline_caps_and_distinct_resource_keys() {
+        let resources = GeometryResourceArena::default();
+        for cap in [
+            noon_core::StrokeCap::Butt,
+            noon_core::StrokeCap::Round,
+            noon_core::StrokeCap::Square,
+        ] {
+            let style = Style {
+                fill: None,
+                stroke: Some(Color::WHITE),
+                stroke_width: 0.2,
+                stroke_width_mode: StrokeWidthMode::ScreenSpace,
+                stroke_cap: cap,
+                ..Style::default()
+            };
+            for (start, end) in [
+                (Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
+                (Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)),
+                (Vec2::new(0.0, -1.0), Vec2::new(0.0, 1.0)),
+            ] {
+                let geometry = GeometryRef::line(start, end);
+                let mesh = tessellate(&geometry, &resources, style, 1.0, Domain::World).unwrap();
+                assert!(!mesh.indices.is_empty());
+                let tangent = (end - start).normalized().unwrap();
+                let normal = Vec2::new(-tangent.y, tangent.x);
+                for vertex in &mesh.vertices {
+                    assert_eq!(vertex.tangent, [tangent.x, tangent.y]);
+                    let center = Vec2::new(vertex.position[0], vertex.position[1]);
+                    let offset = tangent * vertex.extrusion[0] + normal * vertex.extrusion[1];
+                    assert!(vertex.extrusion[1].abs() <= 0.50001);
+                    assert!(vertex.extrusion[0].abs() <= 0.50001);
+                    if cap == noon_core::StrokeCap::Butt {
+                        assert!(vertex.extrusion[0].abs() < 1e-6);
+                    }
+                    assert!((center + offset).x.is_finite());
+                }
+                let screen_key = path_key(&geometry, &resources, style, 1).unwrap();
+                let world_key = path_key(
+                    &geometry,
+                    &resources,
+                    Style {
+                        stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+                        ..style
+                    },
+                    1,
+                )
+                .unwrap();
+                assert_ne!(
+                    screen_key, world_key,
+                    "different expansion policies cannot reuse the same vertices"
+                );
+                assert_eq!(
+                    screen_key,
+                    path_key(
+                        &geometry,
+                        &resources,
+                        Style {
+                            stroke_width: 0.6,
+                            ..style
+                        },
+                        1
+                    )
+                    .unwrap(),
+                    "screen width is compact instance state, not topology"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn circle_screen_strokes_keep_fill_roles_and_projective_extrusion_frames() {
+        let resources = GeometryResourceArena::default();
+        let geometry = GeometryRef::circle(1.25);
+        let style = Style {
+            fill: Some(Color::WHITE),
+            stroke: Some(Color::BLACK),
+            stroke_width: 0.08,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let mesh = tessellate(&geometry, &resources, style, 1.0, Domain::World).unwrap();
+        assert!(!mesh.indices.is_empty());
+        let fill_surface = crate::pack_path_surface(noon_geometry::PathSurface::Fill, 1.0);
+        let stroke_surface = crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0);
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.surface == fill_surface));
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.surface == stroke_surface));
+        let stroke_vertices: Vec<_> = mesh
+            .vertices
+            .iter()
+            .filter(|vertex| vertex.surface == stroke_surface)
+            .collect();
+        assert!(
+            stroke_vertices.len() >= 4,
+            "screen-space Circle stroke must retain its extrusion ring"
+        );
+        for vertex in stroke_vertices {
+            let tangent = Vec2::new(vertex.tangent[0], vertex.tangent[1]);
+            assert!((tangent.length() - 1.0).abs() < 1e-4);
+            assert!(vertex.position.iter().all(|value| value.is_finite()));
+            assert!(vertex.extrusion.iter().all(|value| value.is_finite()));
+            assert!(vertex.extrusion[1].abs() <= 0.5001);
+        }
+        assert_eq!(
+            path_key(&geometry, &resources, style, 9).unwrap(),
+            path_key(
+                &geometry,
+                &resources,
+                Style {
+                    stroke_width: 0.3,
+                    ..style
+                },
+                9
+            )
+            .unwrap(),
+            "screen width is instance state, not tessellation topology"
+        );
+        assert_eq!(
+            tessellate(
+                &GeometryRef::circle(0.0),
+                &resources,
+                style,
+                1.0,
+                Domain::World
+            )
+            .unwrap_err(),
+            SpatialPathError::UnrepresentableVertex
+        );
+    }
+
+    #[test]
+    fn projected_screen_paths_retain_curve_and_corner_join_metadata() {
+        let mut resources = GeometryResourceArena::default();
+        let curved_open = noon_core::VectorPath::new()
+            .move_to(Vec2::new(-1.0, -0.5))
+            .cubic_to(
+                Vec2::new(-0.4, 1.0),
+                Vec2::new(0.3, -1.0),
+                Vec2::new(1.0, -0.5),
+            );
+        let handle = resources.insert_path(curved_open.clone());
+        let style = Style {
+            fill: None,
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.2,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            stroke_join: noon_core::StrokeJoin::Bevel,
+            stroke_cap: noon_core::StrokeCap::Square,
+            ..Style::default()
+        };
+        let external = GeometryRef::External(handle.id);
+        let inline = GeometryRef::VectorPath(curved_open);
+        for geometry in [&inline, &external] {
+            let mesh = tessellate(geometry, &resources, style, 1.0, Domain::World).unwrap();
+            let stroke = crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0);
+            let vertices: Vec<_> = mesh
+                .vertices
+                .iter()
+                .filter(|vertex| vertex.surface == stroke)
+                .collect();
+            assert!(!vertices.is_empty());
+            assert!(vertices.iter().all(|vertex| {
+                let tangent = Vec2::new(vertex.tangent[0], vertex.tangent[1]);
+                (tangent.length() - 1.0).abs() < 1e-4
+                    && vertex.extrusion.iter().all(|value| value.is_finite())
+            }));
+            assert!(
+                vertices
+                    .windows(2)
+                    .any(|pair| pair[0].tangent != pair[1].tangent),
+                "curve/join retains changing local tangent frames"
+            );
+            assert!(path_key(geometry, &resources, style, 12).is_ok());
+        }
+
+        let closed = GeometryRef::rectangle(2.0, 1.0);
+        let closed_mesh = tessellate(&closed, &resources, style, 1.0, Domain::World).unwrap();
+        assert!(closed_mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.stroke_metadata[0] == 1.0));
+        let corner = GeometryRef::VectorPath(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::new(-1.0, 0.0))
+                .line_to(Vec2::ZERO)
+                .line_to(Vec2::new(0.0, 1.0)),
+        );
+        let corner_mesh = tessellate(&corner, &resources, style, 1.0, Domain::World).unwrap();
+        assert!(corner_mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.stroke_metadata[0] == 1.0));
+        let miter_mesh = tessellate(
+            &corner,
+            &resources,
+            Style {
+                stroke_join: noon_core::StrokeJoin::Miter,
+                ..style
+            },
+            1.0,
+            Domain::World,
+        )
+        .unwrap();
+        assert!(miter_mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.stroke_metadata[0] == 3.0));
+        let rounded = tessellate(
+            &inline,
+            &resources,
+            Style {
+                stroke_join: noon_core::StrokeJoin::Round,
+                stroke_cap: noon_core::StrokeCap::Round,
+                ..style
+            },
+            1.0,
+            Domain::World,
+        )
+        .unwrap();
+        assert_ne!(
+            rounded.indices.len(),
+            tessellate(&inline, &resources, style, 1.0, Domain::World,)
+                .unwrap()
+                .indices
+                .len(),
+            "join and cap choices specialize retained topology"
         );
     }
 
@@ -1448,6 +1882,7 @@ mod tests {
                     instance: PathInstance::zeroed(),
                     domain: Domain::World,
                     painter_rank: 0,
+                    cairo: None,
                 }),
             )
         };
@@ -1460,6 +1895,7 @@ mod tests {
                 staged(DrawId { row: 12, item: 0 }, None),
             ],
             new_paths: HashMap::new(),
+            new_cairo_geometry: HashMap::new(),
             needed: 0,
             capacity: 1,
             camera_clip_scale: [1.0, 1.0],
@@ -1564,6 +2000,7 @@ mod tests {
                 source: SourceKey::Inline(index as u64),
                 specialization: Specialization {
                     stroke_width: 0,
+                    screen_stroke: false,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
                     fill: true,
@@ -1595,6 +2032,7 @@ mod tests {
                 source: SourceKey::Inline(row as u64),
                 specialization: Specialization {
                     stroke_width: 0,
+                    screen_stroke: false,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
                     fill: true,

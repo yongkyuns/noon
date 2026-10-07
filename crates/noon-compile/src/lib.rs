@@ -12,9 +12,11 @@ pub use compaction::{CompiledSceneCompactionError, CompiledSceneCompactionStats}
 mod replay_revision;
 mod spatial_composition;
 pub use replay_revision::CompiledReplayRevision;
-pub use spatial_composition::CompiledLocalBounds2D64;
+pub use spatial_composition::{
+    CompiledCairoPathAppearance, CompiledLocalBounds2D64, CompiledWorldBounds3D64,
+};
 mod semantic_lowering;
-use spatial_composition::CompiledFixedOrientationGroup;
+use spatial_composition::{CairoPathPointResourceCache, CompiledSpatialAnchorGroup};
 mod transaction_preflight;
 mod transform;
 
@@ -139,11 +141,15 @@ pub struct CompiledSpatialState {
     pub point_light: bool,
     pub composition_domain: noon_core::SemanticSpatialCompositionDomain,
     pub draw_kind: CompiledSpatialDrawKind,
-    /// Authoritative semantic family whose effective center is shared by this
-    /// FixedOrientation row. Compiler/runtime only; worker payloads carry center.
-    pub fixed_orientation_anchor_family: Option<noon_core::SemanticNodeId>,
+    /// Authoritative semantic family used by FixedOrientation composition or
+    /// CairoPath gradient bounds. Compiler/runtime only; worker payloads carry
+    /// the resolved center/bounds values.
+    pub spatial_anchor_family: Option<noon_core::SemanticNodeId>,
     /// Effective world-bounds center shared by every row in the anchor family.
     pub fixed_orientation_center: Option<SemanticVec3>,
+    /// Cold-prepared Cairo path appearance and its current world family bounds.
+    /// Ordinary spatial rows pay only for this optional pointer.
+    pub cairo_path_appearance: Option<Box<CompiledCairoPathAppearance>>,
 }
 
 /// Source geometry class used to route spatial objects without inferring role
@@ -892,11 +898,13 @@ pub struct CompiledScene {
     /// Sparse effective numeric-content drivers. Ordinary scenes allocate none.
     numeric_text_drivers: Vec<CompiledNumericTextDriver>,
     /// Sparse shared family-center dependencies. Ordinary scenes allocate none.
-    fixed_orientation_groups: Vec<CompiledFixedOrientationGroup>,
-    fixed_orientation_group_indices: HashMap<noon_core::SemanticNodeId, u32>,
-    fixed_orientation_row_groups: HashMap<u32, u32>,
-    fixed_orientation_bounds_row_groups: HashMap<u32, Vec<u32>>,
-    fixed_orientation_local_bounds: HashMap<u32, Option<CompiledLocalBounds2D64>>,
+    spatial_anchor_groups: Vec<CompiledSpatialAnchorGroup>,
+    spatial_anchor_group_indices: HashMap<noon_core::SemanticNodeId, u32>,
+    spatial_anchor_row_groups: HashMap<u32, u32>,
+    spatial_anchor_bounds_row_groups: HashMap<u32, Vec<u32>>,
+    spatial_anchor_local_bounds: HashMap<u32, Option<CompiledLocalBounds2D64>>,
+    cairo_path_control_points: HashMap<u32, Arc<Vec<SemanticVec3>>>,
+    cairo_path_points_by_resource: CairoPathPointResourceCache,
     resources: CompiledResources,
 }
 
@@ -1386,14 +1394,16 @@ impl CompiledScene {
             graph_dirty_dependencies: HashMap::new(),
             graph_authored_content: HashMap::new(),
             numeric_text_drivers: Vec::new(),
-            fixed_orientation_groups: Vec::new(),
-            fixed_orientation_group_indices: HashMap::new(),
-            fixed_orientation_row_groups: HashMap::new(),
-            fixed_orientation_bounds_row_groups: HashMap::new(),
-            fixed_orientation_local_bounds: HashMap::new(),
+            spatial_anchor_groups: Vec::new(),
+            spatial_anchor_group_indices: HashMap::new(),
+            spatial_anchor_row_groups: HashMap::new(),
+            spatial_anchor_bounds_row_groups: HashMap::new(),
+            spatial_anchor_local_bounds: HashMap::new(),
+            cairo_path_control_points: HashMap::new(),
+            cairo_path_points_by_resource: CairoPathPointResourceCache::default(),
             resources: CompiledResources::default(),
         };
-        compiled.rebuild_fixed_orientation_groups();
+        compiled.rebuild_spatial_anchor_groups();
         Ok(compiled)
     }
 
@@ -1765,7 +1775,7 @@ impl CompiledScene {
                 owner,
                 dependencies,
             } => self.graph_dependencies_patch_changes(*owner, dependencies),
-            ExecutionPatch::SetFixedOrientationGroupBoundsMembers {
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers {
                 anchor_family,
                 members,
             } => {
@@ -1774,8 +1784,8 @@ impl CompiledScene {
                     .filter_map(|member| self.object_index(*member))
                     .collect::<Vec<_>>();
                 next.sort_unstable();
-                self.fixed_orientation_group_for_anchor(*anchor_family)
-                    .is_some_and(|group| self.fixed_orientation_group_bounds_members(group) != next)
+                self.spatial_anchor_group_for_anchor(*anchor_family)
+                    .is_some_and(|group| self.spatial_anchor_group_bounds_members(group) != next)
             }
             ExecutionPatch::CreateObject(_)
             | ExecutionPatch::RemoveObject(_)
@@ -1809,7 +1819,8 @@ impl CompiledScene {
                 if let Some(index) = self.retired_object_indices.remove(&object.id) {
                     self.objects[index as usize] = object;
                     let spatial = self.objects[index as usize].spatial.as_deref().cloned();
-                    self.update_fixed_orientation_group(index, None, spatial.as_ref());
+                    self.update_spatial_anchor_group(index, None, spatial.as_ref());
+                    self.refresh_cairo_path_control_points(index);
                     self.object_indices
                         .insert(self.objects[index as usize].id, index);
                     self.live_object_count += 1;
@@ -1826,7 +1837,8 @@ impl CompiledScene {
                 self.object_indices.insert(object.id, index);
                 self.objects.push(object);
                 let spatial = self.objects[index as usize].spatial.as_deref().cloned();
-                self.update_fixed_orientation_group(index, None, spatial.as_ref());
+                self.update_spatial_anchor_group(index, None, spatial.as_ref());
+                self.refresh_cairo_path_control_points(index);
                 self.live_object_count += 1;
                 self.family_order.push(index);
                 self.family_ranks
@@ -1842,7 +1854,7 @@ impl CompiledScene {
                     .object_index(*id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
                 let previous = self.objects[index as usize].spatial.as_deref().cloned();
-                self.update_fixed_orientation_group(index, previous.as_ref(), None);
+                self.update_spatial_anchor_group(index, previous.as_ref(), None);
                 self.graph_authored_content.remove(&index);
                 let channels: Vec<_> = self.channels_for_object_index(index).collect();
                 for channel in channels {
@@ -1859,6 +1871,7 @@ impl CompiledScene {
                 debug_assert!(object.live);
                 object.live = false;
                 object.dynamic = DynamicProperties::default();
+                self.refresh_cairo_path_control_points(index);
                 self.object_indices.remove(id);
                 self.retired_object_indices.insert(*id, index);
                 self.live_object_count -= 1;
@@ -1957,16 +1970,15 @@ impl CompiledScene {
                     self.objects[index as usize].content = content.clone();
                 }
                 self.objects[index as usize].text_bounds = *text_bounds;
+                self.refresh_cairo_path_control_points(index);
                 let spatial = self.objects[index as usize].spatial.as_deref().cloned();
                 if spatial.as_ref().is_some_and(|spatial| {
                     spatial.composition_domain
                         == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
-                }) || self
-                    .fixed_orientation_bounds_row_groups
-                    .contains_key(&index)
+                }) || self.spatial_anchor_bounds_row_groups.contains_key(&index)
                 {
-                    let bounds = self.fixed_orientation_local_bounds_for(index as usize);
-                    self.fixed_orientation_local_bounds.insert(index, bounds);
+                    let bounds = self.spatial_anchor_local_bounds_for(index as usize);
+                    self.spatial_anchor_local_bounds.insert(index, bounds);
                 }
             }
             ExecutionPatch::SetTransform { object, transform } => {
@@ -1996,9 +2008,10 @@ impl CompiledScene {
                     field: ObjectStateField::Transform,
                 })?;
                 let previous = self.objects[index as usize].spatial.as_deref().cloned();
-                self.update_fixed_orientation_group(index, previous.as_ref(), spatial.as_ref());
+                self.update_spatial_anchor_group(index, previous.as_ref(), spatial.as_ref());
                 self.objects[index as usize].base_transform = base_transform;
                 self.objects[index as usize].spatial = spatial.map(Box::new);
+                self.refresh_cairo_path_control_points(index);
             }
             ExecutionPatch::SetSpatialState {
                 object,
@@ -2059,7 +2072,7 @@ impl CompiledScene {
                     });
                 }
                 let previous = self.objects[index as usize].spatial.as_deref().cloned();
-                self.update_fixed_orientation_group(index, previous.as_ref(), spatial.as_ref());
+                self.update_spatial_anchor_group(index, previous.as_ref(), spatial.as_ref());
                 let compiled = &mut self.objects[index as usize];
                 compiled.base_transform = *base_transform;
                 match spatial {
@@ -2072,6 +2085,7 @@ impl CompiledScene {
                     }
                     None => compiled.spatial = None,
                 }
+                self.refresh_cairo_path_control_points(index);
             }
             ExecutionPatch::SetStyle { object, style } => {
                 let index = self
@@ -2084,7 +2098,7 @@ impl CompiledScene {
                 owner,
                 dependencies,
             } => self.apply_graph_dependencies(*owner, dependencies)?,
-            ExecutionPatch::SetFixedOrientationGroupBoundsMembers {
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers {
                 anchor_family,
                 members,
             } => {
@@ -2093,10 +2107,10 @@ impl CompiledScene {
                     .filter_map(|member| self.object_index(*member))
                     .collect::<Vec<_>>();
                 if self
-                    .fixed_orientation_group_for_anchor(*anchor_family)
+                    .spatial_anchor_group_for_anchor(*anchor_family)
                     .is_some()
                 {
-                    self.set_fixed_orientation_group_bounds_members(*anchor_family, &indices);
+                    self.set_spatial_anchor_group_bounds_members(*anchor_family, &indices);
                 }
             }
             ExecutionPatch::AddTrack(track) => {
@@ -2576,10 +2590,23 @@ pub(crate) fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> 
             || spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::World)
         && (spatial.material != noon_core::SemanticSpatialMaterial::PointLit
             || spatial.draw_kind == CompiledSpatialDrawKind::Mesh)
+        && (spatial.material != noon_core::SemanticSpatialMaterial::CairoSurface
+            || spatial.draw_kind == CompiledSpatialDrawKind::Mesh)
+        && (spatial.material != noon_core::SemanticSpatialMaterial::CairoPath
+            || (spatial.draw_kind == CompiledSpatialDrawKind::Planar
+                && spatial.composition_domain
+                    == noon_core::SemanticSpatialCompositionDomain::World
+                && spatial
+                    .cairo_path_appearance
+                    .as_deref()
+                    .is_some_and(CompiledCairoPathAppearance::is_valid)))
+        && ((spatial.material == noon_core::SemanticSpatialMaterial::CairoPath)
+            == spatial.cairo_path_appearance.is_some())
         && ((spatial.composition_domain
             == noon_core::SemanticSpatialCompositionDomain::FixedOrientation)
-            || (spatial.fixed_orientation_anchor_family.is_none()
-                && spatial.fixed_orientation_center.is_none()))
+            || (spatial.fixed_orientation_center.is_none()
+                && (spatial.material == noon_core::SemanticSpatialMaterial::CairoPath
+                    || spatial.spatial_anchor_family.is_none())))
         && spatial.fixed_orientation_center.is_none_or(|center| {
             center.x.is_finite() && center.y.is_finite() && center.z.is_finite()
         })
@@ -2803,8 +2830,9 @@ fn lower_semantic_transform_patch(
                 point_light: spatial.point_light,
                 composition_domain: spatial.composition_domain,
                 draw_kind: spatial.draw_kind,
-                fixed_orientation_anchor_family: spatial.fixed_orientation_anchor_family,
+                spatial_anchor_family: spatial.spatial_anchor_family,
                 fixed_orientation_center: spatial.fixed_orientation_center,
+                cairo_path_appearance: spatial.cairo_path_appearance.clone(),
             }),
         ));
     }
@@ -4250,8 +4278,9 @@ mod tests {
                 point_light: false,
                 composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
                 draw_kind: CompiledSpatialDrawKind::Planar,
-                fixed_orientation_anchor_family: None,
+                spatial_anchor_family: None,
                 fixed_orientation_center: None,
+                cairo_path_appearance: None,
             })),
             ..CompiledObject::new(
                 id,
@@ -4309,8 +4338,9 @@ mod tests {
                 point_light: false,
                 composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
                 draw_kind: CompiledSpatialDrawKind::Planar,
-                fixed_orientation_anchor_family: None,
+                spatial_anchor_family: None,
                 fixed_orientation_center: None,
+                cairo_path_appearance: None,
             })),
             ..camera
         };
@@ -4320,6 +4350,44 @@ mod tests {
                 noon_core::TimelineError::InvalidWorldTransformValues
             ))
         ));
+    }
+
+    #[test]
+    fn cairo_path_material_and_appearance_are_admitted_together() {
+        let state = CompiledSpatialState {
+            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            camera_projection: None,
+            camera_profile: None,
+            camera_motions: None,
+            material: noon_core::SemanticSpatialMaterial::CairoPath,
+            point_light: false,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            draw_kind: CompiledSpatialDrawKind::Planar,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            cairo_path_appearance: Some(Box::new(CompiledCairoPathAppearance {
+                sheen_factor: 0.2,
+                gradient_direction: None,
+                world_family_bounds: None,
+            })),
+        };
+        assert!(valid_compiled_spatial(Some(&state)));
+        let mut orphaned = state.clone();
+        orphaned.material = noon_core::SemanticSpatialMaterial::Unlit;
+        assert!(!valid_compiled_spatial(Some(&orphaned)));
+        let mut missing = state.clone();
+        missing.cairo_path_appearance = None;
+        assert!(!valid_compiled_spatial(Some(&missing)));
+        let mut invalid = state.clone();
+        invalid
+            .cairo_path_appearance
+            .as_deref_mut()
+            .unwrap()
+            .sheen_factor = f64::NAN;
+        assert!(!valid_compiled_spatial(Some(&invalid)));
+        let mut mesh = state;
+        mesh.draw_kind = CompiledSpatialDrawKind::Mesh;
+        assert!(!valid_compiled_spatial(Some(&mesh)));
     }
 
     #[test]
@@ -4333,8 +4401,9 @@ mod tests {
             point_light: false,
             composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
             draw_kind: CompiledSpatialDrawKind::Mesh,
-            fixed_orientation_anchor_family: None,
+            spatial_anchor_family: None,
             fixed_orientation_center: None,
+            cairo_path_appearance: None,
         };
         let light = CompiledSpatialState {
             point_light: true,

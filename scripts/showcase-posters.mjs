@@ -48,7 +48,8 @@ export function posterEvidence(manifest, report) {
       if (interactive) assertInteractionEvidence(entry, result.interaction, result.posterImage);
       else assert.equal(result.posterImage.pngSha256, sample.pngSha256);
       return {
-        id: entry.id, sourceSha256: result.sourceSha256, thumbnailTime: entry.thumbnail_time,
+        id: entry.id, captureBuildId: report.servedBuildIdentity.buildId,
+        sourceSha256: result.sourceSha256, thumbnailTime: entry.thumbnail_time,
         image: result.posterImage,
         sample: { requestedTime, publishedTime, authoredDuration, sourceCompleted, sourceState, completionProbe },
         ...(interactive ? { interaction: result.interaction } : {}),
@@ -57,9 +58,12 @@ export function posterEvidence(manifest, report) {
   };
 }
 
-export function assertRetainedPoster(entry, record, source, png) {
+export function assertRetainedPoster(entry, record, source, png, captureIdentity) {
   const hash = bytes => createHash("sha256").update(bytes).digest("hex");
   assert.equal(record.id, entry.id);
+  assert.match(record.captureBuildId, /^[a-f0-9]{64}$/);
+  assert.equal(record.captureBuildId, captureIdentity?.buildId,
+    `${entry.id}: poster belongs to a different runtime build`);
   assert.equal(hash(source), record.sourceSha256, `${entry.id}: source changed; recapture its poster`);
   assert.equal(record.thumbnailTime, entry.thumbnail_time, `${entry.id}: representative time changed`);
   assert.equal(hash(png), record.image.pngSha256, `${entry.id}: retained image does not match its capture`);

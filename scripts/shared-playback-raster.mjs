@@ -5,7 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import pngjs from "pngjs";
-import { browserArgs, rasterFixtureSource, compareEffectiveFrames, MAX_EFFECTIVE_ABSOLUTE_ERROR } from "./manim-raster-support.mjs";
+import {
+  browserArgs, rasterFixtureSource, compareEffectiveFrames, MAX_EFFECTIVE_ABSOLUTE_ERROR,
+  resolveSharedPlaybackSamples,
+} from "./manim-raster-support.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -52,11 +55,11 @@ async function qualifyFixture(page, fixture, backend) {
   assert.ok(dense && !dense.error && dense.samples.length > 0, "missing successful dense capture");
   const manim = reference.fixtures.find((f) => f.id === fixture.id);
   assert.equal(manim?.frame_count, manim?.frames.length, "invalid reference frame map");
-  const times = dense.samples.map((sample) => {
-    assert.equal(sample.time, manim.frames[sample.frameIndex]?.time, "dense sample is not a pinned frame");
-    return sample.time;
+  const samples = resolveSharedPlaybackSamples({
+    fixture, denseSamples: dense.samples, semanticFixture: manim,
+    pngFrameCount: denseFixture.manim.frameCount, sampleFractions: manifest.sample_fractions,
   });
-  times.push(fixture.expected_duration);
+  const times = [...samples.map(sample => sample.time), fixture.expected_duration];
   const source = await readFile(path.join(repoRoot, fixture.noon_source ?? fixture.source ?? manifest.reference.source), "utf8");
   const selected = rasterFixtureSource(source, fixture.scene, fixture);
   await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
@@ -70,9 +73,9 @@ async function qualifyFixture(page, fixture, backend) {
   assert.equal(loaded.rendererBackend, backend === "webgpu" ? "WebGPU" : "WebGL2");
   const output = path.join(artifactRoot, "shared-playback", backend, fixture.id);
   await mkdir(output, { recursive: true });
-  const samples = [];
-  for (const [index, sample] of dense.samples.entries()) {
-    const label = `frame-${String(sample.frameIndex).padStart(4, "0")}`;
+  const captures = [];
+  for (const [index, sample] of samples.entries()) {
+    const label = sample.label;
     const metrics = await page.evaluate(({ index, times }) => window.noonHostRaster.renderThrough(index, times),
       { index, times });
     assert.equal(metrics.presented, true);
@@ -81,17 +84,21 @@ async function qualifyFixture(page, fixture, backend) {
     await page.locator("#scene").screenshot({ path: sparsePath });
     const sparse = await page.evaluate(() => window.noonHostRaster.debugFrame());
     await writeFile(path.join(output, `${label}.json`), `${JSON.stringify(sparse, null, 2)}\n`);
-    const maximumAbsoluteError = compareEffectiveFrames(effectiveFrame(sparse), effectiveFrame(sample.debugFrame));
+    const maximumAbsoluteError = compareEffectiveFrames(
+      effectiveFrame(sparse), effectiveFrame(dense.samples[index].debugFrame),
+    );
     const expected = PNG.sync.read(await readFile(path.join(artifactRoot, backend, fixture.id, `${label}.png`)));
     const actual = PNG.sync.read(await readFile(sparsePath));
     assert.equal(actual.width, expected.width);
     assert.equal(actual.height, expected.height);
     assert.ok(actual.data.equals(expected.data), `${fixture.id}/${label}: pixels depend on sample cadence`);
-    samples.push({ frameIndex: sample.frameIndex, time: sample.time, effectiveStateEqual: maximumAbsoluteError === 0, maximumAbsoluteError, rasterPixelsEqual: true });
+    captures.push({ frameIndex: sample.frameIndex, referenceKind: sample.referenceKind,
+      time: sample.time, materializedTime: sample.materializedTime,
+      effectiveStateEqual: maximumAbsoluteError === 0, maximumAbsoluteError, rasterPixelsEqual: true });
   }
   const completed = await page.evaluate((times) => window.noonHostRaster.renderThrough(times.length - 1, times), times);
   assert.equal(completed.authoredDuration, fixture.expected_duration);
-  return { id: fixture.id, scene: fixture.scene, samples };
+  return { id: fixture.id, scene: fixture.scene, samples: captures };
 }
 
 const results = [];

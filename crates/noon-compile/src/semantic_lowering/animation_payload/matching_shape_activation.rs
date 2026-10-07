@@ -469,6 +469,7 @@ mod tests {
                 to: 1.0,
                 geometry: GeometryRef::path(source_path.with_morph_target(target_path)),
                 render_transform: None,
+                source_transform: Transform2D::IDENTITY,
             },
             timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),

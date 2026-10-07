@@ -367,16 +367,18 @@ fn materialize_semantic_projection(
         graph_dirty_dependencies,
         graph_authored_content,
         numeric_text_drivers,
-        fixed_orientation_groups: Vec::new(),
-        fixed_orientation_group_indices: HashMap::new(),
-        fixed_orientation_row_groups: HashMap::new(),
-        fixed_orientation_bounds_row_groups: HashMap::new(),
-        fixed_orientation_local_bounds: HashMap::new(),
+        spatial_anchor_groups: Vec::new(),
+        spatial_anchor_group_indices: HashMap::new(),
+        spatial_anchor_row_groups: HashMap::new(),
+        spatial_anchor_bounds_row_groups: HashMap::new(),
+        spatial_anchor_local_bounds: HashMap::new(),
+        cairo_path_control_points: HashMap::new(),
+        cairo_path_points_by_resource: Default::default(),
         resources,
     };
-    compiled.rebuild_fixed_orientation_groups();
+    compiled.rebuild_spatial_anchor_groups();
     if let Some(store) = store {
-        let anchors = compiled.fixed_orientation_anchor_families();
+        let anchors = compiled.spatial_anchor_families();
         for anchor in anchors {
             let members = store
                 .ordered_leaf_nodes(anchor)
@@ -387,7 +389,7 @@ fn materialize_semantic_projection(
                     compiled.object_index(execution_id)
                 })
                 .collect::<Vec<_>>();
-            compiled.set_fixed_orientation_group_bounds_members(anchor, &members);
+            compiled.set_spatial_anchor_group_bounds_members(anchor, &members);
         }
     }
     Ok(compiled)

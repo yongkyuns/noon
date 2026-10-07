@@ -1,8 +1,9 @@
 """Bounded Manim-shaped constructors over Noon retained indexed meshes.
 
-Surface uses Rust-owned cell families, checkerboard roles, strokes, and point-lit
-materials. Other wrappers expose bounded mesh profiles and reject unsupported
-Cairo decorations, partial solids, and arbitrary axial orientations.
+Surface uses Rust-owned cell families, checkerboard roles, strokes, and distinct
+point-lit/Cairo materials. Cube and Prism use six-face Rust semantic families;
+their default Cairo appearance is retained per face. Other wrappers expose
+bounded mesh profiles and reject unsupported decorations and orientations.
 """
 from __future__ import annotations
 
@@ -83,169 +84,65 @@ def _take_mesh(self, mesh):
         self._canonical_live_target_context = context
 
 
-class Sphere(_Mesh3D):
-    """Full opaque sphere mesh profile.
+def _initialize_translucent_prism_family(
+    self, dimensions, fill_color, fill_opacity, stroke_width, shade_in_3d
+):
+    from _noon_spatial import _create_mesh_family, _prism_face_family_options
 
-    The pinned Surface-derived defaults (checkerboard colors, stroke, and 3D
-    shading) remain the signature defaults and raise until explicitly disabled.
-    Partial ``u_range``/``v_range`` are unsupported.
-    """
-
-    def __init__(self, center=(0, 0, 0), radius=1, resolution=(24, 12),
-                 u_range=(0, 2 * math.pi), v_range=(0, math.pi),
-                 fill_color=_base.BLUE_D, fill_opacity=1,
-                 checkerboard_colors=_DEFAULT_CHECKERBOARD, stroke_width=0.5,
-                 shade_in_3d=True, **kwargs):
-        _reject(kwargs, ())
-        if tuple(u_range) != (0, 2 * math.pi) or tuple(v_range) != (0, math.pi):
-            raise NotImplementedError("partial Sphere ranges are not supported by the solid mesh factory")
-        _require_opaque(fill_opacity)
-        _require_no_checkerboard(checkerboard_colors)
-        _require_unshaded(shade_in_3d)
-        if float(stroke_width) != 0.0:
-            raise NotImplementedError("mesh edge strokes are unsupported")
-        mesh = _Mesh3D.sphere(float(radius), resolution=_grid_resolution(resolution, "Sphere"),
-                              color=_color(fill_color))
-        mesh.move_to(center)
-        _take_mesh(self, mesh)
-
-
-class Dot3D(Sphere):
-    """Small retained spherical point with the pinned (8, 8) mesh profile."""
-
-    def __init__(self, point=(0, 0, 0), radius=0.08, color=_base.WHITE,
-                 resolution=(8, 8), stroke_width=0.5, shade_in_3d=True, **kwargs):
-        # Manim calls set_color after Sphere construction, so its visible default
-        # Dot3D color is uniform even though the intermediate Sphere is checkerboarded.
-        kwargs.pop("checkerboard_colors", None)
-        super().__init__(center=point, radius=radius, resolution=resolution,
-                         fill_color=color, checkerboard_colors=False,
-                         stroke_width=stroke_width, shade_in_3d=shade_in_3d, **kwargs)
+    if not isinstance(shade_in_3d, bool):
+        raise TypeError("shade_in_3d requires a boolean")
+    if float(stroke_width) != 0.0:
+        raise NotImplementedError("mesh edge strokes are not supported")
+    fill_opacity = _opacity("fill_opacity", fill_opacity)
+    fill = _as_color("fill_color", fill_color)
+    context = _live_constructor_context("mesh")
+    candidate = _prism_face_family_options(dimensions, shade_in_3d)
+    try:
+        engine_call(
+            candidate.setFill,
+            fill.red,
+            fill.green,
+            fill.blue,
+            fill.alpha,
+            fill_opacity,
+        )
+    except BaseException:
+        candidate.free()
+        raise
+    handle = (
+        engine_call(_create_mesh_family, candidate)
+        if context is None
+        else engine_call(context.createMeshFamily, candidate)
+    )
+    _initialize_shared_wrapper(self)
+    _attach_shared_family(self, handle, context, _compat.VMobject)
+    if context is not None:
+        self._canonical_live_target_context = context
 
 
-class Cube(_Mesh3D):
-    """Flat-faced mesh profile; pinned 0.75 fill opacity is retained and rejected.
-
-    Pass ``fill_opacity=1`` to opt into the opaque indexed-mesh renderer profile.
-    The pinned face shading default is also retained and rejected; pass
-    ``shade_in_3d=False`` to select the unshaded indexed-mesh profile.
-    """
+class Cube(_WorldMobject, _compat.Group):
+    """Six retained face meshes with Manim's Cairo shading defaults."""
 
     def __init__(self, side_length=2, fill_opacity=0.75, fill_color=_base.BLUE,
                  stroke_width=0, shade_in_3d=True, **kwargs):
         _reject(kwargs, ())
-        _require_opaque(fill_opacity)
-        _require_unshaded(shade_in_3d)
-        if float(stroke_width) != 0.0:
-            raise NotImplementedError("mesh edge strokes are not supported")
-        mesh = _Mesh3D.cube(float(side_length), color=_color(fill_color))
-        _take_mesh(self, mesh)
+        side_length = float(side_length)
+        _initialize_translucent_prism_family(
+            self, (side_length, side_length, side_length), fill_color,
+            fill_opacity, stroke_width, shade_in_3d,
+        )
 
 
-class Prism(_Mesh3D):
-    """Flat-faced prism with pinned opacity/shading defaults retained and rejected."""
+class Prism(_WorldMobject, _compat.Group):
+    """Six retained face meshes with Manim's Cairo shading defaults."""
 
     def __init__(self, dimensions=(3, 2, 1), fill_opacity=0.75, fill_color=_base.BLUE,
                  stroke_width=0, shade_in_3d=True, **kwargs):
         _reject(kwargs, ())
-        _require_opaque(fill_opacity)
-        _require_unshaded(shade_in_3d)
-        if float(stroke_width) != 0.0:
-            raise NotImplementedError("mesh edge strokes are not supported")
-        mesh = _Mesh3D.prism(dimensions, color=_color(fill_color))
-        _take_mesh(self, mesh)
-
-
-class Torus(_Mesh3D):
-    """Full torus with pinned Cairo (24, 24) resolution and Surface defaults.
-
-    The inherited checkerboard, stroke, and shading defaults are rejected unless
-    callers explicitly select the supported unshaded solid profile.
-    """
-
-    def __init__(self, major_radius=3, minor_radius=1,
-                 u_range=(0, 2 * math.pi), v_range=(0, 2 * math.pi),
-                 resolution=(24, 24), fill_color=_base.BLUE_D, fill_opacity=1,
-                 checkerboard_colors=_DEFAULT_CHECKERBOARD, stroke_width=0.5,
-                 shade_in_3d=True, **kwargs):
-        _reject(kwargs, ())
-        if tuple(u_range) != (0, 2 * math.pi) or tuple(v_range) != (0, 2 * math.pi):
-            raise NotImplementedError("partial Torus ranges are unsupported by the solid mesh factory")
-        _require_opaque(fill_opacity)
-        _require_no_checkerboard(checkerboard_colors)
-        _require_unshaded(shade_in_3d)
-        if float(stroke_width) != 0.0:
-            raise NotImplementedError("mesh edge strokes are not supported")
-        mesh = _Mesh3D.torus(float(major_radius), float(minor_radius),
-                             resolution=_grid_resolution(resolution, "Torus"),
-                             color=_color(fill_color))
-        _take_mesh(self, mesh)
-
-
-class Cylinder(_Mesh3D):
-    """Closed oriented cylinder; Surface checkerboard/stroke/shading defaults are rejected.
-
-    Rust owns the finite nonzero direction and centered placement. Partial
-    sweeps and open ends remain unsupported.
-    """
-
-    def __init__(self, radius=1, height=2, direction=(0, 0, 1),
-                 v_range=(0, 2 * math.pi), show_ends=True, resolution=(24, 24),
-                 fill_color=_base.BLUE_D, fill_opacity=1,
-                 checkerboard_colors=_DEFAULT_CHECKERBOARD, stroke_width=0.5,
-                 shade_in_3d=True, **kwargs):
-        _reject(kwargs, ())
-        if show_ends is not True:
-            raise NotImplementedError("the retained cylinder mesh is closed at both ends")
-        if tuple(v_range) != (0, 2 * math.pi):
-            raise NotImplementedError("partial Cylinder sweeps are unsupported")
-        _require_opaque(fill_opacity)
-        _require_no_checkerboard(checkerboard_colors)
-        _require_unshaded(shade_in_3d)
-        if float(stroke_width) != 0.0:
-            raise NotImplementedError("mesh edge strokes are not supported")
-        if isinstance(resolution, int):
-            segments = _sample_count(resolution, "Cylinder")
-        else:
-            resolution = tuple(resolution)
-            if len(resolution) != 2 or resolution[0] != resolution[1]:
-                raise NotImplementedError("Cylinder requires equal UV resolution counts")
-            segments = _sample_count(resolution[0], "Cylinder")
-        mesh = _Mesh3D.cylinder(float(radius), float(height), segments,
-                                direction=direction, axial_offset=-float(height) / 2,
-                                color=_color(fill_color))
-        _take_mesh(self, mesh)
-
-
-class Cone(_Mesh3D):
-    """Capped oriented cone; the pinned open-base default is explicitly rejected."""
-
-    def __init__(self, base_radius=1, height=1, direction=(0, 0, 1),
-                 show_base=False, v_range=(0, 2 * math.pi), u_min=0,
-                 checkerboard_colors=False, resolution=32,
-                 fill_color=_base.BLUE_D, fill_opacity=1, stroke_width=0.5,
-                 shade_in_3d=True, **kwargs):
-        _reject(kwargs, ())
-        if show_base is not True:
-            raise NotImplementedError("the pinned open-base Cone profile is not supported; pass show_base=True for a capped mesh")
-        if tuple(v_range) != (0, 2 * math.pi) or float(u_min) != 0.0:
-            raise NotImplementedError("partial Cone profiles are unsupported")
-        _require_no_checkerboard(checkerboard_colors)
-        _require_unshaded(shade_in_3d)
-        _require_opaque(fill_opacity)
-        if float(stroke_width) != 0.0:
-            raise NotImplementedError("mesh edge strokes are unsupported")
-        if isinstance(resolution, int):
-            segments = _sample_count(resolution, "Cone")
-        else:
-            pair = _grid_resolution(resolution, "Cone")
-            if pair[0] != pair[1]:
-                raise NotImplementedError("Cone requires equal UV resolution counts")
-            segments = pair[0]
-        mesh = _Mesh3D.cone(float(base_radius), float(height), segments,
-                            direction=direction, axial_offset=-float(height),
-                            color=_color(fill_color))
-        _take_mesh(self, mesh)
+        dimensions = tuple(float(value) for value in dimensions)
+        _initialize_translucent_prism_family(
+            self, dimensions, fill_color, fill_opacity, stroke_width, shade_in_3d,
+        )
 
 
 class Line3D(_Mesh3D):
@@ -269,8 +166,8 @@ class Line3D(_Mesh3D):
 class Surface(_Mesh3D, _compat.Group):
     """Sampled surface; callback values feed Rust-owned UV topology.
 
-    Python owns only callable sampling and argument coercion. Rust owns UV cell
-    roles, family identity, style publication, point-lit material and transforms.
+    Cairo-compatible shading retains its sampled control points as mesh
+    appearance metadata. ``point_lit`` remains Noon-native lighting.
     """
 
     def __init__(self, func, u_range=(0, 1), v_range=(0, 1), resolution=32,
@@ -278,18 +175,21 @@ class Surface(_Mesh3D, _compat.Group):
                  checkerboard_colors=_DEFAULT_CHECKERBOARD,
                  stroke_color=_DEFAULT_SURFACE_STROKE, stroke_width=0.5,
                  stroke_opacity=1, normal=None, shade_in_3d=True,
-                 point_lit=False, **kwargs):
+                 point_lit=False, _analytic_factory=None, _axial_pose=None,
+                 _force_surface_family=False, _cairo_circle_caps=(), **kwargs):
         from _noon_spatial import _bulk, _vector, _surface_plan, _mesh_family_options, _create_mesh_family
         _reject(kwargs, ())
         if not isinstance(shade_in_3d, bool):
             raise TypeError("shade_in_3d requires a boolean")
-        if shade_in_3d:
-            raise NotImplementedError(
-                "Manim Cairo Surface shading is unsupported; pass shade_in_3d=False "
-                "and opt into Noon lighting with point_lit=True"
-            )
         if not isinstance(point_lit, bool):
             raise TypeError("point_lit requires a boolean")
+        if shade_in_3d and point_lit:
+            raise ValueError("shade_in_3d and point_lit select distinct Surface materials")
+        if shade_in_3d and normal is not None:
+            raise NotImplementedError(
+                "Cairo Surface shading derives its appearance from sampled geometry; "
+                "custom normal callbacks require shade_in_3d=False"
+            )
         u_range = _surface_range("u_range", u_range)
         v_range = _surface_range("v_range", v_range)
         resolution = _grid_resolution(resolution, "Surface")
@@ -307,12 +207,23 @@ class Surface(_Mesh3D, _compat.Group):
                 raise ValueError("checkerboard_colors requires exactly two colors")
             checkerboard_colors = tuple(_color(value, "checkerboard color")
                                         for value in checkerboard_colors)
-        if checkerboard_colors is False and stroke_width == 0.0 and not shade_in_3d:
+        if (checkerboard_colors is False and stroke_width == 0.0 and not shade_in_3d
+                and not _force_surface_family):
             _require_opaque(fill_opacity)
-            mesh = _Mesh3D.parametric(
-                func, u_range=u_range, v_range=v_range, resolution=resolution,
-                normal=normal, color=fill, point_lit=point_lit,
-            )
+            if _analytic_factory is not None and normal is None:
+                # Analytic solids share Surface's fully validated opt-out
+                # profile, but keep their typed Rust geometry factory.
+                mesh = _analytic_factory(
+                    color=fill, point_lit=point_lit, resolution=resolution,
+                    u_range=u_range, v_range=v_range,
+                )
+            else:
+                mesh = None
+            if mesh is None:
+                mesh = _Mesh3D.parametric(
+                    func, u_range=u_range, v_range=v_range, resolution=resolution,
+                    normal=normal, color=fill, point_lit=point_lit,
+                )
             _take_mesh(self, mesh)
             return
         if _surface_plan is None or _mesh_family_options is None:
@@ -321,7 +232,9 @@ class Surface(_Mesh3D, _compat.Group):
         plan = engine_call(_surface_plan, *u_range, *v_range, *resolution)
         candidate = None
         try:
-            parameters = engine_call(plan.parameters)
+            parameters = engine_call(
+                plan.cairoParameters if shade_in_3d else plan.parameters
+            )
             if hasattr(parameters, "to_py"):
                 parameters = parameters.to_py()
             points = array("d")
@@ -331,7 +244,9 @@ class Surface(_Mesh3D, _compat.Group):
                 points.extend(_vector(func(u, v)))
                 if normal is not None:
                     normals.extend(_vector(normal(u, v)))
-            candidate = engine_call(plan.finishCells, _bulk(points), _bulk(normals))
+            candidate = (engine_call(plan.finishCairoCells, _bulk(points))
+                         if shade_in_3d else
+                         engine_call(plan.finishCells, _bulk(points), _bulk(normals)))
         finally:
             plan.free()
         try:
@@ -346,11 +261,19 @@ class Surface(_Mesh3D, _compat.Group):
             engine_call(candidate.setStroke, stroke.red, stroke.green, stroke.blue,
                         stroke.alpha, stroke_width, stroke_opacity)
             engine_call(candidate.setPointLit, point_lit)
-            handle = (engine_call(_create_mesh_family, candidate) if context is None
-                      else engine_call(context.createMeshFamily, candidate))
+            engine_call(candidate.setCairoSurface, shade_in_3d)
+            if _axial_pose is not None:
+                direction, offset = _axial_pose
+                engine_call(candidate.setAxialPose, _bulk(_vector(direction)), float(offset))
+            for radius, local_z, color, shaded in _cairo_circle_caps:
+                engine_call(candidate.addCircleCap, float(radius), float(local_z),
+                            color.red, color.green, color.blue, color.alpha,
+                            bool(shaded))
         except BaseException:
             candidate.free()
             raise
+        handle = (engine_call(_create_mesh_family, candidate) if context is None
+                  else engine_call(context.createMeshFamily, candidate))
         _initialize_shared_wrapper(self)
         _attach_shared_family(self, handle, context, _compat.VMobject)
         if context is not None:
@@ -426,6 +349,206 @@ class Surface(_Mesh3D, _compat.Group):
                               stroke_opacity=opacity)
 
 
+class Cylinder(Surface):
+    """Oriented Cylinder whose side and optional Circle ends publish together."""
+
+    def __init__(self, radius=1, height=2, direction=(0, 0, 1),
+                 v_range=(0, 2 * math.pi), show_ends=True, resolution=(24, 24),
+                 fill_color=_base.BLUE_D, fill_opacity=1,
+                 checkerboard_colors=_DEFAULT_CHECKERBOARD, stroke_width=0.5,
+                 shade_in_3d=True, **kwargs):
+        from _noon_spatial import _vector
+
+        _reject(kwargs, ())
+        if not isinstance(show_ends, bool):
+            raise TypeError("show_ends requires a boolean")
+        v_range = _angular_sweep("Cylinder v_range", v_range)
+        radius = _base._ir._finite_number("radius", radius)
+        height = _base._ir._finite_number("height", height)
+        if radius <= 0.0 or height <= 0.0:
+            raise ValueError("Cylinder radius and height must be positive")
+        opacity = _opacity("fill_opacity", fill_opacity)
+        fill = _color(fill_color)
+        direction = _vector(direction)
+        if show_ends and opacity != 1.0:
+            raise NotImplementedError("Cylinder caps currently require opaque fills")
+        resolution = _grid_resolution(resolution, "Cylinder")
+        caps = ((radius, -height / 2.0, fill, shade_in_3d),
+                (radius, height / 2.0, fill, shade_in_3d)) if show_ends else ()
+
+        def point(u, v):
+            return (radius * math.cos(v), radius * math.sin(v), u)
+
+        super().__init__(
+            point, u_range=(-height / 2.0, height / 2.0), v_range=v_range,
+            resolution=resolution, fill_color=fill_color, fill_opacity=opacity,
+            checkerboard_colors=checkerboard_colors, stroke_width=stroke_width,
+            shade_in_3d=shade_in_3d, _axial_pose=(direction, 0.0),
+            _force_surface_family=True, _cairo_circle_caps=caps,
+        )
+
+
+class Cone(Surface):
+    """Manim's radial-angle cone with an optional ordinary Circle base."""
+
+    def __init__(self, base_radius=1, height=1, direction=(0, 0, 1),
+                 show_base=False, v_range=(0, 2 * math.pi), u_min=0,
+                 checkerboard_colors=False, resolution=32,
+                 fill_color=_base.BLUE_D, fill_opacity=1,
+                 stroke_color=_DEFAULT_SURFACE_STROKE, stroke_width=0.5,
+                 stroke_opacity=1, shade_in_3d=True, point_lit=False, **kwargs):
+        from _noon_spatial import _vector
+
+        _reject(kwargs, ())
+        if not isinstance(show_base, bool):
+            raise TypeError("show_base requires a boolean")
+        if not isinstance(shade_in_3d, bool):
+            raise TypeError("shade_in_3d requires a boolean")
+        base_radius = _base._ir._finite_number("base_radius", base_radius)
+        height = _base._ir._finite_number("height", height)
+        if base_radius <= 0.0 or height <= 0.0:
+            raise ValueError("Cone base_radius and height must be positive")
+        u_min = _base._ir._finite_number("u_min", u_min)
+        u_max = math.hypot(base_radius, height)
+        if not math.isfinite(u_max) or u_min < 0.0 or u_min >= u_max:
+            raise ValueError("Cone u_min must be finite and within [0, sqrt(base_radius² + height²))")
+        v_range = _angular_sweep("Cone v_range", v_range)
+        resolution = _grid_resolution(resolution, "Cone")
+        direction = _vector(direction)
+
+        if show_base and u_min != 0.0:
+            raise NotImplementedError("Cone show_base with a truncated radial range is unsupported")
+        if show_base and _opacity("fill_opacity", fill_opacity) != 1.0:
+            raise NotImplementedError("Cone base currently requires opaque fills")
+        fill = _color(fill_color)
+
+        theta = math.pi - math.atan(base_radius / height)
+
+        def point(u, v):
+            return (u * math.sin(theta) * math.cos(v),
+                    u * math.sin(theta) * math.sin(v),
+                    u * math.cos(theta))
+
+        def analytic_factory(*, color, point_lit, resolution, u_range, v_range):
+            # The shared closed-form mesh matches u_min=0 only. Non-square UV
+            # opt-out profiles use the same Rust-sampled Surface plan instead.
+            if u_min != 0.0 or resolution[0] != resolution[1]:
+                return None
+            return _Mesh3D.cone(
+                base_radius, height, resolution[0], show_base=show_base,
+                v_range=v_range, direction=direction, axial_offset=-height,
+                color=color, point_lit=point_lit,
+            )
+
+        super().__init__(
+            point, u_range=(u_min, u_max), v_range=v_range,
+            resolution=resolution, fill_color=fill_color, fill_opacity=fill_opacity,
+            checkerboard_colors=checkerboard_colors, stroke_color=stroke_color,
+            stroke_width=stroke_width, stroke_opacity=stroke_opacity,
+            shade_in_3d=shade_in_3d, point_lit=point_lit,
+            _analytic_factory=analytic_factory,
+            _axial_pose=(direction, 0.0),
+            _force_surface_family=(show_base or u_min != 0.0 or resolution[0] != resolution[1]),
+            _cairo_circle_caps=((base_radius, -height, fill, False),) if show_base else (),
+        )
+
+
+class Sphere(Surface):
+    """Surface-sampled sphere with the pinned Manim azimuth/polar mapping."""
+
+    def __init__(self, center=(0, 0, 0), radius=1, resolution=(24, 12),
+                 u_range=(0, 2 * math.pi), v_range=(0, math.pi), **kwargs):
+        from _noon_spatial import _vector
+
+        radius = _base._ir._finite_number("radius", radius)
+        if radius <= 0.0:
+            raise ValueError("Sphere radius must be positive")
+        center = _vector(center)
+        if not all(math.isfinite(component) for component in center):
+            raise ValueError("Sphere center must be finite")
+        u_range = _surface_range("Sphere u_range", u_range)
+        v_range = _surface_range("Sphere v_range", v_range)
+        if u_range[0] < 0 or u_range[1] > 2 * math.pi or u_range[0] >= u_range[1]:
+            raise ValueError("Sphere u_range must be increasing within [0, 2π]")
+        if v_range[0] < 0 or v_range[1] > math.pi or v_range[0] >= v_range[1]:
+            raise ValueError("Sphere v_range must be increasing within [0, π]")
+
+        self.radius = radius
+
+        def point(u, v):
+            sin_v, cos_v = math.sin(v), math.cos(v)
+            sin_u, cos_u = math.sin(u), math.cos(u)
+            return (radius * cos_u * sin_v,
+                    radius * sin_u * sin_v,
+                    -radius * cos_v)
+
+        def analytic_factory(*, color, point_lit, resolution, u_range, v_range):
+            return _Mesh3D.sphere(
+                radius, resolution=resolution, u_range=u_range, v_range=v_range,
+                color=color, point_lit=point_lit,
+            )
+
+        super().__init__(point, u_range=u_range, v_range=v_range,
+                         resolution=resolution, _analytic_factory=analytic_factory,
+                         **kwargs)
+        # Translate the parameterized origin as Manim does; this also works for
+        # partial patches whose bounding-box center is not the sphere center.
+        self.shift(center)
+
+
+class Dot3D(Sphere):
+    """Uniform-color sphere family with Manim's small-dot defaults."""
+
+    def __init__(self, point=(0, 0, 0), radius=0.08, color=_base.WHITE,
+                 resolution=(8, 8), stroke_width=0.5, shade_in_3d=True, **kwargs):
+        # Dot3D's set_color after Sphere construction makes every cell uniform.
+        kwargs.pop("checkerboard_colors", None)
+        super().__init__(center=point, radius=radius, resolution=resolution,
+                         fill_color=color, checkerboard_colors=False,
+                         stroke_width=stroke_width, shade_in_3d=shade_in_3d,
+                         **kwargs)
+
+
+class Torus(Surface):
+    """Surface-sampled torus using Manim's pinned orientation and defaults."""
+
+    def __init__(self, major_radius=3, minor_radius=1,
+                 u_range=(0, 2 * math.pi), v_range=(0, 2 * math.pi),
+                 resolution=(24, 24), **kwargs):
+        major_radius = _base._ir._finite_number("major_radius", major_radius)
+        minor_radius = _base._ir._finite_number("minor_radius", minor_radius)
+        if major_radius <= 0.0 or minor_radius <= 0.0 or minor_radius >= major_radius:
+            raise ValueError("Torus radii must satisfy major_radius > minor_radius > 0")
+        u_range = _surface_range("Torus u_range", u_range)
+        v_range = _surface_range("Torus v_range", v_range)
+        if u_range[0] >= u_range[1] or v_range[0] >= v_range[1]:
+            raise ValueError("Torus ranges must be increasing")
+
+        self.R = major_radius
+        self.r = minor_radius
+
+        def point(u, v):
+            radial = major_radius - minor_radius * math.cos(v)
+            return (radial * math.cos(u),
+                    radial * math.sin(u),
+                    -minor_radius * math.sin(v))
+
+        # The typed native torus factory covers the complete periodic surface;
+        # partial ranges still use the checked Surface callback sampler.
+        analytic_factory = None
+        if (u_range == (0.0, 2 * math.pi) and
+                v_range == (0.0, 2 * math.pi)):
+            def analytic_factory(*, color, point_lit, resolution, u_range, v_range):
+                return _Mesh3D.torus(
+                    major_radius, minor_radius, resolution=resolution,
+                    color=color, point_lit=point_lit,
+                )
+
+        super().__init__(point, u_range=u_range, v_range=v_range,
+                         resolution=resolution, _analytic_factory=analytic_factory,
+                         **kwargs)
+
+
 def _surface_range(name, value):
     try:
         values = tuple(_base._ir._finite_number(name, item) for item in value)
@@ -433,6 +556,13 @@ def _surface_range(name, value):
         raise TypeError(f"{name} requires two numeric endpoints") from error
     if len(values) != 2:
         raise ValueError(f"{name} requires two endpoints")
+    return values
+
+
+def _angular_sweep(name, value):
+    values = _surface_range(name, value)
+    if values[0] < 0 or values[0] >= values[1] or values[1] > 2 * math.pi:
+        raise ValueError(f"{name} must be increasing within [0, 2π]")
     return values
 
 

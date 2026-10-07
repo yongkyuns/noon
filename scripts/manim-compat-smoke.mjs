@@ -50,18 +50,56 @@ class SpatialMeshAdapterSmoke(ThreeDScene):
                    for actual, expected in zip(meshes[0].get_center(), (0, -2.4, 0)))
         meshes[0].rotate(-PI / 2, axis=(0, 0, 1), about_point=(0, 0, 0))
         meshes[0].scale(1.2).scale(1 / 1.2)
+        # The wrapper Cylinder/Cone are retained families because their Circle
+        # caps publish beside the UV side cells. Keep the single-mesh endpoint
+        # contract exercised through the low-level mesh factory below.
+        pose_mesh = Mesh3D.cylinder(radius=0.25, height=0.7, segments=8,
+                                    color=BLUE, show_ends=True)
         for index, mesh in enumerate(meshes[1:-1], start=1):
             mesh.move_to((index * 0.8 - 2.4, 0, 0))
         for index, mesh in enumerate(meshes):
             assert all(abs(actual - expected) < 1e-7 for actual, expected in
                        zip(mesh.get_center(), (index * 0.8 - 2.4, 0, 0))), (index, mesh.get_center())
-        handles = [mesh._semantic_handle for mesh in meshes]
-        assert all(handle is not None and handle is mesh._semantic_handle
-                   for mesh, handle in zip(meshes, handles))
+        # Cube and Prism retain six ordered faces. Cylinder and capped Cone
+        # retain one UV side cell per grid cell plus ordinary Circle cap leaves.
+        handles = []
+        for index, mesh in enumerate(meshes):
+            family = getattr(mesh, "_semantic_family_handle", None)
+            if index in (1, 2):
+                assert family is not None and int(family.memberCount) == 6
+                assert len(mesh.submobjects) == 6
+                handles.extend(member._semantic_handle for member in mesh.submobjects)
+            elif index == 3:
+                assert family is not None and int(family.memberCount) == 66
+                assert len(mesh.submobjects) == 66  # 8x8 side cells + two caps
+                handles.extend(member._semantic_handle for member in mesh.submobjects)
+            elif index == 4:
+                assert family is not None and int(family.memberCount) == 65
+                assert len(mesh.submobjects) == 65  # 8x8 side cells + one base cap
+                handles.extend(member._semantic_handle for member in mesh.submobjects)
+            else:
+                assert family is None and mesh._semantic_handle is not None
+                handles.append(mesh._semantic_handle)
+        handles.append(pose_mesh._semantic_handle)
+        assert len(handles) == 147 and all(handle is not None for handle in handles)
         identities = [(int(handle.semanticSlot), int(handle.semanticGeneration))
                       for handle in handles]
-        assert len(set(identities)) == len(meshes)
-        self.add_world_mobjects(*meshes)
+        assert len(set(identities)) == len(handles)
+        # Capped Surface families use shared affine edits and aggregate bounds
+        # centers, but intentionally do not expose one world_transform endpoint.
+        for index in (3, 4):
+            mesh = meshes[index]
+            center = tuple(mesh.get_center())
+            mesh.shift((0.1, -0.2, 0.3))
+            assert all(abs(actual - expected) < 1e-7 for actual, expected in
+                       zip(mesh.get_center(), (center[0] + 0.1, center[1] - 0.2, center[2] + 0.3)))
+            mesh.move_to(center)
+            assert all(abs(actual - expected) < 1e-7 for actual, expected in
+                       zip(mesh.get_center(), center))
+            mesh.rotate(PI / 2, axis=(0, 0, 1), about_point=center)
+            assert all(abs(actual - expected) < 1e-7 for actual, expected in
+                       zip(mesh.get_center(), center))
+        self.add_world_mobjects(*meshes, pose_mesh)
 
         start_camera = self._camera_endpoint()
         self.begin_ambient_camera_rotation(rate=0.4, about="theta")
@@ -86,19 +124,19 @@ class SpatialMeshAdapterSmoke(ThreeDScene):
 
         await self.play(
             WorldTransformTo(meshes[0], translation=(-1.8, 0.2, 0.1)),
-            WorldTransformTo(meshes[3], translation=(0.2, 0.1, 0.3)),
+            WorldTransformTo(pose_mesh, translation=(0.2, 0.1, 0.3)),
             run_time=0.25, rate_func=linear,
         )
         assert all(abs(actual - expected) < 1e-8
                    for actual, expected in zip(meshes[0].world_transform[:3], (-1.8, 0.2, 0.1)))
         assert all(abs(actual - expected) < 1e-7
-                   for actual, expected in zip(meshes[3].get_center(), (0.2, 0.1, 0.65)))
-        meshes[3].rotate(PI / 2, axis=(0, 1, 0)).scale(1.2)
+                   for actual, expected in zip(pose_mesh.get_center(), (0.2, 0.1, 0.65)))
+        pose_mesh.rotate(PI / 2, axis=(0, 1, 0)).scale(1.2)
         assert all(abs(actual - expected) < 1e-7
-                   for actual, expected in zip(meshes[3].get_center(), (0.2, 0.1, 0.65)))
-        meshes[3].move_to((0.2, 0.1, 0))
+                   for actual, expected in zip(pose_mesh.get_center(), (0.2, 0.1, 0.65)))
+        pose_mesh.move_to((0.2, 0.1, 0))
         assert all(abs(actual - expected) < 1e-7
-                   for actual, expected in zip(meshes[3].get_center(), (0.2, 0.1, 0)))
+                   for actual, expected in zip(pose_mesh.get_center(), (0.2, 0.1, 0)))
 `;
 const port = 4175;
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -762,13 +800,17 @@ try {
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     spatialMeshAdaptersSource,
   );
-  assert.equal(spatialMeshAdapters.metrics.objectCount, 8,
-    "public solid adapters must enter the shared semantic scene as retained meshes");
+  assert.equal(spatialMeshAdapters.metrics.objectCount, 148,
+    "solid adapters must retain UV side cells, three Circle caps, and one camera");
   assert.ok(spatialMeshAdapters.metrics.presentedFrames > 0);
   assert.ok(spatialMeshAdapters.metrics.drawCalls > 0,
     "mesh adapters must reach the real retained renderer");
   const meshRows = spatialMeshAdapters.frame.objects.filter(object => object.spatial?.draw_kind === "mesh");
-  assert.equal(meshRows.length, 7);
+  assert.equal(meshRows.length, 144);
+  const capRows = spatialMeshAdapters.frame.objects.filter(object =>
+    object.spatial?.draw_kind === "planar" && !object.spatial.camera_projection);
+  assert.equal(capRows.length, 3, "capped primitives must retain ordinary Circle leaves");
+  assert.ok(capRows.every(object => object.spatial.composition_domain === "world"));
   assert.equal(spatialMeshAdapters.frame.objects.filter(object => object.spatial?.camera_projection).length, 1);
   assert.ok(meshRows.every(object => object.spatial?.composition_domain === "world"),
     "the worker frame must retain mesh draw kinds rather than flattening adapters to planar paths");

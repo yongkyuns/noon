@@ -970,6 +970,10 @@ mod wasm {
             Ok(self.family.clone())
         }
 
+        pub(crate) fn semantic_family_ref(&self) -> &noon::MobjectFamily {
+            &self.family
+        }
+
         pub(crate) fn semantic_surface_family(
             &self,
         ) -> Result<Option<&noon::SurfaceFamily>, JsValue> {
@@ -980,6 +984,12 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = worldFamilyCenter)]
+        pub fn world_family_center(&self) -> Result<Vec<f64>, JsValue> {
+            let center = self.family.world_center().map_err(js_error)?;
+            Ok(vec![center.x, center.y, center.z])
+        }
+
         #[wasm_bindgen(js_name = becomeFamily)]
         pub fn become_family(
             &self,
@@ -1111,6 +1121,11 @@ mod wasm {
             self.semantic_family()?
                 .set_opacity(opacity)
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = fade)]
+        pub fn fade(&self, darkness: f64) -> Result<(), JsValue> {
+            self.semantic_family()?.fade(darkness).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = gridOptions)]

@@ -204,8 +204,8 @@ pub struct SceneInstance {
     last_patch_stats: RuntimePatchStats,
     changes: FrameChanges,
     spatial_changes: FrameChanges,
-    pending_fixed_orientation_anchor_groups: BTreeSet<u32>,
-    pending_fixed_orientation_anchor_rows: BTreeSet<usize>,
+    pending_spatial_anchor_groups: BTreeSet<u32>,
+    pending_spatial_anchor_rows: BTreeSet<usize>,
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
@@ -257,12 +257,8 @@ impl Clone for SceneInstance {
             last_patch_stats: self.last_patch_stats,
             changes: self.changes.clone(),
             spatial_changes: self.spatial_changes.clone(),
-            pending_fixed_orientation_anchor_groups: self
-                .pending_fixed_orientation_anchor_groups
-                .clone(),
-            pending_fixed_orientation_anchor_rows: self
-                .pending_fixed_orientation_anchor_rows
-                .clone(),
+            pending_spatial_anchor_groups: self.pending_spatial_anchor_groups.clone(),
+            pending_spatial_anchor_rows: self.pending_spatial_anchor_rows.clone(),
             reactive: self.reactive.clone(),
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
@@ -355,8 +351,8 @@ impl SceneInstance {
             last_patch_stats: RuntimePatchStats::default(),
             changes: FrameChanges::all(),
             spatial_changes: FrameChanges::all(),
-            pending_fixed_orientation_anchor_groups: BTreeSet::new(),
-            pending_fixed_orientation_anchor_rows: BTreeSet::new(),
+            pending_spatial_anchor_groups: BTreeSet::new(),
+            pending_spatial_anchor_rows: BTreeSet::new(),
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
@@ -510,18 +506,23 @@ impl SceneInstance {
         self.changes.insert(object_index);
         self.spatial_changes.insert(object_index);
         if let Ok(index) = u32::try_from(object_index) {
-            let groups = self.compiled.fixed_orientation_groups_for_row(index);
-            if !groups.is_empty() {
-                self.pending_fixed_orientation_anchor_groups
-                    .extend(groups.iter().copied());
+            let contributes_spatial_geometry = self
+                .frame
+                .objects
+                .get(object_index)
+                .and_then(|object| object.spatial.as_deref())
+                .is_none_or(|spatial| spatial.camera_projection.is_none() && !spatial.point_light);
+            if contributes_spatial_geometry {
+                let groups = self.compiled.spatial_anchor_groups_for_row(index);
+                if !groups.is_empty() {
+                    self.pending_spatial_anchor_groups
+                        .extend(groups.iter().copied());
+                }
             }
             // Bounds dependencies do not imply ownership of this row's center.
             // A surviving row whose anchor was removed still derives its own
             // center even while it contributes to another retained group.
-            if self
-                .compiled
-                .fixed_orientation_group_for_row(index)
-                .is_none()
+            if self.compiled.spatial_anchor_group_for_row(index).is_none()
                 && self.frame.objects.get(object_index).is_some_and(|object| {
                     object.spatial.as_deref().is_some_and(|spatial| {
                         spatial.composition_domain
@@ -529,8 +530,20 @@ impl SceneInstance {
                     })
                 })
             {
-                self.pending_fixed_orientation_anchor_rows
-                    .insert(object_index);
+                self.pending_spatial_anchor_rows.insert(object_index);
+            }
+            if self.compiled.spatial_anchor_group_for_row(index).is_none()
+                && self.frame.objects.get(object_index).is_some_and(|object| {
+                    object.spatial.as_deref().is_some_and(|spatial| {
+                        spatial.material == noon_core::SemanticSpatialMaterial::CairoPath
+                            && spatial
+                                .cairo_path_appearance
+                                .as_deref()
+                                .is_some_and(|a| a.gradient_direction.is_some())
+                    })
+                })
+            {
+                self.pending_spatial_anchor_rows.insert(object_index);
             }
         }
         self.refresh_graph_dependencies_for_changed_row(object_index);
@@ -682,16 +695,22 @@ impl SceneInstance {
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
-            | ExecutionPatch::RemoveObject(object) => {
-                self.compiled.object_index(*object).map(|index| {
-                    self.compiled
-                        .fixed_orientation_groups_for_row(index)
-                        .to_vec()
-                })
-            }
-            ExecutionPatch::SetFixedOrientationGroupBoundsMembers { anchor_family, .. } => self
+            | ExecutionPatch::RemoveObject(object) => self
                 .compiled
-                .fixed_orientation_group_for_anchor(*anchor_family)
+                .object_index(*object)
+                .filter(|index| {
+                    self.frame
+                        .objects
+                        .get(*index as usize)
+                        .and_then(|row| row.spatial.as_deref())
+                        .is_none_or(|spatial| {
+                            spatial.camera_projection.is_none() && !spatial.point_light
+                        })
+                })
+                .map(|index| self.compiled.spatial_anchor_groups_for_row(index).to_vec()),
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { anchor_family, .. } => self
+                .compiled
+                .spatial_anchor_group_for_anchor(*anchor_family)
                 .map(|group| vec![group]),
             _ => None,
         };
@@ -719,9 +738,9 @@ impl SceneInstance {
             }
         }
         if let Some(groups) = previous_anchor_groups {
-            self.pending_fixed_orientation_anchor_groups.extend(groups);
+            self.pending_spatial_anchor_groups.extend(groups);
         }
-        self.flush_fixed_orientation_anchor_changes();
+        self.flush_spatial_anchor_changes();
         match patch {
             ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track)
                 if matches!(track.property, Property::Morph | Property::Transform) =>
@@ -787,13 +806,13 @@ impl SceneInstance {
             self.apply_graph_dependency_patch(patch)?;
             return Ok(&self.frame);
         }
-        if let ExecutionPatch::SetFixedOrientationGroupBoundsMembers { anchor_family, .. } = patch {
+        if let ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { anchor_family, .. } = patch {
             self.compiled.apply_execution_patch(patch)?;
             if let Some(group) = self
                 .compiled
-                .fixed_orientation_group_for_anchor(*anchor_family)
+                .spatial_anchor_group_for_anchor(*anchor_family)
             {
-                self.pending_fixed_orientation_anchor_groups.insert(group);
+                self.pending_spatial_anchor_groups.insert(group);
             }
             self.last_patch_stats = RuntimePatchStats::default();
             return Ok(&self.frame);
@@ -1490,7 +1509,7 @@ impl SceneInstance {
             }
         }
         self.refresh_all_graph_dependencies();
-        self.refresh_all_fixed_orientation_anchors();
+        self.refresh_all_spatial_anchors();
         self.last_stats = stats;
     }
 
@@ -1542,7 +1561,7 @@ impl SceneInstance {
         }
         self.update_requested_family_animations(time);
 
-        self.flush_fixed_orientation_anchor_changes();
+        self.flush_spatial_anchor_changes();
 
         self.last_stats = stats;
         if self.frame.time != previous_time {
@@ -2235,6 +2254,19 @@ fn apply_group_to_row(
         }
     }
     if group.cursor == 0 {
+        // Completion can replace authored geometry with the latest endpoint.
+        // Coupled geometry tracks retain their source snapshot so an earlier
+        // wait must recover it, just as affine channels recover their first `from`.
+        if let Some(first) = tracks.first() {
+            if group.channel.property == Property::Transform {
+                return apply_transform_track(&mut row, first, 0.0);
+            }
+            if group.channel.property == Property::Morph
+                && matches!(first.values, TrackValues::PreparedMorph { .. })
+            {
+                return apply_prestart_morph_track(&mut row, first);
+            }
+        }
         return false;
     }
     if group.channel.property == Property::ZIndex {
@@ -2572,6 +2604,30 @@ fn apply_prepared_morph_track(
         .expect("prepared Morph track must contain matching scalar endpoints and path plan")
 }
 
+fn apply_prestart_morph_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack) -> bool {
+    let TrackValues::PreparedMorph { from, .. } = track.values else {
+        unreachable!("prepared Morph track has scalar endpoints");
+    };
+    let Some(TransformGeometryPlan::PathPair {
+        geometry,
+        prestart_geometry,
+        ..
+    }) = track.transform_geometry_plan.as_ref()
+    else {
+        unreachable!("prepared Morph track has endpoint geometry");
+    };
+    let morph = from.clamp(0.0, 1.0);
+    let changed = *row.morph != morph || row.render_transform.is_some();
+    *row.morph = morph;
+    *row.render_transform = None;
+    changed
+        | set_optional_geometry_if_changed(
+            row.render_geometry,
+            Some(prestart_geometry.as_ref().unwrap_or(geometry)),
+            true,
+        )
+}
+
 fn apply_prepared_morph_values(
     row: &mut FrameRowMut<'_>,
     values: &TrackValues,
@@ -2584,6 +2640,7 @@ fn apply_prepared_morph_values(
     let TransformGeometryPlan::PathPair {
         geometry,
         render_transform,
+        ..
     } = plan
     else {
         return None;
@@ -2626,6 +2683,7 @@ fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progr
         TransformGeometryPlan::PathPair {
             geometry: prepared,
             render_transform: None,
+            ..
         } if from.style.stroke_width_mode == StrokeWidthMode::ScreenSpace
             && to.style.stroke_width_mode == StrokeWidthMode::ScreenSpace =>
         {
@@ -3238,6 +3296,196 @@ mod tests {
             time_map: CompositionTimeMap::identity(),
         });
         CompiledScene::compile_objects(objects, &tracks).expect("scene must compile")
+    }
+
+    #[test]
+    fn delayed_transform_recovers_its_source_before_start_after_completion() {
+        let object = ObjectId::new(0);
+        let from = TransformTrackEndpoint::new(GeometryRef::circle(1.0));
+        let mut to = TransformTrackEndpoint::new(GeometryRef::circle(2.0));
+        to.transform.translation = Vec2::new(10.0, 0.0);
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Transform,
+            values: TrackValues::Object {
+                from: from.clone(),
+                to: to.clone(),
+            },
+            timing: TrackTiming::new(0.25, 0.5, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        // Completion has reconciled the endpoint into the authored object.
+        // The historical track must still recover the source during an earlier wait.
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                to.geometry,
+                to.transform,
+                to.style,
+            )],
+            &[track],
+        )
+        .unwrap();
+        let mut instance = SceneInstance::new(compiled);
+        for time in [0.0, 0.1, 0.25, 0.75, 0.0] {
+            let frame = instance.seek(time).unwrap();
+            let expected = if time >= 0.75 { 2.0 } else { 1.0 };
+            assert_eq!(
+                frame.objects[0].geometry(),
+                Some(&GeometryRef::circle(expected))
+            );
+            assert_eq!(
+                frame.objects[0].transform.translation,
+                if time >= 0.75 {
+                    Vec2::new(10.0, 0.0)
+                } else {
+                    Vec2::ZERO
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn delayed_prepared_morph_recovers_its_source_rendering_before_start() {
+        let object = ObjectId::new(0);
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0));
+        let pair = GeometryRef::path(source.with_morph_target(target.clone()));
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Morph,
+            values: TrackValues::PreparedMorph {
+                from: 0.0,
+                to: 1.0,
+                geometry: pair.clone(),
+                render_transform: Some(Transform2D::IDENTITY),
+                source_transform: Transform2D::IDENTITY,
+            },
+            timing: TrackTiming::new(0.25, 0.5, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                GeometryRef::path(target),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )],
+            &[track],
+        )
+        .unwrap();
+        let mut instance = SceneInstance::new(compiled);
+        instance.seek(0.5).unwrap();
+        for time in [0.0, 0.1, 0.25] {
+            let frame = instance.seek(time).unwrap();
+            assert_eq!(frame.morph(0), 0.0);
+            assert_eq!(frame.render_geometries[0].as_deref(), Some(&pair));
+            assert_eq!(
+                frame.render_transforms[0],
+                (time >= 0.25).then_some(Transform2D::IDENTITY)
+            );
+        }
+    }
+
+    #[test]
+    fn future_fixed_morph_keeps_an_earlier_collapsed_scale_driver_and_shared_geometry() {
+        let object = ObjectId::new(0);
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0));
+        let source_transform = Transform2D {
+            translation: Vec2::new(2.0, 3.0),
+            rotation: 0.3,
+            scale: Vec2::new(2.0, 3.0),
+        };
+        let pair = GeometryRef::path(
+            source
+                .transformed(source_transform)
+                .with_morph_target(target.transformed(source_transform)),
+        );
+        let tracks = [
+            TrackDefinition {
+                id: TrackId::new(0),
+                object,
+                property: Property::Scale,
+                values: TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: source_transform.scale,
+                },
+                timing: TrackTiming::new(0.0, 0.5, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            },
+            TrackDefinition {
+                id: TrackId::new(1),
+                object,
+                property: Property::Morph,
+                values: TrackValues::PreparedMorph {
+                    from: 0.0,
+                    to: 1.0,
+                    geometry: pair,
+                    render_transform: Some(Transform2D::IDENTITY),
+                    source_transform,
+                },
+                timing: TrackTiming::new(0.75, 0.5, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            },
+        ];
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                GeometryRef::path(target),
+                source_transform,
+                Style::default(),
+            )],
+            &tracks,
+        )
+        .unwrap();
+        let mut instance = SceneInstance::new(compiled);
+        let mut retained = None;
+        for time in [0.0, 0.25, 0.5, 1.0, 0.0, 0.25] {
+            let frame = instance.seek(time).unwrap();
+            if time >= 0.75 {
+                assert_eq!(frame.render_transforms[0], Some(Transform2D::IDENTITY));
+                continue;
+            }
+            assert_eq!(frame.render_transforms[0], None);
+            assert_eq!(frame.morph(0), 0.0);
+            assert_eq!(
+                frame.objects[0].transform.scale,
+                source_transform.scale * (time / 0.5) as f32,
+            );
+            let geometry = frame.render_geometries[0].as_ref().unwrap();
+            if let Some(previous) = &retained {
+                assert!(Arc::ptr_eq(geometry, previous));
+            } else {
+                retained = Some(Arc::clone(geometry));
+            }
+            let GeometryRef::VectorPath(path) = geometry.as_ref() else {
+                panic!("source frame retains a path");
+            };
+            for (actual, expected) in path.commands().iter().zip(source.commands()) {
+                let (PathCommand::MoveTo { to: actual } | PathCommand::LineTo { to: actual }) =
+                    actual
+                else {
+                    panic!("source frame contains the original line");
+                };
+                let (PathCommand::MoveTo { to: expected } | PathCommand::LineTo { to: expected }) =
+                    expected
+                else {
+                    unreachable!();
+                };
+                assert!((*actual - *expected).length() < 1.0e-6);
+            }
+        }
     }
 
     #[test]

@@ -30,6 +30,7 @@ on:
       - "scripts/playground-product-compare.mjs"
       - "scripts/renderer-init-failure-smoke.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
+      - "scripts/square-to-circle-start-regression.mjs"
       - "web/**"
 
 permissions:
@@ -130,7 +131,7 @@ jobs:
           version: v0.16.0
 
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -367,6 +368,10 @@ jobs:
       - name: Recheck executable tutorial corpus
         working-directory: candidate
         run: node scripts/manim-tutorial-smoke.mjs
+
+      - name: Check SquareToCircle starts from square
+        working-directory: candidate
+        run: node scripts/square-to-circle-start-regression.mjs
 
       - name: Recheck retained Text animation
         working-directory: candidate

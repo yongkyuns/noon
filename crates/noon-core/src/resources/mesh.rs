@@ -1,10 +1,83 @@
 use crate::SemanticVec3;
 
+/// Cairo-compatible per-cell gradient endpoints and corner-relative spans.
+/// The renderer owns lighting and projection; this immutable geometry metadata
+/// preserves mapped shading samples and optional perimeter controls.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CairoSurfaceAppearance {
+    pub p0: SemanticVec3,
+    pub p6: SemanticVec3,
+    pub span_p3_p0: SemanticVec3,
+    pub span_p12_p0: SemanticVec3,
+    pub span_p9_p6: SemanticVec3,
+    pub span_p3_p6: SemanticVec3,
+    /// Optional cubic controls for the quad perimeter edges in mesh-position order:
+    /// 0→1, 1→2, 2→3, and 3→0. Endpoints are the corresponding mesh positions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_controls: Option<[[SemanticVec3; 2]; 4]>,
+}
+
+impl CairoSurfaceAppearance {
+    pub fn is_finite(&self) -> bool {
+        [
+            self.p0,
+            self.p6,
+            self.span_p3_p0,
+            self.span_p12_p0,
+            self.span_p9_p6,
+            self.span_p3_p6,
+        ]
+        .into_iter()
+        .all(SemanticVec3::is_finite)
+            && self
+                .boundary_controls
+                .is_none_or(|edges| edges.into_iter().flatten().all(SemanticVec3::is_finite))
+    }
+
+    /// Whether this appearance is valid for the given mesh payload. Boundary
+    /// controls are only meaningful for a canonical four-vertex quad.
+    pub fn is_valid_for_mesh(&self, positions: &[SemanticVec3], indices: &[u32]) -> bool {
+        self.is_finite()
+            && (self.boundary_controls.is_none()
+                || Self::has_canonical_quad_topology(positions.len(), indices))
+    }
+
+    fn has_canonical_quad_topology(position_count: usize, indices: &[u32]) -> bool {
+        if position_count != 4 || indices.len() != 6 {
+            return false;
+        }
+        let mut triangles = [
+            [indices[0], indices[1], indices[2]],
+            [indices[3], indices[4], indices[5]],
+        ];
+        for triangle in &mut triangles {
+            triangle.sort_unstable();
+        }
+        triangles.sort_unstable();
+        triangles == [[0, 1, 2], [0, 2, 3]] || triangles == [[0, 1, 3], [1, 2, 3]]
+    }
+}
+
 /// Axis-aligned bounds of a mesh in its local coordinate system.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshBounds3D {
     pub min: SemanticVec3,
     pub max: SemanticVec3,
+}
+
+fn mesh_bounds(points: impl IntoIterator<Item = SemanticVec3>) -> MeshBounds3D {
+    let mut points = points.into_iter();
+    let mut min = points.next().expect("validated nonempty mesh positions");
+    let mut max = min;
+    for point in points {
+        min.x = min.x.min(point.x);
+        min.y = min.y.min(point.y);
+        min.z = min.z.min(point.z);
+        max.x = max.x.max(point.x);
+        max.y = max.y.max(point.y);
+        max.z = max.z.max(point.z);
+    }
+    MeshBounds3D { min, max }
 }
 
 /// Immutable indexed triangle data validated before it enters a resource arena.
@@ -15,6 +88,7 @@ pub struct MeshResource {
     has_usable_normals: bool,
     indices: Vec<u32>,
     bounds: MeshBounds3D,
+    cairo_appearance: Option<Box<CairoSurfaceAppearance>>,
 }
 
 impl MeshResource {
@@ -61,23 +135,45 @@ impl MeshResource {
             });
         }
 
-        let mut min = positions[0];
-        let mut max = positions[0];
-        for point in &positions[1..] {
-            min.x = min.x.min(point.x);
-            min.y = min.y.min(point.y);
-            min.z = min.z.min(point.z);
-            max.x = max.x.max(point.x);
-            max.y = max.y.max(point.y);
-            max.z = max.z.max(point.z);
-        }
+        let bounds = mesh_bounds(positions.iter().copied());
         Ok(Self {
             positions,
             normals,
             has_usable_normals,
             indices,
-            bounds: MeshBounds3D { min, max },
+            bounds,
+            cairo_appearance: None,
         })
+    }
+
+    /// Attach immutable Cairo surface shading geometry after validating every
+    /// retained endpoint and span. Ordinary meshes keep the unboxed `None`.
+    pub fn with_cairo_appearance(
+        mut self,
+        appearance: CairoSurfaceAppearance,
+    ) -> Result<Self, MeshResourceError> {
+        if !appearance.is_finite() {
+            return Err(MeshResourceError::NonFiniteCairoAppearance);
+        }
+        if appearance.boundary_controls.is_some()
+            && !CairoSurfaceAppearance::has_canonical_quad_topology(
+                self.positions.len(),
+                &self.indices,
+            )
+        {
+            return Err(MeshResourceError::InvalidCairoBoundaryTopology);
+        }
+        // Cubic paths stay inside the convex hull of their anchors and controls.
+        // Retain that conservative extent once for world bounds and depth ordering.
+        // Rebuild from anchors so replacing appearance can also shrink the bounds.
+        self.bounds = mesh_bounds(
+            self.positions
+                .iter()
+                .copied()
+                .chain(appearance.boundary_controls.into_iter().flatten().flatten()),
+        );
+        self.cairo_appearance = Some(Box::new(appearance));
+        Ok(self)
     }
 
     pub fn positions(&self) -> &[SemanticVec3] {
@@ -94,8 +190,32 @@ impl MeshResource {
     pub fn indices(&self) -> &[u32] {
         &self.indices
     }
+    /// One retained triangle or two quad triangles sharing an edge. This is the common bounded
+    /// face contract for Cairo appearance and object-depth translucency.
+    pub fn is_single_face(&self) -> bool {
+        match (self.positions.len(), self.indices.len()) {
+            (3, 3) => {
+                let mut indices = [self.indices[0], self.indices[1], self.indices[2]];
+                indices.sort_unstable();
+                indices == [0, 1, 2]
+            }
+            (4, 6) => {
+                let mut first = [self.indices[0], self.indices[1], self.indices[2]];
+                let mut second = [self.indices[3], self.indices[4], self.indices[5]];
+                first.sort_unstable();
+                second.sort_unstable();
+                first.windows(2).all(|p| p[0] != p[1])
+                    && second.windows(2).all(|p| p[0] != p[1])
+                    && first.iter().filter(|i| second.contains(i)).count() == 2
+            }
+            _ => false,
+        }
+    }
     pub const fn bounds(&self) -> MeshBounds3D {
         self.bounds
+    }
+    pub fn cairo_appearance(&self) -> Option<&CairoSurfaceAppearance> {
+        self.cairo_appearance.as_deref()
     }
 
     /// Logical payload bytes retained by the resource, excluding allocator overhead.
@@ -105,6 +225,10 @@ impl MeshResource {
                 values.len() * std::mem::size_of::<SemanticVec3>()
             })
             + self.indices.len() * std::mem::size_of::<u32>()
+            + self
+                .cairo_appearance
+                .as_ref()
+                .map_or(0, |_| std::mem::size_of::<CairoSurfaceAppearance>())
     }
 }
 
@@ -116,6 +240,8 @@ pub enum MeshResourceError {
     NormalCountMismatch { positions: usize, normals: usize },
     InvalidTriangleIndexCount(usize),
     IndexOutOfBounds { index: u32, positions: usize },
+    NonFiniteCairoAppearance,
+    InvalidCairoBoundaryTopology,
 }
 
 impl std::fmt::Display for MeshResourceError {
@@ -133,6 +259,12 @@ impl std::fmt::Display for MeshResourceError {
             ),
             Self::IndexOutOfBounds { index, positions } => {
                 write!(f, "mesh index {index} exceeds position count {positions}")
+            }
+            Self::NonFiniteCairoAppearance => {
+                f.write_str("mesh has non-finite Cairo surface appearance data")
+            }
+            Self::InvalidCairoBoundaryTopology => {
+                f.write_str("Cairo boundary controls require a canonical four-vertex quad")
             }
         }
     }
@@ -172,6 +304,130 @@ mod tests {
             mesh.retained_bytes(),
             3 * std::mem::size_of::<SemanticVec3>() + 3 * std::mem::size_of::<u32>()
         );
+        assert!(mesh.cairo_appearance().is_none());
+    }
+
+    #[test]
+    fn cairo_appearance_is_optional_validated_retained_and_part_of_equality() {
+        let appearance = CairoSurfaceAppearance {
+            p0: SemanticVec3::ZERO,
+            p6: SemanticVec3::new(1.0, 2.0 / 3.0, 1.333334444),
+            span_p3_p0: SemanticVec3::new(1.0, 0.0, 1.0),
+            span_p12_p0: SemanticVec3::new(0.0, 1.0, 1.0),
+            span_p9_p6: SemanticVec3::new(-1.0 / 3.0, 1.0 / 3.0, 0.0),
+            span_p3_p6: SemanticVec3::new(0.0, -2.0 / 3.0, -0.333334444),
+            boundary_controls: None,
+        };
+        let plain = valid();
+        let retained = plain.clone().with_cairo_appearance(appearance).unwrap();
+        assert_eq!(retained.cairo_appearance(), Some(&appearance));
+        assert_ne!(retained, plain);
+        assert_eq!(
+            retained.retained_bytes(),
+            plain.retained_bytes() + std::mem::size_of::<CairoSurfaceAppearance>()
+        );
+        assert_eq!(
+            plain.with_cairo_appearance(CairoSurfaceAppearance {
+                p6: SemanticVec3::new(f64::NAN, 0.0, 0.0),
+                ..appearance
+            }),
+            Err(MeshResourceError::NonFiniteCairoAppearance)
+        );
+    }
+
+    #[test]
+    fn cairo_boundary_controls_require_finite_points_and_canonical_quad_topology() {
+        let appearance = CairoSurfaceAppearance {
+            p0: SemanticVec3::ZERO,
+            p6: SemanticVec3::ZERO,
+            span_p3_p0: SemanticVec3::ZERO,
+            span_p12_p0: SemanticVec3::ZERO,
+            span_p9_p6: SemanticVec3::ZERO,
+            span_p3_p6: SemanticVec3::ZERO,
+            boundary_controls: Some([[SemanticVec3::ZERO; 2]; 4]),
+        };
+        let positions = vec![
+            SemanticVec3::ZERO,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(1.0, 1.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ];
+        let canonical = MeshResource::new(positions.clone(), None, vec![0, 1, 3, 1, 2, 3]).unwrap();
+        let retained = canonical.clone().with_cairo_appearance(appearance).unwrap();
+        assert_eq!(
+            retained.cairo_appearance().unwrap().boundary_controls,
+            appearance.boundary_controls
+        );
+
+        let alternate_diagonal =
+            MeshResource::new(positions.clone(), None, vec![0, 1, 2, 0, 2, 3]).unwrap();
+        assert!(alternate_diagonal.with_cairo_appearance(appearance).is_ok());
+
+        let triangle = valid();
+        assert_eq!(
+            triangle.with_cairo_appearance(appearance),
+            Err(MeshResourceError::InvalidCairoBoundaryTopology)
+        );
+        let noncanonical_quad = MeshResource::new(positions, None, vec![0, 1, 2, 0, 1, 3]).unwrap();
+        assert_eq!(
+            noncanonical_quad.with_cairo_appearance(appearance),
+            Err(MeshResourceError::InvalidCairoBoundaryTopology)
+        );
+
+        let mut non_finite = appearance;
+        non_finite.boundary_controls.as_mut().unwrap()[2][1].z = f64::INFINITY;
+        assert_eq!(
+            canonical.with_cairo_appearance(non_finite),
+            Err(MeshResourceError::NonFiniteCairoAppearance)
+        );
+    }
+
+    #[test]
+    fn curved_perimeter_bounds_include_controls_and_shrink_when_replaced() {
+        let plain = MeshResource::new(
+            vec![
+                SemanticVec3::ZERO,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::new(1.0, 1.0, 0.0),
+                SemanticVec3::new(0.0, 1.0, 0.0),
+            ],
+            None,
+            vec![0, 1, 2, 0, 2, 3],
+        )
+        .unwrap();
+        let appearance = CairoSurfaceAppearance {
+            p0: SemanticVec3::ZERO,
+            p6: SemanticVec3::ZERO,
+            span_p3_p0: SemanticVec3::ZERO,
+            span_p12_p0: SemanticVec3::ZERO,
+            span_p9_p6: SemanticVec3::ZERO,
+            span_p3_p6: SemanticVec3::ZERO,
+            boundary_controls: Some([
+                [
+                    SemanticVec3::new(-2.0, 0.0, 3.0),
+                    SemanticVec3::new(4.0, 2.0, -1.0),
+                ],
+                [SemanticVec3::ZERO; 2],
+                [SemanticVec3::ZERO; 2],
+                [SemanticVec3::ZERO; 2],
+            ]),
+        };
+        let curved = plain.clone().with_cairo_appearance(appearance).unwrap();
+        assert_eq!(
+            curved.bounds(),
+            MeshBounds3D {
+                min: SemanticVec3::new(-2.0, 0.0, -1.0),
+                max: SemanticVec3::new(4.0, 2.0, 3.0),
+            }
+        );
+        assert_eq!(curved.positions(), plain.positions());
+        let straight = curved
+            .with_cairo_appearance(CairoSurfaceAppearance {
+                boundary_controls: None,
+                ..appearance
+            })
+            .unwrap();
+        assert_eq!(straight.bounds(), plain.bounds());
     }
 
     #[test]

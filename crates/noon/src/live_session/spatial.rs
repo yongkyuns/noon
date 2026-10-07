@@ -1,6 +1,8 @@
 use super::*;
-use crate::spatial_authoring::{publish_mesh_creation, publish_mesh_family};
-use crate::{AuthoringError, MeshOptions};
+use crate::spatial_authoring::{
+    publish_mesh_creation, publish_mesh_family, publish_meshes_and_paths_family,
+};
+use crate::{AuthoringError, MeshOptions, SpatialPathOptions};
 
 impl LiveSession<'_> {
     /// Atomically recolor one sampled surface through this session's publication owner.
@@ -65,6 +67,20 @@ impl LiveSession<'_> {
             .map_err(Into::into)
     }
 
+    pub fn effective_world_family_center(
+        &self,
+        family: &crate::MobjectFamily,
+    ) -> Result<noon_core::SemanticVec3, LiveSessionError> {
+        crate::world_affine::target_world_center_with(
+            self.store,
+            crate::MobjectTarget::Family(family),
+            |store, node, _| {
+                crate::spatial_authoring::effective_world_or_authored(self.session, store, node)
+            },
+        )
+        .map_err(Into::into)
+    }
+
     /// Detached creation uses the same resource/publication boundary as Scene.
     pub fn create_mesh(&mut self, options: MeshOptions) -> Result<Mobject, LiveSessionError> {
         let node = self.with_semantic_publication(|store, publish| {
@@ -79,6 +95,17 @@ impl LiveSession<'_> {
     ) -> Result<MobjectFamily, LiveSessionError> {
         let node = self.with_semantic_publication(|store, publish| {
             publish_mesh_family(store, options, publish)
+        })?;
+        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
+    }
+
+    pub fn create_mesh_family_with_paths(
+        &mut self,
+        meshes: Vec<MeshOptions>,
+        paths: Vec<SpatialPathOptions>,
+    ) -> Result<MobjectFamily, LiveSessionError> {
+        let node = self.with_semantic_publication(|store, publish| {
+            publish_meshes_and_paths_family(store, meshes, paths, publish)
         })?;
         MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
     }

@@ -454,8 +454,9 @@ fn added_spatial_object_accepts_transform_and_world_track_in_same_sparse_batch()
         point_light: false,
         composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
         draw_kind: crate::CompiledSpatialDrawKind::Planar,
-        fixed_orientation_anchor_family: None,
+        spatial_anchor_family: None,
         fixed_orientation_center: None,
+        cairo_path_appearance: None,
     }));
     let endpoint = noon_core::WorldTransformTrackEndpoint::from_world(world);
     let transaction = ExecutionMutationTransaction::from_mutations([
@@ -503,8 +504,9 @@ fn spatial_transaction_rejects_camera_scale_and_planar_pose_mutations() {
         point_light: false,
         composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
         draw_kind: crate::CompiledSpatialDrawKind::Planar,
-        fixed_orientation_anchor_family: None,
+        spatial_anchor_family: None,
         fixed_orientation_center: None,
+        cairo_path_appearance: None,
     }));
     let endpoint = |scale| {
         noon_core::WorldTransformTrackEndpoint::from_world(
@@ -586,8 +588,9 @@ fn spatial_domain_change_rejects_incompatible_planar_track_atomically() {
         point_light: false,
         composition_domain: noon_core::SemanticSpatialCompositionDomain::FixedFrame,
         draw_kind: crate::CompiledSpatialDrawKind::Planar,
-        fixed_orientation_anchor_family: None,
+        spatial_anchor_family: None,
         fixed_orientation_center: None,
+        cairo_path_appearance: None,
     }));
     let track = TrackDefinition {
         id: TrackId::new(94),
@@ -611,8 +614,9 @@ fn spatial_domain_change_rejects_incompatible_planar_track_atomically() {
         point_light: false,
         composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
         draw_kind: crate::CompiledSpatialDrawKind::Planar,
-        fixed_orientation_anchor_family: None,
+        spatial_anchor_family: None,
         fixed_orientation_center: None,
+        cairo_path_appearance: None,
     };
     let change = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetSpatialState {
         object: id,

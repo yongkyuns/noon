@@ -323,7 +323,7 @@ impl PreparedSemanticPublication {
             patches.push(ExecutionPatch::CreateObject(entry.compiled));
         }
         patches.extend(self.anchor_bounds_updates.into_iter().map(|update| {
-            ExecutionPatch::SetFixedOrientationGroupBoundsMembers {
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers {
                 anchor_family: update.anchor_family,
                 members: update.members,
             }
@@ -641,13 +641,13 @@ fn prepare_anchor_bounds_updates(
             | SemanticMutation::RemoveMember { family, .. }
             | SemanticMutation::ReorderMember { family, .. } => {
                 if let Some(family) = prepared.planned_node_id(*family) {
-                    anchors.extend(index.fixed_orientation_anchors_for_family(family));
+                    anchors.extend(index.spatial_anchors_for_family(family));
                 }
             }
             SemanticMutation::RemoveNode { node } => {
                 if let Some(node) = node.existing().and_then(|node| prepared.store().node(node)) {
                     for &parent in node.parents() {
-                        anchors.extend(index.fixed_orientation_anchors_for_family(parent));
+                        anchors.extend(index.spatial_anchors_for_family(parent));
                     }
                 }
             }
@@ -668,7 +668,7 @@ fn prepare_anchor_bounds_updates(
             .compiled
             .spatial
             .as_ref()
-            .and_then(|spatial| spatial.fixed_orientation_anchor_family)
+            .and_then(|spatial| spatial.spatial_anchor_family)
         {
             anchors.insert(anchor);
         }

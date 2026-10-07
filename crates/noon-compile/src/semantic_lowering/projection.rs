@@ -24,13 +24,13 @@ use crate::CompiledGraphArrowPolicy;
 #[derive(Clone, Debug, Default)]
 pub struct SemanticExecutionIndex {
     object_ids: HashMap<SemanticNodeId, ObjectId>,
-    /// Reverse family dependencies for FixedOrientation anchor groups. These
+    /// Reverse family dependencies for composed spatial appearance groups. These
     /// contain only family nodes below an anchor, so one membership impact
     /// refreshes only affected group subtrees.
-    fixed_orientation_owner_anchors: HashMap<SemanticNodeId, SemanticNodeId>,
-    fixed_orientation_anchor_owners: HashMap<SemanticNodeId, HashSet<SemanticNodeId>>,
-    fixed_orientation_anchor_descendants: HashMap<SemanticNodeId, Vec<SemanticNodeId>>,
-    fixed_orientation_family_anchors: HashMap<SemanticNodeId, HashSet<SemanticNodeId>>,
+    spatial_anchor_owner_families: HashMap<SemanticNodeId, SemanticNodeId>,
+    spatial_anchor_family_owners: HashMap<SemanticNodeId, HashSet<SemanticNodeId>>,
+    spatial_anchor_family_descendants: HashMap<SemanticNodeId, Vec<SemanticNodeId>>,
+    spatial_anchor_family_groups: HashMap<SemanticNodeId, HashSet<SemanticNodeId>>,
 }
 
 impl SemanticExecutionIndex {
@@ -96,11 +96,11 @@ impl SemanticExecutionIndex {
         for impact in impacts {
             match *impact {
                 SemanticMutationImpact::NodeAdded { node } => {
-                    self.update_fixed_orientation_owner(store, node);
+                    self.update_spatial_anchor_owner(store, node);
                 }
                 SemanticMutationImpact::NodeRemoved { node } => {
                     self.object_ids.remove(&node);
-                    self.update_fixed_orientation_owner(store, node);
+                    self.update_spatial_anchor_owner(store, node);
                 }
                 SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
@@ -124,16 +124,14 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::AnimationAdded { .. } => {}
                 SemanticMutationImpact::SpatialCompositionDomain { object }
                 | SemanticMutationImpact::SpatialAnchorChanged { object } => {
-                    self.update_fixed_orientation_owner(store, object);
+                    self.update_spatial_anchor_owner(store, object);
                 }
                 SemanticMutationImpact::FamilyMemberAdded { family, .. }
                 | SemanticMutationImpact::FamilyMemberRemoved { family, .. }
                 | SemanticMutationImpact::FamilyMemberReordered { family, .. } => {
-                    if let Some(anchors) =
-                        self.fixed_orientation_family_anchors.get(&family).cloned()
-                    {
+                    if let Some(anchors) = self.spatial_anchor_family_groups.get(&family).cloned() {
                         for anchor in anchors {
-                            self.refresh_fixed_orientation_anchor(store, anchor);
+                            self.refresh_spatial_anchor_family(store, anchor);
                         }
                     }
                 }
@@ -141,12 +139,9 @@ impl SemanticExecutionIndex {
         }
     }
 
-    pub(crate) fn fixed_orientation_anchors_for_family(
-        &self,
-        family: SemanticNodeId,
-    ) -> Vec<SemanticNodeId> {
+    pub(crate) fn spatial_anchors_for_family(&self, family: SemanticNodeId) -> Vec<SemanticNodeId> {
         let mut anchors = self
-            .fixed_orientation_family_anchors
+            .spatial_anchor_family_groups
             .get(&family)
             .into_iter()
             .flat_map(|anchors| anchors.iter().copied())
@@ -155,18 +150,17 @@ impl SemanticExecutionIndex {
         anchors
     }
 
-    fn update_fixed_orientation_owner(&mut self, store: &SemanticStore, owner: SemanticNodeId) {
-        if let Some(previous) = self.fixed_orientation_owner_anchors.remove(&owner) {
-            let empty =
-                if let Some(owners) = self.fixed_orientation_anchor_owners.get_mut(&previous) {
-                    owners.remove(&owner);
-                    owners.is_empty()
-                } else {
-                    false
-                };
+    fn update_spatial_anchor_owner(&mut self, store: &SemanticStore, owner: SemanticNodeId) {
+        if let Some(previous) = self.spatial_anchor_owner_families.remove(&owner) {
+            let empty = if let Some(owners) = self.spatial_anchor_family_owners.get_mut(&previous) {
+                owners.remove(&owner);
+                owners.is_empty()
+            } else {
+                false
+            };
             if empty {
-                self.fixed_orientation_anchor_owners.remove(&previous);
-                self.remove_fixed_orientation_anchor(previous);
+                self.spatial_anchor_family_owners.remove(&previous);
+                self.remove_spatial_anchor_family(previous);
             }
         }
         let next = store
@@ -175,21 +169,25 @@ impl SemanticExecutionIndex {
             .filter(|state| {
                 state.spatial_composition_domain()
                     == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
+                    || (state.spatial_material() == noon_core::SemanticSpatialMaterial::CairoPath
+                        && state
+                            .cairo_path_appearance()
+                            .is_some_and(|a| a.gradient_direction.is_some()))
             })
             .and_then(|state| state.spatial_anchor_family());
         if let Some(anchor) = next {
-            self.fixed_orientation_owner_anchors.insert(owner, anchor);
-            self.fixed_orientation_anchor_owners
+            self.spatial_anchor_owner_families.insert(owner, anchor);
+            self.spatial_anchor_family_owners
                 .entry(anchor)
                 .or_default()
                 .insert(owner);
-            self.refresh_fixed_orientation_anchor(store, anchor);
+            self.refresh_spatial_anchor_family(store, anchor);
         }
     }
 
-    fn refresh_fixed_orientation_anchor(&mut self, store: &SemanticStore, anchor: SemanticNodeId) {
-        self.remove_fixed_orientation_anchor(anchor);
-        if !self.fixed_orientation_anchor_owners.contains_key(&anchor) {
+    fn refresh_spatial_anchor_family(&mut self, store: &SemanticStore, anchor: SemanticNodeId) {
+        self.remove_spatial_anchor_family(anchor);
+        if !self.spatial_anchor_family_owners.contains_key(&anchor) {
             return;
         }
         let Ok(nodes) = store.ordered_authoring_nodes(anchor) else {
@@ -204,27 +202,27 @@ impl SemanticExecutionIndex {
             })
             .collect::<Vec<_>>();
         for descendant in &descendants {
-            self.fixed_orientation_family_anchors
+            self.spatial_anchor_family_groups
                 .entry(*descendant)
                 .or_default()
                 .insert(anchor);
         }
-        self.fixed_orientation_anchor_descendants
+        self.spatial_anchor_family_descendants
             .insert(anchor, descendants);
     }
 
-    fn remove_fixed_orientation_anchor(&mut self, anchor: SemanticNodeId) {
-        if let Some(descendants) = self.fixed_orientation_anchor_descendants.remove(&anchor) {
+    fn remove_spatial_anchor_family(&mut self, anchor: SemanticNodeId) {
+        if let Some(descendants) = self.spatial_anchor_family_descendants.remove(&anchor) {
             for descendant in descendants {
                 let remove = self
-                    .fixed_orientation_family_anchors
+                    .spatial_anchor_family_groups
                     .get_mut(&descendant)
                     .is_some_and(|anchors| {
                         anchors.remove(&anchor);
                         anchors.is_empty()
                     });
                 if remove {
-                    self.fixed_orientation_family_anchors.remove(&descendant);
+                    self.spatial_anchor_family_groups.remove(&descendant);
                 }
             }
         }
@@ -303,7 +301,7 @@ impl SemanticExecutionIndex {
         let pending_graph_edges = lower_graph_dependencies(store, &graph_roots, &seen)?;
 
         for (semantic_id, _) in &pending {
-            self.update_fixed_orientation_owner(store, *semantic_id);
+            self.update_spatial_anchor_owner(store, *semantic_id);
         }
 
         let objects = pending
@@ -490,6 +488,9 @@ pub enum SemanticLoweringError {
     UnsupportedSpatialMaterial {
         node: SemanticNodeId,
     },
+    UnsupportedWorldPathStyle {
+        node: SemanticNodeId,
+    },
     UnsupportedSpatialCompositionDomain {
         node: SemanticNodeId,
     },
@@ -575,6 +576,12 @@ impl std::fmt::Display for SemanticLoweringError {
             Self::UnsupportedSpatialCompositionDomain { node } => write!(
                 formatter,
                 "semantic object {}:{} uses a spatial composition domain that is unsupported for its geometry",
+                node.slot(),
+                node.generation()
+            ),
+            Self::UnsupportedWorldPathStyle { node } => write!(
+                formatter,
+                "World path {}:{} requires opaque or disabled fill/stroke paint",
                 node.slot(),
                 node.generation()
             ),
@@ -821,6 +828,7 @@ pub(super) fn object_requires_spatial_lowering(
         || state.role() == noon_core::SemanticObjectRole::PointLight3D
         || object_has_mesh_content(state, store)
         || state.spatial_composition_domain() != noon_core::SemanticSpatialCompositionDomain::World
+        || state.spatial_material() == noon_core::SemanticSpatialMaterial::CairoPath
         || matches!(
             state.transform.orientation,
             noon_core::SemanticOrientation::Spatial(_)
@@ -833,6 +841,9 @@ pub(super) fn lower_object_state(
     store: &SemanticStore,
 ) -> Result<LoweredObjectState, SemanticLoweringError> {
     let mesh_content = object_has_mesh_content(state, store);
+    if !state.world_path_style_is_supported(store.geometry_resources()) {
+        return Err(SemanticLoweringError::UnsupportedWorldPathStyle { node: semantic_id });
+    }
     let is_camera_3d = state.role() == noon_core::SemanticObjectRole::Camera3D;
     let is_point_light = state.role() == noon_core::SemanticObjectRole::PointLight3D;
     let domain = state.spatial_composition_domain();
@@ -847,6 +858,13 @@ pub(super) fn lower_object_state(
         return Err(SemanticLoweringError::UnsupportedSpatialOrientation { node: semantic_id });
     }
     if state.spatial_material() == noon_core::SemanticSpatialMaterial::PointLit && !mesh_content {
+        return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
+    }
+    if state.spatial_material() == noon_core::SemanticSpatialMaterial::CairoSurface && !mesh_content
+    {
+        return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
+    }
+    if state.spatial_material() == noon_core::SemanticSpatialMaterial::CairoPath && mesh_content {
         return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
     }
     if is_camera_3d && state.transform.scale != noon_core::SemanticVec3::new(1.0, 1.0, 1.0) {
@@ -878,8 +896,15 @@ pub(super) fn lower_object_state(
             } else {
                 crate::CompiledSpatialDrawKind::Planar
             },
-            fixed_orientation_anchor_family: state.spatial_anchor_family(),
+            spatial_anchor_family: state.spatial_anchor_family(),
             fixed_orientation_center: None,
+            cairo_path_appearance: state.cairo_path_appearance().map(|appearance| {
+                Box::new(crate::CompiledCairoPathAppearance {
+                    sheen_factor: appearance.sheen_factor,
+                    gradient_direction: appearance.gradient_direction,
+                    world_family_bounds: None,
+                })
+            }),
         })
     } else {
         None
@@ -1237,6 +1262,22 @@ mod tests {
         assert_eq!(object_state.base_style.opacity, 0.6);
         assert_eq!(object_state.presentation.z_index, 9.0);
         assert_eq!(object_state.presentation.insertion_order, 0);
+    }
+
+    #[test]
+    fn offline_world_path_partial_paint_rejects_before_installing_execution_ids() {
+        let mut store = SemanticStore::new();
+        attach(&mut store, circle(1.0));
+        let mut state = circle(1.0);
+        state.transform = noon_core::SemanticWorldTransform3D::IDENTITY.into();
+        state.style.fill_opacity = 0.5;
+        let invalid = attach(&mut store, state);
+        let mut index = SemanticExecutionIndex::new();
+        assert!(matches!(
+            index.lower_scene(&store),
+            Err(SemanticLoweringError::UnsupportedWorldPathStyle { node }) if node == invalid
+        ));
+        assert_eq!(index.len(), 0);
     }
 
     #[test]

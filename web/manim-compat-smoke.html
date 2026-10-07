@@ -69,6 +69,73 @@
       async function runLive(source) {
         return (await runLiveSources([source])).results[0];
       }
+      async function runLiveSamples(source, sampleTimes) {
+        if (!Array.isArray(sampleTimes) || sampleTimes.length === 0) {
+          throw new TypeError("sampleTimes must be a non-empty array");
+        }
+        const times = sampleTimes.map((value, index) => {
+          const time = Number(value);
+          if (!Number.isFinite(time) || time < 0) {
+            throw new TypeError(`sampleTimes[${index}] must be a finite non-negative number`);
+          }
+          if (index > 0 && time <= Number(sampleTimes[index - 1])) {
+            throw new TypeError("sampleTimes must be strictly increasing");
+          }
+          return time;
+        });
+        const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+        const canvas = document.createElement("canvas");
+        canvas.width = 640;
+        canvas.height = 360;
+        document.body.append(canvas);
+        const execution = new AuthoringExecutionClient(canvas);
+        let resolveAttached;
+        let rejectAttached;
+        const attached = new Promise((resolve, reject) => {
+          resolveAttached = resolve;
+          rejectAttached = reject;
+        });
+        let duration = null;
+        const authored = client.run(source, {}, {
+          async onSemanticContinuation(registration) {
+            duration = registration.duration;
+            await execution.startSemanticExecution(registration.semanticExecution, {
+              authoringClient: client,
+              loopDurationSeconds: registration.duration,
+              transportMode: "transferable",
+              pacing: "external_samples",
+            });
+            resolveAttached();
+          },
+        });
+        void authored.then(
+          () => rejectAttached(new Error("sampled live source returned without registering a continuation")),
+          rejectAttached,
+        );
+        try {
+          await attached;
+          if (duration === null) throw new Error("sampled live source did not report its duration");
+          if (times.at(-1) > duration + 1e-9) {
+            throw new RangeError(`sample time ${times.at(-1)} exceeds source duration ${duration}`);
+          }
+          const frames = [];
+          for (const time of times) {
+            const sampled = await execution.sampleToAuthoredTime(time);
+            if (Math.abs(Number(sampled.time) - time) > 1e-9) {
+              throw new Error(`sampled live execution drifted from ${time} to ${sampled.time}`);
+            }
+            frames.push(await execution.debugFrame());
+          }
+          const endpoint = Math.abs(times.at(-1) - duration) <= 1e-9
+            ? Promise.resolve(null)
+            : execution.sampleToAuthoredTime(duration);
+          const [, completed] = await Promise.all([endpoint, authored]);
+          return { duration: completed.duration, frames };
+        } finally {
+          execution.terminate();
+          canvas.remove();
+        }
+      }
       const wasmReady = init();
       const familyCreateSource = `
 from noon import *
@@ -264,6 +331,7 @@ class RetainedSequentialFamilySmoke(Scene):
           return writeRenderResult;
         },
         runLive,
+        runLiveSamples,
         runLiveSources,
       };
     </script>
