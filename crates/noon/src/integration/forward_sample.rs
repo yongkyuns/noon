@@ -130,7 +130,11 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
             Phase::Endpoint { context, .. } => {
                 return Ok(ForwardSampleStatus::PublicationPending(context));
             }
-            Phase::Observed { observation, finished, .. } => {
+            Phase::Observed {
+                observation,
+                finished,
+                ..
+            } => {
                 return Ok(if finished {
                     ForwardSampleStatus::SourceFinished(observation)
                 } else {
@@ -143,12 +147,19 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
 
         match self.program.status() {
             LiveProgramStatus::PublicationPending(context) => {
-                self.phase = Phase::Endpoint { context, consumed: false };
+                self.phase = Phase::Endpoint {
+                    context,
+                    consumed: false,
+                };
                 Ok(ForwardSampleStatus::PublicationPending(context))
             }
             LiveProgramStatus::Finished => {
                 let observation = self.observation();
-                self.phase = Phase::Observed { observation, finished: true, consumed: false };
+                self.phase = Phase::Observed {
+                    observation,
+                    finished: true,
+                    consumed: false,
+                };
                 Ok(ForwardSampleStatus::SourceFinished(observation))
             }
             LiveProgramStatus::Terminal => {
@@ -181,7 +192,11 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
                             current: observation.published_time,
                         });
                     }
-                    self.phase = Phase::Observed { observation, finished: false, consumed: false };
+                    self.phase = Phase::Observed {
+                        observation,
+                        finished: false,
+                        consumed: false,
+                    };
                     Ok(ForwardSampleStatus::Ready(observation))
                 } else {
                     Ok(ForwardSampleStatus::Progress)
@@ -214,7 +229,11 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
         &mut self,
         context: PublicationContext,
     ) -> Result<(), ForwardSampleError<C::Error>> {
-        let Phase::Endpoint { context: expected, consumed } = self.phase else {
+        let Phase::Endpoint {
+            context: expected,
+            consumed,
+        } = self.phase
+        else {
             return Err(ForwardSampleError::NoPublication);
         };
         if context != expected {
@@ -224,7 +243,9 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
             return Err(ForwardSampleError::PublicationNotConsumed);
         }
         // Do not bypass LiveProgram's exact-context and pending-dirty checks.
-        self.program.admit_publication(context).map_err(ForwardSampleError::Program)?;
+        self.program
+            .admit_publication(context)
+            .map_err(ForwardSampleError::Program)?;
         self.phase = Phase::Driving;
         Ok(())
     }
@@ -252,14 +273,19 @@ impl<E: fmt::Display> fmt::Display for ForwardSampleError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidTime { requested, current } => {
-                write!(f, "invalid forward sample {requested} at runtime time {current}")
+                write!(
+                    f,
+                    "invalid forward sample {requested} at runtime time {current}"
+                )
             }
             Self::TransitionLimit => write!(f, "forward sample exhausted its transition budget"),
             Self::Inactive => write!(f, "forward sample or source is inactive"),
             Self::NoPublication => write!(f, "no publication is available in this sample phase"),
             Self::WrongPublication => write!(f, "endpoint receipt names a different publication"),
             Self::PublicationNotConsumed => write!(f, "consume the endpoint before admitting it"),
-            Self::PublicationAlreadyConsumed => write!(f, "sample publication was already consumed"),
+            Self::PublicationAlreadyConsumed => {
+                write!(f, "sample publication was already consumed")
+            }
             Self::Program(error) => error.fmt(f),
         }
     }

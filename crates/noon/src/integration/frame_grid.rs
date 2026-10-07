@@ -170,12 +170,18 @@ impl fmt::Display for FrameGridError {
         match self {
             Self::InvalidRate => write!(f, "frame-rate numerator and denominator must be positive"),
             Self::InvalidOrigin => write!(f, "frame-grid origin must be finite and nonnegative"),
-            Self::InvalidEnd => write!(f, "frame-grid end must be finite and not precede its origin"),
+            Self::InvalidEnd => write!(
+                f,
+                "frame-grid end must be finite and not precede its origin"
+            ),
             Self::FrameLimitExceeded { max_frames } => {
                 write!(f, "export interval exceeds the {max_frames}-frame limit")
             }
             Self::UnrepresentableTime { index } => {
-                write!(f, "frame {index} cannot be represented as a distinct runtime timestamp")
+                write!(
+                    f,
+                    "frame {index} cannot be represented as a distinct runtime timestamp"
+                )
             }
         }
     }
@@ -217,7 +223,10 @@ mod tests {
             let sample = grid.sample(u64::from(p)).unwrap();
             assert_eq!(sample.authored_time(), 1_001.0);
             assert_eq!(sample.time_base(), (1_001, p));
-            assert_eq!(grid.frame_count_before(1_001.0, u64::from(p)), Ok(u64::from(p)));
+            assert_eq!(
+                grid.frame_count_before(1_001.0, u64::from(p)),
+                Ok(u64::from(p))
+            );
         }
     }
 
@@ -241,19 +250,31 @@ mod tests {
     #[test]
     fn frame_caps_are_errors_not_truncated_success() {
         let grid = grid(60, 1);
-        assert_eq!(grid.frame_count_before(10.0, 599), Err(FrameGridError::FrameLimitExceeded { max_frames: 599 }));
-        assert_eq!(grid.frame_count_before(1.0, 0), Err(FrameGridError::FrameLimitExceeded { max_frames: 0 }));
+        assert_eq!(
+            grid.frame_count_before(10.0, 599),
+            Err(FrameGridError::FrameLimitExceeded { max_frames: 599 })
+        );
+        assert_eq!(
+            grid.frame_count_before(1.0, 0),
+            Err(FrameGridError::FrameLimitExceeded { max_frames: 0 })
+        );
     }
 
     #[test]
     fn invalid_times_are_rejected() {
         let rate = FrameRate::new(60, 1).unwrap();
         for origin in [-1.0, f64::NAN, f64::INFINITY] {
-            assert_eq!(FrameGrid::new(rate, origin), Err(FrameGridError::InvalidOrigin));
+            assert_eq!(
+                FrameGrid::new(rate, origin),
+                Err(FrameGridError::InvalidOrigin)
+            );
         }
         let grid = FrameGrid::new(rate, 2.0).unwrap();
         for end in [1.0, f64::NAN, f64::INFINITY] {
-            assert_eq!(grid.frame_count_before(end, 100), Err(FrameGridError::InvalidEnd));
+            assert_eq!(
+                grid.frame_count_before(end, 100),
+                Err(FrameGridError::InvalidEnd)
+            );
         }
         assert_eq!(grid.sample(60).unwrap().authored_time(), 3.0);
     }
@@ -264,14 +285,23 @@ mod tests {
         let index = (1_u64 << 32) + 1;
         // (2^32 + 1) * (2^32 - 1) = 2^64 - 1, rounded only at f64 boundary.
         assert_eq!(grid.sample(index).unwrap().authored_time(), u64::MAX as f64);
-        assert_eq!(grid.frame_count_before(grid.sample(index).unwrap().authored_time(), index), Ok(index));
+        assert_eq!(
+            grid.frame_count_before(grid.sample(index).unwrap().authored_time(), index),
+            Ok(index)
+        );
     }
 
     #[test]
     fn collapsed_runtime_samples_are_rejected() {
         let rate = FrameRate::new(60, 1).unwrap();
-        assert!(matches!(FrameGrid::new(rate, 1.0e30), Err(FrameGridError::UnrepresentableTime { .. })));
-        assert!(matches!(grid(60, 1).sample(u64::MAX), Err(FrameGridError::UnrepresentableTime { .. })));
+        assert!(matches!(
+            FrameGrid::new(rate, 1.0e30),
+            Err(FrameGridError::UnrepresentableTime { .. })
+        ));
+        assert!(matches!(
+            grid(60, 1).sample(u64::MAX),
+            Err(FrameGridError::UnrepresentableTime { .. })
+        ));
     }
 
     #[test]
@@ -281,7 +311,9 @@ mod tests {
                 let grid = FrameGrid::new(FrameRate::new(p, q).unwrap(), origin).unwrap();
                 for step in 0..200 {
                     let end = origin + f64::from(step) / 137.0;
-                    let expected = (0..200).take_while(|&i| grid.sample(i).unwrap().authored_time() < end).count() as u64;
+                    let expected = (0..200)
+                        .take_while(|&i| grid.sample(i).unwrap().authored_time() < end)
+                        .count() as u64;
                     assert_eq!(grid.frame_count_before(end, 200), Ok(expected));
                 }
             }

@@ -4,8 +4,8 @@
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use crate::integration::{
-    ForwardSample, ForwardSampleError, ForwardSampleStatus, FrameGrid, FrameRate,
-    HostCallbackId, SemanticMutationTransaction,
+    ForwardSample, ForwardSampleError, ForwardSampleStatus, FrameGrid, FrameRate, HostCallbackId,
+    SemanticMutationTransaction,
 };
 use crate::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus, LiveSession,
@@ -60,23 +60,36 @@ fn fixture() -> Fixture {
     scene.add(&marker).unwrap();
     let mut registration = SemanticMutationTransaction::new();
     registration.add_updater(marker.node_id(), CALLBACK, 0.0, None);
-    registration.apply(&mut scene.integration_store().borrow_mut()).unwrap();
+    registration
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
     let trace = Rc::new(RefCell::new(Vec::new()));
     let observed_trace = Rc::clone(&trace);
     let mut callbacks = RustHostCallbackTable::new();
-    callbacks.insert(CALLBACK, move |context| {
-        observed_trace.borrow_mut().push((context.time(), context.delta_time()));
-        let mut transform = context.target_state().transform;
-        transform.translation.y += context.delta_time() as f32;
-        context.set_target_transform(transform)
-    }).unwrap();
+    callbacks
+        .insert(CALLBACK, move |context| {
+            observed_trace
+                .borrow_mut()
+                .push((context.time(), context.delta_time()));
+            let mut transform = context.target_state().transform;
+            transform.translation.y += context.delta_time() as f32;
+            context.set_target_transform(transform)
+        })
+        .unwrap();
     let resumes = Rc::new(RefCell::new(Vec::new()));
-    let program = scene.into_live_program(Segments {
-        marker,
-        stage: 0,
-        resumes: Rc::clone(&resumes),
-    }).unwrap();
-    Fixture { program, callbacks, trace, resumes }
+    let program = scene
+        .into_live_program(Segments {
+            marker,
+            stage: 0,
+            resumes: Rc::clone(&resumes),
+        })
+        .unwrap();
+    Fixture {
+        program,
+        callbacks,
+        trace,
+        resumes,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,15 +101,24 @@ struct Observation {
     finished: bool,
 }
 
-fn observe(fixture: &mut Fixture, requested: f64, slow: bool, endpoints: &mut Vec<f64>) -> Observation {
+fn observe(
+    fixture: &mut Fixture,
+    requested: f64,
+    slow: bool,
+    endpoints: &mut Vec<f64>,
+) -> Observation {
     let trace = Rc::clone(&fixture.trace);
-    let mut sample = ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, requested, 32).unwrap();
+    let mut sample =
+        ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, requested, 32).unwrap();
     for _ in 0..100 {
         let status = sample.advance().unwrap();
         match status {
             ForwardSampleStatus::Progress => {}
             ForwardSampleStatus::PublicationPending(expected) => {
-                assert!(matches!(sample.admit_endpoint(expected), Err(ForwardSampleError::PublicationNotConsumed)));
+                assert!(matches!(
+                    sample.admit_endpoint(expected),
+                    Err(ForwardSampleError::PublicationNotConsumed)
+                ));
                 let time = sample.session().frame().time;
                 let trace_before = trace.borrow().clone();
                 if slow {
@@ -108,11 +130,15 @@ fn observe(fixture: &mut Fixture, requested: f64, slow: bool, endpoints: &mut Ve
                 assert_eq!(*trace.borrow(), trace_before);
                 let receipt = sample.take_renderer_publication().unwrap().context();
                 assert_eq!(receipt, expected);
-                assert!(matches!(sample.take_renderer_publication(), Err(ForwardSampleError::PublicationAlreadyConsumed)));
+                assert!(matches!(
+                    sample.take_renderer_publication(),
+                    Err(ForwardSampleError::PublicationAlreadyConsumed)
+                ));
                 sample.admit_endpoint(receipt).unwrap();
                 endpoints.push(time);
             }
-            ForwardSampleStatus::Ready(metadata) | ForwardSampleStatus::SourceFinished(metadata) => {
+            ForwardSampleStatus::Ready(metadata)
+            | ForwardSampleStatus::SourceFinished(metadata) => {
                 let frame = sample.session().frame();
                 let object = &frame.objects[0];
                 let observation = Observation {
@@ -123,7 +149,10 @@ fn observe(fixture: &mut Fixture, requested: f64, slow: bool, endpoints: &mut Ve
                     finished: matches!(status, ForwardSampleStatus::SourceFinished(_)),
                 };
                 let trace_before = trace.borrow().clone();
-                assert_eq!(sample.take_renderer_publication().unwrap().context(), metadata.publication);
+                assert_eq!(
+                    sample.take_renderer_publication().unwrap().context(),
+                    metadata.publication
+                );
                 if slow {
                     std::thread::sleep(Duration::from_millis(1));
                 }
@@ -158,7 +187,10 @@ fn run(slow: bool) -> Run {
         let request = grid.sample(index).unwrap();
         let observation = observe(&mut fixture, request.authored_time(), slow, &mut endpoints);
         if observation.finished {
-            assert_eq!(grid.frame_count_before(observation.published, 64).unwrap(), frames.len() as u64);
+            assert_eq!(
+                grid.frame_count_before(observation.published, 64).unwrap(),
+                frames.len() as u64
+            );
             assert_eq!(fixture.program.status(), LiveProgramStatus::Finished);
             let callback_trace = fixture.trace.borrow().clone();
             let resume_trace = fixture.resumes.borrow().clone();
@@ -216,20 +248,33 @@ fn exact_boundary_observes_post_completion_source_edits() {
 fn invalid_times_do_not_resume_source() {
     let mut fixture = fixture();
     for time in [-1.0, f64::NAN, f64::INFINITY] {
-        assert!(matches!(ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, time, 32), Err(ForwardSampleError::InvalidTime { .. })));
+        assert!(matches!(
+            ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, time, 32),
+            Err(ForwardSampleError::InvalidTime { .. })
+        ));
     }
     assert!(fixture.resumes.borrow().is_empty());
     observe(&mut fixture, 0.1, false, &mut Vec::new());
-    assert!(matches!(ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, 0.0, 32), Err(ForwardSampleError::InvalidTime { .. })));
+    assert!(matches!(
+        ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, 0.0, 32),
+        Err(ForwardSampleError::InvalidTime { .. })
+    ));
 }
 
 #[test]
 fn cancellation_and_premature_capture_do_not_invoke_source() {
     let mut fixture = fixture();
-    let mut sample = ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, 0.1, 32).unwrap();
-    assert!(matches!(sample.take_renderer_publication(), Err(ForwardSampleError::NoPublication)));
+    let mut sample =
+        ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, 0.1, 32).unwrap();
+    assert!(matches!(
+        sample.take_renderer_publication(),
+        Err(ForwardSampleError::NoPublication)
+    ));
     sample.cancel();
-    assert!(matches!(sample.advance(), Err(ForwardSampleError::Inactive)));
+    assert!(matches!(
+        sample.advance(),
+        Err(ForwardSampleError::Inactive)
+    ));
     assert!(fixture.resumes.borrow().is_empty());
 }
 
@@ -237,10 +282,19 @@ fn cancellation_and_premature_capture_do_not_invoke_source() {
 fn missing_callback_is_terminal_and_not_retried() {
     let mut fixture = fixture();
     fixture.callbacks = RustHostCallbackTable::new();
-    let mut sample = ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, 0.1, 32).unwrap();
+    let mut sample =
+        ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, 0.1, 32).unwrap();
     assert_eq!(sample.advance().unwrap(), ForwardSampleStatus::Progress);
-    assert!(matches!(sample.advance(), Err(ForwardSampleError::Program(crate::LiveProgramError::Callback(_)))));
-    assert!(matches!(sample.advance(), Err(ForwardSampleError::Inactive)));
+    assert!(matches!(
+        sample.advance(),
+        Err(ForwardSampleError::Program(
+            crate::LiveProgramError::Callback(_)
+        ))
+    ));
+    assert!(matches!(
+        sample.advance(),
+        Err(ForwardSampleError::Inactive)
+    ));
     assert_eq!(*fixture.resumes.borrow(), [0]);
 }
 
@@ -263,8 +317,14 @@ fn nonprogressing_zero_time_source_exhausts_the_transition_budget() {
     for _ in 0..4 {
         assert_eq!(sample.advance().unwrap(), ForwardSampleStatus::Progress);
     }
-    assert!(matches!(sample.advance(), Err(ForwardSampleError::TransitionLimit)));
-    assert!(matches!(sample.advance(), Err(ForwardSampleError::Inactive)));
+    assert!(matches!(
+        sample.advance(),
+        Err(ForwardSampleError::TransitionLimit)
+    ));
+    assert!(matches!(
+        sample.advance(),
+        Err(ForwardSampleError::Inactive)
+    ));
 }
 
 #[test]
@@ -272,13 +332,20 @@ fn a_foreign_receipt_cannot_release_the_endpoint() {
     let other = fixture();
     let mut fixture = fixture();
     let foreign = other.program.session().publication_context();
-    let mut sample = ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, 0.2, 32).unwrap();
+    let mut sample =
+        ForwardSample::new(&mut fixture.program, &mut fixture.callbacks, 0.2, 32).unwrap();
     for _ in 0..32 {
         if let ForwardSampleStatus::PublicationPending(expected) = sample.advance().unwrap() {
             assert_ne!(expected, foreign);
             let receipt = sample.take_renderer_publication().unwrap().context();
-            assert!(matches!(sample.admit_endpoint(foreign), Err(ForwardSampleError::WrongPublication)));
-            assert_eq!(sample.advance().unwrap(), ForwardSampleStatus::PublicationPending(expected));
+            assert!(matches!(
+                sample.admit_endpoint(foreign),
+                Err(ForwardSampleError::WrongPublication)
+            ));
+            assert_eq!(
+                sample.advance().unwrap(),
+                ForwardSampleStatus::PublicationPending(expected)
+            );
             sample.admit_endpoint(receipt).unwrap();
             return;
         }
