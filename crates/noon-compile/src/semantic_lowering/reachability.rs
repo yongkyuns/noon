@@ -240,7 +240,9 @@ impl SemanticExecutionReachability {
                 SemanticMutationImpact::NodeRemoved { node } => {
                     self.remove_node(node, &mut journal);
                 }
-                SemanticMutationImpact::SignalValue { .. }
+                SemanticMutationImpact::EffectAttachment { .. }
+                | SemanticMutationImpact::EffectParameter { .. }
+                | SemanticMutationImpact::SignalValue { .. }
                 | SemanticMutationImpact::SignalTimeline { .. }
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectTransform { .. }
@@ -404,7 +406,9 @@ impl SemanticExecutionReachability {
             SemanticNodeKind::Family(_) => ReachabilityKind::Family {
                 members: HashSet::new(),
             },
-            SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => return Ok(false),
+            SemanticNodeKind::Signal(_)
+            | SemanticNodeKind::Animation(_)
+            | SemanticNodeKind::Effect(_) => return Ok(false),
         };
 
         self.record_touch(journal, id);

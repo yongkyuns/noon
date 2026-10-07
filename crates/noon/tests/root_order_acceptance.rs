@@ -65,7 +65,9 @@ fn reference_order(store: &SemanticStore, root: SemanticNodeId) -> Vec<ObjectId>
                     visit(store, child, seen, result);
                 }
             }
-            SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => {}
+            SemanticNodeKind::Signal(_)
+            | SemanticNodeKind::Animation(_)
+            | SemanticNodeKind::Effect(_) => {}
         }
     }
     let mut result = Vec::new();

@@ -29,6 +29,9 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     }
     source.validate()?;
     target.validate()?;
+    if source.integration_store().borrow().has_effect_attachments() {
+        return Err(AuthoringError::EffectStateReplacementUnavailable.into());
+    }
     let pairing = source
         .integration_store()
         .borrow()
@@ -451,6 +454,11 @@ pub(crate) fn prepare_become(
     target: SemanticObjectState,
     options: ManimBecomeOptions,
 ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
+    // This state-only capture has no attachment correspondence. Fail explicitly
+    // until #1897 supplies the lifecycle-aware replacement contract.
+    if store.has_effect_attachments() {
+        return Err(AuthoringError::EffectStateReplacementUnavailable);
+    }
     let (target, path) =
         prepare_become_states(store, std::slice::from_ref(source), vec![target], options)?
             .pop()
