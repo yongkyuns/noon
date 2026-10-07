@@ -183,8 +183,9 @@ test("scored fixed-work pairs warm the exact fresh workers without changing budg
   assert.ok(scored > 0 && profiles > scored);
   const block = runner.slice(scored, profiles);
   assert.match(block, /openScoredParticipant/);
-  assert.match(block, /protocol\.scoredWorkerWarmups/);
-  assert.match(block, /measure\(side, source, mode, workload, participants\[side\]\)/);
+  assert.match(block, /scoredPairSchedule\(pair \+ 1\)/);
+  assert.match(block, /event\.kind === "warmup"/);
+  assert.match(block, /measure\(event\.side, source, mode, workload, participants\[event\.side\]\)/);
   assert.match(block, /workerLifetime: "fresh-per-pair-warmed"/);
   assert.match(block, /Promise\.all\(participants\.map\(participant => participant\.close\(\)\)\)/);
   assert.match(block, /protocol\.pairs/);

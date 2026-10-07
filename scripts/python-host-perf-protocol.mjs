@@ -8,6 +8,17 @@ export const PERF_PROTOCOL = Object.freeze({ pairs: 7, warmups: 2, scoredWorkerW
   modes: ["async", "portable", "jspi"], workloads: ["deterministic", "segments", "callbacks"],
   maxPointRatio: 1.03, maxUpperRatio: 1.05 });
 
+export function scoredPairSchedule(pairIndex) {
+  assert.ok(Number.isSafeInteger(pairIndex) && pairIndex >= 1 && pairIndex <= PERF_PROTOCOL.pairs,
+    "pair index must be within the fixed qualification cohort");
+  const order = pairIndex % 2 === 0 ? [1, 0] : [0, 1];
+  return order.flatMap(side => [
+    ...Array.from({ length: PERF_PROTOCOL.scoredWorkerWarmups }, (_, warmup) =>
+      ({ kind: "warmup", side, warmup: warmup + 1 })),
+    { kind: "score", side },
+  ]);
+}
+
 // A source fingerprint is provenance, not a compiler setting. Verify each
 // artifact against its own checkout before this comparison. Cargo manifests may
 // legitimately change with the code under test (e.g. adding an optional native

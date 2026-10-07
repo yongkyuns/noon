@@ -23,6 +23,7 @@ on:
       - "scripts/manim-tutorial-smoke.mjs"
       - "scripts/playground-layout-smoke.mjs"
       - "scripts/playground-product-e2e.mjs"
+      - "scripts/playground-product-pair.mjs"
       - "scripts/playground-product-fps.mjs"
       - "scripts/playground-product-fps.test.mjs"
       - "scripts/python-host-perf*.mjs"
@@ -424,20 +425,14 @@ jobs:
           while IFS=$'\t' read -r noon_example noon_directory; do
             noon_evidence="browser-smoke-artifacts/product-gate/$noon_directory"
             for noon_pair in 1 2 3 4 5 6 7; do
-              noon_order="baseline candidate"
-              if (( noon_pair % 2 == 0 )); then noon_order="candidate baseline"; fi
-              noon_position=0
-              for noon_side in $noon_order; do
-                noon_position=$((noon_position + 1))
-                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
-                NOON_PRODUCT_PORT=4205 \
-                NOON_PRODUCT_EXAMPLE="$noon_example" \
-                NOON_PRODUCT_LABEL="$noon_side" \
-                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
-                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
-                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
-                  node scripts/playground-product-e2e.mjs
-              done
+              NOON_PRODUCT_REFERENCE_ROOT="$NOON_PRODUCT_WORKSPACE/baseline" \
+              NOON_PRODUCT_REFERENCE_ARTIFACT_ROLE=baseline \
+              NOON_PRODUCT_CANDIDATE_ROOT="$NOON_PRODUCT_WORKSPACE/candidate" \
+              NOON_PRODUCT_EVIDENCE_ROOT="$noon_evidence" \
+              NOON_PRODUCT_PORT=4205 \
+              NOON_PRODUCT_EXAMPLE="$noon_example" \
+              NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                node scripts/playground-product-pair.mjs
             done
           done <<< "$noon_workloads"
 
@@ -453,22 +448,14 @@ jobs:
           while IFS=$'\t' read -r noon_example noon_directory; do
             noon_evidence="browser-smoke-artifacts/product-gate/cumulative/$noon_directory"
             for noon_pair in 1 2 3; do
-              noon_order="anchor candidate"
-              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate anchor"; fi
-              noon_position=0
-              for noon_side in $noon_order; do
-                noon_position=$((noon_position + 1))
-                noon_label="$noon_side"
-                if [[ "$noon_side" == anchor ]]; then noon_label="baseline"; fi
-                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
-                NOON_PRODUCT_PORT=4205 \
-                NOON_PRODUCT_EXAMPLE="$noon_example" \
-                NOON_PRODUCT_LABEL="$noon_label" \
-                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
-                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
-                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
-                  node scripts/playground-product-e2e.mjs
-              done
+              NOON_PRODUCT_REFERENCE_ROOT="$NOON_PRODUCT_WORKSPACE/anchor" \
+              NOON_PRODUCT_REFERENCE_ARTIFACT_ROLE=anchor \
+              NOON_PRODUCT_CANDIDATE_ROOT="$NOON_PRODUCT_WORKSPACE/candidate" \
+              NOON_PRODUCT_EVIDENCE_ROOT="$noon_evidence" \
+              NOON_PRODUCT_PORT=4205 \
+              NOON_PRODUCT_EXAMPLE="$noon_example" \
+              NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                node scripts/playground-product-pair.mjs
             done
           done <<< "$noon_workloads"
 

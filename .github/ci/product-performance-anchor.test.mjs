@@ -45,8 +45,11 @@ test("Product Gate builds, verifies, measures, and compares the pinned anchor", 
   assert.match(workflow, /Build cumulative anchor production package/);
   assert.match(workflow, /Verify cumulative anchor source, configuration and package contents/);
   assert.match(workflow, /Measure three alternating cumulative-anchor pairs/);
-  assert.match(workflow, /noon_order="anchor candidate"/);
-  assert.match(workflow, /noon_order="candidate anchor"/);
+  assert.match(workflow, /node scripts\/playground-product-pair\.mjs/);
+  assert.match(workflow, /NOON_PRODUCT_REFERENCE_ROOT="\$NOON_PRODUCT_WORKSPACE\/baseline"/);
+  assert.match(workflow, /NOON_PRODUCT_REFERENCE_ARTIFACT_ROLE=baseline/);
+  assert.match(workflow, /NOON_PRODUCT_REFERENCE_ROOT="\$NOON_PRODUCT_WORKSPACE\/anchor"/);
+  assert.match(workflow, /NOON_PRODUCT_REFERENCE_ARTIFACT_ROLE=anchor/);
   assert.match(workflow, /product-performance-anchor.mjs cohorts/);
   assert.match(workflow, /noon_baseline=anchor/);
   assert.doesNotMatch(workflow, /best[- ]of|retry.*performance/i);
@@ -93,9 +96,10 @@ if (args[0] === ${JSON.stringify(cohortCommand)}) {
   const result = spawnSync(process.execPath, args, { encoding: "utf8", env });
   process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);
 }
-const call = { args, example: env.NOON_PRODUCT_EXAMPLE, label: env.NOON_PRODUCT_LABEL,
-  site: env.NOON_PRODUCT_SITE_ROOT, pair: env.NOON_PRODUCT_PAIR_INDEX,
-  position: env.NOON_PRODUCT_PAIR_POSITION, evidence: env.NOON_PRODUCT_ARTIFACT_DIR };
+const call = { args, example: env.NOON_PRODUCT_EXAMPLE, pair: env.NOON_PRODUCT_PAIR_INDEX,
+  referenceRoot: env.NOON_PRODUCT_REFERENCE_ROOT,
+  referenceRole: env.NOON_PRODUCT_REFERENCE_ARTIFACT_ROLE,
+  candidateRoot: env.NOON_PRODUCT_CANDIDATE_ROOT, evidenceRoot: env.NOON_PRODUCT_EVIDENCE_ROOT };
 appendFileSync(env.NOON_TEST_LOG, JSON.stringify(call) + "\\n");
 if (env.NOON_TEST_FAIL_MATCH && JSON.stringify(call).includes(env.NOON_TEST_FAIL_MATCH)) process.exit(3);
 `);
@@ -114,7 +118,7 @@ if (env.NOON_TEST_FAIL_MATCH && JSON.stringify(call).includes(env.NOON_TEST_FAIL
   return { dir, run, calls };
 }
 
-test("actual measurement shell schedules 100 unique runs with seven adjacent and three anchor pairs", async t => {
+test("actual measurement shell schedules 50 fixed pairs with seven adjacent and three anchor cohorts", async t => {
   const fixture = await shellFixture(t);
   for (const name of ["Measure seven alternating product pairs", "Measure three alternating cumulative-anchor pairs"]) {
     const result = fixture.run(name);
@@ -122,24 +126,21 @@ test("actual measurement shell schedules 100 unique runs with seven adjacent and
     assert.equal(result.status, 0, result.stderr);
   }
   const calls = await fixture.calls();
-  assert.equal(calls.length, 100);
-  assert.equal(new Set(calls.map(call => path.normalize(call.evidence))).size, 100);
+  assert.equal(calls.length, 50);
+  assert.equal(new Set(calls.map(call => [call.example, call.pair, call.evidenceRoot].join("|"))).size, 50);
   let cursor = 0;
   for (const [scope, before, count] of [["", "baseline", 7], ["cumulative", "anchor", 3]]) {
     for (const [index, example] of workloadIds.entries()) {
       for (let pair = 1; pair <= count; pair++) {
-        const sides = pair % 2 === 0 ? ["candidate", before] : [before, "candidate"];
-        for (const [position, side] of sides.entries()) {
-          const call = calls[cursor++];
-          assert.deepEqual(call.args, ["scripts/playground-product-e2e.mjs"]);
-          assert.equal(call.example, example);
-          assert.equal(call.site, path.join(fixture.dir, side));
-          assert.equal(call.label, side === "anchor" ? "baseline" : side);
-          assert.equal(call.pair, String(pair));
-          assert.equal(call.position, String(position + 1));
-          assert.equal(path.normalize(call.evidence), path.join("browser-smoke-artifacts/product-gate",
-            scope, evidenceParts[index], side, `trial-${pair}`));
-        }
+        const call = calls[cursor++];
+        assert.deepEqual(call.args, ["scripts/playground-product-pair.mjs"]);
+        assert.equal(call.example, example);
+        assert.equal(call.pair, String(pair));
+        assert.equal(call.referenceRoot, path.join(fixture.dir, before));
+        assert.equal(call.referenceRole, before);
+        assert.equal(call.candidateRoot, path.join(fixture.dir, "candidate"));
+        assert.equal(path.normalize(call.evidenceRoot), path.join("browser-smoke-artifacts/product-gate",
+          scope, evidenceParts[index]));
       }
     }
   }
@@ -172,17 +173,17 @@ test("invalid cohort configuration fails the actual shell before any browser inv
   assert.deepEqual(await fixture.calls(), []);
 });
 
-for (const [name, expectedRuns] of [["Measure seven alternating product pairs", 29],
-  ["Measure three alternating cumulative-anchor pairs", 13]]) {
+for (const [name, expectedRuns] of [["Measure seven alternating product pairs", 15],
+  ["Measure three alternating cumulative-anchor pairs", 7]]) {
   test(`a failed run in ${name} stops its cohort without retrying or replacing it`, async t => {
     const fixture = await shellFixture(t);
     const result = fixture.run(name, { NOON_TEST_FAIL_MATCH: "showcase-first-scene" });
     assert.ifError(result.error);
     assert.equal(result.status, 3);
     const calls = await fixture.calls();
-    assert.equal(calls.length, expectedRuns); // Two complete workloads, then the first failed mixed run.
+    assert.equal(calls.length, expectedRuns); // Two complete workloads, then the first failed pair.
     assert.equal(calls.at(-1).example, "showcase-first-scene");
-    assert.equal(calls.at(-1).label, "baseline");
+    assert.equal(calls.at(-1).pair, "1");
   });
 }
 

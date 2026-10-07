@@ -14,7 +14,7 @@ import { profileSource, validateProfile, localEditProfileSource, validateLocalEd
 import { qualifyProductCohorts } from "./python-host-perf-product.mjs";
 import { diagnoseWorkerHistory, diagnoseControlledHistory } from "./python-host-perf-history.mjs";
 import { stringifyEvidence } from "./python-host-report.mjs";
-import { PERF_PROTOCOL as protocol, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
+import { PERF_PROTOCOL as protocol, assertComparableArtifacts, pairedCost, performanceSource, scoredPairSchedule } from "./python-host-perf-protocol.mjs";
 
 import { verifyProductArtifact } from "../.github/ci/product-artifact.mjs";
 
@@ -29,6 +29,13 @@ const cache = createPyodideResourceCache(await readFile(path.join(roots[1], "web
 const servers = [], contexts = [], pages = [], reports = [[], []], warmups = [], rows = [], failures = [];
 const profiles = [[], []], diagnostics = [];
 const localProfiles = [[], []], localDiagnostics = [];
+
+async function waitForDiagnosticCount(values, expected, label) {
+  for (let attempt = 0; values.length < expected && attempt < 100; ++attempt) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(values.length, expected, label);
+}
 let browser;
 try {
   for (const [side, root] of roots.entries()) {
@@ -162,16 +169,14 @@ try {
           openScoredParticipant(side, `pair-${workload}-${mode}-${pair + 1}`)));
         const values = [];
         try {
-          const order = pair % 2 ? [1, 0] : [0, 1];
-          for (let warm = 0; warm < protocol.scoredWorkerWarmups; ++warm) {
-            for (const side of order) {
-              warmups.push({ side, workload, mode, pair: pair + 1, warmup: warm + 1,
+          for (const event of scoredPairSchedule(pair + 1)) {
+            if (event.kind === "warmup") {
+              warmups.push({ side: event.side, workload, mode, pair: pair + 1, warmup: event.warmup,
                 workerLifetime: "fresh-per-pair-warmed",
-                result: await measure(side, source, mode, workload, participants[side]) });
+                result: await measure(event.side, source, mode, workload, participants[event.side]) });
+            } else {
+              values[event.side] = await measure(event.side, source, mode, workload, participants[event.side]);
             }
-          }
-          for (const side of order) {
-            values[side] = await measure(side, source, mode, workload, participants[side]);
           }
         } finally {
           await Promise.all(participants.map(participant => participant.close()));
@@ -208,7 +213,7 @@ try {
       const count = profiles[side].length;
       const source = profileSource(workload);
       const observation = await measure(side, source, "async", workload);
-      assert.equal(profiles[side].length, count + 1, "missing diagnostic profile");
+      await waitForDiagnosticCount(profiles[side], count + 1, "missing diagnostic profile");
       const profile = validateProfile(profiles[side].at(-1), workload);
       diagnostics.push({ side, sourceSha: createHash("sha256").update(source).digest("hex"),
         profile, observation });
@@ -226,7 +231,7 @@ try {
     for (const side of [0, 1]) {
       const count = localProfiles[side].length;
       const observation = await measure(side, source, mode, "deterministic");
-      assert.equal(localProfiles[side].length, count + 1, "missing local-edit profile");
+      await waitForDiagnosticCount(localProfiles[side], count + 1, "missing local-edit profile");
       const profile = validateLocalEditProfile(localProfiles[side].at(-1), mode);
       localDiagnostics.push({ side, sourceSha, profile, observation });
       await writeFile(path.join(output, "local-edit-profiles.json"), stringifyEvidence(localDiagnostics) + "\n");

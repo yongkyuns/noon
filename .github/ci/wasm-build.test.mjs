@@ -389,7 +389,9 @@ test("product camera measurements reuse the restored packages and seven fixed al
   assert.match(measurements, /product-performance-anchor.mjs cohorts/);
   assert.match(measurements, /read -r noon_example noon_directory/);
   assert.match(measurements, /for noon_pair in 1 2 3 4 5 6 7/);
-  assert.match(measurements, /noon_pair % 2 == 0/);
+  assert.match(measurements, /node scripts\/playground-product-pair\.mjs/);
+  assert.match(measurements, /NOON_PRODUCT_REFERENCE_ROOT="\$NOON_PRODUCT_WORKSPACE\/baseline"/);
+  assert.match(measurements, /NOON_PRODUCT_REFERENCE_ROOT="\$NOON_PRODUCT_WORKSPACE\/anchor"/);
   assert.match(measurements, /NOON_PRODUCT_EXAMPLE="\$noon_example"/);
   assert.match(measurements, /noon_pairs=7/);
   assert.match(measurements, /noon_pairs=3/);

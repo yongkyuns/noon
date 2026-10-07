@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PERF_PROTOCOL, assertComparableArtifacts, pairedCost, performanceSource } from "./python-host-perf-protocol.mjs";
+import { PERF_PROTOCOL, assertComparableArtifacts, pairedCost, performanceSource, scoredPairSchedule } from "./python-host-perf-protocol.mjs";
 
 test("fixed-work qualification uses independent worker observations", () => {
   assert.equal(PERF_PROTOCOL.workerLifetime, "fresh-per-pair-warmed");
@@ -8,6 +8,30 @@ test("fixed-work qualification uses independent worker observations", () => {
   assert.equal(PERF_PROTOCOL.pairs, 7);
   assert.equal(PERF_PROTOCOL.maxPointRatio, 1.03);
   assert.equal(PERF_PROTOCOL.maxUpperRatio, 1.05);
+});
+
+test("scored workers are warmed immediately before their own alternating observation", () => {
+  assert.deepEqual(scoredPairSchedule(1), [
+    { kind: "warmup", side: 0, warmup: 1 }, { kind: "score", side: 0 },
+    { kind: "warmup", side: 1, warmup: 1 }, { kind: "score", side: 1 },
+  ]);
+  assert.deepEqual(scoredPairSchedule(2), [
+    { kind: "warmup", side: 1, warmup: 1 }, { kind: "score", side: 1 },
+    { kind: "warmup", side: 0, warmup: 1 }, { kind: "score", side: 0 },
+  ]);
+  for (let pair = 1; pair <= PERF_PROTOCOL.pairs; ++pair) {
+    const schedule = scoredPairSchedule(pair);
+    assert.equal(schedule.filter(event => event.kind === "score").length, 2);
+    for (const side of [0, 1]) {
+      const score = schedule.findIndex(event => event.kind === "score" && event.side === side);
+      const warmups = schedule.filter(event => event.kind === "warmup" && event.side === side);
+      assert.equal(warmups.length, PERF_PROTOCOL.scoredWorkerWarmups);
+      assert.equal(schedule[score - 1].kind, "warmup");
+      assert.equal(schedule[score - 1].side, side);
+    }
+  }
+  assert.throws(() => scoredPairSchedule(0), /pair index/);
+  assert.throws(() => scoredPairSchedule(PERF_PROTOCOL.pairs + 1), /pair index/);
 });
 
 test("cost comparison retains all pairs and rejects a regression below the old 20% FPS allowance", () => {
