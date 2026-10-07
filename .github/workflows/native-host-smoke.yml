@@ -147,7 +147,8 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       WGPU_BACKEND: vulkan
-      NOON_CAPTURE_PROOF_DIR: ${{ github.workspace }}/capture-proof/pixels\n      NOON_OUTPUT_PROOF_DIR: ${{ github.workspace }}/capture-proof/output
+      NOON_CAPTURE_PROOF_DIR: ${{ github.workspace }}/capture-proof/pixels
+      NOON_OUTPUT_PROOF_DIR: ${{ github.workspace }}/capture-proof/output
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -172,7 +173,8 @@ jobs:
       - name: Install software Vulkan without a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 ffmpeg\n          ffmpeg -hide_banner -encoders | grep -q libx264
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 ffmpeg
+          ffmpeg -hide_banner -encoders | grep -q libx264
 
       - name: Verify native capture does not depend on a window or language host
         run: |
