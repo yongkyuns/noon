@@ -568,3 +568,76 @@ fn scene_path_alignment_rejects_foreign_before_resource_or_frame_publication() {
     );
     assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
 }
+
+
+#[test]
+fn scene_subcurve_requires_running_and_captures_effective_state() {
+    let mut scene = Scene::new();
+    let source = scene.line((0.0, 0.0), (4.0, 0.0)).unwrap();
+    let mut target = source.target_editor().unwrap();
+    target.shift(0.0, 2.0).unwrap();
+    scene.add(&source).unwrap();
+
+    let cold = scene.subcurve(&source, 0.25, 0.75).unwrap_err();
+    assert!(matches!(
+        cold,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+
+    let animation = scene
+        .declare_transform_to(
+            &source,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let segment = {
+        let mut live = scene.owned_live();
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 2.0).unwrap();
+        live.complete_segment(segment).unwrap();
+        segment
+    };
+    scene.owned_execution_mut().seek(1.0).unwrap();
+
+    let selected = scene.subcurve(&source, 0.25, 0.75).unwrap();
+    assert_eq!(selected.path_query().unwrap().start().unwrap(), (1.0, 1.0));
+    assert_eq!(selected.path_query().unwrap().end().unwrap(), (3.0, 1.0));
+    assert_eq!(source.path_query().unwrap().start().unwrap(), (0.0, 2.0));
+    assert!(!scene
+        .owned_execution()
+        .semantic_object_is_reachable(selected.node_id()));
+
+    scene.owned_execution_mut().seek(2.0).unwrap();
+    assert_eq!(selected.path_query().unwrap().start().unwrap(), (1.0, 1.0));
+
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+    assert!(matches!(
+        scene.subcurve(&foreign, 0.0, 1.0),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+
+    let _ = segment;
+}
