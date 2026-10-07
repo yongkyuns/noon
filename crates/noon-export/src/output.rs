@@ -421,6 +421,10 @@ impl FfmpegMp4Sink {
             .arg("-map")
             .arg("0:v:0")
             .arg("-an")
+            .arg("-fps_mode")
+            .arg("passthrough")
+            .arg("-vf")
+            .arg("scale=in_range=pc:out_range=tv:out_color_matrix=bt709")
             .arg("-c:v")
             .arg("libx264")
             .arg("-preset")
@@ -429,6 +433,16 @@ impl FfmpegMp4Sink {
             .arg(crf_arg)
             .arg("-pix_fmt")
             .arg("yuv420p")
+            .arg("-profile:v")
+            .arg("high")
+            .arg("-color_range")
+            .arg("tv")
+            .arg("-colorspace")
+            .arg("bt709")
+            .arg("-color_primaries")
+            .arg("bt709")
+            .arg("-color_trc")
+            .arg("bt709")
             .arg("-movflags")
             .arg("+faststart")
             .arg(&temp_file)
@@ -600,9 +614,7 @@ fn probe_libx264(executable: &Path) -> Result<(), FfmpegMp4Error> {
             ));
         }
     };
-    let mut found = false;
-    let mut total = 0_usize;
-    let mut carry = Vec::new();
+    let mut output = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
         let count = match stdout.read(&mut buffer) {
@@ -619,22 +631,14 @@ fn probe_libx264(executable: &Path) -> Result<(), FfmpegMp4Error> {
         if count == 0 {
             break;
         }
-        total = total.saturating_add(count);
-        if total > OUTPUT_LIMIT {
+        if output.len().saturating_add(count) > OUTPUT_LIMIT {
             let _ = child.kill();
             let _ = child.wait();
             return Err(FfmpegMp4Error::InvalidConfiguration(
                 "FFmpeg encoder listing exceeded the probe byte limit",
             ));
         }
-        carry.extend_from_slice(&buffer[..count]);
-        if carry.windows(b"libx264".len()).any(|window| window == b"libx264") {
-            found = true;
-        }
-        if carry.len() > 32 {
-            let drain = carry.len() - 32;
-            carry.drain(..drain);
-        }
+        output.extend_from_slice(&buffer[..count]);
     }
     let status = child
         .wait()
@@ -646,6 +650,10 @@ fn probe_libx264(executable: &Path) -> Result<(), FfmpegMp4Error> {
             stderr_truncated: false,
         });
     }
+    let found = String::from_utf8_lossy(&output)
+        .lines()
+        .flat_map(str::split_ascii_whitespace)
+        .any(|token| token == "libx264");
     if !found {
         return Err(FfmpegMp4Error::EncoderUnavailable);
     }
