@@ -2,7 +2,7 @@ use crate::SemanticVec3;
 
 /// Cairo-compatible per-cell gradient endpoints and corner-relative spans.
 /// The renderer owns lighting and projection; this immutable geometry metadata
-/// only preserves the mapped control-point samples needed to derive them.
+/// preserves mapped shading samples and optional perimeter controls.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CairoSurfaceAppearance {
     pub p0: SemanticVec3,
@@ -11,6 +11,10 @@ pub struct CairoSurfaceAppearance {
     pub span_p12_p0: SemanticVec3,
     pub span_p9_p6: SemanticVec3,
     pub span_p3_p6: SemanticVec3,
+    /// Optional cubic controls for the quad perimeter edges in mesh-position order:
+    /// 0→1, 1→2, 2→3, and 3→0. Endpoints are the corresponding mesh positions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_controls: Option<[[SemanticVec3; 2]; 4]>,
 }
 
 impl CairoSurfaceAppearance {
@@ -25,6 +29,32 @@ impl CairoSurfaceAppearance {
         ]
         .into_iter()
         .all(SemanticVec3::is_finite)
+            && self
+                .boundary_controls
+                .is_none_or(|edges| edges.into_iter().flatten().all(SemanticVec3::is_finite))
+    }
+
+    /// Whether this appearance is valid for the given mesh payload. Boundary
+    /// controls are only meaningful for a canonical four-vertex quad.
+    pub fn is_valid_for_mesh(&self, positions: &[SemanticVec3], indices: &[u32]) -> bool {
+        self.is_finite()
+            && (self.boundary_controls.is_none()
+                || Self::has_canonical_quad_topology(positions.len(), indices))
+    }
+
+    fn has_canonical_quad_topology(position_count: usize, indices: &[u32]) -> bool {
+        if position_count != 4 || indices.len() != 6 {
+            return false;
+        }
+        let mut triangles = [
+            [indices[0], indices[1], indices[2]],
+            [indices[3], indices[4], indices[5]],
+        ];
+        for triangle in &mut triangles {
+            triangle.sort_unstable();
+        }
+        triangles.sort_unstable();
+        triangles == [[0, 1, 2], [0, 2, 3]] || triangles == [[0, 1, 3], [1, 2, 3]]
     }
 }
 
@@ -119,6 +149,14 @@ impl MeshResource {
         if !appearance.is_finite() {
             return Err(MeshResourceError::NonFiniteCairoAppearance);
         }
+        if appearance.boundary_controls.is_some()
+            && !CairoSurfaceAppearance::has_canonical_quad_topology(
+                self.positions.len(),
+                &self.indices,
+            )
+        {
+            return Err(MeshResourceError::InvalidCairoBoundaryTopology);
+        }
         self.cairo_appearance = Some(Box::new(appearance));
         Ok(self)
     }
@@ -188,6 +226,7 @@ pub enum MeshResourceError {
     InvalidTriangleIndexCount(usize),
     IndexOutOfBounds { index: u32, positions: usize },
     NonFiniteCairoAppearance,
+    InvalidCairoBoundaryTopology,
 }
 
 impl std::fmt::Display for MeshResourceError {
@@ -208,6 +247,9 @@ impl std::fmt::Display for MeshResourceError {
             }
             Self::NonFiniteCairoAppearance => {
                 f.write_str("mesh has non-finite Cairo surface appearance data")
+            }
+            Self::InvalidCairoBoundaryTopology => {
+                f.write_str("Cairo boundary controls require a canonical four-vertex quad")
             }
         }
     }
@@ -259,6 +301,7 @@ mod tests {
             span_p12_p0: SemanticVec3::new(0.0, 1.0, 1.0),
             span_p9_p6: SemanticVec3::new(-1.0 / 3.0, 1.0 / 3.0, 0.0),
             span_p3_p6: SemanticVec3::new(0.0, -2.0 / 3.0, -0.333334444),
+            boundary_controls: None,
         };
         let plain = valid();
         let retained = plain.clone().with_cairo_appearance(appearance).unwrap();
@@ -273,6 +316,53 @@ mod tests {
                 p6: SemanticVec3::new(f64::NAN, 0.0, 0.0),
                 ..appearance
             }),
+            Err(MeshResourceError::NonFiniteCairoAppearance)
+        );
+    }
+
+    #[test]
+    fn cairo_boundary_controls_require_finite_points_and_canonical_quad_topology() {
+        let appearance = CairoSurfaceAppearance {
+            p0: SemanticVec3::ZERO,
+            p6: SemanticVec3::ZERO,
+            span_p3_p0: SemanticVec3::ZERO,
+            span_p12_p0: SemanticVec3::ZERO,
+            span_p9_p6: SemanticVec3::ZERO,
+            span_p3_p6: SemanticVec3::ZERO,
+            boundary_controls: Some([[SemanticVec3::ZERO; 2]; 4]),
+        };
+        let positions = vec![
+            SemanticVec3::ZERO,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(1.0, 1.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ];
+        let canonical = MeshResource::new(positions.clone(), None, vec![0, 1, 3, 1, 2, 3]).unwrap();
+        let retained = canonical.clone().with_cairo_appearance(appearance).unwrap();
+        assert_eq!(
+            retained.cairo_appearance().unwrap().boundary_controls,
+            appearance.boundary_controls
+        );
+
+        let alternate_diagonal =
+            MeshResource::new(positions.clone(), None, vec![0, 1, 2, 0, 2, 3]).unwrap();
+        assert!(alternate_diagonal.with_cairo_appearance(appearance).is_ok());
+
+        let triangle = valid();
+        assert_eq!(
+            triangle.with_cairo_appearance(appearance),
+            Err(MeshResourceError::InvalidCairoBoundaryTopology)
+        );
+        let noncanonical_quad = MeshResource::new(positions, None, vec![0, 1, 2, 0, 1, 3]).unwrap();
+        assert_eq!(
+            noncanonical_quad.with_cairo_appearance(appearance),
+            Err(MeshResourceError::InvalidCairoBoundaryTopology)
+        );
+
+        let mut non_finite = appearance;
+        non_finite.boundary_controls.as_mut().unwrap()[2][1].z = f64::INFINITY;
+        assert_eq!(
+            canonical.with_cairo_appearance(non_finite),
             Err(MeshResourceError::NonFiniteCairoAppearance)
         );
     }

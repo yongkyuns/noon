@@ -50,6 +50,7 @@ pub fn cairo_path_geometry(path: &VectorPath) -> Option<CairoPathGeometry> {
             span_p12_p0: start_previous,
             span_p9_p6: end_next,
             span_p3_p6: end_previous,
+            boundary_controls: None,
         },
         world_up_normal: points.len() == 4,
     })

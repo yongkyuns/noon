@@ -219,6 +219,7 @@ fn cairo_face_material_uses_geometry_appearance_without_checkerboard_uv_roles() 
         span_p12_p0: SemanticVec3::ZERO,
         span_p9_p6: SemanticVec3::ZERO,
         span_p3_p6: SemanticVec3::ZERO,
+        boundary_controls: None,
     };
     let mesh = MeshResource::new(
         vec![

@@ -152,6 +152,7 @@ mod tests {
             span_p12_p0: SemanticVec3::new(0., 1., 0.),
             span_p9_p6: SemanticVec3::new(-1., 0., 0.),
             span_p3_p6: SemanticVec3::new(0., -1., 0.),
+            boundary_controls: None,
         };
         assert_eq!(std::mem::size_of::<Uniform>(), 96);
         assert_eq!(std::mem::size_of::<super::super::Vertex>(), 24);

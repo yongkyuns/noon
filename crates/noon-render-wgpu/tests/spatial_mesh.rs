@@ -492,6 +492,7 @@ fn cairo_surface_scene(shared_unlit: bool) -> SceneInstance {
         span_p12_p0: SemanticVec3::new(0., 2., 0.),
         span_p9_p6: SemanticVec3::new(-2., 0., 0.),
         span_p3_p6: SemanticVec3::new(0., -2., 0.),
+        boundary_controls: None,
     })
     .unwrap();
     let handle = store.insert_geometry_mesh(payload);
@@ -604,7 +605,9 @@ fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
         )
         .unwrap();
         assert_eq!(initial.resident_meshes, 1);
-        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 96);
+        // Authored vertices/triangles, constant Cairo coverage scalars and one
+        // lighting uniform. Ordinary mesh vertex/instance layouts stay intact.
+        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 4 * 4 + 96);
         // Independent analytic stops: clamp(.8 + .5) = 1; .8 + .5/27.
         // At the center their midpoint is .909259..., not clamp(1.059259...).
         let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
@@ -1966,6 +1969,304 @@ fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
             multiple_renderer.prepare_spatial(&device, &queue, &publication),
             Err(SpatialPrepareError::MultiplePointLights)
         );
+    });
+}
+
+fn cairo_boundary_test_scene(
+    with_occluder: bool,
+    sloped_unlit: bool,
+    curved_fill: bool,
+) -> (SceneInstance, noon_core::ObjectId) {
+    assert!(!(with_occluder && (sloped_unlit || curved_fill)));
+    assert!(!(sloped_unlit && curved_fill));
+    let mut store = SemanticStore::new();
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+            height: 4.0,
+            near: 0.1,
+            far: 30.0,
+        }))
+        .unwrap();
+    camera.transform.translation.z = 5.0;
+    attach(&mut store, camera);
+
+    let positions = if sloped_unlit {
+        vec![
+            SemanticVec3::new(-0.5, -0.5, 1.0),
+            SemanticVec3::new(0.5, -0.5, 0.0),
+            SemanticVec3::new(0.5, 0.5, 0.0),
+            SemanticVec3::new(-0.5, 0.5, 1.0),
+        ]
+    } else {
+        vec![
+            SemanticVec3::new(-0.5, -0.5, 0.0),
+            SemanticVec3::new(0.5, -0.5, 0.0),
+            SemanticVec3::new(0.5, 0.5, 0.0),
+            SemanticVec3::new(-0.5, 0.5, 0.0),
+        ]
+    };
+    let mesh = MeshResource::new(positions, None, vec![0, 1, 3, 1, 2, 3]).unwrap();
+    let mesh = if sloped_unlit {
+        mesh
+    } else {
+        mesh.with_cairo_appearance(noon_core::CairoSurfaceAppearance {
+            p0: SemanticVec3::new(-0.5, -0.5, 0.0),
+            p6: SemanticVec3::new(0.5, 0.5, 0.0),
+            span_p3_p0: SemanticVec3::new(1.0, 0.0, 0.0),
+            span_p12_p0: SemanticVec3::new(0.0, 1.0, 0.0),
+            span_p9_p6: SemanticVec3::new(-1.0, 0.0, 0.0),
+            span_p3_p6: SemanticVec3::new(0.0, -1.0, 0.0),
+            boundary_controls: curved_fill.then_some([
+                [
+                    SemanticVec3::new(-1.0 / 6.0, -1.5, 0.0),
+                    SemanticVec3::new(1.0 / 6.0, -1.5, 0.0),
+                ],
+                [
+                    SemanticVec3::new(0.5, -1.0 / 6.0, 0.0),
+                    SemanticVec3::new(0.5, 1.0 / 6.0, 0.0),
+                ],
+                [
+                    SemanticVec3::new(1.0 / 6.0, 0.5, 0.0),
+                    SemanticVec3::new(-1.0 / 6.0, 0.5, 0.0),
+                ],
+                [
+                    SemanticVec3::new(-0.5, 1.0 / 6.0, 0.0),
+                    SemanticVec3::new(-0.5, -1.0 / 6.0, 0.0),
+                ],
+            ]),
+        })
+        .unwrap()
+    };
+    let surface_handle = store.insert_geometry_mesh(mesh);
+    let mut surface = SemanticObjectState::new(StoredGeometry::Resource(surface_handle));
+    surface.style = SemanticStyle {
+        fill: if sloped_unlit {
+            Some(SemanticPaint::Solid(Color::BLACK))
+        } else if curved_fill {
+            Some(SemanticPaint::Solid(Color::rgba(0.2, 0.5, 0.8, 1.0)))
+        } else {
+            None
+        },
+        fill_opacity: if sloped_unlit || curved_fill {
+            1.0
+        } else {
+            0.0
+        },
+        stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+        stroke_opacity: 1.0,
+        stroke_width: 0.02,
+        stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+        stroke_join: noon_core::StrokeJoin::Miter,
+        stroke_cap: noon_core::StrokeCap::Butt,
+        object_opacity: 1.0,
+    };
+    if !sloped_unlit {
+        surface.set_spatial_material(SemanticSpatialMaterial::CairoSurface);
+        surface.set_surface_uv_cell(Some([0, 0]));
+    }
+    let surface_node = attach(&mut store, surface);
+
+    if with_occluder {
+        let occluder_handle = store.insert_geometry_mesh(
+            MeshResource::new(
+                vec![
+                    SemanticVec3::new(0.4, -0.3, 0.0),
+                    SemanticVec3::new(0.7, -0.3, 0.0),
+                    SemanticVec3::new(0.7, 0.3, 0.0),
+                    SemanticVec3::new(0.4, 0.3, 0.0),
+                ],
+                None,
+                vec![0, 1, 3, 1, 2, 3],
+            )
+            .unwrap(),
+        );
+        let mut occluder = SemanticObjectState::new(StoredGeometry::Resource(occluder_handle));
+        occluder.style = opaque_style(Color::GREEN);
+        occluder.transform.translation.z = 1.0;
+        attach(&mut store, occluder);
+    }
+
+    let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    light.set_role(SemanticObjectRole::PointLight3D);
+    attach(&mut store, light);
+
+    let mut index = SemanticExecutionIndex::new();
+    let (compiled, _) = lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .into_parts();
+    let surface_object = index.execution_object_id(surface_node).unwrap();
+    (SceneInstance::new(compiled), surface_object)
+}
+
+#[test]
+fn cairo_mesh_boundary_has_fractional_subpixel_coverage_and_respects_occlusion() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!(
+                "skipping Cairo boundary coverage GPU qualification: no adapter is available"
+            );
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
+        renderer.set_camera(&queue, camera);
+        let mut preparer = FramePreparer::new();
+        let (mut scene, surface_object) = cairo_boundary_test_scene(false, false, false);
+
+        let mut coverage_profiles = Vec::new();
+        for subpixel in [0.0_f64, 0.25, 0.5, 0.75] {
+            let transform = SemanticWorldTransform3D::new(
+                SemanticVec3::new(subpixel / 32.0, 0.0, 0.0),
+                noon_core::SemanticRotation3D::IDENTITY,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap();
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                    object: surface_object,
+                    transform: transform.into(),
+                })
+                .unwrap();
+            let (_, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut scene,
+                &target,
+            )
+            .unwrap();
+            let profile: Vec<u8> = (78..=82)
+                .map(|x| pixel(&pixels, x, HEIGHT / 2)[0])
+                .collect();
+            assert!(
+                profile.iter().any(|value| *value > 0),
+                "thin Cairo boundary remains visible at {subpixel}px: {profile:?}"
+            );
+            assert!(
+                profile.iter().any(|value| (1..255).contains(value)),
+                "thin Cairo boundary has fractional pixel coverage at {subpixel}px: {profile:?}"
+            );
+            if subpixel == 0.5 {
+                assert!(
+                    profile[2] > 0,
+                    "the centered subpixel stroke contributes at its pixel center: {profile:?}"
+                );
+            }
+            coverage_profiles.push(profile);
+        }
+        assert!(
+            coverage_profiles.windows(2).all(|pair| {
+                let left_sum: u16 = pair[0].iter().map(|value| u16::from(*value)).sum();
+                let right_sum: u16 = pair[1].iter().map(|value| u16::from(*value)).sum();
+                left_sum.abs_diff(right_sum) <= 48
+            }),
+            "integrated edge coverage changes continuously across subpixel placements: {coverage_profiles:?}"
+        );
+        assert!(
+            coverage_profiles.windows(2).any(|pair| pair[0] != pair[1]),
+            "subpixel motion redistributes coverage between neighboring pixels"
+        );
+
+        let (mut sloped, _) = cairo_boundary_test_scene(false, true, false);
+        let mut sloped_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        sloped_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        sloped_renderer.set_camera(&queue, camera);
+        let mut sloped_preparer = FramePreparer::new();
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut sloped_renderer,
+            &mut sloped_preparer,
+            &mut sloped,
+            &target,
+        )
+        .unwrap();
+        for x in [79, 80] {
+            let edge_pixel = pixel(&pixels, x, 64);
+            assert!(
+                edge_pixel[..3]
+                    .iter()
+                    .all(|channel| (1..255).contains(channel)),
+                "sloped unlit mesh keeps fractional white boundary coverage at ({x},64): {edge_pixel:?}"
+            );
+        }
+
+        let (mut occluded, surface_object) = cairo_boundary_test_scene(true, false, false);
+        let mut occlusion_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        occlusion_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        occlusion_renderer.set_camera(&queue, camera);
+        let mut occlusion_preparer = FramePreparer::new();
+        let transform = SemanticWorldTransform3D::new(
+            SemanticVec3::new(0.5 / 32.0, 0.0, 0.0),
+            noon_core::SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+        occluded
+            .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                object: surface_object,
+                transform: transform.into(),
+            })
+            .unwrap();
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut occlusion_renderer,
+            &mut occlusion_preparer,
+            &mut occluded,
+            &target,
+        )
+        .unwrap();
+        let hidden_border = pixel(&pixels, 80, 64);
+        assert!(
+            hidden_border[..3]
+                .iter()
+                .zip([Color::GREEN.red, Color::GREEN.green, Color::GREEN.blue])
+                .all(|(actual, expected)| (f32::from(*actual) - expected * 255.0).abs() < 3.0),
+            "opaque foreground occluder hides the Cairo mesh border: {hidden_border:?}"
+        );
+
+        let (mut curved, _) = cairo_boundary_test_scene(false, false, true);
+        let mut curved_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        curved_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        curved_renderer.set_camera(&queue, camera);
+        let mut curved_preparer = FramePreparer::new();
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut curved_renderer,
+            &mut curved_preparer,
+            &mut curved,
+            &target,
+        )
+        .unwrap();
+        let bulge_fill = pixel(&pixels, 64, 96);
+        assert!(
+            bulge_fill[..3].iter().any(|channel| *channel > 8),
+            "opaque Cairo fill reaches the interior of the retained-control bulge: {bulge_fill:?}"
+        );
+        let below_outline = pixel(&pixels, 64, 109);
+        assert!(
+            below_outline[..3].iter().all(|channel| *channel <= 2),
+            "the curved fill and boundary stay inside the retained-control outline: {below_outline:?}"
+        );
+        for x in [63, 64, 65] {
+            let profile: Vec<_> = (102..=105).map(|y| pixel(&pixels, x, y)).collect();
+            assert!(
+                profile.iter().any(|pixel| pixel[..3].iter().all(|channel| (1..255).contains(channel))),
+                "curved Cairo boundary remains continuously visible with fractional coverage near its midpoint at x={x}: {profile:?}"
+            );
+        }
     });
 }
 

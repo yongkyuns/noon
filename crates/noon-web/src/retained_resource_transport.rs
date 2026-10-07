@@ -858,9 +858,9 @@ impl RetainedResourceBundle {
                         values.len() != positions.len()
                             || values.iter().any(|normal| !normal.is_finite())
                     })
-                    || cairo_appearance
-                        .as_ref()
-                        .is_some_and(|appearance| !appearance.is_finite())
+                    || cairo_appearance.as_ref().is_some_and(|appearance| {
+                        !appearance.is_valid_for_mesh(positions, indices)
+                    })
                     || indices
                         .iter()
                         .any(|index| *index as usize >= positions.len()) =>
@@ -2578,13 +2578,15 @@ mod tests {
                 noon_core::SemanticVec3::new(0.125, -2.5, 9.0),
                 noon_core::SemanticVec3::new(1.0 / 7.0, 3.0, -4.0),
                 noon_core::SemanticVec3::new(-8.0, 0.25, 2.0),
+                noon_core::SemanticVec3::new(2.0, -1.0, 0.5),
             ],
             Some(vec![
                 noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
                 noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
                 noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
+                noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
             ]),
-            vec![0, 1, 2],
+            vec![0, 1, 3, 1, 2, 3],
         )
         .unwrap()
         .with_cairo_appearance(noon_core::CairoSurfaceAppearance {
@@ -2594,6 +2596,12 @@ mod tests {
             span_p12_p0: noon_core::SemanticVec3::new(0.0, 1.0, 0.0),
             span_p9_p6: noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
             span_p3_p6: noon_core::SemanticVec3::new(0.5, -0.25, -1.5),
+            boundary_controls: Some([
+                [noon_core::SemanticVec3::new(0.1, 0.2, 0.3); 2],
+                [noon_core::SemanticVec3::new(0.4, 0.5, 0.6); 2],
+                [noon_core::SemanticVec3::new(0.7, 0.8, 0.9); 2],
+                [noon_core::SemanticVec3::new(1.0, 1.1, 1.2); 2],
+            ]),
         })
         .unwrap();
         let original = mesh.clone();
@@ -2610,6 +2618,10 @@ mod tests {
         assert_eq!(bundle.geometry_count(), 1);
         let payload = serde_json::to_value(&bundle.geometries[0].geometry).unwrap();
         assert_eq!(payload["cairo_appearance"]["p6"]["x"], 0.5);
+        assert_eq!(
+            payload["cairo_appearance"]["boundary_controls"][2][1]["z"],
+            0.9
+        );
         let mut changed_appearance = bundle.clone();
         if let TransportGeometryPayload::Mesh {
             cairo_appearance, ..
@@ -2660,7 +2672,7 @@ mod tests {
         };
         assert!(mesh.cairo_appearance().is_none());
 
-        let mut forged = bundle;
+        let mut forged = bundle.clone();
         if let TransportGeometryPayload::Mesh {
             cairo_appearance, ..
         } = &mut forged.geometries[0].geometry
@@ -2672,10 +2684,33 @@ mod tests {
                 span_p12_p0: noon_core::SemanticVec3::ZERO,
                 span_p9_p6: noon_core::SemanticVec3::ZERO,
                 span_p3_p6: noon_core::SemanticVec3::ZERO,
+                boundary_controls: None,
             });
         }
         let mut bytes = Vec::new();
         ciborium::ser::into_writer(&forged, &mut bytes).unwrap();
+        assert!(matches!(
+            RetainedResourceBundle::decode_binary(&bytes),
+            Err(RetainedResourceTransportError::InvalidGeometry(_))
+        ));
+
+        let mut forged_topology = bundle;
+        if let TransportGeometryPayload::Mesh {
+            cairo_appearance, ..
+        } = &mut forged_topology.geometries[0].geometry
+        {
+            *cairo_appearance = Some(noon_core::CairoSurfaceAppearance {
+                p0: noon_core::SemanticVec3::ZERO,
+                p6: noon_core::SemanticVec3::ZERO,
+                span_p3_p0: noon_core::SemanticVec3::ZERO,
+                span_p12_p0: noon_core::SemanticVec3::ZERO,
+                span_p9_p6: noon_core::SemanticVec3::ZERO,
+                span_p3_p6: noon_core::SemanticVec3::ZERO,
+                boundary_controls: Some([[noon_core::SemanticVec3::ZERO; 2]; 4]),
+            });
+        }
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&forged_topology, &mut bytes).unwrap();
         assert!(matches!(
             RetainedResourceBundle::decode_binary(&bytes),
             Err(RetainedResourceTransportError::InvalidGeometry(_))

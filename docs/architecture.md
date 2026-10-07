@@ -1303,11 +1303,16 @@ appearance from the sampled parametric control points; `point_lit=True` selects
 the distinct Noon-native lighting profile, and `shade_in_3d=False` selects an
 unshaded mesh. Checkerboard color and opacity changes use one checked
 owner-routed transaction; family transforms reuse the shared world-affine
-operation. Surface borders derive immutable exterior triangle edges once, omit
-triangulation diagonals, and use GPU screen-space extrusion during camera
-movement. Translucency is bounded to individual triangle or canonical quad
-cells. Opaque world geometry populates depth first; translucent cells blend in
-camera-depth order, with authored painter order breaking ties. Cairo-compatible
+operation. Surface borders derive immutable exterior triangle edges once and
+omit triangulation diagonals. Sampled Cairo cells retain four mapped perimeter
+cubics; their fills and borders share a bounded approximation of four chords
+per curved edge. The renderer derives these buffers once and evaluates pixel
+coverage and screen-space stroke extrusion during camera movement. Ordinary
+mesh vertex and instance layouts remain unchanged. Translucency is bounded to
+individual triangle or canonical quad cells. Opaque world geometry populates
+depth first; translucent and Cairo cells paint each fill and border together in
+camera-depth order, with authored painter order breaking ties. Color-only cell
+changes preserve that cached order. Cairo-compatible
 Surface gradients and six-face Cube/Prism materials are implemented slices but
 remain pending raster qualification. General intersecting transparent solids
 remain outside the profile.

@@ -15,6 +15,8 @@ struct CairoOutput {
     @location(1) @interpolate(flat) end: vec2<f32>,
     @location(2) @interpolate(flat) first_color: vec4<f32>,
     @location(3) @interpolate(flat) last_color: vec4<f32>,
+    @location(4) @interpolate(flat) boundary_line: vec4<f32>,
+    @location(5) coverage_coordinate: vec2<f32>,
 };
 fn cairo_output(position: vec4<f32>, world: mat4x4<f32>, color: vec4<f32>) -> CairoOutput {
     let start_world = (world * cairo_geometry.p0).xyz + world[3].xyz;
@@ -33,18 +35,27 @@ fn cairo_output(position: vec4<f32>, world: mat4x4<f32>, color: vec4<f32>) -> Ca
     result.end = (b.xy / b.w * vec2<f32>(1.0, -1.0) + vec2<f32>(1.0)) * viewport * 0.5;
     result.first_color = cairo_color(color, start_world, n0);
     result.last_color = cairo_color(color, end_world, n1);
+    result.boundary_line = vec4<f32>(0.0);
+    // Reconstruct linear screen interpolation using ordinary perspective
+    // varyings, which also works on WebGL without noperspective extensions.
+    result.coverage_coordinate = vec2<f32>(position.w);
     return result;
 }
-@vertex fn vs_cairo(input: VertexInput) -> CairoOutput {
+@vertex fn vs_cairo(input: VertexInput, @location(12) coverage: f32) -> CairoOutput {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
-    return cairo_output(camera.view_projection * world * vec4<f32>(input.position, 1.0),
+    var result = cairo_output(camera.view_projection * world * vec4<f32>(input.position, 1.0),
         world, input.color);
+    result.coverage_coordinate.x *= coverage;
+    return result;
 }
 @vertex fn vs_cairo_boundary(input: EdgeInput) -> CairoOutput {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
-    return cairo_output(boundary_position(input), world, input.color);
+    let geometry = boundary_geometry(input);
+    var result = cairo_output(geometry.position, world, input.color);
+    result.boundary_line = geometry.line;
+    return result;
 }
-@fragment fn fs_cairo(input: CairoOutput) -> @location(0) vec4<f32> {
+fn cairo_fragment_color(input: CairoOutput) -> vec4<f32> {
     let delta = input.end - input.start;
     let scale = max(abs(delta.x), abs(delta.y));
     if !(scale > 0.0 && scale <= MAX_FINITE_F32) { return input.first_color; }
@@ -52,4 +63,21 @@ fn cairo_output(position: vec4<f32>, world: mat4x4<f32>, color: vec4<f32>) -> Ca
     let t = clamp(dot((input.position.xy - input.start) / scale, direction)
         / dot(direction, direction), 0.0, 1.0);
     return mix(input.first_color, input.last_color, t);
+}
+
+@fragment fn fs_cairo(input: CairoOutput) -> @location(0) vec4<f32> {
+    let color = cairo_fragment_color(input);
+    let coordinate = input.coverage_coordinate.x / max(input.coverage_coordinate.y, 1e-8);
+    let gradient = vec2<f32>(dpdx(coordinate), dpdy(coordinate));
+    let magnitude = length(gradient);
+    var coverage = 1.0;
+    if magnitude > 1e-8 {
+        coverage = pixel_normal_cdf(coordinate / magnitude, gradient / magnitude);
+    }
+    return vec4<f32>(color.rgb, color.a * coverage);
+}
+@fragment fn fs_cairo_boundary(input: CairoOutput) -> @location(0) vec4<f32> {
+    let color = cairo_fragment_color(input);
+    return vec4<f32>(color.rgb,
+        color.a * boundary_coverage(input.position.xy, input.boundary_line));
 }

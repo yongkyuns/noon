@@ -353,6 +353,7 @@ fn square_cairo_appearance([p0, p3, corner6, p12]: [SemanticVec3; 4]) -> CairoSu
         span_p12_p0: subtract(p12, p0),
         span_p9_p6: subtract(p9, p6),
         span_p3_p6: subtract(p3, p6),
+        boundary_controls: None,
     }
 }
 

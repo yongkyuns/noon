@@ -262,6 +262,12 @@ impl UvSurfacePlan {
                     span_p12_p0: subtract(points[12], p0),
                     span_p9_p6: subtract(p9, p6),
                     span_p3_p6: subtract(points[3], p6),
+                    boundary_controls: Some([
+                        [expanded_handles[0], expanded_handles[1]],
+                        [expanded_handles[2], expanded_handles[3]],
+                        [expanded_handles[4], expanded_handles[5]],
+                        [expanded_handles[6], expanded_handles[7]],
+                    ]),
                 };
                 if !appearance.is_finite() {
                     return Err(SurfaceError::NonFiniteCairoControlPoint);
@@ -858,6 +864,15 @@ mod tests {
         assert!((appearance.p6.x - 1.0).abs() < 1e-12);
         assert!((appearance.p6.y - (2.0 / 3.0)).abs() < 1e-9);
         assert!((appearance.p6.z - 1.333334444).abs() < 1e-9);
+        let controls = appearance.boundary_controls.unwrap();
+        assert!((controls[0][0].x - (1.0 / 3.0)).abs() < 1e-9);
+        assert!((controls[0][0].z - 0.000001111111111).abs() < 1e-9);
+        assert!((controls[0][1].x - (2.0 / 3.0)).abs() < 1e-9);
+        assert!((controls[0][1].z - (1.0 / 3.0)).abs() < 1e-5);
+        assert_eq!(
+            controls[2][0].y, controls[2][1].y,
+            "each boundary segment retains its two actual mapped handles"
+        );
         assert_eq!(sampled.cells().next().unwrap().0.uv_cell, [0, 0]);
     }
 
