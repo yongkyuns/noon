@@ -5,6 +5,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_spatial_geometry.py", runtimePath: "/tmp/_manim_spatial_geometry.py", label: "Noon bounded Manim-shaped spatial geometry adapters" },
   { sourcePath: "python/_noon_ir.py", runtimePath: "/tmp/_noon_ir.py", label: "Noon Python values and constructor arguments" },
   { sourcePath: "python/_manim_compat.py", runtimePath: "/tmp/_manim_compat.py", label: "Noon Manim compatibility layer" },
+  { sourcePath: "python/_manim_namespace.py", runtimePath: "/tmp/_manim_namespace.py", label: "Noon Manim namespace compatibility layer" },
   { sourcePath: "python/_manim_semantic_handles.py", runtimePath: "/tmp/_manim_semantic_handles.py", label: "Noon shared semantic handle layer" },
   { sourcePath: "python/_manim_path_queries.py", runtimePath: "/tmp/_manim_path_queries.py", label: "Noon shared path query wrappers" },
   { sourcePath: "python/_manim_path_editing.py", runtimePath: "/tmp/_manim_path_editing.py", label: "Noon shared path editing wrappers" },
