@@ -947,6 +947,12 @@ fn fixed_orientation_miter_preserves_frame_geometry_with_anisotropic_clip_scale(
             &target,
         )
         .unwrap();
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .any(|rgba| (1..255).contains(&rgba[0])),
+            "a spatial-only path keeps fractional edge coverage without a planar path batch"
+        );
         // The two incident unit directions have Y components +/-1/sqrt(5).
         // Their outer miter rises sqrt(5)/4 frame units above y=0.25.
         let top = (0..HEIGHT)

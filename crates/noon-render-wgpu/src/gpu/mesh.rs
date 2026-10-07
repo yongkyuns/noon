@@ -1022,6 +1022,10 @@ impl SpatialGpuState {
         !self.draws.is_empty() || self.paths.is_active()
     }
 
+    pub fn has_active_paths(&self) -> bool {
+        self.paths.is_active()
+    }
+
     pub fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,

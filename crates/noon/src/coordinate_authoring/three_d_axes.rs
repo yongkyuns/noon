@@ -916,7 +916,11 @@ fn configure_cairo_axis_path(
 }
 
 fn tip_style(style: &SemanticStyle) -> Result<SemanticStyle, CoordinateAuthoringError> {
-    filled_tip_style(style)
+    let mut tip = filled_tip_style(style)?;
+    // ThreeDAxes inherits the shaft style on its filled tip. The shared 2D
+    // helper clears this width for its separate outline-free tip contract.
+    tip.stroke_width = style.stroke_width;
+    Ok(tip)
 }
 
 fn three_d_axis_style() -> SemanticStyle {
@@ -1042,6 +1046,32 @@ mod tests {
     }
 
     #[test]
+    fn three_d_filled_tip_keeps_inherited_axis_stroke_width() {
+        let style = SemanticStyle {
+            fill: None,
+            fill_opacity: 0.35,
+            stroke: Some(SemanticPaint::Solid(noon_core::Color::RED)),
+            stroke_opacity: 0.6,
+            stroke_width: 2.0,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            stroke_join: noon_core::StrokeJoin::Bevel,
+            stroke_cap: noon_core::StrokeCap::Butt,
+            object_opacity: 0.8,
+        };
+
+        let tip = tip_style(&style).unwrap();
+        assert_eq!(tip.stroke_width, 2.0);
+        assert_eq!(tip.stroke_width_mode, style.stroke_width_mode);
+        assert_eq!(tip.stroke_join, style.stroke_join);
+        assert_eq!(tip.stroke_cap, style.stroke_cap);
+        assert_eq!(tip.stroke, style.stroke);
+        assert_eq!(tip.stroke_opacity, style.stroke_opacity);
+        assert_eq!(tip.object_opacity, style.object_opacity);
+        assert_eq!(tip.fill, style.stroke);
+        assert_eq!(tip.fill_opacity, 1.0);
+    }
+
+    #[test]
     fn default_construction_keeps_three_filled_tips_in_the_axis_families() {
         let mut scene = Scene::new();
         let axes = scene
@@ -1065,6 +1095,7 @@ mod tests {
                 tip.spatial_composition_domain(),
                 SemanticSpatialCompositionDomain::World
             );
+            assert_eq!(tip.style.stroke_width, 2.0);
             if index == 2 {
                 let rotation = tip.transform.world_transform().unwrap().rotation;
                 for (source, expected) in [
