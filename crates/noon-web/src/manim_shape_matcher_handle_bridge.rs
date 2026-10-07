@@ -5,6 +5,7 @@ use noon::ManimGeometryOptions;
 use noon_core::Bounds2D64;
 use wasm_bindgen::prelude::*;
 
+use crate::authoring_geometry::WasmManimCrossOptions;
 use crate::{WasmAuthoringFamilyLayout, WasmAuthoringMobjectHandle, WasmManimGeometryOptions};
 
 use crate::authoring_error::js_error;
@@ -22,6 +23,13 @@ fn mobject_bounds(handle: &WasmAuthoringMobjectHandle) -> Result<Bounds2D64, JsV
 
 #[wasm_bindgen]
 impl WasmAuthoringMobjectHandle {
+    #[wasm_bindgen(js_name = beginCross)]
+    pub fn begin_cross(&self, scale_factor: f64) -> Result<WasmManimCrossOptions, JsValue> {
+        ManimGeometryOptions::cross_lines(Some(mobject_bounds(self)?), scale_factor)
+            .map(WasmManimCrossOptions::from_options)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = beginUnderline)]
     pub fn begin_underline(&self, buff: f64) -> Result<WasmManimGeometryOptions, JsValue> {
         let bounds = self
@@ -73,6 +81,13 @@ impl WasmAuthoringMobjectHandle {
 
 #[wasm_bindgen]
 impl WasmAuthoringFamilyLayout {
+    #[wasm_bindgen(js_name = beginCross)]
+    pub fn begin_cross(&self, scale_factor: f64) -> Result<WasmManimCrossOptions, JsValue> {
+        ManimGeometryOptions::cross_lines(Some(self.bounds()), scale_factor)
+            .map(WasmManimCrossOptions::from_options)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = beginSurroundingRectangle)]
     pub fn begin_surrounding_rectangle(
         &self,
