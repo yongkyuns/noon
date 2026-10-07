@@ -12,15 +12,16 @@ const directories = workloads.map(id => id === "parity-square-and-circle" ? "."
 const latencyNames = ["shell ready", "cold Run → applied", "warm Run → applied", "edit → applied"];
 const noisy = [0.7, 1.3, 0.8, 1.2, 0.9, 1.1, 1];
 
-function fixture(exampleId, { fpsRatios = Array(7).fill(1), renderRatios = Array(7).fill(1) } = {}) {
+function fixture(exampleId, { pairs = 7, fpsRatios = Array(pairs).fill(1),
+  renderRatios = Array(pairs).fill(1) } = {}) {
   const measurement = productMeasurement(exampleId);
-  const beforeFps = Array(7).fill(10), afterFps = fpsRatios.map(x => 10 * x);
-  const beforeCost = Array(7).fill(1);
+  const beforeFps = Array(pairs).fill(10), afterFps = fpsRatios.map(x => 10 * x);
+  const beforeCost = Array(pairs).fill(1);
   return {
     exampleId,
-    protocol: { pairs: 7, order: Array.from({ length: 7 }, (_, i) => productPairOrder(i + 1)) },
+    protocol: { pairs, order: Array.from({ length: pairs }, (_, i) => productPairOrder(i + 1)) },
     thresholds: { strictMinFpsRatio: 0.97 },
-    measurements: Array.from({ length: 7 }, (_, i) => Object.fromEntries(
+    measurements: Array.from({ length: pairs }, (_, i) => Object.fromEntries(
       ["baseline", "candidate"].map((side, j) => [side, {
         exampleId, label: side,
         pair: { index: i + 1, position: productPairOrder(i + 1).indexOf(side) + 1 },
@@ -36,20 +37,25 @@ function fixture(exampleId, { fpsRatios = Array(7).fill(1), renderRatios = Array
   };
 }
 
-async function exercise(change = () => {}) {
+async function exercise(change = () => {}, { bothScopes = false } = {}) {
+  const cumulativeDirectories = directories.map(d => d === "." ? "cumulative" : `cumulative/${d}`);
   const reads = [];
   const result = await qualifyProductCohorts(async directory => {
     reads.push(directory);
-    const id = workloads[directories.indexOf(directory)];
+    const cumulativeIndex = cumulativeDirectories.indexOf(directory);
+    const cumulative = cumulativeIndex >= 0;
+    const id = workloads[cumulative ? cumulativeIndex : directories.indexOf(directory)];
     assert.ok(id, `unexpected cohort directory ${directory}`);
-    return change(fixture(id), id) ?? fixture(id);
+    const input = fixture(id, { pairs: cumulative ? 3 : 7 });
+    return cumulative && !bothScopes ? input : change(input, id) ?? input;
   });
-  assert.deepEqual(reads, directories, "read every declared cohort exactly once, in manifest order");
-  assert.deepEqual(result.cohorts.map(c => c.exampleId), workloads);
+  assert.deepEqual(reads, [...directories, ...cumulativeDirectories],
+    "read every scope/cohort exactly once, in manifest order");
+  assert.deepEqual(result.cohorts.map(c => c.exampleId), [...workloads, ...workloads]);
   return result;
 }
 
-test("all five declared workloads receive strict qualification", async () => {
+test("all five declared workloads receive both strict qualifications", async () => {
   assert.equal(workloads.length, 5);
   const result = await exercise();
   assert.deepEqual(result.failures, []);
@@ -64,7 +70,7 @@ for (const id of workloads) {
       assert.equal(result.failures.length, 1);
       assert.equal(result.failures[0].exampleId, id);
       assert.equal(result.failures[0].kind, kind);
-      assert.equal(result.cohorts.filter(c => c.status === "pass").length, workloads.length - 1);
+      assert.equal(result.cohorts.filter(c => c.status === "pass").length, 2 * workloads.length - 1);
     });
   }
   test(`${id} preserves the 1.03 plus 20ms strict latency adjunct`, async () => {
@@ -121,8 +127,8 @@ for (const [name, mutate] of [
 }
 
 test("missing all evidence cannot produce an empty passing qualification", async () => {
-  const result = await exercise(() => { throw new Error("missing"); });
-  assert.equal(result.failures.length, workloads.length);
+  const result = await exercise(() => { throw new Error("missing"); }, { bothScopes: true });
+  assert.equal(result.failures.length, 2 * workloads.length);
   assert.ok(result.cohorts.every(c => c.status === "blocked"));
 });
 

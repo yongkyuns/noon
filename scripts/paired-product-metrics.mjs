@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 
-// One fixed product protocol; three pairs are retained for historical analysis only.
+// Fixed adjacent-base and cumulative-anchor cohorts share the same strict estimator.
 export const PRODUCT_PAIR_COUNT = 7;
+export const CUMULATIVE_PRODUCT_PAIR_COUNT = 3;
 
 export function productPairOrder(index) {
   assert.ok(Number.isSafeInteger(index) && index >= 1 && index <= PRODUCT_PAIR_COUNT,
@@ -72,11 +73,15 @@ export function pairedCostConfidence(before, after, maxPointRatio = 1.03, maxUpp
 // Recompute qualifications from the retained runs, rather than trusting a status
 // label in comparison.json. Renderer cost and delivered FPS are independent
 // requirements: neither a pass nor a speedup in one clears uncertainty in the other.
-export function qualifyProductMetrics(comparison) {
-  assert.equal(comparison.protocol?.pairs, PRODUCT_PAIR_COUNT, "missing seven-pair product protocol");
-  assert.equal(comparison.measurements?.length, PRODUCT_PAIR_COUNT, "missing prescribed product pair");
+export function qualifyProductMetrics(comparison, expectedPairs = PRODUCT_PAIR_COUNT) {
+  // The caller pins the scope; an artifact must not choose its own sample count.
+  assert.ok([PRODUCT_PAIR_COUNT, CUMULATIVE_PRODUCT_PAIR_COUNT].includes(expectedPairs),
+    "unsupported product qualification pair count");
+  const protocolName = expectedPairs === PRODUCT_PAIR_COUNT ? "seven-pair" : "three-pair";
+  assert.equal(comparison.protocol?.pairs, expectedPairs, `missing ${protocolName} product protocol`);
+  assert.equal(comparison.measurements?.length, expectedPairs, "missing prescribed product pair");
   assert.deepEqual(comparison.protocol.order,
-    Array.from({ length: PRODUCT_PAIR_COUNT }, (_, i) => productPairOrder(i + 1)),
+    Array.from({ length: expectedPairs }, (_, i) => productPairOrder(i + 1)),
     "product protocol must retain the actual alternating order");
   assert.equal(comparison.thresholds?.strictMinFpsRatio, 0.97, "strict FPS budget changed");
   const pairs = comparison.measurements;
