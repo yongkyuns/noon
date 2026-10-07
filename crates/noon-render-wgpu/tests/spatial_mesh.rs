@@ -2221,10 +2221,10 @@ fn cairo_boundary_test_scene_with_straight_controls(
 fn cairo_sampled_fill_conserves_white_area_across_subpixel_translations() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();
-        let adapter = instance
-            .request_adapter(&Default::default())
-            .await
-            .expect("Cairo sampled fill area probe requires a GPU adapter");
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo sampled fill area qualification: no adapter is available");
+            return;
+        };
         eprintln!("Cairo sampled fill adapter: {:?}", adapter.get_info());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
