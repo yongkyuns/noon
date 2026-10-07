@@ -14,6 +14,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 mod gpu;
+#[cfg(feature = "ffmpeg")]
+pub mod video;
 
 use std::error::Error;
 use std::fmt;

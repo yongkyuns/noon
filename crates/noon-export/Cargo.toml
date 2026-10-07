@@ -12,6 +12,11 @@ typst = ["noon/typst"]
 bundled-fonts = ["noon/bundled-fonts"]
 image-decode = ["noon/image-decode"]
 latex = ["noon/latex"]
+ffmpeg = []
+
+[[example]]
+name = "export_video"
+required-features = ["ffmpeg"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 noon = { path = "../noon", default-features = false }

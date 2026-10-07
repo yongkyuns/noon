@@ -1,0 +1,118 @@
+name: Native Video Export
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/native-video-export.yml"
+      - "scripts/qualify-video-export.py"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "crates/noon-export/**"
+      - "crates/noon/**"
+      - "crates/noon-core/**"
+      - "crates/noon-compile/**"
+      - "crates/noon-runtime/**"
+      - "crates/noon-render-wgpu/**"
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/native-video-export.yml"
+      - "scripts/qualify-video-export.py"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "crates/noon-export/**"
+      - "crates/noon/**"
+      - "crates/noon-core/**"
+      - "crates/noon-compile/**"
+      - "crates/noon-runtime/**"
+      - "crates/noon-render-wgpu/**"
+
+permissions:
+  contents: read
+
+jobs:
+  native-video:
+    name: Native video encode and independent decode
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      WGPU_BACKEND: vulkan
+      NOON_VIDEO_PROOF_DIR: ${{ github.workspace }}/ci-artifacts/video-proof
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use repository-pinned Rust and record source
+        run: |
+          rustup install
+          rustc --version --verbose
+          mkdir -p "$NOON_VIDEO_PROOF_DIR"
+          git rev-parse HEAD > "$NOON_VIDEO_PROOF_DIR/tested-commit.txt"
+          git archive --format=tar.gz HEAD crates/noon-export scripts/qualify-video-export.py .github/workflows/native-video-export.yml > "$NOON_VIDEO_PROOF_DIR/source.tar.gz"
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-video-cargo-sources-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-capture-cargo-sources-
+
+      - name: Install encoder and software Vulkan without a display server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg mesa-vulkan-drivers libvulkan1
+          ffmpeg -version > "$NOON_VIDEO_PROOF_DIR/ffmpeg-version.txt"
+
+      - name: Compile and exercise frame, process, file and native video contracts
+        run: |
+          set -o pipefail
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+            --lib --test video -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee "$NOON_VIDEO_PROOF_DIR/tests.log"
+
+      - name: Independently verify decoded frames and exact rational timestamps
+        run: |
+          python3 scripts/qualify-video-export.py "$NOON_VIDEO_PROOF_DIR" --remove-reference
+
+      - name: Run the ordinary native Rust MP4 example
+        run: |
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo run --quiet -p noon-export --features ffmpeg \
+            --example export_video -- "$NOON_VIDEO_PROOF_DIR/demo.mp4" \
+            2> "$NOON_VIDEO_PROOF_DIR/demo.log"
+          ffmpeg -v error -nostdin -i "$NOON_VIDEO_PROOF_DIR/demo.mp4" -f null -
+          ffprobe -v error -select_streams v:0 -count_frames -show_streams -of json \
+            "$NOON_VIDEO_PROOF_DIR/demo.mp4" > "$NOON_VIDEO_PROOF_DIR/demo.ffprobe.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads((Path(os.environ['NOON_VIDEO_PROOF_DIR']) / 'demo.ffprobe.json').read_text())['streams'][0]
+          assert int(data['nb_read_frames']) == 90, data
+          assert (data['width'], data['height'], data['avg_frame_rate']) == (1280, 720, '30/1'), data
+          PY
+
+      - name: Check formatting and lint without weakening existing gates
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p noon-export --all-features --all-targets -- -D warnings
+          cargo check -p noon-export --no-default-features --features ffmpeg --lib
+
+      - name: Retain formatter patch after tested-code execution
+        if: always()
+        run: |
+          mkdir -p "$NOON_VIDEO_PROOF_DIR"
+          cargo fmt --all
+          git diff --binary > "$NOON_VIDEO_PROOF_DIR/rustfmt.patch"
+          test ! -f Cargo.lock || cp Cargo.lock "$NOON_VIDEO_PROOF_DIR/Cargo.lock"
+
+      - name: Retain encoded videos and qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-export-video
+          path: ci-artifacts/video-proof/
+          retention-days: 14
