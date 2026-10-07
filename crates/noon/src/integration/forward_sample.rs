@@ -250,6 +250,39 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
         Ok(())
     }
 
+    pub(super) fn observation_consumed(&self) -> bool {
+        matches!(self.phase, Phase::Observed { consumed: true, .. })
+    }
+
+    /// Reuse the borrowed owner for the next output request only after the
+    /// previous observation was consumed. Endpoint barriers cannot be reset.
+    pub(super) fn restart(
+        &mut self,
+        requested_time: f64,
+        max_transitions: u32,
+    ) -> Result<(), ForwardSampleError<C::Error>> {
+        if !self.observation_consumed() {
+            return Err(ForwardSampleError::PublicationNotConsumed);
+        }
+        let current_time = self.session().frame().time;
+        if !requested_time.is_finite()
+            || requested_time < self.requested_time
+            || requested_time < current_time
+        {
+            return Err(ForwardSampleError::InvalidTime {
+                requested: requested_time,
+                current: current_time,
+            });
+        }
+        if max_transitions == 0 {
+            return Err(ForwardSampleError::TransitionLimit);
+        }
+        self.requested_time = requested_time;
+        self.remaining_transitions = max_transitions;
+        self.phase = Phase::Driving;
+        Ok(())
+    }
+
     /// Stop this request cooperatively. No future advance will invoke user code.
     /// The outer host owns failure cleanup and must not publish a successful file.
     pub fn cancel(&mut self) {
