@@ -1,0 +1,77 @@
+name: Task 1653 workload validation and publication (do not merge)
+on:
+  push:
+    branches: [task/1653-product-workload-publish]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - name: Apply exact reviewed changes to production base
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R .github/task-1653-workload-payload /tmp/task-1653-workload-payload
+          git fetch --no-tags --depth=1 origin ce3513697a6356c841c4ab0d8f6eef1d6c1f15e3
+          git checkout --detach ce3513697a6356c841c4ab0d8f6eef1d6c1f15e3
+          test "$(git rev-parse HEAD^{tree})" = 0b3b3f5d126aae3b4b7dba4810007a0d2605f8f5
+          python - <<'PY'
+          from pathlib import Path
+          import gzip, hashlib, json, subprocess
+          payload = b''.join((Path('/tmp/task-1653-workload-payload') / f'{i:03}').read_bytes() for i in range(7))
+          assert hashlib.sha256(payload).hexdigest() == 'f32c2b54741199ce881685b920fe915a35ec6626b1955a9cc15dfa424f6f8ec2'
+          changes = json.loads(gzip.decompress(payload))
+          def blob(data):
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          assert len(changes) == 12
+          for change in changes:
+              p = Path(change['path'])
+              assert not p.is_absolute() and '..' not in p.parts
+              original = p.read_bytes()
+              assert blob(original) == change['base'], str(p)
+              lines = original.decode('utf-8').splitlines(keepends=True)
+              for start, end, text in reversed(change['edits']):
+                  lines[start:end] = text.splitlines(keepends=True)
+              output = ''.join(lines).encode('utf-8')
+              assert blob(output) == change['target'], str(p)
+              p.write_bytes(output)
+          subprocess.run(['git', 'add', '--', *[item['path'] for item in changes]], check=True)
+          PY
+          test "$(git write-tree)" = 74217dc18c2701c9956648e3e3ce1d65f6053289
+          git diff --cached --check
+          git diff --cached --stat
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Focused contracts with actual PNG dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --ignore-scripts pngjs@7.0.0
+          NOON_PRODUCT_IMAGE_TESTS=1 node --test .github/ci/*.test.mjs scripts/playground-product-fps.test.mjs web/playground-product-compare-validation.test.mjs web/playground-product-e2e-contract.test.mjs 2>&1 | tee /tmp/task-1653-workload-tests.log
+      - name: Publish clean source candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git write-tree)" = 74217dc18c2701c9956648e3e3ce1d65f6053289
+          git diff --exit-code
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Broaden Product Gate workload coverage with source-pinned cohorts (#1653)'
+          git push origin HEAD:refs/heads/task/1653-product-workloads-validated
+          git rev-parse HEAD | tee /tmp/task-1653-workload-head.txt
+      - name: Retain focused validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: task-1653-workload-focused-evidence
+          path: |
+            /tmp/task-1653-workload-tests.log
+            /tmp/task-1653-workload-head.txt
+          if-no-files-found: warn
+          retention-days: 7
