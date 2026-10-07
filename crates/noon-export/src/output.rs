@@ -210,7 +210,7 @@ impl PngSequenceSink {
         Ok(())
     }
 
-    fn finish(mut self, capture: CaptureSummary) -> Result<NativeOutputSummary, PngSequenceError> {
+    fn finish(self, capture: CaptureSummary) -> Result<NativeOutputSummary, PngSequenceError> {
         if self.next_pts != capture.sampling.frames {
             return Err(PngSequenceError::FrameMismatch(
                 "captured frame count differs from written PNG count",
@@ -590,20 +590,32 @@ fn probe_libx264(executable: &Path) -> Result<(), FfmpegMp4Error> {
             executable: executable.to_owned(),
             source,
         })?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or(FfmpegMp4Error::InvalidConfiguration(
-            "FFmpeg capability stdout was not piped",
-        ))?;
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(FfmpegMp4Error::InvalidConfiguration(
+                "FFmpeg capability stdout was not piped",
+            ));
+        }
+    };
     let mut found = false;
     let mut total = 0_usize;
     let mut carry = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
-        let count = stdout
-            .read(&mut buffer)
-            .map_err(|error| FfmpegMp4Error::io("read FFmpeg encoder list", error))?;
+        let count = match stdout.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(FfmpegMp4Error::io(
+                    "read FFmpeg encoder list",
+                    error,
+                ));
+            }
+        };
         if count == 0 {
             break;
         }
