@@ -65,6 +65,9 @@ if (( $# > 2 )); then
   exit 2
 fi
 
+# Bounded independent mathematical contracts; no compiler or product imports.
+python3 tests/visual-effects/test_reference.py -v
+
 # Every public validation mode runs the same guards before compiling anything.
 bash scripts/check-architecture.sh "${2-origin/master}"
 case "$mode" in
