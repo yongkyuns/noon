@@ -106,14 +106,14 @@ def _initialize_translucent_prism_family(
             fill.alpha,
             fill_opacity,
         )
-        handle = (
-            engine_call(_create_mesh_family, candidate)
-            if context is None
-            else engine_call(context.createMeshFamily, candidate)
-        )
     except BaseException:
         candidate.free()
         raise
+    handle = (
+        engine_call(_create_mesh_family, candidate)
+        if context is None
+        else engine_call(context.createMeshFamily, candidate)
+    )
     _initialize_shared_wrapper(self)
     _attach_shared_family(self, handle, context, _compat.VMobject)
     if context is not None:
@@ -269,11 +269,11 @@ class Surface(_Mesh3D, _compat.Group):
                 engine_call(candidate.addCircleCap, float(radius), float(local_z),
                             color.red, color.green, color.blue, color.alpha,
                             bool(shaded))
-            handle = (engine_call(_create_mesh_family, candidate) if context is None
-                      else engine_call(context.createMeshFamily, candidate))
         except BaseException:
             candidate.free()
             raise
+        handle = (engine_call(_create_mesh_family, candidate) if context is None
+                  else engine_call(context.createMeshFamily, candidate))
         _initialize_shared_wrapper(self)
         _attach_shared_family(self, handle, context, _compat.VMobject)
         if context is not None:

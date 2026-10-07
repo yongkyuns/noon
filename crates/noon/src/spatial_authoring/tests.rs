@@ -40,6 +40,89 @@ fn flat_grid() -> SurfaceGrid {
 }
 
 #[test]
+fn unlit_cone_apex_cells_retain_surface_roles_with_an_ordinary_base_cap() {
+    let radius: f64 = 0.3;
+    let height: f64 = 0.7;
+    let theta = std::f64::consts::PI - (radius / height).atan();
+    let plan = UvSurfacePlan::new(
+        [0.0, radius.hypot(height)],
+        [0.0, std::f64::consts::TAU],
+        [8, 8],
+    )
+    .unwrap();
+    let grid = plan
+        .finish_unlit_samples(plan.coordinates().map(|(u, v)| {
+            SurfaceSample::position(SemanticVec3::new(
+                u * theta.sin() * v.cos(),
+                u * theta.sin() * v.sin(),
+                u * theta.cos(),
+            ))
+        }))
+        .unwrap();
+    assert!(grid.normals().contains(&SemanticVec3::ZERO));
+    let meshes = grid
+        .cells()
+        .map(|cell| {
+            let role = cell.uv_cell;
+            MeshOptions::new(cell.into_mesh_resource().unwrap()).with_surface_uv_cell(role)
+        })
+        .collect::<Vec<_>>();
+    let apex = meshes
+        .iter()
+        .find(|options| !options.geometry.has_usable_normals())
+        .unwrap()
+        .clone();
+    let cap = SpatialPathOptions::circle(
+        radius,
+        SemanticWorldTransform3D::from_axial_direction(SemanticVec3::new(0.0, 0.0, 1.0), -height)
+            .unwrap(),
+        Color::BLUE_D,
+        false,
+    )
+    .unwrap();
+    let mut scene = Scene::new();
+    let family = scene.mesh_family_with_paths(meshes, vec![cap]).unwrap();
+    let surface = SurfaceFamily::from_family(family).unwrap();
+    let store = Rc::clone(scene.integration_store());
+    let members = store
+        .borrow()
+        .ordered_leaf_nodes(surface.family().node_id())
+        .unwrap();
+    assert_eq!(members.len(), 65);
+    let cap = members
+        .iter()
+        .find(|member| {
+            store
+                .borrow()
+                .semantic_object_state_checked(**member)
+                .unwrap()
+                .surface_uv_cell()
+                .is_none()
+        })
+        .unwrap();
+    let cap_before = store
+        .borrow()
+        .semantic_object_state_checked(*cap)
+        .unwrap()
+        .clone();
+    let resources = store.borrow().geometry_resources().stats();
+    scene
+        .set_surface_checkerboard(&surface, [Color::RED, Color::GREEN], 0.75)
+        .unwrap();
+    assert_eq!(
+        store.borrow().semantic_object_state_checked(*cap).unwrap(),
+        &cap_before
+    );
+    assert_eq!(store.borrow().geometry_resources().stats(), resources);
+    let revision = scene.revision();
+    assert!(scene
+        .mesh(apex.with_material(SemanticSpatialMaterial::PointLit))
+        .is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(store.borrow().geometry_resources().stats(), resources);
+}
+
+#[test]
 fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells() {
     let grid = UvSurfacePlan::new([0.0, 1.0], [0.0, std::f64::consts::TAU], [1, 1])
         .unwrap()

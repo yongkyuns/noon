@@ -8,6 +8,7 @@ import _manim_spatial_geometry as spatial
 from _noon_spatial import Mesh3D
 import _manim_compat as compat
 import _manim_semantic_handles as semantic
+from _noon_errors import NoonErrorCause, NoonOwnershipError
 
 
 def _family_handle(members=()):
@@ -158,6 +159,63 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         self.assertIsInstance(surface, compat.Group)
         self.assertIs(surface._semantic_family_handle, family)
         self.assertIs(surface.submobjects[0]._semantic_handle, member)
+
+    def test_surface_setter_failure_frees_unconsumed_family_options_once(self):
+        import _noon_spatial as native
+
+        failure = ValueError("invalid family style")
+        candidate = Mock()
+        candidate.setFill.side_effect = failure
+        plan = SimpleNamespace(
+            parameters=Mock(return_value=(0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0)),
+            finishCells=Mock(return_value=candidate),
+            free=Mock(),
+        )
+        with patch.object(native, "_surface_plan", return_value=plan), \
+             patch.object(native, "_mesh_family_options", object()), \
+             patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
+             patch.object(native, "_create_mesh_family") as detached_create, \
+             patch.object(spatial, "_live_constructor_context", return_value=None):
+            with self.assertRaises(ValueError) as raised:
+                spatial.Surface(lambda u, v: (u, v, 0), resolution=(1, 1),
+                                shade_in_3d=False, checkerboard_colors=False)
+
+        self.assertIs(raised.exception, failure)
+        plan.free.assert_called_once()
+        candidate.free.assert_called_once()
+        detached_create.assert_not_called()
+
+    def test_surface_live_binding_error_preserves_typed_error_without_freeing_consumed_options(self):
+        import _noon_spatial as native
+
+        typed = NoonOwnershipError(
+            NoonErrorCause("ownership", "family_rejected", "family admission failed"),
+            object(),
+            "createMeshFamily",
+        )
+        candidate = Mock()
+        plan = SimpleNamespace(
+            parameters=Mock(return_value=(0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0)),
+            finishCells=Mock(return_value=candidate),
+            free=Mock(),
+        )
+        context = Mock()
+        context.createMeshFamily.side_effect = typed
+        context.liveExecutionOwnership.return_value = "active"
+        with patch.object(native, "_surface_plan", return_value=plan), \
+             patch.object(native, "_mesh_family_options", object()), \
+             patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
+             patch.object(native, "_create_mesh_family") as detached_create, \
+             patch.object(spatial, "_live_constructor_context", return_value=context):
+            with self.assertRaises(NoonOwnershipError) as raised:
+                spatial.Surface(lambda u, v: (u, v, 0), resolution=(1, 1),
+                                shade_in_3d=False, checkerboard_colors=False)
+
+        self.assertIs(raised.exception, typed)
+        plan.free.assert_called_once()
+        candidate.free.assert_not_called()
+        context.createMeshFamily.assert_called_once_with(candidate)
+        detached_create.assert_not_called()
 
     def test_surface_checkerboard_and_world_scale_use_shared_family_handle(self):
         import _noon_spatial as native
@@ -840,6 +898,41 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             self.assertIs(cube.move_to((1, 2, 3)), cube)
         family.worldFamilyCenter.assert_called_once_with()
         family.shiftWorld.assert_called_with(-9.0, 5.0, 1.0)
+
+    def test_prism_family_setter_failure_frees_unconsumed_options_once(self):
+        import _noon_spatial as native
+
+        failure = ValueError("invalid family fill")
+        candidate = Mock()
+        candidate.setFill.side_effect = failure
+        with patch.object(native, "_prism_face_family_options", return_value=candidate), \
+             patch.object(native, "_create_mesh_family") as detached_create, \
+             patch.object(spatial, "_live_constructor_context", return_value=None):
+            with self.assertRaises(ValueError) as raised:
+                spatial.Cube()
+
+        self.assertIs(raised.exception, failure)
+        candidate.free.assert_called_once()
+        detached_create.assert_not_called()
+
+    def test_prism_detached_binding_error_preserves_typed_error_without_freeing_consumed_options(self):
+        import _noon_spatial as native
+
+        typed = NoonOwnershipError(
+            NoonErrorCause("ownership", "family_rejected", "family admission failed"),
+            object(),
+            "createMeshFamily",
+        )
+        candidate = Mock()
+        with patch.object(native, "_prism_face_family_options", return_value=candidate), \
+             patch.object(native, "_create_mesh_family", side_effect=typed) as detached_create, \
+             patch.object(spatial, "_live_constructor_context", return_value=None):
+            with self.assertRaises(NoonOwnershipError) as raised:
+                spatial.Cube()
+
+        self.assertIs(raised.exception, typed)
+        candidate.free.assert_not_called()
+        detached_create.assert_called_once_with(candidate)
 
     def test_capped_cone_adds_ordinary_base_to_shared_surface_family(self):
         with patch.object(spatial.Surface, "__init__", autospec=True,

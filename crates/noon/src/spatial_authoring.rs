@@ -368,11 +368,10 @@ fn validate_surface_leaf(
     };
     // A Surface cell is a retained four-corner quad split along the canonical
     // v-low/u-high diagonal. UV metadata on an arbitrary mesh is insufficient.
-    let cairo_appearance = state.spatial_material() == SemanticSpatialMaterial::CairoSurface
-        && mesh.cairo_appearance().is_some();
     if mesh.positions().len() != 4
         || mesh.normals().is_none_or(|normals| normals.len() != 4)
-        || (!cairo_appearance && !mesh.has_usable_normals())
+        || (state.spatial_material() == SemanticSpatialMaterial::PointLit
+            && !mesh.has_usable_normals())
         || mesh.indices() != [0, 1, 3, 1, 2, 3]
     {
         return Err(AuthoringError::Unsupported(
