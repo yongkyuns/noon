@@ -509,15 +509,51 @@ try {
       } catch (error) {
         patchError = String(error);
       }
+      const cross = await client.run(`
+from noon import *
+
+class CrossContract(Scene):
+    def construct(self):
+        target = Rectangle(width=4.0, height=2.0).shift((1.0, 2.0, 0.0))
+        cross = Cross(
+            target,
+            stroke_color=BLUE,
+            stroke_width=8.0,
+            scale_factor=1.5,
+        )
+        assert isinstance(cross, VGroup)
+        assert len(cross) == 2
+        assert all(isinstance(member, Line) for member in cross)
+        first, second = cross[0], cross[1]
+        assert tuple(first.get_start())[:2] == (-2.0, 3.5)
+        assert tuple(first.get_end())[:2] == (4.0, 0.5)
+        assert tuple(second.get_start())[:2] == (4.0, 3.5)
+        assert tuple(second.get_end())[:2] == (-2.0, 0.5)
+        assert abs(first.get_stroke_width() - 8.0) < 1e-12
+        assert abs(second.get_stroke_width() - 8.0) < 1e-12
+        assert first.get_stroke_color() == BLUE
+        assert second.get_stroke_color() == BLUE
+        default = Cross()
+        assert len(default) == 2
+        assert tuple(default[0].get_start())[:2] == (-1.0, 1.0)
+        assert tuple(default[0].get_end())[:2] == (1.0, -1.0)
+        self.add(cross, default)
+`);
       const result = await client.run(
         "import noon\nassert not hasattr(noon, 'PatchBatch')\nresult = noon.Scene()",
       );
-      return { patchError, sharedScene: Boolean(result.semanticExecution), terminated: client.terminated };
+      return {
+        patchError,
+        cross: Boolean(cross.semanticExecution),
+        sharedScene: Boolean(result.semanticExecution),
+        terminated: client.terminated,
+      };
     } finally {
       client.terminate();
     }
   });
   assert.match(sceneOnlyAuthoring.patchError, /Python authoring result must be a noon.Scene/);
+  assert.equal(sceneOnlyAuthoring.cross, true, "Cross preserves the two-Line VGroup contract");
   assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
   assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");
 
