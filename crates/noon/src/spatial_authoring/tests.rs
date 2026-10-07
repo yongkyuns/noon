@@ -480,7 +480,7 @@ fn cairo_spherical_surface_family_accepts_poles_and_recolors_without_replacing_m
 }
 
 #[test]
-fn non_cairo_surface_family_still_rejects_zero_vertex_normals() {
+fn point_lit_surface_cells_reject_zero_vertex_normals_before_publication() {
     let positions = vec![
         SemanticVec3::ZERO,
         SemanticVec3::new(1.0, 0.0, 0.0),
@@ -494,17 +494,31 @@ fn non_cairo_surface_family_still_rejects_zero_vertex_normals() {
     )
     .unwrap();
     let mut scene = Scene::new();
-    let object = scene
-        .mesh(MeshOptions::new(mesh).with_surface_uv_cell([0, 0]))
-        .unwrap();
-    let family = scene.family(&[(&object).into()]).unwrap();
-
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .stats();
     assert!(matches!(
-        SurfaceFamily::from_family(family),
+        scene.mesh(
+            MeshOptions::new(mesh)
+                .with_material(SemanticSpatialMaterial::PointLit)
+                .with_surface_uv_cell([0, 0])
+        ),
         Err(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::SurfaceCellRole
         ))
     ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .stats(),
+        resources
+    );
 }
 
 #[test]
@@ -627,14 +641,27 @@ fn surface_family_unlit_is_explicit_and_invalid_members_fail_atomically() {
             == 0.5
     }));
 
-    let impostor = scene.mesh(cube().with_surface_uv_cell([0, 0])).unwrap();
-    let impostor_family = scene.family(&[(&impostor).into()]).unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .stats();
     assert!(matches!(
-        SurfaceFamily::from_family(impostor_family),
+        scene.mesh(cube().with_surface_uv_cell([0, 0])),
         Err(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::SurfaceCellRole
         ))
     ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .stats(),
+        resources
+    );
 }
 
 #[test]

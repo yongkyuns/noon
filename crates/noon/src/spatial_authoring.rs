@@ -438,8 +438,12 @@ pub(crate) fn publish_mesh_creation(
 ) -> Result<noon_core::SemanticNodeId, AuthoringError> {
     let (resource, make_state) = options.into_resource();
     store.with_geometry_resources([resource], |store, handles| {
+        let state = make_state(handles[0]);
+        if state.surface_uv_cell().is_some() {
+            validate_surface_leaf(store, &state)?;
+        }
         let mut transaction = SemanticMutationTransaction::new();
-        let object = transaction.create_node(SemanticNodeCreation::object(make_state(handles[0])));
+        let object = transaction.create_node(SemanticNodeCreation::object(state));
         publish(store, transaction)?
             .resolve(object)
             .ok_or(AuthoringError::UnresolvedCreatedNode(object))

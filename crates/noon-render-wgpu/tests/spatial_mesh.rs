@@ -949,7 +949,9 @@ fn fixed_orientation_miter_preserves_frame_geometry_with_anisotropic_clip_scale(
         .unwrap();
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|rgba| (1..255).contains(&rgba[0])),
             "a spatial-only path keeps fractional edge coverage without a planar path batch"
         );
