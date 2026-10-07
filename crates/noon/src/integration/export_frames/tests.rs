@@ -51,7 +51,9 @@ fn fixture(durations: [f64; 2], with_callback: bool) -> Fixture {
         let trace = Rc::clone(&trace);
         callbacks
             .insert(CALLBACK, move |context| {
-                trace.borrow_mut().push((context.time(), context.delta_time()));
+                trace
+                    .borrow_mut()
+                    .push((context.time(), context.delta_time()));
                 let mut transform = context.target_state().transform;
                 // Nonlinear-in-dt update exposes skipped prefix samples, unlike y += dt.
                 transform.translation.y += (context.delta_time().powi(2) + 1.0) as f32;
@@ -121,7 +123,10 @@ fn drive(
                 let trace_before = fixture.trace.borrow().clone();
                 if delayed {
                     for _ in 0..7 {
-                        assert_eq!(export.advance()?, ExportFramesStatus::SampleReady(sample));
+                        assert_eq!(
+                            export.advance()?,
+                            ExportFramesStatus::SampleReady(sample)
+                        );
                     }
                 }
                 let publication = export.take_renderer_publication()?;
@@ -171,7 +176,9 @@ fn natural_completion_drains_off_grid_end_without_adding_a_frame() {
     assert_eq!(summary.source_end, Some(summary.end_time));
     assert_eq!(summary.scheduled_duration, 10.0 / 30.0);
     assert_eq!(fixture.program.status(), LiveProgramStatus::Finished);
-    assert!(frames.iter().all(|f| f.time == f.actual && !f.held && f.x == 0.0));
+    assert!(frames
+        .iter()
+        .all(|f| f.time == f.actual && !f.held && f.x == 0.0));
     assert_eq!(
         fixture.program.session().frame().objects[0]
             .transform

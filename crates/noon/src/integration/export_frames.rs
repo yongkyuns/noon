@@ -9,8 +9,8 @@ use noon_core::PublicationContext;
 use noon_runtime::RendererPublication;
 
 use super::{
-    ForwardSample, ForwardSampleError, ForwardSampleStatus, FrameGrid, FrameGridError,
-    FrameRate, FrameSample, SampleObservation,
+    ForwardSample, ForwardSampleError, ForwardSampleStatus, FrameGrid, FrameGridError, FrameRate,
+    FrameSample, SampleObservation,
 };
 use crate::{
     ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
@@ -169,9 +169,8 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
                 Some(end)
             }
         };
-        let sample =
-            ForwardSample::new(program, callbacks, 0.0, options.max_transitions_per_sample)
-                .map_err(ExportFramesError::Sample)?;
+        let sample = ForwardSample::new(program, callbacks, 0.0, options.max_transitions_per_sample)
+            .map_err(ExportFramesError::Sample)?;
         Ok(Self {
             sample,
             options,
@@ -206,7 +205,9 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
                 Ok(ExportFramesStatus::PublicationPending(context))
             }
             Ok(ForwardSampleStatus::Ready(observation)) => self.observe(observation, false),
-            Ok(ForwardSampleStatus::SourceFinished(observation)) => self.observe(observation, true),
+            Ok(ForwardSampleStatus::SourceFinished(observation)) => {
+                self.observe(observation, true)
+            }
             Err(error) => Err(ExportFramesError::Sample(error)),
         };
         if result.is_err() {
@@ -241,10 +242,7 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
         }
         let frame = if !at_end && self.index >= self.options.start_frame {
             Some(ExportFrame {
-                source_sample: self
-                    .grid
-                    .sample(self.index)
-                    .map_err(ExportFramesError::Grid)?,
+                source_sample: self.grid.sample(self.index).map_err(ExportFramesError::Grid)?,
                 pts: self.index - self.options.start_frame,
                 held: finished,
             })
@@ -396,9 +394,7 @@ pub enum ExportFramesError<E> {
 impl<E: fmt::Display> fmt::Display for ExportFramesError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SourceAlreadyStarted => {
-                f.write_str("export requires a fresh source at time zero")
-            }
+            Self::SourceAlreadyStarted => f.write_str("export requires a fresh source at time zero"),
             Self::InvalidOptions => f.write_str("invalid export bounds or hold configuration"),
             Self::InvalidHold => f.write_str("terminal hold has no finite distinct end"),
             Self::EmptyInterval => {

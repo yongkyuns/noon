@@ -251,7 +251,10 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
     }
 
     pub(super) fn observation_consumed(&self) -> bool {
-        matches!(self.phase, Phase::Observed { consumed: true, .. })
+        matches!(
+            self.phase,
+            Phase::Observed { consumed: true, .. }
+        )
     }
 
     /// Reuse the borrowed owner for the next output request only after the
