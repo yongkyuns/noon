@@ -619,7 +619,13 @@ impl GpuRenderer {
             }],
         });
         let polygon_coverage = include_str!("../polygon_coverage.wgsl");
-        let analytic_source = format!("{}\n{}", include_str!("../analytic.wgsl"), polygon_coverage);
+        let cairo_color = include_str!("../cairo_color.wgsl");
+        let analytic_source = format!(
+            "{}\n{}\n{}",
+            include_str!("../analytic.wgsl"),
+            cairo_color,
+            polygon_coverage
+        );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Noon analytic shader"),
             source: wgpu::ShaderSource::Wgsl(analytic_source.into()),
