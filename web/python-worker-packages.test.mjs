@@ -11,13 +11,39 @@ assert.ok(start >= 0 && end > start, "production source-run boundary must exist"
 // Only the interpreter interface is mocked; no duplicate source runner is tested.
 const runAuthoringSource = vm.runInNewContext(`(${source.slice(start, end)})`);
 
-function interpreter({ load, execute } = {}) {
+function interpreter({ load, loadPackage: loadOptional, execute, implicitPackages } = {}) {
   const events = [];
   const namespaces = [];
+  const loadedPackages = new Set();
+  let currentSource = "";
+  let requestedPackages = [];
   const pyodide = {
     async loadPackagesFromImports(text) {
+      currentSource = text;
       events.push(["packages", text]);
       await load?.(text);
+    },
+    async loadPackage(packages) {
+      const requested = [...packages];
+      events.push(["load-package", requested]);
+      await loadOptional?.(requested);
+      for (const packageName of requested) loadedPackages.add(packageName);
+    },
+    runPython(code) {
+      if (code.includes("required_packages_json")) {
+        requestedPackages = [...(implicitPackages?.(currentSource) ?? [])];
+        return JSON.stringify(requestedPackages);
+      }
+      if (code.includes("missing_packages_json")) {
+        return JSON.stringify(
+          requestedPackages.filter(packageName => !loadedPackages.has(packageName)),
+        );
+      }
+      if (code.includes("bind_loaded_packages_json")) {
+        events.push(["bind-packages", [...requestedPackages]]);
+        return null;
+      }
+      throw new Error(`unexpected synchronous Python source: ${code}`);
     },
     globals: {
       get(name) {
@@ -42,10 +68,11 @@ function interpreter({ load, execute } = {}) {
       return execute ? execute(bootstrap, globals) : "source-result";
     },
   };
-  return { pyodide, events, namespaces };
+  return { pyodide, events, namespaces, loadedPackages };
 }
 
 const numpyScene = "import numpy as np\nfrom noon import *\nclass Demo(Scene):\n    def construct(self):\n        self.add(Dot([np.sin(1), 0, 0]))\n";
+const implicitNumpyScene = "from noon import *\nclass Demo(Scene):\n    def construct(self):\n        self.add(Dot([np.sin(1), 0, 0]))\n";
 
 test("source imports finish loading before namespace allocation or authored effects", async () => {
   let release;
@@ -111,9 +138,45 @@ test("each run delegates its original imports without installing a fixed package
   assert.equal(state.namespaces.length, sources.length);
 });
 
+test("implicit Manim namespace packages load once before authoring and bind the real module", async () => {
+  const state = interpreter({
+    implicitPackages: () => ["numpy"],
+  });
+  assert.equal(await runAuthoringSource(state.pyodide, implicitNumpyScene, {}), "source-result");
+  assert.deepEqual(state.events.filter(([kind]) => kind === "load-package"), [
+    ["load-package", ["numpy"]],
+  ]);
+  const bindIndex = state.events.findIndex(([kind]) => kind === "bind-packages");
+  const executeIndex = state.events.findIndex(([kind]) => kind === "execute");
+  assert.ok(bindIndex >= 0 && bindIndex < executeIndex, "implicit module binds before user source");
+
+  assert.equal(await runAuthoringSource(state.pyodide, implicitNumpyScene, {}), "source-result");
+  assert.equal(
+    state.events.filter(([kind]) => kind === "load-package").length,
+    1,
+    "the interpreter package cache prevents a second optional download",
+  );
+  assert.equal(state.events.filter(([kind]) => kind === "bind-packages").length, 2);
+});
+
+test("implicit optional package failure preserves its error and never executes user source", async () => {
+  const failure = new Error("implicit package download failed");
+  const state = interpreter({
+    implicitPackages: () => ["numpy"],
+    loadPackage: async () => { throw failure; },
+  });
+  await assert.rejects(
+    runAuthoringSource(state.pyodide, implicitNumpyScene, {}),
+    error => error === failure,
+  );
+  assert.equal(state.events.filter(([kind]) => kind === "execute").length, 0);
+  assert.equal(state.namespaces.length, 0);
+});
+
 test("package discovery is source-startup work, never worker initialization or callbacks", () => {
   assert.equal(source.slice(0, start).includes("loadPackagesFromImports"), false);
   assert.equal(source.slice(end).includes("loadPackagesFromImports"), false);
   assert.equal(source.match(/loadPackagesFromImports\(/g)?.length, 1);
+  assert.equal(source.match(/loadPackage\(/g)?.length, 1);
   assert.equal(source.includes('loadPackage("numpy")'), false);
 });
