@@ -1002,17 +1002,17 @@ impl CanonicalAuthoringScene {
                 .with_message("mobject belongs to another authoring store"));
         }
         handle.validate().map_err(AuthoringFailure::from)?;
-        let mut bounds = handle
-            .layout_bounds()
-            .map_err(AuthoringFailure::from)?
-            .unwrap_or_else(|| {
+        let mut bounds = match handle.layout_bounds().map_err(AuthoringFailure::from)? {
+            Some(bounds) => bounds,
+            None => {
                 let point = handle
                     .state()
-                    .expect("validated mobject state remains readable")
+                    .map_err(AuthoringFailure::from)?
                     .transform
                     .translation;
                 noon_core::Bounds2D64::point(point.x, point.y)
-            });
+            }
+        };
         if self.identities.contains_key(&handle.node_id()) {
             let (x, y, width, height) = self.mobject_layout(handle)?;
             bounds = noon_core::Bounds2D64 {
