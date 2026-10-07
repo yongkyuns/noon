@@ -2275,20 +2275,20 @@ fn cairo_sampled_fill_conserves_white_area_across_subpixel_translations() {
             )
             .unwrap();
             let mut area = [0.0; 3];
-            for rgba in pixels.chunks_exact(4) {
+            let mut fractional_edge_pixels = 0;
+            let (rgba_pixels, trailing_bytes) = pixels.as_chunks::<4>();
+            assert!(trailing_bytes.is_empty());
+            for rgba in rgba_pixels {
                 for channel in 0..3 {
                     area[channel] += f64::from(rgba[channel]) / 255.0;
                 }
+                fractional_edge_pixels += usize::from(rgba[0] > 0 && rgba[0] < 255);
             }
             let [red_area, green_area, blue_area] = area;
             let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
             eprintln!(
                 "Cairo sampled fill area: x_shift_px={subpixel_pixels:.2} red={red_area:.4} green={green_area:.4} blue={blue_area:.4} center_rgba={center:?}"
             );
-            let fractional_edge_pixels = pixels
-                .chunks_exact(4)
-                .filter(|rgba| rgba[0] > 0 && rgba[0] < 255)
-                .count();
             eprintln!(
                 "Cairo sampled fill fractional edge pixels: x_shift_px={subpixel_pixels:.2} count={fractional_edge_pixels}"
             );
