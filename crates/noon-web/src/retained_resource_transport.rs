@@ -564,7 +564,7 @@ impl RetainedResourceBundle {
                         positions: mesh.positions().to_vec(),
                         normals: mesh.normals().map(|values| values.to_vec()),
                         indices: mesh.indices().to_vec(),
-                        cairo_appearance: mesh.cairo_appearance().copied(),
+                        cairo_appearance: mesh.cairo_appearance().copied().map(Box::new),
                     }
                 }
             };
@@ -1862,7 +1862,7 @@ enum TransportGeometryPayload {
         normals: Option<Vec<noon_core::SemanticVec3>>,
         indices: Vec<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        cairo_appearance: Option<noon_core::CairoSurfaceAppearance>,
+        cairo_appearance: Option<Box<noon_core::CairoSurfaceAppearance>>,
     },
 }
 
@@ -1928,7 +1928,7 @@ fn install_geometry(
             let mesh = MeshResource::new(positions, normals, indices)
                 .map_err(|_| RetainedResourceTransportError::InvalidGeometry(entry.handle))?;
             let mesh = if let Some(appearance) = cairo_appearance {
-                mesh.with_cairo_appearance(appearance)
+                mesh.with_cairo_appearance(*appearance)
                     .map_err(|_| RetainedResourceTransportError::InvalidGeometry(entry.handle))?
             } else {
                 mesh
@@ -2627,9 +2627,7 @@ mod tests {
             cairo_appearance, ..
         } = &mut changed_appearance.geometries[0].geometry
         {
-            let mut appearance = cairo_appearance.unwrap();
-            appearance.p6.x += 1.0;
-            *cairo_appearance = Some(appearance);
+            cairo_appearance.as_mut().unwrap().p6.x += 1.0;
         }
         assert_ne!(bundle, changed_appearance);
 
@@ -2677,7 +2675,7 @@ mod tests {
             cairo_appearance, ..
         } = &mut forged.geometries[0].geometry
         {
-            *cairo_appearance = Some(noon_core::CairoSurfaceAppearance {
+            *cairo_appearance = Some(Box::new(noon_core::CairoSurfaceAppearance {
                 p0: noon_core::SemanticVec3::ZERO,
                 p6: noon_core::SemanticVec3::new(f64::NAN, 0.0, 0.0),
                 span_p3_p0: noon_core::SemanticVec3::ZERO,
@@ -2685,7 +2683,7 @@ mod tests {
                 span_p9_p6: noon_core::SemanticVec3::ZERO,
                 span_p3_p6: noon_core::SemanticVec3::ZERO,
                 boundary_controls: None,
-            });
+            }));
         }
         let mut bytes = Vec::new();
         ciborium::ser::into_writer(&forged, &mut bytes).unwrap();
@@ -2699,7 +2697,7 @@ mod tests {
             cairo_appearance, ..
         } = &mut forged_topology.geometries[0].geometry
         {
-            *cairo_appearance = Some(noon_core::CairoSurfaceAppearance {
+            *cairo_appearance = Some(Box::new(noon_core::CairoSurfaceAppearance {
                 p0: noon_core::SemanticVec3::ZERO,
                 p6: noon_core::SemanticVec3::ZERO,
                 span_p3_p0: noon_core::SemanticVec3::ZERO,
@@ -2707,7 +2705,7 @@ mod tests {
                 span_p9_p6: noon_core::SemanticVec3::ZERO,
                 span_p3_p6: noon_core::SemanticVec3::ZERO,
                 boundary_controls: Some([[noon_core::SemanticVec3::ZERO; 2]; 4]),
-            });
+            }));
         }
         let mut bytes = Vec::new();
         ciborium::ser::into_writer(&forged_topology, &mut bytes).unwrap();
