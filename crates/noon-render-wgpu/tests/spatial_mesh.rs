@@ -2114,7 +2114,7 @@ fn cairo_boundary_test_store(
     straight_controls: bool,
     bottom_control_y: Option<f64>,
 ) -> (SemanticStore, noon_core::SemanticNodeId) {
-    assert!(!(with_occluder && (sloped_unlit || curved_fill)));
+    assert!(!(with_occluder && sloped_unlit));
     assert!(!(sloped_unlit && curved_fill));
     let mut store = SemanticStore::new();
     let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
@@ -2414,11 +2414,10 @@ fn cairo_curved_fill_preserves_perimeter_area_for_each_winding() {
         eprintln!("Cairo curved area adapter: {:?}", adapter.get_info());
         let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
         let target = Target::new(&device);
-        // Four chords sample a cubic with bottom controls at -1.5 or -0.25.
-        // Their trapezoid areas are 1 + 15/32 and 1 - 15/128 world units.
-        // The second shape is concave, so a convex-only shortcut is insufficient.
-        // Both retained centers stay inside their perimeter's fan kernel.
-        for (control_y, expected_area) in [(-1.5, 1504.0), (-0.25, 904.0)] {
+        // Four chords sample outward and concave cubics with known trapezoid
+        // areas. The strongest concavity excludes the original quad center
+        // from its fan kernel and must select a proven planar center instead.
+        for (control_y, expected_area) in [(-1.5, 1504.0), (-0.25, 904.0), (0.0, 784.0)] {
             let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
             renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
             renderer.set_camera(
@@ -2434,71 +2433,167 @@ fn cairo_curved_fill_preserves_perimeter_area_for_each_winding() {
                 .into_parts();
             let object = index.execution_object_id(node).unwrap();
             let mut scene = SceneInstance::new(compiled);
-            scene
-                .apply_execution_patch(&ExecutionPatch::SetStyle {
-                    object,
-                    style: noon_core::Style {
-                        fill: Some(Color::WHITE),
-                        stroke: None,
-                        stroke_width: 0.0,
-                        ..Default::default()
-                    },
-                })
-                .unwrap();
-            for mirror in [1.0, -1.0] {
-                for angle in [0.0, std::f64::consts::FRAC_PI_4] {
-                    for offset in [0.0, 0.25, 0.5, 0.75] {
-                        let transform = SemanticWorldTransform3D::new(
-                            SemanticVec3::new(offset / 32.0, 0.0, 0.0),
-                            noon_core::SemanticRotation3D::from_axis_angle(
-                                SemanticVec3::new(0.0, 0.0, 1.0),
-                                angle,
+            for opacity in [1.0, 0.45] {
+                if opacity < 1.0 && control_y != 0.0 {
+                    continue;
+                }
+                scene
+                    .apply_execution_patch(&ExecutionPatch::SetStyle {
+                        object,
+                        style: noon_core::Style {
+                            fill: Some(Color::WHITE),
+                            stroke: None,
+                            stroke_width: 0.0,
+                            opacity,
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+                for mirror in [1.0, -1.0] {
+                    for (axis, angle, area_scale) in [
+                        (SemanticVec3::new(0.0, 0.0, 1.0), 0.0, 1.0),
+                        (
+                            SemanticVec3::new(0.0, 0.0, 1.0),
+                            std::f64::consts::FRAC_PI_4,
+                            1.0,
+                        ),
+                        (
+                            SemanticVec3::new(0.0, 1.0, 0.0),
+                            std::f64::consts::FRAC_PI_6,
+                            std::f64::consts::FRAC_PI_6.cos(),
+                        ),
+                    ] {
+                        for offset in [0.0, 0.25, 0.5, 0.75] {
+                            let transform = SemanticWorldTransform3D::new(
+                                SemanticVec3::new(offset / 32.0, 0.0, 0.0),
+                                noon_core::SemanticRotation3D::from_axis_angle(axis, angle)
+                                    .unwrap(),
+                                SemanticVec3::new(mirror, 1.0, 1.0),
                             )
-                            .unwrap(),
-                            SemanticVec3::new(mirror, 1.0, 1.0),
-                        )
-                        .unwrap();
-                        scene
-                            .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
-                                object,
-                                transform: transform.into(),
-                            })
                             .unwrap();
-                        let (_, image) = render(
-                            &device,
-                            &queue,
-                            &mut renderer,
-                            &mut preparer,
-                            &mut scene,
-                            &target,
-                        )
-                        .unwrap();
-                        let area: f64 = image
-                            .as_chunks::<4>()
-                            .0
-                            .iter()
-                            .map(|p| f64::from(p[0]) / 255.0)
-                            .sum();
-                        eprintln!("Cairo curved area: control={control_y} mirror={mirror} angle={angle} offset={offset} area={area} expected={expected_area}");
-                        assert!(
-                            (area - expected_area).abs() <= 2.0,
-                            "{area} versus {expected_area}"
-                        );
-                        let (stats, repeated) = render(
-                            &device,
-                            &queue,
-                            &mut renderer,
-                            &mut preparer,
-                            &mut scene,
-                            &target,
-                        )
-                        .unwrap();
-                        assert_eq!(stats.bytes_uploaded(), 0);
-                        assert_eq!(stats.rows_visited, 0);
-                        assert_eq!(image, repeated);
+                            scene
+                                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                                    object,
+                                    transform: transform.into(),
+                                })
+                                .unwrap();
+                            let (_, image) = render(
+                                &device,
+                                &queue,
+                                &mut renderer,
+                                &mut preparer,
+                                &mut scene,
+                                &target,
+                            )
+                            .unwrap();
+                            let area: f64 = image
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|p| f64::from(p[0]) / 255.0)
+                                .sum();
+                            let expected_area = expected_area * area_scale * f64::from(opacity);
+                            eprintln!("Cairo curved area: control={control_y} opacity={opacity} mirror={mirror} angle={angle} offset={offset} area={area} expected={expected_area}");
+                            assert!(
+                                (area - expected_area).abs() <= 2.0,
+                                "{area} versus {expected_area}"
+                            );
+                            let (stats, repeated) = render(
+                                &device,
+                                &queue,
+                                &mut renderer,
+                                &mut preparer,
+                                &mut scene,
+                                &target,
+                            )
+                            .unwrap();
+                            assert_eq!(stats.bytes_uploaded(), 0);
+                            assert_eq!(stats.rows_visited, 0);
+                            assert_eq!(image, repeated);
+                        }
                     }
                 }
             }
+        }
+    });
+}
+
+#[test]
+fn cairo_concave_planar_proxy_preserves_sloped_depth() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo planar proxy depth: no adapter is available");
+            return;
+        };
+        eprintln!("Cairo planar proxy depth adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut preparer = FramePreparer::new();
+        let (store, node) = cairo_boundary_test_store(true, false, true, false, Some(0.0));
+        let mut index = SemanticExecutionIndex::new();
+        let (compiled, _) = lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        let object = index.execution_object_id(node).unwrap();
+        let mut scene = SceneInstance::new(compiled);
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object,
+                style: noon_core::Style {
+                    fill: Some(Color::WHITE),
+                    stroke: None,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        for angle in [-std::f64::consts::FRAC_PI_6, std::f64::consts::FRAC_PI_6] {
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                    object,
+                    transform: SemanticWorldTransform3D::new(
+                        SemanticVec3::ZERO,
+                        noon_core::SemanticRotation3D::from_axis_angle(
+                            SemanticVec3::new(0.0, 1.0, 0.0),
+                            angle,
+                        )
+                        .unwrap(),
+                        SemanticVec3::new(1.0, 1.0, 1.0),
+                    )
+                    .unwrap()
+                    .into(),
+                })
+                .unwrap();
+            let (_, image) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut scene,
+                &target,
+            )
+            .unwrap();
+            let edge = pixel(&image, 77, 64);
+            let background = [Color::GREEN.red, Color::GREEN.green, Color::GREEN.blue]
+                .map(|channel| (channel * 255.0).round() as u8);
+            if angle < 0.0 {
+                // Projected right edge is x=64+16*cos(pi/6), covering 0.8564
+                // of pixel 77. Its positive depth is nearer than the green plane.
+                let coverage = 64.0 + 16.0 * std::f64::consts::FRAC_PI_6.cos() - 77.0;
+                for (actual, background) in edge[..3].iter().zip(background) {
+                    let expected =
+                        f64::from(background) + (255.0 - f64::from(background)) * coverage;
+                    assert!(
+                        (f64::from(*actual) - expected).abs() <= 1.0,
+                        "near face: {edge:?}"
+                    );
+                }
+            } else {
+                assert_eq!(edge[..3], background, "far face is occluded");
+            }
+            assert_eq!(edge[3], 255);
         }
     });
 }

@@ -85,6 +85,23 @@ struct CairoPathOutput {
                 // anisotropy; only its box-filter coverage changes.
                 let side = select(-1.0, 1.0, input.extrusion.y > 0.0);
                 let stroke_offset = (original - middle) * side;
+                let determinant = delta.x * stroke_offset.y - delta.y * stroke_offset.x;
+                if !(abs(determinant) > 1e-12 && abs(determinant) <= MAX_FINITE_F32) {
+                    return result;
+                }
+                // Preserve the original stroke's depth plane across its padded
+                // support, including an oblique authoring-frame width vector.
+                let first_depth = first.z / first.w;
+                let last_depth = last.z / last.w;
+                let depth_gradient = vec2<f32>(stroke_offset.y, -stroke_offset.x)
+                    * ((last_depth - first_depth) / determinant);
+                let depth_padding = 1.25 * (abs(dot(direction, depth_gradient))
+                    + abs(dot(normal, depth_gradient)));
+                if !(all(abs(depth_gradient) <= vec2<f32>(MAX_FINITE_F32)))
+                    || min(first_depth, last_depth) < depth_padding
+                    || max(first_depth, last_depth) + depth_padding > 1.0 {
+                    return result;
+                }
                 result.line_points0 = vec4<f32>(
                     p0 - stroke_offset, p1 - stroke_offset);
                 result.line_points1 = vec4<f32>(
@@ -98,7 +115,8 @@ struct CairoPathOutput {
                     + (stroke_offset + padding) * side;
                 result.position = vec4<f32>(
                     (expanded - pixel_origin) / pixel_scale * center.w,
-                    center.z, center.w);
+                    (first_depth + dot(expanded - p0, depth_gradient)) * center.w,
+                    center.w);
             }
         }
     }

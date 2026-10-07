@@ -336,7 +336,7 @@ fn cairo_butt_lines_preserve_fractional_and_rotated_pixel_area() {
         let target = Target::new(&device);
         for authoring_width in [12.0, 6.0] {
             // Backdrops: 0 = black; 1 = Cairo line; 2 = unlit face; 3 = Cairo face;
-            // 4 additionally overlays an opaque fixed-orientation path.
+            // 4 overlays a fixed-orientation path; 5 crosses an opaque depth plane.
             for (width, offset, angle, backdrop) in [
                 (0.25, 0.0, 0.0, 0),
                 (0.5, 0.5, 0.0, 0),
@@ -350,6 +350,7 @@ fn cairo_butt_lines_preserve_fractional_and_rotated_pixel_area() {
                 (1.35, 0.0, 0.0, 2),
                 (1.35, 0.0, 0.0, 3),
                 (1.35, 0.0, 0.0, 4),
+                (1.35, 0.0, 0.0, 5),
             ] {
                 let mut store = SemanticStore::new();
                 let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
@@ -376,8 +377,16 @@ fn cairo_butt_lines_preserve_fractional_and_rotated_pixel_area() {
                 line.transform = SemanticWorldTransform3D::new(
                     SemanticVec3::new(0.0, offset / 16.0, 0.0),
                     noon_core::SemanticRotation3D::from_axis_angle(
-                        SemanticVec3::new(0.0, 0.0, 1.0),
-                        angle,
+                        if backdrop == 5 {
+                            SemanticVec3::new(0.0, 1.0, 0.0)
+                        } else {
+                            SemanticVec3::new(0.0, 0.0, 1.0)
+                        },
+                        if backdrop == 5 {
+                            std::f64::consts::FRAC_PI_6
+                        } else {
+                            angle
+                        },
                     )
                     .unwrap(),
                     SemanticVec3::new(1.0, 1.0, 1.0),
@@ -413,7 +422,7 @@ fn cairo_butt_lines_preserve_fractional_and_rotated_pixel_area() {
                         vec![0, 1, 3, 1, 2, 3],
                     )
                     .unwrap();
-                    if backdrop >= 3 {
+                    if matches!(backdrop, 3 | 4) {
                         mesh = mesh
                             .with_cairo_appearance(noon_core::CairoSurfaceAppearance {
                                 p0: SemanticVec3::new(-2.0, -1.0, 0.0),
@@ -428,10 +437,16 @@ fn cairo_butt_lines_preserve_fractional_and_rotated_pixel_area() {
                     }
                     let handle = store.insert_geometry_mesh(mesh);
                     let mut face = SemanticObjectState::new(StoredGeometry::Resource(handle));
-                    face.transform.translation.z = -0.5;
+                    // The tilted line crosses this plane at pixel-column boundary 89.
+                    // All MSAA samples in pixel 88 are nearer, and all in 89 farther.
+                    face.transform.translation.z = if backdrop == 5 {
+                        (7.0 / 16.0) * std::f64::consts::FRAC_PI_6.tan()
+                    } else {
+                        -0.5
+                    };
                     face.style.fill = Some(SemanticPaint::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0)));
                     face.style.stroke = None;
-                    if backdrop >= 3 {
+                    if matches!(backdrop, 3 | 4) {
                         face.set_spatial_material(noon_core::SemanticSpatialMaterial::CairoSurface);
                     }
                     attach(&mut store, face);
@@ -533,6 +548,16 @@ fn cairo_butt_lines_preserve_fractional_and_rotated_pixel_area() {
                             [0, 255, 0, 255],
                             "fixed-orientation painter content remains above world draws"
                         );
+                    }
+                    if backdrop == 5 {
+                        let near = pixel(&image, 88, 63);
+                        let far = pixel(&image, 89, 63);
+                        eprintln!("Cairo sloped depth near={near:?} far={far:?}");
+                        assert!(
+                            (i16::from(near[1]) - 172).abs() <= 1,
+                            "near stroke remains visible: {near:?}"
+                        );
+                        assert_eq!(far, [255, 0, 0, 255], "far stroke is occluded");
                     }
                     if pass == 1 {
                         assert_eq!(

@@ -89,7 +89,8 @@ fn cairo_inward_normal(center: vec2<f32>, point: vec2<f32>, neighbor: vec2<f32>)
     let transform = camera.view_projection * world;
     var position = transform * vec4<f32>(input.position, 1.0);
     var result = cairo_output(position, world, input.color);
-    let count = u32(cairo_geometry.center.w);
+    // A negative count marks a planar face whose old fan anchor was invalid.
+    let count = u32(abs(cairo_geometry.center.w));
     let scale = boundary_metrics.xy * 0.5;
     var lower = vec2<f32>(MAX_FINITE_F32);
     var upper = -lower;
@@ -122,6 +123,41 @@ fn cairo_inward_normal(center: vec2<f32>, point: vec2<f32>, neighbor: vec2<f32>)
         negative = negative || turn < 0.0;
     }
     result.coverage_data.y = select(0.0, 1.0, count == 4u && !(positive && negative));
+    if cairo_geometry.center.w < 0.0 && count >= 4u && valid {
+        let center = transform * vec4<f32>(cairo_geometry.center.xyz, 1.0);
+        let a = transform * cairo_geometry.perimeter[0u];
+        let b = transform * cairo_geometry.perimeter[1u];
+        let origin = center.xy / center.w * scale;
+        let p = a.xy / a.w * scale - origin;
+        let q = b.xy / b.w * scale - origin;
+        let determinant = cairo_cross(p, q);
+        if center.w > 1e-6 && abs(determinant) > 1e-8
+            && abs(determinant) <= MAX_FINITE_F32 {
+            let depth = center.z / center.w;
+            let da = a.z / a.w - depth;
+            let db = b.z / b.w - depth;
+            let gradient = vec2<f32>(da * q.y - db * p.y,
+                db * p.x - da * q.x) / determinant;
+            let midpoint = (lower + upper) * 0.5;
+            let extent = (upper - lower) * 0.5 + vec2<f32>(1.0);
+            let middle_depth = depth + dot(midpoint - origin, gradient);
+            let depth_span = dot(extent, abs(gradient));
+            if all(abs(gradient) <= vec2<f32>(MAX_FINITE_F32))
+                && middle_depth - depth_span >= 0.0
+                && middle_depth + depth_span <= 1.0 {
+                // A bounded box covers the filter support without moving a
+                // concave miter across a fan edge. The existing fan indices
+                // submit two box triangles; remaining triangles degenerate.
+                var point = midpoint - extent;
+                if vertex == 1u { point.x = midpoint.x + extent.x; }
+                if vertex == 2u { point = midpoint + extent; }
+                if vertex == 3u { point.y = midpoint.y + extent.y; }
+                result.position = vec4<f32>(point / scale * center.w,
+                    (depth + dot(point - origin, gradient)) * center.w, center.w);
+                return result;
+            }
+        }
+    }
     if count > 0u && vertex > 0u && valid {
         let previous = cairo_geometry.perimeter[(vertex + count - 2u) % count];
         let next = cairo_geometry.perimeter[vertex % count];

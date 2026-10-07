@@ -90,6 +90,7 @@ pub(super) fn vertices(mesh: &MeshResource) -> Result<Vec<EdgeVertex>, SpatialPr
 pub(super) struct FillGeometry {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
+    pub planar_proxy: bool,
 }
 
 /// Cairo face fans share the retained border subdivision.
@@ -99,6 +100,7 @@ pub(super) fn fill_geometry(mesh: &MeshResource) -> Result<FillGeometry, Spatial
         return Ok(FillGeometry {
             vertices: corners,
             indices: mesh.indices().to_vec(),
+            planar_proxy: false,
         });
     };
     let Some(controls) = appearance.boundary_controls else {
@@ -106,6 +108,7 @@ pub(super) fn fill_geometry(mesh: &MeshResource) -> Result<FillGeometry, Spatial
         return Ok(FillGeometry {
             vertices: corners,
             indices: mesh.indices().to_vec(),
+            planar_proxy: false,
         });
     };
     let points = mesh.positions();
@@ -135,12 +138,82 @@ pub(super) fn fill_geometry(mesh: &MeshResource) -> Result<FillGeometry, Spatial
             });
         }
     }
+    let (center, planar_proxy) = planar_fan_center(&vertices[1..], vertices[0].position);
+    vertices[0].position = center;
     let count = vertices.len() as u32;
     let mut indices = Vec::with_capacity(48);
     for point in 1..count {
         indices.extend([0, point, if point + 1 == count { 1 } else { point + 1 }]);
     }
-    Ok(FillGeometry { vertices, indices })
+    Ok(FillGeometry {
+        vertices,
+        indices,
+        planar_proxy,
+    })
+}
+
+/// Keep the existing anchor unless a planar ring proves a better fan center.
+/// This bounded staging calculation never runs for camera or light changes.
+fn planar_fan_center(vertices: &[Vertex], original: [f32; 3]) -> ([f32; 3], bool) {
+    let origin = vertices[0].position.map(f64::from);
+    let points: Vec<[f64; 3]> = vertices
+        .iter()
+        .map(|v| std::array::from_fn(|axis| f64::from(v.position[axis]) - origin[axis]))
+        .collect();
+    let mut normal = [0.0; 3];
+    for (a, b) in points.iter().zip(points.iter().cycle().skip(1)) {
+        for axis in 0..3 {
+            let u = (axis + 1) % 3;
+            let v = (axis + 2) % 3;
+            normal[axis] += a[u] * b[v] - a[v] * b[u];
+        }
+    }
+    let axis = (0..3)
+        .max_by(|&a, &b| normal[a].abs().total_cmp(&normal[b].abs()))
+        .expect("three coordinate axes");
+    let area = normal[axis];
+    if area == 0.0 {
+        return (original, false);
+    }
+    let scale = points.iter().flatten().fold(1.0_f64, |s, v| s.max(v.abs()));
+    if points.iter().any(|p| {
+        let distance: f64 = p.iter().zip(normal).map(|(p, n)| p * n).sum();
+        distance.abs() > area.abs() * scale * 1e-6
+    }) {
+        return (original, false);
+    }
+    let u = (axis + 1) % 3;
+    let v = (axis + 2) % 3;
+    let cross = |a: &[f64; 3], b: &[f64; 3]| a[u] * b[v] - a[v] * b[u];
+    let in_kernel = |center: [f32; 3]| {
+        let center: [f64; 3] = std::array::from_fn(|axis| f64::from(center[axis]) - origin[axis]);
+        points
+            .iter()
+            .zip(points.iter().cycle().skip(1))
+            .all(|(a, b)| {
+                let edge = std::array::from_fn(|axis| b[axis] - a[axis]);
+                let offset = std::array::from_fn(|axis| center[axis] - a[axis]);
+                cross(&edge, &offset) * area.signum() >= 0.0
+            })
+    };
+    if in_kernel(original) {
+        return (original, false);
+    }
+    let mut centroid = [0.0; 3];
+    for (a, b) in points.iter().zip(points.iter().cycle().skip(1)) {
+        let weight = cross(a, b) / (3.0 * area);
+        for axis in 0..3 {
+            centroid[axis] += (a[axis] + b[axis]) * weight;
+        }
+    }
+    let candidate = std::array::from_fn(|axis| (origin[axis] + centroid[axis]) as f32);
+    if candidate.iter().all(|value| value.is_finite()) && in_kernel(candidate) {
+        (candidate, true)
+    } else {
+        // Non-planar or empty-kernel faces need a different topology; never
+        // silently substitute an unproved center for their existing geometry.
+        (original, false)
+    }
 }
 
 fn topology(mesh: &MeshResource) -> BTreeMap<(u32, u32), (u32, u32)> {
@@ -225,6 +298,66 @@ fn lower_point(point: SemanticVec3) -> Result<[f32; 3], SpatialPrepareError> {
 mod tests {
     use super::*;
     use noon_core::SemanticVec3;
+
+    #[test]
+    fn planar_fan_center_checks_each_edge_and_retains_nonplanar_geometry() {
+        let ring = [
+            [-0.5, -0.5, 0.0],
+            [-0.25, -0.21875, 0.0],
+            [0.0, -0.125, 0.0],
+            [0.25, -0.21875, 0.0],
+            [0.5, -0.5, 0.0],
+            [0.5, 0.5, 0.0],
+            [-0.5, 0.5, 0.0],
+        ];
+        for axis in 0..3 {
+            for reversed in [false, true] {
+                let original = [16.0, -8.0, 4.0];
+                let mut vertices: Vec<_> = ring
+                    .iter()
+                    .map(|p| Vertex {
+                        position: std::array::from_fn(|i| original[i] + p[(i + axis) % 3]),
+                        normal: [0.0; 3],
+                    })
+                    .collect();
+                if reversed {
+                    vertices.reverse();
+                }
+                let (center, planar_proxy) = planar_fan_center(&vertices, original);
+                assert!(planar_proxy);
+                let shifted_axis = (4 - axis) % 3;
+                assert!((center[shifted_axis] - original[shifted_axis] - 0.10905612).abs() < 1e-6);
+                assert_eq!(planar_fan_center(&vertices, center), (center, false));
+                vertices[0].position[(5 - axis) % 3] += 0.05;
+                assert_eq!(planar_fan_center(&vertices, original), (original, false));
+            }
+        }
+        let empty_kernel: Vec<_> = [
+            [-0.5, -0.5, 0.0],
+            [0.5, -0.5, 0.0],
+            [0.5, 0.5, 0.0],
+            [0.25, 0.5, 0.0],
+            [0.25, 0.0, 0.0],
+            [-0.25, 0.0, 0.0],
+            [-0.25, 0.5, 0.0],
+            [-0.5, 0.5, 0.0],
+        ]
+        .into_iter()
+        .map(|position| Vertex {
+            position,
+            normal: [0.0; 3],
+        })
+        .collect();
+        assert_eq!(
+            planar_fan_center(&empty_kernel, [0.0, -0.25, 0.0]),
+            ([0.0, -0.25, 0.0], false)
+        );
+        let collapsed = [Vertex {
+            position: [0.0; 3],
+            normal: [0.0; 3],
+        }; 4];
+        assert_eq!(planar_fan_center(&collapsed, [0.0; 3]), ([0.0; 3], false));
+    }
 
     #[test]
     fn quad_boundary_omits_the_shared_diagonal_and_degenerate_edges() {

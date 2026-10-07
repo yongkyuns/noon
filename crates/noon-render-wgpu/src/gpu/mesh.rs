@@ -596,6 +596,7 @@ impl SpatialGpuState {
                         appearance,
                         draw.mesh.positions(),
                         &geometry.vertices,
+                        geometry.planar_proxy,
                     )?;
                     if size_of::<cairo::Uniform>() > device.limits().max_buffer_size as usize {
                         return Err(SpatialPrepareError::BufferLimit);
