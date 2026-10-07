@@ -1,6 +1,7 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },
   { sourcePath: "python/noon.py", runtimePath: "/tmp/noon.py", label: "Noon Python API" },
+  { sourcePath: "python/_manim_namespace.py", runtimePath: "/tmp/_manim_namespace.py", label: "Noon Manim namespace compatibility" },
   { sourcePath: "python/_noon_spatial.py", runtimePath: "/tmp/_noon_spatial.py", label: "Noon typed spatial authoring" },
   { sourcePath: "python/_manim_spatial_geometry.py", runtimePath: "/tmp/_manim_spatial_geometry.py", label: "Noon bounded Manim-shaped spatial geometry adapters" },
   { sourcePath: "python/_noon_ir.py", runtimePath: "/tmp/_noon_ir.py", label: "Noon Python values and constructor arguments" },
