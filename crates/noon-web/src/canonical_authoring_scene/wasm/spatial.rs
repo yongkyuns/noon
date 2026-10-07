@@ -64,14 +64,21 @@ impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = createMeshFamily)]
     pub fn create_mesh_family(
         &mut self,
-        mut candidate: WasmMeshFamilyOptions,
+        candidate: WasmMeshFamilyOptions,
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
-        candidate.retain_surface_roles()?;
-        self.inner
-            .create_mesh_family(candidate.options)
-            .and_then(|family| noon::SurfaceFamily::from_family(family).map_err(Into::into))
-            .map(WasmAuthoringFamilyHandle::from_surface_family)
-            .map_err(js_error)
+        let surface = candidate.has_surface_roles();
+        let (meshes, paths) = candidate.into_parts()?;
+        let family = self
+            .inner
+            .create_mesh_family(meshes, paths)
+            .map_err(js_error)?;
+        if surface {
+            noon::SurfaceFamily::from_family(family)
+                .map(WasmAuthoringFamilyHandle::from_surface_family)
+                .map_err(js_error)
+        } else {
+            Ok(WasmAuthoringFamilyHandle::from_semantic_family(family))
+        }
     }
 
     /// Create and bind the one camera declaration before execution begins.
@@ -157,6 +164,17 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<Vec<f64>, JsValue> {
         self.inner
             .effective_world_center(object.semantic_mobject())
+            .map(|center| vec![center.x, center.y, center.z])
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = effectiveWorldFamilyCenter)]
+    pub fn effective_world_family_center(
+        &mut self,
+        family: &crate::WasmAuthoringFamilyHandle,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.inner
+            .effective_world_family_center(family.semantic_family_ref())
             .map(|center| vec![center.x, center.y, center.z])
             .map_err(js_error)
     }

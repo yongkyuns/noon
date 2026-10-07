@@ -362,6 +362,11 @@ impl MobjectFamily {
             .map_err(Into::into)
     }
 
+    /// Authored aggregate world-space bounds center for this family's leaves.
+    pub fn world_center(&self) -> Result<noon_core::SemanticVec3, AuthoringError> {
+        crate::world_affine::target_world_center(&self.store, MobjectTarget::Family(self))
+    }
+
     /// Aggregate the current layout bounds of this family's authoritative leaves.
     pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         Ok(self.layout()?.bounds())

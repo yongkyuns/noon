@@ -1,8 +1,9 @@
 use super::PlotPresentationError;
 
-/// Presentation of ordinary native Text labels on a coordinate shaft.
+/// Presentation of native Text or DecimalNumber labels on a coordinate shaft.
 /// Positions are prepared in world coordinates; subsequent family transforms
 /// act on labels and shafts together without reformatting or reshaping text.
+/// `font` selects the native Text face and is unused by real-TeX decimal labels.
 #[derive(Clone, Debug)]
 pub struct NumberLabelOptions {
     pub font: String,

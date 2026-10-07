@@ -512,6 +512,12 @@ enum OrdinaryCompositionChild {
         direction: SemanticFadeDirection,
         options: noon_core::AnimationOptions,
     },
+    FamilyArrowGrow {
+        target: noon::MobjectFamily,
+        arrow: noon::ManimArrow,
+        entering: Vec<(ObjectId, noon::Mobject)>,
+        options: noon_core::AnimationOptions,
+    },
     Create {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -1796,6 +1802,12 @@ impl CanonicalAuthoringScene {
                     direction: *direction,
                     options: *options,
                 },
+                OrdinaryCompositionChild::FamilyArrowGrow { arrow, options, .. } => {
+                    noon::AnimationCompositionRequest::FamilyArrowGrow {
+                        target: arrow,
+                        options: *options,
+                    }
+                }
                 OrdinaryCompositionChild::Create {
                     target, options, ..
                 } => noon::AnimationCompositionRequest::Create {
@@ -1922,6 +1934,7 @@ impl CanonicalAuthoringScene {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::FamilyFade { entering, .. }
+                | OrdinaryCompositionChild::FamilyArrowGrow { entering, .. }
                 | OrdinaryCompositionChild::FamilyTextWrite { entering, .. }
                 | OrdinaryCompositionChild::FamilyReveal { entering, .. } => {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
@@ -2186,6 +2199,12 @@ impl CanonicalAuthoringScene {
                     options,
                     ..
                 }
+                | OrdinaryCompositionChild::FamilyArrowGrow {
+                    target,
+                    entering,
+                    options,
+                    ..
+                }
                 | OrdinaryCompositionChild::FamilyTextWrite {
                     target,
                     entering,
@@ -2227,6 +2246,16 @@ impl CanonicalAuthoringScene {
                             "ordinary family wrapper identities do not match detached leaves"
                                 .into(),
                         );
+                    }
+                    if let OrdinaryCompositionChild::FamilyArrowGrow { arrow, options, .. } = child
+                    {
+                        if arrow.family().node_id() != target.node_id()
+                            || options.introducer != Some(true)
+                            || options.remover != Some(false)
+                            || options.path_arc != Some(0.0)
+                        {
+                            return Err("invalid shared Arrow growth target or lifecycle".into());
+                        }
                     }
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
@@ -5172,6 +5201,61 @@ mod wasm {
             }
             entering.push((
                 parse_object_id("fade family object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
+            Ok(())
+        }
+
+        /// Append GrowArrow for one Arrow family. Rust validates the family
+        /// identity/admission and creates its ordered per-leaf lifecycle tracks.
+        #[wasm_bindgen(js_name = appendFamilyArrowGrow)]
+        pub fn append_family_arrow_grow(
+            &mut self,
+            target: &crate::WasmAuthoringArrowHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .introducer(true)
+                .remover(false)
+                .path_arc(0.0);
+            let arrow = target.arrow()?.clone();
+            let family = arrow.family().clone();
+            self.children
+                .push(OrdinaryCompositionChild::FamilyArrowGrow {
+                    target: family,
+                    arrow,
+                    entering: Vec::new(),
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyArrowGrowEntering)]
+        pub fn append_family_arrow_grow_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilyArrowGrow {
+                target, entering, ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error(
+                    "family entering member must follow FamilyArrowGrow",
+                ));
+            };
+            if !std::rc::Rc::ptr_eq(
+                target.integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
+                return Err(js_error(
+                    "Arrow grow entering member belongs to another authoring store",
+                ));
+            }
+            entering.push((
+                parse_object_id("Arrow grow object ID", object_id)?,
                 member.semantic_mobject().clone(),
             ));
             Ok(())
@@ -8567,6 +8651,21 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFamilyFade)]
+        pub fn live_set_family_fade(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            darkness: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_fade(&family, darkness)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveArrangeFamilyInGrid)]
         pub fn live_arrange_family_in_grid(
             &mut self,
@@ -10616,6 +10715,68 @@ mod tests {
             rejected.scene.integration_store().borrow().scene_revision(),
             revision
         );
+    }
+
+    #[test]
+    fn ordinary_arrow_grow_admits_all_leaves_only_after_lifecycle_validation() {
+        let mut context = CanonicalAuthoringScene::default();
+        let arrow = context
+            .scene
+            .manim_arrow(noon::ManimArrowOptions::vector(2.0, 1.0).unwrap())
+            .unwrap();
+        let child = |options| OrdinaryCompositionChild::FamilyArrowGrow {
+            target: arrow.family().clone(),
+            arrow: arrow.clone(),
+            entering: vec![
+                (ObjectId::new(0), arrow.shaft().clone()),
+                (ObjectId::new(1), arrow.end_tip().clone()),
+            ],
+            options,
+        };
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .introducer(true)
+            .remover(false)
+            .path_arc(0.0);
+        let before = context.scene.integration_store().borrow().scene_revision();
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &[child(options.remover(true))],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            before
+        );
+        assert!(context.bindings.is_empty());
+        assert!(context.player_ownership.is_unstarted());
+
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &[child(options)],
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            1.0
+        );
+        assert_eq!(context.bindings.len(), 2);
+        for leaf in [arrow.shaft(), arrow.end_tip()] {
+            assert!(context.contains_mobject(leaf).unwrap());
+            let effective = context
+                .active_live_player()
+                .unwrap()
+                .live_effective(leaf)
+                .unwrap();
+            assert_eq!(effective.transform.translation, noon_core::Vec2::ZERO);
+            assert_eq!(effective.transform.scale, noon_core::Vec2::new(1.0, 1.0));
+        }
     }
 
     #[test]

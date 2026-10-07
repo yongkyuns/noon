@@ -932,6 +932,32 @@ mod tests {
         }
     }
 
+    struct FailOnFourthCompile(usize);
+
+    impl LatexBackend for FailOnFourthCompile {
+        fn identity(&self) -> &str {
+            "numeric-coordinate-failure-fixture"
+        }
+
+        fn format(&self) -> crate::LatexFormat {
+            crate::LatexFormat::Preloaded
+        }
+
+        fn font(&mut self, name: &str) -> Result<crate::DviFontResource, String> {
+            let mut backend = RuleBackend;
+            backend.font(name)
+        }
+
+        fn compile(&mut self, document: &str) -> Result<Vec<u8>, String> {
+            self.0 += 1;
+            if self.0 == 4 {
+                return Err("injected y-axis glyph compilation failure".into());
+            }
+            let mut backend = RuleBackend;
+            backend.compile(document)
+        }
+    }
+
     fn text_box(source: &str, bounds: Rect) -> TextResource {
         TextResource {
             source: Arc::from(source),
@@ -1226,6 +1252,107 @@ mod tests {
                 .source
                 .as_ref(),
             "+63.25...m"
+        );
+    }
+
+    #[test]
+    fn number_plane_decimal_coordinates_publish_both_axes_atomically_and_keep_precision() {
+        use crate::plot_presentation::NumberLabelOptions;
+        use crate::{ManimNumberPlane, ManimNumberPlaneOptions};
+
+        let scene = crate::Scene::new();
+        let plane = ManimNumberPlane::create(
+            Rc::clone(scene.integration_store()),
+            &ManimNumberPlaneOptions::default(),
+        )
+        .unwrap();
+        let options = NumberLabelOptions {
+            decimal_places: 1,
+            ..Default::default()
+        };
+        let mut backend = RuleBackend;
+        let [x, y] = plane
+            .add_decimal_coordinates(
+                &mut backend,
+                Some(&[1.0]),
+                Some(&[-2.0]),
+                &options,
+                &options,
+            )
+            .unwrap();
+        let store = Rc::clone(scene.integration_store());
+        let sources = |family: &crate::MobjectFamily| {
+            store
+                .borrow()
+                .semantic_family_members_checked(family.node_id())
+                .unwrap()
+                .into_iter()
+                .map(|member| {
+                    let object = Mobject::from_node(Rc::clone(&store), member).unwrap();
+                    let number = DecimalNumber::from_mobject(object).unwrap();
+                    (
+                        number.text().unwrap(),
+                        number.format().unwrap().decimal_places,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sources(&x), vec![("1.0".to_owned(), 1)]);
+        assert_eq!(sources(&y), vec![("-2.0".to_owned(), 1)]);
+
+        let before_x = plane.x_axis().unwrap().family().node_id();
+        let before_y = plane.y_axis().unwrap().family().node_id();
+        let before_x = store
+            .borrow()
+            .semantic_family_members_checked(before_x)
+            .unwrap();
+        let before_y = store
+            .borrow()
+            .semantic_family_members_checked(before_y)
+            .unwrap();
+        let before_publication = {
+            let store = store.borrow();
+            (
+                store.scene_revision(),
+                store.len(),
+                store.text_resources().stats(),
+                store.font_resources().stats(),
+            )
+        };
+        let mut failing_backend = FailOnFourthCompile(0);
+        assert!(plane
+            .add_decimal_coordinates(
+                &mut failing_backend,
+                Some(&[1.0]),
+                Some(&[2.0]),
+                &options,
+                &options,
+            )
+            .is_err());
+        assert_eq!(failing_backend.0, 4);
+        let after_publication = {
+            let store = store.borrow();
+            (
+                store.scene_revision(),
+                store.len(),
+                store.text_resources().stats(),
+                store.font_resources().stats(),
+            )
+        };
+        assert_eq!(after_publication, before_publication);
+        assert_eq!(
+            store
+                .borrow()
+                .semantic_family_members_checked(plane.x_axis().unwrap().family().node_id())
+                .unwrap(),
+            before_x
+        );
+        assert_eq!(
+            store
+                .borrow()
+                .semantic_family_members_checked(plane.y_axis().unwrap().family().node_id())
+                .unwrap(),
+            before_y
         );
     }
 

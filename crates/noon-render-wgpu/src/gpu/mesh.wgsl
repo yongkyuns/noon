@@ -28,23 +28,6 @@ struct VertexOutput {
     @location(2) world_normal: vec3<f32>,
     @location(3) point_lit: f32,
 };
-const MAX_FINITE_F32: f32 = 3.402823e38;
-// Normalize after scaling by the largest component. This avoids overflow in
-// length-squared for large finite values and marks the zero vector explicitly.
-fn stable_normalize(value: vec3<f32>) -> vec4<f32> {
-    let scale = max(max(abs(value.x), abs(value.y)), abs(value.z));
-    // WGSL has `isNan` and `isInf`, but no `isFinite`; ordered bounds reject
-    // zero, infinities, and NaNs without relying on a nonstandard builtin.
-    if !(scale > 0.0 && scale <= MAX_FINITE_F32) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-    let scaled = value / scale;
-    let magnitude = length(scaled);
-    if !(magnitude > 0.0 && magnitude <= MAX_FINITE_F32) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-    return vec4<f32>(scaled / magnitude, 1.0);
-}
 @vertex fn vs_main(input: VertexInput) -> VertexOutput {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
     let normal_matrix = mat3x3<f32>(input.normal0.xyz, input.normal1.xyz, input.normal2.xyz);
@@ -90,6 +73,7 @@ struct EdgeInput {
     @location(0) start: vec3<f32>,
     @location(1) end: vec3<f32>,
     @location(10) corner: vec2<f32>,
+    @location(11) face_point: vec3<f32>,
     @location(2) world0: vec4<f32>,
     @location(3) world1: vec4<f32>,
     @location(4) world2: vec4<f32>,
@@ -102,8 +86,13 @@ struct EdgeInput {
 struct EdgeOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) @interpolate(flat) line: vec4<f32>,
 };
-@vertex fn vs_boundary(input: EdgeInput) -> EdgeOutput {
+struct BoundaryGeometry {
+    position: vec4<f32>,
+    line: vec4<f32>,
+};
+fn boundary_geometry(input: EdgeInput) -> BoundaryGeometry {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
     var a = camera.view_projection * world * vec4<f32>(input.start, 1.0);
     var b = camera.view_projection * world * vec4<f32>(input.end, 1.0);
@@ -126,15 +115,71 @@ struct EdgeOutput {
         perpendicular = vec2<f32>(-direction.y, direction.x) / length(direction);
     }
     var p = mix(a, b, input.corner.x);
-    // The width is in authoring frame units; projecting endpoints and extruding
-    // stays on the GPU even while the camera moves.
-    p = vec4<f32>(p.xy + perpendicular * input.corner.y * input.normal1.w
-        * boundary_metrics.zw * 0.5 * p.w, p.zw);
-    var result: EdgeOutput;
+    // Retain the authored width in pixels. The support also covers the box
+    // filter and MSAA sample offsets; alpha carries the actual pixel area.
+    let half_width = input.normal1.w * 0.25
+        * length(perpendicular * boundary_metrics.zw * viewport);
+    p = vec4<f32>(p.xy + perpendicular * input.corner.y
+        * (half_width + 1.5) * 2.0 / viewport * p.w, p.zw);
+    // Screen extrusion must remain on its incident triangle's depth plane.
+    // Centerline depth alone lets the adjacent fill occlude a subpixel border.
+    let c = camera.view_projection * world * vec4<f32>(input.face_point, 1.0);
+    if a.w > 1e-8 && b.w > 1e-8 && c.w > 1e-8 {
+        let ab = b.xyz / b.w - a.xyz / a.w;
+        let ac = c.xyz / c.w - a.xyz / a.w;
+        let determinant = ab.x * ac.y - ab.y * ac.x;
+        if abs(determinant) > 1e-12 && abs(determinant) <= MAX_FINITE_F32 {
+            let depth_gradient = vec2<f32>(ab.z * ac.y - ac.z * ab.y,
+                ab.x * ac.z - ac.x * ab.z) / determinant;
+            if all(abs(depth_gradient) <= vec2<f32>(MAX_FINITE_F32)) {
+                let centerline = mix(a, b, input.corner.x);
+                p.z += dot(p.xy / p.w - centerline.xy / centerline.w, depth_gradient) * p.w;
+            }
+        }
+    }
+    let normal = perpendicular * vec2<f32>(1.0, -1.0);
+    let start_pixel = (a.xy / max(a.w, 1e-8) * vec2<f32>(1.0, -1.0)
+        + vec2<f32>(1.0)) * viewport * 0.5;
+    var result: BoundaryGeometry;
     result.position = p;
+    result.line = vec4<f32>(normal, dot(start_pixel, normal), half_width);
+    return result;
+}
+fn pixel_normal_cdf(distance: f32, normal: vec2<f32>) -> f32 {
+    // A square pixel projected onto an oblique normal has a trapezoidal
+    // density. Integrating it avoids orientation-dependent thin-line energy.
+    let major = max(abs(normal.x), abs(normal.y));
+    let minor = min(abs(normal.x), abs(normal.y));
+    if major <= 1e-8 { return 0.0; }
+    if minor <= 1e-4 { return clamp(distance / major + 0.5, 0.0, 1.0); }
+    let support = (major + minor) * 0.5;
+    if distance <= -support { return 0.0; }
+    if distance >= support { return 1.0; }
+    let plateau = (major - minor) * 0.5;
+    if distance < -plateau {
+        let tail = distance + support;
+        return tail * tail / (2.0 * major * minor);
+    }
+    if distance > plateau {
+        let tail = support - distance;
+        return 1.0 - tail * tail / (2.0 * major * minor);
+    }
+    return 0.5 + distance / major;
+}
+fn boundary_coverage(position: vec2<f32>, line: vec4<f32>) -> f32 {
+    let distance = dot(position, line.xy) - line.z;
+    return clamp(pixel_normal_cdf(distance + line.w, line.xy)
+        - pixel_normal_cdf(distance - line.w, line.xy), 0.0, 1.0);
+}
+@vertex fn vs_boundary(input: EdgeInput) -> EdgeOutput {
+    var result: EdgeOutput;
+    let geometry = boundary_geometry(input);
+    result.position = geometry.position;
+    result.line = geometry.line;
     result.color = input.color;
     return result;
 }
 @fragment fn fs_boundary(input: EdgeOutput) -> @location(0) vec4<f32> {
-    return input.color;
+    return vec4<f32>(input.color.rgb,
+        input.color.a * boundary_coverage(input.position.xy, input.line));
 }

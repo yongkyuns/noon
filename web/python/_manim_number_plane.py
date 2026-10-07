@@ -1,6 +1,8 @@
 """Static NumberPlane grid over ordinary shared Rust coordinate/family handles."""
+import math
 from operator import index
 
+import noon as _base
 import _manim_plotting as _plot
 from _noon_errors import engine_call
 
@@ -25,6 +27,18 @@ def _line_style(options, values, *, faded):
 def _lines(handle):
     return _plot._family(object.__new__(_plot._compat.Group), handle,
                          [_plot._leaf(leaf) for leaf in engine_call(handle.directMobjects)])
+
+
+def _coordinate_decimal_places(axis_range):
+    """Mirror NumberLine's formatting inference after its range becomes floats."""
+    try:
+        step = 1.0 if axis_range is None or len(axis_range) < 3 else float(axis_range[2])
+    except (TypeError, ValueError, IndexError):
+        return 1
+    if not math.isfinite(step):
+        return 1
+    spelling = str(step)
+    return len(spelling.partition(".")[2]) if "." in spelling else 0
 
 
 class NumberPlane(_plot.Axes):
@@ -66,6 +80,10 @@ class NumberPlane(_plot.Axes):
             options.free()
             raise
         handle = engine_call(context.liveCreateCoordinates if context is not None else _plot._create_coordinates, options)
+        self._coordinate_decimal_places = (
+            _coordinate_decimal_places(x_range),
+            _coordinate_decimal_places(y_range),
+        )
         members = [_lines(engine_call(handle.numberPlanePart, i)) for i in (0, 1)]
         members.extend(_plot._attach_number_line(object.__new__(_plot.NumberLine), engine_call(handle.numberPlanePart, i))
                        for i in (2, 3))
@@ -93,8 +111,23 @@ class NumberPlane(_plot.Axes):
             return engine_call(context.queryNumberPlaneFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.numberPlaneFrame)
 
-    def add_coordinates(self, *args, **kwargs):
-        raise NotImplementedError("NumberPlane numeric label families are not yet supported")
+    def add_coordinates(self, x_values=None, y_values=None, **kwargs):
+        from _manim_number_labels import add_number_plane_coordinates
+        x_config = dict(kwargs.pop("x_config", None) or {})
+        y_config = dict(kwargs.pop("y_config", None) or {})
+        if "direction" not in kwargs:
+            x_config.setdefault("direction", _base.DR)
+            y_config.setdefault("direction", _base.DR)
+        kwargs.setdefault("font_size", 24)
+        kwargs.setdefault("buff", _base.SMALL_BUFF)
+        return add_number_plane_coordinates(
+            self,
+            x_values,
+            y_values,
+            x_config=x_config,
+            y_config=y_config,
+            config=kwargs,
+        )
 
 
 __all__ = ["NumberPlane"]

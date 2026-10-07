@@ -42,6 +42,7 @@ for (const backend of backends) {
     const relative = path.join(relativeDir, `corpus-${backend}.json`);
     run("scripts/perf-corpus.mjs", {
       NOON_CORPUS_BACKEND: backend,
+      NOON_CORPUS_GPU_MODE: gpuMode,
       NOON_CORPUS_ARTIFACT: relative,
     });
     artifacts.push({ suite: "corpus", backend, path: relative });

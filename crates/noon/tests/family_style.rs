@@ -99,6 +99,42 @@ fn live_paint_batches_unique_leaves_and_rejects_foreign_or_invalid_edits_atomica
 }
 
 #[test]
+fn live_family_fade_publishes_one_atomic_style_only_update() {
+    let (mut scene, family, [mut a, mut b], _) = family();
+    a.set_fill(1.0, 0.0, 0.0, 0.8).unwrap();
+    a.set_stroke_color(0.0, 0.0, 1.0, 1.0).unwrap();
+    a.set_stroke_opacity(0.6).unwrap();
+    a.set_object_opacity(0.7).unwrap();
+    b.set_fill(0.0, 1.0, 0.0, 0.5).unwrap();
+    let a_content = a.state().unwrap().content;
+    let b_content = b.state().unwrap().content;
+    scene.add_many(&[(&family).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let before_revision = scene.revision();
+    let result = live.fade_family(&family, 0.25).unwrap();
+    assert_eq!(result.impacts().len(), 2);
+    assert_eq!(scene.revision(), before_revision.checked_next().unwrap());
+    let faded_a = live.effective(&a).unwrap();
+    let faded_b = live.effective(&b).unwrap();
+    assert!((faded_a.fill_opacity() - 0.6).abs() < 1e-7);
+    assert!((faded_a.stroke_opacity() - 0.45).abs() < 1e-7);
+    assert_eq!(faded_a.style.opacity, 0.7_f32);
+    assert!((faded_b.fill_opacity() - 0.375).abs() < 1e-7);
+    assert_eq!(a.state().unwrap().content, a_content);
+    assert_eq!(b.state().unwrap().content, b_content);
+
+    let before_invalid = [faded_a, faded_b];
+    let revision = scene.revision();
+    assert!(live.fade_family(&family, 1.1).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        [live.effective(&a).unwrap(), live.effective(&b).unwrap()],
+        before_invalid
+    );
+}
+
+#[test]
 fn combined_style_is_atomic_and_omission_is_a_noop() {
     use noon::StyleUpdate;
     let (scene, family, [mut a, b], unrelated) = family();

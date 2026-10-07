@@ -67,6 +67,10 @@ jobs:
         run: python scripts/manim-arrow-tip-reference.py
       - name: Use repository-pinned Rust and WASM target
         run: |
+          # Avoid unowned Clippy binaries in the runner-provided toolchain.
+          noon_rustup_home="$(mktemp -d "$RUNNER_TEMP/noon-arrow-rustup.XXXXXX")"
+          export RUSTUP_HOME="$noon_rustup_home"
+          printf 'RUSTUP_HOME=%s\n' "$RUSTUP_HOME" >> "$GITHUB_ENV"
           rustup install
           rustup show active-toolchain
           rustc --version --verbose

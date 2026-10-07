@@ -1,9 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import vm from "node:vm";
 import { FOLLOWING_SOURCE, FOLLOWING_TIMES, followingManifest,
-  assertFollowingSources, assertFollowingState, assertFollowingReports, assertFollowingPythonLifecycle, assertFollowingDirectLifecycle } from "./special-camera-qualification.mjs";
+  PINNED_CAMERA_FOLLOWUPS, assertSpecialCameraObservation, assertPairedCameraObservation,
+  writeSpecialCameraObservations,
+  assertFollowingSources, assertFollowingState, assertFollowingReports,
+  assertFollowingPythonLifecycle, assertFollowingDirectLifecycle } from "./special-camera-qualification.mjs";
+import { CAMERA_SOURCE_HASHES, extractPinnedScene, PINNED_DOCS_COMMIT,
+  PINNED_DOCS_SHA256 } from "./stage-special-camera-raster.mjs";
 
 const paint = (red, green, blue) => ({ red, green, blue, alpha: 1 });
 const white = paint(1, 1, 1);
@@ -72,6 +79,145 @@ test("effective camera/dots compare by observable state, not engine identity or 
   assert.equal(assertFollowingState(actual, reference).maximumAbsoluteError, 0);
   actual.camera.center[0] += 0.5e-6;
   assert.ok(assertFollowingState(actual, reference).maximumAbsoluteError > 0);
+});
+
+function cameraFixture(profile, sampleTime = 0) {
+  if (profile === "moving-zoomed-scene" || profile === "following-graph-camera") {
+    const file = profile === "moving-zoomed-scene" ? "moving_zoomed_scene_around" : "following_graph_camera";
+    return { id: `${file}-${sampleTime}`, sampleTime, factory: "direct", file };
+  }
+  return { id: `${profile}-${sampleTime}`, sampleTime,
+    factory: "createDirectSpecialCameraSettingsRenderer", factoryArgs: [profile] };
+}
+
+function semanticObservationFrame(fixture, hostTime = fixture.sampleTime) {
+  const profile = fixture.factoryArgs?.[0] ?? (fixture.file === "moving_zoomed_scene_around"
+    ? "moving-zoomed-scene" : "following-graph-camera");
+  let spatial = { composition_domain: "world", material: "unlit", point_light: false,
+    translation: [0, 0, 0] };
+  if (profile === "fixed-frame") spatial.composition_domain = "fixed_frame";
+  if (profile === "light" || profile === "surface") {
+    spatial = { ...spatial, material: "point_lit", point_light: true,
+      translation: profile === "light" ? [0, 0, -3] : [-7, -9, 10] };
+  }
+  const objects = [{ id: 1, present: true, center: [0, 0], bounds: { width: 2, height: 2 },
+    spatial, fill: paint(1, 0, 0) }];
+  if (profile === "light" || profile === "surface") {
+    const cellSpatial = { composition_domain: "world", material: "point_lit",
+      point_light: false, translation: [0, 0, 0] };
+    objects.push({ id: 2, present: true, center: [1, 1], bounds: { width: 1, height: 1 },
+      spatial: cellSpatial, fill: paint(1, 0, 0) });
+    if (profile === "surface") objects.push({ id: 3, present: true, center: [2, 1],
+      bounds: { width: 1, height: 1 }, spatial: structuredClone(cellSpatial), fill: paint(0, 1, 0) });
+  }
+  return { time: hostTime, camera: { center: [0, 0], height: 8 },
+    present_object_count: objects.length, objects };
+}
+
+test("pinned followup inventory covers the six non-FollowingGraphCamera cases", () => {
+  assert.deepEqual(PINNED_CAMERA_FOLLOWUPS, ["MovingZoomedSceneAround", "FixedInFrameMObjectTest",
+    "ThreeDLightSourcePosition", "ThreeDCameraRotation", "ThreeDCameraIllusionRotation", "ThreeDSurfacePlot"]);
+});
+
+test("staged exact-source raster inputs pin all six upstream class hashes", async () => {
+  assert.match(PINNED_DOCS_COMMIT, /^[a-f0-9]{40}$/);
+  assert.match(PINNED_DOCS_SHA256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(Object.keys(CAMERA_SOURCE_HASHES), [
+    "MovingZoomedSceneAround", "FixedInFrameMObjectTest", "ThreeDLightSourcePosition",
+    "ThreeDCameraRotation", "ThreeDCameraIllusionRotation", "ThreeDSurfacePlot",
+  ]);
+  assert.ok(Object.values(CAMERA_SOURCE_HASHES).every(hash => /^[a-f0-9]{64}$/.test(hash)));
+  const rst = [
+    ".. manim:: RasterFixture",
+    "    class RasterFixture(Scene):",
+    "        def construct(self):",
+    "            self.wait(1)",
+  ].join("\n");
+  const source = "class RasterFixture(Scene):\n    def construct(self):\n        self.wait(1)\n";
+  const { createHash } = await import("node:crypto");
+  const digest = createHash("sha256").update(source).digest("hex");
+  assert.equal(extractPinnedScene(rst, "RasterFixture", digest), source);
+  assert.throws(() => extractPinnedScene(rst, "RasterFixture", "0".repeat(64)), /source drift/);
+});
+
+for (const profile of ["fixed-frame", "ambient", "illusion", "light", "surface",
+  "moving-zoomed-scene", "following-graph-camera"]) {
+  test(`camera observation records semantic content and authored time for ${profile}`, () => {
+    const fixture = cameraFixture(profile, 0.5);
+    const frame = semanticObservationFrame(fixture);
+    const observation = assertSpecialCameraObservation(frame, fixture, "python");
+    assert.equal(observation.authoredTime, 0.5);
+    assert.equal(observation.pinnedAppearance, "not-qualified-by-this-noon-profile");
+    assert.equal(assertPairedCameraObservation(frame, structuredClone(frame), fixture).semanticState,
+      "paired-equal");
+  });
+}
+
+for (const [name, profile, mutate] of [
+  ["fixed-frame domain", "fixed-frame", frame => { frame.objects[0].spatial.composition_domain = "world"; }],
+  ["ambient world content", "ambient", frame => { frame.objects[0].spatial.composition_domain = "fixed_frame"; }],
+  ["illusion world content", "illusion", frame => { frame.objects[0].spatial.composition_domain = "fixed_frame"; }],
+  ["point light position", "light", frame => { frame.objects[0].spatial.translation[2] = -2; }],
+  ["point-lit surface", "surface", frame => {
+    for (const row of frame.objects.filter(item => item.spatial.point_light !== true)) row.spatial.material = "unlit";
+  }],
+  ["effective camera", "moving-zoomed-scene", frame => { frame.camera.height = null; }],
+  ["authored time", "ambient", frame => { frame.time += 0.1; }],
+]) test(`camera semantic/timing observer rejects ${name}`, () => {
+  const fixture = cameraFixture(profile, 0.5);
+  const frame = semanticObservationFrame(fixture);
+  mutate(frame);
+  assert.throws(() => assertSpecialCameraObservation(frame, fixture, "python"));
+});
+
+test("paired camera observer rejects semantic drift while ignoring engine identity", () => {
+  const fixture = cameraFixture("surface", 0);
+  const rust = semanticObservationFrame(fixture);
+  const python = structuredClone(rust);
+  python.objects[0].id = 1001;
+  assert.equal(assertPairedCameraObservation(rust, python, fixture).semanticState, "paired-equal");
+  python.objects.reverse();
+  assert.throws(() => assertPairedCameraObservation(rust, python, fixture), /differs from/);
+  python.objects.reverse();
+  python.objects[0].fill.alpha = 0.5;
+  assert.throws(() => assertPairedCameraObservation(rust, python, fixture), /differs from/);
+});
+
+test("paired camera observer uses the inclusive raw 1e-6 semantic tolerance", () => {
+  const fixture = cameraFixture("fixed-frame", 0.5);
+  const rust = semanticObservationFrame(fixture);
+  const python = structuredClone(rust);
+  python.objects[0].center[0] += 0.999e-6;
+  const observation = assertPairedCameraObservation(rust, python, fixture);
+  assert.ok(observation.maximumAbsoluteError <= 1e-6);
+  python.objects[0].center[0] = rust.objects[0].center[0] + 1.001e-6;
+  assert.throws(() => assertPairedCameraObservation(rust, python, fixture), /differs from/);
+});
+
+test("camera observation artifact records selected coverage and appearance limitation", async () => {
+  const previousSelection = process.env.NOON_PAIRED_CASES;
+  delete process.env.NOON_PAIRED_CASES;
+  const directory = mkdtempSync(path.join(os.tmpdir(), "noon-camera-observation-"));
+  try {
+    const fixture = cameraFixture("fixed-frame", 0.5);
+    const frame = semanticObservationFrame(fixture);
+    const stem = path.join(directory, `${fixture.id}-WebGPU`);
+    writeFileSync(`${stem}-rust-wasm-frame.json`, JSON.stringify(frame));
+    writeFileSync(`${stem}-python-frame.json`, JSON.stringify(frame));
+    const observation = await writeSpecialCameraObservations({ backends: [
+      { backend: "WebGPU", static: { [fixture.id]: {} } },
+    ] }, [fixture], directory);
+    assert.equal(observation.passed, true);
+    assert.equal(observation.coverageComplete, false);
+    assert.deepEqual(observation.selectedFixtureIds, [fixture.id]);
+    assert.equal(observation.appearanceQualification, "deferred-to-pinned-Manim-raster-oracle");
+    const artifact = JSON.parse(readFileSync(path.join(directory, "semantic-observations.json"), "utf8"));
+    assert.deepEqual(artifact, observation);
+  } finally {
+    if (previousSelection === undefined) delete process.env.NOON_PAIRED_CASES;
+    else process.env.NOON_PAIRED_CASES = previousSelection;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 for (const [name, mutate] of [

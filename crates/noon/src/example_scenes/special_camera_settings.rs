@@ -106,6 +106,14 @@ pub fn scene(case: CameraCase) -> Result<(Scene, Mobject), String> {
                 )
                 .map_err(|e| e.to_string())?;
             scene.add(&light).map_err(|e| e.to_string())?;
+            // Both pinned examples add axes before their surface. Preserve
+            // that order in shared runtime state as well as rendered pixels.
+            scene
+                .add_in_spatial_composition_domain(
+                    MobjectTarget::Family(axes.family()),
+                    SemanticSpatialCompositionDomain::World,
+                )
+                .map_err(|e| e.to_string())?;
             let plan = if case == CameraCase::Light {
                 UvSurfacePlan::new([-FRAC_PI_2, FRAC_PI_2], [0., TAU], [15, 32])
             } else {
@@ -161,12 +169,14 @@ pub fn scene(case: CameraCase) -> Result<(Scene, Mobject), String> {
                 .map_err(|e| e.to_string())?;
         }
     }
-    scene
-        .add_in_spatial_composition_domain(
-            MobjectTarget::Family(axes.family()),
-            SemanticSpatialCompositionDomain::World,
-        )
-        .map_err(|e| e.to_string())?;
+    if !matches!(case, CameraCase::Light | CameraCase::Surface) {
+        scene
+            .add_in_spatial_composition_domain(
+                MobjectTarget::Family(axes.family()),
+                SemanticSpatialCompositionDomain::World,
+            )
+            .map_err(|e| e.to_string())?;
+    }
     Ok((scene, camera))
 }
 
@@ -234,4 +244,34 @@ pub fn static_session(case: CameraCase) -> Result<crate::ExecutionSession, Strin
         .0
         .execution_session()
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noon_compile::CompiledSpatialDrawKind::{Mesh, Planar};
+
+    #[test]
+    fn static_camera_examples_preserve_authored_axes_surface_order() {
+        for (case, first, last) in [
+            (CameraCase::Light, Planar, Mesh),
+            (CameraCase::Surface, Planar, Mesh),
+        ] {
+            let session = static_session(case).unwrap();
+            let draws: Vec<_> = session
+                .painter_order()
+                .iter()
+                .map(|&index| {
+                    session.frame().objects[index as usize]
+                        .spatial
+                        .as_deref()
+                        .unwrap()
+                })
+                .filter(|state| state.camera_projection.is_none() && !state.point_light)
+                .map(|state| state.draw_kind)
+                .collect();
+            assert_eq!(*draws.first().unwrap(), first);
+            assert_eq!(*draws.last().unwrap(), last);
+        }
+    }
 }

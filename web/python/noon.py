@@ -906,6 +906,7 @@ _PUBLIC_EXPORTS = {
     "GrowFromPoint": "_manim_growing",
     "GrowFromCenter": "_manim_growing",
     "GrowFromEdge": "_manim_growing",
+    "GrowArrow": "_manim_growing",
     "SpinInFromNothing": "_manim_growing",
     "DrawBorderThenFill": "_manim_draw_border_then_fill",
     "ShowPassingFlash": "_manim_indication",

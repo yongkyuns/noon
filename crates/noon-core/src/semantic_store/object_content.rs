@@ -579,6 +579,59 @@ impl SemanticObjectState {
         self.spatial_properties.as_deref().cloned()
     }
 
+    /// Check the bounded opaque World-path paint profile against the final
+    /// authored state. Meshes, text, lights and planar/overlay paths keep their
+    /// own appearance rules. Resource lookup is constant work per affected row.
+    pub fn world_path_style_is_supported(&self, resources: &crate::GeometryResourceArena) -> bool {
+        if self.spatial_composition_domain() != SemanticSpatialCompositionDomain::World
+            || matches!(
+                self.role,
+                SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D
+            )
+            || (self.spatial_material() != SemanticSpatialMaterial::CairoPath
+                && !matches!(
+                    self.transform.orientation,
+                    crate::SemanticOrientation::Spatial(_)
+                ))
+        {
+            return true;
+        }
+        let path = match self.content.geometry() {
+            Some(StoredGeometry::Resource(handle)) => {
+                matches!(
+                    resources.get(handle),
+                    Some(crate::GeometryResource::VectorPath(_))
+                )
+            }
+            Some(_) => true,
+            None => false,
+        };
+        if !path {
+            return true;
+        }
+        let paint_supported = |paint: Option<&crate::SemanticPaint>, opacity: f64| {
+            if !(0.0..=1.0).contains(&opacity) {
+                return false;
+            }
+            match paint {
+                None => true,
+                Some(crate::SemanticPaint::Resource(_)) => false,
+                Some(crate::SemanticPaint::Solid(color)) => {
+                    let alpha = f64::from(color.alpha) * opacity;
+                    [color.red, color.green, color.blue, color.alpha]
+                        .into_iter()
+                        .all(|channel| (0.0..=1.0).contains(&channel))
+                        && (alpha == 0.0 || alpha * self.style.object_opacity == 1.0)
+                }
+            }
+        };
+        (0.0..=1.0).contains(&self.style.object_opacity)
+            && self.style.stroke_width.is_finite()
+            && (0.0..=f64::from(f32::MAX)).contains(&self.style.stroke_width)
+            && paint_supported(self.style.fill.as_ref(), self.style.fill_opacity)
+            && paint_supported(self.style.stroke.as_ref(), self.style.stroke_opacity)
+    }
+
     /// Authored UV-cell identity for one leaf in a sampled Surface family.
     pub fn surface_uv_cell(&self) -> Option<[usize; 2]> {
         self.spatial_properties
@@ -619,6 +672,11 @@ impl SemanticObjectState {
             self.spatial_properties
                 .as_deref()
                 .and_then(|properties| properties.surface_uv_cell()),
+        )
+        .with_cairo_path_appearance(
+            self.spatial_properties
+                .as_deref()
+                .and_then(|properties| properties.cairo_path_appearance()),
         );
         self.spatial_properties = (!properties.is_default()).then(|| Arc::new(properties));
     }
@@ -631,6 +689,29 @@ impl SemanticObjectState {
             self.spatial_composition_domain(),
             self.spatial_anchor_family(),
         );
+    }
+
+    pub fn cairo_path_appearance(&self) -> Option<crate::SemanticCairoPathAppearance> {
+        self.spatial_properties
+            .as_deref()
+            .and_then(|properties| properties.cairo_path_appearance())
+    }
+
+    /// Configure path sheen and optional bounds-derived gradient anchors before
+    /// the ordinary object transaction publishes this appearance.
+    pub fn set_cairo_path_appearance(
+        &mut self,
+        appearance: crate::SemanticCairoPathAppearance,
+    ) -> Result<(), SemanticSpatialCompositionDomainError> {
+        if self.spatial_material() != SemanticSpatialMaterial::CairoPath || !appearance.is_valid() {
+            return Err(SemanticSpatialCompositionDomainError::InvalidCairoPathAppearance);
+        }
+        let properties = self
+            .spatial_properties()
+            .expect("CairoPath has spatial properties")
+            .with_cairo_path_appearance(Some(appearance));
+        self.spatial_properties = Some(Arc::new(properties));
+        Ok(())
     }
 
     /// Set the projection for a Camera3D declaration. The role is authored
@@ -725,7 +806,11 @@ impl SemanticObjectState {
         {
             return Err(SemanticSpatialCompositionDomainError::CameraOrLightMustRemainWorld);
         }
-        if anchor_family.is_some() && domain != SemanticSpatialCompositionDomain::FixedOrientation {
+        if anchor_family.is_some()
+            && domain != SemanticSpatialCompositionDomain::FixedOrientation
+            && !(domain == SemanticSpatialCompositionDomain::World
+                && self.spatial_material() == SemanticSpatialMaterial::CairoPath)
+        {
             return Err(SemanticSpatialCompositionDomainError::AnchorRequiresFixedOrientation);
         }
         self.update_spatial_properties(
@@ -792,7 +877,15 @@ impl SemanticObjectState {
             ) || self.spatial_composition_domain() == SemanticSpatialCompositionDomain::World)
             && (self.spatial_anchor_family().is_none()
                 || self.spatial_composition_domain()
-                    == SemanticSpatialCompositionDomain::FixedOrientation)
+                    == SemanticSpatialCompositionDomain::FixedOrientation
+                || (self.spatial_material() == SemanticSpatialMaterial::CairoPath
+                    && self.spatial_composition_domain()
+                        == SemanticSpatialCompositionDomain::World))
+            && (self.spatial_material() != SemanticSpatialMaterial::CairoPath
+                || (self.spatial_composition_domain() == SemanticSpatialCompositionDomain::World
+                    && self
+                        .cairo_path_appearance()
+                        .is_some_and(|appearance| appearance.is_valid())))
             && (self.role != SemanticObjectRole::PointLight3D
                 || (self.transform.world_transform().is_some()
                     && self.transform.scale == SemanticVec3::new(1.0, 1.0, 1.0)))

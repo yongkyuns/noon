@@ -58,7 +58,7 @@ pub enum TransportObjectContent {
 
 /// Exact f64 spatial declaration carried only across the Python-worker boundary.
 /// It is reconstructed into the ordinary compiled spatial row on receipt.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransportSpatialState {
     pub draw_kind: noon_compile::CompiledSpatialDrawKind,
     pub composition_domain: noon_core::SemanticSpatialCompositionDomain,
@@ -69,6 +69,8 @@ pub struct TransportSpatialState {
     pub camera_projection: Option<TransportProjection3D>,
     pub material: TransportSpatialMaterial,
     pub point_light: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cairo_path_appearance: Option<Box<noon_compile::CompiledCairoPathAppearance>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -92,6 +94,8 @@ pub enum TransportSpatialMaterial {
     #[default]
     Unlit,
     PointLit,
+    CairoSurface,
+    CairoPath,
 }
 
 impl TransportSpatialState {
@@ -126,18 +130,35 @@ impl TransportSpatialState {
             material: match value.material {
                 SemanticSpatialMaterial::Unlit => TransportSpatialMaterial::Unlit,
                 SemanticSpatialMaterial::PointLit => TransportSpatialMaterial::PointLit,
+                SemanticSpatialMaterial::CairoSurface => TransportSpatialMaterial::CairoSurface,
+                SemanticSpatialMaterial::CairoPath => TransportSpatialMaterial::CairoPath,
             },
             point_light: value.point_light,
+            cairo_path_appearance: value.cairo_path_appearance.clone(),
         }
     }
 
-    fn is_valid(self) -> bool {
+    fn is_valid(&self) -> bool {
         use noon_compile::CompiledSpatialDrawKind as Draw;
         use noon_core::SemanticSpatialCompositionDomain as Domain;
-        if (self.camera_projection.is_some() || self.point_light)
-            && self.composition_domain != Domain::World
+        if (self.material == TransportSpatialMaterial::CairoPath)
+            != self.cairo_path_appearance.is_some()
+            || self
+                .cairo_path_appearance
+                .as_deref()
+                .is_some_and(|appearance| {
+                    self.draw_kind != Draw::Planar
+                        || self.composition_domain != Domain::World
+                        || !appearance.is_valid()
+                        || (appearance.gradient_direction.is_some()
+                            && appearance.world_family_bounds.is_none())
+                })
+            || (self.camera_projection.is_some() || self.point_light)
+                && self.composition_domain != Domain::World
             || self.draw_kind == Draw::Mesh && self.composition_domain != Domain::World
             || self.material == TransportSpatialMaterial::PointLit && self.draw_kind != Draw::Mesh
+            || self.material == TransportSpatialMaterial::CairoSurface
+                && self.draw_kind != Draw::Mesh
             || self.material == TransportSpatialMaterial::PointLit
                 && self.scale.into_iter().any(|component| component == 0.0)
             || self.camera_projection.is_some() && self.point_light
@@ -186,7 +207,7 @@ impl TransportSpatialState {
                 })
     }
 
-    fn into_compiled(self) -> Option<noon_compile::CompiledSpatialState> {
+    fn to_compiled(&self) -> Option<noon_compile::CompiledSpatialState> {
         if !self.is_valid() {
             return None;
         }
@@ -218,7 +239,7 @@ impl TransportSpatialState {
         Some(noon_compile::CompiledSpatialState {
             draw_kind: self.draw_kind,
             composition_domain: self.composition_domain,
-            fixed_orientation_anchor_family: None,
+            spatial_anchor_family: None,
             fixed_orientation_center: self
                 .fixed_orientation_center
                 .map(|v| SemanticVec3::new(v[0], v[1], v[2])),
@@ -229,8 +250,11 @@ impl TransportSpatialState {
             material: match self.material {
                 TransportSpatialMaterial::Unlit => SemanticSpatialMaterial::Unlit,
                 TransportSpatialMaterial::PointLit => SemanticSpatialMaterial::PointLit,
+                TransportSpatialMaterial::CairoSurface => SemanticSpatialMaterial::CairoSurface,
+                TransportSpatialMaterial::CairoPath => SemanticSpatialMaterial::CairoPath,
             },
             point_light: self.point_light,
+            cairo_path_appearance: self.cairo_path_appearance.clone(),
         })
     }
 }
@@ -1268,7 +1292,15 @@ impl RetainedExecutionFrameMirror {
                 ));
             }
         }
-        validate_single_camera(objects.iter().map(|object| (object.object, object.spatial)))?;
+        validate_single_camera(objects.iter().map(|object| {
+            (
+                object.object,
+                object
+                    .spatial
+                    .as_ref()
+                    .is_some_and(|state| state.camera_projection.is_some()),
+            )
+        }))?;
 
         let render_geometries = objects
             .iter()
@@ -1444,12 +1476,18 @@ impl RetainedExecutionFrameMirror {
                     object
                         .spatial
                         .as_deref()
-                        .map(TransportSpatialState::from_compiled),
+                        .is_some_and(|state| state.camera_projection.is_some()),
                 )
             })
             .collect::<HashMap<_, _>>();
         for object in &delta.objects {
-            camera_rows.insert(object.object, object.spatial);
+            camera_rows.insert(
+                object.object,
+                object
+                    .spatial
+                    .as_ref()
+                    .is_some_and(|state| state.camera_projection.is_some()),
+            );
         }
         validate_single_camera(camera_rows)?;
         let added_indices = updates
@@ -1731,7 +1769,11 @@ fn validate_object_fields(
             ));
         }
     }
-    if object.spatial.is_some_and(|spatial| !spatial.is_valid()) {
+    if object
+        .spatial
+        .as_ref()
+        .is_some_and(|spatial| !spatial.is_valid())
+    {
         return Err(RetainedExecutionTransportError::InvalidSpatialState(
             object.slot,
         ));
@@ -1766,13 +1808,11 @@ fn validate_object_fields(
 }
 
 fn validate_single_camera(
-    rows: impl IntoIterator<Item = (ObjectId, Option<TransportSpatialState>)>,
+    rows: impl IntoIterator<Item = (ObjectId, bool)>,
 ) -> Result<(), RetainedExecutionTransportError> {
     let mut camera = None;
-    for (object, spatial) in rows {
-        if spatial.is_some_and(|state| state.camera_projection.is_some())
-            && camera.replace(object).is_some()
-        {
+    for (object, is_camera) in rows {
+        if is_camera && camera.replace(object).is_some() {
             return Err(RetainedExecutionTransportError::MultipleCamera3D);
         }
     }
@@ -1799,8 +1839,8 @@ fn frame_object(
     object: &RetainedTransportObjectState,
     content: ObjectContentRef,
 ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
-    let spatial = match object.spatial {
-        Some(spatial) => Some(spatial.into_compiled().ok_or(
+    let spatial = match object.spatial.as_ref() {
+        Some(spatial) => Some(spatial.to_compiled().ok_or(
             RetainedExecutionTransportError::InvalidSpatialState(object.slot),
         )?),
         None => None,
@@ -1919,7 +1959,7 @@ mod tests {
         frame.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
             draw_kind: noon_compile::CompiledSpatialDrawKind::Mesh,
             composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
-            fixed_orientation_anchor_family: None,
+            spatial_anchor_family: None,
             fixed_orientation_center: None,
             world: noon_core::SemanticWorldTransform3D::new(
                 noon_core::SemanticVec3::new(1.0 / 3.0, -1.0e60, 1.0e-100),
@@ -1930,13 +1970,14 @@ mod tests {
             camera_projection: None,
             material: noon_core::SemanticSpatialMaterial::PointLit,
             point_light: false,
+            cairo_path_appearance: None,
             camera_profile: None,
             camera_motions: None,
         }));
         frame.objects[1].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
             draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
             composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
-            fixed_orientation_anchor_family: None,
+            spatial_anchor_family: None,
             fixed_orientation_center: None,
             world: noon_core::SemanticWorldTransform3D::new(
                 noon_core::SemanticVec3::new(0.0, 0.0, 8.0),
@@ -1951,6 +1992,7 @@ mod tests {
             }),
             material: noon_core::SemanticSpatialMaterial::Unlit,
             point_light: false,
+            cairo_path_appearance: None,
             camera_profile: None,
             camera_motions: None,
         }));
@@ -2010,6 +2052,7 @@ mod tests {
             }),
             material: TransportSpatialMaterial::Unlit,
             point_light: false,
+            cairo_path_appearance: None,
         });
         let mut mirror = RetainedExecutionFrameMirror::default();
         assert!(matches!(
@@ -2033,16 +2076,35 @@ mod tests {
             camera_projection: None,
             material: TransportSpatialMaterial::Unlit,
             point_light: false,
+            cairo_path_appearance: None,
         };
         let wire = serde_json::to_vec(&valid).unwrap();
         let decoded: TransportSpatialState = serde_json::from_slice(&wire).unwrap();
         assert_eq!(decoded, valid);
-        let compiled = decoded.into_compiled().unwrap();
+        let compiled = decoded.to_compiled().unwrap();
         assert_eq!(compiled.composition_domain, Domain::FixedOrientation);
-        assert_eq!(compiled.fixed_orientation_anchor_family, None);
+        assert_eq!(compiled.spatial_anchor_family, None);
         assert_eq!(compiled.camera_profile, None);
         assert!(compiled.camera_motions.is_none());
         assert_eq!(TransportSpatialState::from_compiled(&compiled), valid);
+
+        let cairo_surface = TransportSpatialState {
+            draw_kind: Draw::Mesh,
+            composition_domain: Domain::World,
+            fixed_orientation_center: None,
+            material: TransportSpatialMaterial::CairoSurface,
+            ..valid.clone()
+        };
+        assert!(cairo_surface.is_valid());
+        let compiled = cairo_surface.to_compiled().unwrap();
+        assert_eq!(
+            compiled.material,
+            noon_core::SemanticSpatialMaterial::CairoSurface
+        );
+        assert_eq!(
+            TransportSpatialState::from_compiled(&compiled),
+            cairo_surface
+        );
 
         let camera = TransportSpatialState {
             composition_domain: Domain::World,
@@ -2052,55 +2114,144 @@ mod tests {
                 near: 0.1,
                 far: 100.0,
             }),
-            ..valid
+            ..valid.clone()
         };
         assert!(camera.is_valid());
         let invalid = [
             TransportSpatialState {
                 fixed_orientation_center: None,
-                ..valid
+                ..valid.clone()
             },
             TransportSpatialState {
                 fixed_orientation_center: Some([f64::NAN, 0.0, 0.0]),
-                ..valid
+                ..valid.clone()
             },
             TransportSpatialState {
                 draw_kind: Draw::Mesh,
-                ..valid
+                ..valid.clone()
             },
             TransportSpatialState {
                 material: TransportSpatialMaterial::PointLit,
-                ..valid
+                ..valid.clone()
+            },
+            TransportSpatialState {
+                material: TransportSpatialMaterial::CairoSurface,
+                ..valid.clone()
             },
             TransportSpatialState {
                 point_light: true,
-                ..valid
+                ..valid.clone()
             },
             TransportSpatialState {
                 scale: [2.0; 3],
-                ..camera
+                ..camera.clone()
             },
             TransportSpatialState {
                 draw_kind: Draw::Mesh,
-                ..camera
+                ..camera.clone()
             },
             TransportSpatialState {
                 material: TransportSpatialMaterial::PointLit,
-                ..camera
+                ..camera.clone()
             },
             TransportSpatialState {
                 point_light: true,
-                ..camera
+                ..camera.clone()
             },
             TransportSpatialState {
                 composition_domain: Domain::FixedFrame,
-                ..camera
+                ..camera.clone()
             },
         ];
         for row in invalid {
             assert!(!row.is_valid(), "invalid role/domain combination: {row:?}");
-            assert!(row.into_compiled().is_none());
+            assert!(row.to_compiled().is_none());
         }
+    }
+
+    #[test]
+    fn cairo_path_worker_rows_round_trip_and_reject_incomplete_gradient_bounds_atomically() {
+        use noon_compile::{
+            CompiledCairoPathAppearance, CompiledSpatialDrawKind, CompiledWorldBounds3D64,
+        };
+        use noon_core::SemanticSpatialCompositionDomain;
+        let row = TransportSpatialState {
+            draw_kind: CompiledSpatialDrawKind::Planar,
+            composition_domain: SemanticSpatialCompositionDomain::World,
+            fixed_orientation_center: None,
+            translation: [1.0 / 3.0, -2.0, 4.0],
+            rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
+            scale: [1.0; 3],
+            camera_projection: None,
+            material: TransportSpatialMaterial::CairoPath,
+            point_light: false,
+            cairo_path_appearance: Some(Box::new(CompiledCairoPathAppearance {
+                sheen_factor: 0.2,
+                gradient_direction: Some(SemanticVec3::new(-7.0, -9.0, 10.0)),
+                world_family_bounds: Some(CompiledWorldBounds3D64 {
+                    min: SemanticVec3::new(-5.25, -0.175, 0.0),
+                    max: SemanticVec3::new(5.25, 0.175, 0.0),
+                }),
+            })),
+        };
+        assert!(row.is_valid());
+        let decoded: TransportSpatialState =
+            serde_json::from_slice(&serde_json::to_vec(&row).unwrap()).unwrap();
+        assert_eq!(decoded, row);
+        let compiled = decoded.to_compiled().unwrap();
+        assert_eq!(compiled.material, SemanticSpatialMaterial::CairoPath);
+        assert_eq!(TransportSpatialState::from_compiled(&compiled), row);
+
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let mut snapshot = encoder
+            .encode_snapshot_with_context(
+                &mixed_frame(),
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        snapshot.objects[0].spatial = Some(row.clone());
+        let mut mirror = test_mirror();
+        mirror.apply(snapshot.clone()).unwrap();
+        let installed = mirror.frame().unwrap().clone();
+        let mut invalid = row.clone();
+        invalid
+            .cairo_path_appearance
+            .as_deref_mut()
+            .unwrap()
+            .world_family_bounds = None;
+        assert!(!invalid.is_valid());
+        snapshot.sequence = 1;
+        snapshot.objects[0].spatial = Some(invalid);
+        assert!(matches!(
+            mirror.apply(snapshot),
+            Err(RetainedExecutionTransportError::InvalidSpatialState(_))
+        ));
+        assert_eq!(mirror.frame().unwrap(), &installed);
+        let mut invalid = row.clone();
+        invalid
+            .cairo_path_appearance
+            .as_deref_mut()
+            .unwrap()
+            .world_family_bounds
+            .as_mut()
+            .unwrap()
+            .min
+            .x = 6.0;
+        assert!(!invalid.is_valid());
+        let mut invalid = row.clone();
+        invalid.material = TransportSpatialMaterial::Unlit;
+        assert!(!invalid.is_valid());
+        let mut invalid = row.clone();
+        invalid.cairo_path_appearance = None;
+        assert!(!invalid.is_valid());
+        let ordinary = TransportSpatialState {
+            material: TransportSpatialMaterial::Unlit,
+            cairo_path_appearance: None,
+            ..row
+        };
+        let json = serde_json::to_value(ordinary).unwrap();
+        assert!(json.get("cairo_path_appearance").is_none());
     }
 
     #[test]
@@ -2109,7 +2260,7 @@ mod tests {
         start.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
             draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
             composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
-            fixed_orientation_anchor_family: None,
+            spatial_anchor_family: None,
             fixed_orientation_center: None,
             world: noon_core::SemanticWorldTransform3D::IDENTITY,
             camera_projection: Some(noon_core::SemanticProjection3D::Orthographic {
@@ -2119,6 +2270,7 @@ mod tests {
             }),
             material: noon_core::SemanticSpatialMaterial::Unlit,
             point_light: false,
+            cairo_path_appearance: None,
             camera_profile: None,
             camera_motions: None,
         }));
@@ -2140,7 +2292,7 @@ mod tests {
         end.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
             draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
             composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
-            fixed_orientation_anchor_family: None,
+            spatial_anchor_family: None,
             fixed_orientation_center: None,
             world: noon_core::SemanticWorldTransform3D::new(
                 noon_core::SemanticVec3::new(2.25, -4.5, 7.0),
@@ -2155,6 +2307,7 @@ mod tests {
             camera_projection: start.objects[0].camera_projection(),
             material: noon_core::SemanticSpatialMaterial::Unlit,
             point_light: false,
+            cairo_path_appearance: None,
             camera_profile: None,
             camera_motions: None,
         }));

@@ -185,12 +185,61 @@ pub async fn create_direct_spatial_primitives_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Direct shaded and translucent Cube/Prism face-family qualification scene.
+#[wasm_bindgen(js_name = createDirectSpatialCairoCubePrismSmokeRenderer)]
+pub async fn create_direct_spatial_cairo_cube_prism_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::spatial_primitives::cairo_cube_prism_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Default Cairo-shaded Cylinder ends and the optional Cone base.
+#[wasm_bindgen(js_name = createDirectSpatialCairoCylinderConeCapsSmokeRenderer)]
+pub async fn create_direct_spatial_cairo_cylinder_cone_caps_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::spatial_primitives::cairo_cylinder_cone_caps_session()
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Direct Rust/WASM smoke for the shared renderer-independent UV surface fixture.
 #[wasm_bindgen(js_name = createDirectSpatialSurfaceSmokeRenderer)]
 pub async fn create_direct_spatial_surface_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::spatial_surface::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct Rust/WASM counterpart of the default Cairo-shaded Surface case.
+#[wasm_bindgen(js_name = createDirectSpatialSurfaceCairoSmokeRenderer)]
+pub async fn create_direct_spatial_surface_cairo_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::spatial_surface::cairo_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Paired default shaded Sphere/Torus Surface families under a moving camera.
+#[wasm_bindgen(js_name = createDirectSpatialSurfaceSphereTorusSmokeRenderer)]
+pub async fn create_direct_spatial_surface_sphere_torus_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::spatial_surface::cairo_sphere_torus_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Paired default and tilted partial Cairo-shaded Cone Surface families.
+#[wasm_bindgen(js_name = createDirectSpatialSurfaceConeBodiesSmokeRenderer)]
+pub async fn create_direct_spatial_surface_cone_bodies_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::spatial_surface::cairo_cone_bodies_session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
@@ -218,6 +267,16 @@ pub async fn create_direct_spatial_three_d_axes_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::spatial_three_d_axes::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Tilted, nonuniform Circle screen stroke under a finite camera animation.
+#[wasm_bindgen(js_name = createDirectSpatialCircleScreenStrokeSmokeRenderer)]
+pub async fn create_direct_spatial_circle_screen_stroke_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::spatial_three_d_axes::circle_screen_stroke_session()
+        .map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
@@ -1119,6 +1178,17 @@ pub async fn create_direct_vector_space_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::vector_space::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Direct typed Rust/WASM fixture for LTS coordinates, transformables and ghosts.
+#[wasm_bindgen(js_name = createDirectVectorSpaceFeaturesRenderer)]
+pub async fn create_direct_vector_space_features_renderer(
+    canvas: OffscreenCanvas,
+    compiler: &mut crate::WasmLatexCompiler,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::vector_space_features::decimal_session(compiler).map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 

@@ -5,8 +5,8 @@ use crate::plot_presentation::{
     number_labels, NumberLabelAuthoringError as Error, NumberLabelOptions, PlotPresentationError,
 };
 use crate::{
-    AuthoringError, Bounds2D64, ManimAxes, ManimNextToArgs, ManimNumberLine, MobjectFamily,
-    NumberLineFrame,
+    AuthoringError, Bounds2D64, ManimAxes, ManimNextToArgs, ManimNumberLine, ManimNumberPlane,
+    MobjectFamily, NumberLineFrame,
 };
 use noon_core::{
     FontResourceArena, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
@@ -142,6 +142,24 @@ fn publish(
         .collect()
 }
 
+fn add_coordinate_families(
+    store: Rc<RefCell<SemanticStore>>,
+    frame: crate::AxesFrame,
+    parents: [SemanticNodeId; 2],
+    numbers: [Option<&[f64]>; 2],
+    options: [&NumberLabelOptions; 2],
+) -> Result<[MobjectFamily; 2], Error> {
+    let x_labels = prepare(frame.x(), numbers[0], options[0])?;
+    let y_labels = prepare(frame.y(), numbers[1], options[1])?;
+    let mut families = publish(
+        store,
+        vec![(Some(parents[0]), x_labels), (Some(parents[1]), y_labels)],
+    )?;
+    let y = families.pop().expect("Y label family");
+    let x = families.pop().expect("X label family");
+    Ok([x, y])
+}
+
 impl ManimNumberLine {
     /// Cold constructor for a detached family of native Text labels. None uses
     /// tick values; Some(&[]) is an explicit empty family. Shared group operations
@@ -191,18 +209,36 @@ impl ManimAxes {
         let x = self.x_axis()?;
         let y = self.y_axis()?;
         let frame = self.authored_frame()?;
-        let x_labels = prepare(frame.x(), x_numbers, x_options)?;
-        let y_labels = prepare(frame.y(), y_numbers, y_options)?;
-        let mut families = publish(
+        add_coordinate_families(
             Rc::clone(self.family().integration_store()),
-            vec![
-                (Some(x.family().node_id()), x_labels),
-                (Some(y.family().node_id()), y_labels),
-            ],
-        )?;
-        let y = families.pop().expect("Y label family");
-        let x = families.pop().expect("X label family");
-        Ok([x, y])
+            frame,
+            [x.family().node_id(), y.family().node_id()],
+            [x_numbers, y_numbers],
+            [x_options, y_options],
+        )
+    }
+}
+
+impl ManimNumberPlane {
+    /// Atomically attach Rust-positioned numeric labels to both plane axes.
+    /// Text remains an ordinary semantic family nested under each NumberLine.
+    pub fn add_coordinates(
+        &self,
+        x_numbers: Option<&[f64]>,
+        y_numbers: Option<&[f64]>,
+        x_options: &NumberLabelOptions,
+        y_options: &NumberLabelOptions,
+    ) -> Result<[MobjectFamily; 2], Error> {
+        let frame = self.authored_frame()?;
+        let x_axis = self.x_axis()?;
+        let y_axis = self.y_axis()?;
+        add_coordinate_families(
+            Rc::clone(self.family().integration_store()),
+            frame,
+            [x_axis.family().node_id(), y_axis.family().node_id()],
+            [x_numbers, y_numbers],
+            [x_options, y_options],
+        )
     }
 }
 

@@ -4,6 +4,36 @@ import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
+test("numeric label members reuse the DecimalNumber getter and live-query facade", () => {
+  const worker = {};
+  const compiler = {};
+  new Function("self", "latexCompiler", source.slice(
+    source.indexOf("  const numericHandle ="),
+    source.indexOf("  self.noonCreateAuthoringDecimalNumberHandle ="),
+  ))(worker, compiler);
+  const object = {};
+  const writes = [];
+  const raw = { value: -1, text: "-1.0", fontSize: () => 18,
+    mobject: () => object, integerValue: () => -1,
+    setValue: (...args) => writes.push(args),
+    incrementValue: (...args) => writes.push(args) };
+  const [number] = worker.noonDecimalNumberLabelMembers({ decimalNumberLabelMembers: () => [raw] });
+  assert.equal(number.text(), "-1.0");
+  assert.equal(number.value(null), -1);
+  assert.equal(number.fontSize(null), 18);
+  assert.equal(number.mobject(), object);
+  const context = { queryMobjectDecimalValue: value => {
+    assert.equal(value, object); return 2;
+  }, queryMobjectDecimalFontSize: value => {
+    assert.equal(value, object); return 24;
+  } };
+  assert.equal(number.value(context), 2);
+  assert.equal(number.fontSize(context), 24);
+  number.setValue(3);
+  number.incrementValue(1);
+  assert.deepEqual(writes, [[compiler, 3], [compiler, 1]]);
+});
+
 const callbackEntry = new Function(`${source.slice(
   source.indexOf("async function runCanonicalCallbackPhase"),
   source.indexOf("function validateRequest"),

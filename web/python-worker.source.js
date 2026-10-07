@@ -238,6 +238,17 @@ async function initializePyodide() {
     return context == null ? chart.labelFamily(size, buff, math, rgba, latexCompiler)
       : context.liveBarLabelFamily(chart, size, buff, math, rgba, latexCompiler);
   };
+  self.noonNumberPlaneDecimalCoordinateLabelFamilies = (
+    plane, xValues, automaticX, yValues, automaticY, xOptions, yOptions,
+  ) => {
+    if (!latexCompiler) {
+      xOptions.free(); yOptions.free();
+      throw new Error("Call await prepare_latex() before constructing NumberPlane coordinates");
+    }
+    return plane.numberPlaneDecimalCoordinateLabelFamilies(
+      xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
+    );
+  };
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);
@@ -293,6 +304,8 @@ async function initializePyodide() {
       incrementValueLive: (context, delta) => context.liveIncrementDecimalValue(handle.mobject(), latexCompiler, delta),
     };
   };
+  self.noonDecimalNumberLabelMembers = (family) =>
+    Array.from(family.decimalNumberLabelMembers(), numericHandle);
   self.noonCreateAuthoringDecimalNumberHandle = (value, places, sign, commas, ellipsis, unit, fontSize, context) => {
     if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
     const args = [value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler];

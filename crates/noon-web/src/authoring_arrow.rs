@@ -482,7 +482,7 @@ impl WasmAuthoringArrowHandle {
         Ok(Self { published })
     }
 
-    fn arrow(&self) -> Result<&noon::ManimArrow, JsValue> {
+    pub(crate) fn arrow(&self) -> Result<&noon::ManimArrow, JsValue> {
         match &self.published {
             PublishedArrowRequest::Arrow(arrow) => Ok(arrow),
             PublishedArrowRequest::VectorField(_) => Err(invalid_input(

@@ -30,7 +30,7 @@ pub(crate) mod incremental_render;
 /// vector-decoration geometry, typed spatial meshes, and exact OpenType buffers
 /// across the Python-worker boundary when a retained scene is installed.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 11;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 12;
 const MAX_SHARED_RENDER_GEOMETRIES: usize = 16;
 const MAX_TRANSPORT_MESH_VERTICES: usize = 500_000;
 const MAX_TRANSPORT_MESH_INDICES: usize = 3_000_000;
@@ -232,6 +232,7 @@ pub(crate) fn compiled_render_geometry_preparations(
             let noon_compile::TransformGeometryPlan::PathPair {
                 geometry,
                 render_transform,
+                ..
             } = track.transform_geometry_plan.as_ref()?
             else {
                 return None;
@@ -265,6 +266,7 @@ pub(crate) fn compiled_render_geometries(
             let noon_compile::TransformGeometryPlan::PathPair {
                 geometry,
                 render_transform,
+                ..
             } = track.transform_geometry_plan.as_ref()?
             else {
                 return None;
@@ -555,12 +557,14 @@ impl RetainedResourceBundle {
                         mesh.positions().len(),
                         mesh.normals().map_or(0, |values| values.len()),
                         mesh.indices().len(),
+                        mesh.cairo_appearance().is_some(),
                         &mut mesh_payload_bytes,
                     )?;
                     TransportGeometryPayload::Mesh {
                         positions: mesh.positions().to_vec(),
                         normals: mesh.normals().map(|values| values.to_vec()),
                         indices: mesh.indices().to_vec(),
+                        cairo_appearance: mesh.cairo_appearance().copied().map(Box::new),
                     }
                 }
             };
@@ -843,6 +847,7 @@ impl RetainedResourceBundle {
                     positions,
                     normals,
                     indices,
+                    cairo_appearance,
                 } if positions.len() > MAX_TRANSPORT_MESH_VERTICES
                     || indices.len() > MAX_TRANSPORT_MESH_INDICES
                     || positions.is_empty()
@@ -852,6 +857,9 @@ impl RetainedResourceBundle {
                     || normals.as_ref().is_some_and(|values| {
                         values.len() != positions.len()
                             || values.iter().any(|normal| !normal.is_finite())
+                    })
+                    || cairo_appearance.as_ref().is_some_and(|appearance| {
+                        !appearance.is_valid_for_mesh(positions, indices)
                     })
                     || indices
                         .iter()
@@ -865,12 +873,14 @@ impl RetainedResourceBundle {
                     positions,
                     normals,
                     indices,
+                    cairo_appearance,
                 } => {
                     add_mesh_payload_budget(
                         entry.handle,
                         positions.len(),
                         normals.as_ref().map_or(0, Vec::len),
                         indices.len(),
+                        cairo_appearance.is_some(),
                         &mut mesh_payload_bytes,
                     )?;
                 }
@@ -1851,6 +1861,8 @@ enum TransportGeometryPayload {
         positions: Vec<noon_core::SemanticVec3>,
         normals: Option<Vec<noon_core::SemanticVec3>>,
         indices: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cairo_appearance: Option<Box<noon_core::CairoSurfaceAppearance>>,
     },
 }
 
@@ -1859,6 +1871,7 @@ fn add_mesh_payload_budget(
     positions: usize,
     normals: usize,
     indices: usize,
+    has_cairo_appearance: bool,
     total: &mut usize,
 ) -> Result<(), RetainedResourceTransportError> {
     if positions > MAX_TRANSPORT_MESH_VERTICES || indices > MAX_TRANSPORT_MESH_INDICES {
@@ -1871,6 +1884,13 @@ fn add_mesh_payload_budget(
             indices
                 .checked_mul(std::mem::size_of::<u32>())
                 .and_then(|index_bytes| bytes.checked_add(index_bytes))
+        })
+        .and_then(|bytes| {
+            bytes.checked_add(if has_cairo_appearance {
+                std::mem::size_of::<noon_core::CairoSurfaceAppearance>()
+            } else {
+                0
+            })
         })
         .and_then(|bytes| total.checked_add(bytes))
         .filter(|&bytes| bytes <= MAX_TRANSPORT_MESH_BYTES)
@@ -1896,6 +1916,7 @@ fn install_geometry(
             positions,
             normals,
             indices,
+            cairo_appearance,
         } => {
             if positions.len() > MAX_TRANSPORT_MESH_VERTICES
                 || indices.len() > MAX_TRANSPORT_MESH_INDICES
@@ -1906,6 +1927,12 @@ fn install_geometry(
             }
             let mesh = MeshResource::new(positions, normals, indices)
                 .map_err(|_| RetainedResourceTransportError::InvalidGeometry(entry.handle))?;
+            let mesh = if let Some(appearance) = cairo_appearance {
+                mesh.with_cairo_appearance(*appearance)
+                    .map_err(|_| RetainedResourceTransportError::InvalidGeometry(entry.handle))?
+            } else {
+                mesh
+            };
             Ok(arena.insert_mesh(mesh))
         }
     }
@@ -2551,14 +2578,31 @@ mod tests {
                 noon_core::SemanticVec3::new(0.125, -2.5, 9.0),
                 noon_core::SemanticVec3::new(1.0 / 7.0, 3.0, -4.0),
                 noon_core::SemanticVec3::new(-8.0, 0.25, 2.0),
+                noon_core::SemanticVec3::new(2.0, -1.0, 0.5),
             ],
             Some(vec![
                 noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
                 noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
                 noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
+                noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
             ]),
-            vec![0, 1, 2],
+            vec![0, 1, 3, 1, 2, 3],
         )
+        .unwrap()
+        .with_cairo_appearance(noon_core::CairoSurfaceAppearance {
+            p0: noon_core::SemanticVec3::ZERO,
+            p6: noon_core::SemanticVec3::new(0.5, 0.25, 1.5),
+            span_p3_p0: noon_core::SemanticVec3::new(1.0, 0.0, 0.0),
+            span_p12_p0: noon_core::SemanticVec3::new(0.0, 1.0, 0.0),
+            span_p9_p6: noon_core::SemanticVec3::new(0.0, 0.0, 1.0),
+            span_p3_p6: noon_core::SemanticVec3::new(0.5, -0.25, -1.5),
+            boundary_controls: Some([
+                [noon_core::SemanticVec3::new(0.1, 0.2, 0.3); 2],
+                [noon_core::SemanticVec3::new(0.4, 0.5, 0.6); 2],
+                [noon_core::SemanticVec3::new(0.7, 0.8, 0.9); 2],
+                [noon_core::SemanticVec3::new(1.0, 1.1, 1.2); 2],
+            ]),
+        })
         .unwrap();
         let original = mesh.clone();
         let source_handle = source.insert_mesh(mesh);
@@ -2572,6 +2616,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bundle.geometry_count(), 1);
+        let payload = serde_json::to_value(&bundle.geometries[0].geometry).unwrap();
+        assert_eq!(payload["cairo_appearance"]["p6"]["x"], 0.5);
+        assert_eq!(
+            payload["cairo_appearance"]["boundary_controls"][2][1]["z"],
+            0.9
+        );
+        let mut changed_appearance = bundle.clone();
+        if let TransportGeometryPayload::Mesh {
+            cairo_appearance, ..
+        } = &mut changed_appearance.geometries[0].geometry
+        {
+            cairo_appearance.as_mut().unwrap().p6.x += 1.0;
+        }
+        assert_ne!(bundle, changed_appearance);
 
         let decoded =
             RetainedResourceBundle::decode_binary(&bundle.encode_binary().unwrap()).unwrap();
@@ -2582,6 +2640,79 @@ mod tests {
             panic!("transported mesh was installed as a non-mesh resource")
         };
         assert_eq!(received.as_ref(), &original);
+    }
+
+    #[test]
+    fn mesh_transport_omits_absent_appearance_and_rejects_forged_nonfinite_metadata() {
+        let mut source = GeometryResourceArena::new();
+        let handle = source.insert_mesh(
+            MeshResource::new(vec![noon_core::SemanticVec3::ZERO; 3], None, vec![0, 1, 2]).unwrap(),
+        );
+        let bundle = RetainedResourceBundle::capture_additions_with_geometries(
+            [],
+            [handle],
+            &TextResourceArena::new(),
+            &source,
+            &FontResourceArena::new(),
+            &RetainedResourceInventory::default(),
+        )
+        .unwrap();
+        let payload = serde_json::to_value(&bundle.geometries[0].geometry).unwrap();
+        assert!(payload.get("cairo_appearance").is_none());
+        let installed = RetainedResourceBundle::decode_binary(&bundle.encode_binary().unwrap())
+            .unwrap()
+            .install()
+            .unwrap();
+        let transport_handle = TransportGeometryResourceHandle::from(handle);
+        let local = installed.geometry_handle_remap()[&transport_handle];
+        let GeometryResource::Mesh(mesh) = installed.geometries().get(local).unwrap() else {
+            panic!("ordinary transported mesh changed resource kind")
+        };
+        assert!(mesh.cairo_appearance().is_none());
+
+        let mut forged = bundle.clone();
+        if let TransportGeometryPayload::Mesh {
+            cairo_appearance, ..
+        } = &mut forged.geometries[0].geometry
+        {
+            *cairo_appearance = Some(Box::new(noon_core::CairoSurfaceAppearance {
+                p0: noon_core::SemanticVec3::ZERO,
+                p6: noon_core::SemanticVec3::new(f64::NAN, 0.0, 0.0),
+                span_p3_p0: noon_core::SemanticVec3::ZERO,
+                span_p12_p0: noon_core::SemanticVec3::ZERO,
+                span_p9_p6: noon_core::SemanticVec3::ZERO,
+                span_p3_p6: noon_core::SemanticVec3::ZERO,
+                boundary_controls: None,
+            }));
+        }
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&forged, &mut bytes).unwrap();
+        assert!(matches!(
+            RetainedResourceBundle::decode_binary(&bytes),
+            Err(RetainedResourceTransportError::InvalidGeometry(_))
+        ));
+
+        let mut forged_topology = bundle;
+        if let TransportGeometryPayload::Mesh {
+            cairo_appearance, ..
+        } = &mut forged_topology.geometries[0].geometry
+        {
+            *cairo_appearance = Some(Box::new(noon_core::CairoSurfaceAppearance {
+                p0: noon_core::SemanticVec3::ZERO,
+                p6: noon_core::SemanticVec3::ZERO,
+                span_p3_p0: noon_core::SemanticVec3::ZERO,
+                span_p12_p0: noon_core::SemanticVec3::ZERO,
+                span_p9_p6: noon_core::SemanticVec3::ZERO,
+                span_p3_p6: noon_core::SemanticVec3::ZERO,
+                boundary_controls: Some([[noon_core::SemanticVec3::ZERO; 2]; 4]),
+            }));
+        }
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&forged_topology, &mut bytes).unwrap();
+        assert!(matches!(
+            RetainedResourceBundle::decode_binary(&bytes),
+            Err(RetainedResourceTransportError::InvalidGeometry(_))
+        ));
     }
 
     #[test]
@@ -2609,12 +2740,50 @@ mod tests {
 
         let mut total = 0;
         let limit = MAX_TRANSPORT_MESH_BYTES;
-        assert!(
-            add_mesh_payload_budget(handle.into(), 500_000, 500_000, 3_000_000, &mut total).is_ok()
-        );
+        assert!(add_mesh_payload_budget(
+            handle.into(),
+            500_000,
+            500_000,
+            3_000_000,
+            false,
+            &mut total,
+        )
+        .is_ok());
         assert!(total <= limit);
+        let plain_bytes = total;
+        let appearance_bytes = std::mem::size_of::<noon_core::CairoSurfaceAppearance>();
+        let mut metadata_total = 0;
+        assert!(add_mesh_payload_budget(
+            handle.into(),
+            500_000,
+            500_000,
+            3_000_000,
+            true,
+            &mut metadata_total,
+        )
+        .is_ok());
+        assert_eq!(metadata_total, plain_bytes + appearance_bytes);
+        let mut near_limit = limit - plain_bytes;
         assert!(matches!(
-            add_mesh_payload_budget(handle.into(), 500_000, 500_000, 3_000_000, &mut total),
+            add_mesh_payload_budget(
+                handle.into(),
+                500_000,
+                500_000,
+                3_000_000,
+                true,
+                &mut near_limit,
+            ),
+            Err(RetainedResourceTransportError::GeometryPayloadLimit(_))
+        ));
+        assert!(matches!(
+            add_mesh_payload_budget(
+                handle.into(),
+                500_000,
+                500_000,
+                3_000_000,
+                false,
+                &mut total,
+            ),
             Err(RetainedResourceTransportError::GeometryPayloadLimit(_))
         ));
     }

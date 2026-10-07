@@ -7,6 +7,28 @@ from pathlib import Path
 
 
 class ManimConstantExportTests(unittest.TestCase):
+    def test_depth_directions_have_component_arithmetic(self) -> None:
+        from noon import IN, OUT, RIGHT
+        import copy
+        import pickle
+
+        self.assertEqual(3 * IN, (0.0, 0.0, -3.0))
+        self.assertEqual(0.5 * OUT, (0.0, 0.0, 0.5))
+        self.assertEqual(OUT / 4, (0.0, 0.0, 0.25))
+        self.assertEqual(-IN, OUT)
+        self.assertEqual(OUT + RIGHT, (1.0, 0.0, 1.0))
+        self.assertEqual(OUT - (1, 2, 3), (-1.0, -2.0, -2.0))
+        self.assertEqual(copy.deepcopy(IN), IN)
+        self.assertEqual(pickle.loads(pickle.dumps(OUT)), OUT)
+        with self.assertRaises(TypeError):
+            OUT + (1, 2)
+        with self.assertRaises(TypeError):
+            OUT + (1, 2, 3, 4)
+        with self.assertRaises(ZeroDivisionError):
+            OUT / 0
+        with self.assertRaises(ValueError):
+            OUT * float("inf")
+
     def test_public_facade_imports_without_bootstrap(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
@@ -45,6 +67,8 @@ class ManimConstantExportTests(unittest.TestCase):
             assert namespace["MED_SMALL_BUFF"] == 0.25
             assert namespace["MED_LARGE_BUFF"] == 0.5
             assert namespace["LARGE_BUFF"] == 1.0
+            from _manim_growing import GrowArrow
+            assert namespace["GrowArrow"] is GrowArrow
             wait = namespace["Wait"](0.25)
             group = namespace["AnimationGroup"](wait)
             assert wait.run_time == 0.25 and group.animations == [wait]
@@ -55,6 +79,8 @@ class ManimConstantExportTests(unittest.TestCase):
             assert update.mobject is target and update.update_function is callback
             assert update.anim_args["run_time"] == 0.75
             assert namespace["smooth"](0.5) == 0.5
+            assert tuple(3 * namespace["IN"]) == (0.0, 0.0, -3.0)
+            assert len(namespace["OUT"]) == 3
             """
         )
         completed = subprocess.run(

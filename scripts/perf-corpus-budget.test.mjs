@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateBudget } from "./perf-corpus-budget.mjs";
+import { evaluateBudget, validateRuntimeExpectations } from "./perf-corpus-budget.mjs";
 
 const report = {
   cadence: { frameIntervalMs: { p95: 17, p99: 20 }, effective: { longFrameRate: 0.01 } },
@@ -22,4 +22,16 @@ test("round-trip and cadence budgets evaluate their own measurements", () => {
   assert.deepEqual(result.checks.map((check) => check.status), ["failed", "passed"]);
   assert.equal(evaluateBudget(report, { advanceRoundTripP95Ms: 6 }).passed, true);
   assert.equal(evaluateBudget(report, null).gated, false);
+});
+
+test("manifest runtime expectations reject empty scenes and lost source continuation", () => {
+  const definition = { minimumObjects: 4, sourceContinuation: true };
+  const report = { scene: { objects: 4 }, execution: { sourceContinuation: true } };
+  assert.deepEqual(validateRuntimeExpectations(report, definition), { passed: true, failures: [] });
+  assert.deepEqual(validateRuntimeExpectations({ scene: { objects: 0 }, execution: { sourceContinuation: false } }, definition), {
+    passed: false,
+    failures: ["objects 0 < 4", "sourceContinuation false != true"],
+  });
+  assert.equal(validateRuntimeExpectations({ scene: {}, execution: {} }, definition).passed, false);
+  assert.equal(validateRuntimeExpectations({}, {}).passed, true);
 });

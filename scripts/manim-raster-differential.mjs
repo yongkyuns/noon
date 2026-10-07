@@ -10,9 +10,12 @@ import playwright from "playwright";
 import pngjs from "pngjs";
 import {
   browserArgs,
+  compareEffective3DCamera,
   dominantImageRgba,
+  directStaticObservation,
   rasterFixtureSource,
-  sampleRasterFrames,
+  resolveRasterReferenceSamples,
+  selectDirectReplayCapture,
 } from "./manim-raster-support.mjs";
 import { evaluateRasterTolerance, formatRasterPolicyFailure, resolveRasterTolerance } from "./manim-raster-policy.mjs";
 import { compareForegroundCoverage } from "./browser-visual-parity-lib.mjs";
@@ -92,6 +95,9 @@ for (const backend of backends) {
 assert.equal(reference.version, "0.21.0", "raster oracle must stay pinned to ManimCE 0.21.0");
 assert.equal(reference.renderer, "cairo", "initial raster oracle is defined against Cairo");
 for (const fixture of manifest.fixtures) {
+  assert.ok(fixture.camera_profile_observation === undefined
+    || typeof fixture.camera_profile_observation === "boolean",
+  `${fixture.id}: camera_profile_observation must be boolean when specified`);
   assert.ok(
     fixtureSourceFor(fixture).includes("from manim import *"),
     `${fixture.id}: canonical source must import real Manim`,
@@ -144,25 +150,33 @@ async function findPngFrames(root, scene) {
     .filter(({ match }) => match)
     .sort((left, right) => Number(left.match[1]) - Number(right.match[1]))
     .map(({ file }) => file);
-  assert.ok(frames.length > 0, `${scene}: expected Manim PNG frames under ${root}`);
   return frames;
 }
 
-function sampleFrames(frameTimes, fixture) {
-  return sampleRasterFrames(frameTimes, manifest.sample_fractions, fixture?.sample_times);
+function sampleFrames(frameTimes, fixture, semanticFixture, pngFrameCount) {
+  return resolveRasterReferenceSamples(frameTimes, fixture.sample_times, {
+    logicalDuration: Number(fixture.expected_duration),
+    terminalState: semanticFixture.terminal_state,
+    terminalPng: semanticFixture.terminal_png,
+    frozenIntervals: semanticFixture.frozen_intervals,
+    pngFrameCount,
+    semanticFrames: semanticFixture.frames,
+    sampleFractions: manifest.sample_fractions,
+  });
 }
 
 async function assertSpatialMeshOracle(semantic, samples) {
-  const byIndex = new Map(semantic.frames.map(frame => [frame.frame_index, frame]));
   for (const sample of samples) {
-    const frame = byIndex.get(sample.frameIndex);
+    const frame = sample.referenceKind === "terminal"
+      ? semantic.terminal_state : semantic.frames[sample.frameIndex];
     assert.ok(frame?.oracle, `spatial-mesh-depth: missing numeric Manim state at ${sample.time}`);
     const { camera, red_center: red, blue_center: blue } = frame.oracle;
-    assert.ok(Math.abs(red[2] - (1 - sample.time)) < 1e-6,
+    const stateTime = frame.time;
+    assert.ok(Math.abs(red[2] - (1 - stateTime)) < 1e-6,
       `spatial-mesh-depth: red world z at ${sample.time} must follow 1-t; got ${red[2]}`);
     assert.ok(Math.abs(blue[2]) < 1e-6,
       `spatial-mesh-depth: blue world z must stay at zero; got ${blue[2]}`);
-    assert.ok(Math.abs(camera.frame_center[0] - sample.time * 0.125) < 1e-6,
+    assert.ok(Math.abs(camera.frame_center[0] - stateTime * 0.125) < 1e-6,
       `spatial-mesh-depth: camera center x at ${sample.time}; got ${camera.frame_center[0]}`);
     assert.ok(Math.abs(camera.phi) < 1e-6 && Math.abs(Math.cos(camera.theta)) < 1e-6,
       "spatial-mesh-depth: camera must face the XY triangle plane");
@@ -187,7 +201,6 @@ async function assertSpatialMeshOracle(semantic, samples) {
 }
 
 function assertSpatialCameraLabelsOracle(semantic, samples) {
-  const byIndex = new Map(semantic.frames.map(frame => [frame.frame_index, frame]));
   const expectedLabels = {
     world: { center: [-3.2, 2.6, 0.1], width: 1.8, height: 0.28 },
     formula: { center: [2.2, 2.6, 0.1], width: 0.8, height: 0.55 },
@@ -201,10 +214,11 @@ function assertSpatialCameraLabelsOracle(semantic, samples) {
     frame_center: [[0, 0, 0], [0.3, 0, 0]],
   };
   for (const sample of samples) {
-    const frame = byIndex.get(sample.frameIndex);
+    const frame = sample.referenceKind === "terminal"
+      ? semantic.terminal_state : semantic.frames[sample.frameIndex];
     const oracle = frame?.oracle;
     assert.ok(oracle, `spatial-camera-labels: missing numeric Manim state at ${sample.time}`);
-    const progress = Math.min(1, Math.max(0, sample.time));
+    const progress = Math.min(1, Math.max(0, frame.time));
     const interpolate = (start, end) => start + (end - start) * progress;
     for (const key of ["phi", "theta", "gamma", "focal_distance", "zoom"]) {
       const expected = interpolate(...expectedCamera[key]);
@@ -288,33 +302,35 @@ function assertSpatialCameraHudPixels(buffer, context) {
 }
 
 async function assertVectorSpaceOracle(semantic, samples) {
-  const byIndex = new Map(semantic.frames.map(frame => [frame.frame_index, frame]));
-  const initialSample = samples.find(sample => Math.abs(sample.time) < 1e-9);
-  const initialOracle = initialSample ? byIndex.get(initialSample.frameIndex)?.oracle : null;
-  assert.ok(initialOracle, "vector-space-lts: missing initial endpoint oracle");
+  // The ordinary one-second GrowArrow entrance precedes the three-second
+  // matrix transform. The initial moving vector is collapsed; use authored
+  // endpoints rather than treating that frame as the matrix's starting pose.
+  const authored = { basis_i: [1, 0], basis_j: [0, 1], moving_vector: [2, 1] };
   for (const sample of samples) {
-    const oracle = byIndex.get(sample.frameIndex)?.oracle;
+    const frame = sample.referenceKind === "terminal"
+      ? semantic.terminal_state : semantic.frames[sample.frameIndex];
+    const oracle = frame?.oracle;
     assert.ok(oracle, `vector-space-lts: missing numeric Manim state at ${sample.time}`);
-    const progress = Math.min(1, Math.max(0, sample.time / 3));
+    const stateTime = frame.time;
     // Pinned Manim smooth uses a normalized sigmoid with inflection 10.
     const sigmoid = value => 1 / (1 + Math.exp(-value));
     const edge = sigmoid(-5);
-    const eased = Math.min(1, Math.max(0, (sigmoid(10 * (progress - 0.5)) - edge) / (1 - 2 * edge)));
+    const smooth = progress => Math.min(1, Math.max(0,
+      (sigmoid(10 * (progress - 0.5)) - edge) / (1 - 2 * edge)));
+    const matrixProgress = smooth(Math.min(1, Math.max(0, (stateTime - 1) / 3)));
     const checkEndpoint = (name, target) => {
       const vector = oracle[name];
-      const initial = initialOracle[name];
+      const initial = authored[name];
       assert.ok(vector, `vector-space-lts: missing ${name} endpoints`);
-      assert.ok(initial, `vector-space-lts: missing initial ${name} endpoints`);
       assert.ok(Math.abs(vector.start[0]) < 1e-6 && Math.abs(vector.start[1]) < 1e-6,
         `vector-space-lts: ${name} remains anchored at the origin`);
-      const expected = [
-        (target[0] - initial.end[0]) * eased + initial.end[0],
-        (target[1] - initial.end[1]) * eased + initial.end[1],
-      ];
+      const expected = name === "moving_vector" && stateTime < 1
+        ? initial.map(value => value * smooth(stateTime))
+        : initial.map((value, axis) => value + (target[axis] - value) * matrixProgress);
       assert.ok(Math.abs(vector.end[0] - expected[0]) < 1e-6,
-        `vector-space-lts: ${name} x endpoint matches smooth matrix interpolation`);
+        `vector-space-lts: ${name} x endpoint matches grow/matrix interpolation`);
       assert.ok(Math.abs(vector.end[1] - expected[1]) < 1e-6,
-        `vector-space-lts: ${name} y endpoint matches smooth matrix interpolation`);
+        `vector-space-lts: ${name} y endpoint matches grow/matrix interpolation`);
     };
     checkEndpoint("basis_i", [0, 1]);
     checkEndpoint("basis_j", [1, 0]);
@@ -352,6 +368,8 @@ async function renderManimReferences() {
     manifestPath,
     "--output",
     manimSemanticPath,
+    "--terminal-png-root",
+    path.join(semanticRoot, "terminal"),
   ]);
   const semantic = JSON.parse(await readFile(manimSemanticPath, "utf8"));
   assert.equal(semantic.manim_version, reference.version, "raster semantic Manim version");
@@ -387,15 +405,17 @@ async function renderManimReferences() {
     const frameFiles = await findPngFrames(mediaDir, fixture.scene);
     const semanticFixture = semanticByFixture.get(fixture.id);
     assert.ok(semanticFixture, `${fixture.id}: missing semantic reference fixture`);
-    assert.equal(
-      semanticFixture.frame_count,
-      frameFiles.length,
-      `${fixture.id}: semantic/PNG Manim frame count`,
-    );
-    const frameTimes = semanticFixture.frames.map((frame) => Number(frame.time));
-    const firstFrame = PNG.sync.read(await readFile(frameFiles[0]));
     const logicalDuration = Number(fixture.expected_duration);
     assert.ok(Number.isFinite(logicalDuration) && logicalDuration >= 0, `${fixture.id}: logical duration`);
+    const emptyZeroDuration = semanticFixture.frame_count === 0 && frameFiles.length === 1
+      && logicalDuration === 0 && semanticFixture.terminal_state;
+    assert.ok(semanticFixture.frame_count === frameFiles.length || emptyZeroDuration,
+      `${fixture.id}: semantic/PNG Manim sequence frame count`);
+    const frameTimes = semanticFixture.frames.map((frame) => Number(frame.time));
+    const dimensionSource = frameFiles[0]
+      ?? semanticFixture.terminal_png?.path;
+    assert.ok(dimensionSource, `${fixture.id}: missing materialized frames and terminal Cairo PNG`);
+    const firstFrame = PNG.sync.read(await readFile(dimensionSource));
     const frames = {
       frameCount: frameFiles.length,
       frameRate: reference.frame_rate,
@@ -408,17 +428,34 @@ async function renderManimReferences() {
     assert.equal(frames.width, reference.pixel_width, `${fixture.id}: Manim reference width`);
     assert.equal(frames.height, reference.pixel_height, `${fixture.id}: Manim reference height`);
 
-    const samples = sampleFrames(frameTimes, fixture);
+    const samples = sampleFrames(frameTimes, fixture, semanticFixture, frameFiles.length);
     for (const sample of samples) {
+      if (fixture.camera_profile_observation === true) {
+        const semanticFrame = sample.referenceKind === "terminal"
+          ? semanticFixture.terminal_state : semanticFixture.frames[sample.frameIndex];
+        assert.ok(semanticFrame?.camera_3d,
+          `${fixture.id}/${sample.label}: missing exact-frame Manim camera_3d observation`);
+        sample.camera3dOracle = semanticFrame.camera_3d;
+      }
       const outputPath = path.join(frameDir, `${sample.label}.png`);
-      const image = await readFile(frameFiles[sample.frameIndex]);
+      const image = sample.referenceKind === "terminal"
+        ? await readFile(semanticFixture.terminal_png.path)
+        : await readFile(frameFiles[sample.frameIndex]);
+      if (sample.referenceKind === "terminal") {
+        assert.equal(createHash("sha256").update(image).digest("hex"),
+          semanticFixture.terminal_png.sha256, `${fixture.id}: terminal Cairo PNG provenance`);
+        assert.ok(Math.abs(semanticFixture.terminal_png.authored_time - logicalDuration) <= 1e-9,
+          `${fixture.id}: terminal Cairo PNG time`);
+      }
       if (fixture.id.startsWith("spatial-camera-labels-")) {
         assertSpatialCameraHudPixels(image, `${fixture.id} Manim reference at ${sample.time}`);
       }
       await writeFile(outputPath, image);
       sample.referencePath = outputPath;
       if (fixture.id.startsWith("vector-space-lts-")) {
-        sample.vectorOracle = semanticFixture.frames[sample.frameIndex].oracle;
+        sample.vectorOracle = sample.referenceKind === "terminal"
+          ? semanticFixture.terminal_state.oracle
+          : semanticFixture.frames[sample.frameIndex].oracle;
       }
     }
     if (fixture.id === "spatial-mesh-depth") {
@@ -430,7 +467,12 @@ async function renderManimReferences() {
     if (fixture.id === "vector-space-lts-direct" || fixture.id === "vector-space-lts-worker") {
       await assertVectorSpaceOracle(semanticFixture, samples);
     }
-    results.set(fixture.id, { fixture, frames, frameTimes, samples });
+    const captureTimes = [...new Set([
+      ...frameTimes,
+      ...samples.map(sample => sample.requestedTime),
+      logicalDuration,
+    ])].sort((left, right) => left - right);
+    results.set(fixture.id, { fixture, frames, frameTimes, captureTimes, samples });
   }
   return results;
 }
@@ -445,13 +487,25 @@ async function prepareHostCapturePage(page) {
 
 async function captureHostFixture(page, fixture, referenceResult, fixtureDir, expectedBackend) {
   if (fixture.direct_factory) {
-    const loaded = await page.evaluate(async ({ factory }) => {
+    const loaded = await page.evaluate(async ({ factory, requiresLatex }) => {
       const canvas = document.querySelector("#scene");
       canvas.width = 960;
       canvas.height = 540;
       const wasm = await import("./pkg/noon_web.js");
       await wasm.default();
-      const renderer = await wasm[factory](canvas.transferControlToOffscreen());
+      let compiler = null;
+      let renderer;
+      try {
+        if (requiresLatex) {
+          const { prepareLatexBackend } = await import("./latex/backend.js");
+          compiler = new wasm.WasmLatexCompiler(await prepareLatexBackend());
+        }
+        const offscreen = canvas.transferControlToOffscreen();
+        renderer = compiler == null ? await wasm[factory](offscreen)
+          : await wasm[factory](offscreen, compiler);
+      } finally {
+        compiler?.free();
+      }
       renderer.resize(960, 540);
       window.noonSpatialMeshOracle = renderer;
       renderer.directWakeDirectiveJson(0);
@@ -462,7 +516,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
       }
       return { kind: "direct_typed_execution", rendererBackend: renderer.rendererBackend(),
         objectCount: renderer.objectCount(), presented, time: renderer.time() };
-    }, { factory: fixture.direct_factory });
+    }, { factory: fixture.direct_factory, requiresLatex: fixture.requires_latex === true });
     assert.equal(loaded.kind, "direct_typed_execution", `${fixture.id}: canonical Rust/WASM scene`);
     assert.equal(loaded.rendererBackend, expectedBackend, `${fixture.id}: host renderer backend`);
     assert.equal(loaded.presented, true, `${fixture.id}: initial direct frame not presented`);
@@ -470,7 +524,10 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
     for (const sample of referenceResult.samples) {
       const metrics = await page.evaluate(async ({ time, initialPresented }) => {
         const renderer = window.noonSpatialMeshOracle;
+        const priorTime = renderer.time();
         let presented = initialPresented;
+        const observationMode = "forward";
+        let wake = null;
         if (time > 0) {
           renderer.advanceDirectRealtime(time * 1000);
           presented = false;
@@ -478,9 +535,30 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
             if (renderer.render()) { presented = true; break; }
             await new Promise(resolve => setTimeout(resolve, 10));
           }
+          if (!presented) {
+            wake = JSON.parse(renderer.directWakeDirectiveJson(time * 1000));
+          }
         }
-        return { error: null, presented, time: renderer.time(), objectCount: renderer.objectCount() };
-      }, { time: sample.time, initialPresented: loaded.presented });
+        return { error: null, presented, time: renderer.time(), objectCount: renderer.objectCount(),
+          observationMode, runtimeTimeBeforeObservation: priorTime, wake };
+      }, { time: sample.requestedTime, initialPresented: loaded.presented });
+      const staticObservation = directStaticObservation(metrics, sample.requestedTime, sample.referenceKind);
+      if (staticObservation === "retained") {
+        metrics.presented = true;
+        metrics.presentationMode = "retained-clean";
+      } else if (staticObservation === "seek") {
+        const held = await page.evaluate(async (time) => {
+          const renderer = window.noonSpatialMeshOracle;
+          const pending = renderer.seekDirect(time);
+          let presented = !pending;
+          for (let attempt = 0; pending && attempt < 60; attempt += 1) {
+            if (renderer.render()) { presented = true; break; }
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          return { time: renderer.time(), presented };
+        }, sample.requestedTime);
+        Object.assign(metrics, held, { observationMode: "static-hold-seek" });
+      }
       assert.equal(metrics.error, null, `${fixture.id}: direct render error at ${sample.time}`);
       assert.equal(metrics.presented, true, `${fixture.id}: direct frame not presented at ${sample.time}`);
       assert.ok(Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
@@ -497,7 +575,25 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
       if (fixture.id === "spatial-camera-labels-direct") {
         assertSpatialCameraLabelsFrame(debugFrame, sample.time);
       }
-      captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
+      await writeFile(path.join(fixtureDir, `${sample.label}-frame.json`), `${JSON.stringify(debugFrame, null, 2)}\n`);
+      captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame,
+        observationMode: metrics.observationMode });
+      if (metrics.observationMode === "static-hold-seek") {
+        const restored = await page.evaluate(async (priorTime) => {
+          const renderer = window.noonSpatialMeshOracle;
+          const needsPresentation = renderer.seekDirect(priorTime);
+          let presented = !needsPresentation;
+          for (let attempt = 0; needsPresentation && attempt < 60; attempt += 1) {
+            if (renderer.render()) { presented = true; break; }
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          renderer.directWakeDirectiveJson(priorTime * 1000);
+          return { time: renderer.time(), presented };
+        }, metrics.runtimeTimeBeforeObservation);
+        assert.equal(restored.presented, true, `${fixture.id}: static observation restore`);
+        assert.ok(Math.abs(Number(restored.time) - Number(metrics.runtimeTimeBeforeObservation)) < 1e-9,
+          `${fixture.id}: static observation restore time`);
+      }
     }
     const completed = await page.evaluate(async (duration) => {
       const renderer = window.noonSpatialMeshOracle;
@@ -507,37 +603,51 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
         if (renderer.render()) { presented = true; break; }
         await new Promise(resolve => setTimeout(resolve, 10));
       }
-      return { authoredDuration: renderer.time(), objectCount: renderer.objectCount(), presented };
+      const wake = JSON.parse(renderer.directWakeDirectiveJson(duration * 1000));
+      const retainedSettled = !presented && wake.cadence === "idle"
+        && wake.presentNow === false && Math.abs(renderer.time() - duration) <= 1e-9;
+      return { authoredDuration: renderer.time(), objectCount: renderer.objectCount(),
+        presented: presented || retainedSettled,
+        presentationMode: retainedSettled ? "retained-settled" : "new-frame", wake };
     }, fixture.expected_duration);
     assert.equal(completed.authoredDuration, fixture.expected_duration,
       `${fixture.id}: typed Rust/WASM duration`);
     assert.ok(Number.isInteger(fixture.expected_object_count), `${fixture.id}: explicit typed fixture object count`);
     assert.equal(completed.objectCount, fixture.expected_object_count, `${fixture.id}: canonical object count`);
     assert.equal(completed.presented, true, `${fixture.id}: endpoint not presented`);
-    const midpoint = fixture.expected_duration / 2;
-    const forwardMidpoint = captures.find(capture => Math.abs(capture.time - midpoint) < 1e-9);
-    assert.ok(forwardMidpoint, `${fixture.id}: requires a forward midpoint capture`);
-    await page.evaluate(async (midpoint) => {
-      const renderer = window.noonSpatialMeshOracle;
-      renderer.seekDirect(midpoint);
-      let presented = false;
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        if (renderer.render()) { presented = true; break; }
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
-      if (!presented) throw new Error("direct spatial mesh reseek was not presented");
-      await new Promise(resolve => requestAnimationFrame(resolve));
-    }, midpoint);
-    const reseekPath = path.join(fixtureDir, "reseek-midpoint.png");
-    await page.locator("#scene").screenshot({ path: reseekPath });
-    const forwardPixels = PNG.sync.read(await readFile(forwardMidpoint.noonPath)).data;
-    const reseekPixels = PNG.sync.read(await readFile(reseekPath)).data;
-    assert.deepEqual(
-      reseekPixels,
-      forwardPixels,
-      `${fixture.id}: direct midpoint seek must reproduce its forward-sampled raster`,
-    );
-    return { duration: completed.authoredDuration, objectCount: completed.objectCount, captures };
+    const replay = selectDirectReplayCapture(captures, fixture.expected_duration);
+    if (fixture.expected_duration > 0) {
+      assert.ok(replay, `${fixture.id}: requires a forward or exclusively static interior observation`);
+    }
+    if (replay) {
+      const replayTime = replay.capture.time;
+      await page.evaluate(async (time) => {
+        const renderer = window.noonSpatialMeshOracle;
+        const needsPresentation = renderer.seekDirect(time);
+        let presented = !needsPresentation;
+        for (let attempt = 0; needsPresentation && attempt < 60; attempt += 1) {
+          if (renderer.render()) { presented = true; break; }
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        if (!presented) throw new Error("direct observation replay was not presented");
+        if (Math.abs(renderer.time() - time) >= 1e-9) throw new Error("direct observation replay time mismatch");
+        await new Promise(resolve => requestAnimationFrame(resolve));
+      }, replayTime);
+      const reseekPath = path.join(fixtureDir, `${replay.replayMode}.png`);
+      await page.locator("#scene").screenshot({ path: reseekPath });
+      const forwardPixels = PNG.sync.read(await readFile(replay.capture.noonPath)).data;
+      const reseekPixels = PNG.sync.read(await readFile(reseekPath)).data;
+      assert.deepEqual(
+        reseekPixels,
+        forwardPixels,
+        `${fixture.id}: ${replay.replayMode} at ${replayTime} must reproduce the selected raster`,
+      );
+    }
+    return { duration: completed.authoredDuration, objectCount: completed.objectCount, captures,
+      endpointPresentation: { mode: completed.presentationMode, wake: completed.wake },
+      replay: replay ? { time: replay.capture.time,
+        sourceObservationMode: replay.capture.observationMode,
+        replayMode: replay.replayMode, pixelEqual: true } : null };
   }
   const loaded = await page.evaluate(
     ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
@@ -549,16 +659,20 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
   // Manim's final materialized frame may precede its logical endpoint. Sample
   // those exact frame times, then complete the normal source continuation to
   // verify duration/lifecycle without changing any reference screenshot.
-  const frameTimes = [...referenceResult.frameTimes, fixture.expected_duration];
+  const frameTimes = referenceResult.captureTimes;
   const captures = [];
   for (const sample of referenceResult.samples) {
+    const captureFrameIndex = frameTimes.findIndex(time =>
+      Math.abs(time - sample.requestedTime) <= 1e-9);
+    assert.notEqual(captureFrameIndex, -1,
+      `${fixture.id}: missing worker capture time ${sample.requestedTime}`);
     const metrics = await page.evaluate(
       ({ frameIndex, frameTimes }) => window.noonHostRaster.renderThrough(frameIndex, frameTimes),
-      { frameIndex: sample.frameIndex, frameTimes },
+      { frameIndex: captureFrameIndex, frameTimes },
     );
     assert.equal(metrics.error, null, `${fixture.id}: host render error at frame ${sample.frameIndex}`);
     assert.equal(metrics.presented, true, `${fixture.id}: host frame ${sample.frameIndex} not presented`);
-    assert.equal(metrics.frameIndex, sample.frameIndex, `${fixture.id}: host frame index`);
+    assert.equal(metrics.frameIndex, captureFrameIndex, `${fixture.id}: host materialized capture index`);
     assert.ok(Math.abs(Number(metrics.time) - Number(sample.time)) < 1e-9,
       `${fixture.id}: host logical time mismatch at frame ${sample.frameIndex}`);
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
@@ -572,6 +686,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
     if (fixture.id === "spatial-camera-labels-worker") {
       assertSpatialCameraLabelsFrame(debugFrame, sample.time);
     }
+    await writeFile(path.join(fixtureDir, `${sample.label}-frame.json`), `${JSON.stringify(debugFrame, null, 2)}\n`);
     captures.push({ ...sample, noonPath: outputPath, metrics, debugFrame });
   }
   const completed = await page.evaluate((times) =>
@@ -721,9 +836,11 @@ async function compareAll(references, backendResults) {
     enforce,
     generatedAt: new Date().toISOString(),
     fixtures: [],
+    semanticFailures: [],
   };
   const enforcementFailures = [];
   const executionFailures = [];
+  const semanticFailures = report.semanticFailures;
 
   for (const fixture of manifest.fixtures) {
     const tolerance = resolveRasterTolerance(manifest, fixture);
@@ -744,21 +861,35 @@ async function compareAll(references, backendResults) {
         const referenceStats = pixelStats(referenceBuffer);
         const noonStats = pixelStats(actualBuffer);
         let foregroundCoverage;
-        if (fixture.id.startsWith("vector-space-lts-")) {
-          const oracle = capture.vectorOracle;
-          assert.ok(oracle, `${fixture.id}: missing captured Manim vector oracle`);
-          assertVectorSpaceFrame(capture.debugFrame, oracle, `${fixture.id}/${backend}@${capture.time}`);
-          // Full-viewport thin grids differ in Cairo/WGPU antialiasing. Keep a
-          // strict geometric guard so the edge-pixel budget cannot hide gaps.
-          foregroundCoverage = compareForegroundCoverage(
-            PNG.sync.read(referenceBuffer), PNG.sync.read(actualBuffer), {
-              background: referenceStats.background,
-              backgroundDistance: 24, neighborRadius: 1,
-              maxMismatchFraction: 0.001, maxBoundsDelta: 1,
-            },
-          );
-          assert.ok(foregroundCoverage.pass,
-            `${fixture.id}/${backend}@${capture.time}: foreground coverage ${JSON.stringify(foregroundCoverage)}`);
+        let cameraProfileObservation = null;
+        let semanticObservationError = null;
+        try {
+          if (fixture.id.startsWith("vector-space-lts-")) {
+            const oracle = capture.vectorOracle;
+            assert.ok(oracle, `${fixture.id}: missing captured Manim vector oracle`);
+            assertVectorSpaceFrame(capture.debugFrame, oracle, `${fixture.id}/${backend}@${capture.time}`);
+            // Full-viewport thin grids differ in Cairo/WGPU antialiasing. Keep a
+            // strict geometric guard so the edge-pixel budget cannot hide gaps.
+            foregroundCoverage = compareForegroundCoverage(
+              PNG.sync.read(referenceBuffer), PNG.sync.read(actualBuffer), {
+                background: referenceStats.background,
+                backgroundDistance: 24, neighborRadius: 1,
+                maxMismatchFraction: 0.001, maxBoundsDelta: 1,
+              },
+            );
+            assert.ok(foregroundCoverage.pass,
+              `${fixture.id}/${backend}@${capture.time}: foreground coverage ${JSON.stringify(foregroundCoverage)}`);
+          }
+          if (fixture.camera_profile_observation === true) {
+            assert.ok(capture.camera3dOracle,
+              `${fixture.id}: missing selected Manim camera_3d reference frame`);
+            cameraProfileObservation = compareEffective3DCamera(
+              capture.debugFrame, capture.camera3dOracle,
+            );
+          }
+        } catch (error) {
+          semanticObservationError = `${fixture.id}/${backend}@${capture.time}: ${error.message}`;
+          semanticFailures.push(semanticObservationError);
         }
         const diff = comparePng(referenceBuffer, actualBuffer);
         const diffPath = path.join(
@@ -772,9 +903,18 @@ async function compareAll(references, backendResults) {
         const sample = {
           frameIndex: capture.frameIndex,
           time: capture.time,
+          requestedTime: capture.requestedTime,
+          materializedTime: capture.materializedTime,
+          terminalState: capture.terminalState,
+          referenceKind: capture.referenceKind,
+          observationMode: capture.observationMode ?? "forward",
+          runtimeTimeBeforeObservation: capture.metrics.runtimeTimeBeforeObservation ?? null,
+          wakeDirective: capture.metrics.wake ?? null,
           reference: referenceStats,
           noon: noonStats,
           debugFrame: capture.debugFrame,
+          effectiveCameraProfile: cameraProfileObservation,
+          semanticObservationError,
           foregroundCoverage,
           boundsDelta: bboxDelta(referenceStats, noonStats),
           diff: {
@@ -800,6 +940,8 @@ async function compareAll(references, backendResults) {
         manimVideoDuration: referenceResult.frames.duration,
         durationDelta: timingDelta,
         objectCount: actualResult.objectCount,
+        endpointPresentation: actualResult.endpointPresentation ?? null,
+        replay: actualResult.replay ?? null,
         samples,
       };
     }
@@ -826,6 +968,9 @@ async function compareAll(references, backendResults) {
           `categories=${categories.join("|") || "none"}`,
       );
     }
+  }
+  if (semanticFailures.length > 0) {
+    throw new Error(`Manim semantic observation failures (report: ${reportPath}):\n${semanticFailures.join("\n")}`);
   }
   if (executionFailures.length > 0) {
     throw new Error(`Shared raster execution failures (report: ${reportPath}):\n${executionFailures.join("\n")}`);

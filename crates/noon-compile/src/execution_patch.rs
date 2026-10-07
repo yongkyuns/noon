@@ -79,7 +79,7 @@ pub enum ExecutionPatch {
     },
     /// Replace the affected anchor group's leaf rows after one prepared family
     /// membership edit. IDs are semantic leaf identities encoded as execution keys.
-    SetFixedOrientationGroupBoundsMembers {
+    SetSpatialAnchorGroupBoundsMembers {
         anchor_family: noon_core::SemanticNodeId,
         members: Vec<ObjectId>,
     },
@@ -151,7 +151,7 @@ impl CompiledScene {
             .spatial
             .as_deref()
             .cloned();
-        self.update_fixed_orientation_group(object_index, previous.as_ref(), spatial.as_deref());
+        self.update_spatial_anchor_group(object_index, previous.as_ref(), spatial.as_deref());
         let object = &mut self.objects[object_index as usize];
         object.base_transform = base_transform;
         match spatial {

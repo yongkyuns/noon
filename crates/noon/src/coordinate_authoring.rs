@@ -9,7 +9,9 @@ mod number_plane;
 mod three_d_axes;
 pub(crate) use number_plane::prepare_number_plane;
 pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
-pub use three_d_axes::{ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions};
+pub use three_d_axes::{
+    ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions, ManimThreeDAxisOverrides,
+};
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -1003,6 +1005,9 @@ pub(crate) fn filled_tip_style(
     tip.fill = Some(SemanticPaint::Solid(*color));
     tip.fill_opacity = 1.0;
     tip.stroke = Some(SemanticPaint::Solid(*color));
+    // Manim's default ArrowTriangleFilledTip has no outline. Shaft width
+    // controls the axis stroke, not the filled tip's boundary.
+    tip.stroke_width = 0.0;
     Ok(tip)
 }
 

@@ -42,7 +42,7 @@ use family_edges::FamilyEdgePreflight;
 mod node_addition;
 pub use node_addition::SemanticNodeCreation;
 use node_addition::SemanticPendingPathObject;
-use node_addition::{commit_add_node, preflight_add_node};
+use node_addition::{commit_add_node, preflight_add_node, validate_spatial_material_resource};
 
 mod provisional;
 use provisional::{
@@ -105,7 +105,7 @@ pub enum SemanticMutation {
     SetSpatialCompositionDomain {
         object: SemanticTransactionNodeRef,
         domain: SemanticSpatialCompositionDomain,
-        anchor_family: Option<SemanticNodeId>,
+        anchor_family: Option<SemanticTransactionNodeRef>,
     },
     /// Replace immutable native angular-driver intervals on one camera.
     SetCameraMotions {
@@ -242,7 +242,7 @@ impl SemanticMutation {
                 ..
             } => {
                 let mut refs = vec![*object];
-                refs.extend(anchor_family.map(SemanticTransactionNodeRef::Existing));
+                refs.extend(*anchor_family);
                 refs
             }
             Self::SetInset2DView {
@@ -557,6 +557,7 @@ pub(super) struct SemanticTransactionPreflight {
     changed: Vec<bool>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
+    staged_spatial_anchors: HashMap<SemanticTransactionNodeRef, SemanticTransactionNodeRef>,
     /// Final constructor fields for transaction-only retained paths. This is a
     /// narrow creation overlay, never a durable object-state substitute.
     staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject>,
@@ -798,6 +799,22 @@ impl SemanticMutationTransaction {
         object: impl Into<SemanticTransactionNodeRef>,
         domain: SemanticSpatialCompositionDomain,
         anchor_family: Option<SemanticNodeId>,
+    ) -> &mut Self {
+        self.set_spatial_composition_domain_with_anchor_ref(
+            object,
+            domain,
+            anchor_family.map(SemanticTransactionNodeRef::Existing),
+        )
+    }
+
+    /// Set composition domain with an optional existing or transaction-local
+    /// FixedOrientation anchor. Pending anchors are resolved immediately before
+    /// commit publication.
+    pub fn set_spatial_composition_domain_with_anchor_ref(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        domain: SemanticSpatialCompositionDomain,
+        anchor_family: Option<SemanticTransactionNodeRef>,
     ) -> &mut Self {
         self.mutations
             .push(SemanticMutation::SetSpatialCompositionDomain {
@@ -1972,6 +1989,8 @@ impl SemanticMutationTransaction {
             HashMap::new();
         let mut staged_family_z = HashMap::new();
         let mut staged_object_order = Vec::new();
+        let mut spatial_anchor_checks = HashMap::new();
+        let mut staged_spatial_anchors = HashMap::new();
         let mut staged_updaters =
             HashMap::<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>::new();
         let mut staged_signal_timeline =
@@ -2359,6 +2378,12 @@ impl SemanticMutationTransaction {
                         index,
                     )?;
                     validate_object_content_resource(store, *content, index)?;
+                    validate_spatial_material_resource(
+                        store,
+                        state.spatial_material(),
+                        *content,
+                        index,
+                    )?;
                     let did_change = state.content != *content;
                     if did_change {
                         state.content = *content;
@@ -2442,23 +2467,41 @@ impl SemanticMutationTransaction {
                     domain,
                     anchor_family,
                 } => {
+                    if let SemanticTransactionNodeRef::Pending(token) = object {
+                        if removed_pending.contains(token) {
+                            changed.push(false);
+                            continue;
+                        }
+                    }
                     if let Some(anchor) = anchor_family {
-                        catalog.ensure_authoring_node((*anchor).into(), index)?;
-                        let target = object.existing().ok_or(
-                            SemanticMutationTransactionError::InvalidNodeObjectState { index },
-                        )?;
-                        let anchor_node = store.node(*anchor).expect("anchor preflighted");
-                        let valid_anchor = match anchor_node.kind() {
-                            SemanticNodeKind::AuthoringObject => *anchor == target,
-                            SemanticNodeKind::Family(_) => {
-                                store.is_family_ancestor(*anchor, target).unwrap_or(false)
+                        if let SemanticTransactionNodeRef::Pending(token) = anchor {
+                            if removed_pending.contains(token) {
+                                return Err(SemanticMutationTransactionError::UnknownPendingNode {
+                                    index,
+                                    token: *token,
+                                });
                             }
-                            _ => false,
-                        };
-                        if !valid_anchor {
-                            return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
-                                index,
-                            });
+                        }
+                        catalog.ensure_authoring_node(*anchor, index)?;
+                        catalog.ensure_object(*object, index)?;
+                        if anchor != object {
+                            catalog.ensure_family(*anchor, index)?;
+                            spatial_anchor_checks.insert(*object, (index, *anchor, *object));
+                        } else {
+                            spatial_anchor_checks.remove(object);
+                        }
+                    } else {
+                        spatial_anchor_checks.remove(object);
+                    }
+                    match (object, anchor_family) {
+                        (
+                            SemanticTransactionNodeRef::Existing(_),
+                            Some(anchor @ SemanticTransactionNodeRef::Pending(_)),
+                        ) => {
+                            staged_spatial_anchors.insert(*object, *anchor);
+                        }
+                        _ => {
+                            staged_spatial_anchors.remove(object);
                         }
                     }
                     let state = catalog.staged_object_state(
@@ -2468,10 +2511,15 @@ impl SemanticMutationTransaction {
                         index,
                     )?;
                     let did_change = state.spatial_composition_domain() != *domain
-                        || state.spatial_anchor_family() != *anchor_family;
+                        || anchor_family.is_some_and(|anchor| anchor.existing().is_none())
+                        || state.spatial_anchor_family()
+                            != anchor_family.and_then(|anchor| anchor.existing());
                     if did_change {
                         state
-                            .set_spatial_composition_domain_with_anchor(*domain, *anchor_family)
+                            .set_spatial_composition_domain_with_anchor(
+                                *domain,
+                                anchor_family.and_then(|anchor| anchor.existing()),
+                            )
                             .map_err(|_| {
                                 SemanticMutationTransactionError::InvalidNodeObjectState { index }
                             })?;
@@ -2968,6 +3016,12 @@ impl SemanticMutationTransaction {
             }
         }
 
+        for (index, anchor, object) in spatial_anchor_checks.into_values() {
+            if !family_edges.contains_ancestor(&catalog, anchor, object) {
+                return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
+            }
+        }
+
         for (mutation, changed) in self.mutations.iter().zip(&mut changed) {
             if mutation.references_any_pending(&removed_pending) {
                 *changed = false;
@@ -3005,6 +3059,11 @@ impl SemanticMutationTransaction {
         // Only affected/provisional objects are staged; this remains local to
         // the transaction and runs before any semantic resource publication.
         for (object, state) in &staged_objects {
+            if !state.world_path_style_is_supported(store.geometry_resources()) {
+                return Err(
+                    SemanticMutationTransactionError::UnsupportedWorldPathStyle { object: *object },
+                );
+            }
             if state.content.image().is_some()
                 && (!crate::SemanticImageContent::supports_style(&state.style)
                     || state
@@ -3042,6 +3101,7 @@ impl SemanticMutationTransaction {
             staged_family_z,
             changed,
             staged_objects,
+            staged_spatial_anchors,
             staged_pending_paths,
             staged_object_order,
             staged_updaters,
@@ -3965,6 +4025,9 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         object: SemanticTransactionNodeRef,
     },
+    InvalidSpatialMaterialResource {
+        index: usize,
+    },
     InvalidStyle {
         index: usize,
         object: SemanticNodeId,
@@ -3982,6 +4045,9 @@ pub enum SemanticMutationTransactionError {
         resource: crate::GeometryResourceHandle,
     },
     UnsupportedImageStyle {
+        object: SemanticTransactionNodeRef,
+    },
+    UnsupportedWorldPathStyle {
         object: SemanticTransactionNodeRef,
     },
     UnsupportedImageAnimation {
@@ -4526,6 +4592,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} cannot assign a singular pose to PointLit object {object:?}"
             ),
+            Self::InvalidSpatialMaterialResource { index } => write!(
+                formatter,
+                "semantic transaction mutation {index} requires a CairoSurface mesh with retained appearance metadata"
+            ),
             Self::InvalidStyle { index, object } => write!(
                 formatter,
                 "semantic transaction mutation {index} cannot replace style on object {}:{} with non-finite authored values",
@@ -4548,6 +4618,10 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::UnsupportedImageStyle { object } => write!(
                 formatter,
                 "image {object:?} supports alpha and affine edits, not recoloring, strokes or patterns",
+            ),
+            Self::UnsupportedWorldPathStyle { object } => write!(
+                formatter,
+                "World path {object:?} requires opaque or disabled fill/stroke paint; partial transparency is unsupported",
             ),
             Self::UnsupportedImageAnimation { index } => write!(
                 formatter,

@@ -516,12 +516,14 @@ mod tests {
                     to: 1.0,
                     geometry,
                     render_transform: None,
+                    source_transform: Transform2D::IDENTITY,
                 },
                 timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
                 transform_geometry_plan: Some(TransformGeometryPlan::PathPair {
                     geometry: prepared,
                     render_transform: None,
+                    prestart_geometry: None,
                 }),
             }],
         );

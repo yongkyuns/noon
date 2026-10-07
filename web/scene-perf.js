@@ -1,4 +1,3 @@
-import { PythonAuthoringClient } from "./authoring-client.js";
 import { ProvenancedPythonAuthoringClient } from "./provenanced-authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
@@ -20,6 +19,7 @@ const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
 const samples = parameters.get("includeSamples") === "1" ? [] : null;
 const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
 const rendererMetricsSampling = parameters.get("rendererMetricsSampling") ?? "dense";
+const includeRendererGpuIdentity = parameters.get("includeRendererGpuIdentity") === "1";
 if (!["dense", "sparse"].includes(rendererMetricsSampling)) {
   throw new Error("unsupported renderer metrics sampling mode");
 }
@@ -57,11 +57,9 @@ function failSource(error) {
 try {
   const source = await loadText(sourcePath);
   const workerStarted = performance.now();
-  client = rendererSamples === null
-    ? new PythonAuthoringClient()
-    : new ProvenancedPythonAuthoringClient();
+  client = new ProvenancedPythonAuthoringClient();
   const readyIdentity = await client.ready();
-  if (rendererSamples !== null) runtimeBuildIdentity = readyIdentity;
+  runtimeBuildIdentity = readyIdentity;
   const workerStartupMs = performance.now() - workerStarted;
   execution = new AuthoringExecutionClient(canvas, {
     onError: failSource,
@@ -74,13 +72,16 @@ try {
     rejectAttached = reject;
   });
   let attaching = false;
-  async function attach(descriptor, isContinuation) {
+  async function attach(descriptor, isContinuation, duration) {
     if (attaching) return;
     attaching = true;
     if (!descriptor) throw new Error("scene profiler requires shared semantic execution");
     continuation = isContinuation;
     const ready = await execution.startSemanticExecution(descriptor, {
       authoringClient: client,
+      loopDurationSeconds: isContinuation
+        ? Math.max(duration, (warmupFrames + measuredFrames) / targetHz)
+        : duration > 0 ? duration : (warmupFrames + measuredFrames) / targetHz,
       transportMode,
       ...(sharedSlotCapacity === undefined ? {} : { sharedSlotCapacity }),
       ...(continuation ? { pacing: "external_samples" } : { initiallyPaused: true }),
@@ -90,10 +91,10 @@ try {
   // Source execution may remain suspended across play/wait. Attach to its
   // existing session, then let exact samples advance Rust's continuation lane.
   void client.run(source, context, {
-    onSemanticContinuation: (registration) => attach(registration.semanticExecution, true),
+    onSemanticContinuation: (registration) => attach(registration.semanticExecution, true, registration.duration),
   }).then(async (result) => {
     completedSource = result;
-    await attach(result.semanticExecution, false);
+    await attach(result.semanticExecution, false, result.duration);
   }).catch((error) => {
     failSource(error);
     rejectAttached(error);
@@ -121,6 +122,7 @@ try {
   const before = (await execution.metrics({
     profilePublicationStages: rendererSamples !== null,
     profileRenderSubstages: rendererSamples !== null,
+    includeGpuIdentity: includeRendererGpuIdentity,
   })).metrics;
   const cadence = new FrameMetrics({ targetHz });
   jank = new BrowserJankMonitor();
@@ -137,7 +139,7 @@ try {
     firstMeasuredTime ??= lastSampleTime;
     const advanceRoundTripMs = performance.now() - started;
     cadence.record(timestamp, advanceRoundTripMs);
-    samples?.push({ sceneTime: lastSampleTime, advanceRoundTripMs });
+    samples?.push({ sceneTime: lastSampleTime, frameTimestampMs: timestamp, advanceRoundTripMs });
     if (stageTimingSamples !== null) {
       stageTimingSamples.push({
         sceneTime: lastSampleTime,
@@ -255,8 +257,10 @@ try {
     environment: {
       userAgent: navigator.userAgent,
       rendererBackend: execution.rendererBackend,
+      ...(includeRendererGpuIdentity ? { rendererGpuIdentity: before.rendererGpuIdentity } : {}),
       devicePixelRatio: window.devicePixelRatio || 1,
       viewportCssPixels: [canvas.clientWidth, canvas.clientHeight],
+      backingResolution: [canvas.width, canvas.height],
       targetHz,
     },
     setup: { workerStartupMs, initialExecutionReadyMs, warmupFrames },

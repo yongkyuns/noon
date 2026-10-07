@@ -299,6 +299,9 @@ pub enum TrackValues {
         to: f32,
         geometry: crate::GeometryRef,
         render_transform: Option<crate::Transform2D>,
+        /// Captured semantic frame of the source. Before activation, geometry
+        /// must follow earlier affine drivers, including collapsed entrances.
+        source_transform: crate::Transform2D,
     },
     Object {
         from: TransformTrackEndpoint,
@@ -416,6 +419,7 @@ impl TrackValues {
                 to,
                 geometry,
                 render_transform,
+                source_transform,
             } => {
                 if !from.is_finite() || !to.is_finite() {
                     return Err(TimelineError::InvalidScalarValues {
@@ -425,6 +429,9 @@ impl TrackValues {
                     });
                 }
                 validate_geometry(object, geometry).map_err(|error| {
+                    invalid_object_track_value(property, TrackValueEndpoint::From, error)
+                })?;
+                validate_transform(object, *source_transform).map_err(|error| {
                     invalid_object_track_value(property, TrackValueEndpoint::From, error)
                 })?;
                 if let Some(transform) = render_transform {

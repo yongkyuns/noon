@@ -146,6 +146,7 @@ fn manim_axes_profile_normalizes_ranges_and_retains_filled_tips() {
         ));
         assert_eq!(tip.style.fill, tip.style.stroke);
         assert_eq!(tip.style.fill_opacity, 1.0);
+        assert_eq!(tip.style.stroke_width, 0.0);
     }
     drop(store);
     assert_eq!(resources(&scene), 2);

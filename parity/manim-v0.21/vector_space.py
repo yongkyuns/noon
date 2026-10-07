@@ -6,7 +6,8 @@ from manim import *
 
 class VectorSpaceLTS(LinearTransformationScene):
     def construct(self):
-        self.test_vector = self.add_vector((2.0, 1.0))
+        self.test_vector = Vector((2.0, 1.0), color=YELLOW)
+        self.add_vector(self.test_vector, animate=True)
         self.apply_matrix([[0.0, 1.0], [1.0, 0.0]])
 
     def noon_oracle_state(self):

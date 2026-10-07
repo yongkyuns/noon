@@ -52,6 +52,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/perf-device-run.mjs
   node --check scripts/perf-compare.mjs
   node --check scripts/perf-corpus.mjs
+  node --check scripts/stage-special-camera-raster.mjs
   node --check scripts/host-callback-perf.mjs
   node --check scripts/playground-cold-start.mjs
   node --check scripts/playground-cold-start-memory.mjs
@@ -92,6 +93,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/pr-risk-classifier.test.mjs
   node --test scripts/retained-dynamic-stress-perf-lib.test.mjs
   node --test scripts/perf-corpus-budget.test.mjs
+  node --test scripts/perf-corpus-provenance.test.mjs
   node --test scripts/perf-compare.test.mjs
   node --test scripts/retained-typst-workflow-policy.test.mjs
   node --test scripts/playground-product-fps.test.mjs

@@ -522,7 +522,7 @@ pub(super) fn preflight_transaction_with_resources(
                     return Err(CompilePatchError::TooManyGraphDependencies(count));
                 }
             }
-            ExecutionPatch::SetFixedOrientationGroupBoundsMembers { members, .. } => {
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { members, .. } => {
                 for member in members {
                     if overlay.object_index(scene, *member).is_none() {
                         return Err(CompilePatchError::UnknownObject(*member));

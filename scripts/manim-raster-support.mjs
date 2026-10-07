@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 // Select actual reference frames, never fabricated timestamps. Explicit times
 // are for contract boundaries; fraction-based sampling remains the default.
 export function sampleRasterFrames(frameTimes, sampleFractions, sampleTimes) {
@@ -48,6 +50,179 @@ export function sampleRasterFrames(frameTimes, sampleFractions, sampleTimes) {
     time: frameTimes[frameIndex],
     label: `frame-${String(frameIndex).padStart(4, "0")}`,
   }));
+}
+
+function visualState(state) {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return state;
+  return Object.fromEntries(Object.entries(state)
+    .filter(([key]) => !["frame_index", "time", "animation_time"].includes(key)));
+}
+
+// Resolve logical samples against observed Cairo images. Interior static holds
+// require an explicit frozen interval; changed endpoints require a separately
+// captured terminal PNG. Reuse of a final sequence PNG requires exact terminal
+// visual equality. Zero-duration scenes retain an empty semantic timeline.
+export function resolveRasterReferenceSamples(frameTimes, sampleTimes, {
+  logicalDuration, terminalState, terminalPng, frozenIntervals = [], pngFrameCount,
+  semanticFrames, sampleFractions,
+}) {
+  if (!Array.isArray(frameTimes) || !Number.isFinite(logicalDuration) || logicalDuration < 0
+      || !Number.isInteger(pngFrameCount) || pngFrameCount < 0) {
+    throw new Error("invalid logical duration or independently observed PNG count");
+  }
+  if (frameTimes.length > pngFrameCount) {
+    throw new Error("semantic and independently observed PNG frame counts differ");
+  }
+  let previousFrameTime = -Infinity;
+  for (const [index, time] of frameTimes.entries()) {
+    if (!Number.isFinite(time) || time < 0 || time + 1e-12 < previousFrameTime
+        || time > logicalDuration + 1e-9) {
+      throw new Error(`invalid or out-of-range logical time for reference frame ${index}`);
+    }
+    previousFrameTime = time;
+  }
+  if (sampleTimes !== undefined && (!Array.isArray(sampleTimes) || sampleTimes.length === 0
+      || sampleTimes.some((time, index) => !Number.isFinite(time) || time < 0
+        || (index > 0 && time <= sampleTimes[index - 1])))) {
+    throw new Error("sample_times must be finite, non-negative and strictly increasing");
+  }
+  if (frameTimes.length === 0) {
+    const emptyTerminalOnly = pngFrameCount === 0 && Boolean(terminalPng);
+    if ((!emptyTerminalOnly && pngFrameCount !== 1) || logicalDuration !== 0 || !terminalState
+        || terminalState.time !== 0) {
+      throw new Error("empty semantic timeline requires a zero-duration terminal and observed Cairo image");
+    }
+    const selected = sampleTimes === undefined
+      ? sampleRasterFrames([0], sampleFractions)
+      : sampleRasterFrames([0], [], sampleTimes);
+    return selected.map((sample) => terminalPng && (sampleTimes !== undefined || pngFrameCount === 0)
+      ? { ...sample, frameIndex: null, requestedTime: sample.time, materializedTime: 0,
+        terminalState: true, referenceKind: "terminal", label: "frame-0000-terminal" }
+      : { ...sample, requestedTime: sample.time, materializedTime: 0,
+        terminalState: false, referenceKind: "sequence" });
+  }
+  if (frameTimes.length !== pngFrameCount) {
+    throw new Error("semantic and independently observed PNG frame counts differ");
+  }
+  if (sampleTimes === undefined) {
+    return sampleRasterFrames(frameTimes, sampleFractions).map(sample => ({ ...sample,
+      requestedTime: sample.time, materializedTime: sample.time, terminalState: false,
+      referenceKind: "sequence" }));
+  }
+  const intervals = frozenIntervals.map((interval, intervalIndex) => {
+    const frameIndex = interval?.frame_index;
+    const start = interval?.start_time;
+    const end = interval?.end_time;
+    if (!Number.isSafeInteger(frameIndex) || frameIndex < 0 || frameIndex >= frameTimes.length
+        || !Number.isFinite(start) || !Number.isFinite(end) || start < 0
+        || end < start || end > logicalDuration + 1e-9
+        || Math.abs(frameTimes[frameIndex] - start) > 1e-9) {
+      throw new Error(`invalid frozen interval ${intervalIndex}`);
+    }
+    return { frameIndex, start, end };
+  });
+  return sampleTimes.map(requestedTime => {
+    if (Math.abs(requestedTime - logicalDuration) <= 1e-9 && terminalPng) {
+      if (typeof terminalState?.time !== "number" || !Number.isFinite(terminalState.time)
+          || Math.abs(terminalState.time - logicalDuration) > 1e-9) {
+        throw new Error("terminal PNG requires a terminal semantic state at the authored endpoint");
+      }
+      const lastIndex = frameTimes.length - 1;
+      return { frameIndex: null, time: requestedTime, requestedTime,
+        materializedTime: logicalDuration, terminalState: true, referenceKind: "terminal",
+        label: `frame-${String(lastIndex).padStart(4, "0")}-terminal` };
+    }
+    const exact = frameTimes.findIndex(time => Math.abs(time - requestedTime) <= 1e-9);
+    if (exact >= 0) return { frameIndex: exact, time: requestedTime, requestedTime,
+      materializedTime: frameTimes[exact], terminalState: false, referenceKind: "sequence",
+      label: `frame-${String(exact).padStart(4, "0")}` };
+    const covering = intervals.filter(interval => requestedTime >= interval.start
+      && requestedTime < interval.end);
+    if (covering.length === 1) {
+      const { frameIndex } = covering[0];
+      return { frameIndex, time: requestedTime, requestedTime,
+        materializedTime: frameTimes[frameIndex], terminalState: false,
+        referenceKind: "frozen-hold",
+        label: `frame-${String(frameIndex).padStart(4, "0")}-hold-${String(requestedTime).replace(/[^0-9a-z]/gi, "_")}` };
+    }
+    if (covering.length > 1) throw new Error(`overlapping frozen holds at logical time ${requestedTime}`);
+    if (Math.abs(requestedTime - logicalDuration) <= 1e-9
+        && terminalState && typeof terminalState.time === "number"
+        && Number.isFinite(terminalState.time)
+        && Math.abs(terminalState.time - logicalDuration) <= 1e-9) {
+      const lastIndex = frameTimes.length - 1;
+      // The terminal comparison uses observed scene state, not time alone.
+      if (Array.isArray(semanticFrames) && semanticFrames[lastIndex]
+          && isDeepStrictEqual(visualState(semanticFrames[lastIndex]), visualState(terminalState))) {
+        return { frameIndex: lastIndex, time: requestedTime, requestedTime,
+          materializedTime: frameTimes[lastIndex], terminalState: true, referenceKind: "sequence",
+          label: `frame-${String(lastIndex).padStart(4, "0")}-terminal` };
+      }
+    }
+    throw new Error(`no reference frame at requested logical time ${requestedTime}`);
+  });
+}
+
+// Sparse playback compares logical checkpoints against the same canonical
+// sequence/hold/terminal resolution used by the pixel qualification runner.
+// The raster report's frame index is a materialized reference index, not a
+// sparse playback-step index, and its time may differ from the requested time
+// by harmless clock rounding.
+export function resolveSharedPlaybackSamples({ fixture, denseSamples, semanticFixture,
+  pngFrameCount, sampleFractions }) {
+  const frameTimes = (semanticFixture.frames ?? []).map(frame => Number(frame.time));
+  const samples = resolveRasterReferenceSamples(frameTimes, fixture.sample_times, {
+    logicalDuration: Number(fixture.expected_duration),
+    terminalState: semanticFixture.terminal_state,
+    terminalPng: semanticFixture.terminal_png,
+    frozenIntervals: semanticFixture.frozen_intervals ?? [],
+    pngFrameCount,
+    semanticFrames: semanticFixture.frames,
+    sampleFractions,
+  });
+  if (!Array.isArray(denseSamples) || denseSamples.length !== samples.length) {
+    throw new Error(`${fixture.id}: dense and canonical sample counts differ`);
+  }
+  for (const [index, dense] of denseSamples.entries()) {
+    const resolved = samples[index];
+    if (!Number.isFinite(dense.time) || !Number.isFinite(dense.materializedTime)
+        || Math.abs(dense.time - resolved.time) > 1e-9
+        || dense.referenceKind !== resolved.referenceKind
+        || dense.frameIndex !== resolved.frameIndex
+        || Math.abs(dense.materializedTime - resolved.materializedTime) > 1e-9) {
+      throw new Error(`${fixture.id}: dense sample ${index} disagrees with canonical ${resolved.referenceKind} resolution`);
+    }
+  }
+  return samples;
+}
+
+// A clean retained canvas needs no new draw. An idle snapshot may be sampled by
+// seek only when the independent reference proves a frozen hold at that time.
+// Continuous animation and unexplained stalls must remain qualification failures.
+export function directStaticObservation(metrics, requestedTime, referenceKind) {
+  if (metrics.presented || !Number.isFinite(metrics.time) || !Number.isFinite(requestedTime)
+      || requestedTime < 0 || metrics.time < 0 || metrics.wake?.presentNow !== false) return null;
+  const { cadence, delayMs } = metrics.wake;
+  const timer = cadence === "timer" && Number.isFinite(delayMs) && delayMs > 0;
+  if (!timer && cadence !== "idle") return null;
+  if (Math.abs(metrics.time - requestedTime) <= 1e-9) return "retained";
+  if (metrics.time < requestedTime && (timer || referenceKind === "frozen-hold")) return "seek";
+  return null;
+}
+
+export function selectDirectReplayCapture(captures, duration) {
+  if (!Array.isArray(captures) || !Number.isFinite(duration) || duration <= 0) return null;
+  const interior = captures.filter(capture => Number.isFinite(capture.time)
+    && capture.time > 0 && capture.time < duration);
+  const nearest = candidates => candidates.sort((left, right) =>
+    Math.abs(left.time - duration / 2) - Math.abs(right.time - duration / 2)
+    || left.time - right.time)[0] ?? null;
+  const forward = nearest(interior.filter(capture => capture.observationMode === "forward"));
+  if (forward) return { capture: forward, replayMode: "direct-seek-replay" };
+  if (interior.length > 0 && interior.every(capture => capture.observationMode === "static-hold-seek")) {
+    return { capture: nearest(interior), replayMode: "static-hold-observation-repeat" };
+  }
+  return null;
 }
 
 export function rasterFixtureSource(source, scene, { requires_latex = false } = {}) {
@@ -172,6 +347,76 @@ export function isSoftwareGpuAdapter(info) {
     .some((needle) => description.includes(needle));
 }
 
+export function classifyBrowserGpuDiagnostics(diagnostics) {
+  if (diagnostics?.api === "webgpu") {
+    const adapter = diagnostics.adapter;
+    if (!adapter || !isIdentifiedGpuAdapter(adapter)) return "unknown";
+    return isSoftwareGpuAdapter(adapter) ? "software" : "hardware-like-unverified";
+  }
+  const rendererInfo = {
+    vendor: String(diagnostics?.vendor ?? ""),
+    device: String(diagnostics?.renderer ?? ""),
+  };
+  if (![rendererInfo.vendor, rendererInfo.device].some((value) => value.trim() !== "")) return "unknown";
+  return isSoftwareGpuAdapter(rendererInfo) ? "software" : "hardware-like-unverified";
+}
+
+// Classify only identity read from the renderer's actual WGPU device. The
+// descriptor can distinguish known software paths from an identified adapter,
+// but it cannot certify a physical display or prove hardware provenance.
+export function classifyRendererGpuIdentity(info, expectedBackend) {
+  if (!info || typeof info !== "object" || !["webgpu", "webgl"].includes(expectedBackend)) {
+    return "unknown";
+  }
+  const expected = expectedBackend === "webgpu" ? "BrowserWebGpu" : "Gl";
+  if (info.backend !== expected) return "unknown";
+  const descriptor = {
+    vendor: Number(info.vendor) > 0 ? String(info.vendor) : "",
+    device: Number(info.device) > 0 ? String(info.device) : "",
+    description: [info.name, info.driver, info.driverInfo]
+      .filter((value) => typeof value === "string").join(" "),
+    architecture: String(info.deviceType ?? ""),
+    driver: String(info.driver ?? ""),
+    driverInfo: String(info.driverInfo ?? ""),
+  };
+  const hasIdentity = [descriptor.vendor, descriptor.device, descriptor.description]
+    .some((value) => value.trim() !== "");
+  if (String(info.deviceType ?? "").toLowerCase() === "cpu") return "software";
+  if (!hasIdentity) return "unknown";
+  if (isSoftwareGpuAdapter(descriptor)) {
+    return "software";
+  }
+  return "hardware-like-unverified";
+}
+
+export function validateRendererGpuMode(mode, identity, expectedBackend) {
+  if (mode === null || mode === undefined) return null;
+  if (!["software", "hardware"].includes(mode)) {
+    throw new Error(`NOON_CORPUS_GPU_MODE must be hardware or software`);
+  }
+  const classification = classifyRendererGpuIdentity(identity, expectedBackend);
+  if (classification === "unknown") {
+    throw new Error(`renderer GPU identity is unknown for explicit ${mode} qualification`);
+  }
+  if (mode === "hardware" && classification !== "hardware-like-unverified") {
+    throw new Error("renderer selected a known software adapter for hardware qualification");
+  }
+  if (mode === "software" && classification !== "software") {
+    throw new Error("renderer did not select an identified software adapter for software qualification");
+  }
+  return classification;
+}
+
+export function rendererGpuQualification(mode, identity, expectedBackend) {
+  const classification = classifyRendererGpuIdentity(identity, expectedBackend);
+  try {
+    validateRendererGpuMode(mode, identity, expectedBackend);
+    return { mode, passed: true, classification, error: null };
+  } catch (error) {
+    return { mode, passed: false, classification, error: String(error?.message ?? error) };
+  }
+}
+
 // Runtime geometry uses f32. Absolute shared-property callbacks can round by a
 // fraction of a micro-unit as sample cadence changes. Identities, shape, order
 // and scalar values beyond this fixed numerical bound must still agree.
@@ -201,4 +446,76 @@ export function compareEffectiveFrames(actual, expected) {
   }
   compare(actual, expected, "frame");
   return maximumAbsoluteError;
+}
+
+const EFFECTIVE_CAMERA_3D_FIELDS = [
+  "phi", "theta", "gamma", "focal_distance", "zoom", "frame_height", "frame_center",
+];
+const DEFAULT_MANIM_POINT_LIGHT = [-7, -9, 10];
+
+function requireFiniteVector(value, length, label) {
+  if (!Array.isArray(value) || value.length !== length
+      || value.some(component => typeof component !== "number" || !Number.isFinite(component))) {
+    throw new Error(`${label}: expected ${length} finite numeric components`);
+  }
+}
+
+/** Compare one exact Manim 3D semantic frame to one Noon debug frame. */
+export function compareEffective3DCamera(debugFrame, expectedCamera3d) {
+  if (!debugFrame || !Array.isArray(debugFrame.objects)) {
+    throw new Error("camera profile: missing Noon debug-frame objects");
+  }
+  if (!expectedCamera3d || typeof expectedCamera3d !== "object") {
+    throw new Error("camera profile: missing exact Manim camera_3d observation");
+  }
+  for (const field of EFFECTIVE_CAMERA_3D_FIELDS) {
+    const value = expectedCamera3d[field];
+    if (field === "frame_center") requireFiniteVector(value, 3, `Manim camera ${field}`);
+    else if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`Manim camera ${field}: expected a finite number`);
+    }
+  }
+  requireFiniteVector(expectedCamera3d.light_source, 3, "Manim camera light_source");
+
+  const cameraRows = debugFrame.objects.filter(row => row.present
+    && row.spatial?.camera_profile != null);
+  if (cameraRows.length !== 1) {
+    throw new Error(`camera profile: expected one present profiled camera row; found ${cameraRows.length}`);
+  }
+  const actual = cameraRows[0].spatial.camera_profile;
+  if (!actual || typeof actual !== "object") throw new Error("camera profile: malformed Noon observation");
+  const near = actual.near;
+  const far = actual.far;
+  if (typeof near !== "number" || !Number.isFinite(near)
+      || typeof far !== "number" || !Number.isFinite(far) || near >= far) {
+    throw new Error("camera profile: Noon clipping planes must be finite and ordered");
+  }
+  for (const field of EFFECTIVE_CAMERA_3D_FIELDS) {
+    const value = actual[field];
+    if (field === "frame_center") requireFiniteVector(value, 3, `Noon camera ${field}`);
+    else if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`Noon camera ${field}: expected a finite number`);
+    }
+  }
+  const expectedProfile = Object.fromEntries(
+    EFFECTIVE_CAMERA_3D_FIELDS.map(field => [field, expectedCamera3d[field]]),
+  );
+  const actualProfile = Object.fromEntries(
+    EFFECTIVE_CAMERA_3D_FIELDS.map(field => [field, actual[field]]),
+  );
+  const cameraError = compareEffectiveFrames(actualProfile, expectedProfile);
+
+  const lightRows = debugFrame.objects.filter(row => row.present && row.spatial?.point_light === true);
+  let lightError = 0;
+  if (lightRows.length === 0) {
+    lightError = compareEffectiveFrames(expectedCamera3d.light_source, DEFAULT_MANIM_POINT_LIGHT);
+  } else {
+    if (lightRows.length !== 1) {
+      throw new Error(`camera profile: expected at most one present point-light row; found ${lightRows.length}`);
+    }
+    const translation = lightRows[0].spatial.translation;
+    requireFiniteVector(translation, 3, "Noon point-light translation");
+    lightError = compareEffectiveFrames(translation, expectedCamera3d.light_source);
+  }
+  return { maximumAbsoluteError: Math.max(cameraError, lightError), lightObserved: lightRows.length === 1 };
 }

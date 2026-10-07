@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   compareEffectiveFrames,
+  compareEffective3DCamera,
+  classifyBrowserGpuDiagnostics,
+  classifyRendererGpuIdentity,
   dominantImageRgba,
   rasterFixtureSource,
   resolveQualifiedBackend,
+  rendererGpuQualification,
+  validateRendererGpuMode,
 } from "./manim-raster-support.mjs";
 
 const frame = { objects: [{ id: 7, present: true, transform: { y: 3.9542133808135986 }, opacity: 0.5 }] };
@@ -19,6 +24,43 @@ test("explicit paired qualification retains strict backend matching", () => {
   assert.throws(() => resolveQualifiedBackend("WebGL2", "WebGPU"), /expected WebGL2/);
   assert.throws(() => resolveQualifiedBackend("automatic", "Other"), /unsupported backend/);
   assert.throws(() => resolveQualifiedBackend("Other", "WebGPU"), /unsupported expected/);
+});
+
+test("renderer GPU qualification rejects unknown, mismatched, and software identity", () => {
+  const hardware = { backend: "BrowserWebGpu", vendor: 1452, device: 1,
+    name: "Apple M4", deviceType: "IntegratedGpu", driver: "Metal", driverInfo: "" };
+  const software = { ...hardware, name: "SwiftShader Device (Subzero)" };
+  const unknown = { backend: "BrowserWebGpu", vendor: 0, device: 0,
+    name: "", deviceType: "Unknown", driver: "", driverInfo: "" };
+  const emptyOtherType = { ...unknown, deviceType: "Other" };
+  assert.equal(classifyRendererGpuIdentity(hardware, "webgpu"), "hardware-like-unverified");
+  assert.equal(validateRendererGpuMode("hardware", hardware, "webgpu"), "hardware-like-unverified");
+  assert.equal(classifyRendererGpuIdentity(software, "webgpu"), "software");
+  assert.equal(validateRendererGpuMode("software", software, "webgpu"), "software");
+  assert.throws(() => validateRendererGpuMode("hardware", software, "webgpu"), /known software/);
+  assert.throws(() => validateRendererGpuMode("hardware", unknown, "webgpu"), /identity is unknown/);
+  assert.equal(classifyRendererGpuIdentity(emptyOtherType, "webgpu"), "unknown");
+  assert.throws(() => validateRendererGpuMode("hardware", emptyOtherType, "webgpu"), /identity is unknown/);
+  assert.throws(() => validateRendererGpuMode("software", hardware, "webgpu"), /did not select/);
+  assert.throws(() => validateRendererGpuMode("hardware", hardware, "webgl"), /identity is unknown/);
+  assert.deepEqual(rendererGpuQualification("hardware", software, "webgpu"), {
+    mode: "hardware", passed: false, classification: "software",
+    error: "renderer selected a known software adapter for hardware qualification",
+  });
+  assert.deepEqual(rendererGpuQualification("hardware", unknown, "webgpu"), {
+    mode: "hardware", passed: false, classification: "unknown",
+    error: "renderer GPU identity is unknown for explicit hardware qualification",
+  });
+});
+
+test("default corpus browser diagnostics retain their standalone classifier path", () => {
+  assert.equal(classifyBrowserGpuDiagnostics({ api: "webgpu", adapter: {
+    vendor: "Apple", architecture: "Apple GPU", device: "M4", description: "Apple M4",
+  } }), "hardware-like-unverified");
+  assert.equal(classifyBrowserGpuDiagnostics({ api: "webgpu", adapter: {
+    vendor: "Google", architecture: "SwiftShader", device: "", description: "SwiftShader Device",
+  } }), "software");
+  assert.equal(classifyBrowserGpuDiagnostics({ api: "webgl2", vendor: null, renderer: null }), "unknown");
 });
 
 test("full-image background estimate ignores a colored perimeter", () => {
@@ -82,4 +124,58 @@ test("effective comparison preserves identity, presence and object structure", (
     mutate(actual);
     assert.throws(() => compareEffectiveFrames(actual, frame));
   }
+});
+
+test("effective 3D camera compares every profile field and observes point light", () => {
+  const expected = {
+    phi: 0.8, theta: -0.1, gamma: 0.2, focal_distance: 5, zoom: 1.1,
+    frame_height: 8, frame_center: [0.3, 0, 0], light_source: [-6, -8, 9],
+  };
+  const profile = { ...expected, near: 0.1, far: 100 };
+  delete profile.light_source;
+  const debug = { objects: [
+    { present: true, spatial: { camera_profile: profile } },
+    { present: true, spatial: { point_light: true, translation: [-6, -8, 9] } },
+  ] };
+  assert.deepEqual(compareEffective3DCamera(debug, expected), {
+    maximumAbsoluteError: 0, lightObserved: true,
+  });
+  const withinTolerance = structuredClone(debug);
+  withinTolerance.objects[0].spatial.camera_profile.theta += 5e-7;
+  assert.ok(Math.abs(compareEffective3DCamera(withinTolerance, expected).maximumAbsoluteError - 5e-7) < 1e-12);
+  for (const mutate of [
+    frame => { frame.objects[0].spatial.camera_profile.zoom = 1.10001; },
+    frame => { frame.objects[0].spatial.camera_profile.phi = NaN; },
+    frame => { frame.objects[0].spatial.camera_profile.frame_center.pop(); },
+    frame => { frame.objects[0].spatial.camera_profile.near = Infinity; },
+    frame => { frame.objects[0].spatial.camera_profile.far = 0.05; },
+    frame => { frame.objects[1].spatial.translation[0] = -5; },
+  ]) {
+    const bad = structuredClone(debug);
+    mutate(bad);
+    assert.throws(() => compareEffective3DCamera(bad, expected));
+  }
+});
+
+test("effective 3D camera permits an absent light row only at Manim's pinned default", () => {
+  const expected = {
+    phi: 0.6, theta: -1.2, gamma: 0, focal_distance: 5, zoom: 1,
+    frame_height: 8, frame_center: [0, 0, 0], light_source: [-7, -9, 10],
+  };
+  const debug = { objects: [{ present: true, spatial: {
+    camera_profile: { ...expected, near: 0.1, far: 100 },
+  } }] };
+  delete debug.objects[0].spatial.camera_profile.light_source;
+  assert.deepEqual(compareEffective3DCamera(debug, expected), {
+    maximumAbsoluteError: 0, lightObserved: false,
+  });
+  assert.throws(() => compareEffective3DCamera(debug, {
+    ...expected, light_source: [-6, -8, 9],
+  }), /effective value differs/);
+  for (const invalid of [
+    { ...expected, frame_height: Infinity },
+    { ...expected, frame_center: [0, NaN, 0] },
+    { ...expected, light_source: [0, 0] },
+  ]) assert.throws(() => compareEffective3DCamera(debug, invalid));
+  assert.throws(() => compareEffective3DCamera({ objects: [] }, expected), /expected one present/);
 });

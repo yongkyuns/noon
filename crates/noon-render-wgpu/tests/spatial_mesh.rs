@@ -472,6 +472,1067 @@ fn pixel(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
     bytes[start..start + 4].try_into().unwrap()
 }
 
+fn cairo_surface_scene(shared_unlit: bool) -> SceneInstance {
+    let mut store = SemanticStore::new();
+    let payload = MeshResource::new(
+        vec![
+            SemanticVec3::new(-1., -1., 0.),
+            SemanticVec3::new(1., -1., 0.),
+            SemanticVec3::new(1., 1., 0.),
+            SemanticVec3::new(-1., 1., 0.),
+        ],
+        None,
+        vec![0, 1, 3, 1, 2, 3],
+    )
+    .unwrap()
+    .with_cairo_appearance(noon_core::CairoSurfaceAppearance {
+        p0: SemanticVec3::new(-1., -1., 0.),
+        p6: SemanticVec3::new(1., 1., 0.),
+        span_p3_p0: SemanticVec3::new(2., 0., 0.),
+        span_p12_p0: SemanticVec3::new(0., 2., 0.),
+        span_p9_p6: SemanticVec3::new(-2., 0., 0.),
+        span_p3_p6: SemanticVec3::new(0., -2., 0.),
+        boundary_controls: None,
+    })
+    .unwrap();
+    let handle = store.insert_geometry_mesh(payload);
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0. });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+            height: 4.,
+            near: 0.1,
+            far: 30.,
+        }))
+        .unwrap();
+    camera.transform.translation.z = 5.;
+    let camera_node = attach(&mut store, camera);
+    let mut surface = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    surface.style = opaque_style(Color::rgba(0.8, 0.8, 0.8, 1.));
+    surface.set_spatial_material(SemanticSpatialMaterial::CairoSurface);
+    surface.set_surface_uv_cell(Some([0, 0]));
+    if shared_unlit {
+        surface.transform.scale = SemanticVec3::new(0.45, 0.45, 1.);
+        surface.transform.translation.x = -0.75;
+    }
+    attach(&mut store, surface);
+    if shared_unlit {
+        let mut unlit = SemanticObjectState::new(StoredGeometry::Resource(handle));
+        unlit.style = opaque_style(Color::rgba(0.8, 0.8, 0.8, 1.));
+        unlit.transform.scale = SemanticVec3::new(0.45, 0.45, 1.);
+        unlit.transform.translation.x = 0.75;
+        attach(&mut store, unlit);
+    }
+    let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0. });
+    light.set_role(SemanticObjectRole::PointLight3D);
+    // Cairo's white scalar response deliberately ignores this red native light.
+    light.style = opaque_style(Color::RED);
+    light.transform.translation = SemanticVec3::new(-1., -1., 1.);
+    let light_node = attach(&mut store, light);
+    let mut index = SemanticExecutionIndex::new();
+    let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .into_parts();
+    let pose = |x| {
+        SemanticWorldTransform3D::new(
+            SemanticVec3::new(x, x, 1.),
+            noon_core::SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1., 1., 1.),
+        )
+        .unwrap()
+    };
+    compiled
+        .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(0),
+            object: index.execution_object_id(light_node).unwrap(),
+            property: Property::WorldTransform,
+            values: TrackValues::WorldTransform {
+                from: WorldTransformTrackEndpoint::from_world(pose(-1.)),
+                to: WorldTransformTrackEndpoint::from_world(pose(1.)),
+            },
+            timing: TrackTiming::new(0., 1., RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        }))
+        .unwrap();
+    let camera_pose = |x| {
+        SemanticWorldTransform3D::new(
+            SemanticVec3::new(x, 0., 5.),
+            noon_core::SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1., 1., 1.),
+        )
+        .unwrap()
+    };
+    compiled
+        .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(1),
+            object: index.execution_object_id(camera_node).unwrap(),
+            property: Property::WorldTransform,
+            values: TrackValues::WorldTransform {
+                from: WorldTransformTrackEndpoint::from_world(camera_pose(0.)),
+                to: WorldTransformTrackEndpoint::from_world(camera_pose(0.5)),
+            },
+            timing: TrackTiming::new(1., 1., RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        }))
+        .unwrap();
+    SceneInstance::new(compiled)
+}
+
+#[test]
+fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo Surface GPU qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut preparer = FramePreparer::new();
+        let mut scene = cairo_surface_scene(false);
+        let (initial, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(initial.resident_meshes, 1);
+        // Authored vertices/triangles, constant Cairo coverage scalars and one
+        // lighting uniform. Ordinary mesh vertex/instance layouts stay intact.
+        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 4 * 4 + 96);
+        // Independent analytic stops: clamp(.8 + .5) = 1; .8 + .5/27.
+        // At the center their midpoint is .909259..., not clamp(1.059259...).
+        let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        for channel in &center[..3] {
+            assert!(
+                (230..=234).contains(channel),
+                "Cairo clamped-stop gradient: {center:?}"
+            );
+        }
+        let first = pixel(&pixels, 40, 87);
+        let last = pixel(&pixels, 87, 40);
+        assert!(
+            first[0] > last[0] + 25,
+            "projected gradient follows p0 to p6: {first:?}, {last:?}"
+        );
+        scene.advance_to(1.).unwrap();
+        let (moved, end_pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(moved.geometry_bytes, 0);
+        assert_eq!(moved.instance_bytes, 0);
+        assert_eq!(moved.camera_bytes, 0);
+        assert_eq!(moved.light_bytes, 32);
+        assert!(pixel(&end_pixels, 40, 87)[0] + 25 < pixel(&end_pixels, 87, 40)[0]);
+        scene.advance_to(2.).unwrap();
+        let (camera_moved, camera_pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(camera_moved.geometry_bytes, 0);
+        assert_eq!(camera_moved.instance_bytes, 0);
+        assert_eq!(camera_moved.camera_bytes, 64);
+        assert_eq!(camera_moved.light_bytes, 0);
+        assert_eq!(
+            pixel(&camera_pixels, 48, 64),
+            pixel(&end_pixels, 64, 64),
+            "camera motion projects the same retained shading gradient"
+        );
+        scene.seek(0.).unwrap();
+        let (rewound, replay) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(rewound.geometry_bytes, 0);
+        assert_eq!(
+            pixels, replay,
+            "deterministic seek restores the endpoint gradient"
+        );
+
+        let mut shared = cairo_surface_scene(true);
+        let mut shared_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        shared_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let (stats, pixels) = render(
+            &device,
+            &queue,
+            &mut shared_renderer,
+            &mut preparer,
+            &mut shared,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            stats.resident_meshes, 1,
+            "different materials retain one shared topology"
+        );
+        assert_eq!(stats.resident_instances, 2);
+        let unlit = pixel(&pixels, 88, 64);
+        assert_eq!(
+            unlit,
+            [204, 204, 204, 255],
+            "Cairo pipeline must not shade the Unlit instance"
+        );
+        assert_ne!(pixel(&pixels, 40, 64), unlit);
+    });
+}
+
+fn cairo_path_scene() -> SceneInstance {
+    let mut store = SemanticStore::new();
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+            height: 4.0,
+            near: 0.1,
+            far: 30.0,
+        }))
+        .unwrap();
+    camera.transform.translation.z = 5.0;
+    let camera_node = attach(&mut store, camera);
+    let mut shaft = SemanticObjectState::new(StoredGeometry::Line {
+        start: noon_core::Vec2::new(-1.0, 0.0),
+        end: noon_core::Vec2::new(1.0, 0.0),
+    });
+    shaft.style = SemanticStyle {
+        fill: None,
+        stroke: Some(SemanticPaint::Solid(Color::rgba(0.4, 0.4, 0.4, 1.0))),
+        stroke_width: 0.25,
+        stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+        ..SemanticStyle::default()
+    };
+    shaft.transform = SemanticWorldTransform3D::new(
+        SemanticVec3::ZERO,
+        noon_core::SemanticRotation3D::from_axis_angle(
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap(),
+        SemanticVec3::new(1.0, 1.0, 1.0),
+    )
+    .unwrap()
+    .into();
+    shaft.set_spatial_material(SemanticSpatialMaterial::CairoPath);
+    shaft
+        .set_cairo_path_appearance(noon_core::SemanticCairoPathAppearance {
+            sheen_factor: 0.2,
+            gradient_direction: Some(SemanticVec3::new(1.0, 0.0, 0.0)),
+        })
+        .unwrap();
+    attach(&mut store, shaft);
+    let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    light.set_role(SemanticObjectRole::PointLight3D);
+    light.style = opaque_style(Color::RED);
+    light.transform.translation = SemanticVec3::new(-1.0, 1.0, 0.0);
+    let light_node = attach(&mut store, light);
+    let mut index = SemanticExecutionIndex::new();
+    let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .into_parts();
+    for (track, node, start, from, to) in [
+        (
+            0,
+            light_node,
+            0.0,
+            SemanticVec3::new(-1.0, 1.0, 0.0),
+            SemanticVec3::new(-1.0, -1.0, 0.0),
+        ),
+        (
+            1,
+            camera_node,
+            1.0,
+            SemanticVec3::new(0.0, 0.0, 5.0),
+            SemanticVec3::new(0.5, 0.0, 5.0),
+        ),
+    ] {
+        let pose = |translation| {
+            SemanticWorldTransform3D::new(
+                translation,
+                noon_core::SemanticRotation3D::IDENTITY,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap()
+        };
+        compiled
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(track),
+                object: index.execution_object_id(node).unwrap(),
+                property: Property::WorldTransform,
+                values: TrackValues::WorldTransform {
+                    from: WorldTransformTrackEndpoint::from_world(pose(from)),
+                    to: WorldTransformTrackEndpoint::from_world(pose(to)),
+                },
+                timing: TrackTiming::new(start, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+    }
+    SceneInstance::new(compiled)
+}
+
+#[test]
+fn cairo_path_world_up_shading_and_sheen_reuse_geometry_across_light_camera_and_seek() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo path GPU qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut preparer = FramePreparer::new();
+        let mut scene = cairo_path_scene();
+        let (initial, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(initial.resident_instances, 1);
+        assert!(initial.geometry_bytes > 0);
+        // A single-curve Cairo path keeps world UP after the X rotation. Its
+        // independently derived stops are .4 + .5 = .9 and clamp(.6 + .5) = 1.
+        let center = pixel(&pixels, 64, 64);
+        assert!(
+            (241..=244).contains(&center[0]),
+            "world-UP clamped sheen: {center:?}"
+        );
+        assert!(pixel(&pixels, 88, 64)[0] > pixel(&pixels, 40, 64)[0]);
+        scene.advance_to(1.0).unwrap();
+        let (moved, moved_pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(moved.geometry_bytes, 0);
+        assert_eq!(moved.instance_bytes, 0);
+        assert_eq!(moved.camera_bytes, 0);
+        assert_eq!(moved.light_bytes, 32);
+        // Negative illumination uses half of the signed cubic response:
+        // -.25, giving .15/.35 stops and .25 at the center.
+        let center = pixel(&moved_pixels, 64, 64);
+        assert!(
+            (62..=66).contains(&center[0]),
+            "negative Cairo response: {center:?}"
+        );
+        scene.advance_to(2.0).unwrap();
+        let (camera, camera_pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(camera.geometry_bytes, 0);
+        assert_eq!(camera.instance_bytes, 0);
+        assert_eq!(camera.camera_bytes, 64);
+        assert_eq!(camera.light_bytes, 0);
+        assert_eq!(pixel(&camera_pixels, 48, 64), pixel(&moved_pixels, 64, 64));
+        scene.seek(0.0).unwrap();
+        let (rewound, replay) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(rewound.geometry_bytes, 0);
+        assert_eq!(pixels, replay);
+    });
+}
+
+#[test]
+fn fixed_orientation_miter_preserves_frame_geometry_with_anisotropic_clip_scale() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping fixed-orientation stroke qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let mut store = SemanticStore::new();
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera
+            .set_camera_projection(Some(projection(true)))
+            .unwrap();
+        camera.transform.translation.z = 5.0;
+        attach(&mut store, camera);
+        let handle = store
+            .insert_geometry_path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-1.0, -0.25))
+                    .line_to(noon_core::Vec2::new(0.0, 0.25))
+                    .line_to(noon_core::Vec2::new(1.0, -0.25)),
+            )
+            .unwrap();
+        let mut path = SemanticObjectState::new(StoredGeometry::Resource(handle));
+        path.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 1.0,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            stroke_join: noon_core::StrokeJoin::Miter,
+            stroke_cap: noon_core::StrokeCap::Butt,
+            ..SemanticStyle::default()
+        };
+        path.set_spatial_composition_domain(
+            noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
+        )
+        .unwrap();
+        attach(&mut store, path);
+        let (compiled, _) = lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
+            .unwrap()
+            .into_parts();
+        let mut runtime = SceneInstance::new(compiled);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        // Unequal logical scales expose an erroneous second aspect correction
+        // of the world XY tangent. The retained miter must be constructed in
+        // frame coordinates before those coordinates are projected to pixels.
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(8.0, 2.0)).unwrap(),
+        );
+        let target = Target::new(&device);
+        let mut preparer = FramePreparer::new();
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut runtime,
+            &target,
+        )
+        .unwrap();
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|rgba| (1..255).contains(&rgba[0])),
+            "a spatial-only path keeps fractional edge coverage without a planar path batch"
+        );
+        // The two incident unit directions have Y components +/-1/sqrt(5).
+        // Their outer miter rises sqrt(5)/4 frame units above y=0.25.
+        let top = (0..HEIGHT)
+            .find(|&y| (60..68).any(|x| pixel(&pixels, x, y)[0] > 128))
+            .expect("the miter must remain visible");
+        let expected = ((1.0 - (0.25 + 5.0_f64.sqrt() / 4.0)) * HEIGHT as f64 / 2.0).floor() as u32;
+        assert!(
+            top.abs_diff(expected) <= 1,
+            "frame-space miter top {top}, expected {expected}"
+        );
+        assert!(
+            pixel(&pixels, WIDTH / 2, 14)[0] > 128,
+            "the correct miter reaches the independently computed outer wedge"
+        );
+    });
+}
+
+#[test]
+fn cairo_path_miter_keeps_acute_tip_while_ordinary_path_keeps_its_limit() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo miter qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        for cairo in [false, true] {
+            let mut store = SemanticStore::new();
+            let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+            camera.set_role(SemanticObjectRole::Camera3D);
+            camera
+                .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+                    height: 8.0,
+                    near: 0.1,
+                    far: 30.0,
+                }))
+                .unwrap();
+            camera.transform.translation.z = 5.0;
+            attach(&mut store, camera);
+            let handle = store
+                .insert_geometry_path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::new(-0.5, -1.0))
+                        .line_to(noon_core::Vec2::new(0.0, 1.5))
+                        .line_to(noon_core::Vec2::new(0.5, -1.0)),
+                )
+                .unwrap();
+            let mut path = SemanticObjectState::new(StoredGeometry::Resource(handle));
+            path.style = SemanticStyle {
+                fill: None,
+                stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+                stroke_width: 0.5,
+                stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+                stroke_join: noon_core::StrokeJoin::Miter,
+                stroke_cap: noon_core::StrokeCap::Butt,
+                ..SemanticStyle::default()
+            };
+            path.transform = SemanticWorldTransform3D::new(
+                SemanticVec3::ZERO,
+                noon_core::SemanticRotation3D::IDENTITY,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap()
+            .into();
+            if cairo {
+                path.set_spatial_material(SemanticSpatialMaterial::CairoPath);
+                path.set_cairo_path_appearance(noon_core::SemanticCairoPathAppearance {
+                    sheen_factor: 0.0,
+                    gradient_direction: None,
+                })
+                .unwrap();
+                let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+                light.set_role(SemanticObjectRole::PointLight3D);
+                light.transform.translation.z = 5.0;
+                attach(&mut store, light);
+            }
+            attach(&mut store, path);
+            let (compiled, _) =
+                lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
+                    .unwrap()
+                    .into_parts();
+            let mut runtime = SceneInstance::new(compiled);
+            let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+            renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            renderer.set_camera(
+                &queue,
+                Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(8.0, 8.0)).unwrap(),
+            );
+            let (_, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut FramePreparer::new(),
+                &mut runtime,
+                &target,
+            )
+            .unwrap();
+            // The apex is at pixel y=40. Its incident slopes give an outer
+            // miter distance 0.25*sqrt(26), or 20.4 pixels at 16 pixels/unit.
+            // That lies between the ordinary 4x and Cairo 10x miter limits.
+            assert_eq!(pixel(&pixels, WIDTH / 2, 24)[0] > 128, cairo);
+            assert!(pixel(&pixels, WIDTH / 2 - 7, 75)[0] > 128);
+        }
+    });
+}
+
+#[test]
+fn world_screen_stroke_keeps_width_across_perspective_distance_and_object_scale() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping screen-stroke GPU qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let mut store = SemanticStore::new();
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera
+            .set_camera_projection(Some(SemanticProjection3D::Perspective {
+                vertical_fov_radians: 1.0,
+                near: 0.1,
+                far: 30.0,
+            }))
+            .unwrap();
+        camera.transform.translation.z = 5.0;
+        let camera_id = attach(&mut store, camera);
+        let mut line = SemanticObjectState::new(StoredGeometry::Line {
+            start: noon_core::Vec2::new(-1.0, 0.0),
+            end: noon_core::Vec2::new(1.0, 0.0),
+        });
+        line.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.25,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            ..SemanticStyle::default()
+        };
+        line.transform = SemanticWorldTransform3D::new(
+            SemanticVec3::ZERO,
+            noon_core::SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(2.0, 0.01, 1.0),
+        )
+        .unwrap()
+        .into();
+        let line_id = attach(&mut store, line);
+        let mut circle = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.65 });
+        circle.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.25,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            ..SemanticStyle::default()
+        };
+        circle.transform = SemanticWorldTransform3D::new(
+            SemanticVec3::new(-1.3, 1.35, 0.0),
+            noon_core::SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.45)
+                .unwrap(),
+            SemanticVec3::new(1.1, 0.7, 1.0),
+        )
+        .unwrap()
+        .into();
+        let circle_id = attach(&mut store, circle);
+        let path_handle = store
+            .insert_geometry_path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-1.0, -0.5))
+                    .cubic_to(
+                        noon_core::Vec2::new(-0.4, 1.0),
+                        noon_core::Vec2::new(0.3, -1.0),
+                        noon_core::Vec2::new(1.0, -0.5),
+                    ),
+            )
+            .unwrap();
+        let mut path = SemanticObjectState::new(StoredGeometry::Resource(path_handle));
+        path.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.25,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            stroke_join: noon_core::StrokeJoin::Bevel,
+            stroke_cap: noon_core::StrokeCap::Square,
+            ..SemanticStyle::default()
+        };
+        path.transform = SemanticWorldTransform3D::new(
+            SemanticVec3::new(1.25, -1.2, 0.0),
+            noon_core::SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.35)
+                .unwrap(),
+            SemanticVec3::new(1.1, 0.7, 1.0),
+        )
+        .unwrap()
+        .into();
+        let path_id = attach(&mut store, path);
+        let corner_handle = store
+            .insert_geometry_path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-0.55, -0.4))
+                    .line_to(noon_core::Vec2::new(0.0, -0.4))
+                    .line_to(noon_core::Vec2::new(0.0, 0.55)),
+            )
+            .unwrap();
+        let mut corner = SemanticObjectState::new(StoredGeometry::Resource(corner_handle));
+        corner.style = SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.25,
+            stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+            stroke_join: noon_core::StrokeJoin::Miter,
+            stroke_cap: noon_core::StrokeCap::Square,
+            ..SemanticStyle::default()
+        };
+        let corner_world = SemanticWorldTransform3D::new(
+            SemanticVec3::new(-1.6, -1.2, 0.0),
+            noon_core::SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.7)
+                .unwrap(),
+            SemanticVec3::new(1.5, 0.7, 1.0),
+        )
+        .unwrap();
+        corner.transform = corner_world.into();
+        let corner_id = attach(&mut store, corner);
+        let mut index = SemanticExecutionIndex::new();
+        let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        compiled
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(0),
+                object: index.execution_object_id(camera_id).unwrap(),
+                property: Property::WorldTransform,
+                values: TrackValues::WorldTransform {
+                    from: WorldTransformTrackEndpoint::from_world(
+                        SemanticWorldTransform3D::new(
+                            SemanticVec3::new(0.0, 0.0, 5.0),
+                            noon_core::SemanticRotation3D::IDENTITY,
+                            SemanticVec3::new(1.0, 1.0, 1.0),
+                        )
+                        .unwrap(),
+                    ),
+                    to: WorldTransformTrackEndpoint::from_world(
+                        SemanticWorldTransform3D::new(
+                            SemanticVec3::new(0.0, 0.0, 10.0),
+                            noon_core::SemanticRotation3D::IDENTITY,
+                            SemanticVec3::new(1.0, 1.0, 1.0),
+                        )
+                        .unwrap(),
+                    ),
+                },
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+        let mut runtime = SceneInstance::new(compiled);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(8.0, 8.0)).unwrap(),
+        );
+        let target = Target::new(&device);
+        let mut preparer = FramePreparer::new();
+        let mut counts = Vec::new();
+        let mut circle_widths = Vec::new();
+        let mut circle_pixel_counts = Vec::new();
+        let mut circle_rasters = Vec::new();
+        let mut path_pixel_counts = Vec::new();
+        let mut corner_pixel_counts = Vec::new();
+        let mut corner_rasters = Vec::new();
+        for (index, time) in [0.0, 0.5, 1.0, 0.0].into_iter().enumerate() {
+            runtime.seek(time).unwrap();
+            let (uploads, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut runtime,
+                &target,
+            )
+            .unwrap();
+            // Other paths can project onto this column as the camera recedes;
+            // measure only the centered horizontal line's cross-section.
+            let width = (HEIGHT / 2 - 8..HEIGHT / 2 + 8)
+                .filter(|&y| pixel(&pixels, WIDTH / 2, y)[0] > 128)
+                .count();
+            assert_eq!(width, 4, "screen width must remain 0.25 frame units, despite perspective and 0.01 object Y scale at {time}");
+            let circle_pixels: Vec<_> = (8..60)
+                .flat_map(|y| (5..60).map(move |x| (x, y)))
+                .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+                .collect();
+            assert!(
+                circle_pixels.len() > 30,
+                "tilted Circle stroke disappeared at {time}"
+            );
+            let path_pixels = (72..108)
+                .flat_map(|y| (58..104).map(move |x| (x, y)))
+                .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+                .count();
+            assert!(
+                path_pixels > 12,
+                "curved World path stroke disappeared at {time}"
+            );
+            path_pixel_counts.push(path_pixels);
+            let corner_pixels = (65..94)
+                .flat_map(|y| (28..60).map(move |x| (x, y)))
+                .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+                .count();
+            assert!(
+                corner_pixels > 16,
+                "projected miter path vanished at {time}"
+            );
+            corner_pixel_counts.push(corner_pixels);
+            corner_rasters.push(pixels.clone());
+            if index == 0 {
+                // Locate cross-sections from the independent scalar projection,
+                // rather than guessing screen windows for this rotated pose.
+                let project = |x: f64, y: f64| {
+                    let world = corner_world
+                        .transform_point(SemanticVec3::new(x, y, 0.0))
+                        .unwrap();
+                    let focal = 1.0 / (0.5_f64).tan();
+                    let depth = 5.0 - world.z;
+                    [
+                        (1.0 + focal * world.x / depth) * f64::from(WIDTH) * 0.5,
+                        (1.0 - focal * world.y / depth) * f64::from(HEIGHT) * 0.5,
+                    ]
+                };
+                let width_across = |start: [f64; 2], end: [f64; 2]| {
+                    let dx = end[0] - start[0];
+                    let dy = end[1] - start[1];
+                    let length = dx.hypot(dy);
+                    let center = [(start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5];
+                    let samples = (-6..=6)
+                        .map(|step| {
+                            let step = f64::from(step);
+                            (
+                                (center[0] - step * dy / length).floor() as u32,
+                                (center[1] + step * dx / length).floor() as u32,
+                            )
+                        })
+                        .collect::<std::collections::BTreeSet<_>>();
+                    samples
+                        .into_iter()
+                        .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+                        .count()
+                };
+                let horizontal_width = width_across(project(-0.55, -0.4), project(0.0, -0.4));
+                let vertical_width = width_across(project(0.0, -0.4), project(0.0, 0.55));
+                assert!(
+                    (3..=5).contains(&horizontal_width),
+                    "projected horizontal segment width {horizontal_width}px"
+                );
+                assert!(
+                    (3..=5).contains(&vertical_width),
+                    "projected vertical segment width {vertical_width}px"
+                );
+            }
+            let min_x = circle_pixels.iter().map(|(x, _)| *x).min().unwrap();
+            let max_x = circle_pixels.iter().map(|(x, _)| *x).max().unwrap();
+            let min_y = circle_pixels.iter().map(|(_, y)| *y).min().unwrap();
+            let max_y = circle_pixels.iter().map(|(_, y)| *y).max().unwrap();
+            assert!(max_x - min_x >= 8 && max_y - min_y >= 8);
+            let center_x = (min_x + max_x) / 2;
+            let center_y = (min_y + max_y) / 2;
+            assert!(
+                pixel(&pixels, center_x, center_y)[0] < 32,
+                "Circle stroke must preserve its inner silhouette at {time}"
+            );
+            let left_edge = (5..center_x).find(|x| pixel(&pixels, *x, center_y)[0] > 128);
+            let right_edge = (center_x..60)
+                .rev()
+                .find(|x| pixel(&pixels, *x, center_y)[0] > 128);
+            let top_edge = (8..center_y).find(|y| pixel(&pixels, center_x, *y)[0] > 128);
+            let bottom_edge = (center_y..60)
+                .rev()
+                .find(|y| pixel(&pixels, center_x, *y)[0] > 128);
+            assert!(
+                left_edge.is_some()
+                    && right_edge.is_some()
+                    && top_edge.is_some()
+                    && bottom_edge.is_some(),
+                "Circle stroke must cover all four outer cardinal silhouettes at {time}"
+            );
+            let left_width = (left_edge.unwrap()..=center_x)
+                .take_while(|x| pixel(&pixels, *x, center_y)[0] > 128)
+                .count();
+            let top_width = (top_edge.unwrap()..=center_y)
+                .take_while(|y| pixel(&pixels, center_x, *y)[0] > 128)
+                .count();
+            assert!(
+                (3..=5).contains(&left_width),
+                "left cardinal stroke thickness {left_width} at {time}"
+            );
+            assert!(
+                (3..=5).contains(&top_width),
+                "top cardinal stroke thickness {top_width} at {time}"
+            );
+            circle_widths.push((left_width, top_width));
+            circle_pixel_counts.push(circle_pixels.len());
+            circle_rasters.push(pixels.clone());
+            counts.push(
+                (0..WIDTH)
+                    .filter(|&x| pixel(&pixels, x, HEIGHT / 2)[0] > 128)
+                    .count(),
+            );
+            if index > 0 {
+                assert_eq!(
+                    uploads.geometry_bytes, 0,
+                    "camera frames reuse stroke topology"
+                );
+                assert_eq!(
+                    uploads.instance_bytes, 0,
+                    "camera frames do not rewrite object instances"
+                );
+            }
+        }
+        assert!(
+            counts[0] > counts[1] && counts[1] > counts[2],
+            "perspective still changes centerline length"
+        );
+        assert_eq!(
+            counts[0], counts[3],
+            "backward seek restores the same projected extent"
+        );
+        assert!(
+            circle_widths
+                .iter()
+                .take(3)
+                .all(|(left, top)| left.abs_diff(circle_widths[0].0) <= 1
+                    && top.abs_diff(circle_widths[0].1) <= 1),
+            "screen stroke thickness remains stable across perspective distances: {circle_widths:?}"
+        );
+        assert_eq!(circle_widths[0], circle_widths[3]);
+        assert_eq!(
+            circle_rasters[0], circle_rasters[3],
+            "Circle raster exactly replays after backward seek"
+        );
+        assert_eq!(
+            corner_rasters[0], corner_rasters[3],
+            "projected corner joins exactly replay after backward seek"
+        );
+        assert_eq!(corner_pixel_counts[0], corner_pixel_counts[3]);
+        assert!(index.execution_object_id(corner_id).is_some());
+        let line_object = index.execution_object_id(line_id).unwrap();
+        let circle_object = index.execution_object_id(circle_id).unwrap();
+        let style = noon_core::Style {
+            stroke_width: 0.5,
+            ..runtime
+                .frame()
+                .objects
+                .iter()
+                .find(|object| object.id == line_object)
+                .unwrap()
+                .style
+        };
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: line_object,
+                style,
+            })
+            .unwrap();
+        let (uploads, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut runtime,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            uploads.geometry_bytes, 0,
+            "width edits reuse the unit stroke topology"
+        );
+        assert!(
+            uploads.instance_bytes > 0,
+            "width edits update the affected instance"
+        );
+        assert_eq!(
+            (0..HEIGHT)
+                .filter(|&y| pixel(&pixels, WIDTH / 2, y)[0] > 128)
+                .count(),
+            8
+        );
+        let circle_frame = runtime.frame();
+        let circle_style = noon_core::Style {
+            stroke_width: 0.5,
+            ..circle_frame
+                .objects
+                .iter()
+                .find(|object| object.id == circle_object)
+                .unwrap()
+                .style
+        };
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: circle_object,
+                style: circle_style,
+            })
+            .unwrap();
+        let (uploads, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut runtime,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            uploads.geometry_bytes, 0,
+            "Circle width edits reuse retained topology"
+        );
+        assert!(
+            uploads.instance_bytes > 0,
+            "Circle width edits update its instance"
+        );
+        let widened = (8..60)
+            .flat_map(|y| (5..60).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+            .count();
+        assert!(
+            widened > circle_pixel_counts[3] + 20,
+            "Circle width edit visibly thickens the retained stroke: {widened} vs {}",
+            circle_pixel_counts[3]
+        );
+
+        let path_object = index.execution_object_id(path_id).unwrap();
+        let path_style = noon_core::Style {
+            stroke_width: 0.5,
+            ..runtime
+                .frame()
+                .objects
+                .iter()
+                .find(|object| object.id == path_object)
+                .unwrap()
+                .style
+        };
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: path_object,
+                style: path_style,
+            })
+            .unwrap();
+        let (uploads, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut runtime,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            uploads.geometry_bytes, 0,
+            "path width edits reuse retained curve/join topology"
+        );
+        assert!(
+            uploads.instance_bytes > 0,
+            "path width edits update the instance"
+        );
+        let widened_path = (72..108)
+            .flat_map(|y| (58..104).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixel(&pixels, x, y)[0] > 128)
+            .count();
+        assert!(
+            widened_path > path_pixel_counts[3],
+            "screen width edit thickens the retained path: {widened_path} vs {}",
+            path_pixel_counts[3]
+        );
+    });
+}
+
 #[test]
 fn spatial_renderer_rejects_an_older_publication_after_advancing() {
     pollster::block_on(async {
@@ -1009,6 +2070,307 @@ fn point_lit_mesh_uses_cubic_normal_response_and_light_only_updates() {
             multiple_renderer.prepare_spatial(&device, &queue, &publication),
             Err(SpatialPrepareError::MultiplePointLights)
         );
+    });
+}
+
+fn cairo_boundary_test_scene(
+    with_occluder: bool,
+    sloped_unlit: bool,
+    curved_fill: bool,
+) -> (SceneInstance, noon_core::ObjectId) {
+    assert!(!(with_occluder && (sloped_unlit || curved_fill)));
+    assert!(!(sloped_unlit && curved_fill));
+    let mut store = SemanticStore::new();
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    camera.set_role(SemanticObjectRole::Camera3D);
+    camera
+        .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+            height: 4.0,
+            near: 0.1,
+            far: 30.0,
+        }))
+        .unwrap();
+    camera.transform.translation.z = 5.0;
+    attach(&mut store, camera);
+
+    let positions = if sloped_unlit {
+        vec![
+            SemanticVec3::new(-0.5, -0.5, 1.0),
+            SemanticVec3::new(0.5, -0.5, 0.0),
+            SemanticVec3::new(0.5, 0.5, 0.0),
+            SemanticVec3::new(-0.5, 0.5, 1.0),
+        ]
+    } else {
+        vec![
+            SemanticVec3::new(-0.5, -0.5, 0.0),
+            SemanticVec3::new(0.5, -0.5, 0.0),
+            SemanticVec3::new(0.5, 0.5, 0.0),
+            SemanticVec3::new(-0.5, 0.5, 0.0),
+        ]
+    };
+    let mesh = MeshResource::new(positions, None, vec![0, 1, 3, 1, 2, 3]).unwrap();
+    let mesh = if sloped_unlit {
+        mesh
+    } else {
+        mesh.with_cairo_appearance(noon_core::CairoSurfaceAppearance {
+            p0: SemanticVec3::new(-0.5, -0.5, 0.0),
+            p6: SemanticVec3::new(0.5, 0.5, 0.0),
+            span_p3_p0: SemanticVec3::new(1.0, 0.0, 0.0),
+            span_p12_p0: SemanticVec3::new(0.0, 1.0, 0.0),
+            span_p9_p6: SemanticVec3::new(-1.0, 0.0, 0.0),
+            span_p3_p6: SemanticVec3::new(0.0, -1.0, 0.0),
+            boundary_controls: curved_fill.then_some([
+                [
+                    SemanticVec3::new(-1.0 / 6.0, -1.5, 0.0),
+                    SemanticVec3::new(1.0 / 6.0, -1.5, 0.0),
+                ],
+                [
+                    SemanticVec3::new(0.5, -1.0 / 6.0, 0.0),
+                    SemanticVec3::new(0.5, 1.0 / 6.0, 0.0),
+                ],
+                [
+                    SemanticVec3::new(1.0 / 6.0, 0.5, 0.0),
+                    SemanticVec3::new(-1.0 / 6.0, 0.5, 0.0),
+                ],
+                [
+                    SemanticVec3::new(-0.5, 1.0 / 6.0, 0.0),
+                    SemanticVec3::new(-0.5, -1.0 / 6.0, 0.0),
+                ],
+            ]),
+        })
+        .unwrap()
+    };
+    let surface_handle = store.insert_geometry_mesh(mesh);
+    let mut surface = SemanticObjectState::new(StoredGeometry::Resource(surface_handle));
+    surface.style = SemanticStyle {
+        fill: if sloped_unlit {
+            Some(SemanticPaint::Solid(Color::BLACK))
+        } else if curved_fill {
+            Some(SemanticPaint::Solid(Color::rgba(0.2, 0.5, 0.8, 1.0)))
+        } else {
+            None
+        },
+        fill_opacity: if sloped_unlit || curved_fill {
+            1.0
+        } else {
+            0.0
+        },
+        stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+        stroke_opacity: 1.0,
+        stroke_width: 0.02,
+        stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
+        stroke_join: noon_core::StrokeJoin::Miter,
+        stroke_cap: noon_core::StrokeCap::Butt,
+        object_opacity: 1.0,
+    };
+    if !sloped_unlit {
+        surface.set_spatial_material(SemanticSpatialMaterial::CairoSurface);
+        surface.set_surface_uv_cell(Some([0, 0]));
+    }
+    let surface_node = attach(&mut store, surface);
+
+    if with_occluder {
+        let occluder_handle = store.insert_geometry_mesh(
+            MeshResource::new(
+                vec![
+                    SemanticVec3::new(0.4, -0.3, 0.0),
+                    SemanticVec3::new(0.7, -0.3, 0.0),
+                    SemanticVec3::new(0.7, 0.3, 0.0),
+                    SemanticVec3::new(0.4, 0.3, 0.0),
+                ],
+                None,
+                vec![0, 1, 3, 1, 2, 3],
+            )
+            .unwrap(),
+        );
+        let mut occluder = SemanticObjectState::new(StoredGeometry::Resource(occluder_handle));
+        occluder.style = opaque_style(Color::GREEN);
+        // Keep the foreground very close to the border's face. Its coverage
+        // must survive the boundary's small depth-roundoff margin.
+        occluder.transform.translation.z = 0.001;
+        attach(&mut store, occluder);
+    }
+
+    let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    light.set_role(SemanticObjectRole::PointLight3D);
+    attach(&mut store, light);
+
+    let mut index = SemanticExecutionIndex::new();
+    let (compiled, _) = lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .into_parts();
+    let surface_object = index.execution_object_id(surface_node).unwrap();
+    (SceneInstance::new(compiled), surface_object)
+}
+
+#[test]
+fn cairo_mesh_boundary_has_fractional_subpixel_coverage_and_respects_occlusion() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!(
+                "skipping Cairo boundary coverage GPU qualification: no adapter is available"
+            );
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
+        renderer.set_camera(&queue, camera);
+        let mut preparer = FramePreparer::new();
+        let (mut scene, surface_object) = cairo_boundary_test_scene(false, false, false);
+
+        let mut coverage_profiles = Vec::new();
+        for subpixel in [0.0_f64, 0.25, 0.5, 0.75] {
+            let transform = SemanticWorldTransform3D::new(
+                SemanticVec3::new(subpixel / 32.0, 0.0, 0.0),
+                noon_core::SemanticRotation3D::IDENTITY,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap();
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                    object: surface_object,
+                    transform: transform.into(),
+                })
+                .unwrap();
+            let (_, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut scene,
+                &target,
+            )
+            .unwrap();
+            let profile: Vec<u8> = (78..=82)
+                .map(|x| pixel(&pixels, x, HEIGHT / 2)[0])
+                .collect();
+            assert!(
+                profile.iter().any(|value| *value > 0),
+                "thin Cairo boundary remains visible at {subpixel}px: {profile:?}"
+            );
+            assert!(
+                profile.iter().any(|value| (1..255).contains(value)),
+                "thin Cairo boundary has fractional pixel coverage at {subpixel}px: {profile:?}"
+            );
+            if subpixel == 0.5 {
+                assert!(
+                    profile[2] > 0,
+                    "the centered subpixel stroke contributes at its pixel center: {profile:?}"
+                );
+            }
+            coverage_profiles.push(profile);
+        }
+        assert!(
+            coverage_profiles.windows(2).all(|pair| {
+                let left_sum: u16 = pair[0].iter().map(|value| u16::from(*value)).sum();
+                let right_sum: u16 = pair[1].iter().map(|value| u16::from(*value)).sum();
+                left_sum.abs_diff(right_sum) <= 48
+            }),
+            "integrated edge coverage changes continuously across subpixel placements: {coverage_profiles:?}"
+        );
+        assert!(
+            coverage_profiles.windows(2).any(|pair| pair[0] != pair[1]),
+            "subpixel motion redistributes coverage between neighboring pixels"
+        );
+
+        let (mut sloped, _) = cairo_boundary_test_scene(false, true, false);
+        let mut sloped_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        sloped_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        sloped_renderer.set_camera(&queue, camera);
+        let mut sloped_preparer = FramePreparer::new();
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut sloped_renderer,
+            &mut sloped_preparer,
+            &mut sloped,
+            &target,
+        )
+        .unwrap();
+        let sloped_profile: Vec<_> = (77..=82).map(|x| pixel(&pixels, x, 64)).collect();
+        for x in [79, 80] {
+            let edge_pixel = pixel(&pixels, x, 64);
+            assert!(
+                edge_pixel[..3]
+                    .iter()
+                    .all(|channel| (1..255).contains(channel)),
+                "sloped unlit mesh keeps fractional white boundary coverage at ({x},64): {edge_pixel:?}; scanline {sloped_profile:?}"
+            );
+        }
+
+        let (mut occluded, surface_object) = cairo_boundary_test_scene(true, false, false);
+        let mut occlusion_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        occlusion_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        occlusion_renderer.set_camera(&queue, camera);
+        let mut occlusion_preparer = FramePreparer::new();
+        let transform = SemanticWorldTransform3D::new(
+            SemanticVec3::new(0.5 / 32.0, 0.0, 0.0),
+            noon_core::SemanticRotation3D::IDENTITY,
+            SemanticVec3::new(1.0, 1.0, 1.0),
+        )
+        .unwrap();
+        occluded
+            .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                object: surface_object,
+                transform: transform.into(),
+            })
+            .unwrap();
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut occlusion_renderer,
+            &mut occlusion_preparer,
+            &mut occluded,
+            &target,
+        )
+        .unwrap();
+        let hidden_border = pixel(&pixels, 80, 64);
+        assert!(
+            hidden_border[..3]
+                .iter()
+                .zip([Color::GREEN.red, Color::GREEN.green, Color::GREEN.blue])
+                .all(|(actual, expected)| (f32::from(*actual) - expected * 255.0).abs() < 3.0),
+            "opaque foreground occluder hides the Cairo mesh border: {hidden_border:?}"
+        );
+
+        let (mut curved, _) = cairo_boundary_test_scene(false, false, true);
+        let mut curved_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        curved_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        curved_renderer.set_camera(&queue, camera);
+        let mut curved_preparer = FramePreparer::new();
+        let (_, pixels) = render(
+            &device,
+            &queue,
+            &mut curved_renderer,
+            &mut curved_preparer,
+            &mut curved,
+            &target,
+        )
+        .unwrap();
+        let bulge_fill = pixel(&pixels, 64, 96);
+        assert!(
+            bulge_fill[..3].iter().any(|channel| *channel > 8),
+            "opaque Cairo fill reaches the interior of the retained-control bulge: {bulge_fill:?}"
+        );
+        let below_outline = pixel(&pixels, 64, 109);
+        assert!(
+            below_outline[..3].iter().all(|channel| *channel <= 2),
+            "the curved fill and boundary stay inside the retained-control outline: {below_outline:?}"
+        );
+        for x in [63, 64, 65] {
+            let profile: Vec<_> = (102..=105).map(|y| pixel(&pixels, x, y)).collect();
+            assert!(
+                profile.iter().any(|pixel| pixel[..3].iter().all(|channel| (1..255).contains(channel))),
+                "curved Cairo boundary remains continuously visible with fractional coverage near its midpoint at x={x}: {profile:?}"
+            );
+        }
     });
 }
 

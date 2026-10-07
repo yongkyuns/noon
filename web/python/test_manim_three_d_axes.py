@@ -65,20 +65,48 @@ class ThreeDAxesAdapterTests(TestCase):
         )
         self.options.setTicks.assert_called_once_with(True, 0.1, True)
         self.options.setTips.assert_called_once_with(True)
+        self.options.setNumAxisPieces.assert_called_once_with(20)
+        self.options.setAxisLightDirection.assert_called_once_with(-7.0, -9.0, 10.0)
+        self.options.setShadeIn3D.assert_called_once_with(True)
         self.context.liveCreateCoordinates.assert_called_once_with(self.options)
         self.assertIs(axes.x_axis, self.axes_members[0])
         self.assertIs(axes.y_axis, self.axes_members[1])
         self.assertIs(axes.z_axis, self.axes_members[2])
 
-    def test_custom_labels_and_unknown_cairo_options_fail_before_allocation(self):
+    def test_custom_labels_and_unknown_options_fail_before_allocation(self):
         with self.assertRaises(NotImplementedError):
             self.construct(labels={"x": "time"})
         with patch.object(plotting, "_coordinate_style", self.real_coordinate_style):
             with self.assertRaises(TypeError):
-                self.construct(num_axis_pieces=5)
-        self.factory.assert_called_once()
-        self.options.free.assert_called_once_with()
+                self.construct(unrecognized_option=5)
+        self.factory.assert_not_called()
+        self.options.free.assert_not_called()
         self.context.liveCreateCoordinates.assert_not_called()
+
+    def test_cairo_axis_options_are_forwarded_and_validated_before_allocation(self):
+        self.construct(num_axis_pieces=7, light_source=(1, 2, 3), shade_in_3d=False)
+        self.options.setNumAxisPieces.assert_called_once_with(7)
+        self.options.setAxisLightDirection.assert_called_once_with(1.0, 2.0, 3.0)
+        self.options.setShadeIn3D.assert_called_once_with(False)
+
+        for kwargs, error in (
+            ({"num_axis_pieces": 0}, ValueError),
+            ({"num_axis_pieces": 257}, ValueError),
+            ({"num_axis_pieces": 2.5}, TypeError),
+            ({"num_axis_pieces": True}, TypeError),
+            ({"light_source": (0, 0, 0)}, ValueError),
+            ({"light_source": (1, 2)}, ValueError),
+            ({"light_source": (1, float("nan"), 2)}, ValueError),
+            ({"shade_in_3d": 1}, TypeError),
+        ):
+            with self.subTest(kwargs=kwargs), patch.object(
+                plotting, "_coordinate_constructor_context", return_value=self.context
+            ):
+                factory = Mock(return_value=self.options)
+                with patch.object(plotting, "_coordinate_options", SimpleNamespace(threeDAxes=factory)):
+                    with self.assertRaises(error):
+                        self.construct(**kwargs)
+                factory.assert_not_called()
 
     def test_coordinate_math_is_a_rust_frame_call(self):
         axes = self.construct()

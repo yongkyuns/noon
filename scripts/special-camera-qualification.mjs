@@ -15,6 +15,10 @@ export const FOLLOWING_TIMES = Object.freeze([
   0, 0.5, 29 / 30, 1, 31 / 30, 1.2, 1.5, 1.8, 59 / 30,
   2, 61 / 30, 2.5, 89 / 30,
 ]);
+export const PINNED_CAMERA_FOLLOWUPS = Object.freeze([
+  "MovingZoomedSceneAround", "FixedInFrameMObjectTest", "ThreeDLightSourcePosition",
+  "ThreeDCameraRotation", "ThreeDCameraIllusionRotation", "ThreeDSurfacePlot",
+]);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -29,6 +33,162 @@ export function followingManifest(baseline) {
     fixtures: [{ id: "following-graph-camera", scene: "FollowingGraphCamera",
       source: FOLLOWING_SOURCE, expected_duration: 3, sample_times: [...FOLLOWING_TIMES] }],
   };
+}
+
+function compareSemanticValue(actual, expected, label, errors) {
+  if (typeof expected === "number") {
+    assert.equal(typeof actual, "number", `${label}: expected numeric value`);
+    assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${label}: non-finite semantic number`);
+    const error = Math.abs(actual - expected);
+    assert.ok(error <= 1e-6, `${label}: ${actual} differs from ${expected} by ${error}`);
+    errors.maximumAbsoluteError = Math.max(errors.maximumAbsoluteError, error);
+    return;
+  }
+  if (Array.isArray(expected)) {
+    assert.ok(Array.isArray(actual), `${label}: expected array`);
+    assert.equal(actual.length, expected.length, `${label}: array length`);
+    expected.forEach((value, index) => compareSemanticValue(actual[index], value,
+      `${label}[${index}]`, errors));
+    return;
+  }
+  if (expected && typeof expected === "object") {
+    assert.ok(actual && typeof actual === "object" && !Array.isArray(actual), `${label}: expected object`);
+    assert.deepEqual(Object.keys(actual).sort(), Object.keys(expected).sort(), `${label}: object fields`);
+    for (const key of Object.keys(expected)) {
+      compareSemanticValue(actual[key], expected[key], `${label}.${key}`, errors);
+    }
+    return;
+  }
+  assert.equal(actual, expected, label);
+}
+
+function cameraCaseName(fixture) {
+  if (fixture.factory === "createDirectSpecialCameraSettingsRenderer") return fixture.factoryArgs?.[0];
+  if (fixture.id.startsWith("moving_zoomed_scene_around-")) return "moving-zoomed-scene";
+  if (fixture.id.startsWith("following_graph_camera-")) return "following-graph-camera";
+  return null;
+}
+
+export function assertSpecialCameraObservation(frame, fixture, host) {
+  const label = `${fixture.id}/${host}`;
+  const expectedTime = host === "rust-wasm"
+    ? fixture.directHeldSampleTime ?? fixture.sampleTime
+    : fixture.sampleTime;
+  assert.equal(typeof frame?.time, "number", `${label}: missing authored frame time`);
+  assert.ok(Number.isFinite(frame.time), `${label}: non-finite authored frame time`);
+  assert.ok(Math.abs(frame.time - expectedTime) <= 1e-6,
+    `${label}: authored time ${frame.time} differs from requested observation ${expectedTime}`);
+  assert.ok(Array.isArray(frame.objects), `${label}: missing semantic objects`);
+  const present = frame.objects.filter(row => row.present === true);
+  assert.ok(present.length > 0, `${label}: no present semantic objects`);
+  assert.equal(frame.present_object_count, present.length, `${label}: inconsistent present-object count`);
+  const cameraCase = cameraCaseName(fixture);
+  let capability;
+  switch (cameraCase) {
+    case "fixed-frame":
+      assert.ok(present.some(row => row.spatial?.composition_domain === "fixed_frame"),
+        `${label}: fixed-frame text lost its composition domain`);
+      capability = "fixed-frame-composition";
+      break;
+    case "ambient":
+    case "illusion":
+      assert.ok(present.some(row => row.spatial?.composition_domain === "world"),
+        `${label}: missing world-authored camera-motion content`);
+      capability = cameraCase === "ambient" ? "ambient-camera-timing" : "illusion-camera-timing";
+      break;
+    case "light":
+    case "surface": {
+      const expectedLight = cameraCase === "light" ? [0, 0, -3] : [-7, -9, 10];
+      const lights = present.filter(row => row.spatial?.point_light === true);
+      assert.ok(lights.some(row => row.spatial.translation?.every((value, axis) =>
+        typeof value === "number" && Math.abs(value - expectedLight[axis]) <= 1e-6)),
+      `${label}: missing authored point-light position`);
+      if (cameraCase === "surface") {
+        const cells = present.filter(row => row.spatial?.point_light !== true
+          && row.spatial?.material === "point_lit" && row.spatial?.composition_domain === "world");
+        assert.ok(cells.length >= 2, `${label}: missing point-lit world surface cells`);
+        const checkerboard = new Set(cells.map(row => JSON.stringify(row.fill)));
+        assert.ok(checkerboard.size >= 2, `${label}: surface checkerboard colors collapsed`);
+      } else {
+        assert.ok(present.some(row => row.spatial?.point_light !== true && row.spatial?.material === "point_lit"),
+          `${label}: missing point-lit surface cells`);
+      }
+      capability = cameraCase === "light" ? "point-light-and-surface" : "surface-light-and-world-composition";
+      break;
+    }
+    case "moving-zoomed-scene":
+    case "following-graph-camera":
+      assert.ok(frame.camera && Array.isArray(frame.camera.center)
+        && frame.camera.center.length === 2 && frame.camera.center.every(Number.isFinite)
+        && Number.isFinite(frame.camera.height) && frame.camera.height > 0,
+      `${label}: missing finite effective 2D camera observation`);
+      capability = cameraCase;
+      break;
+    default:
+      throw new Error(`${label}: no semantic observation contract for ${cameraCase}`);
+  }
+  return { authoredTime: frame.time, presentObjectCount: present.length, capability,
+    cameraPoseObserved: cameraCase === "moving-zoomed-scene" || cameraCase === "following-graph-camera"
+      ? "effective-2d-camera" : "not-exposed-by-frame-diagnostic",
+    pinnedAppearance: "not-qualified-by-this-noon-profile" };
+}
+
+export function assertPairedCameraObservation(rustFrame, pythonFrame, fixture) {
+  const rust = assertSpecialCameraObservation(rustFrame, fixture, "rust-wasm");
+  const python = assertSpecialCameraObservation(pythonFrame, fixture, "python");
+  const observation = frame => ({
+    camera: frame.camera,
+    present_object_count: frame.present_object_count,
+    // Diagnostics preserve painter order. Compare each corresponding row and
+    // omit only engine-local IDs; sorting could mask an ordering regression.
+    objects: frame.objects.map(({ id: _identity, ...semantic }) => semantic),
+  });
+  const errors = { maximumAbsoluteError: 0 };
+  compareSemanticValue(observation(rustFrame), observation(pythonFrame), fixture.id, errors);
+  return { fixture: fixture.id, rust, python, ...errors,
+    semanticState: "paired-equal", pinnedAppearance: "deferred" };
+}
+
+export async function writeSpecialCameraObservations(report, fixtures, outputDirectory) {
+  const requestedIds = process.env.NOON_PAIRED_CASES
+    ? new Set(process.env.NOON_PAIRED_CASES.split(",").map(id => id.trim()).filter(Boolean))
+    : new Set(fixtures.map(fixture => fixture.id));
+  const selectedFixtures = fixtures.filter(fixture => requestedIds.has(fixture.id));
+  assert.equal(selectedFixtures.length, requestedIds.size, "unknown camera observation selection");
+  const observations = { pinnedFollowupCases: [...PINNED_CAMERA_FOLLOWUPS], passed: false,
+    selectedFixtureIds: selectedFixtures.map(fixture => fixture.id),
+    appearanceQualification: "deferred-to-pinned-Manim-raster-oracle" };
+  try {
+    observations.backends = [];
+    for (const backend of report.backends) {
+      const backendName = backend.backend;
+      assert.ok(backendName, "camera qualification backend did not resolve");
+      const entries = [];
+      for (const fixture of selectedFixtures) {
+        const staticResult = backend.static?.[fixture.id];
+        assert.ok(staticResult, `${fixture.id}/${backendName}: paired raster observation missing`);
+        const stem = path.join(outputDirectory, `${fixture.id}-${backendName}`);
+        const rustFrame = JSON.parse(await readFile(`${stem}-rust-wasm-frame.json`, "utf8"));
+        const pythonFrame = JSON.parse(await readFile(`${stem}-python-frame.json`, "utf8"));
+        entries.push(assertPairedCameraObservation(rustFrame, pythonFrame, fixture));
+      }
+      observations.backends.push({ backend: backendName, fixtures: entries });
+    }
+    const observedNames = new Set(selectedFixtures.map(cameraCaseName));
+    const requiredProfiles = ["moving-zoomed-scene", "fixed-frame", "light", "ambient", "illusion", "surface"];
+    observations.coverageComplete = requiredProfiles.every(profile => observedNames.has(profile));
+    observations.observedFollowupCases = PINNED_CAMERA_FOLLOWUPS.filter((name, index) =>
+      observedNames.has(requiredProfiles[index]));
+    observations.passed = true;
+  } catch (error) {
+    observations.error = error.stack ?? String(error);
+    throw error;
+  } finally {
+    await mkdir(outputDirectory, { recursive: true });
+    await writeFile(path.join(outputDirectory, "semantic-observations.json"),
+      `${JSON.stringify(observations, null, 2)}\n`);
+  }
+  return observations;
 }
 
 // Compare the complete class AST, not a text substring or just the final frame.
@@ -495,8 +655,12 @@ async function main() {
   const noJspi = process.env.NOON_CAMERA_NO_JSPI === "1" || browserName === "webkit";
   const contextOptions = browserName === "webkit" ? { ...playwright.devices["iPhone 13"] } : undefined;
   const output = process.env.NOON_CAMERA_ARTIFACTS ?? "browser-smoke-artifacts/special-camera";
-  await qualifyPairedAuthoring({ cases, prepareContext: noJspi ? disableAuthoringJspi : undefined,
-    browserName, contextOptions, artifactDirectory: noJspi ? `${output}/no-jspi` : output });
+  const artifactDirectory = noJspi ? `${output}/no-jspi` : output;
+  const report = await qualifyPairedAuthoring({ cases, prepareContext: noJspi ? disableAuthoringJspi : undefined,
+    browserName, contextOptions, artifactDirectory });
+  const observations = await writeSpecialCameraObservations(
+    report, cases, path.resolve(root, artifactDirectory));
+  console.log(`[PASS] ${observations.backends.length} backend(s): semantic/timing observations; pinned appearance remains deferred`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
