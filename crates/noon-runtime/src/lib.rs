@@ -3396,7 +3396,12 @@ mod tests {
 
     #[test]
     fn translated_prepared_morph_preserves_pointwise_rotation_through_seek_and_forward_playback() {
-        for rate in [RateFunction::Linear, RateFunction::ThereAndBack] {
+        for (rate, morph_from, morph_to) in [
+            (RateFunction::Linear, 0.0, 1.0),
+            (RateFunction::ThereAndBack, 0.0, 1.0),
+            (RateFunction::Linear, 0.5, 1.0),
+            (RateFunction::Linear, 1.0, 0.0),
+        ] {
             let source = VectorPath::new()
                 .move_to(Vec2::new(-1.0, 0.0))
                 .line_to(Vec2::new(1.0, 0.0));
@@ -3413,7 +3418,7 @@ mod tests {
             for (index, (from, to)) in positions.into_iter().enumerate() {
                 let object = ObjectId::new(index as u64);
                 let source_transform = Transform2D {
-                    translation: from,
+                    translation: from + (to - from) * morph_from,
                     ..Transform2D::IDENTITY
                 };
                 objects.push(CompiledObject::new(
@@ -3426,7 +3431,10 @@ mod tests {
                     id: TrackId::new((index * 2) as u64),
                     object,
                     property: Property::Position,
-                    values: TrackValues::Vec2 { from, to },
+                    values: TrackValues::Vec2 {
+                        from: source_transform.translation,
+                        to: from + (to - from) * morph_to,
+                    },
                     timing: TrackTiming::new(0.25, 1.0, rate),
                     time_map: CompositionTimeMap::identity(),
                 });
@@ -3435,11 +3443,14 @@ mod tests {
                     object,
                     property: Property::Morph,
                     values: TrackValues::PreparedMorph {
-                        from: 0.0,
-                        to: 1.0,
+                        from: morph_from,
+                        to: morph_to,
                         geometry: pair.clone(),
                         render_frame: Some(noon_core::MorphRenderFrame {
-                            from: source_transform,
+                            from: Transform2D {
+                                translation: from,
+                                ..Transform2D::IDENTITY
+                            },
                             to_translation: to,
                         }),
                         source_transform,
@@ -3460,12 +3471,29 @@ mod tests {
                 assert_eq!(frame.render_transforms, forward_frame.render_transforms);
                 assert_eq!(frame.render_geometries, forward_frame.render_geometries);
                 for (index, (from, to)) in positions.into_iter().enumerate() {
-                    let alpha = rate.evaluate(((time - 0.25) as f32).clamp(0.0, 1.0));
+                    let progress = rate.evaluate(((time - 0.25) as f32).clamp(0.0, 1.0));
+                    let alpha = morph_from + (morph_to - morph_from) * progress;
                     assert_eq!(frame.morph(index), alpha);
                     let transform = frame.render_transform(index);
                     let corner = Vec2::new(-1.0 + alpha, -alpha);
                     let expected = from + (to - from) * alpha + corner;
-                    assert!((transform.transform_point(corner) - expected).length() < 1.0e-6);
+                    let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(index) else {
+                        panic!("prepared morph must retain its path pair")
+                    };
+                    let noon_core::PathCommand::MoveTo { to: source_point } = path.commands()[0]
+                    else {
+                        panic!("source endpoint")
+                    };
+                    let noon_core::PathCommand::MoveTo { to: target_point } =
+                        path.morph_target().unwrap().commands()[0]
+                    else {
+                        panic!("target endpoint")
+                    };
+                    let actual_point = source_point + (target_point - source_point) * alpha;
+                    assert!(
+                        (transform.transform_point(actual_point) - expected).length() < 1.0e-6,
+                        "object {index}@{time}, morph {morph_from}->{morph_to}"
+                    );
                     if time >= 0.25 {
                         assert_eq!(frame.render_geometries[index].as_deref(), Some(&pair));
                     }

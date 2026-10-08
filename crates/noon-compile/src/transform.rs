@@ -52,6 +52,7 @@ pub(crate) fn compile_transform_geometry_values(
     if property == Property::Morph {
         return match values {
             TrackValues::PreparedMorph {
+                from,
                 geometry,
                 render_frame,
                 source_transform,
@@ -76,9 +77,10 @@ pub(crate) fn compile_transform_geometry_values(
                     geometry: Arc::new(geometry.clone()),
                     render_frame: *render_frame,
                     prestart_geometry: render_frame
-                        .filter(|render| render.from != *source_transform)
+                        .map(|frame| frame.sample(from.clamp(0.0, 1.0)))
+                        .filter(|render| *render != *source_transform)
                         .map(|render| {
-                            prepared_pair_in_source_frame(source, render.from, *source_transform)
+                            prepared_pair_in_source_frame(source, render, *source_transform)
                         })
                         .transpose()?
                         .map(Arc::new),
