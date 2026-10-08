@@ -64,7 +64,7 @@ impl LiveContinuation for Motion {
 }
 
 fn external_session() -> (Scene, ExecutionSession, ExecutionSegment) {
-    let (mut scene, object, target) = make_scene(false);
+    let (scene, object, target) = make_scene(false);
     let mut session = scene.execution_session().unwrap();
     let segment = scene
         .live(&mut session)
@@ -75,7 +75,7 @@ fn external_session() -> (Scene, ExecutionSession, ExecutionSegment) {
 
 #[test]
 fn invalid_configuration_and_precancelled_session_fail_before_gpu_creation() {
-    let (mut scene, _, _) = make_scene(false);
+    let (scene, _, _) = make_scene(false);
     let session = scene.execution_session().unwrap();
     let mut invalid = options();
     invalid.width = 0;
@@ -124,7 +124,7 @@ fn session_capture_matches_live_program_pixels_without_advancing_source() {
     )
     .unwrap();
     assert_eq!(summary.sampling.frames, 3);
-    let (mut scene, mut session, segment) = external_session();
+    let (scene, mut session, segment) = external_session();
     let mut capture = SessionCapture::new(&session, options()).unwrap();
     let mut address = None;
     for (index, expected) in reference.iter().enumerate() {
@@ -199,7 +199,7 @@ fn foreign_runtime_and_cancellation_poison_capture_without_mutating_session() {
 #[test]
 #[ignore = "requires software Vulkan; selected by native output gate"]
 fn pending_callback_is_not_captured_completed_or_acknowledged() {
-    let (mut scene, _object, _target) = make_scene(true);
+    let (scene, _object, _target) = make_scene(true);
     let mut session = scene.execution_session().unwrap();
     let mut capture = SessionCapture::new(&session, options()).unwrap();
     let segment = scene.live(&mut session).wait_segment(0.5).unwrap();
