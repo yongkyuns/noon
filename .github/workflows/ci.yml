@@ -1,4 +1,4 @@
-name: M1 browser qualification prerequisites (temporary)
+name: M1 exact merge-base snapshot (temporary)
 on:
   push:
     branches: [codex/m1-browser-prerequisites-ca12]
@@ -7,30 +7,21 @@ permissions:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: e0459b34a9db795f28c82066c6b28402b124a476
+          ref: b13c09055fd1f837fd9ad10f1f04b5de3af91095
           persist-credentials: false
-      - name: Collect exact master and standalone binding tools
-        shell: bash
+      - name: Archive verified merge-base for local three-way integration
         run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/m1-browser-prerequisites/npm"
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/m1-browser-prerequisites/master.tar.gz"
-          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/m1-browser-prerequisites/master-identity.txt"
-          curl --fail --location --retry 2 'https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz' -o "$RUNNER_TEMP/m1-browser-prerequisites/wasm-bindgen.tar.gz"
-          cd "$RUNNER_TEMP/m1-browser-prerequisites/npm"
-          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          tar -czf ../node-modules.tar.gz node_modules
-          cd ..
-          rm -rf npm
-          sha256sum master.tar.gz wasm-bindgen.tar.gz node-modules.tar.gz > checksums.txt
+          mkdir -p "$RUNNER_TEMP/m1-base"
+          test "$(git rev-parse HEAD^{tree})" = 6a2320edb3385903ed7ba410bc9fec141259358a
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/m1-base/base.tar.gz"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/m1-base/identity.txt"
       - uses: actions/upload-artifact@v7
-        if: always()
         with:
-          name: m1-browser-prerequisites
-          path: ${{ runner.temp }}/m1-browser-prerequisites/
+          name: m1-exact-base-b13
+          path: ${{ runner.temp }}/m1-base/
           if-no-files-found: error
           retention-days: 1
