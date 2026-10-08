@@ -27,8 +27,9 @@ mod frame_grid;
 mod pixel_readback;
 
 pub use export_frames::{
-    ExportEndReason, ExportFrame, ExportFrameOptions, ExportFrameSummary, ExportFrames,
-    ExportFramesError, ExportFramesStatus, ExportSample, ExportSampleKind, ExportStop,
+    ExportEndReason, ExportFrame, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyError,
+    ExportFramePolicyStatus, ExportFrameSummary, ExportFrames, ExportFramesError,
+    ExportFramesStatus, ExportSample, ExportSampleKind, ExportStop,
 };
 pub use forward_sample::{
     ForwardSample, ForwardSampleError, ForwardSampleStatus, SampleObservation,

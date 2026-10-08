@@ -3,14 +3,17 @@
 //! This module owns output indices and acknowledgements, not scene time,
 //! animation evaluation, source continuation, rendering, or encoder completion.
 
+mod policy;
+pub use policy::{ExportFramePolicy, ExportFramePolicyError, ExportFramePolicyStatus};
+
 use std::{error::Error, fmt};
 
 use noon_core::PublicationContext;
 use noon_runtime::RendererPublication;
 
 use super::{
-    ForwardSample, ForwardSampleError, ForwardSampleStatus, FrameGrid, FrameGridError, FrameRate,
-    FrameSample, SampleObservation,
+    ForwardSample, ForwardSampleError, ForwardSampleStatus, FrameGridError, FrameRate, FrameSample,
+    SampleObservation,
 };
 use crate::{
     ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
@@ -107,16 +110,13 @@ pub enum ExportFramesStatus {
 /// is cooperative and cannot interrupt a synchronous callback that never returns.
 /// On consumer failure, cancel and discard the export rather than retry a consumed
 /// publication. Neither this type nor its summary certifies a completed video.
+///
+/// The reusable `ExportFramePolicy` owns frame/range decisions. This adapter only
+/// coordinates it with Rust's existing continuation and publication protocol.
 pub struct ExportFrames<'a, C: LiveContinuation> {
     sample: ForwardSample<'a, C>,
-    options: ExportFrameOptions,
-    grid: FrameGrid,
-    stop_time: Option<f64>,
-    index: u64,
-    emitted: u64,
-    pending: Option<(ExportSample, Option<ExportFrameSummary>)>,
-    complete: Option<ExportFrameSummary>,
-    failed: bool,
+    policy: ExportFramePolicy,
+    max_transitions_per_sample: u32,
 }
 
 impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
@@ -130,58 +130,14 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
         {
             return Err(ExportFramesError::SourceAlreadyStarted);
         }
-        if options.max_frames == 0
-            || options.start_frame >= options.max_frames
-            || options.max_transitions_per_sample == 0
-            || !options.final_hold_seconds.is_finite()
-            || options.final_hold_seconds < 0.0
-        {
-            return Err(ExportFramesError::InvalidOptions);
-        }
-        let grid = FrameGrid::new(options.frame_rate, 0.0).map_err(ExportFramesError::Grid)?;
-        let start_time = grid
-            .sample(options.start_frame)
-            .map_err(ExportFramesError::Grid)?
-            .authored_time();
-        let stop_time = match options.stop {
-            ExportStop::SourceEnd => None,
-            ExportStop::FrameCount(count) => {
-                if count == 0 {
-                    return Err(ExportFramesError::EmptyInterval);
-                }
-                let end = options
-                    .start_frame
-                    .checked_add(count)
-                    .filter(|&end| end <= options.max_frames)
-                    .ok_or(ExportFramesError::FrameLimit)?;
-                Some(
-                    grid.sample(end)
-                        .map_err(ExportFramesError::Grid)?
-                        .authored_time(),
-                )
-            }
-            ExportStop::EndTime(end) => {
-                if !end.is_finite() || end <= start_time {
-                    return Err(ExportFramesError::InvalidOptions);
-                }
-                grid.frame_count_before(end, options.max_frames)
-                    .map_err(ExportFramesError::Grid)?;
-                Some(end)
-            }
-        };
+        let policy = ExportFramePolicy::new(options)?;
         let sample =
             ForwardSample::new(program, callbacks, 0.0, options.max_transitions_per_sample)
                 .map_err(ExportFramesError::Sample)?;
         Ok(Self {
             sample,
-            options,
-            grid,
-            stop_time,
-            index: 0,
-            emitted: 0,
-            pending: None,
-            complete: None,
-            failed: false,
+            policy,
+            max_transitions_per_sample: options.max_transitions_per_sample,
         })
     }
 
@@ -200,22 +156,30 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
 
     /// At most one underlying cooperative step; no wall-clock pacing.
     pub fn advance(&mut self) -> Result<ExportFramesStatus, ExportFramesError<C::Error>> {
-        if self.failed {
-            return Err(ExportFramesError::Inactive);
-        }
-        if let Some((sample, _)) = self.pending {
-            return Ok(ExportFramesStatus::SampleReady(sample));
-        }
-        if let Some(summary) = self.complete {
-            return Ok(ExportFramesStatus::Complete(summary));
+        match self.policy.status()? {
+            ExportFramePolicyStatus::NeedsSample(_) => {}
+            ExportFramePolicyStatus::SampleReady(sample) => {
+                return Ok(ExportFramesStatus::SampleReady(sample));
+            }
+            ExportFramePolicyStatus::Complete(summary) => {
+                return Ok(ExportFramesStatus::Complete(summary));
+            }
         }
         let result = match self.sample.advance() {
             Ok(ForwardSampleStatus::Progress) => Ok(ExportFramesStatus::Progress),
             Ok(ForwardSampleStatus::PublicationPending(context)) => {
                 Ok(ExportFramesStatus::PublicationPending(context))
             }
-            Ok(ForwardSampleStatus::Ready(observation)) => self.observe(observation, false),
-            Ok(ForwardSampleStatus::SourceFinished(observation)) => self.observe(observation, true),
+            Ok(ForwardSampleStatus::Ready(observation)) => self
+                .policy
+                .observe(observation, false)
+                .map(ExportFramesStatus::SampleReady)
+                .map_err(ExportFramesError::from),
+            Ok(ForwardSampleStatus::SourceFinished(observation)) => self
+                .policy
+                .observe(observation, true)
+                .map(ExportFramesStatus::SampleReady)
+                .map_err(ExportFramesError::from),
             Err(error) => Err(ExportFramesError::Sample(error)),
         };
         if result.is_err() {
@@ -224,86 +188,10 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
         result
     }
 
-    fn observe(
-        &mut self,
-        observation: SampleObservation,
-        finished: bool,
-    ) -> Result<ExportFramesStatus, ExportFramesError<C::Error>> {
-        let source_end = finished.then_some(observation.published_time);
-        let source_limit = match source_end {
-            Some(end) => {
-                let held_end = end + self.options.final_hold_seconds;
-                if !held_end.is_finite()
-                    || (self.options.final_hold_seconds > 0.0 && held_end <= end)
-                {
-                    return Err(ExportFramesError::InvalidHold);
-                }
-                held_end
-            }
-            None => f64::INFINITY,
-        };
-        let requested_limit = self.stop_time.unwrap_or(f64::INFINITY);
-        let end = source_limit.min(requested_limit);
-        let at_end = observation.requested_time >= end;
-        if !at_end && self.index >= self.options.max_frames {
-            return Err(ExportFramesError::FrameLimit);
-        }
-        let frame = if !at_end && self.index >= self.options.start_frame {
-            Some(ExportFrame {
-                source_sample: self
-                    .grid
-                    .sample(self.index)
-                    .map_err(ExportFramesError::Grid)?,
-                pts: self.index - self.options.start_frame,
-                held: finished,
-            })
-        } else {
-            None
-        };
-        let sample = ExportSample {
-            observation,
-            kind: if at_end {
-                ExportSampleKind::Completion
-            } else if frame.is_some() {
-                ExportSampleKind::Output
-            } else {
-                ExportSampleKind::Prefix
-            },
-            frame,
-        };
-        let summary = if at_end {
-            Some(ExportFrameSummary {
-                frames: self.emitted,
-                frame_rate: self.options.frame_rate,
-                start_time: self
-                    .grid
-                    .sample(self.options.start_frame)
-                    .map_err(ExportFramesError::Grid)?
-                    .authored_time(),
-                end_time: end,
-                source_end,
-                scheduled_duration: self
-                    .grid
-                    .sample(self.emitted)
-                    .map_err(ExportFramesError::Grid)?
-                    .authored_time(),
-                reason: if source_limit <= requested_limit {
-                    ExportEndReason::SourceEnd
-                } else {
-                    ExportEndReason::RequestedStop
-                },
-            })
-        } else {
-            None
-        };
-        self.pending = Some((sample, summary));
-        Ok(ExportFramesStatus::SampleReady(sample))
-    }
-
     pub fn take_renderer_publication(
         &mut self,
     ) -> Result<RendererPublication<'_>, ExportFramesError<C::Error>> {
-        if self.failed || self.complete.is_some() {
+        if matches!(self.policy.status()?, ExportFramePolicyStatus::Complete(_)) {
             return Err(ExportFramesError::Inactive);
         }
         self.sample
@@ -315,7 +203,7 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
         &mut self,
         context: PublicationContext,
     ) -> Result<(), ExportFramesError<C::Error>> {
-        if self.failed || self.complete.is_some() {
+        if matches!(self.policy.status()?, ExportFramePolicyStatus::Complete(_)) {
             return Err(ExportFramesError::Inactive);
         }
         self.sample
@@ -329,11 +217,10 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
         &mut self,
         expected: ExportSample,
     ) -> Result<(), ExportFramesError<C::Error>> {
-        if self.failed || self.complete.is_some() {
-            return Err(ExportFramesError::Inactive);
-        }
-        let Some((sample, summary)) = self.pending else {
-            return Err(ExportFramesError::WrongSample);
+        let sample = match self.policy.status()? {
+            ExportFramePolicyStatus::SampleReady(sample) => sample,
+            ExportFramePolicyStatus::Complete(_) => return Err(ExportFramesError::Inactive),
+            ExportFramePolicyStatus::NeedsSample(_) => return Err(ExportFramesError::WrongSample),
         };
         if sample != expected {
             return Err(ExportFramesError::WrongSample);
@@ -343,48 +230,23 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
                 ForwardSampleError::PublicationNotConsumed,
             ));
         }
-        if let Some(summary) = summary {
-            if summary.frames == 0 {
-                self.cancel();
-                return Err(ExportFramesError::EmptyInterval);
+        let result = (|| {
+            self.policy.acknowledge_sample(sample)?;
+            if let ExportFramePolicyStatus::NeedsSample(requested) = self.policy.status()? {
+                self.sample
+                    .restart(requested, self.max_transitions_per_sample)
+                    .map_err(ExportFramesError::Sample)?;
             }
-            self.pending = None;
-            self.complete = Some(summary);
-            return Ok(());
-        }
-        let result = self.next_sample(sample.frame.is_some());
+            Ok(())
+        })();
         if result.is_err() {
             self.cancel();
         }
         result
     }
 
-    fn next_sample(&mut self, output: bool) -> Result<(), ExportFramesError<C::Error>> {
-        let next = self
-            .index
-            .checked_add(1)
-            .ok_or(ExportFramesError::FrameLimit)?;
-        let grid_time = self
-            .grid
-            .sample(next)
-            .map_err(ExportFramesError::Grid)?
-            .authored_time();
-        // Drain an off-grid requested end exactly, never advance callbacks to the
-        // next grid point beyond it. Source completion is handled by ForwardSample.
-        let requested = self.stop_time.map_or(grid_time, |end| grid_time.min(end));
-        self.sample
-            .restart(requested, self.options.max_transitions_per_sample)
-            .map_err(ExportFramesError::Sample)?;
-        if output {
-            self.emitted += 1; // bounded by index < max_frames before offer
-        }
-        self.index = next;
-        self.pending = None;
-        Ok(())
-    }
-
     pub fn cancel(&mut self) {
-        self.failed = true;
+        self.policy.cancel();
         self.sample.cancel();
     }
 }
@@ -394,12 +256,28 @@ pub enum ExportFramesError<E> {
     SourceAlreadyStarted,
     InvalidOptions,
     InvalidHold,
+    InvalidObservation,
     EmptyInterval,
     FrameLimit,
     WrongSample,
     Inactive,
     Grid(FrameGridError),
     Sample(ForwardSampleError<E>),
+}
+
+impl<E> From<ExportFramePolicyError> for ExportFramesError<E> {
+    fn from(error: ExportFramePolicyError) -> Self {
+        match error {
+            ExportFramePolicyError::InvalidOptions => Self::InvalidOptions,
+            ExportFramePolicyError::InvalidHold => Self::InvalidHold,
+            ExportFramePolicyError::InvalidObservation => Self::InvalidObservation,
+            ExportFramePolicyError::EmptyInterval => Self::EmptyInterval,
+            ExportFramePolicyError::FrameLimit => Self::FrameLimit,
+            ExportFramePolicyError::WrongSample => Self::WrongSample,
+            ExportFramePolicyError::Inactive => Self::Inactive,
+            ExportFramePolicyError::Grid(error) => Self::Grid(error),
+        }
+    }
 }
 
 impl<E: fmt::Display> fmt::Display for ExportFramesError<E> {
@@ -410,6 +288,9 @@ impl<E: fmt::Display> fmt::Display for ExportFramesError<E> {
             }
             Self::InvalidOptions => f.write_str("invalid export bounds or hold configuration"),
             Self::InvalidHold => f.write_str("terminal hold has no finite distinct end"),
+            Self::InvalidObservation => {
+                f.write_str("observation does not settle the requested export sample")
+            }
             Self::EmptyInterval => {
                 f.write_str("export has no frames; author or request a positive hold")
             }
