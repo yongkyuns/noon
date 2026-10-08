@@ -78,7 +78,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     assert_eq!(
         current,
         Transform2D {
-            translation: from.transform.translation,
+            translation: (from.transform.translation + to.transform.translation) * 0.5,
             ..Transform2D::IDENTITY
         }
     );
@@ -104,11 +104,11 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     };
 
     assert_vec2_close(
-        current.transform_point(source_relative),
+        source_relative + from.transform.translation,
         from.transform.transform_point(Vec2::new(1.0, 0.0)),
     );
     assert_vec2_close(
-        current.transform_point(target_relative),
+        target_relative + to.transform.translation,
         to.transform.transform_point(Vec2::new(0.0, 1.0)),
     );
     let stable = instance.frame().render_geometries[0].clone().unwrap();
@@ -136,12 +136,28 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
             retained_frame.objects[0].transform
         );
         let bounds = noon_runtime::frame_object_conservative_bounds(frame, 0).unwrap();
-        let source_world = from.transform.transform_point(Vec2::new(1.0, 0.0));
-        let target_world = to.transform.transform_point(Vec2::new(0.0, 1.0));
-        for point in [source_world, target_world] {
-            if time <= 0.0 || time >= 2.0 {
-                continue;
-            }
+        let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(0) else {
+            panic!("transform must retain path geometry");
+        };
+        for (index, length) in [1.0, 2.0].into_iter().enumerate() {
+            let source_world = from.transform.transform_point(Vec2::new(length, 0.0));
+            let target_world = to.transform.transform_point(Vec2::new(0.0, length));
+            let progress = (time / 2.0) as f32;
+            let expected = source_world + (target_world - source_world) * progress;
+            let source_point = match path.commands()[index] {
+                PathCommand::MoveTo { to } | PathCommand::LineTo { to } => to,
+                _ => panic!("endpoint"),
+            };
+            let target_point =
+                path.morph_target()
+                    .map_or(source_point, |target| match target.commands()[index] {
+                        PathCommand::MoveTo { to } | PathCommand::LineTo { to } => to,
+                        _ => panic!("endpoint"),
+                    });
+            let point = frame
+                .render_transform(0)
+                .transform_point(source_point + (target_point - source_point) * frame.morph(0));
+            assert_vec2_close(point, expected);
             assert!(point.x >= bounds.min.x && point.x <= bounds.max.x);
             assert!(point.y >= bounds.min.y && point.y <= bounds.max.y);
         }
@@ -219,15 +235,22 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
         rotation: std::f32::consts::FRAC_PI_4,
         scale: Vec2::new(1.5, 1.75),
     };
-    let world = from.transform.transform_point(Vec2::new(1.0, 0.0));
+    let source_world = from.transform.transform_point(Vec2::new(1.0, 0.0));
+    let target_world = to.transform.transform_point(Vec2::new(0.0, 1.0));
+    let world = (source_world + target_world) * 0.5;
     let relative = (world - base.translation).rotate(-base.rotation);
     let local = Vec2::new(relative.x / base.scale.x, relative.y / base.scale.y);
     let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(0) else {
         panic!("path pair");
     };
-    let PathCommand::MoveTo { to: point } = path.commands()[0] else {
+    let PathCommand::MoveTo { to: source_point } = path.commands()[0] else {
         panic!("endpoint");
     };
+    let PathCommand::MoveTo { to: target_point } = path.morph_target().unwrap().commands()[0]
+    else {
+        panic!("endpoint");
+    };
+    let point = source_point + (target_point - source_point) * frame.morph(0);
     assert_vec2_close(
         frame.render_transform(0).transform_point(point),
         frame.objects[0].transform.transform_point(local),

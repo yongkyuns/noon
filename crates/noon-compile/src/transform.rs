@@ -24,8 +24,8 @@ pub enum TransformGeometryPlan {
     },
     PathPair {
         geometry: Arc<GeometryRef>,
-        /// Fixed coordinate frame for renderer-only endpoints; semantic TRS stays separate.
-        render_transform: Option<Transform2D>,
+        /// Shape frame with independently sampled translation; semantic TRS stays separate.
+        render_frame: Option<noon_core::MorphRenderFrame>,
         /// Prepared once in source semantic coordinates for earlier playback.
         /// Only fixed-frame PreparedMorph plans need this additional geometry.
         prestart_geometry: Option<Arc<GeometryRef>>,
@@ -52,8 +52,9 @@ pub(crate) fn compile_transform_geometry_values(
     if property == Property::Morph {
         return match values {
             TrackValues::PreparedMorph {
+                from,
                 geometry,
-                render_transform,
+                render_frame,
                 source_transform,
                 ..
             } => {
@@ -74,8 +75,9 @@ pub(crate) fn compile_transform_geometry_values(
                 // it deliberately revalidates only renderer-independent correspondence.
                 Ok(Some(TransformGeometryPlan::PathPair {
                     geometry: Arc::new(geometry.clone()),
-                    render_transform: *render_transform,
-                    prestart_geometry: render_transform
+                    render_frame: *render_frame,
+                    prestart_geometry: render_frame
+                        .map(|frame| frame.sample(from.clamp(0.0, 1.0)))
                         .filter(|render| *render != *source_transform)
                         .map(|render| {
                             prepared_pair_in_source_frame(source, render, *source_transform)
@@ -179,7 +181,7 @@ pub(crate) fn compile_content_morph(
     to_style: Style,
     from_transform: Transform2D,
     to_transform: Transform2D,
-) -> Result<(GeometryRef, Option<Transform2D>), TransformCompileFailure> {
+) -> Result<(GeometryRef, Option<noon_core::MorphRenderFrame>), TransformCompileFailure> {
     let supported = matches!(
         (from_geometry, to_geometry),
         (GeometryRef::Circle { .. }, GeometryRef::Rectangle { .. })
@@ -224,7 +226,7 @@ pub(crate) fn compile_content_morph(
     };
     let TransformGeometryPlan::PathPair {
         geometry,
-        render_transform,
+        render_frame,
         ..
     } = compile_path_pair(
         pair_from_style,
@@ -237,11 +239,10 @@ pub(crate) fn compile_content_morph(
     else {
         unreachable!("point transform compiles to a path pair")
     };
-    if screen_space_stroke_requires_fixed_frame(from_style, to_style) && render_transform.is_none()
-    {
+    if screen_space_stroke_requires_fixed_frame(from_style, to_style) && render_frame.is_none() {
         return Err(TransformCompileFailure::RequiresRetessellation);
     }
-    Ok((geometry.as_ref().clone(), render_transform))
+    Ok((geometry.as_ref().clone(), render_frame))
 }
 
 fn screen_space_stroke_requires_fixed_frame(from: Style, to: Style) -> bool {
@@ -279,10 +280,10 @@ fn compile_path_pair(
     if fill_topology_required && !filled_morph_is_supported(&source, &target) {
         return Err(TransformCompileFailure::UnsafeFilledPath);
     }
-    // A fixed render frame keeps both stroke tessellation and path resource identity
-    // independent of animation progress. Anchor it at the source translation instead
-    // of baking absolute world positions into the resource: repeated morphs with the
-    // same shapes and relative motion can then share one endpoint geometry. Prepared
+    // A shape frame keeps stroke tessellation and path resource identity independent
+    // of animation progress and endpoint translations. Interpolate translation in
+    // the runtime frame: pointwise interpolation is linear in both endpoint points
+    // and translation, so unrelated moves can share the same endpoint geometry. Prepared
     // morph evaluation owns this frame through an interior singular scale, so only the
     // endpoint transforms need to be invertible when a later independent TRS driver
     // takes ownership.
@@ -291,17 +292,21 @@ fn compile_path_pair(
     {
         let world_source = source.transformed(from_transform);
         let world_target = target.transformed(to_transform);
-        let render_transform = Transform2D {
-            translation: from_transform.translation,
-            ..Transform2D::IDENTITY
+        let render_frame = noon_core::MorphRenderFrame {
+            from: Transform2D {
+                translation: from_transform.translation,
+                ..Transform2D::IDENTITY
+            },
+            to_translation: to_transform.translation,
         };
+        let intermediate_translation = render_frame.sample(0.5).translation;
         let frame_source = source.transformed(Transform2D {
             translation: noon_core::Vec2::ZERO,
             rotation: from_transform.rotation,
             scale: from_transform.scale,
         });
         let frame_target = target.transformed(Transform2D {
-            translation: to_transform.translation - from_transform.translation,
+            translation: noon_core::Vec2::ZERO,
             rotation: to_transform.rotation,
             scale: to_transform.scale,
         });
@@ -311,6 +316,8 @@ fn compile_path_pair(
             && world_target.is_finite()
             && frame_source.is_finite()
             && frame_target.is_finite()
+            && intermediate_translation.x.is_finite()
+            && intermediate_translation.y.is_finite()
             && fixed_frame_inverse_is_finite(
                 &world_source,
                 &world_target,
@@ -323,14 +330,14 @@ fn compile_path_pair(
                 geometry: Arc::new(GeometryRef::path(
                     frame_source.with_morph_target(frame_target),
                 )),
-                render_transform: Some(render_transform),
+                render_frame: Some(render_frame),
                 prestart_geometry: None,
             });
         }
     }
     Ok(TransformGeometryPlan::PathPair {
         geometry: Arc::new(GeometryRef::path(source.with_morph_target(target))),
-        render_transform: None,
+        render_frame: None,
         prestart_geometry: None,
     })
 }
@@ -511,13 +518,13 @@ mod tests {
             .unwrap();
             let TransformGeometryPlan::PathPair {
                 geometry,
-                render_transform,
+                render_frame,
                 ..
             } = plan
             else {
                 panic!("pair");
             };
-            assert_eq!(render_transform.is_some(), fixed);
+            assert_eq!(render_frame.is_some(), fixed);
             assert!(geometry.is_finite());
         }
     }
@@ -559,7 +566,7 @@ mod tests {
 
         let TransformGeometryPlan::PathPair {
             geometry,
-            render_transform: Some(render_transform),
+            render_frame: Some(render_frame),
             ..
         } = compile_path_pair(style, style, from, to, source.clone(), target.clone()).unwrap()
         else {
@@ -567,7 +574,7 @@ mod tests {
         };
         let TransformGeometryPlan::PathPair {
             geometry: translated_geometry,
-            render_transform: Some(translated_render_transform),
+            render_frame: Some(translated_render_frame),
             ..
         } = compile_path_pair(
             style,
@@ -583,9 +590,9 @@ mod tests {
         };
 
         assert_eq!(geometry, translated_geometry);
-        assert_eq!(render_transform.translation, from.translation);
+        assert_eq!(render_frame.from.translation, from.translation);
         assert_eq!(
-            translated_render_transform.translation,
+            translated_render_frame.from.translation,
             translated_from.translation
         );
 
@@ -621,8 +628,10 @@ mod tests {
                 + (translated_to.transform_point(target_point)
                     - translated_from.transform_point(source_point))
                     * progress;
-            let actual = render_transform.transform_point(frame_point);
-            let translated_actual = translated_render_transform.transform_point(frame_point);
+            let actual = render_frame.sample(progress).transform_point(frame_point);
+            let translated_actual = translated_render_frame
+                .sample(progress)
+                .transform_point(frame_point);
             assert!(
                 (actual - expected).length() <= 1.0e-4,
                 "progress {progress}: expected {expected:?}, got {actual:?}"
@@ -631,6 +640,63 @@ mod tests {
                 (translated_actual - translated_expected).length() <= 1.0e-4,
                 "translated progress {progress}: expected {translated_expected:?}, got {translated_actual:?}"
             );
+        }
+    }
+
+    #[test]
+    fn screen_space_morphs_share_geometry_across_600_independent_moves() {
+        let geometry = GeometryRef::rectangle(0.14, 0.14);
+        let style = Style {
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let mut shared = None;
+        for index in 0..600 {
+            let from = Transform2D {
+                translation: Vec2::new((index % 30) as f32 * 0.3, (index / 30) as f32 * 0.3),
+                rotation: std::f32::consts::FRAC_PI_2,
+                ..Transform2D::IDENTITY
+            };
+            let angle = index as f32 * 0.07;
+            let to = Transform2D {
+                translation: Vec2::new(angle.cos(), angle.sin()) * (index as f32 / 100.0),
+                rotation: from.rotation + std::f32::consts::FRAC_PI_3,
+                ..Transform2D::IDENTITY
+            };
+            let (pair, Some(frame)) =
+                compile_content_morph(&geometry, &geometry, style, style, from, to).unwrap()
+            else {
+                panic!("screen-space morph must retain a sampled shape frame")
+            };
+            if let Some(expected) = &shared {
+                assert_eq!(
+                    &pair, expected,
+                    "move {index} must not create distinct path coordinates"
+                );
+            } else {
+                shared = Some(pair.clone());
+            }
+            let GeometryRef::VectorPath(path) = pair else {
+                panic!("point morph has a path pair")
+            };
+            let PathCommand::MoveTo { to: a } = path.commands()[0] else {
+                panic!("source corner")
+            };
+            let PathCommand::MoveTo { to: b } = path.morph_target().unwrap().commands()[0] else {
+                panic!("target corner")
+            };
+            let point = Vec2::new(0.07, 0.07);
+            // Compare to the independent world-space point definition, including
+            // the shrunken rotation midpoint rather than rigid rotation.
+            for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                let expected = from.transform_point(point)
+                    + (to.transform_point(point) - from.transform_point(point)) * alpha;
+                let actual = frame.sample(alpha).transform_point(a + (b - a) * alpha);
+                assert!(
+                    (actual - expected).length() <= 1.0e-5,
+                    "move {index}@{alpha}: {actual:?} != {expected:?}"
+                );
+            }
         }
     }
 
@@ -647,7 +713,7 @@ mod tests {
             scale: Vec2::new(-1.0, 1.0),
             ..Transform2D::IDENTITY
         };
-        let (geometry, render_transform) = compile_content_morph(
+        let (geometry, render_frame) = compile_content_morph(
             &GeometryRef::rectangle(2.0, 1.0),
             &GeometryRef::rectangle(2.0, 1.0),
             style,
@@ -656,7 +722,10 @@ mod tests {
             reflection,
         )
         .expect("nonsingular reflected endpoints keep one fixed render frame");
-        assert_eq!(render_transform, Some(Transform2D::IDENTITY));
+        assert_eq!(
+            render_frame,
+            Some(noon_core::MorphRenderFrame::fixed(Transform2D::IDENTITY))
+        );
         let GeometryRef::VectorPath(path) = geometry else {
             panic!("point correspondence must compile to a path pair")
         };
@@ -684,7 +753,7 @@ mod tests {
             rotation: std::f32::consts::FRAC_PI_4,
             ..Transform2D::IDENTITY
         };
-        let (geometry, render_transform) = compile_content_morph(
+        let (geometry, render_frame) = compile_content_morph(
             &GeometryRef::rectangle(2.0, 2.0),
             &GeometryRef::circle(1.0),
             style,
@@ -698,7 +767,10 @@ mod tests {
             panic!("analytic cross-content morph must compile to a path pair")
         };
         assert!(path.morph_target().is_some());
-        assert_eq!(render_transform, Some(Transform2D::IDENTITY));
+        assert_eq!(
+            render_frame,
+            Some(noon_core::MorphRenderFrame::fixed(Transform2D::IDENTITY))
+        );
         assert!(path
             .conservative_bounds()
             .is_some_and(|bounds| bounds.width() > 2.5 && bounds.height() > 2.5));
@@ -712,7 +784,7 @@ mod tests {
             stroke_width_mode: StrokeWidthMode::ScreenSpace,
             ..Style::default()
         };
-        let (geometry, render_transform) = compile_content_morph(
+        let (geometry, render_frame) = compile_content_morph(
             &GeometryRef::line(Vec2::ZERO, Vec2::new(0.75, 0.0)),
             &GeometryRef::line(Vec2::ZERO, Vec2::new(0.0, 0.75)),
             style,
@@ -726,7 +798,10 @@ mod tests {
             panic!("line content morph must use the retained path pair")
         };
         let target = path.morph_target().expect("rotated line endpoint path");
-        assert_eq!(render_transform, Some(Transform2D::IDENTITY));
+        assert_eq!(
+            render_frame,
+            Some(noon_core::MorphRenderFrame::fixed(Transform2D::IDENTITY))
+        );
         assert_eq!(path.commands().len(), 2);
         assert_eq!(target.commands().len(), 2);
         assert_eq!(
@@ -758,7 +833,7 @@ mod tests {
         };
         let source = GeometryRef::line(Vec2::ZERO, Vec2::new(0.75, 0.0));
         let target = GeometryRef::line(Vec2::ZERO, Vec2::new(0.0, 0.75));
-        let (geometry, render_transform) = compile_content_morph(
+        let (geometry, render_frame) = compile_content_morph(
             &source,
             &target,
             source_style,
@@ -768,7 +843,10 @@ mod tests {
         )
         .expect("screen-space line width is a runtime style channel");
         assert!(matches!(geometry, GeometryRef::VectorPath(_)));
-        assert_eq!(render_transform, Some(Transform2D::IDENTITY));
+        assert_eq!(
+            render_frame,
+            Some(noon_core::MorphRenderFrame::fixed(Transform2D::IDENTITY))
+        );
 
         let scale_with_object = Style {
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
@@ -844,7 +922,7 @@ mod tests {
             ..Transform2D::IDENTITY
         };
 
-        let (geometry, render_transform) = compile_content_morph(
+        let (geometry, render_frame) = compile_content_morph(
             &GeometryRef::rectangle(2.0, 2.0),
             &GeometryRef::circle(1.0),
             style,
@@ -857,7 +935,7 @@ mod tests {
             panic!("content morph must compile to a path pair")
         };
         assert!(path.morph_target().is_some());
-        assert_eq!(render_transform, None);
+        assert_eq!(render_frame, None);
     }
 
     #[test]
@@ -896,9 +974,9 @@ mod tests {
         assert!(matches!(
             plan,
             TransformGeometryPlan::PathPair {
-                render_transform: Some(Transform2D::IDENTITY),
+                render_frame: Some(frame),
                 ..
-            }
+            } if frame == noon_core::MorphRenderFrame::fixed(Transform2D::IDENTITY)
         ));
 
         let visible_fill = Style {

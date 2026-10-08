@@ -2376,7 +2376,7 @@ pub(super) fn lower_transform_channels(
         .map_err(|_| AffinePayloadIssue::InvalidEffectiveTransform)?;
     let target_style =
         lower_semantic_style_value(target).map_err(AffinePayloadIssue::InvalidTargetStyle)?;
-    let (prepared, render_transform) = crate::transform::compile_content_morph(
+    let (prepared, render_frame) = crate::transform::compile_content_morph(
         &geometry(source.content)?,
         &geometry(target.content)?,
         from.style,
@@ -2396,7 +2396,7 @@ pub(super) fn lower_transform_channels(
             from: 0.0,
             to: 1.0,
             geometry: prepared,
-            render_transform,
+            render_frame,
             source_transform: from.transform,
         },
     });
