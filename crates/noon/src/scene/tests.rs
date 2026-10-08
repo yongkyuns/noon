@@ -777,10 +777,7 @@ fn scene_running_path_edits_reject_cold_and_foreign_without_mutation() {
         destination.path_query().unwrap().start().unwrap(),
         (1.0, 0.0)
     );
-    assert_eq!(
-        destination.path_query().unwrap().end().unwrap(),
-        (3.0, 0.0)
-    );
+    assert_eq!(destination.path_query().unwrap().end().unwrap(), (3.0, 0.0));
     assert!(scene.revision().get() > revision.get());
 
     let foreign = Scene::new().line((0.0, 0.0), (1.0, 0.0)).unwrap();
