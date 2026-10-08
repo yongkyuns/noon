@@ -127,6 +127,13 @@ impl DepthDraw {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+struct DepthOrderEntry {
+    draw: DepthDraw,
+    depth: f64,
+    painter_rank: u32,
+}
 #[derive(Debug)]
 struct GpuState {
     device: wgpu::Device,
@@ -167,7 +174,7 @@ pub(super) struct SpatialGpuState {
     meshes: HashMap<GeometryResourceHandle, ResidentMesh>,
     mesh_instances: BTreeMap<GeometryResourceHandle, InstanceRanges>,
     depth_ordered_draws: BTreeSet<usize>,
-    depth_order: Vec<DepthDraw>,
+    depth_order: Vec<DepthOrderEntry>,
     stroked_draws: BTreeSet<usize>,
     instances: Vec<Instance>,
     free_instances: Vec<usize>,
@@ -840,41 +847,52 @@ impl SpatialGpuState {
             }
         }
         if depth_order_changed {
-            self.depth_order = self
-                .depth_ordered_draws
-                .iter()
-                .copied()
-                .map(DepthDraw::Mesh)
-                .chain(self.paths.depth_draws().map(DepthDraw::Path))
-                .collect();
-            if let Some(camera) = cameras.values().next() {
-                let depth = |draw: DepthDraw| {
-                    let p = match draw {
-                        DepthDraw::Mesh(index) => self.draws[&index].center,
-                        DepthDraw::Path(id) => self.paths.depth_center(id),
-                    };
-                    camera
-                        .orientation
-                        .inverse()
-                        .rotate_vector(SemanticVec3::new(
-                            p.x - camera.position.x,
-                            p.y - camera.position.y,
-                            p.z - camera.position.z,
-                        ))
-                        .map_or(f64::INFINITY, |p| p.z)
-                };
+            let camera = cameras.values().next();
+            let draws = &self.draws;
+            let paths = &self.paths;
+            // Reuse the draw list, calculating each key once rather than
+            // rotating centers and looking up ranks for every comparison.
+            self.depth_order.clear();
+            self.depth_order.extend(
+                self.depth_ordered_draws
+                    .iter()
+                    .copied()
+                    .map(DepthDraw::Mesh)
+                    .chain(paths.depth_draws().map(DepthDraw::Path))
+                    .map(|draw| {
+                        let depth = camera.map_or(f64::INFINITY, |camera| {
+                            let p = match draw {
+                                DepthDraw::Mesh(index) => draws[&index].center,
+                                DepthDraw::Path(id) => paths.depth_center(id),
+                            };
+                            camera
+                                .orientation
+                                .inverse()
+                                .rotate_vector(SemanticVec3::new(
+                                    p.x - camera.position.x,
+                                    p.y - camera.position.y,
+                                    p.z - camera.position.z,
+                                ))
+                                .map_or(f64::INFINITY, |p| p.z)
+                        });
+                        let row = draw.order_key().0;
+                        DepthOrderEntry {
+                            draw,
+                            depth,
+                            painter_rank: paths.painter_rank(row).unwrap_or(row as u32),
+                        }
+                    }),
+            );
+            if camera.is_some() {
                 // Camera looks along -Z: more negative view Z is drawn first.
-                self.depth_order.sort_by(|a, b| {
-                    depth(*a).total_cmp(&depth(*b)).then_with(|| {
-                        let rank = |draw: &DepthDraw| {
-                            let row = draw.order_key().0;
-                            self.paths.painter_rank(row).unwrap_or(row as u32)
-                        };
-                        rank(a)
-                            .cmp(&rank(b))
-                            .then(a.order_key().cmp(&b.order_key()))
-                            .then(a.cmp(b))
-                    })
+                // Draw identity makes ties total, so an in-place sort preserves
+                // the same order without allocating stable-sort scratch space.
+                self.depth_order.sort_unstable_by(|a, b| {
+                    a.depth
+                        .total_cmp(&b.depth)
+                        .then(a.painter_rank.cmp(&b.painter_rank))
+                        .then(a.draw.order_key().cmp(&b.draw.order_key()))
+                        .then(a.draw.cmp(&b.draw))
                 });
             }
         }
@@ -1127,8 +1145,8 @@ impl SpatialGpuState {
             noon_core::SemanticSpatialCompositionDomain::World,
         );
         let mut using_path_pipeline = false;
-        for &item in &self.depth_order {
-            let index = match item {
+        for entry in &self.depth_order {
+            let index = match entry.draw {
                 DepthDraw::Mesh(index) => index,
                 DepthDraw::Path(id) => {
                     if !using_path_pipeline {
@@ -1825,7 +1843,7 @@ mod tests {
     }
     #[test]
     fn full_spatial_publication_reorders_equal_depth_faces_without_uploads() {
-        use super::{DepthDraw, FrameChanges, SpatialGpuState};
+        use super::{DepthDraw, FrameChanges, FrameState, SpatialGpuState};
         use noon_core::{
             Color, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticProjection3D,
             SemanticStore, StoredGeometry,
@@ -1890,14 +1908,17 @@ mod tests {
         let camera =
             super::super::Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(16.0, 9.0))
                 .unwrap();
-        let prepare = |state: &mut SpatialGpuState, order: &[u32]| {
+        let prepare = |state: &mut SpatialGpuState,
+                       frame: &FrameState,
+                       changes: &FrameChanges,
+                       order: &[u32]| {
             state.prepare_frame(
                 &device,
                 &queue,
                 wgpu::TextureFormat::Rgba8UnormSrgb,
                 [64, 64],
-                scene.frame(),
-                &FrameChanges::all(),
+                frame,
+                changes,
                 scene.geometry_resources(),
                 scene.text_resources(),
                 scene.font_resources(),
@@ -1905,17 +1926,77 @@ mod tests {
                 camera,
             )
         };
-        prepare(&mut state, &order).unwrap();
-        assert_eq!(state.depth_order, expected);
+        prepare(&mut state, scene.frame(), &FrameChanges::all(), &order).unwrap();
+        let observed_order = |state: &SpatialGpuState| {
+            state
+                .depth_order
+                .iter()
+                .map(|entry| entry.draw)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(observed_order(&state), expected);
+        let storage = (state.depth_order.as_ptr(), state.depth_order.capacity());
         order.reverse();
         expected.reverse();
-        let stats = prepare(&mut state, &order).unwrap();
+        let stats = prepare(&mut state, scene.frame(), &FrameChanges::all(), &order).unwrap();
         assert_eq!(
-            state.depth_order, expected,
+            observed_order(&state),
+            expected,
             "full publication must refresh depth ties"
         );
         assert_eq!(stats.bytes_uploaded(), 0);
         assert_eq!(stats.resident_meshes, 1);
         assert_eq!(stats.resident_instances, 2);
+
+        // Pose changes override authored tie order; camera motion must refresh
+        // those keys without rebuilding geometry or the ordering allocation.
+        let mut frame = scene.frame().clone();
+        let farther_row = expected[1].order_key().0;
+        frame.objects[farther_row]
+            .spatial
+            .as_mut()
+            .unwrap()
+            .world
+            .translation
+            .z = -1.0;
+        let stats = prepare(
+            &mut state,
+            &frame,
+            &FrameChanges::objects(vec![farther_row]),
+            &order,
+        )
+        .unwrap();
+        expected.reverse();
+        assert_eq!(observed_order(&state), expected);
+        assert_eq!(stats.geometry_bytes, 0);
+
+        let camera_row = frame
+            .objects
+            .iter()
+            .position(|object| object.camera_projection().is_some())
+            .unwrap();
+        let world = &mut frame.objects[camera_row].spatial.as_mut().unwrap().world;
+        world.translation.z = -5.0;
+        world.rotation = noon_core::SemanticRotation3D::from_axis_angle(
+            SemanticVec3::new(0.0, 1.0, 0.0),
+            std::f64::consts::PI,
+        )
+        .unwrap();
+        let stats = prepare(
+            &mut state,
+            &frame,
+            &FrameChanges::objects(vec![camera_row]),
+            &order,
+        )
+        .unwrap();
+        expected.reverse();
+        assert_eq!(observed_order(&state), expected);
+        assert_eq!(stats.geometry_bytes, 0);
+        assert_eq!(stats.instance_bytes, 0);
+        assert_eq!(stats.camera_bytes, std::mem::size_of::<[f32; 16]>());
+        assert_eq!(
+            (state.depth_order.as_ptr(), state.depth_order.capacity()),
+            storage
+        );
     }
 }
