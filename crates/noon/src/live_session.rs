@@ -1015,18 +1015,6 @@ impl<'a> LiveSession<'a> {
             .map_err(LiveSessionError::from)
     }
 
-    pub(crate) fn composite_entry_state(
-        &self,
-        source: &Mobject,
-    ) -> Result<SemanticObjectState, crate::AuthoringError> {
-        crate::family_layout::composite_entry_state(
-            self.store,
-            Some(self.session),
-            self.root,
-            source,
-        )
-    }
-
     /// Capture conservative world-axis bounds from one coherent object state.
     /// Reachable objects use the live effective transform; detached objects use
     /// their validated authored state. Publication and callback gates are shared

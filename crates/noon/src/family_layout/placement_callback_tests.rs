@@ -3,8 +3,8 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     AnimationOptions, AuthoringError, ExecutionSession, LiveLayoutTarget, LiveSessionError,
-    Mobject, RateFunction, RustHostCallbackTable, Scene, Transform2D, UnsupportedAuthoringOperation,
-    Vec2,
+    Mobject, RateFunction, RustHostCallbackTable, Scene, Transform2D,
+    UnsupportedAuthoringOperation, Vec2,
 };
 use noon_core::{HostCallbackId, SemanticObjectProperty, SemanticVec3};
 
@@ -251,6 +251,10 @@ fn active_animation_and_reactive_affine_drivers_are_not_callback_placement() {
     let mut fixture = Fixture::new(false, false);
     let mut target = fixture.marker.target_editor().unwrap();
     target.set_translation(4.0, 0.0).unwrap();
+    // Target-editor construction changes the semantic store revision. The
+    // previous session has never advanced; replace it with a fresh session
+    // on that revision before testing rejection during an ACTIVE animation.
+    fixture.session = fixture.scene.execution_session().unwrap();
     let segment = fixture
         .scene
         .live(&mut fixture.session)

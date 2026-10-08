@@ -1304,10 +1304,8 @@ impl ExecutionSession {
         target: SemanticNodeId,
         translation: SemanticVec3,
         mut transform: Transform2D,
-    ) -> Result<
-        noon_core::SemanticMutationTransactionResult,
-        super::ExecutionSessionPublicationError,
-    > {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, super::ExecutionSessionPublicationError>
+    {
         use super::publication::SemanticPublicationPurpose;
         use super::ExecutionSessionPublicationError as PublicationError;
 

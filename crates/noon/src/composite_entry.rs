@@ -1,8 +1,14 @@
 //! Shared admission for one retained object-or-family composite entry.
 
-use crate::{AuthoringError, Mobject, MobjectFamily, MobjectTarget};
+use crate::{Mobject, MobjectFamily, MobjectTarget};
+use std::rc::Rc;
+
+#[cfg(test)]
+use crate::AuthoringError;
+#[cfg(test)]
 use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore};
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
+#[cfg(test)]
+use std::{cell::RefCell, collections::BTreeSet};
 
 /// An owned retained entry root returned by composite display families.
 ///
@@ -36,32 +42,17 @@ impl CompositeEntryHandle {
         }
     }
 
-    pub(crate) fn from_node(
-        store: Rc<RefCell<SemanticStore>>,
-        node: SemanticNodeId,
-    ) -> Result<Self, AuthoringError> {
-        let kind = store.borrow().node(node).map(|value| value.kind().clone());
-        match kind {
-            Some(noon_core::SemanticNodeKind::AuthoringObject) => {
-                Ok(Self::Mobject(Mobject::from_node(Rc::clone(&store), node)?))
-            }
-            Some(noon_core::SemanticNodeKind::Family(_)) => Ok(Self::Family(
-                MobjectFamily::from_node(Rc::clone(&store), node)?,
-            )),
-            _ => Err(AuthoringError::Semantic(
-                noon_core::SemanticSceneOperationError::UnknownNode(node),
-            )),
-        }
-    }
 }
 
 /// One supplied table/matrix entry and the leaves that must move with its root.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct CompositeEntry {
     root: SemanticNodeId,
     leaves: Vec<(Mobject, SemanticObjectState)>,
 }
 
+#[cfg(test)]
 impl CompositeEntry {
     pub(crate) fn root(&self) -> SemanticNodeId {
         self.root
@@ -95,6 +86,7 @@ impl CompositeEntry {
 /// The shared topology and overlap check, parameterized by the ownership-aware
 /// state capture boundary.  Table and matrix admission use their owning Scene
 /// or LiveSession here so Scene-owned execution observes effective placement.
+#[cfg(test)]
 pub(crate) fn capture_entries_with(
     store: &Rc<RefCell<SemanticStore>>,
     entries: &[MobjectTarget<'_>],
