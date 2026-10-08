@@ -637,3 +637,109 @@ fn scene_subcurve_requires_running_and_captures_effective_state() {
         resources
     );
 }
+
+#[test]
+fn scene_move_to_matches_authored_and_running_placement_for_stable_state() {
+    fn make_scene() -> (Scene, Mobject, Mobject) {
+        let mut scene = Scene::new();
+        let source = scene.square(2.0).unwrap();
+        let mut target = scene.square(2.0).unwrap();
+        target.shift(4.0, -3.0).unwrap();
+        (scene, source, target)
+    }
+
+    let (mut cold, cold_source, cold_target) = make_scene();
+    cold.move_to(
+        &cold_source,
+        crate::LiveLayoutTarget::Mobject(&cold_target),
+        (0.0, 0.0),
+        (1.0, 1.0),
+    )
+    .unwrap();
+    let cold_center = cold_source.center().unwrap();
+
+    let (mut running, running_source, running_target) = make_scene();
+    let execution = running.execution_session().unwrap();
+    running.install_execution(execution);
+    running
+        .move_to(
+            &running_source,
+            crate::LiveLayoutTarget::Mobject(&running_target),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
+        .unwrap();
+    let running_center = running_source.center().unwrap();
+
+    assert_eq!(cold_center, (4.0, -3.0));
+    assert_eq!(running_center, cold_center);
+}
+
+#[test]
+fn scene_family_placement_surface_is_available_before_execution_bootstrap() {
+    let mut scene = Scene::new();
+    let mut left = scene.square(2.0).unwrap();
+    let mut right = scene.square(2.0).unwrap();
+    left.shift(-2.0, 0.0).unwrap();
+    right.shift(2.0, 0.0).unwrap();
+    let family = scene
+        .family(&[
+            crate::MobjectTarget::Object(&left),
+            crate::MobjectTarget::Object(&right),
+        ])
+        .unwrap();
+    let source_anchor = crate::LayoutAnchor::from(&family);
+    let aligner = crate::LayoutAnchor::from(&left);
+    let revision = scene.revision();
+
+    scene
+        .move_family_to(
+            &family,
+            crate::LiveLayoutTarget::Point(1.0, 2.0),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
+        .unwrap();
+    assert_eq!(family.layout().unwrap().center(), (1.0, 2.0));
+
+    scene
+        .next_family_to(
+            &family,
+            crate::LiveLayoutTarget::Point(0.0, 0.0),
+            crate::ManimNextToArgs {
+                direction: (1.0, 0.0),
+                buff: 0.25,
+                aligned_edge: (0.0, 0.0),
+                mask: (1.0, 1.0),
+            },
+        )
+        .unwrap();
+
+    scene
+        .align_family_to(
+            &family,
+            crate::LiveLayoutTarget::Point(0.0, 0.0),
+            (0.0, 1.0),
+        )
+        .unwrap();
+
+    scene
+        .align_family_on_frame(&family, (1.0, 0.0), 0.5)
+        .unwrap();
+
+    scene
+        .next_layout_to_aligned(
+            &source_anchor,
+            crate::LiveLayoutTarget::Point(0.0, 0.0),
+            &aligner,
+            crate::ManimNextToArgs {
+                direction: (0.0, 1.0),
+                buff: 0.1,
+                aligned_edge: (0.0, 0.0),
+                mask: (1.0, 1.0),
+            },
+        )
+        .unwrap();
+
+    assert!(scene.revision().get() > revision.get());
+}
