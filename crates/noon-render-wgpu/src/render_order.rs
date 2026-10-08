@@ -153,6 +153,7 @@ impl FramePreparer {
             }
         }
 
+        self.visible_submission_slots = seen;
         let mut stats = self.prepare_incremental(frame, changes).stats;
 
         if !self.visible_projection_matches(visible_object_indices) {
@@ -551,6 +552,7 @@ fn projected_frame<'a>(
         slots: &preparer.slots,
         slot_presences: &preparer.slot_presences,
         complete_submission: false,
+        submitted_source_slots: Some(&preparer.visible_submission_slots),
         zero_contribution: &preparer.zero_contribution,
         mega_path_offsets: &preparer.mega_path_offsets,
     }

@@ -1,3 +1,6 @@
+pub(super) mod glow_publication;
+pub use glow_publication::{RetainedGlowStats, DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET};
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},

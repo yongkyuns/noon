@@ -33,6 +33,17 @@ on:
       - "crates/noon-render-wgpu/src/gpu/glow_filter/**"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow*"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
+      - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
+      - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication*"
+      - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication/**"
+      - "crates/noon-render-wgpu/src/gpu/mod.rs"
+      - "crates/noon-render-wgpu/src/lib.rs"
+      - "crates/noon-render-wgpu/src/render_order.rs"
+      - "crates/noon-render-wgpu/src/path_residency.rs"
+      - "crates/noon-native/src/lib.rs"
+      - "crates/noon-export/src/gpu.rs"
+      - "crates/noon-web/src/execution_canvas.rs"
+      - "web/ci-workflow-topology.test.mjs"
       - "tests/visual-effects/**"
       - "crates/noon/src/example_scenes/spatial_surface.rs"
       - "crates/noon/src/execution_session/**"
@@ -132,6 +143,7 @@ jobs:
         run: |
           cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests
           cargo test -p noon-render-wgpu --lib gpu::analytic_glow::tests
+          cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Preserve native glow qualification evidence

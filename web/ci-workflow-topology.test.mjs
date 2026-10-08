@@ -283,3 +283,28 @@ test("foreground qualification requires success from every evidence stage", asyn
     }
   }
 });
+
+
+test("automatic glow qualification selects its retained preparation and real host call sites", async () => {
+  const workflow = await readFile(new URL("ci.yml", workflowDir), "utf8");
+  const selection = workflow.split("  pull_request:\n")[1]?.split("  workflow_dispatch:")[0];
+  assert.ok(selection, "main CI must retain its pull-request selection");
+  for (const path of [
+    "crates/noon-render-wgpu/src/gpu/retained_text.rs",
+    "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication*",
+    "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication/**",
+    "crates/noon-render-wgpu/src/gpu/mod.rs",
+    "crates/noon-render-wgpu/src/lib.rs",
+    "crates/noon-render-wgpu/src/render_order.rs",
+    "crates/noon-render-wgpu/src/path_residency.rs",
+    "crates/noon-native/src/lib.rs",
+    "crates/noon-export/src/gpu.rs",
+    "crates/noon-web/src/execution_canvas.rs",
+    "web/ci-workflow-topology.test.mjs",
+  ]) {
+    assert.ok(selection.includes(`      - "${path}"`), `glow qualification must select ${path}`);
+  }
+  const contracts = workflow.split("      - name: Test glow resource and kernel contracts\n")[1]?.split("      - name:")[0];
+  assert.ok(contracts?.includes("cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests"),
+    "dedicated raster job must run the automatic source/budget/retry contracts");
+});

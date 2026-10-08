@@ -1,7 +1,7 @@
 """Control-flow/parser checks only; these are not GPU execution evidence."""
 import unittest
 
-from qualify_gpu_operator import ANIMATED_TEST, LIVE_TEST, PAINTER_TEST, SEMANTIC_TEST, TEST, qualified
+from qualify_gpu_operator import HOST_TEST, ANIMATED_TEST, LIVE_TEST, PAINTER_TEST, SEMANTIC_TEST, TEST, qualified
 
 
 class QualificationAdmission(unittest.TestCase):
@@ -62,6 +62,15 @@ class QualificationAdmission(unittest.TestCase):
         self.assertTrue(qualified(0, log, test=LIVE_TEST))
         self.assertFalse(qualified(101, log, test=LIVE_TEST))
         self.assertFalse(qualified(0, log.replace("1 passed", "0 passed"), test=LIVE_TEST))
+
+    def test_host_stage_requires_an_executed_host_test(self):
+        for other in (TEST, PAINTER_TEST, SEMANTIC_TEST, ANIMATED_TEST, LIVE_TEST):
+            log = f"test {other} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;"
+            self.assertFalse(qualified(0, log, test=HOST_TEST))
+        log = f"test {HOST_TEST} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;"
+        self.assertTrue(qualified(0, log, test=HOST_TEST))
+        self.assertFalse(qualified(101, log, test=HOST_TEST))
+        self.assertFalse(qualified(0, log.replace("1 passed", "0 passed"), test=HOST_TEST))
 
     def test_missing_or_ignored_test_does_not_pass(self):
         for code in (0, 1, 101):

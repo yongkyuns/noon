@@ -21,6 +21,7 @@ PAINTER_TEST = "gpu::glow_filter::tests::analytic_scene::retained_painter_glow_p
 SEMANTIC_TEST = "gpu::glow_filter::tests::analytic_scene::semantic_static_glow_publication_pixels"
 ANIMATED_TEST = "gpu::glow_filter::tests::animated_scene::animated_glow_publication_pixels"
 LIVE_TEST = "gpu::glow_filter::tests::animated_scene::live_glow_value_publication_pixels"
+HOST_TEST = "gpu::glow_filter::tests::retained_host::automatic_retained_host_glow_pixels"
 PASS = re.compile(r"test result: ok\. 1 passed; 0 failed; 0 ignored;")
 FAIL = re.compile(r"test result: FAILED\. 0 passed; 1 failed; 0 ignored;")
 ORIGINAL = "let bits = u32(round(clamp(value, 0.0, 1.0) * 16777215.0));"
@@ -93,7 +94,7 @@ def main() -> None:
     records = []
     report = {
         "schema": 1,
-        "scope": "native raster operator, painter, static, animated and live value publication; not full Scene orchestration or physical performance",
+        "scope": "native raster operator, painter, static, animated, live value and automatic host preparation; not full Scene orchestration or physical performance",
         "source_shader_sha256": sha256(original),
         "mutant_shader_sha256": sha256(mutant),
         "stages": records,
@@ -125,7 +126,10 @@ def main() -> None:
                     if animated["accepted"]:
                         live = run_stage(root, output, "live-value-publication", False, test=LIVE_TEST)
                         records.append(live)
-        report["passed"] = all(record["accepted"] for record in records) and len(records) == 7
+                        if live["accepted"]:
+                            host = run_stage(root, output, "automatic-retained-host", False, test=HOST_TEST)
+                            records.append(host)
+        report["passed"] = all(record["accepted"] for record in records) and len(records) == 8
         if not report["passed"]:
             raise RuntimeError("glow GPU qualification or real-shader negative control failed")
     finally:

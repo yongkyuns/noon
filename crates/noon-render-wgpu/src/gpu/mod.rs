@@ -490,6 +490,7 @@ impl std::error::Error for PathPreloadUploadError {}
 #[derive(Debug)]
 pub struct GpuRenderer {
     analytic_glows: Option<Box<analytic_glow::AnalyticGlowGpu>>,
+    retained_glow: retained_text::glow_publication::RetainedGlowPublication,
     spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
@@ -817,6 +818,7 @@ impl GpuRenderer {
             derived_display,
             images: None,
             analytic_glows: None,
+            retained_glow: Default::default(),
             path_render_bundle: None,
             path_render_bundle_batches: Vec::new(),
             path_render_bundle_rebuilds: 0,

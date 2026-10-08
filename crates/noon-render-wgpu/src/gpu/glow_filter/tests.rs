@@ -540,3 +540,6 @@ fn capture_origins_preserve_derivative_quads_across_fractional_motion_and_radius
         }
     }
 }
+
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+mod retained_host;

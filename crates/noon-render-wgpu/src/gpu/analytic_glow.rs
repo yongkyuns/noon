@@ -251,6 +251,19 @@ impl GpuRenderer {
         let observation = prepared
             .observe_object(request.object_index)
             .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+        self.prepare_observed_analytic_glow(device, queue, encoder, prepared, request, observation)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_observed_analytic_glow(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        prepared: &PreparedFrame<'_>,
+        request: AnalyticGlowRequest,
+        observation: crate::PreparedGeometryObjectObservation,
+    ) -> Result<AnalyticGlowStats, GlowPrepareError> {
         let kind = match observation.primitive {
             RenderPrimitive::Circle => 0,
             RenderPrimitive::Rectangle => 1,
@@ -578,6 +591,7 @@ impl GpuRenderer {
     /// Call when recorded capture/filter commands were abandoned rather than
     /// submitted. Renderer/device recreation naturally drops the entire cache.
     pub fn invalidate_analytic_glows(&mut self) {
+        self.retained_glow.invalidate();
         if let Some(glows) = self.analytic_glows.as_deref_mut() {
             for scope in glows.scopes.values_mut() {
                 scope.invalidated = true;
