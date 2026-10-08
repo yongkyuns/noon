@@ -8,6 +8,8 @@ mod callback;
 mod callback_values;
 mod composition;
 mod context;
+#[cfg(feature = "export")]
+mod export;
 mod geometry;
 mod mobject;
 mod options;
@@ -42,6 +44,8 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 
 #[pymodule]
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "export")]
+    m.add_class::<export::VideoExport>()?;
     m.add_class::<geometry::GeometryOptions>()?;
     m.add_class::<context::Store>()?;
     m.add_class::<context::Context>()?;

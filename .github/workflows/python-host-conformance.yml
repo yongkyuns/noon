@@ -8,6 +8,7 @@ on:
       - "web/python-compat-modules.js"
       - "web/python-worker.source.js"
       - "crates/noon-python/**"
+      - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
       - "crates/noon-runtime/**"
@@ -15,6 +16,8 @@ on:
       - "crates/noon-web/**"
       - "scripts/python-host-*.mjs"
       - "scripts/python_host_*.py"
+      - "scripts/python_export_conformance.py"
+      - "scripts/test_python_export_facade.py"
       - "scripts/build-native-python.py"
       - "parity/python-host/**"
       - "Cargo.toml"
@@ -66,6 +69,26 @@ jobs:
         run: python3 scripts/python_host_conformance.py
       - name: Native binding performance and interpreter locality
         run: python3 scripts/python_host_performance.py
+      - name: Native export facade lifecycle
+        run: python3 scripts/test_python_export_facade.py
+      - name: Build optional native export and its compiled Rust counterpart
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg mesa-vulkan-drivers libvulkan1
+          python3 scripts/build-native-python.py --profile release --export-video
+          cargo build --release -p noon-export --no-default-features --example python_export_contract
+      - name: Real native Python video and Rust pixel equivalence
+        run: env -u DISPLAY -u WAYLAND_DISPLAY WGPU_BACKEND=vulkan python3 scripts/python_export_conformance.py
+      - name: Lint optional native export binding
+        run: cargo clippy -p noon-python --features export --all-targets -- -D warnings
+      - name: Preserve native Python export proof
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-export-${{ github.sha }}
+          path: artifacts/python-export/
+          retention-days: 14
+          if-no-files-found: warn
       - name: Record exact tested source
         if: always()
         run: |

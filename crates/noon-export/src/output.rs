@@ -183,7 +183,11 @@ pub fn export_file<C: LiveContinuation>(
     })
 }
 
-struct FileSink {
+/// A native frame sink shared by compiled and interpreter-owned source hosts.
+/// Supply frames from the shared sampling policy and production capture path.
+/// Dropping an unfinished sink abandons its staged output. Only `finish` can
+/// publish a completed destination; queue acceptance alone is not file success.
+pub struct FileSink {
     // Encoder drops BEFORE its destination so an aborted process cannot keep
     // writing into a directory while the file owner is cleaning it up.
     encoder: Option<Encoder>,
@@ -200,7 +204,8 @@ struct FileSink {
 }
 
 impl FileSink {
-    fn new(
+    /// Validate the installed encoder before consuming any authored frames.
+    pub fn new(
         mut options: OutputOptions,
         rate: FrameRate,
         width: u32,
@@ -271,7 +276,7 @@ impl FileSink {
         })
     }
 
-    fn write(&mut self, frame: CapturedFrame<'_>) -> io::Result<()> {
+    pub fn write(&mut self, frame: CapturedFrame<'_>) -> io::Result<()> {
         let result = (|| {
             if self.failed
                 || frame.frame.pts != self.frames
@@ -321,7 +326,9 @@ impl FileSink {
         result
     }
 
-    fn finish(mut self, expected_frames: u64) -> io::Result<(PathBuf, OutputFormat, String)> {
+    /// Finalize only after shared sampling completed successfully. This consumes
+    /// the sink; an error must not be retried against already executed source.
+    pub fn finish(mut self, expected_frames: u64) -> io::Result<(PathBuf, OutputFormat, String)> {
         if self.failed || self.frames == 0 || self.frames != expected_frames {
             return Err(io::Error::other(
                 "sampling and encoder frame counts disagree",

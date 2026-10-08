@@ -21,11 +21,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("dev", "release"), default="release")
     parser.add_argument("--output", type=Path, default=ROOT / "build/python")
+    parser.add_argument("--export-video", action="store_true",
+                        help="Include the native GPU and installed-FFmpeg export adapter")
     args = parser.parse_args()
     output = args.output.resolve()
     command = ["cargo", "build", "-p", "noon-python"]
     if args.profile == "release":
         command.append("--release")
+    if args.export_video:
+        command += ["--features", "export"]
     environment = dict(os.environ, PYO3_PYTHON=sys.executable)
     subprocess.run(command, cwd=ROOT, env=environment, check=True)
     target = Path(environment.get("CARGO_TARGET_DIR", ROOT / "target"))

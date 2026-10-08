@@ -5,6 +5,10 @@ edition = "2021"
 license = "MIT"
 description = "Native CPython binding to the shared Noon authoring and execution API"
 
+[features]
+default = []
+export = ["dep:noon-export"]
+
 [lib]
 name = "_noon_native"
 crate-type = ["cdylib", "rlib"]
@@ -15,3 +19,4 @@ doctest = false
 noon = { path = "../noon", default-features = false }
 noon-core = { path = "../noon-core" }
 pyo3 = { version = "=0.29.2", features = ["extension-module"] }
+noon-export = { path = "../noon-export", default-features = false, optional = true }

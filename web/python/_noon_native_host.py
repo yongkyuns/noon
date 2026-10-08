@@ -11,6 +11,7 @@ import _noon_native as _native
 _store = ContextVar("noon_native_store", default=None)
 _settings = ContextVar("noon_native_settings", default=60.0)
 _resources = ContextVar("noon_native_resources", default=None)
+_video = ContextVar("noon_native_video", default=None)
 
 
 class _NativeRunResources:
@@ -59,6 +60,9 @@ def noonCreateCanonicalAuthoringSceneContext():
     resources = _resources.get()
     if resources is not None:
         resources.contexts.append(context)
+    video = _video.get()
+    if video is not None:
+        video.bind(context)
     return context
 
 
@@ -96,8 +100,13 @@ class _NativeCompletion:
         return self._wait().__await__()
 
 
+def _drive(context):
+    video = _video.get()
+    return context.drive() if video is None else video.drive(context)
+
+
 def noonAwaitSemanticContinuation(context):
-    return _NativeCompletion(context.drive)
+    return _NativeCompletion(_drive, context)
 
 
 def noonSetSemanticContinuationCallbackSession(context, session_id):
@@ -124,7 +133,7 @@ def noonAcknowledgeSemanticContinuationCallback(context, token, failure=None):
         context.retire()
         raise RuntimeError(failure)
     context.acknowledge_callback(token)
-    return _NativeCompletion(context.drive)
+    return _NativeCompletion(_drive, context)
 
 
 def noonFailSemanticContinuationCallback(context, token, message):
@@ -183,3 +192,61 @@ async def run_source(source, context=None, *, sample_hz=60.0, portable=False, fi
         _resources.reset(resource_token)
         _settings.reset(settings_token)
         _store.reset(store_token)
+
+
+async def _export(execute, output, options):
+    """Own one source invocation and native output; no frame loop lives in Python."""
+    import os
+    if _video.get() is not None:
+        raise RuntimeError("nested native video export is not supported")
+    if not hasattr(_native, "VideoExport"):
+        raise RuntimeError("native video export requires build-native-python.py --export-video")
+    video = _native.VideoExport(os.fspath(output), **options)
+    token = _video.set(video)
+    scene = None
+    try:
+        scene = await execute()
+        return video.finish()
+    finally:
+        try:
+            video.abort()  # Idempotent; successful committed files are retained.
+        finally:
+            try:
+                if scene is not None:
+                    close_scene(scene)
+            finally:
+                _video.reset(token)
+
+
+async def export_scene(scene_class, output, *, width=1280, height=720, fps=(30, 1),
+                       max_frames=108000, start_frame=0, final_hold=0.0,
+                       png=False, overwrite=False, fallback=False, ffmpeg=None):
+    """Export a finite native-supported scene through the shared Rust engine.
+
+    FPS is a positive integer numerator/denominator pair. Crop starts use the
+    zero-origin frame grid. max_frames is a failure safety cap, not truncation.
+    The final hold is explicit. No audio, browser fallback or broader native
+    geometry/text/resource capability is implied. The scene is retired on exit.
+    """
+    p, q = fps
+    options = dict(width=width, height=height, p=p, q=q, max_frames=max_frames,
+                   start_frame=start_frame, final_hold=final_hold, png=png,
+                   overwrite=overwrite, fallback=fallback, ffmpeg=ffmpeg)
+    return await _export(lambda: run_scene(scene_class), output, options)
+
+
+async def export_source(source, output, context=None, *, portable=False,
+                        filename="<noon>", width=1280, height=720, fps=(30, 1),
+                        max_frames=108000, start_frame=0, final_hold=0.0,
+                        png=False, overwrite=False, fallback=False, ffmpeg=None):
+    """Run one selected source scene with the same source/compiler lifecycle.
+
+    Multiple scene contexts in one export are rejected rather than mixed.
+    Original sync and supported portable/async source modes remain unchanged.
+    """
+    p, q = fps
+    options = dict(width=width, height=height, p=p, q=q, max_frames=max_frames,
+                   start_frame=start_frame, final_hold=final_hold, png=png,
+                   overwrite=overwrite, fallback=fallback, ffmpeg=ffmpeg)
+    return await _export(lambda: run_source(source, context, portable=portable,
+                                           filename=filename), output, options)
