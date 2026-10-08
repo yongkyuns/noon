@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn bundled_style_cache_cannot_override_an_explicit_font_face() {
-        let base = bundled_native_font(DEFAULT_NATIVE_TEXT_FONT_FAMILY).unwrap();
+        let base = bundled_native_font_face(DEFAULT_NATIVE_TEXT_FONT_FAMILY).unwrap();
         let text: Text =
             MarkupText::new("<span font_family='DejaVu Sans Mono'><b>A</b></span><b>B</b>")
                 .with_font_face(base)

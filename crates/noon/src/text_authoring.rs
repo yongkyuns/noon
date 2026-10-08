@@ -393,7 +393,12 @@ impl Text {
 }
 
 #[cfg(feature = "native-text")]
-fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringError> {
+/// Resolve an embedded font into an exact, reusable native text input.
+///
+/// Resolution follows the same regular-face policy as [`Text::with_font`].
+/// Cloning the result shares its immutable bytes and content identity. No host
+/// font discovery is performed; unavailable families return an error.
+pub fn bundled_native_font_face(family: &str) -> Result<NativeFontFace, TextAuthoringError> {
     #[cfg(feature = "bundled-fonts")]
     {
         let mut fallback = None;
