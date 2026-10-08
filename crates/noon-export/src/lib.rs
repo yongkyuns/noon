@@ -16,6 +16,9 @@
 
 mod gpu;
 pub mod output;
+mod session_capture;
+
+pub use session_capture::{CaptureReceipt, SessionCapture, SessionCaptureError, SessionFrame};
 
 use std::error::Error;
 use std::fmt;
