@@ -16,6 +16,7 @@ import initNoonWeb, {
   WasmSurfaceSamplingPlan,
   WasmSceneMembershipBatch,
   WasmTextColorBatch,
+  WasmNativeFontFace,
   WasmLatexCompiler,
   WasmLatexOptions,
   WasmMatrixOptions,
@@ -261,10 +262,11 @@ async function initializePyodide() {
   self.noonCreateAuthoringSvgHandle = (source, shouldCenter, height, width) =>
     authoringStore.createSvgFromString(source, shouldCenter, height, width);
   self.noonTextColorBatch = () => new WasmTextColorBatch();
-  self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing, colors) =>
-    authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing, colors);
-  self.noonCreateAuthoringMarkupTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
-    authoringStore.createManimMarkupText(source, fontFamily, fontSize, lineSpacing);
+  self.noonNativeFontFace = (family, data, faceIndex) =>
+    new WasmNativeFontFace(family, data, faceIndex);
+  self.noonBundledNativeFontFace = (family) => WasmNativeFontFace.bundled(family);
+  self.noonCreateAuthoringTextHandle = (...args) => authoringStore.createManimText(...args);
+  self.noonCreateAuthoringMarkupTextHandle = (...args) => authoringStore.createManimMarkupText(...args);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
   let latexCompiler = null;

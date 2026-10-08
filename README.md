@@ -229,6 +229,15 @@ store; they do not introduce another registry or execution path. Selecting a
 native family with `with_font` clears an earlier explicit face. An empty or
 invalid explicit Typst font set is an error even when bundled fonts are enabled.
 
+`bundled_native_font_face(family)` resolves the same embedded regular face into a
+reusable Rust input. Python exposes `NativeFontFace(family, bytes, face_index=0)`
+and `NativeFontFace.bundled(family)`, accepted by `Text` and `MarkupText` through
+`font=face`. Reusing a face shares its immutable Rust bytes and content identity.
+`Text.set_default(font=face)` changes only future Python constructors that omit
+`font`; `Text.set_default()` restores the portable DejaVu Sans Mono default.
+MarkupText has its own constructor default. These APIs do not discover OS fonts.
+Markup styles require a matching embedded styled face; unavailable styles reject.
+
 Without bundles, family lookup fails with `TextAuthoringError::FontUnavailable`
 and the Typst convenience constructors report `TypstBackendError::FontsUnavailable`.
 There is no provider substitution. Provider-specific APIs are absent when their

@@ -108,12 +108,14 @@ pub(crate) fn manim_text(
     font_family: &str,
     font_size: f64,
     line_spacing: f64,
+    font_face: Option<noon::NativeFontFace>,
 ) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
     configure_native_text(
         noon::Text::new(source),
         font_family,
         font_size,
         line_spacing,
+        font_face,
     )
 }
 
@@ -123,12 +125,14 @@ pub(crate) fn manim_markup_text(
     font_family: &str,
     font_size: f64,
     line_spacing: f64,
+    font_face: Option<noon::NativeFontFace>,
 ) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
     configure_native_text(
         noon::MarkupText::new(source).into(),
         font_family,
         font_size,
         line_spacing,
+        font_face,
     )
 }
 
@@ -138,14 +142,18 @@ fn configure_native_text(
     font_family: &str,
     font_size: f64,
     line_spacing: f64,
+    font_face: Option<noon::NativeFontFace>,
 ) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
     let font_size = text_authoring_f32("font size", font_size)?;
     let line_spacing = text_authoring_f32("line spacing", line_spacing)?;
     if line_spacing != -1.0 && line_spacing <= -1.0 {
         return Err("line spacing must be -1 or greater than -1".into());
     }
+    let text = match font_face {
+        Some(face) => text.with_font_face(face),
+        None => text.with_font(font_family),
+    };
     Ok(text
-        .with_font(font_family)
         .with_font_size(font_size)
         .with_line_spacing(line_spacing))
 }
@@ -168,6 +176,70 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmAuthoringStore {
         pub(crate) semantics: SharedSemanticStore,
+    }
+
+    /// Immutable authoring input; admission and font residency remain in the
+    /// shared Rust text pipeline. Clones reuse the same exact font bytes.
+    #[wasm_bindgen]
+    pub struct WasmNativeFontFace {
+        pub(crate) face: noon::NativeFontFace,
+    }
+
+    #[wasm_bindgen]
+    impl WasmNativeFontFace {
+        #[wasm_bindgen(constructor)]
+        pub fn new(family: &str, data: &[u8], face_index: f64) -> Result<Self, JsValue> {
+            // Keep the JS number until validation: wasm-bindgen's u32 coercion
+            // would otherwise wrap an invalid index onto another valid face.
+            if !face_index.is_finite()
+                || face_index.fract() != 0.0
+                || !(0.0..=f64::from(u32::MAX)).contains(&face_index)
+            {
+                return Err(js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "text.invalid_font_index",
+                    "font face index must be an integer between 0 and 4294967295",
+                )));
+            }
+            noon::NativeFontFace::new(
+                family,
+                std::sync::Arc::<[u8]>::from(data),
+                face_index as u32,
+            )
+            .map(|face| Self { face })
+            .map_err(|error| {
+                js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "text.invalid_font_face",
+                    error,
+                ))
+            })
+        }
+
+        /// Resolve the shared engine's embedded regular face without a byte transfer.
+        pub fn bundled(family: &str) -> Result<Self, JsValue> {
+            noon::bundled_native_font_face(family)
+                .map(|face| Self { face })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn family(&self) -> String {
+            self.face.family.to_string()
+        }
+
+        #[wasm_bindgen(getter, js_name = faceIndex)]
+        pub fn face_index(&self) -> u32 {
+            self.face.face_index
+        }
+
+        /// Produce an owned argument without copying or re-fingerprinting bytes.
+        #[wasm_bindgen(js_name = cloneFace)]
+        pub fn clone_face(&self) -> Self {
+            Self {
+                face: self.face.clone(),
+            }
+        }
     }
 
     #[wasm_bindgen]
@@ -366,9 +438,16 @@ mod wasm {
             font_size: f64,
             line_spacing: f64,
             colors: Option<crate::WasmTextColorBatch>,
+            font_face: Option<WasmNativeFontFace>,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            let text = super::manim_text(source, font_family, font_size, line_spacing)
-                .map_err(js_error)?;
+            let text = super::manim_text(
+                source,
+                font_family,
+                font_size,
+                line_spacing,
+                font_face.map(|input| input.face),
+            )
+            .map_err(js_error)?;
             let text = if let Some(batch) = colors {
                 text.color(batch.base_color).with_text2color(batch.colors)
             } else {
@@ -386,9 +465,16 @@ mod wasm {
             font_family: &str,
             font_size: f64,
             line_spacing: f64,
+            font_face: Option<WasmNativeFontFace>,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            let text = super::manim_markup_text(source, font_family, font_size, line_spacing)
-                .map_err(js_error)?;
+            let text = super::manim_markup_text(
+                source,
+                font_family,
+                font_size,
+                line_spacing,
+                font_face.map(|input| input.face),
+            )
+            .map_err(js_error)?;
             Mobject::from_text(Rc::clone(&self.semantics), text)
                 .map(|handle| WasmAuthoringMobjectHandle { handle })
                 .map_err(js_error)

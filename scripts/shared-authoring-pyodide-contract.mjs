@@ -32,6 +32,10 @@ try {
   report.wasmSha256 = hash(module);
   report.bindingsSha256 = hash(fs.readFileSync(path.join(root, "web/pkg/noon_web.js")));
   await initNoonWeb({ module_or_path: module });
+  for (const index of [-1, 0.5, 2 ** 32, NaN, Infinity]) {
+    assert.throws(() => new wasm.WasmNativeFontFace("invalid", new Uint8Array(), index),
+      error => error.category === "invalid_input" && error.code === "text.invalid_font_index");
+  }
   const pyodide = await loadPyodide({ indexURL: path.resolve(runtimeRoot) + path.sep });
   assert.equal(pyodide.version, pinnedVersion, "test interpreter must match the worker pin");
   report.pyodideVersion = pyodide.version;
@@ -46,6 +50,11 @@ try {
     noonCreateAuthoringGeometryHandle: (options) => authoringStore.createManimGeometry(options),
     noonAuthoringMembershipBatch: (kind) => new wasm.WasmSceneMembershipBatch(kind),
     noonCreateAuthoringFamilyHandle: (batch, zIndex) => authoringStore.createFamily(batch, zIndex),
+    noonNativeFontFace: (...args) => new wasm.WasmNativeFontFace(...args),
+    noonBundledNativeFontFace: (family) => wasm.WasmNativeFontFace.bundled(family),
+    noonTextColorBatch: () => new wasm.WasmTextColorBatch(),
+    noonCreateAuthoringTextHandle: (...args) => authoringStore.createManimText(...args),
+    noonCreateAuthoringMarkupTextHandle: (...args) => authoringStore.createManimMarkupText(...args),
     noonGlowUpdate: (...args) => new wasm.WasmGlowUpdate(...args),
     noonGlow: (update) => new wasm.WasmGlow(update),
     noonResolveAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveAnimationOptions, ...args),
@@ -56,6 +65,66 @@ try {
       fs.readFileSync(path.join(root, "web", descriptor.sourcePath), "utf8"));
   }
   pyodide.runPython('import sys\nsys.path.insert(0, "/tmp")\nimport noon');
+  // Actual optional owned WASM arguments must retain the font wrapper for reuse
+  // across cold/live plain and markup text, copies, and constructor defaults.
+  pyodide.runPython(`
+import copy
+import json
+from noon import NativeFontFace, Text, MarkupText, Scene, RED
+from _noon_errors import NoonValueError, NoonMissingResourceError
+import _manim_reactive
+face = NativeFontFace.bundled("DejaVu Sans Mono")
+assert face.family == "DejaVu Sans Mono" and face.face_index == 0
+assert copy.copy(face) is face and copy.deepcopy(face) is face
+implicit = Text("Same face")
+explicit = Text("Same face", font=face)
+assert abs(implicit.width - explicit.width) < 1e-9
+assert abs(implicit.height - explicit.height) < 1e-9
+assert abs(explicit.copy().width - explicit.width) < 1e-9
+assert abs(MarkupText("Same face", font=face).width - explicit.width) < 1e-9
+colored = Text("Same face", font=face, t2c={"Same": RED})
+assert abs(colored.width - explicit.width) < 1e-9
+Text.set_default(font=face)
+try:
+    assert abs(Text("Same face").width - explicit.width) < 1e-9
+finally:
+    Text.set_default()
+font_scene = Scene()
+font_token = _manim_reactive._enter_authoring_scene(font_scene)
+try:
+    live = Text("Same face", font=face)
+    live_markup = MarkupText("Same face", font=face)
+    live_colored = Text("Same face", font=face, t2c={"Same": RED})
+    assert abs(live.width - explicit.width) < 1e-9
+    assert abs(live_markup.width - explicit.width) < 1e-9
+    assert abs(live_colored.width - explicit.width) < 1e-9
+    font_scene.add(live, live_markup, live_colored)
+finally:
+    _manim_reactive._leave_authoring_scene(font_token)
+assert len(font_scene.mobjects) == 3
+for invalid_index in (True, -1, 2**32):
+    try:
+        NativeFontFace("invalid", b"bad bytes", invalid_index)
+    except (TypeError, ValueError):
+        pass
+    else:
+        raise AssertionError("invalid face index accepted")
+try:
+    NativeFontFace("invalid", b"not an OpenType face")
+except NoonValueError as error:
+    assert error.code == "text.invalid_font_face"
+else:
+    raise AssertionError("invalid font bytes accepted")
+try:
+    NativeFontFace.bundled("not an embedded Noon font")
+except NoonMissingResourceError as error:
+    assert error.code == "text.font_unavailable"
+else:
+    raise AssertionError("unavailable font accepted")
+_font_result_json = json.dumps({"family": face.family, "faceIndex": face.face_index,
+    "width": explicit.width, "liveObjectCount": len(font_scene.mobjects)})
+`);
+  report.nativeFontInput = JSON.parse(pyodide.globals.get("_font_result_json"));
   const fixture = fs.readFileSync(path.join(root, "web/python/examples/effect_authoring_contract.py"), "utf8");
   report.fixtureSha256 = hash(fixture);
   // Direct construction intentionally tests the existing synchronous context

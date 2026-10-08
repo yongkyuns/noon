@@ -290,3 +290,133 @@ assert kind == "colors" and values == (noon.BLUE.red, noon.BLUE.green, noon.BLUE
             capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class NativeFontFaceConstructorTests(unittest.TestCase):
+    def test_face_bridge_cold_live_routing_copy_metadata_and_defaults(self):
+        python_dir = Path(__file__).resolve().parent
+        source = textwrap.dedent(r'''
+            import copy
+            import _manim_semantic_handles as handles
+            import _typed_geometry_test_support as geometry
+            geometry.install_module_bridge(handles, lambda *args: object())
+            import _manim_typst as text
+            import noon
+
+            assert noon.NativeFontFace is text.NativeFontFace
+            bridge_calls = []
+            class OwnedFace:
+                def __init__(self, token): self.token, self.freed = token, False
+                def cloneFace(self): return OwnedFace(self.token)
+                def free(self): self.freed = True
+            def make_face(family, data, index):
+                bridge_calls.append((family, bytes(data), index))
+                return OwnedFace("times-face")
+            text._create_native_font_face = make_face
+            converted = []
+            text._to_js = lambda value: converted.append(type(value)) or bytes(value)
+            face = noon.NativeFontFace("Times New Roman", bytearray(b"font-bytes"), 2)
+            assert bridge_calls == [("Times New Roman", b"font-bytes", 2)]
+            assert converted == [memoryview]
+            assert face.family == "Times New Roman" and face.face_index == 2
+            for invalid_index, error_type in (
+                (True, TypeError), (-1, ValueError), (0x1_0000_0000, ValueError),
+            ):
+                try: noon.NativeFontFace("Invalid", b"must-not-convert", invalid_index)
+                except error_type: pass
+                else: raise AssertionError("invalid face index accepted")
+            assert bridge_calls == [("Times New Roman", b"font-bytes", 2)]
+            assert converted == [memoryview]
+
+            class BundledHandle(OwnedFace):
+                family = "Resolved Bundled Family"
+                faceIndex = 3
+            bundled_calls = []
+            text._create_bundled_native_font_face = lambda name: bundled_calls.append(name) or BundledHandle("bundled")
+            bundled = noon.NativeFontFace.bundled("Embedded Family")
+            assert bundled_calls == ["Embedded Family"]
+            assert bundled.family == "Resolved Bundled Family" and bundled.face_index == 3
+            assert converted == [memoryview]
+            before = len(bundled_calls)
+            for invalid in ("", "  ", None):
+                try: noon.NativeFontFace.bundled(invalid)
+                except (TypeError, ValueError): pass
+                else: raise AssertionError("invalid bundled family accepted")
+            assert len(bundled_calls) == before
+
+            assert copy.copy(face) is face and copy.deepcopy(face) is face
+            try: face.family = "changed"
+            except AttributeError: pass
+            else: raise AssertionError("font face wrapper was mutable")
+
+            class Handle:
+                def setColor(self, *args): pass
+                def setOpacity(self, *args): pass
+                def setObjectOpacity(self, *args): pass
+                def cloneHandle(self): return Handle()
+            cold_calls = []
+            text._create_authoring_text_handle = lambda *args: cold_calls.append(args) or Handle()
+            text._create_authoring_markup_text_handle = lambda *args: cold_calls.append(args) or Handle()
+            text._live_text_context = lambda: None
+            cold_plain = noon.Text("plain", font=face)
+            cold_markup = noon.MarkupText("<b>markup</b>", font=face)
+            bundled_text = noon.Text("bundled", font=bundled)
+            assert cold_plain.font == cold_markup.font == "Times New Roman"
+            assert cold_plain._font_face is face and cold_markup._font_face is face
+            assert bundled_text.font == "Resolved Bundled Family"
+            assert bundled_text._font_face is bundled and bundled_text._font_face.face_index == 3
+            assert cold_calls[0][:4] == ("plain", "Times New Roman", 48.0, -1.0)
+            assert len(cold_calls[0]) == 6 and cold_calls[0][4] is None
+            assert cold_calls[0][-1].token == "times-face"
+            assert cold_calls[1][:4] == ("<b>markup</b>", "Times New Roman", 48.0, -1.0)
+            assert len(cold_calls[1]) == 5
+            assert cold_calls[1][-1].token == "times-face"
+            assert cold_calls[0][-1] is not cold_calls[1][-1]
+            assert cold_calls[2][:4] == ("bundled", "Resolved Bundled Family", 48.0, -1.0)
+            assert len(cold_calls[2]) == 6 and cold_calls[2][4] is None
+            assert cold_calls[2][-1].token == "bundled"
+
+            class Live:
+                def __init__(self): self.calls = []
+                def liveCreateManimText(self, *args): self.calls.append(("text", args)); return Handle()
+                def liveCreateManimMarkupText(self, *args): self.calls.append(("markup", args)); return Handle()
+            context = Live()
+            text._live_text_context = lambda: context
+            live_plain = noon.Text("live", font=face)
+            live_markup = noon.MarkupText("<i>live</i>", font=face)
+            assert [kind for kind, _ in context.calls] == ["text", "markup"]
+            assert context.calls[0][1][:4] == ("live", "Times New Roman", 48.0, -1.0)
+            assert len(context.calls[0][1]) == 11 and context.calls[0][1][9] is None
+            assert context.calls[0][1][-1].token == "times-face"
+            assert context.calls[1][1][:4] == ("<i>live</i>", "Times New Roman", 48.0, -1.0)
+            assert len(context.calls[1][1]) == 10
+            assert context.calls[1][1][-1].token == "times-face"
+
+            clone = cold_plain.copy()
+            assert clone._font == cold_plain._font
+            assert clone._font_face is face
+            assert clone._font_face._handle is face._handle
+
+            text._live_text_context = lambda: None
+            text._create_authoring_text_handle = lambda *args: Handle()
+            text.Text.set_default(font=face)
+            text.MarkupText.set_default(font="Custom Markup")
+            try:
+                implicit_plain = noon.Text("default")
+                explicit_plain = noon.Text("override", font="Per Call")
+                implicit_markup = noon.MarkupText("<b>default</b>")
+                assert implicit_plain.font == "Times New Roman" and implicit_plain._font_face is face
+                assert explicit_plain.font == "Per Call" and explicit_plain._font_face is None
+                assert implicit_markup.font == "Custom Markup" and implicit_markup._font_face is None
+            finally:
+                text.Text.set_default()
+                text.MarkupText.set_default()
+            assert text.Text._default_font == "DejaVu Sans Mono"
+            assert text.MarkupText._default_font == "DejaVu Sans Mono"
+        ''')
+        completed = subprocess.run(
+            [sys.executable, "-c", source], cwd=python_dir,
+            env={**os.environ, "PYTHONPATH": str(python_dir)},
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)

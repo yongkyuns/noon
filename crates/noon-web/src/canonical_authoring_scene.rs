@@ -7754,18 +7754,24 @@ mod wasm {
             alpha: f64,
             opacity: f64,
             colors: Option<crate::WasmTextColorBatch>,
+            font_face: Option<crate::WasmNativeFontFace>,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
-            let text =
-                crate::authoring_mobject::manim_text(source, font_family, font_size, line_spacing)
-                    .map_err(typed_js_error)?
-                    .color(Color::rgba(
-                        checked_f32("text red", red)?,
-                        checked_f32("text green", green)?,
-                        checked_f32("text blue", blue)?,
-                        checked_f32("text alpha", alpha)?,
-                    ))
-                    .set_opacity(checked_f32("text opacity", opacity)?)
-                    .with_text2color(colors.map_or_else(Vec::new, |batch| batch.colors));
+            let text = crate::authoring_mobject::manim_text(
+                source,
+                font_family,
+                font_size,
+                line_spacing,
+                font_face.map(|input| input.face),
+            )
+            .map_err(typed_js_error)?
+            .color(Color::rgba(
+                checked_f32("text red", red)?,
+                checked_f32("text green", green)?,
+                checked_f32("text blue", blue)?,
+                checked_f32("text alpha", alpha)?,
+            ))
+            .set_opacity(checked_f32("text opacity", opacity)?)
+            .with_text2color(colors.map_or_else(Vec::new, |batch| batch.colors));
             self.inner
                 .live_create_text(text)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
@@ -7784,12 +7790,14 @@ mod wasm {
             blue: f64,
             alpha: f64,
             opacity: f64,
+            font_face: Option<crate::WasmNativeFontFace>,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             let text = crate::authoring_mobject::manim_markup_text(
                 source,
                 font_family,
                 font_size,
                 line_spacing,
+                font_face.map(|input| input.face),
             )
             .map_err(typed_js_error)?
             .color(Color::rgba(

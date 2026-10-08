@@ -191,7 +191,7 @@ pub(crate) fn compile_native(text: &Text) -> Result<Arc<CompiledTextArtifact>, T
     let artifact = compile_cached(key, || {
         let font = match &text.font_face {
             Some(font) => font.clone(),
-            None => bundled_native_font(text.font_family.as_ref())?,
+            None => bundled_native_font_face(text.font_family.as_ref())?,
         };
         let mut options = NativeTextOptions::new(text.font_size);
         options.line_spacing = text.line_spacing;
@@ -348,6 +348,35 @@ pub(super) fn typst_identity(
 #[cfg(all(test, feature = "native-text", feature = "bundled-fonts"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reusable_embedded_face_preserves_regular_selection_and_compilation_identity() {
+        clear_text_compiler_cache();
+        let face = bundled_native_font_face(DEFAULT_NATIVE_TEXT_FONT_FAMILY).unwrap();
+        let cloned = face.clone();
+        assert!(Arc::ptr_eq(&face.data, &cloned.data));
+        assert!(Arc::ptr_eq(&face.face_key, &cloned.face_key));
+        let implicit = Text::new("shared exact face").compile_artifact().unwrap();
+        let explicit = Text::new("shared exact face")
+            .with_font_face(face)
+            .compile_artifact()
+            .unwrap();
+        // Family and exact-face input keys may differ; their selected face and
+        // shaped output must agree. Reusing an exact face then hits the cache.
+        assert_eq!(implicit.resource, explicit.resource);
+        let repeated = Text::new("shared exact face")
+            .with_font_face(cloned)
+            .compile_artifact()
+            .unwrap();
+        assert!(Arc::ptr_eq(&explicit.resource, &repeated.resource));
+        assert!(Arc::ptr_eq(&explicit.fonts, &repeated.fonts));
+        assert_eq!(text_compiler_diagnostics().successful_compiles, 2);
+        assert_eq!(text_compiler_diagnostics().cache_hits, 1);
+        assert!(matches!(
+            bundled_native_font_face("not an embedded Noon font"),
+            Err(TextAuthoringError::FontUnavailable(_))
+        ));
+    }
 
     #[test]
     fn presentation_style_reuses_one_native_compilation() {
