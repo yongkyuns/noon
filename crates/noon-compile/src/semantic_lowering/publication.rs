@@ -460,15 +460,16 @@ fn validate_mutations(
     prepared: Option<&PreparedSemanticMutationTransaction<'_>>,
 ) -> Result<(), SemanticPublicationLoweringError> {
     for (position, mutation) in mutations.iter().enumerate() {
-        // Existing value edits use the prepared local lane. Attachment topology
-        // still requires coherent lifecycle/worker publication before admission.
-        if matches!(
-            mutation,
-            SemanticMutation::AddNode {
-                creation: noon_core::SemanticNodeCreation::Effect { .. },
-                ..
+        // Only a new detached target copy can carry inert attachment topology.
+        // Membership enrollment and all existing-owner topology remain guarded.
+        if let SemanticMutation::AddNode {
+            creation: noon_core::SemanticNodeCreation::Effect { owner, .. },
+            ..
+        } = mutation
+        {
+            if prepared.is_some_and(|prepared| prepared.is_detached_effect_target(*owner)) {
+                continue;
             }
-        ) {
             return Err(SemanticPublicationLoweringError::UnsupportedMutation { index: position });
         }
         let ordinary = matches!(

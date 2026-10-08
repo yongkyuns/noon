@@ -162,6 +162,11 @@ pub fn lower_semantic_execution(
     store: &SemanticStore,
     index: &mut SemanticExecutionIndex,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
+    // Reject unsupported host orchestration before profile/object projection.
+    if store.has_effect_attachments() {
+        return Err(SemanticLoweringError::EffectExecutionUnavailable.into());
+    }
+
     let roots = store.scene_roots().collect::<Vec<_>>();
     let mut staged_index = index.clone();
     let projection = staged_index.lower_scene(store)?;
@@ -181,6 +186,11 @@ pub fn lower_semantic_execution_root(
     root: SemanticNodeId,
     index: &mut SemanticExecutionIndex,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
+    // Reject unsupported host orchestration before profile/object projection.
+    if store.has_effect_attachments() {
+        return Err(SemanticLoweringError::EffectExecutionUnavailable.into());
+    }
+
     let mut staged_index = index.clone();
     let projection = staged_index.lower_root(store, root)?;
     finish_semantic_execution(store, &[root], index, staged_index, projection, None)
@@ -209,6 +219,11 @@ pub fn lower_semantic_execution_root_with_animation_root_at(
     animation_root: SemanticNodeId,
     origin: f64,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
+    // Reject unsupported host orchestration before profile/object projection.
+    if store.has_effect_attachments() {
+        return Err(SemanticLoweringError::EffectExecutionUnavailable.into());
+    }
+
     let mut staged_index = index.clone();
     let projection = staged_index.lower_root(store, root)?;
     finish_semantic_execution(
@@ -229,12 +244,6 @@ fn finish_semantic_execution(
     projection: SemanticExecutionProjection,
     animation_root: Option<(SemanticNodeId, f64)>,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
-    // Static values now cross object lowering, compiled slots and frame rows.
-    // Keep normal Scene orchestration gated until animated/lifecycle publication
-    // and all host consumers are wired, including detached target edits (#1897).
-    if store.has_effect_attachments() {
-        return Err(SemanticLoweringError::EffectExecutionUnavailable.into());
-    }
     let camera = semantic_camera_object(store, &projection)?;
     let reactive = lower_semantic_reactive_projection_for_roots(store, &projection, roots)?;
     let host_callbacks = lower_semantic_host_callbacks(store, roots);

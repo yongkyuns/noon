@@ -180,7 +180,7 @@ fn final_glow_base_coalesces_independently_of_style_and_transform() {
 fn rejected_rebinding_and_discrete_changes_cannot_commit_a_prefix_or_hide_as_superseded() {
     let object = object();
     let good = update(&object, GlowUpdate::default().intensity(2.0));
-    let mut rebound = (*good).clone();
+    let mut rebound = *good;
     rebound.attachment = SemanticNodeId::new(7, 4);
     let mut runtime = runtime(object.clone());
     runtime.take_frame_changes();

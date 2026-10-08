@@ -139,7 +139,7 @@ pub struct CompiledObject {
 
 /// One static attachment lowered from the existing generational semantic node.
 /// This is execution data, not a second attachment allocator or mutable scene.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CompiledGlow {
     pub attachment: noon_core::SemanticNodeId,
     pub definition: noon_core::Glow,

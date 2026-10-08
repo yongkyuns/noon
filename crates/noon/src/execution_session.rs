@@ -1600,6 +1600,7 @@ impl ExecutionSession {
             let frame = self.runtime.frame();
             let row = frame.objects.get(index)?;
             Some(EffectiveAnimationProperties {
+                glow: row.glow.as_deref().copied(),
                 z_index: row.z_index,
                 transform: row.transform,
                 style: row.style,
@@ -3831,7 +3832,14 @@ impl ExecutionSession {
             .semantic_object_state_checked(target)
             .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?
             .clone();
-        Ok(declaration.create_node(SemanticNodeCreation::object(state)))
+        let copy = declaration.create_node(SemanticNodeCreation::object(state));
+        store
+            .copy_effects_into(target, copy, declaration)
+            .map_err(|error| ExecutionSessionAnimationError::TargetState {
+                target,
+                error: error.into(),
+            })?;
+        Ok(copy)
     }
 
     fn validate_indicate_options(
@@ -3990,6 +3998,7 @@ impl ExecutionSession {
                 let frame = self.runtime.frame();
                 let row = frame.objects.get(index)?;
                 Some(EffectiveAnimationProperties {
+                    glow: row.glow.as_deref().copied(),
                     z_index: row.z_index,
                     transform: row.transform,
                     style: row.style,
@@ -4048,6 +4057,7 @@ impl ExecutionSession {
                             let frame = self.runtime.frame();
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
+                                glow: row.glow.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,
                                 style: row.style,
@@ -4093,6 +4103,7 @@ impl ExecutionSession {
                             let frame = self.runtime.frame();
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
+                                glow: row.glow.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,
                                 style: row.style,

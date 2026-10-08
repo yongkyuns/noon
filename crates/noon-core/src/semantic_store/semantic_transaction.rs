@@ -584,6 +584,9 @@ pub struct SemanticMutationTransaction {
 pub(super) struct SemanticTransactionPreflight {
     changed: Vec<bool>,
     staged_effects: HashMap<SemanticNodeId, crate::EffectDefinition>,
+    animation_effect_snapshots:
+        HashMap<SemanticLocalNodeToken, Box<crate::SemanticTransformEffectSnapshot>>,
+    pending_effect_order: HashMap<SemanticTransactionNodeRef, Vec<SemanticLocalNodeToken>>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
     staged_spatial_anchors: HashMap<SemanticTransactionNodeRef, SemanticTransactionNodeRef>,
@@ -3254,6 +3257,8 @@ impl SemanticMutationTransaction {
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_pending_paths.retain(|token, _| !removed_pending.contains(token));
         let preflight = SemanticTransactionPreflight {
+            animation_effect_snapshots: HashMap::new(),
+            pending_effect_order: HashMap::new(),
             staged_effects,
             staged_family_z,
             changed,

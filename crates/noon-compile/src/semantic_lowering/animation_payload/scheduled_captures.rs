@@ -21,7 +21,7 @@ pub(super) struct ScheduledCaptures {
 impl ScheduledCaptures {
     pub fn get(&self, object: ObjectId) -> Option<EffectiveAnimationProperties> {
         let mut value = *self.base.get(&object)?;
-        for slot in 0..=driver_key(object, Property::Presence).1 {
+        for slot in 0..=driver_key(object, Property::GlowIntensity).1 {
             let Some((property, values, at_end)) = self.completed.get(&(object.get(), slot)) else {
                 continue;
             };
@@ -68,7 +68,7 @@ impl ScheduledCaptures {
         {
             return;
         }
-        for slot in 0..=driver_key(object, Property::Presence).1 {
+        for slot in 0..=driver_key(object, Property::GlowIntensity).1 {
             let key = (object.get(), slot);
             let Some(owner) = driven.get(&key).copied() else {
                 continue;
@@ -186,6 +186,21 @@ fn apply_effective_track_endpoint(
     at_end: bool,
 ) -> Option<()> {
     match (property, values) {
+        (
+            Property::GlowColor | Property::GlowRadius | Property::GlowIntensity,
+            TrackValues::Glow {
+                attachment,
+                from,
+                to,
+            },
+        ) => {
+            let glow = value.glow.as_mut()?;
+            if glow.attachment != *attachment {
+                return None;
+            }
+            let endpoint = if at_end { *to } else { *from };
+            glow.definition = endpoint.update().apply_to(glow.definition).ok()?;
+        }
         (Property::ZIndex, TrackValues::ZIndex { from, to }) => {
             value.z_index = if at_end { *to } else { *from };
         }

@@ -1,3 +1,6 @@
+mod effect_snapshot;
+pub use effect_snapshot::*;
+
 use crate::{
     AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
     SemanticSceneOperationError, SemanticSignalError, SemanticStore, SemanticVec3,
@@ -537,11 +540,20 @@ impl SemanticAnimationIntent {
 pub struct SemanticAnimationState {
     intent: SemanticAnimationIntent,
     options: AnimationOptions,
+    pub(crate) transform_effects: Option<Box<SemanticTransformEffectSnapshot>>,
 }
 
 impl SemanticAnimationState {
     pub const fn new(intent: SemanticAnimationIntent, options: AnimationOptions) -> Self {
-        Self { intent, options }
+        Self {
+            intent,
+            options,
+            transform_effects: None,
+        }
+    }
+
+    pub fn transform_effect_snapshot(&self) -> Option<&SemanticTransformEffectSnapshot> {
+        self.transform_effects.as_deref()
     }
 
     pub const fn intent(&self) -> &SemanticAnimationIntent {
@@ -975,18 +987,22 @@ impl SemanticStore {
         }
         validate_authored_animation_options(options)?;
 
-        Ok(
-            self.insert_semantic_animation_state(SemanticAnimationState::new(
-                SemanticAnimationIntent::TransformTo {
-                    target,
-                    target_state,
-                    interpolation,
-
-                    complete_priority,
-                },
-                options,
-            )),
-        )
+        let mut state = SemanticAnimationState::new(
+            SemanticAnimationIntent::TransformTo {
+                target,
+                target_state,
+                interpolation,
+                complete_priority,
+            },
+            options,
+        );
+        state.transform_effects = SemanticTransformEffectSnapshot::new(
+            self.animation_effect_snapshot(target)
+                .expect("validated transform source"),
+            self.animation_effect_snapshot(target_state)
+                .expect("validated transform target"),
+        );
+        Ok(self.insert_semantic_animation_state(state))
     }
 
     /// Insert a typed world-pose animation. The endpoint is captured in the

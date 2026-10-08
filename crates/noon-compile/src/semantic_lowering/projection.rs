@@ -874,6 +874,24 @@ fn lower_glow_attachment(
     let [attachment] = effects else {
         return Err(unsupported());
     };
+    validate_glow_source_profile(owner, state, store)?;
+    let effect = store.semantic_effect_state(*attachment)?;
+    if effect.owner() != owner {
+        return Err(unsupported());
+    }
+    let noon_core::EffectDefinition::Glow(definition) = effect.definition();
+    Ok(Some(std::sync::Arc::new(crate::CompiledGlow {
+        attachment: *attachment,
+        definition,
+    })))
+}
+
+pub(super) fn validate_glow_source_profile(
+    owner: SemanticNodeId,
+    state: &SemanticObjectState,
+    store: &SemanticStore,
+) -> Result<(), SemanticLoweringError> {
+    let unsupported = || SemanticLoweringError::UnsupportedGlowProfile { owner };
     let geometry_supported = match state.content {
         SemanticObjectContent::Geometry(noon_core::StoredGeometry::Circle { radius }) => {
             radius.is_finite() && radius > 0.0
@@ -894,15 +912,7 @@ fn lower_glow_attachment(
     {
         return Err(unsupported());
     }
-    let effect = store.semantic_effect_state(*attachment)?;
-    if effect.owner() != owner {
-        return Err(unsupported());
-    }
-    let noon_core::EffectDefinition::Glow(definition) = effect.definition();
-    Ok(Some(std::sync::Arc::new(crate::CompiledGlow {
-        attachment: *attachment,
-        definition,
-    })))
+    Ok(())
 }
 
 pub(super) fn lower_object_state(
