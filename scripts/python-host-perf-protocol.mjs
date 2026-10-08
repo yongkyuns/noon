@@ -1,5 +1,6 @@
 // Qualification inputs/statistics only, not an engine or a runtime scheduler.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 // scoredWorkerWarmups conditions the exact fresh worker that is measured; it is
 // intentionally distinct from any historical/global warmup sequence.
@@ -19,11 +20,45 @@ export function scoredPairSchedule(pairIndex) {
   ]);
 }
 
+// The exact published producer recipes differ by one *preflight-only* syntax
+// check. The product builds set NOON_SKIP_WEB_PREFLIGHT=1, so this command is
+// not executed when constructing either production artifact. Do not ignore the
+// script hash: authenticate both sources against their immutable artifact
+// identities and prove the entire script differs by only this one known line.
+const WEB_RECIPE = "scripts/build-web-demo.sh";
+const SKIPPED_PAIR_CHECK = "  node --check scripts/playground-product-pair.mjs\n";
+const PREFLIGHT_START = 'if [[ "$skip_web_preflight" != "1" ]]; then\n';
+const PREFLIGHT_END = '\nfi\n\nif [[ "$web_preflight_only" == "1" ]]; then\n';
+
+function verifySkippedPreflightRecipeDelta(identities, scripts, preflightSkipped) {
+  assert.equal(preflightSkipped, true, "different build recipe: product preflight skip must be attested");
+  assert.ok(Array.isArray(scripts) && scripts.length === 2,
+    "both authenticated web build scripts are required");
+  for (const [index, source] of scripts.entries()) {
+    assert.equal(typeof source, "string", "build script bytes must be text");
+    const fullHash = createHash("sha256").update(source).digest("hex");
+    assert.equal(fullHash, identities[index].build.inputs[WEB_RECIPE],
+      "build script source differs from the verified artifact fingerprint");
+  }
+  const [baseline, candidate] = scripts;
+  assert.equal(baseline.includes(SKIPPED_PAIR_CHECK), false,
+    "baseline contains the candidate-only preflight check");
+  assert.equal(candidate.split(SKIPPED_PAIR_CHECK).length, 2,
+    "candidate must contain exactly one additional pair-runner syntax check");
+  const start = candidate.indexOf(PREFLIGHT_START);
+  const end = candidate.indexOf(PREFLIGHT_END, start + PREFLIGHT_START.length);
+  const check = candidate.indexOf(SKIPPED_PAIR_CHECK);
+  assert.ok(start >= 0 && end > start && check > start && check < end,
+    "the differing command must be inside the skipped preflight branch");
+  assert.equal(candidate.replace(SKIPPED_PAIR_CHECK, ""), baseline,
+    "web build production recipes differ beyond the skipped preflight syntax check");
+}
+
 // A source fingerprint is provenance, not a compiler setting. Verify each
 // artifact against its own checkout before this comparison. Cargo manifests may
 // legitimately change with the code under test (e.g. adding an optional native
-// crate). Compiler/tool options and out-of-manifest build recipes must still match.
-export function assertComparableArtifacts(identities) {
+// crate). Compiler/tool options and executed build recipes must still match.
+export function assertComparableArtifacts(identities, { webBuildScripts = null, preflightSkipped = false } = {}) {
   assert.equal(identities.length, 2, "expected baseline and candidate artifacts");
   const builds = identities.map(identity => {
     assert.equal(identity.schema, 1, "unsupported artifact schema");
@@ -37,6 +72,14 @@ export function assertComparableArtifacts(identities) {
       .filter(([name]) => name !== "Cargo.toml" && !name.endsWith("/Cargo.toml")));
     return { settings, recipes };
   });
+  if (builds[0].recipes[WEB_RECIPE] !== builds[1].recipes[WEB_RECIPE]) {
+    verifySkippedPreflightRecipeDelta(identities, webBuildScripts, preflightSkipped);
+    // Normalize only this proved-unexecuted command. Every other recipe input
+    // is still compared by its full hash and a changed build script is listed
+    // separately in changedBuildInputs for later provenance review.
+    builds[0].recipes[WEB_RECIPE] = "verified-skipped-preflight-only";
+    builds[1].recipes[WEB_RECIPE] = "verified-skipped-preflight-only";
+  }
   assert.deepEqual(builds[0], builds[1], "different build configuration or recipe");
   assert.equal(typeof identities[0].compiler, "string", "missing compiler identity");
   assert.ok(identities[0].compiler.length > 0, "missing compiler identity");

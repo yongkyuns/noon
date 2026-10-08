@@ -45,7 +45,12 @@ try {
     // standalone invocation cannot trust an artifact's claimed identity.
     identities.push(await verifyProductArtifact(root, process.env, role));
   }
-  changedBuildInputs = assertComparableArtifacts(identities);
+  const buildScripts = await Promise.all(roots.map(root =>
+    readFile(path.join(root, "scripts/build-web-demo.sh"), "utf8")));
+  changedBuildInputs = assertComparableArtifacts(identities, {
+    webBuildScripts: buildScripts,
+    preflightSkipped: process.env.NOON_PRODUCT_PREFLIGHT_SKIPPED === "1",
+  });
   browser = await playwright.chromium.launch({ headless: true, args: browserArgs("webgl") });
   for (const root of roots) {
     const server = await serveRepository(root, 0, { crossOriginIsolated: true }); servers.push(server);

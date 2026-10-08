@@ -215,3 +215,16 @@ for (const exampleId of workloadIds) {
       sha256: createHash("sha256").update(expected).digest("hex") });
   });
 }
+
+
+test("producer preflight-only checks cannot be mistaken for different executed build recipes", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const producer = workflow.split("\n  build:\n")[1]?.split("\n  compare:\n")[0];
+  const consumer = workflow.split("\n  compare:\n")[1];
+  assert.ok(producer && consumer, "required producer/comparison jobs are missing");
+  assert.match(producer, /^      NOON_SKIP_WEB_PREFLIGHT: "1"$/m,
+    "producer must skip the source-dependent preflight for both production builds");
+  assert.match(consumer, /^      NOON_PRODUCT_PREFLIGHT_SKIPPED: "1"$/m,
+    "consumer must explicitly attest the matching producer preflight selection");
+  assert.match(consumer, /node scripts\/python-host-perf\.mjs/);
+});

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { PERF_PROTOCOL, assertComparableArtifacts, pairedCost, performanceSource, scoredPairSchedule } from "./python-host-perf-protocol.mjs";
 
@@ -89,6 +91,43 @@ test("different optimization, target, feature, recipe or compiler identity still
   }
   const after = artifact("b"); after.compiler += "\nchanged";
   assert.throws(() => assertComparableArtifacts([artifact("a"), after]), /compiler/);
+});
+
+
+test("the exact extra skipped-preflight check is authenticated, not a general recipe waiver", async () => {
+  const candidateSource = await readFile(new URL("./build-web-demo.sh", import.meta.url), "utf8");
+  const check = "  node --check scripts/playground-product-pair.mjs\n";
+  assert.equal(candidateSource.split(check).length, 2, "candidate's guard must remain unique");
+  const baselineSource = candidateSource.replace(check, "");
+  const hash = source => createHash("sha256").update(source).digest("hex");
+  const make = (sources = [baselineSource, candidateSource]) => {
+    const values = [artifact("a"), artifact("b")];
+    for (let i = 0; i < 2; i++) values[i].build.inputs["scripts/build-web-demo.sh"] = hash(sources[i]);
+    return values;
+  };
+  const sources = [baselineSource, candidateSource];
+  assert.throws(() => assertComparableArtifacts(make()), /preflight skip/);
+  assert.throws(() => assertComparableArtifacts(make(), { webBuildScripts: sources }), /preflight skip/);
+  const options = { webBuildScripts: sources, preflightSkipped: true };
+  assert.deepEqual(assertComparableArtifacts(make(), options), ["scripts/build-web-demo.sh"]);
+  const wrongDigest = make(); wrongDigest[1].build.inputs["scripts/build-web-demo.sh"] = "f".repeat(64);
+  assert.throws(() => assertComparableArtifacts(wrongDigest, options), /fingerprint/);
+  // A change anywhere in the *executable* build path still fails, including
+  // changes to compiler flags, feature selection, or the WASM build command.
+  for (const changed of [
+    candidateSource.replace('wasm-pack "${wasm_pack_args[@]}"', 'echo not-a-build "${wasm_pack_args[@]}"'),
+    candidateSource.replace('wasm_pack_args+=(--no-opt)', 'wasm_pack_args+=(--opt)'),
+    candidateSource.replace('node scripts/build-runtime-identity.mjs', 'node scripts/changed-identity.mjs'),
+    candidateSource.replace(check, check + '  node --check scripts/another-check.mjs\n'),
+    candidateSource.replace(check, "") + check,
+  ]) {
+    const tamperedSources = [baselineSource, changed];
+    assert.throws(() => assertComparableArtifacts(make(tamperedSources), {
+      webBuildScripts: tamperedSources, preflightSkipped: true,
+    }), /recipes differ|guard|candidate|exactly one|preflight branch/);
+  }
+  const badCompiler = make(); badCompiler[1].compiler += " different";
+  assert.throws(() => assertComparableArtifacts(badCompiler, options), /compiler/);
 });
 
 test("missing or malformed provenance is not a comparable build", () => {

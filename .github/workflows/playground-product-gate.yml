@@ -285,6 +285,9 @@ jobs:
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "0"
       NOON_RENDERER_SMOKE: "0"
+      # Producer job pins NOON_SKIP_WEB_PREFLIGHT=1. This attests that the
+      # extra candidate pair-runner syntax check was never a build step.
+      NOON_PRODUCT_PREFLIGHT_SKIPPED: "1"
     steps:
       - name: Require successful production builds
         env:
