@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Python validation must not add interpreter caches to the browser package.
+export PYTHONDONTWRITEBYTECODE=1
+
 noon_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$noon_root"
 
@@ -22,8 +25,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   # The #61 ownership inventory is an architecture ratchet, not passive documentation.
   # Validate both the checked-in inventory and the validator's ownership-class invariants
   # in the required web build so contradictory or growing Python semantic debt cannot land.
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/semantic_ownership_check.py
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_semantic_ownership_check.py
+  python3 scripts/semantic_ownership_check.py
+  python3 scripts/test_semantic_ownership_check.py
 
   # Keep top-level browser modules and tests self-registering with the required web build.
   # This prevents a new JavaScript file or regression test from silently escaping syntax
@@ -103,23 +106,12 @@ if [[ "$skip_web_preflight" != "1" ]]; then
     node --test "$test_file"
   done
 
-  PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
-    web/python/_manim_compat.py \
-    web/python/_manim_typst.py \
-    web/python/_manim_rate_functions.py \
-    web/python/_manim_shared_geometry.py \
-    web/python/_manim_animation_options.py \
-    web/python/_manim_animate.py \
-    web/python/_manim_rotate.py \
-    web/python/_manim_composition.py \
-    web/python/_manim_frame_sampling.py \
-    web/python/_manim_lifecycle.py \
-    web/python/_manim_growing.py \
-    web/python/_manim_draw_border_then_fill.py \
-    web/python/_manim_reactive.py \
-    web/python/_manim_updaters.py
-  PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
-  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py'
+  python3 - <<'PYTHON'
+from pathlib import Path
+for source in Path("web/python").rglob("*.py"):
+    compile(source.read_bytes(), str(source), "exec")
+PYTHON
+  python3 -m unittest discover -s web/python -p 'test_*.py'
 
 fi
 
