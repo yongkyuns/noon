@@ -550,7 +550,7 @@ pub(crate) fn effective_anchor_layout_measure(
 
 /// Validate that persistent composite placement can safely use an entry's state.
 /// Existing affine/reactive drivers cannot be baked into a new authored position.
-#[cfg(test)]
+#[cfg(any(test, feature = "native-text", feature = "latex"))]
 pub(crate) fn composite_entry_state(
     store: &Rc<RefCell<SemanticStore>>,
     execution: Option<&ExecutionSession>,
@@ -566,6 +566,21 @@ pub(crate) fn composite_entry_state(
         return crate::effective_capture::capture_mobject_state(store, execution, object);
     }
     object.state()
+}
+
+#[cfg(any(feature = "native-text", feature = "latex"))]
+impl crate::Scene {
+    pub(crate) fn composite_entry_state(
+        &self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticObjectState, AuthoringError> {
+        composite_entry_state(
+            self.integration_store(),
+            self.running_execution(),
+            self.root(),
+            object,
+        )
+    }
 }
 
 pub(crate) fn placement_authored_transform(
