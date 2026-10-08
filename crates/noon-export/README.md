@@ -111,3 +111,30 @@ videos, compares the PNG sequence byte-for-byte against a fresh native capture,
 and retains media, logs, tool versions and tested revision. Process and file
 failure tests are separate from visual/timing checks. Existing architecture,
 workspace, native viewer, browser and product gates are not waived.
+
+## Session-owned native hosts
+
+`SessionCapture` is the capture-only entry point for a native host that already
+owns an `ExecutionSession`, rather than a Rust `LiveProgram`. It uses the same
+native GPU capture, retained composition and readback code as `capture_frames`.
+It does not run Python, drive a timeline, invoke callbacks or encode a file.
+
+Construct it with `SessionCapture::new(&session, capture_options)`, then call
+`capture(&mut session)` only after the shared runtime has settled the requested
+sample. The result borrows tightly packed RGBA pixels and reports the actual
+publication context/time. It deliberately does not invent video timestamps.
+`render(&mut session)` consumes a publication without reading pixels; it can
+satisfy an off-grid render barrier without creating an extra output frame. The
+source owner still performs the existing endpoint-admission/continuation steps.
+
+A capture instance is bound to one runtime identity. A different runtime, an
+unsettled callback, cancellation or a render error fails explicitly and poisons
+that instance. Capturing cannot change scene time, complete a callback or admit a
+source continuation. Repeated captures of a settled state are just repeated
+images, not animation playback. A consumer must copy borrowed pixels to retain
+them beyond the next capture.
+
+This API is a prerequisite for native language-binding integration, not a claim
+that native Python or Pyodide can already export video. Those bindings still need
+the shared rational sample/completion contract and file-sink integration; a
+Python-side sampling loop or browser fallback is not supplied here.

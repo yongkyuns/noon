@@ -28,8 +28,9 @@ mod pixel_readback;
 mod svg_failure;
 
 pub use export_frames::{
-    ExportEndReason, ExportFrame, ExportFrameOptions, ExportFrameSummary, ExportFrames,
-    ExportFramesError, ExportFramesStatus, ExportSample, ExportSampleKind, ExportStop,
+    ExportEndReason, ExportFrame, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyError,
+    ExportFramePolicyStatus, ExportFrameSummary, ExportFrames, ExportFramesError,
+    ExportFramesStatus, ExportSample, ExportSampleKind, ExportStop,
 };
 pub use forward_sample::{
     ForwardSample, ForwardSampleError, ForwardSampleStatus, SampleObservation,
