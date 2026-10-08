@@ -605,9 +605,9 @@ fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
         )
         .unwrap();
         assert_eq!(initial.resident_meshes, 1);
-        // Authored vertices/triangles, constant Cairo coverage scalars and one
-        // lighting uniform. Ordinary mesh vertex/instance layouts stay intact.
-        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 4 * 4 + 96);
+        // Authored vertices/triangles and one retained appearance uniform.
+        // Ordinary mesh vertex/instance layouts stay intact.
+        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 368);
         // Independent analytic stops: clamp(.8 + .5) = 1; .8 + .5/27.
         // At the center their midpoint is .909259..., not clamp(1.059259...).
         let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
@@ -2078,7 +2078,43 @@ fn cairo_boundary_test_scene(
     sloped_unlit: bool,
     curved_fill: bool,
 ) -> (SceneInstance, noon_core::ObjectId) {
-    assert!(!(with_occluder && (sloped_unlit || curved_fill)));
+    cairo_boundary_test_scene_with_straight_controls(
+        with_occluder,
+        sloped_unlit,
+        curved_fill,
+        false,
+    )
+}
+
+fn cairo_boundary_test_scene_with_straight_controls(
+    with_occluder: bool,
+    sloped_unlit: bool,
+    curved_fill: bool,
+    straight_controls: bool,
+) -> (SceneInstance, noon_core::ObjectId) {
+    let (store, surface_node) = cairo_boundary_test_store(
+        with_occluder,
+        sloped_unlit,
+        curved_fill,
+        straight_controls,
+        None,
+    );
+    let mut index = SemanticExecutionIndex::new();
+    let (compiled, _) = lower_semantic_execution(&store, &mut index)
+        .unwrap()
+        .into_parts();
+    let surface_object = index.execution_object_id(surface_node).unwrap();
+    (SceneInstance::new(compiled), surface_object)
+}
+
+fn cairo_boundary_test_store(
+    with_occluder: bool,
+    sloped_unlit: bool,
+    curved_fill: bool,
+    straight_controls: bool,
+    bottom_control_y: Option<f64>,
+) -> (SemanticStore, noon_core::SemanticNodeId) {
+    assert!(!(with_occluder && sloped_unlit));
     assert!(!(sloped_unlit && curved_fill));
     let mut store = SemanticStore::new();
     let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
@@ -2119,10 +2155,18 @@ fn cairo_boundary_test_scene(
             span_p12_p0: SemanticVec3::new(0.0, 1.0, 0.0),
             span_p9_p6: SemanticVec3::new(-1.0, 0.0, 0.0),
             span_p3_p6: SemanticVec3::new(0.0, -1.0, 0.0),
-            boundary_controls: curved_fill.then_some([
+            boundary_controls: (curved_fill || straight_controls).then_some([
                 [
-                    SemanticVec3::new(-1.0 / 6.0, -1.5, 0.0),
-                    SemanticVec3::new(1.0 / 6.0, -1.5, 0.0),
+                    SemanticVec3::new(
+                        -1.0 / 6.0,
+                        bottom_control_y.unwrap_or(if curved_fill { -1.5 } else { -0.5 }),
+                        0.0,
+                    ),
+                    SemanticVec3::new(
+                        1.0 / 6.0,
+                        bottom_control_y.unwrap_or(if curved_fill { -1.5 } else { -0.5 }),
+                        0.0,
+                    ),
                 ],
                 [
                     SemanticVec3::new(0.5, -1.0 / 6.0, 0.0),
@@ -2195,12 +2239,438 @@ fn cairo_boundary_test_scene(
     light.set_role(SemanticObjectRole::PointLight3D);
     attach(&mut store, light);
 
-    let mut index = SemanticExecutionIndex::new();
-    let (compiled, _) = lower_semantic_execution(&store, &mut index)
-        .unwrap()
-        .into_parts();
-    let surface_object = index.execution_object_id(surface_node).unwrap();
-    (SceneInstance::new(compiled), surface_object)
+    (store, surface_node)
+}
+
+#[test]
+fn cairo_sampled_fill_conserves_white_area_across_subpixel_translations() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo sampled fill area qualification: no adapter is available");
+            return;
+        };
+        eprintln!("Cairo sampled fill adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
+        renderer.set_camera(&queue, camera);
+        let mut preparer = FramePreparer::new();
+        let (mut scene, surface_object) =
+            cairo_boundary_test_scene_with_straight_controls(false, false, false, true);
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: surface_object,
+                style: noon_core::Style {
+                    fill: Some(Color::WHITE),
+                    stroke: None,
+                    stroke_width: 0.0,
+                    opacity: 1.0,
+                    ..noon_core::Style::default()
+                },
+            })
+            .unwrap();
+
+        let mut observations = Vec::new();
+        for subpixel_pixels in [0.0_f64, 0.25, 0.5, 0.75] {
+            let transform = SemanticWorldTransform3D::new(
+                SemanticVec3::new(subpixel_pixels / 32.0, 0.0, 0.0),
+                noon_core::SemanticRotation3D::IDENTITY,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap();
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                    object: surface_object,
+                    transform: transform.into(),
+                })
+                .unwrap();
+            let (_, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut scene,
+                &target,
+            )
+            .unwrap();
+            let mut area = [0.0; 3];
+            let mut fractional_edge_pixels = 0;
+            let (rgba_pixels, trailing_bytes) = pixels.as_chunks::<4>();
+            assert!(trailing_bytes.is_empty());
+            for rgba in rgba_pixels {
+                for channel in 0..3 {
+                    area[channel] += f64::from(rgba[channel]) / 255.0;
+                }
+                fractional_edge_pixels += usize::from(rgba[0] > 0 && rgba[0] < 255);
+            }
+            let [red_area, green_area, blue_area] = area;
+            let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+            eprintln!(
+                "Cairo sampled fill area: x_shift_px={subpixel_pixels:.2} red={red_area:.4} green={green_area:.4} blue={blue_area:.4} center_rgba={center:?}"
+            );
+            eprintln!(
+                "Cairo sampled fill fractional edge pixels: x_shift_px={subpixel_pixels:.2} count={fractional_edge_pixels}"
+            );
+            observations.push((
+                subpixel_pixels,
+                red_area,
+                green_area,
+                blue_area,
+                center,
+                fractional_edge_pixels,
+            ));
+        }
+        assert_eq!(observations.len(), 4);
+        for (subpixel, red, green, blue, center, fractional_edge_pixels) in &observations {
+            assert_eq!(
+                *center, [255; 4],
+                "white fill center at x shift {subpixel:.2}px"
+            );
+            assert!(
+                (red - 1024.0).abs() <= 2.0
+                    && (green - 1024.0).abs() <= 2.0
+                    && (blue - 1024.0).abs() <= 2.0,
+                "white fill area at x shift {subpixel:.2}px: RGB integrated pixel areas were {red:.4}, {green:.4}, {blue:.4}; expected 1024 within 2"
+            );
+            if *subpixel > 0.0 {
+                assert!(
+                    *fractional_edge_pixels > 0,
+                    "white fill at x shift {subpixel:.2}px has no fractional edge pixels"
+                );
+            }
+        }
+        // Surface cells can be narrower than a pixel near a silhouette or
+        // cone tip. Their two opposite edges must filter together, rather
+        // than treating the cell as an unbounded half-plane.
+        for (width_pixels, angle) in [
+            (0.25_f64, 0.0),
+            (0.5, 0.0),
+            (1.0, 0.0),
+            (0.25, std::f64::consts::FRAC_PI_4),
+            (0.5, std::f64::consts::FRAC_PI_2 - 0.001),
+        ] {
+            let transform = SemanticWorldTransform3D::new(
+                SemanticVec3::new(0.5 / 32.0, 0.0, 0.0),
+                noon_core::SemanticRotation3D::from_axis_angle(
+                    SemanticVec3::new(0.0, 0.0, 1.0),
+                    angle,
+                )
+                .unwrap(),
+                SemanticVec3::new(width_pixels / 32.0, 1.0, 1.0),
+            )
+            .unwrap();
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                    object: surface_object,
+                    transform: transform.into(),
+                })
+                .unwrap();
+            let (stats, pixels) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut scene,
+                &target,
+            )
+            .unwrap();
+            assert_eq!(stats.geometry_bytes, 0);
+            let area = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|rgba| f64::from(rgba[0]) / 255.0)
+                .sum::<f64>();
+            eprintln!(
+                "Cairo thin-cell area: width_px={width_pixels:.2} angle={angle:.6} red={area:.4}"
+            );
+            assert!(
+                (area - width_pixels * 32.0).abs() <= 1.0,
+                "Cairo thin-cell area: width_px={width_pixels:.2}, area={area:.4}, expected={}",
+                width_pixels * 32.0
+            );
+        }
+    });
+}
+
+#[test]
+fn cairo_curved_fill_preserves_perimeter_area_for_each_winding() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let adapter = match instance.request_adapter(&Default::default()).await {
+            Ok(adapter) => adapter,
+            Err(wgpu::RequestAdapterError::NotFound { .. }) => {
+                eprintln!("skipping Cairo curved area: no adapter is available");
+                return;
+            }
+            Err(error) => panic!("Cairo curved area adapter request failed: {error}"),
+        };
+        eprintln!("Cairo curved area adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+        let target = Target::new(&device);
+        // Four chords sample outward and concave cubics with known trapezoid
+        // areas. The strongest concavity excludes the original quad center
+        // from its fan kernel and must select a proven planar center instead.
+        for (control_y, expected_area) in [(-1.5, 1504.0), (-0.25, 904.0), (0.0, 784.0)] {
+            let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+            renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            renderer.set_camera(
+                &queue,
+                Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap(),
+            );
+            let mut preparer = FramePreparer::new();
+            let (store, node) =
+                cairo_boundary_test_store(false, false, true, false, Some(control_y));
+            let mut index = SemanticExecutionIndex::new();
+            let (compiled, _) = lower_semantic_execution(&store, &mut index)
+                .unwrap()
+                .into_parts();
+            let object = index.execution_object_id(node).unwrap();
+            let mut scene = SceneInstance::new(compiled);
+            for opacity in [1.0, 0.45] {
+                if opacity < 1.0 && control_y != 0.0 {
+                    continue;
+                }
+                scene
+                    .apply_execution_patch(&ExecutionPatch::SetStyle {
+                        object,
+                        style: noon_core::Style {
+                            fill: Some(Color::WHITE),
+                            stroke: None,
+                            stroke_width: 0.0,
+                            opacity,
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+                for mirror in [1.0, -1.0] {
+                    for (axis, angle, area_scale) in [
+                        (SemanticVec3::new(0.0, 0.0, 1.0), 0.0, 1.0),
+                        (
+                            SemanticVec3::new(0.0, 0.0, 1.0),
+                            std::f64::consts::FRAC_PI_4,
+                            1.0,
+                        ),
+                        (
+                            SemanticVec3::new(0.0, 1.0, 0.0),
+                            std::f64::consts::FRAC_PI_6,
+                            std::f64::consts::FRAC_PI_6.cos(),
+                        ),
+                    ] {
+                        for offset in [0.0, 0.25, 0.5, 0.75] {
+                            let transform = SemanticWorldTransform3D::new(
+                                SemanticVec3::new(offset / 32.0, 0.0, 0.0),
+                                noon_core::SemanticRotation3D::from_axis_angle(axis, angle)
+                                    .unwrap(),
+                                SemanticVec3::new(mirror, 1.0, 1.0),
+                            )
+                            .unwrap();
+                            scene
+                                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                                    object,
+                                    transform: transform.into(),
+                                })
+                                .unwrap();
+                            let (_, image) = render(
+                                &device,
+                                &queue,
+                                &mut renderer,
+                                &mut preparer,
+                                &mut scene,
+                                &target,
+                            )
+                            .unwrap();
+                            let area: f64 = image
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|p| f64::from(p[0]) / 255.0)
+                                .sum();
+                            let expected_area = expected_area * area_scale * f64::from(opacity);
+                            eprintln!("Cairo curved area: control={control_y} opacity={opacity} mirror={mirror} angle={angle} offset={offset} area={area} expected={expected_area}");
+                            assert!(
+                                (area - expected_area).abs() <= 2.0,
+                                "{area} versus {expected_area}"
+                            );
+                            let (stats, repeated) = render(
+                                &device,
+                                &queue,
+                                &mut renderer,
+                                &mut preparer,
+                                &mut scene,
+                                &target,
+                            )
+                            .unwrap();
+                            assert_eq!(stats.bytes_uploaded(), 0);
+                            assert_eq!(stats.rows_visited, 0);
+                            assert_eq!(image, repeated);
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn cairo_concave_planar_proxy_preserves_sloped_depth() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping Cairo planar proxy depth: no adapter is available");
+            return;
+        };
+        eprintln!("Cairo planar proxy depth adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut preparer = FramePreparer::new();
+        let (store, node) = cairo_boundary_test_store(true, false, true, false, Some(0.0));
+        let mut index = SemanticExecutionIndex::new();
+        let (compiled, _) = lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        let object = index.execution_object_id(node).unwrap();
+        let mut scene = SceneInstance::new(compiled);
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object,
+                style: noon_core::Style {
+                    fill: Some(Color::WHITE),
+                    stroke: None,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        for angle in [-std::f64::consts::FRAC_PI_6, std::f64::consts::FRAC_PI_6] {
+            scene
+                .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                    object,
+                    transform: SemanticWorldTransform3D::new(
+                        SemanticVec3::ZERO,
+                        noon_core::SemanticRotation3D::from_axis_angle(
+                            SemanticVec3::new(0.0, 1.0, 0.0),
+                            angle,
+                        )
+                        .unwrap(),
+                        SemanticVec3::new(1.0, 1.0, 1.0),
+                    )
+                    .unwrap()
+                    .into(),
+                })
+                .unwrap();
+            let (_, image) = render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                &mut scene,
+                &target,
+            )
+            .unwrap();
+            let edge = pixel(&image, 77, 64);
+            let background = [Color::GREEN.red, Color::GREEN.green, Color::GREEN.blue]
+                .map(|channel| (channel * 255.0).round() as u8);
+            if angle < 0.0 {
+                // Projected right edge is x=64+16*cos(pi/6), covering 0.8564
+                // of pixel 77. Its positive depth is nearer than the green plane.
+                let coverage = 64.0 + 16.0 * std::f64::consts::FRAC_PI_6.cos() - 77.0;
+                for (actual, background) in edge[..3].iter().zip(background) {
+                    let expected =
+                        f64::from(background) + (255.0 - f64::from(background)) * coverage;
+                    assert!(
+                        (f64::from(*actual) - expected).abs() <= 1.0,
+                        "near face: {edge:?}"
+                    );
+                }
+            } else {
+                assert_eq!(edge[..3], background, "far face is occluded");
+            }
+            assert_eq!(edge[3], 255);
+        }
+    });
+}
+
+#[test]
+fn adjacent_cairo_cells_blend_independent_pixel_coverage_without_reupload() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping adjacent Cairo fill qualification: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
+        renderer.set_camera(&queue, camera);
+        let mut preparer = FramePreparer::new();
+        let (mut store, original) = cairo_boundary_test_store(false, false, false, true, None);
+        let mut cell = store
+            .semantic_object_state_checked(original)
+            .unwrap()
+            .clone();
+        cell.style = opaque_style(Color::WHITE);
+        store.detach_semantic_object(original).unwrap();
+        // Both cells share one immutable mesh. Their common boundary passes
+        // through the center of a pixel, where each covers exactly one half.
+        for x in [-0.5, 0.5] {
+            cell.transform.translation.x = x + 0.5 / 32.0;
+            attach(&mut store, cell.clone());
+        }
+        let mut index = SemanticExecutionIndex::new();
+        let (compiled, _) = lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        let mut scene = SceneInstance::new(compiled);
+        let (first, pixels) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(first.resident_meshes, 1);
+        assert_eq!(first.resident_instances, 2);
+        let common_edge = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+        eprintln!("adjacent Cairo half-pixel edge: {common_edge:?}");
+        // Cairo paints independent face coverage with source-over: .5 over
+        // .5 gives .75. A geometric sample union incorrectly produces white.
+        for channel in &common_edge[..3] {
+            assert!(
+                (190..=193).contains(channel),
+                "adjacent Cairo coverage: {common_edge:?}"
+            );
+        }
+        assert_eq!(common_edge[3], 255);
+        assert_eq!(pixel(&pixels, WIDTH / 2 - 4, HEIGHT / 2), [255; 4]);
+        assert_eq!(pixel(&pixels, WIDTH / 2 + 4, HEIGHT / 2), [255; 4]);
+        let (clean, repeated) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(clean.bytes_uploaded(), 0);
+        assert_eq!(clean.rows_visited, 0);
+        assert_eq!(repeated, pixels);
+    });
 }
 
 #[test]

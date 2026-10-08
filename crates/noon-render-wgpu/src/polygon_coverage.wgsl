@@ -1,3 +1,24 @@
+// Signed edge contribution to a unit pixel's winding integral (Green's theorem).
+// Clip Y first, then integrate the piecewise-linear clamp(X, 0, 1). Summing
+// closed perimeter edges handles concavity and overlapping fan pieces without
+// clipping a separate triangle for each piece. Horizontal edges contribute zero.
+fn polygon_edge_pixel_area(p: vec2<f32>, q: vec2<f32>) -> f32 {
+    let y = clamp(vec2<f32>(p.y, q.y), vec2<f32>(0.0), vec2<f32>(1.0));
+    if y.x == y.y { return 0.0; }
+    let t = (y - vec2<f32>(p.y)) / (q.y - p.y);
+    let x = vec2<f32>(p.x) + (q.x - p.x) * t;
+    let lower = min(x.x, x.y);
+    let upper = max(x.x, x.y);
+    var average = clamp(lower, 0.0, 1.0);
+    if upper > lower {
+        let inside = clamp(vec2<f32>(lower, upper), vec2<f32>(0.0), vec2<f32>(1.0));
+        let ramp_area = (inside.y - inside.x) * (inside.y + inside.x) * 0.5;
+        let saturated_width = max(0.0, upper - max(lower, 1.0));
+        average = (ramp_area + saturated_width) / (upper - lower);
+    }
+    return (y.y - y.x) * average;
+}
+
 struct ClippedPolygon {
     // Keep the clipped vertices as fields rather than a dynamically indexed
     // array inside a function-space struct. FXC cannot materialize writes to

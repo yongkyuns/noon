@@ -45,9 +45,9 @@ pub(super) enum SourceKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct DrawId {
-    row: usize,
-    item: u32,
+pub(super) struct DrawId {
+    pub(super) row: usize,
+    pub(super) item: u32,
 }
 
 type FixedOrientationOrderKey = (u32, u32, usize);
@@ -331,7 +331,7 @@ fn spatial_path_pipeline(
         // ignores that depth without declaring an incompatible pipeline.
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth24Plus,
-            depth_write_enabled: Some(depth),
+            depth_write_enabled: Some(depth && !cairo),
             depth_compare: Some(if depth {
                 wgpu::CompareFunction::LessEqual
             } else {
@@ -353,10 +353,11 @@ fn spatial_path_pipeline(
 pub(super) struct PathPlan {
     staged: Vec<(DrawId, Option<StagedPath>)>,
     new_paths: HashMap<PathKey, TessellatedSpatialPath>,
-    new_cairo_geometry: HashMap<PathKey, noon_geometry::CairoPathGeometry>,
+    new_cairo_geometry: HashMap<PathKey, cairo::Geometry>,
     needed: usize,
     capacity: usize,
     camera_clip_scale: [f32; 2],
+    painter_ranks: Option<HashMap<usize, u32>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -364,6 +365,7 @@ pub(super) struct PathUploadStats {
     pub geometry_bytes: usize,
     pub instance_bytes: usize,
     pub camera_bytes: usize,
+    pub depth_order_changed: bool,
 }
 
 #[derive(Debug)]
@@ -372,7 +374,7 @@ struct StagedPath {
     instance: PathInstance,
     domain: Domain,
     painter_rank: u32,
-    cairo: Option<Box<cairo::Uniform>>,
+    cairo: Option<Box<(cairo::Uniform, SemanticVec3)>>,
 }
 
 #[derive(Debug)]
@@ -466,14 +468,11 @@ impl SpatialPathGpuState {
         self.painter_ranks.get(&index).copied()
     }
 
-    fn refresh_painter_ranks(&mut self, painter_order: &[u32]) {
-        self.painter_ranks.clear();
-        self.painter_ranks.extend(
-            painter_order.iter().enumerate().filter_map(|(rank, &row)| {
-                u32::try_from(rank).ok().map(|rank| (row as usize, rank))
-            }),
-        );
-        self.painter_ranks_initialized = true;
+    pub(super) fn commit_painter_ranks(&mut self, plan: &mut PathPlan) {
+        if let Some(ranks) = plan.painter_ranks.take() {
+            self.painter_ranks = ranks;
+            self.painter_ranks_initialized = true;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -499,10 +498,17 @@ impl SpatialPathGpuState {
         {
             return Err(SpatialPathError::InvalidStyle);
         }
-        if !self.painter_ranks_initialized || changes.is_all() || changes.has_painter_order_change()
-        {
-            self.refresh_painter_ranks(painter_order);
-        }
+        let painter_ranks = (!self.painter_ranks_initialized
+            || changes.is_all()
+            || changes.has_painter_order_change())
+        .then(|| {
+            let mut ranks = HashMap::with_capacity(painter_order.len());
+            ranks.extend(painter_order.iter().enumerate().filter_map(|(rank, &row)| {
+                u32::try_from(rank).ok().map(|rank| (row as usize, rank))
+            }));
+            ranks
+        });
+        let effective_ranks = painter_ranks.as_ref().unwrap_or(&self.painter_ranks);
         for &index in indices {
             staged.extend(self.row_draw_ids(index).map(|draw_id| (draw_id, None)));
             let Some(object) = frame.objects.get(index).filter(|_| frame.is_present(index)) else {
@@ -538,8 +544,7 @@ impl SpatialPathGpuState {
                 SemanticVec3::ZERO
             };
             let painter_rank = if fixed {
-                *self
-                    .painter_ranks
+                *effective_ranks
                     .get(&index)
                     .ok_or(SpatialPathError::MissingPainterRank)?
             } else {
@@ -614,15 +619,33 @@ impl SpatialPathGpuState {
                         *corners
                     } else {
                         let path = local_path(geometry.as_ref(), resources)?;
-                        let corners = noon_geometry::cairo_path_geometry(&path)
+                        let lighting = noon_geometry::cairo_path_geometry(&path)
                             .ok_or(SpatialPathError::UnsupportedGeometry)?;
+                        let center = path
+                            .conservative_bounds()
+                            .ok_or(SpatialPathError::UnsupportedGeometry)?
+                            .center();
+                        let corners = cairo::Geometry {
+                            lighting,
+                            center: SemanticVec3::from_vec2(center),
+                        };
                         new_cairo_geometry.insert(keyed, corners);
                         corners
                     };
-                    Some(Box::new(cairo::Uniform::lower(
-                        geometry_metadata,
-                        appearance,
-                    )?))
+                    let center = spatial
+                        .world
+                        .transform_point(geometry_metadata.center)
+                        .ok_or(SpatialPathError::InvalidStyle)?;
+                    Some(Box::new((
+                        cairo::Uniform::lower(
+                            geometry_metadata.lighting,
+                            appearance,
+                            matches!(geometry.as_ref(), GeometryRef::Line { .. })
+                                && screen_stroke(style)
+                                && style.stroke_cap == noon_core::StrokeCap::Butt,
+                        )?,
+                        center,
+                    )))
                 } else {
                     None
                 };
@@ -741,6 +764,7 @@ impl SpatialPathGpuState {
             needed,
             capacity,
             camera_clip_scale,
+            painter_ranks,
         })
     }
 
@@ -836,19 +860,36 @@ impl SpatialPathGpuState {
         let mut released = HashSet::new();
         for (draw_id, staged) in plan.staged {
             if let Some(state) = self.cairo.as_deref_mut() {
-                if let Some(value) = staged.as_ref().and_then(|draw| draw.cairo.as_deref()) {
+                let old_center = state
+                    .draws
+                    .get(&draw_id)
+                    .filter(|_| {
+                        self.draws
+                            .get(&draw_id)
+                            .is_some_and(|draw| draw.domain == Domain::World)
+                    })
+                    .map(|draw| draw.center);
+                let next_center = staged
+                    .as_ref()
+                    .filter(|draw| draw.domain == Domain::World)
+                    .and_then(|draw| draw.cairo.as_deref().map(|(_, center)| *center));
+                stats.depth_order_changed |= old_center != next_center;
+                if let Some((value, center)) =
+                    staged.as_ref().and_then(|draw| draw.cairo.as_deref())
+                {
                     if let Some(draw) = state.draws.get_mut(&draw_id) {
                         if draw.value != *value {
                             queue.write_buffer(&draw.buffer, 0, bytemuck::bytes_of(value));
                             draw.value = *value;
                             stats.instance_bytes += std::mem::size_of::<cairo::Uniform>();
                         }
+                        draw.center = *center;
                     } else {
                         let draw = state
                             .pipelines
                             .as_ref()
                             .expect("Cairo path pipelines")
-                            .retain(device, queue, *value);
+                            .retain(device, queue, *value, *center);
                         state.draws.insert(draw_id, draw);
                         stats.instance_bytes += std::mem::size_of::<cairo::Uniform>();
                     }
@@ -941,6 +982,7 @@ impl SpatialPathGpuState {
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         sample_count: u32,
+        domain: Domain,
     ) -> usize {
         let Some(gpu) = self.gpu.as_ref() else {
             return 0;
@@ -952,58 +994,68 @@ impl SpatialPathGpuState {
         pass.set_bind_group(1, &gpu.fixed_camera_group, &[]);
         pass.set_vertex_buffer(1, gpu.instances.slice(..));
         let mut draw_calls = 0;
-        for domain in [Domain::World, Domain::FixedOrientation] {
-            pass.set_pipeline(match (domain, sample_count) {
-                (Domain::World, 1) => &gpu.world_pipeline,
-                (Domain::World, _) => &gpu.world_pipeline_msaa,
-                (_, 1) => &gpu.fixed_pipeline,
-                (_, _) => &gpu.fixed_pipeline_msaa,
-            });
-            match domain {
-                Domain::World => {
-                    let mut using_cairo = false;
-                    for (id, draw) in self
-                        .draws
-                        .iter()
-                        .filter(|(_, draw)| draw.domain == Domain::World)
-                    {
-                        let cairo_draw =
-                            self.cairo.as_deref().and_then(|state| state.draws.get(id));
-                        if using_cairo != cairo_draw.is_some() {
-                            if cairo_draw.is_some() {
-                                let pipelines = self
-                                    .cairo
-                                    .as_deref()
-                                    .and_then(|state| state.pipelines.as_ref())
-                                    .expect("Cairo path pipelines");
-                                pass.set_pipeline(&pipelines.world[usize::from(sample_count != 1)]);
-                            } else {
-                                pass.set_pipeline(if sample_count == 1 {
-                                    &gpu.world_pipeline
-                                } else {
-                                    &gpu.world_pipeline_msaa
-                                });
-                            }
-                            using_cairo = cairo_draw.is_some();
-                        }
-                        if let Some(appearance) = cairo_draw {
-                            pass.set_bind_group(2, &appearance.binding, &[]);
-                        }
+        pass.set_pipeline(match (domain, sample_count) {
+            (Domain::World, 1) => &gpu.world_pipeline,
+            (Domain::World, _) => &gpu.world_pipeline_msaa,
+            (_, 1) => &gpu.fixed_pipeline,
+            (_, _) => &gpu.fixed_pipeline_msaa,
+        });
+        match domain {
+            Domain::World => {
+                for (_, draw) in self.draws.iter().filter(|(id, draw)| {
+                    draw.domain == Domain::World
+                        && !self
+                            .cairo
+                            .as_deref()
+                            .is_some_and(|state| state.draws.contains_key(id))
+                }) {
+                    draw_calls += encode_path_draw(pass, &self.paths, draw);
+                }
+            }
+            Domain::FixedOrientation => {
+                for &(_, item, row) in &self.fixed_orientation_order {
+                    let id = DrawId { row, item };
+                    if let Some(draw) = self.draws.get(&id) {
                         draw_calls += encode_path_draw(pass, &self.paths, draw);
                     }
                 }
-                Domain::FixedOrientation => {
-                    for &(_, item, row) in &self.fixed_orientation_order {
-                        let id = DrawId { row, item };
-                        if let Some(draw) = self.draws.get(&id) {
-                            draw_calls += encode_path_draw(pass, &self.paths, draw);
-                        }
-                    }
-                }
-                Domain::FixedFrame => {}
             }
+            Domain::FixedFrame => {}
         }
         draw_calls
+    }
+
+    pub(super) fn depth_draws(&self) -> impl Iterator<Item = DrawId> + '_ {
+        self.cairo
+            .iter()
+            .flat_map(|state| state.draws.keys())
+            .copied()
+            .filter(|id| self.draws[id].domain == Domain::World)
+    }
+
+    pub(super) fn depth_center(&self, id: DrawId) -> SemanticVec3 {
+        self.cairo.as_ref().expect("Cairo state").draws[&id].center
+    }
+
+    pub(super) fn bind_depth_pipeline<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, samples: u32) {
+        let gpu = self.gpu.as_ref().expect("spatial path GPU state");
+        let cairo = self.cairo.as_ref().expect("Cairo state");
+        pass.set_pipeline(
+            &cairo.pipelines.as_ref().expect("Cairo pipelines").world[usize::from(samples != 1)],
+        );
+        pass.set_bind_group(0, &gpu.camera_group, &[]);
+        pass.set_bind_group(1, &gpu.fixed_camera_group, &[]);
+        pass.set_vertex_buffer(1, gpu.instances.slice(..));
+    }
+
+    pub(super) fn encode_depth_draw<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        id: DrawId,
+    ) -> usize {
+        let cairo = self.cairo.as_ref().expect("Cairo state");
+        pass.set_bind_group(2, &cairo.draws[&id].binding, &[]);
+        encode_path_draw(pass, &self.paths, &self.draws[&id])
     }
 }
 
@@ -1899,6 +1951,7 @@ mod tests {
             needed: 0,
             capacity: 1,
             camera_clip_scale: [1.0, 1.0],
+            painter_ranks: None,
         };
         // Row 9 remains, row 2/item 0 remains after its replacement, and the
         // transient row 12 draw is absent: two final draws total.
