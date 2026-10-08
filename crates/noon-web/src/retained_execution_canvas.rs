@@ -224,6 +224,9 @@ mod wasm {
         mirror: InstalledRetainedExecutionMirror,
         pending_frame: bool,
         pending_changes: FrameChanges,
+        // Renderer-side capability bit, derived only from admitted worker rows.
+        // Ordinary no-glow sessions retain the original zero-extra-work path.
+        glow_transport_seen: bool,
         preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
         text_gpu: RetainedTextGpuState,
@@ -389,6 +392,7 @@ mod wasm {
                 mirror,
                 pending_frame: false,
                 pending_changes: FrameChanges::default(),
+                glow_transport_seen: false,
                 preparer,
                 renderer,
                 text_gpu,
@@ -496,6 +500,9 @@ mod wasm {
                 None
             };
 
+            // Mark only validated, accepted source glow publications. Once seen,
+            // keep the path active long enough to retire removed GPU scopes.
+            let received_glow = delta.retained.objects.iter().any(|row| row.glow.is_some());
             let pointer_view = delta.pointer_view;
             let mirror = &mut self.mirror;
             let preparer = &mut self.preparer;
@@ -564,8 +571,21 @@ mod wasm {
             }
             match outcome {
                 RetainedTransportApplyOutcome::Applied => {
+                    // The admitted worker source is authoritative. Retain this
+                    // preparation path for subsequent removal/cleanup frames.
+                    self.glow_transport_seen |= received_glow;
                     if replaces_session {
                         self.renderer.reset_spatial_publication_context();
+                        // A previous glow session can already have returned to
+                        // the no-effect fast path. Its retained preparer's last
+                        // publication epoch must still be retired before a new
+                        // session may introduce another attachment.
+                        if self.glow_transport_seen
+                            || self.preparer.last_applied_publication().is_some()
+                        {
+                            self.preparer.reset_publication_context();
+                            self.renderer.reset_retained_analytic_glow_publication();
+                        }
                     }
                     self.selection_overlay = overlay;
                     let view_changed = self.pointer_view != pointer_view;
@@ -743,6 +763,18 @@ mod wasm {
                 .and_then(|target| target.as_ref().ok());
             let prepare_started = profiling.then(performance_now_ms);
             let resources = self.mirror.resources();
+            // Worker transport has already resolved and validated this frame and
+            // its resource handles. The borrowed renderer publication uses those
+            // same objects; no JS effects state or separate renderer is introduced.
+            let glow_publication = if self.glow_transport_seen {
+                Some(
+                    self.mirror
+                        .renderer_publication(&self.pending_changes)
+                        .map_err(js_error)?,
+                )
+            } else {
+                None
+            };
             let installed_frame = self
                 .mirror
                 .frame()
@@ -781,6 +813,20 @@ mod wasm {
                 .map_err(js_error)?;
             let plans = self.mirror.family_plans();
             let family_frame = self.mirror.planned_family_frame().map_err(js_error)?;
+            if let Some(publication) = glow_publication.as_ref() {
+                // This worker's normal retained preparation already contains all
+                // installed rows; there is no viewport-candidate culling to
+                // augment. Updating the shared sparse source index is still
+                // required for live changes/removal before painter capture.
+                self.renderer
+                    .glow_source_visibility(publication, &[])
+                    .map_err(js_error)?;
+                if !self.mirror.active_family_animation_indices().is_empty() {
+                    return Err(js_message(
+                        "retained worker glow does not yet support simultaneous family animation",
+                    ));
+                }
+            }
             if self.pending_changes.is_all() {
                 self.preparer.set_painter_order(self.mirror.painter_order());
             } else if let Some(range) = self.pending_changes.painter_order_range() {
@@ -803,18 +849,24 @@ mod wasm {
                 let frame = self.mirror.frame().ok_or_else(|| {
                     js_message("retained execution renderer has no frame snapshot")
                 })?;
-                self.preparer
-                    .prepare_with_image_resources(
-                        &self.device,
-                        frame,
-                        &self.pending_changes,
-                        resources.texts(),
-                        resources.fonts(),
-                        resources.geometries(),
-                        resources.images(),
-                        metrics,
-                    )
-                    .map_err(js_error)?
+                if let Some(publication) = glow_publication.as_ref() {
+                    self.preparer
+                        .prepare_publication(&self.device, publication, metrics)
+                        .map_err(js_error)?
+                } else {
+                    self.preparer
+                        .prepare_with_image_resources(
+                            &self.device,
+                            frame,
+                            &self.pending_changes,
+                            resources.texts(),
+                            resources.fonts(),
+                            resources.geometries(),
+                            resources.images(),
+                            metrics,
+                        )
+                        .map_err(js_error)?
+                }
             } else {
                 let family_frame = family_frame.ok_or_else(|| {
                     js_message(
@@ -894,6 +946,18 @@ mod wasm {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Noon retained execution render worker frame"),
                 });
+            if let Some(publication) = glow_publication.as_ref() {
+                self.renderer
+                    .prepare_retained_analytic_glows(
+                        &self.device,
+                        &self.queue,
+                        &mut encoder,
+                        &prepared,
+                        publication,
+                        noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+                    )
+                    .map_err(js_error)?;
+            }
             let draw = self
                 .renderer
                 .encode_retained_with_transient_presentations_and_overlay(
@@ -916,6 +980,14 @@ mod wasm {
             let submit_started = profiling.then(performance_now_ms);
             self.queue.submit(Some(command_buffer));
             self.queue.present(surface_texture);
+            // Returning to no-effect content restores the original worker fast
+            // path once the last old retained GPU scope has been retired.
+            if self.glow_transport_seen
+                && !self.renderer.has_retained_analytic_glow_sources()
+                && self.renderer.analytic_glow_texture_bytes() == 0
+            {
+                self.glow_transport_seen = false;
+            }
             self.presentation_sequence = self.presentation_sequence.saturating_add(1);
             if let (Some(started), Some(timings)) = (submit_started, substage_timings.as_mut()) {
                 timings.submit_present_cpu_wall_ms = performance_now_ms() - started;

@@ -2,7 +2,9 @@
 //!
 //! This is a disposable sparse index of the existing runtime column, not an
 //! effect-value store. No frontend request, object scan on clean publications,
-//! or additional clock is involved. The genuine worker transport remains gated.
+//! or additional clock is involved. The genuine worker reborrows this exact
+//! publication from its validated retained mirror; public Scene activation is
+//! still gated until end-to-end cross-worker playback is qualified.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -119,6 +121,21 @@ impl RetainedGlowPublication {
 }
 
 impl GpuRenderer {
+    /// A transport renderer can return to its ordinary zero-effect fast path
+    /// after the last published source and its scope resources are retired.
+    pub fn has_retained_analytic_glow_sources(&self) -> bool {
+        !self.retained_glow.sources.is_empty()
+    }
+
+    /// Drop publication-scoped glow bindings when a new validated worker
+    /// session replaces the previous one. Frame epochs order a single session;
+    /// they cannot establish authority across unrelated sessions. All GPU
+    /// textures remain safely retained by any already-submitted wgpu work.
+    pub fn reset_retained_analytic_glow_publication(&mut self) {
+        self.retained_glow = RetainedGlowPublication::default();
+        self.analytic_glows = None;
+    }
+
     /// Add only effect-source indices to the execution-owned, painter-ordered
     /// visibility result. The usual retained preparer validates the candidate set.
     /// A source may be outside semantic bounds while its padded halo is visible.

@@ -61,6 +61,33 @@ impl InstalledRetainedExecutionMirror {
         self.wire.painter_order()
     }
 
+    /// Reborrow the validated, installed worker frame as the same renderer
+    /// publication contract consumed by direct native/WASM hosts. No second
+    /// resource state or transport-to-scene re-lowering is created here.
+    pub fn renderer_publication(
+        &self,
+        changes: &FrameChanges,
+    ) -> Result<noon_runtime::RendererPublication<'_>, InstalledExecutionError> {
+        let frame = self
+            .wire
+            .frame()
+            .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
+        Ok(
+            noon_runtime::RendererPublication::from_validated_transport_frame(
+                self.wire.publication_context(),
+                frame,
+                changes.clone(),
+                self.resources.texts(),
+                self.resources.fonts(),
+                self.resources.geometries(),
+                self.resources.images(),
+                self.family.plans(),
+                self.family.active_indices(),
+                self.wire.painter_order(),
+            ),
+        )
+    }
+
     pub fn family_frame(&self) -> Result<Option<RetainedFamilyFrame<'_>>, InstalledExecutionError> {
         if self.family.plans().is_empty() {
             return Ok(None);
@@ -635,6 +662,29 @@ mod tests {
             .add_many(&[(&first).into(), (&second).into()])
             .unwrap();
         SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 4.0, 17).unwrap()
+    }
+
+    #[test]
+    fn validated_worker_publication_borrows_exact_installed_frame_and_context() {
+        let mut source = geometry_engine();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&source.resource_bundle_bytes())
+                .unwrap();
+        assert!(matches!(
+            mirror.renderer_publication(&FrameChanges::all()),
+            Err(InstalledExecutionError::MissingResolvedFrame)
+        ));
+        let (outcome, changes) = mirror
+            .apply_json(&source.initial_delta_json().unwrap())
+            .unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
+        let publication = mirror.renderer_publication(&changes).unwrap();
+        assert_eq!(publication.frame(), mirror.frame().unwrap());
+        assert_eq!(publication.context(), mirror.publication_context());
+        assert_eq!(publication.painter_order(), mirror.painter_order());
+        assert_eq!(publication.changes(), &changes);
+        assert!(publication.active_family_animation_indices().is_empty());
+        assert_eq!(publication.family_animation_plans().len(), 0);
     }
 
     #[test]
