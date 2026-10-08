@@ -70,13 +70,21 @@ function failAuthoringWorker(error) {
   self.close();
 }
 
+// A WASM trap cannot unwind Rust borrows or restore a coherent engine instance.
+// Retire this host through the existing fatal channel, even if Python catches it.
+self.noonReportEngineTrap = (error) => {
+  if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
+};
+
 self.addEventListener("message", (event) => {
   if (fatalAuthoringFailure) return;
   if (isContinuationControl(event.data)) {
     void handleContinuationControl(event.data);
     return;
   }
-  requestQueue = requestQueue.then(() => handleRequest(event.data));
+  requestQueue = requestQueue.then(() => {
+    if (!fatalAuthoringFailure) return handleRequest(event.data);
+  });
 });
 
 async function initializePyodide() {
@@ -1313,6 +1321,7 @@ function validateRequest(request) {
 }
 
 function post(type, payload = {}) {
+  if (fatalAuthoringFailure && (type !== "error" || payload.requestId !== null)) return;
   self.postMessage({
     channel: AUTHORING_CHANNEL,
     protocolVersion: AUTHORING_PROTOCOL_VERSION,

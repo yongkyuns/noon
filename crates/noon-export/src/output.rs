@@ -110,8 +110,9 @@ pub struct FileExportSummary {
 /// sRGB transfer is preserved and tagged, not falsely retagged as BT.709 transfer.
 /// PNG preserves all captured RGBA bytes. Both currently require opaque input.
 ///
-/// A bounded native writer copies into one reusable frame buffer. Only that
-/// buffer crosses threads; source/callback objects need not implement Send.
+/// Two reusable encoder buffers overlap input writes with subsequent capture.
+/// Only owned pixels cross threads; source/callbacks stay on the owner thread.
+/// Queue acceptance is not write completion: finalization drains every reply.
 /// Cancellation/deadlines kill FFmpeg to unblock pipe writes. OS process reaping,
 /// synchronous callbacks, filesystems and hostile executables are not preemptible.
 ///
@@ -296,7 +297,7 @@ impl FileSink {
             self.encoder
                 .as_mut()
                 .ok_or_else(|| io::Error::other("encoder already finished"))?
-                .write(frame.rgba)?;
+                .enqueue(frame.rgba)?;
             if let Some(manifest) = self.manifest.as_mut() {
                 writeln!(
                     manifest,

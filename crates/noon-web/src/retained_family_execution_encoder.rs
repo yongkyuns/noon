@@ -239,21 +239,39 @@ impl RetainedFamilyExecutionDeltaEncoder {
                     && previous.presence == row.presence
                     && previous.reveal == row.reveal
                     && previous.render_geometry == row.render_geometry
-                    && previous.render_transform == row.render_transform
+                    && match (previous.render_transform, row.render_transform) {
+                        (None, None) => true,
+                        (Some(previous), Some(current)) => {
+                            previous.scale == current.scale && previous.rotation == current.rotation
+                        }
+                        _ => false,
+                    }
                     && previous.render_geometry_resource == row.render_geometry_resource
             });
             let patch = previous.and_then(|previous| {
                 let transform = (previous.transform != row.transform).then_some(row.transform);
                 let style = (previous.style != row.style).then_some(row.style);
                 let morph = (previous.morph != row.morph).then_some(row.morph);
-                (eligible && stable && (transform.is_some() || style.is_some() || morph.is_some()))
-                    .then_some(crate::RetainedTransportObjectPatch {
-                        slot: row.slot,
-                        object: row.object,
-                        transform,
-                        style,
-                        morph,
-                    })
+                let render_translation = previous
+                    .render_transform
+                    .zip(row.render_transform)
+                    .and_then(|(previous, current)| {
+                        (previous.translation != current.translation).then_some(current.translation)
+                    });
+                (eligible
+                    && stable
+                    && (transform.is_some()
+                        || style.is_some()
+                        || morph.is_some()
+                        || render_translation.is_some()))
+                .then_some(crate::RetainedTransportObjectPatch {
+                    slot: row.slot,
+                    object: row.object,
+                    transform,
+                    style,
+                    morph,
+                    render_translation,
+                })
             });
             if let Some(patch) = patch {
                 retained.object_patches.push(patch);
@@ -983,6 +1001,12 @@ mod tests {
 
     #[test]
     fn dense_row_compaction_preserves_changed_content_as_full_row() {
+        for render_override in [false, true] {
+            check_dense_row_compaction(render_override);
+        }
+    }
+
+    fn check_dense_row_compaction(render_override: bool) {
         let (_, mut frame, _) = fixture();
         let template = frame.objects[0].clone();
         frame.objects = (0..128)
@@ -999,9 +1023,21 @@ mod tests {
         frame.morphs = vec![0.0; 128];
         frame.render_geometries = vec![None; 128];
         frame.render_transforms = vec![None; 128];
+        if render_override {
+            frame
+                .render_geometries
+                .fill(Some(Arc::new(GeometryRef::path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::ZERO)
+                        .line_to(noon_core::Vec2::ONE),
+                ))));
+            frame.render_transforms.fill(Some(Transform2D::IDENTITY));
+        }
 
         let mut base = RetainedExecutionDeltaEncoder::new(1);
         let mut compactor = RetainedFamilyExecutionDeltaEncoder::new(1);
+        let mut full_mirror = crate::RetainedExecutionFrameMirror::default();
+        let mut compact_mirror = crate::RetainedExecutionFrameMirror::default();
         let wrap = |retained| RetainedFamilyExecutionDeltaEnvelope {
             retained,
             family_states: Vec::new(),
@@ -1023,6 +1059,8 @@ mod tests {
         compactor.compact_dense_rows(&mut snapshot);
         assert_eq!(snapshot.retained.objects.len(), 128);
         assert!(snapshot.retained.object_patches.is_empty());
+        full_mirror.apply(snapshot.retained.clone()).unwrap();
+        compact_mirror.apply(snapshot.retained).unwrap();
 
         frame.time = 0.5;
         frame.morphs.fill(0.3);
@@ -1039,10 +1077,17 @@ mod tests {
         compactor.compact_dense_rows(&mut seed);
         assert_eq!(seed.retained.objects.len(), 128);
         assert!(seed.retained.object_patches.is_empty());
+        full_mirror.apply(seed.retained.clone()).unwrap();
+        compact_mirror.apply(seed.retained).unwrap();
 
         frame.time = 0.6;
         frame.morphs.fill(0.4);
         frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::circle(4.0));
+        if render_override {
+            for (index, transform) in frame.render_transforms.iter_mut().enumerate() {
+                transform.as_mut().unwrap().translation = noon_core::Vec2::new(index as f32, -2.0);
+            }
+        }
         let full = wrap(
             base.encode_incremental_with_context(
                 &frame,
@@ -1059,6 +1104,105 @@ mod tests {
         assert_eq!(compact.retained.objects.len(), 1);
         assert_eq!(compact.retained.object_patches.len(), 127);
         assert!(serde_json::to_vec(&compact).unwrap().len() < full_bytes);
+        for patch in &compact.retained.object_patches {
+            assert_eq!(patch.transform, None);
+            assert_eq!(patch.render_translation.is_some(), render_override);
+        }
+        full_mirror.apply(full.retained).unwrap();
+        let decoded =
+            serde_json::from_slice(&serde_json::to_vec(&compact.retained).unwrap()).unwrap();
+        compact_mirror.apply(decoded).unwrap();
+        assert_eq!(full_mirror.frame(), Some(&frame));
+        assert_eq!(compact_mirror.frame(), full_mirror.frame());
+
+        if !render_override {
+            return;
+        }
+        let installed_geometry = compact_mirror.frame().unwrap().render_geometries[1]
+            .clone()
+            .unwrap();
+        // Derived movement alone is a patch, independent of semantic TRS/morph.
+        frame.time = 0.7;
+        for transform in &mut frame.render_transforms {
+            transform.as_mut().unwrap().translation.y += 1.0;
+        }
+        let full = base
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects((0..128).collect()),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let mut compact = wrap(full.clone());
+        compactor.compact_dense_rows(&mut compact);
+        assert!(compact.retained.objects.is_empty());
+        assert_eq!(compact.retained.object_patches.len(), 128);
+        assert!(compact.retained.object_patches.iter().all(|patch| {
+            patch.transform.is_none()
+                && patch.style.is_none()
+                && patch.morph.is_none()
+                && patch.render_translation.is_some()
+        }));
+        full_mirror.apply(full).unwrap();
+        compact_mirror.apply(compact.retained).unwrap();
+        assert_eq!(compact_mirror.frame(), Some(&frame));
+        assert_eq!(compact_mirror.frame(), full_mirror.frame());
+        assert!(Arc::ptr_eq(
+            &installed_geometry,
+            compact_mirror.frame().unwrap().render_geometries[1]
+                .as_ref()
+                .unwrap()
+        ));
+
+        // Entry, exit, changed geometry and linear frames keep complete rows. Other active
+        // overrides still compact and retain their immutable geometry.
+        for step in 0..5 {
+            frame.time += 0.1;
+            frame.morphs.iter_mut().for_each(|morph| *morph += 0.1);
+            if step == 0 {
+                frame.render_geometries[0] = None;
+                frame.render_transforms[0] = None;
+            } else if step < 3 {
+                frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::ZERO)
+                        .line_to(noon_core::Vec2::new(2.0 + step as f32, 3.0)),
+                )));
+                frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+            } else if step == 3 {
+                frame.render_transforms[0].as_mut().unwrap().scale = noon_core::Vec2::new(2.0, 3.0);
+            } else {
+                frame.render_transforms[0].as_mut().unwrap().rotation = 0.5;
+            }
+            let full = base
+                .encode_incremental_with_context(
+                    &frame,
+                    &FrameChanges::objects((0..128).collect()),
+                    Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
+                )
+                .unwrap()
+                .unwrap();
+            let mut compact = wrap(full.clone());
+            compactor.compact_dense_rows(&mut compact);
+            assert_eq!(compact.retained.objects.len(), 1);
+            assert_eq!(compact.retained.objects[0].object, frame.objects[0].id);
+            assert_eq!(compact.retained.object_patches.len(), 127);
+            assert!(compact.resource_additions.is_none());
+            assert!(compact.resource_retirements.is_empty());
+            full_mirror.apply(full).unwrap();
+            compact_mirror.apply(compact.retained).unwrap();
+            assert_eq!(compact_mirror.frame(), Some(&frame));
+            assert_eq!(compact_mirror.frame(), full_mirror.frame());
+            assert!(Arc::ptr_eq(
+                &installed_geometry,
+                compact_mirror.frame().unwrap().render_geometries[1]
+                    .as_ref()
+                    .unwrap()
+            ));
+        }
     }
 
     #[test]

@@ -997,6 +997,12 @@ The current implementation keeps the semantic context and its existing compiler/
 
 Required Python callbacks can hold authored progress at the shared barrier while the last coherent frame remains presentable. Playback with no host callbacks does not require per-frame interpreter execution. Source reruns currently replace a session; this diagram does not claim incremental hot-reload identity preservation.
 
+A `WebAssembly.RuntimeError` crossing the Python authoring adapter retires that
+worker through its existing fatal-error channel. Rust borrows and publication
+state cannot be recovered after a trap; queued requests and late results are
+discarded, and the next Run creates a fresh host. Ordinary Python and typed
+Noon errors remain recoverable within the existing host.
+
 Exact worker placement remains an integration decision, not a semantic boundary. A future placement that separates semantic authoring from execution must still satisfy the same ownership, callback, revision and atomic-publication contracts.
 
 A browser worker/process boundary may require a typed transport representation because it is a real cross-context boundary. That transport is derived from authoritative semantic/execution state and must not become another scene model.

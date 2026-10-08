@@ -1,7 +1,9 @@
 """Pure Python adapter tests; real WASM/Pyodide coverage is in the browser smoke."""
 import asyncio
+import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from _noon_errors import (
     NoonError, NoonForeignHandleError, NoonOwnershipError, NoonPendingError,
@@ -74,6 +76,31 @@ class ErrorProjectionTests(unittest.TestCase):
         with self.assertRaises(NoonPendingError) as caught:
             engine_call(fail, operation="Scene.add")
         self.assertIs(caught.exception.__cause__, original)
+
+    def test_host_observes_original_js_error_without_changing_projection(self):
+        observed = []
+        host = SimpleNamespace(noonReportEngineTrap=observed.append)
+        original = js_exception(SimpleNamespace(message="opaque JS failure"))
+        def fail():
+            raise original
+        async def fail_async():
+            raise original
+        with patch.dict(sys.modules, {"js": host}):
+            value = object()
+            self.assertIs(engine_call(lambda: value), value)
+            self.assertEqual(observed, [])
+            for invoke in (lambda: engine_call(fail),
+                           lambda: asyncio.run(engine_await(fail_async()))):
+                with self.assertRaises(RuntimeError) as caught:
+                    invoke()
+                self.assertIs(caught.exception, original)
+            plain = ValueError("Python failure")
+            def fail_plain():
+                raise plain
+            with self.assertRaises(ValueError) as caught:
+                engine_call(fail_plain)
+            self.assertIs(caught.exception, plain)
+        self.assertEqual(observed, [original.js_error, original.js_error])
 
     def test_await_maps_the_same_contract(self):
         original = js_exception(diagnostic("pending_work", "completion.not_at_boundary"))

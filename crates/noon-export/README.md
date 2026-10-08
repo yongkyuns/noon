@@ -52,9 +52,21 @@ against external mutation of its private working directories.
 A real one-frame codec/muxer probe runs before user source execution. Its image
 is discarded, not inserted into authored output. Missing/unsupported FFmpeg
 builds fail explicitly. Stdout is unused, stderr is continuously drained with a
-64 KiB retention limit, and writes handle partial pipe writes. One reusable
-owned input buffer crosses the encoder writer thread. The source/callbacks stay
-on the caller thread and need not implement `Send`. No frame history is stored.
+64 KiB retention limit, and writes handle partial pipe writes. Two preallocated
+owned input buffers overlap encoder pipe writes with subsequent capture. A full
+pool applies backpressure instead of growing or dropping frames. Source and
+callbacks stay on the caller thread and need not implement `Send`.
+
+Queue acceptance is distinct from I/O completion. Finalization collects a
+successful, ordered write receipt for every submitted frame before sending EOF.
+A writer failure cannot be hidden by a successful encoder exit. The one-frame
+capability probe uses the synchronous path through the same transport.
+
+The transport stores at most two frames (8 x width x height bytes), in addition
+to the existing capture buffers and encoder-process memory. It adds no source
+history or GPU submissions in flight. A failed encoder can be discovered after
+later source work has already run; the whole export is then abandoned, never
+retried against the consumed runtime state.
 
 Cancellation and per-write/finalization deadlines kill the encoder to unblock
 stalled pipes. OS process termination/reaping, blocking filesystems, GPU driver
@@ -91,8 +103,10 @@ without viewer inspection or selection overlays.
 cargo run --release -p noon-export --example capture_frames > scene.rgba
 ```
 
-This raw example is 320x180 at 30 FPS. Pipelined GPU readback/encoding overlap and
-matched Manim performance measurements remain later slices; no speedup is claimed.
+This raw example is 320x180 at 30 FPS. File export overlaps encoding with the
+next serial capture; GPU readback itself still waits for each submission.
+GPU readback pipelining and matched Manim measurements remain later slices.
+No numerical throughput improvement is claimed without measurement.
 
 ## Qualification
 
