@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "studyId": "1933-product-aa-20261008-01",
+  "kind": "diagnostic-only",
+  "qualification": false,
+  "issue": 1933,
+  "qualificationPr": 1875,
+  "producerRun": 37710961499,
+  "harnessSha": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+  "harnessTree": "ecbfa794d50d61a4c3df3ef3111aa22e03998f0c",
+  "sourcePair": {
+    "schema": 1,
+    "candidate": "f67d915ad6709d97f5a2ba60827302f87fedfba2",
+    "baseline": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f",
+    "head": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+    "eventBase": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f"
+  },
+  "builds": [
+    {
+      "name": "baseline",
+      "source": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f",
+      "artifactId": 11523896652,
+      "zipSha256": "23eb7282da981e6272c18b2ba59a9ff8863d45406cd00efae73fc87657d54071",
+      "buildId": "810ea10b60bc3ea023a9c20ff21bc918a791494ba3e7c595bdc657dbea95fc15"
+    },
+    {
+      "name": "candidate",
+      "source": "f67d915ad6709d97f5a2ba60827302f87fedfba2",
+      "artifactId": 11523836933,
+      "zipSha256": "786064af906bf68d237bc72c567c4466c5e3ef4c877e5323a11bc2409a5d68b0",
+      "buildId": "b469b22dc7b96fe706d19d6f96604527af23f6765a94763c40314cd7a8ac6932"
+    }
+  ],
+  "workloads": [
+    "parity-square-and-circle",
+    "showcase-camera-follows-path",
+    "showcase-first-scene",
+    "showcase-raster-images",
+    "showcase-bezier-paths"
+  ],
+  "cohorts": [
+    {
+      "name": "seven-pair",
+      "pairs": 7
+    },
+    {
+      "name": "three-pair",
+      "pairs": 3
+    }
+  ],
+  "environment": {
+    "runner": "ubuntu-24.04",
+    "playwright": "1.62.1",
+    "pngjs": "7.0.0",
+    "browserVersion": "151.0.7922.34",
+    "renderer": "WebGL2",
+    "browserMode": "software-WebGL",
+    "port": 4205,
+    "node": "22.23.3",
+    "runnerNote": "Hosted ubuntu-24.04; record image version, CPU/cgroup limits and software renderer. No fixed physical machine is claimed."
+  },
+  "pairRunner": "scripts/playground-product-pair.mjs",
+  "comparator": "scripts/playground-product-compare.mjs",
+  "scorer": "scripts/paired-product-metrics.mjs",
+  "schedule": "cohort, workload, pair; alternating build order; original alternating side order within each fresh browser pair",
+  "retries": 0,
+  "stopOnTrialError": true,
+  "scopeNote": "Product FPS/render/latency A/A only. No fixed-work host A/A in this study. The three-pair cohort tests estimator precision; it is not anchor-vs-candidate acceptance.",
+  "retention": "All attempts, all raw reports and screenshots, both original packages, source archives, scorer, per-pair process logs and environment snapshots.",
+  "plannedPairCommands": 100,
+  "plannedObservations": 200,
+  "execution": {
+    "event": "pull_request.opened",
+    "allowedRunAttempt": 1,
+    "pairDeadlineSeconds": 420,
+    "termGraceSeconds": 5,
+    "jobDeadlineMinutes": 180
+  }
+}
