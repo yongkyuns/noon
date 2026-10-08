@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "studyId": "1933-scheduler-attribution-20261008-01",
+  "qualification": false,
+  "mergeApproval": false,
+  "validatorSha": "35022a15f334e803aa57024490b25ea89872de05",
+  "validatorPlanSha256": "ffbe17eea5e9bfe20bd2761167bec612c547459139f1152572ac4d9e99a84ef9",
+  "harnessSha": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+  "harnessTree": "ecbfa794d50d61a4c3df3ef3111aa22e03998f0c",
+  "build": "baseline",
+  "workloads": [
+    "parity-square-and-circle",
+    "showcase-camera-follows-path"
+  ],
+  "pairs": [
+    1,
+    2
+  ],
+  "pairCommands": 4,
+  "observations": 8,
+  "sampleIntervalMs": 100,
+  "pairDeadlineSeconds": 420,
+  "retries": 0,
+  "scope": "Instrumented scheduler attribution only. Original baseline against itself, both logical orders. No precision estimate or acceptance scoring. Observer overhead and missing/exited threads are retained.",
+  "schedulerAccounting": "kernel.sched_schedstats=1 during diagnostic; restore original value afterward"
+}

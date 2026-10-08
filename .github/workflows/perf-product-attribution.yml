@@ -1,0 +1,180 @@
+name: Product scheduler attribution (not qualification)
+
+on:
+  pull_request:
+    types: [opened]
+    paths:
+      - ".github/workflows/perf-product-attribution.yml"
+      - "benchmarks/product-attribution-study.json"
+      - "scripts/product-attribution-study.mjs"
+      - "scripts/product-attribution-study.test.mjs"
+      - "scripts/product-scheduler-probe.py"
+      - "scripts/test_product_scheduler_probe.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: scheduler-attribution-1933-20261008-01
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Instrumented baseline scheduler attribution — no merge approval
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: control
+          persist-credentials: false
+
+      - name: Record this single registered attempt
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/inputs
+          printf '%s\n' "Diagnostic only; never a qualification or merge approval." > evidence/README.txt
+          printf '%s\n' "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > evidence/attempt.txt
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          if event.get("action") != "opened":
+              raise SystemExit("Only the first pull_request.opened event is registered.")
+          PY
+          git -C control rev-parse HEAD > evidence/control-commit.txt
+          git -C control archive HEAD | gzip > evidence/inputs/control-source.tar.gz
+          cp control/benchmarks/product-attribution-study.json evidence/inputs/registered-plan.json
+          sha256sum evidence/inputs/registered-plan.json > evidence/inputs/plan.sha256
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.23.3"
+
+      - name: Test diagnostic schedule, provenance and failure handling
+        run: |
+          set -euo pipefail
+          node --check control/scripts/product-attribution-study.mjs
+          node --test control/scripts/product-attribution-study.test.mjs 2>&1 | tee evidence/controller-tests.log
+          python3 -m unittest discover -s control/scripts -p test_product_scheduler_probe.py -v 2>&1 | tee evidence/probe-tests.log
+
+      - name: Checkout the frozen measurement and scoring implementation
+        uses: actions/checkout@v7
+        with:
+          ref: f5ec15c7a1a9a70c368e141abfc740f5081efc4e
+          fetch-depth: 2
+          path: harness
+          persist-credentials: false
+
+      - name: Checkout original baseline source
+        uses: actions/checkout@v7
+        with:
+          ref: 4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f
+          fetch-depth: 2
+          path: baseline
+          persist-credentials: false
+
+      - name: Checkout frozen source and report validator
+        uses: actions/checkout@v7
+        with:
+          ref: 35022a15f334e803aa57024490b25ea89872de05
+          fetch-depth: 2
+          path: validator
+          persist-credentials: false
+
+      - name: Fetch exact original archives and authenticate before extraction
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, stat, subprocess, zipfile
+          from pathlib import Path, PurePosixPath
+          plan = json.loads(Path("validator/benchmarks/product-aa-study.json").read_text())
+          for build in [plan["builds"][0]]:
+              endpoint = f'repos/yongkyuns/noon/actions/artifacts/{build["artifactId"]}'
+              metadata = json.loads(subprocess.check_output(["gh", "api", endpoint]))
+              Path(f'evidence/inputs/{build["name"]}-artifact.json').write_text(json.dumps(metadata, indent=2))
+              if metadata["id"] != build["artifactId"] or metadata.get("expired"):
+                  raise SystemExit("Missing or expired frozen artifact")
+              if metadata.get("workflow_run", {}).get("id") != plan["producerRun"]:
+                  raise SystemExit("Artifact came from a different producer")
+              if metadata.get("digest") != "sha256:" + build["zipSha256"]:
+                  raise SystemExit("Producer archive digest differs from preregistration")
+              archive = Path(f'evidence/inputs/{build["name"]}-original.zip')
+              with archive.open("xb") as output:
+                  subprocess.run(["gh", "api", endpoint + "/zip"], stdout=output, check=True)
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != build["zipSha256"]:
+                  raise SystemExit("Downloaded archive checksum mismatch")
+              root = Path(build["name"]) / "web"
+              with zipfile.ZipFile(archive) as z:
+                  for info in z.infolist():
+                      item = PurePosixPath(info.filename)
+                      if item.is_absolute() or ".." in item.parts or "\\" in info.filename:
+                          raise SystemExit("Unsafe archive path")
+                      if stat.S_ISLNK(info.external_attr >> 16):
+                          raise SystemExit("Archive symlink is not accepted")
+                  z.extractall(root)
+              identity = json.loads((root / "ci-artifact.json").read_text())
+              if identity["source"] != build["source"]:
+                  raise SystemExit("Original production source changed")
+          PY
+
+      - name: Preserve source inputs and runner image without recompiling
+        run: |
+          set -euo pipefail
+          for side in harness baseline validator; do
+            git -C "$side" rev-parse HEAD > "evidence/inputs/$side-commit.txt"
+            git -C "$side" rev-parse 'HEAD^{tree}' > "evidence/inputs/$side-tree.txt"
+            git -C "$side" archive HEAD | gzip > "evidence/inputs/$side-source.tar.gz"
+          done
+          uname -a > evidence/inputs/uname.txt
+          lscpu > evidence/inputs/lscpu.txt
+          cat /etc/os-release > evidence/inputs/os-release.txt
+          printf '%s\n' "ImageOS=${ImageOS:-unavailable}" "ImageVersion=${ImageVersion:-unavailable}" > evidence/inputs/runner-image.txt
+
+      - name: Install the original browser tooling
+        working-directory: harness
+        run: |
+          set -euo pipefail
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+          npm ls playwright pngjs > ../evidence/inputs/node-packages.txt
+          node --version > ../evidence/inputs/node-version.txt
+
+      - name: Enable and record scheduler wait accounting (diagnostic overhead only)
+        run: |
+          set -euo pipefail
+          sysctl kernel.sched_schedstats > evidence/inputs/schedstats-before.txt
+          sudo sysctl -w kernel.sched_schedstats=1
+          sysctl kernel.sched_schedstats > evidence/inputs/schedstats-active.txt
+
+      - name: Collect four registered baseline-only instrumented pair commands
+        run: |
+          set -euo pipefail
+          node control/scripts/product-attribution-study.mjs \
+            control/benchmarks/product-attribution-study.json \
+            "$GITHUB_WORKSPACE/validator" "$GITHUB_WORKSPACE/harness" \
+            "$GITHUB_WORKSPACE/baseline" "$GITHUB_WORKSPACE/evidence/study"
+
+      - name: Restore prior scheduler accounting setting
+        if: always()
+        run: |
+          if test -f evidence/inputs/schedstats-before.txt; then
+            old=$(awk '{print $3}' evidence/inputs/schedstats-before.txt)
+            case "$old" in 0|1) sudo sysctl -w "kernel.sched_schedstats=$old" ;; *) exit 1 ;; esac
+          fi
+
+      - name: Preserve diagnostic inputs, all trials, and any partial failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scheduler-attribution-1933-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
