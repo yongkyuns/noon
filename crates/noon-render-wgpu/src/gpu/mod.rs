@@ -4,7 +4,9 @@ use bytemuck::{Pod, Zeroable};
 use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};
 
+mod analytic_glow;
 mod derived_display;
+pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats};
 mod glow_filter;
 pub use glow_filter::{
     GlowCapture, GlowCaptureTile, GlowFilter, GlowParameters, GlowPixelBounds, GlowPrepareError,
@@ -344,6 +346,7 @@ pub enum SecondaryViewportError {
     EmptyDestination,
     DestinationOutOfBounds,
     MultisampledContentUnsupported,
+    GlowSecondaryViewUnsupported,
 }
 
 impl std::fmt::Display for SecondaryViewportError {
@@ -352,6 +355,9 @@ impl std::fmt::Display for SecondaryViewportError {
             Self::EmptyDestination => "secondary viewport destination must be non-empty",
             Self::DestinationOutOfBounds => {
                 "secondary viewport destination must fit inside the output viewport"
+            }
+            Self::GlowSecondaryViewUnsupported => {
+                "glow captures for secondary views are not prepared"
             }
             Self::MultisampledContentUnsupported => {
                 "secondary viewport currently supports single-sample analytic content only"
@@ -483,6 +489,7 @@ impl std::error::Error for PathPreloadUploadError {}
 
 #[derive(Debug)]
 pub struct GpuRenderer {
+    analytic_glows: Option<Box<analytic_glow::AnalyticGlowGpu>>,
     spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
@@ -809,6 +816,7 @@ impl GpuRenderer {
             mega_path_vertex_instance_buffer,
             derived_display,
             images: None,
+            analytic_glows: None,
             path_render_bundle: None,
             path_render_bundle_batches: Vec::new(),
             path_render_bundle_rebuilds: 0,
@@ -1356,6 +1364,9 @@ impl GpuRenderer {
             query_set,
         } = composition;
 
+        if !secondary_viewports.is_empty() && self.has_analytic_glows() {
+            return Err(SecondaryViewportError::GlowSecondaryViewUnsupported);
+        }
         for secondary in secondary_viewports {
             SecondaryViewport::new(secondary.camera, secondary.destination, self.viewport_size)?;
         }
@@ -1663,6 +1674,26 @@ impl GpuRenderer {
     }
 
     fn draw_resolved_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+    ) -> DrawStats {
+        if let Some(stats) = self.draw_analytic_glow_batch(
+            pass,
+            prepared,
+            resolved,
+            single_sample_analytics,
+            binding,
+        ) {
+            return stats;
+        }
+        self.draw_plain_ordered_batch(pass, prepared, resolved, single_sample_analytics, binding)
+    }
+
+    fn draw_plain_ordered_batch<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &PreparedFrame<'_>,

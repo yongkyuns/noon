@@ -16,32 +16,33 @@ import time
 from pathlib import Path
 
 TEST = "gpu::glow_filter::tests::pixels::native_gaussian_pixels_and_retained_updates"
+PAINTER_TEST = "gpu::glow_filter::tests::analytic_scene::retained_painter_glow_pixels"
 PASS = re.compile(r"test result: ok\. 1 passed; 0 failed; 0 ignored;")
 FAIL = re.compile(r"test result: FAILED\. 0 passed; 1 failed; 0 ignored;")
 ORIGINAL = "let bits = u32(round(clamp(value, 0.0, 1.0) * 16777215.0));"
 MUTATION = "let bits = u32(round(clamp(value, 0.0, 1.0) * 255.0)) * 65793u;"
 
 
-def qualified(code: int, log: str, *, negative: bool = False) -> bool:
+def qualified(code: int, log: str, *, negative: bool = False, test: str = TEST) -> bool:
     """Reject empty filters, compile/setup errors, and unrelated test failures."""
     if negative:
         return (
             code == 101
             and FAIL.search(log) is not None
-            and TEST in log
+            and test in log
             and "Gaussian mask exceeds frozen tolerance:" in log
         )
-    return code == 0 and PASS.search(log) is not None and TEST in log
+    return code == 0 and PASS.search(log) is not None and test in log
 
 
 def sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def run_stage(root: Path, output: Path, name: str, negative: bool) -> dict:
+def run_stage(root: Path, output: Path, name: str, negative: bool, *, test: str = TEST) -> dict:
     command = [
         "cargo", "test", "-p", "noon-render-wgpu", "--lib",
-        TEST, "--", "--ignored", "--exact", "--nocapture",
+        test, "--", "--ignored", "--exact", "--nocapture",
     ]
     started = time.monotonic()
     # Do not import a shell environment from report files or interpret log text.
@@ -65,7 +66,7 @@ def run_stage(root: Path, output: Path, name: str, negative: bool) -> dict:
         "return_code": code,
         "elapsed_seconds": time.monotonic() - started,
         "negative_control": negative,
-        "accepted": qualified(code, log, negative=negative),
+        "accepted": qualified(code, log, negative=negative, test=test),
         "log_sha256": sha256(log.encode()),
     }
     (output / f"{name}.json").write_text(json.dumps(record, indent=2) + "\n")
@@ -88,7 +89,7 @@ def main() -> None:
     records = []
     report = {
         "schema": 1,
-        "scope": "native raster operator; not authored Scene or physical performance",
+        "scope": "native raster operator and retained painter; not authored Scene or physical performance",
         "source_shader_sha256": sha256(original),
         "mutant_shader_sha256": sha256(mutant),
         "stages": records,
@@ -108,7 +109,10 @@ def main() -> None:
             shader.write_bytes(original)
         restored = run_stage(root, output, "restored-source", False)
         records.append(restored)
-        report["passed"] = all(record["accepted"] for record in records) and len(records) == 3
+        if restored["accepted"]:
+            painter = run_stage(root, output, "retained-painter", False, test=PAINTER_TEST)
+            records.append(painter)
+        report["passed"] = all(record["accepted"] for record in records) and len(records) == 4
         if not report["passed"]:
             raise RuntimeError("glow GPU qualification or real-shader negative control failed")
     finally:

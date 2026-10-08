@@ -499,3 +499,6 @@ fn analytic_projection_rejects_nonuniform_camera_and_bad_geometry() {
         Err(GlowPrepareError::InvalidSourceBounds)
     );
 }
+
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+mod analytic_scene;

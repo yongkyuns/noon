@@ -7,7 +7,7 @@ use noon_core::{GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D, Vec
 use noon_runtime::{FrameObjectState, FrameState};
 use std::time::Duration;
 
-fn device() -> (wgpu::Device, wgpu::Queue) {
+pub(super) fn device() -> (wgpu::Device, wgpu::Queue) {
     let backends = match std::env::var("NOON_GLOW_BACKEND").as_deref() {
         Ok("vulkan") => wgpu::Backends::VULKAN,
         Ok("gl") => wgpu::Backends::GL,
@@ -29,7 +29,11 @@ fn device() -> (wgpu::Device, wgpu::Queue) {
         .expect("glow pixel qualification requires a device")
 }
 
-fn readback(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
+pub(super) fn readback(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+) -> Vec<u8> {
     let row = texture.width() * 4;
     let stride =
         row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -152,7 +156,7 @@ fn primitive_capture(
 
 // Independent square-support two-dimensional oracle. No production coefficients,
 // separable intermediate masks, GPU uniform bytes or shader code are reused.
-fn reference(mask: &[u8], size: [u32; 2], sigma: f64) -> Vec<f64> {
+pub(super) fn reference(mask: &[u8], size: [u32; 2], sigma: f64) -> Vec<f64> {
     let [width, height] = size.map(|x| x as i32);
     let radius = (3.0 * sigma).ceil() as i32;
     let weight = |dx: i32, dy: i32| {

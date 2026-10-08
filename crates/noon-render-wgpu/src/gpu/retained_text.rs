@@ -3363,6 +3363,7 @@ pub struct RetainedTextGpuState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Inset2DRenderError {
+    GlowCaptureUnsupported,
     InvalidCamera(ObjectId),
     InvalidDisplay(ObjectId),
 }
@@ -3370,6 +3371,9 @@ pub enum Inset2DRenderError {
 impl std::fmt::Display for Inset2DRenderError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::GlowCaptureUnsupported => {
+                formatter.write_str("glow captures for inset views are not prepared")
+            }
             Self::InvalidCamera(object) => write!(
                 formatter,
                 "inset camera {} has an invalid effective viewport",
@@ -3422,6 +3426,9 @@ impl GpuRenderer {
         text_state: &mut RetainedTextGpuState,
         states: &[noon_core::Inset2DViewState],
     ) -> Result<(), Inset2DRenderError> {
+        if !states.is_empty() && self.has_analytic_glows() {
+            return Err(Inset2DRenderError::GlowCaptureUnsupported);
+        }
         let mut views = Vec::with_capacity(states.len());
         let mut cameras = Vec::with_capacity(states.len());
         for state in states.iter().copied() {
