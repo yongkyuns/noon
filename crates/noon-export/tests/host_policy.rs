@@ -74,7 +74,7 @@ fn direct(options: ExportFrameOptions) -> (Vec<Vec<u8>>, ExportFrameSummary) {
 }
 
 fn external(options: ExportFrameOptions) -> (Vec<Vec<u8>>, ExportFrameSummary) {
-    let (mut scene, marker) = scene();
+    let (scene, marker) = scene();
     let mut session = scene.execution_session().unwrap();
     let mut target = SessionCapture::new(&session, capture_options()).unwrap();
     let mut policy = ExportFramePolicy::new(options).unwrap();

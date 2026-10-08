@@ -124,11 +124,18 @@ impl SessionCapture {
                 .map_err(|e| SessionCaptureError::Capture(CaptureError::View(e.to_string())))?;
             let publication = session.take_renderer_publication();
             if publication.context() != context {
-                return Err(SessionCaptureError::Capture(CaptureError::PublicationMismatch));
+                return Err(SessionCaptureError::Capture(
+                    CaptureError::PublicationMismatch,
+                ));
             }
             let work = self
                 .gpu
-                .render(&publication, &view, visibility.object_indices(), read_pixels)
+                .render(
+                    &publication,
+                    &view,
+                    visibility.object_indices(),
+                    read_pixels,
+                )
                 .map_err(SessionCaptureError::Capture)?;
             if self.options.cancellation.is_cancelled() {
                 return Err(SessionCaptureError::Cancelled);
