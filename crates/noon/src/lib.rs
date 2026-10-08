@@ -281,12 +281,12 @@ pub use noon_core::{
     SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticWorldTransform3D,
 };
+pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{
     cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,
     torus_mesh, triangular_polyhedron_mesh, CairoSurfaceGrid, SurfaceError, SurfaceGrid,
     SurfaceSample, UvSurfacePlan,
 };
-pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame, PolarFrame};
 pub use noon_geometry::{
     PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,

@@ -16,8 +16,6 @@ mod authoring_arrow;
 #[cfg(target_arch = "wasm32")]
 mod authoring_arrow_endpoints;
 #[cfg(target_arch = "wasm32")]
-mod authoring_vector_field_defaults;
-#[cfg(target_arch = "wasm32")]
 mod authoring_bar_chart;
 #[cfg(target_arch = "wasm32")]
 mod authoring_brace;
@@ -25,6 +23,8 @@ mod authoring_brace;
 mod authoring_composite;
 #[cfg(target_arch = "wasm32")]
 mod authoring_coordinates;
+#[cfg(target_arch = "wasm32")]
+mod authoring_vector_field_defaults;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_composite::WasmCompositeRows;
 #[cfg(any(target_arch = "wasm32", test))]
