@@ -4932,8 +4932,11 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            play_run_time: Option<f64>,
+            play_rate_function: Option<String>,
         ) -> Result<(), JsValue> {
             let options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .with_overrides(Self::optional_options(play_run_time, play_rate_function)?)
                 .introducer(introducer)
                 .remover(remover)
                 .reverse_rate_function(reverse_rate_function);
@@ -4965,8 +4968,11 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            play_run_time: Option<f64>,
+            play_rate_function: Option<String>,
         ) -> Result<(), JsValue> {
             let options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .with_overrides(Self::optional_options(play_run_time, play_rate_function)?)
                 .introducer(introducer)
                 .remover(remover)
                 .reverse_rate_function(reverse_rate_function);
@@ -5024,8 +5030,11 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            play_run_time: Option<f64>,
+            play_rate_function: Option<String>,
         ) -> Result<(), JsValue> {
-            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .with_overrides(Self::optional_options(play_run_time, play_rate_function)?);
             if let Some(introducer) = introducer {
                 options = options.introducer(introducer);
             }
@@ -5063,8 +5072,11 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            play_run_time: Option<f64>,
+            play_rate_function: Option<String>,
         ) -> Result<(), JsValue> {
-            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .with_overrides(Self::optional_options(play_run_time, play_rate_function)?);
             if let Some(introducer) = introducer {
                 options = options.introducer(introducer);
             }

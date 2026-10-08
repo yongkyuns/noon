@@ -10,7 +10,7 @@ class OrdinaryTextWrite(Scene):
         self.add(moving)
         self.play(
             moving.animate.shift(2 * RIGHT),
-            Write(writing, run_time=2),
+            Write(writing),
             run_time=2,
             rate_func=linear,
         )
