@@ -1,6 +1,6 @@
 //! Persistent vector edits publish new immutable content through one transaction.
 mod transaction;
-use crate::{AuthoringError, ExecutionSession, Mobject};
+use crate::{AuthoringError, ExecutionSession, Mobject, MobjectFamily};
 use noon_core::{
     SemanticMutationTransaction, SemanticNodeId, SemanticObjectContent, SemanticObjectState,
     SemanticStore, StoredGeometry, Vec2, VectorPath,
@@ -43,6 +43,297 @@ pub(crate) fn publish_running_path_edits(
             .apply_semantic_transaction_at_root(store, root, transaction)
             .map_err(AuthoringError::from)
     })
+}
+
+fn require_running_object(
+    store: &Rc<RefCell<SemanticStore>>,
+    object: &Mobject,
+) -> Result<(), AuthoringError> {
+    if !Rc::ptr_eq(store, object.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    object.validate()
+}
+
+fn require_running_family(
+    store: &Rc<RefCell<SemanticStore>>,
+    family: &MobjectFamily,
+) -> Result<(), AuthoringError> {
+    if !Rc::ptr_eq(store, family.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    family.validate()
+}
+
+/// Capture, prepare and publish one ordinary running path edit.
+///
+/// Resource admission remains before effective capture, preserving the existing
+/// fail-closed ordering for edits that may allocate immutable geometry.
+pub(crate) fn publish_running_object_edit(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    object: &Mobject,
+    edit: PathEdit<'_>,
+) -> Result<(), AuthoringError> {
+    require_running_object(store, object)?;
+    require_running_path_resource_admission(store, root, execution)?;
+    let captured = crate::effective_capture::capture_mobject_state(store, execution, object)?;
+    let store_ref = store.borrow();
+    let Some(prepared) = prepare_object_edit(&store_ref, object.node_id(), captured, edit)? else {
+        return Ok(());
+    };
+    drop(store_ref);
+    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
+}
+
+/// Apply one matrix edit from the current coherent effective object state.
+pub(crate) fn publish_running_apply_matrix(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    object: &Mobject,
+    values: &[f64],
+    dimensions: (usize, usize),
+    about: (f64, f64),
+) -> Result<(), AuthoringError> {
+    require_running_object(store, object)?;
+    let captured = crate::effective_capture::capture_mobject_state(store, execution, object)?;
+    let prepared = {
+        let store = store.borrow();
+        crate::matrix_authoring::prepare_apply_matrix(
+            &store,
+            object.node_id(),
+            captured,
+            values,
+            dimensions.0,
+            dimensions.1,
+            about,
+        )?
+    };
+    let Some(prepared) = prepared else {
+        return Ok(());
+    };
+    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
+}
+
+/// Capture the source and replace one destination with its selected path interval.
+pub(crate) fn publish_running_pointwise_partial(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    object: &Mobject,
+    source: &Mobject,
+    a: f64,
+    b: f64,
+) -> Result<(), AuthoringError> {
+    require_running_object(store, source)?;
+    let (a, b) = partial_interval(a, b)?;
+    let source = crate::effective_capture::capture_mobject_state(store, execution, source)?;
+    publish_running_object_edit(
+        store,
+        root,
+        execution,
+        object,
+        PathEdit::Partial {
+            source: &source,
+            a,
+            b,
+        },
+    )
+}
+
+/// Change every authoritative family leaf between smooth and jagged anchors.
+pub(crate) fn publish_running_family_anchor_mode(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+    smooth: bool,
+) -> Result<(), AuthoringError> {
+    require_running_family(store, family)?;
+    require_running_path_resource_admission(store, root, execution)?;
+    let nodes = store
+        .borrow()
+        .ordered_leaf_nodes(family.node_id())
+        .map_err(AuthoringError::from)?;
+    let states = nodes
+        .into_iter()
+        .map(|node| {
+            let object = Mobject::from_node(Rc::clone(store), node)?;
+            Ok((
+                node,
+                crate::effective_capture::capture_mobject_state(store, execution, &object)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, AuthoringError>>()?;
+    let prepared = {
+        let store = store.borrow();
+        crate::path_smoothing::prepare_anchor_edits(&store, states, smooth)?
+    };
+    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
+}
+
+impl crate::Scene {
+    /// Apply a pointwise matrix through this Scene's running publication authority.
+    pub fn apply_matrix(
+        &mut self,
+        object: &Mobject,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_apply_matrix(
+                store,
+                root,
+                execution,
+                object,
+                values,
+                (rows, columns),
+                (about_x, about_y),
+            )
+        })
+    }
+
+    pub fn set_points_smoothly(
+        &mut self,
+        object: &Mobject,
+        points: &[Vec2],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::SmoothCorners(points),
+            )
+        })
+    }
+
+    pub fn make_smooth(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::AnchorMode(true))
+        })
+    }
+
+    pub fn make_jagged(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::AnchorMode(false))
+        })
+    }
+
+    pub fn set_points_as_corners(
+        &mut self,
+        object: &Mobject,
+        points: &[Vec2],
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::Corners(points))
+        })
+    }
+
+    pub fn start_new_path(&mut self, object: &Mobject, point: Vec2) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::Start(point))
+        })
+    }
+
+    pub fn add_line_to(&mut self, object: &Mobject, point: Vec2) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::Line(point))
+        })
+    }
+
+    pub fn add_quadratic_bezier_curve_to(
+        &mut self,
+        object: &Mobject,
+        control: Vec2,
+        anchor: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::Quadratic(control, anchor),
+            )
+        })
+    }
+
+    pub fn add_cubic_bezier_curve_to(
+        &mut self,
+        object: &Mobject,
+        c1: Vec2,
+        c2: Vec2,
+        anchor: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::Cubic(c1, c2, anchor),
+            )
+        })
+    }
+
+    pub fn close_path(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::Close)
+        })
+    }
+
+    pub fn insert_n_curves(
+        &mut self,
+        object: &Mobject,
+        additional: usize,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::Subdivide(additional),
+            )
+        })
+    }
+
+    pub fn reverse_direction(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(store, root, execution, object, PathEdit::Reverse)
+        })
+    }
+
+    pub fn pointwise_become_partial(
+        &mut self,
+        object: &Mobject,
+        source: &Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_pointwise_partial(store, root, execution, object, source, a, b)
+        })
+    }
+
+    pub fn make_family_smooth(&mut self, family: &MobjectFamily) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_family_anchor_mode(store, root, execution, family, true)
+        })
+    }
+
+    pub fn make_family_jagged(&mut self, family: &MobjectFamily) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_family_anchor_mode(store, root, execution, family, false)
+        })
+    }
 }
 
 pub(crate) fn corners_path(points: &[Vec2]) -> Result<VectorPath, AuthoringError> {

@@ -403,7 +403,7 @@ impl Scene {
         operation(&mut store, &mut publish)
     }
 
-    fn with_running_execution<T>(
+    pub(crate) fn with_running_execution<T>(
         &mut self,
         operation: impl FnOnce(
             &Rc<RefCell<SemanticStore>>,
