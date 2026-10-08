@@ -92,3 +92,13 @@ test("invalid browser flags fail closed and still preserve the report", async t 
   assert.equal(result.decision.status, "blocked");
   assert.match(result.errors[0], /hardware flags must be exactly/);
 });
+test("self-hosted physical job is manual and default-branch-only", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/perf-physical-readiness.yml", import.meta.url), "utf8");
+  const physical = workflow.split("\n  physical:\n")[1];
+  assert.ok(physical, "physical job must be explicit");
+  assert.match(physical, /^    runs-on: \[self-hosted, macOS, noon-physical\]$/m);
+  assert.match(physical, /^    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs\/heads\/master'$/m);
+  assert.match(workflow, /^  pull_request:$/m);
+  assert.match(workflow, /^  workflow_dispatch:$/m);
+  assert.match(workflow, /Readiness protocol tests \(hosted, no GPU verdict\)/);
+});
