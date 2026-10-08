@@ -357,6 +357,7 @@ pub(super) struct PathPlan {
     needed: usize,
     capacity: usize,
     camera_clip_scale: [f32; 2],
+    painter_ranks: Option<HashMap<usize, u32>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -467,14 +468,11 @@ impl SpatialPathGpuState {
         self.painter_ranks.get(&index).copied()
     }
 
-    fn refresh_painter_ranks(&mut self, painter_order: &[u32]) {
-        self.painter_ranks.clear();
-        self.painter_ranks.extend(
-            painter_order.iter().enumerate().filter_map(|(rank, &row)| {
-                u32::try_from(rank).ok().map(|rank| (row as usize, rank))
-            }),
-        );
-        self.painter_ranks_initialized = true;
+    pub(super) fn commit_painter_ranks(&mut self, plan: &mut PathPlan) {
+        if let Some(ranks) = plan.painter_ranks.take() {
+            self.painter_ranks = ranks;
+            self.painter_ranks_initialized = true;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -500,10 +498,17 @@ impl SpatialPathGpuState {
         {
             return Err(SpatialPathError::InvalidStyle);
         }
-        if !self.painter_ranks_initialized || changes.is_all() || changes.has_painter_order_change()
-        {
-            self.refresh_painter_ranks(painter_order);
-        }
+        let painter_ranks = (!self.painter_ranks_initialized
+            || changes.is_all()
+            || changes.has_painter_order_change())
+        .then(|| {
+            let mut ranks = HashMap::with_capacity(painter_order.len());
+            ranks.extend(painter_order.iter().enumerate().filter_map(|(rank, &row)| {
+                u32::try_from(rank).ok().map(|rank| (row as usize, rank))
+            }));
+            ranks
+        });
+        let effective_ranks = painter_ranks.as_ref().unwrap_or(&self.painter_ranks);
         for &index in indices {
             staged.extend(self.row_draw_ids(index).map(|draw_id| (draw_id, None)));
             let Some(object) = frame.objects.get(index).filter(|_| frame.is_present(index)) else {
@@ -539,8 +544,7 @@ impl SpatialPathGpuState {
                 SemanticVec3::ZERO
             };
             let painter_rank = if fixed {
-                *self
-                    .painter_ranks
+                *effective_ranks
                     .get(&index)
                     .ok_or(SpatialPathError::MissingPainterRank)?
             } else {
@@ -760,6 +764,7 @@ impl SpatialPathGpuState {
             needed,
             capacity,
             camera_clip_scale,
+            painter_ranks,
         })
     }
 
@@ -1946,6 +1951,7 @@ mod tests {
             needed: 0,
             capacity: 1,
             camera_clip_scale: [1.0, 1.0],
+            painter_ranks: None,
         };
         // Row 9 remains, row 2/item 0 remains after its replacement, and the
         // transient row 12 draw is absent: two final draws total.

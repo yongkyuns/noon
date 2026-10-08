@@ -308,8 +308,8 @@ impl SpatialGpuState {
             );
         }
         // Stage and validate the planar lane before mesh residency, buffer
-        // allocation, or queue writes. Its commit is infallible after this point.
-        let path_plan = self
+        // allocation, or queue writes. Both lanes publish after mesh validation.
+        let mut path_plan = self
             .paths
             .plan(
                 device,
@@ -649,6 +649,9 @@ impl SpatialGpuState {
             rows_visited: indices.len(),
             ..Default::default()
         };
+        // All path and mesh validation has succeeded. Publish shared painter
+        // ranks even for mesh-only frames before deriving depth ties.
+        self.paths.commit_painter_ranks(&mut path_plan);
         if self.gpu.is_none() && (remaining_draws > 0 || remaining_paths > 0) {
             self.gpu = Some(GpuState::new(device, queue, format, viewport));
             self.viewport = viewport;
@@ -738,7 +741,8 @@ impl SpatialGpuState {
             stats.geometry_bytes += bytes.len();
         }
         let mut dirty_strokes = Vec::new();
-        let mut depth_order_changed = matrix != self.camera_matrix
+        let mut depth_order_changed = changes.is_all()
+            || matrix != self.camera_matrix
             || changes.has_painter_order_change()
             || path_stats.depth_order_changed;
         let mut dirty = BTreeSet::new();
@@ -1718,5 +1722,200 @@ mod tests {
             validate_point_lit_normals(&without_normals, 3),
             Err(SpatialPrepareError::PointLitMeshNeedsNormals(3))
         );
+    }
+    #[test]
+    fn rejected_spatial_prepare_preserves_painter_ranks_until_commit() {
+        use super::{FrameChanges, FrameState, GeometryRef, SpatialGpuState, SpatialPathError};
+
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut state = SpatialGpuState::default();
+        let mut frame = FrameState {
+            time: 0.0,
+            objects: (0..2)
+                .map(|index| noon_runtime::FrameObjectState {
+                    id: noon_core::ObjectId::new(index + 1),
+                    content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
+                    text_bounds: None,
+                    transform: noon_core::Transform2D::IDENTITY,
+                    style: noon_core::Style::default(),
+                    z_index: 0.0,
+                    appearance: 1.0,
+                    spatial: None,
+                })
+                .collect(),
+            presences: vec![true; 2],
+            reveals: vec![1.0; 2],
+            morphs: vec![0.0; 2],
+            render_geometries: vec![None; 2],
+            render_transforms: vec![None; 2],
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
+        };
+        let resources = noon_core::GeometryResourceArena::default();
+        let texts = noon_core::TextResourceArena::default();
+        let fonts = noon_core::FontResourceArena::default();
+        let camera =
+            super::super::Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(16.0, 9.0))
+                .unwrap();
+        let prepare = |state: &mut SpatialGpuState, frame: &FrameState, order: &[u32]| {
+            state.prepare_frame(
+                &device,
+                &queue,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                [64, 64],
+                frame,
+                &FrameChanges::all(),
+                &resources,
+                &texts,
+                &fonts,
+                order,
+                camera,
+            )
+        };
+        prepare(&mut state, &frame, &[1, 0]).unwrap();
+        assert_eq!(state.paths.painter_rank(0), Some(1));
+        assert_eq!(state.paths.painter_rank(1), Some(0));
+
+        frame.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            camera_projection: None,
+            camera_profile: None,
+            camera_motions: None,
+            material: SemanticSpatialMaterial::PointLit,
+            point_light: false,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            cairo_path_appearance: None,
+        }));
+        assert!(matches!(
+            prepare(&mut state, &frame, &[0, 1]),
+            Err(SpatialPrepareError::SpatialPath(
+                SpatialPathError::UnsupportedMaterial
+            ))
+        ));
+        let rejected_path_ranks = (state.paths.painter_rank(0), state.paths.painter_rank(1));
+
+        // Reset the committed order before independently testing mesh rejection.
+        let mut spatial = frame.objects[0].spatial.take().unwrap();
+        prepare(&mut state, &frame, &[1, 0]).unwrap();
+        spatial.material = SemanticSpatialMaterial::Unlit;
+        spatial.draw_kind = noon_compile::CompiledSpatialDrawKind::Mesh;
+        frame.objects[0].spatial = Some(spatial);
+        assert!(matches!(
+            prepare(&mut state, &frame, &[0, 1]),
+            Err(SpatialPrepareError::MissingMesh(0))
+        ));
+        let rejected_mesh_ranks = (state.paths.painter_rank(0), state.paths.painter_rank(1));
+
+        // Successful publication must update ranks even without a path lane.
+        frame.objects[0].spatial = None;
+        let stats = prepare(&mut state, &frame, &[0, 1]).unwrap();
+        assert_eq!(
+            (rejected_path_ranks, rejected_mesh_ranks),
+            ((Some(1), Some(0)), (Some(1), Some(0))),
+            "path and mesh rejection must independently preserve the committed order"
+        );
+        assert_eq!(state.paths.painter_rank(0), Some(0));
+        assert_eq!(state.paths.painter_rank(1), Some(1));
+        assert_eq!(stats.geometry_bytes, 0);
+        assert_eq!(stats.instance_bytes, 0);
+        assert!(!state.paths.is_active());
+    }
+    #[test]
+    fn full_spatial_publication_reorders_equal_depth_faces_without_uploads() {
+        use super::{DepthDraw, FrameChanges, SpatialGpuState};
+        use noon_core::{
+            Color, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticProjection3D,
+            SemanticStore, StoredGeometry,
+        };
+
+        let mut store = SemanticStore::new();
+        let handle = store.insert_geometry_mesh(
+            MeshResource::new(
+                vec![
+                    SemanticVec3::new(-1.0, -1.0, 0.0),
+                    SemanticVec3::new(1.0, -1.0, 0.0),
+                    SemanticVec3::new(0.0, 1.0, 0.0),
+                ],
+                None,
+                vec![0, 1, 2],
+            )
+            .unwrap(),
+        );
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera
+            .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+                height: 6.0,
+                near: 0.1,
+                far: 30.0,
+            }))
+            .unwrap();
+        camera.transform.translation = SemanticVec3::new(0.0, 0.0, 5.0);
+        let camera = store.insert_semantic_object(camera);
+        store.attach_semantic_object(camera).unwrap();
+        for color in [Color::RED, Color::BLUE] {
+            let mut face = SemanticObjectState::new(StoredGeometry::Resource(handle));
+            face.style.fill = Some(SemanticPaint::Solid(color));
+            face.style.fill_opacity = 0.5;
+            face.style.stroke = None;
+            let face = store.insert_semantic_object(face);
+            store.attach_semantic_object(face).unwrap();
+        }
+        let (compiled, _) = noon_compile::lower_semantic_execution(
+            &store,
+            &mut noon_compile::SemanticExecutionIndex::new(),
+        )
+        .unwrap()
+        .into_parts();
+        let scene = noon_runtime::SceneInstance::new(compiled);
+        let mut order = scene.painter_order().to_vec();
+        let mut expected: Vec<_> = order
+            .iter()
+            .filter(|&&row| {
+                scene.frame().objects[row as usize]
+                    .spatial
+                    .as_ref()
+                    .is_some_and(|spatial| {
+                        spatial.draw_kind == noon_compile::CompiledSpatialDrawKind::Mesh
+                    })
+            })
+            .map(|&row| DepthDraw::Mesh(row as usize))
+            .collect();
+        assert_eq!(expected.len(), 2);
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut state = SpatialGpuState::default();
+        let camera =
+            super::super::Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(16.0, 9.0))
+                .unwrap();
+        let prepare = |state: &mut SpatialGpuState, order: &[u32]| {
+            state.prepare_frame(
+                &device,
+                &queue,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                [64, 64],
+                scene.frame(),
+                &FrameChanges::all(),
+                scene.geometry_resources(),
+                scene.text_resources(),
+                scene.font_resources(),
+                order,
+                camera,
+            )
+        };
+        prepare(&mut state, &order).unwrap();
+        assert_eq!(state.depth_order, expected);
+        order.reverse();
+        expected.reverse();
+        let stats = prepare(&mut state, &order).unwrap();
+        assert_eq!(
+            state.depth_order, expected,
+            "full publication must refresh depth ties"
+        );
+        assert_eq!(stats.bytes_uploaded(), 0);
+        assert_eq!(stats.resident_meshes, 1);
+        assert_eq!(stats.resident_instances, 2);
     }
 }
