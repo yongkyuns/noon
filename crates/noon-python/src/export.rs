@@ -4,11 +4,12 @@
 use std::{fmt, path::PathBuf};
 
 use noon::integration::{
-    CallbackAdvance, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyStatus,
-    ExportSample, ExportStop, FrameRate, SampleObservation,
+    CallbackAdvance, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyStatus, ExportSample,
+    ExportStop, FrameRate, SampleObservation,
 };
 use noon_export::{
-    output::{FileSink, OutputOptions}, CaptureOptions, CapturedFrame, SessionCapture,
+    output::{FileSink, OutputOptions},
+    CaptureOptions, CapturedFrame, SessionCapture,
 };
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict};
 
@@ -37,7 +38,7 @@ pub struct VideoExport {
 #[pymethods]
 impl VideoExport {
     #[new]
-    #[pyo3(signature = (path, *, width=1280, height=720, p=30, q=1,
+    #[pyo3(signature = (path, *, width, height, p, q,
         max_frames=108000, start_frame=0, final_hold=0.0, png=false,
         overwrite=false, fallback=false, ffmpeg=None))]
     #[allow(clippy::too_many_arguments)]
@@ -99,7 +100,9 @@ impl VideoExport {
         let result = (|| {
             self.require_active()?;
             if self.context.is_some() {
-                return Err(output_error("one export accepts exactly one source context"));
+                return Err(output_error(
+                    "one export accepts exactly one source context",
+                ));
             }
             let source = context.try_borrow()?;
             source.require_active()?;
@@ -157,7 +160,11 @@ impl VideoExport {
 
     fn require_context(&self, context: &Bound<'_, Context>) -> PyResult<()> {
         self.require_active()?;
-        if !self.context.as_ref().is_some_and(|owner| owner.as_ptr() == context.as_ptr()) {
+        if !self
+            .context
+            .as_ref()
+            .is_some_and(|owner| owner.as_ptr() == context.as_ptr())
+        {
             return Err(output_error("export belongs to another source context"));
         }
         Ok(())
@@ -165,8 +172,12 @@ impl VideoExport {
 
     fn ensure_capture(&mut self, source: &Context) -> PyResult<()> {
         if self.capture.is_none() {
-            let session = source.execution.as_ref().ok_or_else(|| output_error("no execution"))?;
-            self.capture = Some(SessionCapture::new(session, self.options.clone()).map_err(output_error)?);
+            let session = source
+                .execution
+                .as_ref()
+                .ok_or_else(|| output_error("no execution"))?;
+            self.capture =
+                Some(SessionCapture::new(session, self.options.clone()).map_err(output_error)?);
         }
         Ok(())
     }
@@ -176,7 +187,9 @@ impl VideoExport {
             self.request = Some(requested);
             self.remaining = self.transition_limit;
         }
-        self.remaining = self.remaining.checked_sub(1)
+        self.remaining = self
+            .remaining
+            .checked_sub(1)
             .ok_or_else(|| output_error("sample transition budget exhausted"))?;
         Ok(())
     }
@@ -184,60 +197,100 @@ impl VideoExport {
     fn drive_inner(&mut self, py: Python<'_>, source: &mut Context) -> PyResult<Py<PyDict>> {
         source.require_active()?;
         if source.pending_ack.is_some() {
-            return Err(output_error("acknowledge the committed callback before advancing"));
+            return Err(output_error(
+                "acknowledge the committed callback before advancing",
+            ));
         }
-        let segment = source.segment.ok_or_else(|| output_error("no pending segment"))?;
+        let segment = source
+            .segment
+            .ok_or_else(|| output_error("no pending segment"))?;
         self.ensure_capture(source)?;
         loop {
             py.check_signals()?;
             match self.policy.status().map_err(output_error)? {
                 ExportFramePolicyStatus::NeedsSample(requested) => {
                     self.spend_transition(requested)?;
-                    let session = source.execution.as_mut().ok_or_else(|| output_error("no execution"))?;
-                    match session.advance_segment_to_callback_barrier(segment, requested).map_err(engine_error)? {
-                        CallbackAdvance::HostRequired { invocations, overlay } => {
+                    let session = source
+                        .execution
+                        .as_mut()
+                        .ok_or_else(|| output_error("no execution"))?;
+                    match session
+                        .advance_segment_to_callback_barrier(segment, requested)
+                        .map_err(engine_error)?
+                    {
+                        CallbackAdvance::HostRequired {
+                            invocations,
+                            overlay,
+                        } => {
                             source.callback_regions += 1;
-                            return callback::event(py, "callback", Some(callback::phase(py, overlay, invocations)?));
+                            return callback::event(
+                                py,
+                                "callback",
+                                Some(callback::phase(py, overlay, invocations)?),
+                            );
                         }
                         CallbackAdvance::Ready(_) => {}
                     }
                     if session.frame().time >= segment.end_time() {
-                        source.scene.live(session).complete_segment(segment).map_err(engine_error)?;
+                        source
+                            .scene
+                            .live(session)
+                            .complete_segment(segment)
+                            .map_err(engine_error)?;
                         // Consume this exact endpoint before Python resumes. It is
                         // NOT an output sample, even when it lies on the frame grid:
                         // same-time source edits must settle first.
-                        self.capture.as_mut().ok_or_else(|| output_error("capture inactive"))?
-                            .render(session).map_err(output_error)?;
+                        self.capture
+                            .as_mut()
+                            .ok_or_else(|| output_error("capture inactive"))?
+                            .render(session)
+                            .map_err(output_error)?;
                         source.segment = None;
                         return callback::event(py, "complete", None);
                     }
                     if session.frame().time != requested {
                         continue;
                     }
-                    self.policy.observe(SampleObservation {
-                        requested_time: requested,
-                        published_time: session.frame().time,
-                        publication: session.publication_context(),
-                    }, false).map_err(output_error)?;
+                    self.policy
+                        .observe(
+                            SampleObservation {
+                                requested_time: requested,
+                                published_time: session.frame().time,
+                                publication: session.publication_context(),
+                            },
+                            false,
+                        )
+                        .map_err(output_error)?;
                 }
                 ExportFramePolicyStatus::SampleReady(sample) => self.consume(source, sample)?,
                 ExportFramePolicyStatus::Complete(_) => {
-                    return Err(output_error("source ended outside its continuation boundary"));
+                    return Err(output_error(
+                        "source ended outside its continuation boundary",
+                    ));
                 }
             }
         }
     }
 
     fn consume(&mut self, source: &mut Context, sample: ExportSample) -> PyResult<()> {
-        let session = source.execution.as_mut().ok_or_else(|| output_error("no execution"))?;
-        let capture = self.capture.as_mut().ok_or_else(|| output_error("capture inactive"))?;
+        let session = source
+            .execution
+            .as_mut()
+            .ok_or_else(|| output_error("no execution"))?;
+        let capture = self
+            .capture
+            .as_mut()
+            .ok_or_else(|| output_error("capture inactive"))?;
         if let Some(frame) = sample.frame {
             let pixels = capture.capture(session).map_err(output_error)?;
             if pixels.receipt.publication != sample.observation.publication
-                || pixels.receipt.published_time != sample.observation.published_time {
+                || pixels.receipt.published_time != sample.observation.published_time
+            {
                 return Err(output_error("capture does not match the settled sample"));
             }
-            self.sink.as_mut().ok_or_else(|| output_error("encoder inactive"))?
+            self.sink
+                .as_mut()
+                .ok_or_else(|| output_error("encoder inactive"))?
                 .write(CapturedFrame {
                     frame,
                     observation: sample.observation,
@@ -246,12 +299,14 @@ impl VideoExport {
                     format: pixels.format,
                     rgba: pixels.rgba,
                     work: pixels.receipt.work,
-                }).map_err(output_error)?;
+                })
+                .map_err(output_error)?;
             source.frames += 1;
         } else {
             let receipt = capture.render(session).map_err(output_error)?;
             if receipt.publication != sample.observation.publication
-                || receipt.published_time != sample.observation.published_time {
+                || receipt.published_time != sample.observation.published_time
+            {
                 return Err(output_error("publication changed before consumption"));
             }
         }
@@ -260,33 +315,58 @@ impl VideoExport {
 
     fn finish_inner(&mut self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         self.require_active()?;
-        let owner = self.context.as_ref().ok_or_else(|| output_error("source created no scene"))?.clone_ref(py);
+        let owner = self
+            .context
+            .as_ref()
+            .ok_or_else(|| output_error("source created no scene"))?
+            .clone_ref(py);
         let mut source = owner.try_borrow_mut(py)?;
         source.require_active()?;
         if source.segment.is_some() || source.pending_ack.is_some() {
-            return Err(output_error("source returned with unfinished animation or callback work"));
+            return Err(output_error(
+                "source returned with unfinished animation or callback work",
+            ));
         }
         if source.execution.is_none() {
-            source.execution = Some(source.scene.execution_session().map_err(|e| output_error(e.to_string()))?);
+            source.execution = Some(
+                source
+                    .scene
+                    .execution_session()
+                    .map_err(|e| output_error(e.to_string()))?,
+            );
         }
         self.ensure_capture(&source)?;
         let sampling = loop {
             py.check_signals()?;
             match self.policy.status().map_err(output_error)? {
                 ExportFramePolicyStatus::NeedsSample(requested) => {
-                    let session = source.execution.as_ref().ok_or_else(|| output_error("no execution"))?;
-                    self.policy.observe(SampleObservation {
-                        requested_time: requested,
-                        published_time: session.frame().time,
-                        publication: session.publication_context(),
-                    }, true).map_err(output_error)?;
+                    let session = source
+                        .execution
+                        .as_ref()
+                        .ok_or_else(|| output_error("no execution"))?;
+                    self.policy
+                        .observe(
+                            SampleObservation {
+                                requested_time: requested,
+                                published_time: session.frame().time,
+                                publication: session.publication_context(),
+                            },
+                            true,
+                        )
+                        .map_err(output_error)?;
                 }
-                ExportFramePolicyStatus::SampleReady(sample) => self.consume(&mut source, sample)?,
+                ExportFramePolicyStatus::SampleReady(sample) => {
+                    self.consume(&mut source, sample)?
+                }
                 ExportFramePolicyStatus::Complete(summary) => break summary,
             }
         };
-        let (path, format, diagnostics) = self.sink.take().ok_or_else(|| output_error("encoder inactive"))?
-            .finish(sampling.frames).map_err(output_error)?;
+        let (path, format, diagnostics) = self
+            .sink
+            .take()
+            .ok_or_else(|| output_error("encoder inactive"))?
+            .finish(sampling.frames)
+            .map_err(output_error)?;
         self.active = false;
         self.capture.take();
         self.context.take();
@@ -294,7 +374,13 @@ impl VideoExport {
         result.set_item("path", path.to_string_lossy().as_ref())?;
         result.set_item("format", format!("{format:?}"))?;
         result.set_item("frames", sampling.frames)?;
-        result.set_item("fps", (sampling.frame_rate.numerator(), sampling.frame_rate.denominator()))?;
+        result.set_item(
+            "fps",
+            (
+                sampling.frame_rate.numerator(),
+                sampling.frame_rate.denominator(),
+            ),
+        )?;
         result.set_item("start_time", sampling.start_time)?;
         result.set_item("end_time", sampling.end_time)?;
         result.set_item("source_end", sampling.source_end)?;

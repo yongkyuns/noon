@@ -13,6 +13,7 @@ mod export;
 mod geometry;
 mod mobject;
 mod options;
+mod render_options;
 
 fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
     fn attach(py: Python<'_>, error: AuthoringFailure) -> PyErr {
@@ -56,5 +57,6 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<composition::Composition>()?;
     m.add_function(wrap_pyfunction!(options::resolve_animation_options, m)?)?;
     m.add_function(wrap_pyfunction!(options::resolve_transform_options, m)?)?;
+    m.add_function(wrap_pyfunction!(render_options::resolve_render_options, m)?)?;
     Ok(())
 }

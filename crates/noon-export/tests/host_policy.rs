@@ -56,7 +56,9 @@ impl LiveContinuation for Source {
 
 fn direct(options: ExportFrameOptions) -> (Vec<Vec<u8>>, ExportFrameSummary) {
     let (scene, marker) = scene();
-    let mut program = scene.into_live_program(Source { marker, stage: 0 }).unwrap();
+    let mut program = scene
+        .into_live_program(Source { marker, stage: 0 })
+        .unwrap();
     let mut frames = Vec::new();
     let summary = capture_frames(
         &mut program,
@@ -165,10 +167,15 @@ fn external_session_policy_matches_direct_rust_pixels_for_crops_and_holds() {
         assert_eq!(external_pixels.len(), expected);
         assert_eq!(external_summary, direct_summary);
         for (index, (a, b)) in direct_pixels.iter().zip(&external_pixels).enumerate() {
-            assert!(a == b, "different source-host pixels at output frame {index}");
+            assert!(
+                a == b,
+                "different source-host pixels at output frame {index}"
+            );
         }
         if final_hold_seconds > 0.0 {
-            assert!(external_pixels[10..].iter().all(|p| p == &external_pixels[10]));
+            assert!(external_pixels[10..]
+                .iter()
+                .all(|p| p == &external_pixels[10]));
             assert!(
                 external_pixels[9] != external_pixels[10],
                 "final source edit was not captured"

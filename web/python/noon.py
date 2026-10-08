@@ -6,6 +6,12 @@ owns authoring syntax, argument conversion, and wrapper identity.
 
 from __future__ import annotations
 
+# Enter the CLI before defining a second __main__.Scene. User source subsequently
+# imports the canonical noon module, just as normal library callers do.
+if __name__ == "__main__":
+    from _noon_render_cli import main
+    raise SystemExit(main())
+
 import math
 from functools import cache as _cache
 from typing import Any, Callable
@@ -874,6 +880,12 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
     return target
 
 
+def resolve_render_options(**options):
+    """Resolve output settings through the same Rust API on CPython and Pyodide."""
+    from _noon_render_options import resolve_render_options as resolve
+    return resolve(**options)
+
+
 _PUBLIC_EXPORTS = {
     "SampleSpace": "_manim_sample_space",
     "NumberLine": "_manim_plotting",
@@ -1041,6 +1053,7 @@ def __dir__():
 
 
 __all__ = [
+    "resolve_render_options",
     "Glow",
     "Pixels",
     "EffectHandle",

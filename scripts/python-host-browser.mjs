@@ -18,7 +18,7 @@ const native = JSON.parse(await readFile(path.join(evidence, "native.json"), "ut
 assert.equal(native.schema, 1);
 assert.equal(native.host, "native-cpython");
 assert.equal(native.sample_hz, 4);
-assert.equal(native.cases.length, 8);
+assert.equal(native.cases.length, 9);
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 const server = await serveRepository(root, 0, { crossOriginIsolated: true });
 const results = [];
@@ -182,4 +182,4 @@ try {
   await server.close();
 }
 assert.deepEqual(failures, [], "Python host conformance failures");
-assert.equal(results.length, 19);
+assert.equal(results.length, 21);

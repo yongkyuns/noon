@@ -100,7 +100,7 @@ async def main():
                 await self.wait(0.207)
                 marker.move_to([2, -1, 0])
         target = output / ("callbacks-" + name)
-        await export_scene(Callbacks, target, start_frame=start, final_hold=hold, **common)
+        await export_scene(Callbacks, target, start_frame=start, final_hold=hold, fps=(30, 1), **common)
         traces.append(calls)
         callback_frames.append(png_pixels(target))
     require(traces[0] and traces[0] == traces[1] == traces[2], "crop/hold/delay changed callback history")
@@ -136,7 +136,7 @@ async def main():
 
     # A normal synchronous source must use the same optional driver, not a shim.
     source = "from noon import *\nresult = Scene()\nresult.add(Square())\nresult.wait(0.1)\n"
-    summary = await export_source(source, output / "sync-source", **common)
+    summary = await export_source(source, output / "sync-source", fps=(30, 1), **common)
     require(summary["frames"] == 3, "synchronous source did not use the export frame grid")
     try:
         await export_scene(Static, output / "cap.mp4", width=64, height=32, max_frames=1, fallback=True)

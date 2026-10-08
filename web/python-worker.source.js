@@ -23,8 +23,10 @@ import initNoonWeb, {
   WasmTableOptions,
   noonLinearTransformationPathArc,
   resolveAnimationOptions,
+  resolveRenderOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
+import { resolveRenderOptionsPlain } from "./render-options.js";
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
@@ -388,6 +390,7 @@ async function initializePyodide() {
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
+  self.noonResolveRenderOptions = (...args) => resolveRenderOptionsPlain(resolveRenderOptions, ...args);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
   self.noonResolveTransformAnimationOptions = (...args) =>
     resolveAnimationOptionsPlain(resolveTransformAnimationOptions, ...args);

@@ -7,6 +7,9 @@ import sys
 from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
+PYTHON = Path(__file__).resolve().parents[1] / 'web/python'
+sys.path.insert(0, str(PYTHON))
+
 HOST = Path(__file__).resolve().parents[1] / 'web/python/_noon_native_host.py'
 
 class FacadeTests(TestCase):
@@ -24,11 +27,18 @@ class FacadeTests(TestCase):
                 events.append(('drive', context))
                 return 'video-event'
         self.native = SimpleNamespace(VideoExport=Video, GeometryOptions=object,
-                                      resolve_animation_options=object, resolve_transform_options=object)
+                                      resolve_animation_options=object, resolve_transform_options=object,
+                                      resolve_render_options=mock.Mock(return_value=SimpleNamespace(
+                                          pixelWidth=322, pixelHeight=182, frameRateNumerator=60000,
+                                          frameRateDenominator=1001, format="mp4")))
         spec = importlib.util.spec_from_file_location('export_facade_under_test', HOST)
         self.host = importlib.util.module_from_spec(spec)
         with mock.patch.dict(sys.modules, {'_noon_native': self.native}):
             spec.loader.exec_module(self.host)
+        binding = mock.patch.dict(sys.modules, {'_noon_host': SimpleNamespace(
+            noonResolveRenderOptions=self.native.resolve_render_options)})
+        binding.start()
+        self.addCleanup(binding.stop)
 
     def test_source_finishes_before_file_and_context_is_restored(self):
         scene = object()
@@ -60,7 +70,7 @@ class FacadeTests(TestCase):
         scene = object()
         async def execute(*args, **kwargs):
             self.assertEqual(args, ('source bytes', {'name': 'value'}))
-            self.assertEqual(kwargs, {'portable': True, 'filename': 'scene.py'})
+            self.assertEqual(kwargs, {'portable': True, 'filename': 'scene.py', 'scene_name': None})
             return scene
         with mock.patch.object(self.host, 'run_source', execute), mock.patch.object(self.host, 'close_scene'):
             asyncio.run(self.host.export_source('source bytes', 'out', {'name': 'value'},

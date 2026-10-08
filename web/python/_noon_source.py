@@ -16,7 +16,9 @@ from noon import Scene
 
 
 async def execute_source(source: str, context=None, *, portable: bool = True,
-                         filename: str = "<noon>") -> Scene:
+                         filename: str = "<noon>", scene_name: str | None = None) -> Scene:
+    if scene_name is not None and (not isinstance(scene_name, str) or not scene_name.isidentifier()):
+        raise ValueError("scene_name must be a Python class identifier")
     if not isinstance(source, str) or not source.strip():
         raise TypeError("Python authoring source must be non-empty")
     namespace = {"context": {} if context is None else context, "__name__": "__main__"}
@@ -27,7 +29,15 @@ async def execute_source(source: str, context=None, *, portable: bool = True,
         namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
     with authoring_source_scope():
         await execute_authoring_module(code, namespace)
-    if "result" in namespace:
+    if scene_name is not None:
+        if "result" in namespace:
+            raise RuntimeError("named scene selection cannot be combined with a module-level result")
+        selected = namespace.get(scene_name)
+        if not isinstance(selected, type) or not issubclass(selected, Scene) or selected is Scene:
+            raise ValueError(f"source does not define a Scene class named {scene_name!r}")
+        result = selected()
+        await execute_construct(result, portable_constructs=portable_constructs)
+    elif "result" in namespace:
         result = namespace["result"]
     else:
         classes = [value for value in namespace.values()

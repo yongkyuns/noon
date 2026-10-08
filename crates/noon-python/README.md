@@ -69,3 +69,57 @@ renderer and FFmpeg, compares PNG pixels with a compiled Rust counterpart, check
 callback/crop/hold equivalence, decodes every MP4 frame and verifies rational PTS,
 and tests source failure and handle cleanup. A published entry point is not a
 passing qualification result; consult its exact source revision's CI.
+
+## Supported Manim-shaped render interface (#1896)
+
+The optional export build now exposes one parser via both `python -m noon` and
+`python -m noon_native`. Rendering is the default; `render` is an optional explicit
+subcommand. Execution without a file is now explicitly `python -m noon run ...`.
+
+```sh
+python3 scripts/build-native-python.py --profile release --export-video
+PYTHONPATH=build/python python3 -m noon -pqh scene.py Demo --fps 60 -o demo.mp4
+PYTHONPATH=build/python python3 -m noon render scene.py Demo -r 65,33 \
+  --frame_rate 60000/1001 --format png -o demo-frames
+```
+
+`-q/--quality` accepts l/m/h/p/k; `-r/--resolution` accepts W,H;
+`--fps/--frame_rate` accepts ordinary numbers as well as exact P/Q;
+`-o/--output_file` names the output; `--format` supports mp4 or png.
+`-p/--preview` opens only a successfully finalized MP4. A single named Scene is
+selected by the existing shared source loader. A source defining multiple scenes
+no longer needs rewriting merely to choose one. Explicit selection with a
+module-level `result` is rejected to avoid running a second scene accidentally.
+
+`noon::integration::RenderOptionInputs` is the sole resolver for preset values,
+explicit override precedence, supported profile names and exact rate parsing.
+Both the CPython and WASM bindings call it. Python only coerces values; the browser
+worker copies the typed result and releases its WASM allocation. The common
+`noon.resolve_render_options` API is usable on both Python hosts without implying
+that a browser video sink has landed.
+
+Defaults follow ManimCE v0.21.0's high-quality profile: 1920x1080 at 60 FPS.
+Explicit dimensions and FPS independently override a quality preset. Decimal
+29.97 means exactly 2997/100; it is never guessed to mean 30000/1001. Use the
+rational form for NTSC rates. Programmatic exports accept `quality`, `resolution`,
+`frame_rate` and `format`; the existing `fps`, `width`, `height` and `png` inputs
+remain direct aliases into this same resolver, not alternate implementations.
+Supplying both rate spellings or conflicting dimension/profile spellings fails.
+
+This remains a **supported subset**, not complete Manim CLI/API compatibility.
+Default output is local SceneName.mp4 (or source stem when unnamed), rather than
+Manim's configurable media tree. PNG is Noon's atomically published sequence
+bundle. Configuration files and config/tempconfig, Scene.render(), multiple/all
+scene rendering, animation-number ranges (`-n`), final-still output, sections,
+transparency, audio, other codecs/containers and Manim renderer selection remain
+unsupported. Known flags fail explicitly; unknown flags are not abbreviated or
+silently accepted. `--start-frame` is a Noon frame-grid crop, never an alias for
+Manim's animation-number range. Existing file no-clobber behavior is retained;
+replacement requires the Noon `--overwrite` option.
+
+Tests include typed Rust option cases, syntax/selection/delegation tests with
+mocked boundaries, and scheduled actual native CLI/video decoding and unchanged
+CPython/Pyodide option conformance. Mocked tests do not certify native/WASM builds
+or media equivalence. The pre-existing callback `move_to`/active-affine-driver
+failure in the broader export oracle is retained; CLI proof runs separately and
+does not turn that failing overall workflow green.
