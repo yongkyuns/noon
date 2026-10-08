@@ -55,6 +55,7 @@ pub use transform::TransformGeometryPlan;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DynamicProperties {
+    pub glow: bool,
     pub presence: bool,
     pub z_index: bool,
     pub transform: bool,
@@ -75,6 +76,9 @@ pub struct DynamicProperties {
 impl DynamicProperties {
     fn mark(&mut self, property: Property) {
         match property {
+            Property::GlowColor | Property::GlowRadius | Property::GlowIntensity => {
+                self.glow = true
+            }
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
             Property::Transform => self.transform = true,
@@ -94,7 +98,8 @@ impl DynamicProperties {
     }
 
     pub const fn any(self) -> bool {
-        self.presence
+        self.glow
+            || self.presence
             || self.z_index
             || self.transform
             || self.world_transform
@@ -138,6 +143,42 @@ pub struct CompiledObject {
 pub struct CompiledGlow {
     pub attachment: noon_core::SemanticNodeId,
     pub definition: noon_core::Glow,
+}
+
+impl CompiledGlow {
+    /// Lower a captured parameter request to ordinary independent timeline values.
+    /// The caller assigns existing TrackIds, timing and composition maps. Capture
+    /// this value from the runtime row at activation, not an earlier authored copy.
+    pub fn parameter_channels(
+        &self,
+        update: noon_core::GlowUpdate,
+    ) -> Result<Vec<(Property, TrackValues)>, noon_core::GlowParameterError> {
+        update.prepare(self.definition)?;
+        let target = update.apply_to(self.definition)?;
+        let count = usize::from(update.color.is_some())
+            + usize::from(update.radius.is_some())
+            + usize::from(update.intensity.is_some());
+        let mut channels = Vec::with_capacity(count);
+        for (requested, property) in [
+            (update.color.is_some(), Property::GlowColor),
+            (update.radius.is_some(), Property::GlowRadius),
+            (update.intensity.is_some(), Property::GlowIntensity),
+        ] {
+            if requested {
+                channels.push((
+                    property,
+                    TrackValues::Glow {
+                        attachment: self.attachment,
+                        from: noon_core::GlowTrackValue::from_definition(property, self.definition)
+                            .expect("glow property"),
+                        to: noon_core::GlowTrackValue::from_definition(property, target)
+                            .expect("glow property"),
+                    },
+                ));
+            }
+        }
+        Ok(channels)
+    }
 }
 
 /// Compact optional 3D state shared by semantic lowering and runtime publication.
@@ -1331,6 +1372,8 @@ impl CompiledScene {
                 .get(&track.object)
                 .ok_or(CompileError::UnknownObject(track.object))?;
             validate_track_definition(track).map_err(CompileError::InvalidTrack)?;
+            validate_glow_track(track, &objects[object_index as usize])
+                .map_err(CompileError::InvalidTrack)?;
             if !valid_track_for_spatial(track, objects[object_index as usize].spatial.as_deref()) {
                 return Err(CompileError::InvalidTrack(
                     noon_core::TimelineError::InvalidWorldTransformValues,
@@ -2318,6 +2361,8 @@ impl CompiledScene {
             .object_index(track.object)
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
         validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
+        validate_glow_track(track, &self.objects[object_index as usize])
+            .map_err(CompilePatchError::InvalidTrack)?;
         if !valid_track_for_spatial(
             track,
             self.objects[object_index as usize].spatial.as_deref(),
@@ -2435,6 +2480,38 @@ fn reject_geometry_track_on_text(
 ) -> Result<(), (TrackId, Property)> {
     if object.text().is_some() && matches!(track.property, Property::Transform | Property::Morph) {
         return Err((track.id, track.property));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_glow_track(
+    track: &TrackDefinition,
+    object: &CompiledObject,
+) -> Result<(), noon_core::TimelineError> {
+    validate_glow_track_attachment(track, object.glow.as_deref())
+}
+
+pub(crate) fn validate_glow_track_attachment(
+    track: &TrackDefinition,
+    glow: Option<&CompiledGlow>,
+) -> Result<(), noon_core::TimelineError> {
+    if let TrackValues::Glow {
+        attachment,
+        from,
+        to,
+    } = track.values
+    {
+        let Some(glow) = glow.filter(|glow| glow.attachment == attachment) else {
+            return Err(noon_core::TimelineError::InvalidGlowAttachment {
+                object: track.object,
+                attachment,
+            });
+        };
+        if from.update().prepare(glow.definition).is_err()
+            || to.update().prepare(glow.definition).is_err()
+        {
+            return Err(noon_core::TimelineError::InvalidGlowValues(track.property));
+        }
     }
     Ok(())
 }
@@ -2923,6 +3000,9 @@ const fn property_rank(property: Property) -> u8 {
         Property::Reveal => 12,
         Property::Morph => 13,
         Property::ZIndex => 14,
+        Property::GlowColor => 15,
+        Property::GlowRadius => 16,
+        Property::GlowIntensity => 17,
     }
 }
 
@@ -3204,6 +3284,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[animated_index].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 presence: false,
                 transform: false,
@@ -3251,6 +3332,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 scale: true,
                 ..DynamicProperties::default()
@@ -3281,6 +3363,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 stroke_width: true,
                 ..DynamicProperties::default()
@@ -3312,6 +3395,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 appearance: true,
                 ..DynamicProperties::default()
@@ -3346,6 +3430,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 presence: true,
                 ..DynamicProperties::default()
@@ -3565,6 +3650,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 presence: false,
                 transform: false,

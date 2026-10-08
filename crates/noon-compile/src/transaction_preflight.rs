@@ -75,6 +75,7 @@ fn effective_track_interval(
 
 enum ObjectOverlay {
     Present {
+        glow: Option<std::sync::Arc<crate::CompiledGlow>>,
         index: u32,
         is_text: bool,
         spatial: Option<Box<crate::CompiledSpatialState>>,
@@ -124,6 +125,22 @@ impl PreflightOverlay {
         }
     }
 
+    fn glow(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+    ) -> Option<std::sync::Arc<crate::CompiledGlow>> {
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { glow, .. }) => glow.clone(),
+            Some(ObjectOverlay::Removed { .. }) => None,
+            None => {
+                let index = scene.object_indices.get(&id).copied()?;
+                self.seen_objects.insert(id);
+                scene.objects[index as usize].glow.clone()
+            }
+        }
+    }
+
     fn spatial(
         &mut self,
         scene: &CompiledScene,
@@ -158,6 +175,7 @@ impl PreflightOverlay {
             self.objects.insert(
                 id,
                 ObjectOverlay::Present {
+                    glow: scene.objects[index as usize].glow.clone(),
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
                     spatial: spatial.map(Box::new),
@@ -319,6 +337,7 @@ pub(super) fn preflight_transaction_with_resources(
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
+                        glow: object.glow.clone(),
                         index,
                         is_text: object.text().is_some(),
                         spatial: object.spatial.clone(),
@@ -374,9 +393,11 @@ pub(super) fn preflight_transaction_with_resources(
                     }
                 }
                 let spatial = overlay.spatial(scene, *object);
+                let glow = overlay.glow(scene, *object);
                 overlay.objects.insert(
                     *object,
                     ObjectOverlay::Present {
+                        glow,
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
                         spatial: spatial.map(Box::new),
@@ -537,6 +558,13 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                if matches!(track.values, TrackValues::Glow { .. }) {
+                    crate::validate_glow_track_attachment(
+                        track,
+                        overlay.glow(scene, track.object).as_deref(),
+                    )
+                    .map_err(CompilePatchError::InvalidTrack)?;
+                }
                 let spatial = overlay.spatial(scene, track.object);
                 if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
                     return Err(CompilePatchError::InvalidTrack(
@@ -575,6 +603,13 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                if matches!(track.values, TrackValues::Glow { .. }) {
+                    crate::validate_glow_track_attachment(
+                        track,
+                        overlay.glow(scene, track.object).as_deref(),
+                    )
+                    .map_err(CompilePatchError::InvalidTrack)?;
+                }
                 let spatial = overlay.spatial(scene, track.object);
                 if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
                     return Err(CompilePatchError::InvalidTrack(

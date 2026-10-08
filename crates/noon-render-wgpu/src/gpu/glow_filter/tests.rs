@@ -325,12 +325,12 @@ fn padded_capture_preserves_offscreen_halo_and_skips_truly_invisible_source() {
         .unwrap()
         .expect("offscreen geometry contributes visible halo");
     assert_eq!(tile.support_radius, 6);
-    assert_eq!(tile.origin, [-15, 13]);
-    assert_eq!(tile.size, [18, 18]);
-    assert_eq!(tile.viewport_origin, [0, 13]);
-    assert_eq!(tile.local_origin, [15, 0]);
-    assert_eq!(tile.visible_size, [3, 18]);
-    assert_eq!(tile.capture_and_scratch_bytes, 18 * 18 * 16);
+    assert_eq!(tile.origin, [-16, 12]);
+    assert_eq!(tile.size, [19, 19]);
+    assert_eq!(tile.viewport_origin, [0, 12]);
+    assert_eq!(tile.local_origin, [16, 0]);
+    assert_eq!(tile.visible_size, [3, 19]);
+    assert_eq!(tile.capture_and_scratch_bytes, 19 * 19 * 16);
     let far = GlowPixelBounds {
         min: [-80.0, 20.0],
         max: [-70.0, 24.0],
@@ -502,3 +502,41 @@ fn analytic_projection_rejects_nonuniform_camera_and_bad_geometry() {
 
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 mod analytic_scene;
+
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
+mod animated_scene;
+
+#[test]
+fn capture_origins_preserve_derivative_quads_across_fractional_motion_and_radius_changes() {
+    for left in [-21.3, -20.0, -19.7, -1.2, 0.0, 0.3, 7.8, 8.0, 9.1] {
+        for sigma in [0.25, 1.1, 3.25, 4.45, 6.0] {
+            let bounds = GlowPixelBounds {
+                min: [left, 11.3],
+                max: [left + 3.0, 14.4],
+            };
+            let Some(tile) =
+                GlowCaptureTile::prepare(bounds, [100, 80], parameters(sigma), 4096, 1_000_000)
+                    .unwrap()
+            else {
+                continue;
+            };
+            let padding = (3.0 * sigma).ceil() + 1.0;
+            for axis in 0..2 {
+                assert_eq!(
+                    tile.origin[axis].rem_euclid(2),
+                    0,
+                    "local raster quad grid must match output"
+                );
+                assert!(f64::from(tile.origin[axis]) <= bounds.min[axis] - padding);
+                assert!(
+                    f64::from(tile.origin[axis]) + f64::from(tile.size[axis])
+                        >= bounds.max[axis] + padding
+                );
+                assert_eq!(
+                    i64::from(tile.origin[axis]) + i64::from(tile.local_origin[axis]),
+                    i64::from(tile.viewport_origin[axis])
+                );
+            }
+        }
+    }
+}

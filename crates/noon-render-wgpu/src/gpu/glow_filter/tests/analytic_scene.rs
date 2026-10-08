@@ -10,11 +10,11 @@ use noon_core::{
 };
 use noon_runtime::{FrameState, SceneInstance};
 
-const VIEW: [u32; 2] = [80, 60];
+pub(super) const VIEW: [u32; 2] = [80, 60];
 const PAD: u32 = 24;
-const SIGMA: f64 = 3.25;
+pub(super) const SIGMA: f64 = 3.25;
 
-fn target(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
+pub(super) fn target(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Noon glow painter qualification output"),
         size: wgpu::Extent3d {
@@ -31,7 +31,7 @@ fn target(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
     })
 }
 
-fn render_plain(
+pub(super) fn render_plain(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     frame: &FrameState,
@@ -85,7 +85,12 @@ fn over(dst: &mut [u8], src: &[u8]) {
     }
 }
 
-fn expected(device: &wgpu::Device, queue: &wgpu::Queue, frame: &FrameState, glow: Glow) -> Vec<u8> {
+pub(super) fn expected(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    frame: &FrameState,
+    glow: Glow,
+) -> Vec<u8> {
     let size = [VIEW[0] + 2 * PAD, VIEW[1] + 2 * PAD];
     let mut source_frame = isolated(frame, 1);
     let opacity = source_frame.objects[1].style.opacity;
@@ -97,7 +102,12 @@ fn expected(device: &wgpu::Device, queue: &wgpu::Queue, frame: &FrameState, glow
     } else {
         source.clone()
     };
-    let blur = reference(&mask, size, SIGMA);
+    let sigma = glow.radius().to_output_pixels(VIEW[1], 6.0).unwrap();
+    assert!(
+        (3.0 * sigma).ceil() + 1.0 <= f64::from(PAD),
+        "reference canvas must enclose full Gaussian support"
+    );
+    let blur = reference(&mask, size, sigma);
     assert!(blur.iter().copied().fold(0.0_f64, f64::max) > 1e-4);
     let tint = glow.color();
     let tint = [tint.red, tint.green, tint.blue].map(f64::from);
@@ -134,7 +144,7 @@ fn expected(device: &wgpu::Device, queue: &wgpu::Queue, frame: &FrameState, glow
     cropped
 }
 
-fn frame(rectangle: bool, offscreen: bool, transparent: bool) -> FrameState {
+pub(super) fn frame(rectangle: bool, offscreen: bool, transparent: bool) -> FrameState {
     let geometry = if rectangle {
         GeometryRef::rectangle(1.1, 0.6)
     } else {
@@ -302,7 +312,7 @@ fn retained_painter_glow_pixels() {
 
 /// Build only through shared semantic transactions and the normal static object
 /// projection. Full Scene animation/live/host admission is still guarded.
-fn semantic_runtime(source: &FrameState, glow: Glow) -> SceneInstance {
+pub(super) fn semantic_runtime(source: &FrameState, glow: Glow) -> SceneInstance {
     use noon_compile::SemanticExecutionIndex;
     use noon_core::{
         SemanticMutationTransaction, SemanticObjectState, SemanticStore, SemanticStyle,

@@ -598,6 +598,9 @@ const fn property_slot(property: Property) -> u8 {
         Property::Reveal => 11,
         Property::Morph => 12,
         Property::ZIndex => 13,
+        Property::GlowColor => 15,
+        Property::GlowRadius => 16,
+        Property::GlowIntensity => 17,
     }
 }
 

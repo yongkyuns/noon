@@ -15,7 +15,7 @@ pub struct Pixels(pub f64);
 ///
 /// Object scale changes source geometry, not this radius. A plain f64 converts
 /// to Scene; values are validated when an update is applied or prepared.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GlowRadius {
     Scene(f64),
     Pixels(f64),

@@ -2742,6 +2742,9 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::ZIndex => 12,
         Property::Presence => 13,
         Property::CameraProfile => 14,
+        Property::GlowColor => 15,
+        Property::GlowRadius => 16,
+        Property::GlowIntensity => 17,
     };
     (object.get(), slot)
 }

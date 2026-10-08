@@ -171,7 +171,11 @@ impl GlowCaptureTile {
             {
                 return Err(GlowPrepareError::CaptureCoordinatesOutOfRange);
             }
-            start[axis] = left as i64;
+            // Match the output raster's 2x2 derivative-quad grid. Integer pixel
+            // alignment alone is insufficient: shifting a capture by one pixel
+            // changes SDF fwidth coverage even when geometry is unchanged.
+            // Round outward (including negative origins) so support is retained.
+            start[axis] = (left as i64).div_euclid(2) * 2;
             end[axis] = right as i64;
         }
         let visible_start = [start[0].max(0), start[1].max(0)];

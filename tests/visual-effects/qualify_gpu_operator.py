@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Run actual native glow readback with a real-shader negative control.
 
-This is correctness qualification, not a performance benchmark or Scene test.
+This is correctness qualification through ordinary runtime tracks and publication,
+not a performance benchmark or full public Scene orchestration test.
 Compilation/setup failures cannot satisfy the negative control. Every attempt is
 retained; no retry-until-green, ignored failure, or zero-test success is accepted.
 """
@@ -18,6 +19,7 @@ from pathlib import Path
 TEST = "gpu::glow_filter::tests::pixels::native_gaussian_pixels_and_retained_updates"
 PAINTER_TEST = "gpu::glow_filter::tests::analytic_scene::retained_painter_glow_pixels"
 SEMANTIC_TEST = "gpu::glow_filter::tests::analytic_scene::semantic_static_glow_publication_pixels"
+ANIMATED_TEST = "gpu::glow_filter::tests::animated_scene::animated_glow_publication_pixels"
 PASS = re.compile(r"test result: ok\. 1 passed; 0 failed; 0 ignored;")
 FAIL = re.compile(r"test result: FAILED\. 0 passed; 1 failed; 0 ignored;")
 ORIGINAL = "let bits = u32(round(clamp(value, 0.0, 1.0) * 16777215.0));"
@@ -90,7 +92,7 @@ def main() -> None:
     records = []
     report = {
         "schema": 1,
-        "scope": "native raster operator, painter and static semantic publication; not full Scene orchestration or physical performance",
+        "scope": "native raster operator, painter, static and animated runtime publication; not full Scene orchestration or physical performance",
         "source_shader_sha256": sha256(original),
         "mutant_shader_sha256": sha256(mutant),
         "stages": records,
@@ -116,7 +118,10 @@ def main() -> None:
             if painter["accepted"]:
                 semantic = run_stage(root, output, "static-semantic-publication", False, test=SEMANTIC_TEST)
                 records.append(semantic)
-        report["passed"] = all(record["accepted"] for record in records) and len(records) == 5
+                if semantic["accepted"]:
+                    animated = run_stage(root, output, "animated-runtime-publication", False, test=ANIMATED_TEST)
+                    records.append(animated)
+        report["passed"] = all(record["accepted"] for record in records) and len(records) == 6
         if not report["passed"]:
             raise RuntimeError("glow GPU qualification or real-shader negative control failed")
     finally:

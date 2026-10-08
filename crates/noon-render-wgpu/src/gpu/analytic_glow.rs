@@ -165,13 +165,13 @@ pub struct PublishedAnalyticGlowRequest {
 }
 
 impl GpuRenderer {
-    /// Consume a static attachment from the same borrowed runtime publication as
+    /// Consume an effective attachment from the same borrowed runtime publication as
     /// source geometry/paint. Invoke for initially resident or dirty rows; no
     /// unrelated scene scan or private effect clock is introduced here.
     ///
     /// Absent/removed attachments retire their existing renderer derivations.
-    /// Full Scene orchestration remains guarded until animated effect publication
-    /// and all platform consumers are integrated (#1897).
+    /// Full Scene orchestration remains guarded until authored activation/live
+    /// publication and all platform consumers are integrated (#1897).
     pub fn prepare_published_analytic_glow(
         &mut self,
         device: &wgpu::Device,
