@@ -1693,6 +1693,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .iter()
         .enumerate()
         .map(|(index, object)| FrameObjectState {
+            glow: object.glow.clone(),
             z_index: initial_z_index(compiled, index),
             id: object.id,
             content: object.content.clone(),
@@ -1858,6 +1859,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     let object = &compiled.objects()[object_index];
     debug_assert!(object.live);
     frame.objects.push(FrameObjectState {
+        glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
@@ -1899,6 +1901,7 @@ fn reset_object_frame(
 ) {
     let object = &compiled.objects()[object_index];
     frame.objects[object_index] = FrameObjectState {
+        glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),

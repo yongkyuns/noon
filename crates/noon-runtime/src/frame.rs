@@ -10,6 +10,8 @@ use crate::release_render_transform;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameObjectState {
+    /// Current persistent leaf effect, published with this row and its frame epoch.
+    pub glow: Option<Arc<noon_compile::CompiledGlow>>,
     pub z_index: f64,
     pub id: ObjectId,
     pub content: ObjectContentRef,
@@ -82,6 +84,7 @@ mod spatial_render_routing_tests {
 
     fn row(domain: Domain, draw_kind: CompiledSpatialDrawKind) -> FrameObjectState {
         FrameObjectState {
+            glow: None,
             z_index: 0.0,
             id: ObjectId::new(1),
             content: GeometryRef::circle(1.0).into(),

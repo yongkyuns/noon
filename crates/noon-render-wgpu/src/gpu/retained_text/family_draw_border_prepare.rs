@@ -565,6 +565,7 @@ mod draw_border_tests {
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
@@ -584,6 +585,7 @@ mod draw_border_tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                glow: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(20),

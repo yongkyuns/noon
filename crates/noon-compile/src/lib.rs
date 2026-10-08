@@ -114,6 +114,8 @@ impl DynamicProperties {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledObject {
+    /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
+    pub glow: Option<Arc<CompiledGlow>>,
     pub id: ObjectId,
     pub content: ObjectContentRef,
     /// Immutable local bounds for resource-backed text; geometry bounds remain derived.
@@ -128,6 +130,14 @@ pub struct CompiledObject {
     /// Whether this stable compiled slot currently contains a live scene object.
     /// Removed objects leave tombstones so unrelated slot numbers never change.
     pub live: bool,
+}
+
+/// One static attachment lowered from the existing generational semantic node.
+/// This is execution data, not a second attachment allocator or mutable scene.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledGlow {
+    pub attachment: noon_core::SemanticNodeId,
+    pub definition: noon_core::Glow,
 }
 
 /// Compact optional 3D state shared by semantic lowering and runtime publication.
@@ -184,6 +194,7 @@ impl CompiledObject {
             content: content.into(),
             text_bounds: None,
             base_transform,
+            glow: None,
             spatial: None,
             base_style,
             base_z_index: 0.0,

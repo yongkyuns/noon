@@ -415,3 +415,92 @@ fn fractional_translation_reuses_warmed_capture_capacity() {
         queue.submit([encoder.finish()]);
     }
 }
+
+#[cfg(feature = "ci-noop")]
+#[test]
+fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() {
+    use std::sync::Arc;
+    let object = || {
+        let mut object = CompiledObject::new(
+            ObjectId::new(91),
+            GeometryRef::circle(0.4),
+            Transform2D::IDENTITY,
+            Style {
+                fill: Some(Color::WHITE),
+                stroke: None,
+                ..Style::default()
+            },
+        );
+        object.glow = Some(Arc::new(noon_compile::CompiledGlow {
+            attachment: noon_core::SemanticNodeId::new(6, 2),
+            definition: glow(1.0).definition,
+        }));
+        object
+    };
+    let runtime_for =
+        |object| SceneInstance::new(CompiledScene::compile_objects(vec![object], &[]).unwrap());
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer.set_viewport(&device, &queue, 80, 60);
+    renderer.set_camera(
+        &queue,
+        Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
+    );
+    let mut runtime = runtime_for(object());
+    let publication = runtime.take_renderer_publication();
+    let mut preparer = FramePreparer::new();
+    let prepared = preparer.prepare(publication.frame());
+    renderer.upload(&device, &queue, &prepared);
+    let request = PublishedAnalyticGlowRequest {
+        object_index: 0,
+        texture_budget_bytes: 1_000_000,
+    };
+    let mut encoder = device.create_command_encoder(&Default::default());
+    renderer
+        .prepare_published_analytic_glow(
+            &device,
+            &queue,
+            &mut encoder,
+            &prepared,
+            &publication,
+            request,
+        )
+        .unwrap();
+    queue.submit([encoder.finish()]);
+    let bytes = renderer.analytic_glow_texture_bytes();
+    let output = renderer.analytic_glows.as_ref().unwrap().scopes[&(0, 0)]
+        .filter
+        .output()
+        .unwrap()
+        .clone();
+    for change in 0..4 {
+        let mut changed = object();
+        match change {
+            0 => changed.base_transform.translation.x = 0.25,
+            1 => changed.base_style.fill = Some(Color::RED),
+            2 => changed.content = noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.6)),
+            _ => changed.id = ObjectId::new(92),
+        }
+        let mut other = runtime_for(changed);
+        let other_publication = other.take_renderer_publication();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert_eq!(
+            renderer.prepare_published_analytic_glow(
+                &device,
+                &queue,
+                &mut encoder,
+                &prepared,
+                &other_publication,
+                request
+            ),
+            Err(GlowPrepareError::PublicationMismatch)
+        );
+        assert_eq!(renderer.analytic_glow_texture_bytes(), bytes);
+        assert_eq!(
+            renderer.analytic_glows.as_ref().unwrap().scopes[&(0, 0)]
+                .filter
+                .output(),
+            Some(&output)
+        );
+    }
+}

@@ -1,7 +1,7 @@
 """Control-flow/parser checks only; these are not GPU execution evidence."""
 import unittest
 
-from qualify_gpu_operator import PAINTER_TEST, TEST, qualified
+from qualify_gpu_operator import PAINTER_TEST, SEMANTIC_TEST, TEST, qualified
 
 
 class QualificationAdmission(unittest.TestCase):
@@ -36,6 +36,14 @@ class QualificationAdmission(unittest.TestCase):
         self.assertTrue(qualified(0, painter, test=PAINTER_TEST))
         self.assertFalse(qualified(0, painter.replace("1 passed", "0 passed"), test=PAINTER_TEST))
         self.assertFalse(qualified(101, painter, test=PAINTER_TEST))
+
+    def test_semantic_stage_requires_its_own_executed_test(self):
+        for other in (TEST, PAINTER_TEST):
+            log = f"test {other} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;"
+            self.assertFalse(qualified(0, log, test=SEMANTIC_TEST))
+        log = f"test {SEMANTIC_TEST} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;"
+        self.assertTrue(qualified(0, log, test=SEMANTIC_TEST))
+        self.assertFalse(qualified(0, log.replace("1 passed", "0 passed"), test=SEMANTIC_TEST))
 
     def test_missing_or_ignored_test_does_not_pass(self):
         for code in (0, 1, 101):

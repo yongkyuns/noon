@@ -2739,6 +2739,7 @@ impl RetainedFramePreparer {
         let scratch_slot = self.scratch.objects.len();
         let scratch_id = ObjectId::new(scratch_slot as u64);
         self.scratch.objects.push(FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: scratch_id,
@@ -4409,6 +4410,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        glow: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
@@ -4419,6 +4421,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        glow: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
@@ -4459,6 +4462,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        glow: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
@@ -4469,6 +4473,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        glow: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
@@ -4745,6 +4750,7 @@ mod tests {
                 ..Style::default()
             };
             FrameObjectState {
+                glow: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(id),
@@ -5402,6 +5408,7 @@ mod tests {
             image_resource,
         );
         frame.objects.push(FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(3),

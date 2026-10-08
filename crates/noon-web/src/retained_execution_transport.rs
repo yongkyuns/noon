@@ -394,6 +394,7 @@ pub enum RetainedExecutionTransportError {
     StructuralChangeRequiresSnapshot,
     FrameShapeMismatch,
     InvalidObjectIndex(usize),
+    UnsupportedGlowTransport(ObjectId),
     InvalidSpatialState(TransportSlotId),
     MultipleCamera3D,
     InvalidZIndex(TransportSlotId),
@@ -421,6 +422,8 @@ pub enum RetainedExecutionTransportError {
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedGlowTransport(object) => write!(formatter,
+                "retained worker transport has not enabled glow for object {}", object.get()),
             Self::InvalidSpatialState(slot) => write!(
                 formatter,
                 "retained slot {}:{} has invalid spatial state",
@@ -1698,6 +1701,11 @@ fn transport_object(
         .objects
         .get(index)
         .ok_or(RetainedExecutionTransportError::InvalidObjectIndex(index))?;
+    if object.glow.is_some() {
+        return Err(RetainedExecutionTransportError::UnsupportedGlowTransport(
+            object.id,
+        ));
+    }
     let slot_index = u32::try_from(index)
         .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
     let state = RetainedTransportObjectState {
@@ -1846,6 +1854,7 @@ fn frame_object(
         None => None,
     };
     Ok(FrameObjectState {
+        glow: None,
         spatial: spatial.map(Box::new),
         z_index: object.z_index,
         id: object.object,
@@ -1917,6 +1926,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
@@ -1927,6 +1937,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(12),
@@ -1946,6 +1957,50 @@ mod tests {
             render_geometries: vec![None, None],
             render_transforms: vec![None, None],
         }
+    }
+
+    #[test]
+    fn unsupported_glow_transport_rejects_without_consuming_sequence_or_snapshot() {
+        let mut frame = mixed_frame();
+        let glow = Arc::new(noon_compile::CompiledGlow {
+            attachment: noon_core::SemanticNodeId::new(77, 3),
+            definition: noon_core::Glow::default(),
+        });
+        frame.objects[0].glow = Some(glow.clone());
+        let camera = Camera2DState::default();
+        let context = noon_core::PublicationContext::default();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let initial_sequence = encoder.next_sequence;
+        assert_eq!(
+            encoder.encode_snapshot_with_context(&frame, camera, context),
+            Err(RetainedExecutionTransportError::UnsupportedGlowTransport(
+                frame.objects[0].id
+            ))
+        );
+        assert_eq!(encoder.next_sequence, initial_sequence);
+        assert!(!encoder.initialized);
+        assert!(encoder.snapshot_orders.is_empty());
+        frame.objects[0].glow = None;
+        let ordinary = encoder
+            .encode_snapshot_with_context(&frame, camera, context)
+            .unwrap();
+        assert_eq!(ordinary.sequence, initial_sequence);
+        let sequence = encoder.next_sequence;
+        let orders = encoder.snapshot_orders.clone();
+        frame.objects[0].glow = Some(glow);
+        assert_eq!(
+            encoder.encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                camera,
+                context
+            ),
+            Err(RetainedExecutionTransportError::UnsupportedGlowTransport(
+                frame.objects[0].id
+            ))
+        );
+        assert_eq!(encoder.next_sequence, sequence);
+        assert_eq!(encoder.snapshot_orders, orders);
     }
 
     #[test]
@@ -2646,6 +2701,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),
@@ -2765,6 +2821,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),

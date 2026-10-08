@@ -182,6 +182,7 @@ fn materialize_semantic_projection(
         let (content, text_bounds) =
             lower_content(object.semantic_id, object.content, store, &mut resources)?;
         objects.push(CompiledObject {
+            glow: object.glow.clone(),
             id: object.execution_id,
             content,
             text_bounds,

@@ -299,3 +299,186 @@ fn retained_painter_glow_pixels() {
         assert_eq!(renderer.analytic_glow_texture_bytes(), 0);
     }
 }
+
+/// Build only through shared semantic transactions and the normal static object
+/// projection. Full Scene animation/live/host admission is still guarded.
+fn semantic_runtime(source: &FrameState, glow: Glow) -> SceneInstance {
+    use noon_compile::SemanticExecutionIndex;
+    use noon_core::{
+        SemanticMutationTransaction, SemanticObjectState, SemanticStore, SemanticStyle,
+        SemanticTransform2_5D, SemanticVec3, StoredGeometry,
+    };
+    let mut store = SemanticStore::new();
+    let mut owner = None;
+    for (i, row) in source.objects.iter().enumerate() {
+        let geometry = match row.geometry().unwrap() {
+            GeometryRef::Circle { radius } => StoredGeometry::Circle { radius: *radius },
+            GeometryRef::Rectangle { size } => StoredGeometry::Rectangle { size: *size },
+            _ => panic!("finite analytic fixture"),
+        };
+        let mut state = SemanticObjectState::new(geometry);
+        state.style = SemanticStyle::from_compact(row.style);
+        state.transform = SemanticTransform2_5D {
+            translation: SemanticVec3::from_vec2(row.transform.translation),
+            scale: SemanticVec3::new(
+                f64::from(row.transform.scale.x),
+                f64::from(row.transform.scale.y),
+                1.0,
+            ),
+            rotation_z: f64::from(row.transform.rotation),
+        }
+        .into();
+        let id = store.insert_semantic_object(state);
+        store.attach_to_scene(id).unwrap();
+        if i == 1 {
+            owner = Some(id);
+        }
+    }
+    let owner = owner.unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    let token = tx.create_effect(owner, "glow", glow);
+    let attachment = tx.apply(&mut store).unwrap().resolve(token).unwrap();
+    let mut index = SemanticExecutionIndex::new();
+    let projection = index.lower_scene(&store).unwrap();
+    let compiled = CompiledScene::from_semantic_projection(&projection).unwrap();
+    assert_eq!(
+        compiled.objects()[1].glow.as_ref().unwrap().attachment,
+        attachment
+    );
+    let mut runtime = SceneInstance::new(compiled);
+    // Ordinary runtime translation channel and seek, not an effects clock.
+    let from = runtime.frame().objects[1].transform.translation;
+    let object = runtime.frame().objects[1].id;
+    runtime
+        .apply_execution_patch(&noon_compile::ExecutionPatch::AddTrack(
+            noon_core::TrackDefinition {
+                id: noon_core::TrackId::new(1),
+                object,
+                property: noon_core::Property::Position,
+                values: noon_core::TrackValues::Vec2 {
+                    from,
+                    to: from + Vec2::new(0.35, 0.0),
+                },
+                timing: noon_core::TrackTiming::new(0.0, 1.0, noon_core::RateFunction::Linear),
+                time_map: Default::default(),
+            },
+        ))
+        .unwrap();
+    runtime
+}
+
+#[test]
+#[ignore = "requires raster adapter; static semantic projection and published-frame integration"]
+fn semantic_static_glow_publication_pixels() {
+    use crate::PublishedAnalyticGlowRequest;
+    let (device, queue) = device();
+    for (rectangle, offscreen, transparent) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, true),
+        (false, false, true),
+    ] {
+        let glow = Glow::new(
+            GlowUpdate::default()
+                .radius(Pixels(SIGMA))
+                .intensity(2.4)
+                .color(Color::rgba(0.95, 0.35, 0.8, 0.8))
+                .source(if transparent {
+                    GlowSource::Silhouette
+                } else {
+                    GlowSource::Painted
+                }),
+        )
+        .unwrap();
+        let mut runtime = semantic_runtime(&frame(rectangle, offscreen, transparent), glow);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        renderer.set_viewport(&device, &queue, VIEW[0], VIEW[1]);
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
+        );
+        let mut preparer = FramePreparer::new();
+        let texture = target(&device, VIEW);
+        let view = texture.create_view(&Default::default());
+        let request = PublishedAnalyticGlowRequest {
+            object_index: 1,
+            texture_budget_bytes: 1_000_000,
+        };
+        let mut first_pixels = None;
+        for time in [0.0, 0.37, 0.8, 0.0] {
+            runtime.seek(time).unwrap();
+            let publication = runtime.take_renderer_publication();
+            assert_eq!(
+                publication.frame().objects[1]
+                    .glow
+                    .as_ref()
+                    .unwrap()
+                    .definition,
+                glow
+            );
+            let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
+            renderer.upload(&device, &queue, &prepared);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            renderer
+                .prepare_published_analytic_glow(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    &prepared,
+                    &publication,
+                    request,
+                )
+                .unwrap();
+            renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::TRANSPARENT);
+            queue.submit([encoder.finish()]);
+            let pixels = readback(&device, &queue, &texture);
+            let reference = expected(&device, &queue, publication.frame(), glow);
+            let error = pixels
+                .iter()
+                .zip(reference)
+                .map(|(a, b)| (i32::from(*a) - i32::from(b)).abs())
+                .max()
+                .unwrap();
+            let plain = render_plain(&device, &queue, publication.frame(), VIEW);
+            let signal = pixels
+                .iter()
+                .zip(plain)
+                .map(|(a, b)| (i32::from(*a) - i32::from(b)).abs())
+                .max()
+                .unwrap();
+            eprintln!("semantic rectangle={rectangle} offscreen={offscreen} silhouette={transparent} t={time} max_byte_error={error} halo_signal={signal}");
+            assert!(
+                error <= 2,
+                "semantic static publication pixel mismatch: {error}"
+            );
+            assert!(signal > 2, "semantic attachment cannot silently disappear");
+            if time == 0.0 {
+                if let Some(first) = &first_pixels {
+                    assert_eq!(&pixels, first, "rewind must reproduce exact pixels");
+                } else {
+                    first_pixels = Some(pixels);
+                }
+            }
+        }
+        let owner = runtime.frame().objects[1].id;
+        runtime
+            .apply_execution_patch(&noon_compile::ExecutionPatch::RemoveObject(owner))
+            .unwrap();
+        let publication = runtime.take_renderer_publication();
+        let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
+        renderer.upload(&device, &queue, &prepared);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer
+            .prepare_published_analytic_glow(
+                &device,
+                &queue,
+                &mut encoder,
+                &prepared,
+                &publication,
+                request,
+            )
+            .unwrap();
+        assert_eq!(renderer.analytic_glow_texture_bytes(), 0);
+    }
+}

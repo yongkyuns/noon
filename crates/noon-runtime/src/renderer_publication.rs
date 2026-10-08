@@ -460,6 +460,7 @@ mod derived_display_tests {
         FrameState {
             time: 0.0,
             objects: vec![FrameObjectState {
+                glow: None,
                 id: ObjectId::new(1),
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),

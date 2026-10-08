@@ -246,6 +246,7 @@ pub enum GlowPrepareError {
     InvalidSourceBounds,
     CaptureCoordinatesOutOfRange,
     InvalidProjection,
+    PublicationMismatch,
     CaptureSizeMismatch,
     ExtentExceedsDevice,
     ScratchBudgetExceeded,

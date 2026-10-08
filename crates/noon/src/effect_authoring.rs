@@ -307,4 +307,6 @@ impl LiveSession<'_> {
 }
 
 #[cfg(test)]
+mod bridge_tests;
+#[cfg(test)]
 mod tests;

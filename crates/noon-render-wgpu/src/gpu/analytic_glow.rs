@@ -157,7 +157,80 @@ pub(super) struct AnalyticGlowGpu {
     bytes: u64,
 }
 
+/// Sparse request for one runtime-owned row, never a host copy of effect values.
+#[derive(Clone, Copy, Debug)]
+pub struct PublishedAnalyticGlowRequest {
+    pub object_index: usize,
+    pub texture_budget_bytes: u64,
+}
+
 impl GpuRenderer {
+    /// Consume a static attachment from the same borrowed runtime publication as
+    /// source geometry/paint. Invoke for initially resident or dirty rows; no
+    /// unrelated scene scan or private effect clock is introduced here.
+    ///
+    /// Absent/removed attachments retire their existing renderer derivations.
+    /// Full Scene orchestration remains guarded until animated effect publication
+    /// and all platform consumers are integrated (#1897).
+    pub fn prepare_published_analytic_glow(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        prepared: &PreparedFrame<'_>,
+        publication: &noon_runtime::RendererPublication<'_>,
+        request: PublishedAnalyticGlowRequest,
+    ) -> Result<AnalyticGlowStats, GlowPrepareError> {
+        let frame = publication.frame();
+        let row = frame
+            .objects
+            .get(request.object_index)
+            .ok_or(GlowPrepareError::UnsupportedCapture)?;
+        if frame.time != prepared.time {
+            return Err(GlowPrepareError::PublicationMismatch);
+        }
+        let Some(glow) = row
+            .glow
+            .as_ref()
+            .filter(|_| frame.is_present(request.object_index))
+        else {
+            self.remove_analytic_glow(row.id);
+            return Ok(AnalyticGlowStats {
+                retained_texture_bytes: self.analytic_glow_texture_bytes(),
+                ..Default::default()
+            });
+        };
+        let observation = prepared
+            .observe_object(request.object_index)
+            .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+        let key = match observation.primitive {
+            RenderPrimitive::Circle => (0, observation.instance_index),
+            RenderPrimitive::Rectangle => (1, observation.instance_index),
+            _ => return Err(GlowPrepareError::UnsupportedCapture),
+        };
+        let source =
+            SourceInstance::prepared(prepared, key).ok_or(GlowPrepareError::UnsupportedCapture)?;
+        if observation.object != row.id
+            || observation.transform != frame.render_transform(request.object_index).into()
+            || observation.style != crate::pack_style(row)
+            || frame.render_geometry(request.object_index) != Some(&source.geometry())
+            || frame.reveal(request.object_index) != 1.0
+        {
+            return Err(GlowPrepareError::PublicationMismatch);
+        }
+        self.prepare_analytic_glow(
+            device,
+            queue,
+            encoder,
+            prepared,
+            AnalyticGlowRequest {
+                object_index: request.object_index,
+                definition: glow.definition,
+                texture_budget_bytes: request.texture_budget_bytes,
+            },
+        )
+    }
+
     /// Capture/filter one effective primitive using the same command encoder as
     /// the subsequent ordinary scene encode. Call after packed-instance upload.
     /// This finite slice admits filled, unstroked, fully revealed planar sources.
