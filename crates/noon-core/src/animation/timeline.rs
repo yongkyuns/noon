@@ -4,6 +4,40 @@ use std::sync::Arc;
 /// Upper bound for one activation-time retained path-motion snapshot.
 pub const MAX_PATH_MOTION_COMMANDS: usize = 65_536;
 
+/// Derived frame for a prepared point morph, separate from authored TRS.
+///
+/// Endpoint translations do not belong in immutable path coordinates. Sampling
+/// this frame with the morph alpha preserves world-space point interpolation
+/// while equivalent shape pairs reuse the same geometry across independent moves.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MorphRenderFrame {
+    pub from: crate::Transform2D,
+    pub to_translation: crate::Vec2,
+}
+
+impl MorphRenderFrame {
+    pub const fn fixed(transform: crate::Transform2D) -> Self {
+        Self {
+            from: transform,
+            to_translation: transform.translation,
+        }
+    }
+
+    pub fn sample(self, alpha: f32) -> crate::Transform2D {
+        let translation = if alpha <= 0.0 {
+            self.from.translation
+        } else if alpha >= 1.0 {
+            self.to_translation
+        } else {
+            self.from.translation + (self.to_translation - self.from.translation) * alpha
+        };
+        crate::Transform2D {
+            translation,
+            ..self.from
+        }
+    }
+}
+
 use crate::{
     object_state::{validate_geometry, validate_style, validate_transform},
     CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectStateError, ObjectStateField,
@@ -298,7 +332,7 @@ pub enum TrackValues {
         from: f32,
         to: f32,
         geometry: crate::GeometryRef,
-        render_transform: Option<crate::Transform2D>,
+        render_frame: Option<MorphRenderFrame>,
         /// Captured semantic frame of the source. Before activation, geometry
         /// must follow earlier affine drivers, including collapsed entrances.
         source_transform: crate::Transform2D,
@@ -418,7 +452,7 @@ impl TrackValues {
                 from,
                 to,
                 geometry,
-                render_transform,
+                render_frame,
                 source_transform,
             } => {
                 if !from.is_finite() || !to.is_finite() {
@@ -434,9 +468,15 @@ impl TrackValues {
                 validate_transform(object, *source_transform).map_err(|error| {
                     invalid_object_track_value(property, TrackValueEndpoint::From, error)
                 })?;
-                if let Some(transform) = render_transform {
-                    validate_transform(object, *transform).map_err(|error| {
+                if let Some(frame) = render_frame {
+                    validate_transform(object, frame.from).map_err(|error| {
                         invalid_object_track_value(property, TrackValueEndpoint::From, error)
+                    })?;
+                    validate_transform(object, frame.sample(1.0)).map_err(|error| {
+                        invalid_object_track_value(property, TrackValueEndpoint::To, error)
+                    })?;
+                    validate_transform(object, frame.sample(0.5)).map_err(|error| {
+                        invalid_object_track_value(property, TrackValueEndpoint::To, error)
                     })?;
                 }
                 Ok(())
@@ -1180,6 +1220,66 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn prepared_morph_rejects_non_finite_and_overflowing_translation_frames() {
+        let validate = |frame| {
+            validate_track_definition(&track(
+                Property::Morph,
+                TrackValues::PreparedMorph {
+                    from: 0.0,
+                    to: 1.0,
+                    geometry: GeometryRef::path(
+                        crate::VectorPath::new()
+                            .move_to(Vec2::ZERO)
+                            .line_to(Vec2::ONE)
+                            .with_morph_target(
+                                crate::VectorPath::new()
+                                    .move_to(Vec2::ONE)
+                                    .line_to(Vec2::ZERO),
+                            ),
+                    ),
+                    render_frame: Some(frame),
+                    source_transform: Transform2D::IDENTITY,
+                },
+                timing(),
+            ))
+        };
+        assert_eq!(
+            validate(MorphRenderFrame::fixed(Transform2D::IDENTITY)),
+            Ok(())
+        );
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for translation in [Vec2::new(invalid, 0.0), Vec2::new(0.0, invalid)] {
+                assert_eq!(
+                    validate(MorphRenderFrame {
+                        from: Transform2D::IDENTITY,
+                        to_translation: translation,
+                    }),
+                    Err(TimelineError::InvalidObjectValue {
+                        property: Property::Morph,
+                        endpoint: TrackValueEndpoint::To,
+                        field: ObjectStateField::Transform,
+                    })
+                );
+            }
+        }
+        // Finite endpoints alone cannot guarantee that translation sampling is finite.
+        assert_eq!(
+            validate(MorphRenderFrame {
+                from: Transform2D {
+                    translation: Vec2::new(-f32::MAX, 0.0),
+                    ..Transform2D::IDENTITY
+                },
+                to_translation: Vec2::new(f32::MAX, 0.0),
+            }),
+            Err(TimelineError::InvalidObjectValue {
+                property: Property::Morph,
+                endpoint: TrackValueEndpoint::To,
+                field: ObjectStateField::Transform,
+            })
+        );
     }
 
     #[test]

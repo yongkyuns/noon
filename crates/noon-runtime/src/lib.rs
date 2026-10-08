@@ -2639,16 +2639,17 @@ fn apply_prepared_morph_values(
     };
     let TransformGeometryPlan::PathPair {
         geometry,
-        render_transform,
+        render_frame,
         ..
     } = plan
     else {
         return None;
     };
     let morph = lerp(*from, *to, progress).clamp(0.0, 1.0);
-    let mut changed = *row.morph != morph || *row.render_transform != *render_transform;
+    let render_transform = render_frame.map(|frame| frame.sample(morph));
+    let mut changed = *row.morph != morph || *row.render_transform != render_transform;
     *row.morph = morph;
-    *row.render_transform = *render_transform;
+    *row.render_transform = render_transform;
     changed |= set_optional_geometry_if_changed(row.render_geometry, Some(geometry), true);
     Some(changed)
 }
@@ -2670,7 +2671,7 @@ fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progr
     let fixed_endpoint = matches!(
         plan,
         TransformGeometryPlan::PathPair {
-            render_transform: Some(_),
+            render_frame: Some(_),
             ..
         }
     ) && (progress <= 0.0 || progress >= 1.0);
@@ -2682,7 +2683,7 @@ fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progr
     let owned_render_geometry = match plan {
         TransformGeometryPlan::PathPair {
             geometry: prepared,
-            render_transform: None,
+            render_frame: None,
             ..
         } if from.style.stroke_width_mode == StrokeWidthMode::ScreenSpace
             && to.style.stroke_width_mode == StrokeWidthMode::ScreenSpace =>
@@ -2705,9 +2706,9 @@ fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progr
         next_render_geometry = None;
     }
     let next_render_transform = match plan {
-        TransformGeometryPlan::PathPair {
-            render_transform, ..
-        } if !fixed_endpoint => *render_transform,
+        TransformGeometryPlan::PathPair { render_frame, .. } if !fixed_endpoint => {
+            render_frame.map(|frame| frame.sample(progress))
+        }
         _ => None,
     };
     let transform_changed = *row.render_transform != next_render_transform;
@@ -3364,7 +3365,7 @@ mod tests {
                 from: 0.0,
                 to: 1.0,
                 geometry: pair.clone(),
-                render_transform: Some(Transform2D::IDENTITY),
+                render_frame: Some(noon_core::MorphRenderFrame::fixed(Transform2D::IDENTITY)),
                 source_transform: Transform2D::IDENTITY,
             },
             timing: TrackTiming::new(0.25, 0.5, RateFunction::Linear),
@@ -3390,6 +3391,86 @@ mod tests {
                 frame.render_transforms[0],
                 (time >= 0.25).then_some(Transform2D::IDENTITY)
             );
+        }
+    }
+
+    #[test]
+    fn translated_prepared_morph_preserves_pointwise_rotation_through_seek_and_forward_playback() {
+        for rate in [RateFunction::Linear, RateFunction::ThereAndBack] {
+            let source = VectorPath::new()
+                .move_to(Vec2::new(-1.0, 0.0))
+                .line_to(Vec2::new(1.0, 0.0));
+            let target = VectorPath::new()
+                .move_to(Vec2::new(0.0, -1.0))
+                .line_to(Vec2::new(0.0, 1.0));
+            let pair = GeometryRef::path(source.clone().with_morph_target(target));
+            let mut tracks = Vec::new();
+            let mut objects = Vec::new();
+            let positions = [
+                (Vec2::new(2.0, 3.0), Vec2::new(6.0, 11.0)),
+                (Vec2::new(-3.0, 2.0), Vec2::new(8.0, -7.0)),
+            ];
+            for (index, (from, to)) in positions.into_iter().enumerate() {
+                let object = ObjectId::new(index as u64);
+                let source_transform = Transform2D {
+                    translation: from,
+                    ..Transform2D::IDENTITY
+                };
+                objects.push(CompiledObject::new(
+                    object,
+                    GeometryRef::path(source.clone()),
+                    source_transform,
+                    Style::default(),
+                ));
+                tracks.push(TrackDefinition {
+                    id: TrackId::new((index * 2) as u64),
+                    object,
+                    property: Property::Position,
+                    values: TrackValues::Vec2 { from, to },
+                    timing: TrackTiming::new(0.25, 1.0, rate),
+                    time_map: CompositionTimeMap::identity(),
+                });
+                tracks.push(TrackDefinition {
+                    id: TrackId::new((index * 2 + 1) as u64),
+                    object,
+                    property: Property::Morph,
+                    values: TrackValues::PreparedMorph {
+                        from: 0.0,
+                        to: 1.0,
+                        geometry: pair.clone(),
+                        render_frame: Some(noon_core::MorphRenderFrame {
+                            from: source_transform,
+                            to_translation: to,
+                        }),
+                        source_transform,
+                    },
+                    timing: TrackTiming::new(0.25, 1.0, rate),
+                    time_map: CompositionTimeMap::identity(),
+                });
+            }
+            let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
+            let mut direct = SceneInstance::new(compiled.clone());
+            for time in [0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 0.1, 0.75] {
+                let frame = direct.seek(time).unwrap();
+                let mut forward = SceneInstance::new(compiled.clone());
+                for step in 0..=(time * 100.0).round() as usize {
+                    forward.advance_to(step as f64 / 100.0).unwrap();
+                }
+                let forward_frame = forward.advance_to(time).unwrap();
+                assert_eq!(frame.render_transforms, forward_frame.render_transforms);
+                assert_eq!(frame.render_geometries, forward_frame.render_geometries);
+                for (index, (from, to)) in positions.into_iter().enumerate() {
+                    let alpha = rate.evaluate(((time - 0.25) as f32).clamp(0.0, 1.0));
+                    assert_eq!(frame.morph(index), alpha);
+                    let transform = frame.render_transform(index);
+                    let corner = Vec2::new(-1.0 + alpha, -alpha);
+                    let expected = from + (to - from) * alpha + corner;
+                    assert!((transform.transform_point(corner) - expected).length() < 1.0e-6);
+                    if time >= 0.25 {
+                        assert_eq!(frame.render_geometries[index].as_deref(), Some(&pair));
+                    }
+                }
+            }
         }
     }
 
@@ -3432,7 +3513,7 @@ mod tests {
                     from: 0.0,
                     to: 1.0,
                     geometry: pair,
-                    render_transform: Some(Transform2D::IDENTITY),
+                    render_frame: Some(noon_core::MorphRenderFrame::fixed(Transform2D::IDENTITY)),
                     source_transform,
                 },
                 timing: TrackTiming::new(0.75, 0.5, RateFunction::Linear),

@@ -70,8 +70,17 @@ fn completed_round_trip() -> SceneInstance {
                     from: 0.0,
                     to: 1.0,
                     geometry: GeometryRef::path(from_path.with_morph_target(to_path)),
-                    render_transform: Some(Transform2D::IDENTITY),
-                    source_transform: Transform2D::IDENTITY,
+                    render_frame: Some(noon_core::MorphRenderFrame {
+                        from: Transform2D {
+                            translation: Vec2::new(from, 0.0),
+                            ..Transform2D::IDENTITY
+                        },
+                        to_translation: Vec2::new(to, 0.0),
+                    }),
+                    source_transform: Transform2D {
+                        translation: Vec2::new(from, 0.0),
+                        ..Transform2D::IDENTITY
+                    },
                 },
             ),
         ] {
@@ -117,7 +126,13 @@ fn assert_intermediate_target(runtime: &SceneInstance) {
         path.morph_target().unwrap().commands(),
         vertical().commands()
     );
-    assert_eq!(frame.render_transforms[0], Some(Transform2D::IDENTITY));
+    assert_eq!(frame.render_transform(0).translation, Vec2::new(4.0, 0.0));
+    assert_eq!(
+        frame
+            .render_transform(0)
+            .transform_point(Vec2::new(0.0, -2.0)),
+        Vec2::new(4.0, -2.0)
+    );
 }
 
 #[test]
