@@ -204,6 +204,32 @@ class Demo(Scene):
 
 `;
 
+// Public Cross must be a real two-Line family over Rust-owned matcher geometry.
+const crossAdapterSource = `
+from noon import *
+
+class CrossAdapterSmoke(Scene):
+    def construct(self):
+        target = Rectangle(width=2.0, height=1.0)
+        cross = Cross(target, scale_factor=1.5, stroke_width=6.0)
+        assert isinstance(cross, VGroup) and len(cross) == 2
+        assert all(isinstance(member, Line) for member in cross)
+        assert cross[0] is not cross[1]
+        assert abs(cross[0].get_start().x + 1.5) < 1e-6
+        assert abs(cross[0].get_start().y - 0.75) < 1e-6
+        assert abs(cross[0].get_end().x - 1.5) < 1e-6
+        assert abs(cross[0].get_end().y + 0.75) < 1e-6
+        assert abs(cross[1].get_start().x - 1.5) < 1e-6
+        assert abs(cross[1].get_end().x + 1.5) < 1e-6
+        assert all(abs(member.style["stroke_width"] - 0.06) < 1e-6 for member in cross)
+        copied = cross.copy()
+        assert isinstance(copied, VGroup) and len(copied) == 2
+        assert copied[0]._semantic_handle.semanticSlot != cross[0]._semantic_handle.semanticSlot
+        assert len(Cross()) == 2
+        self.add(cross)
+        self.wait(0.3)
+`;
+
 // Ordinary groups use the same shared family lifecycle as Text families.
 const groupFadeSource = `
 from noon import *
@@ -687,6 +713,14 @@ result = Scene()
   assert.equal(groupFades.metrics.objectCount, 0, "family FadeOut detaches the shared root");
   assert.ok(groupFades.metrics.presentedFrames > 0);
   assert.equal(groupFades.duration, 0.5);
+
+  const crossAdapter = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    crossAdapterSource,
+  );
+  assert.equal(crossAdapter.duration, 0.3, "Cross must preserve normal authored timing");
+  assert.equal(crossAdapter.metrics.objectCount, 2, "Cross must retain two Line leaves");
+  assert.ok(crossAdapter.metrics.presentedFrames > 0, "Cross must render through the shared runtime");
 
   const uncreate = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
