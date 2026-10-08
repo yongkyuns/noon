@@ -2052,6 +2052,11 @@ def _canonical_family_reveal_animation(scene: _base.Scene, animation: object):
     return family, leaves, reverse
 
 
+def _canonical_text_play_options(kwargs: dict[str, object]):
+    """Marshal flat play overrides separately; Rust retains partial precedence."""
+    return _canonical_play_options(dict(kwargs)), _canonical_composition_rate_id(kwargs)
+
+
 def _canonical_text_write_options(animation: object):
     """Return only explicitly authored leaf options; Rust resolves omitted timing."""
     args = dict(_options.builder_args(animation))
@@ -2413,6 +2418,7 @@ def _build_canonical_composition_candidate(
                 child_run_time,
                 rate_function,
                 child_lag_ratio,
+                *_canonical_text_play_options(child_kwargs),
             )
             detached = [member for member in leaves if member._scene is None]
             if detached:
@@ -2451,6 +2457,7 @@ def _build_canonical_composition_candidate(
                 child_run_time,
                 rate_function,
                 child_lag_ratio,
+                *_canonical_text_play_options(child_kwargs),
             )
             removes = reverse if remover is None else remover
             if removes:
@@ -2510,18 +2517,6 @@ def _build_canonical_composition_candidate(
         family_write = _canonical_text_family_write_animation(self, animation)
         if family_write is not None:
             family, leaves = family_write
-            if child_kwargs:
-                unsupported = set(child_kwargs) - {
-                    "duration",
-                    "run_time",
-                    "easing",
-                    "rate_func",
-                }
-                if unsupported:
-                    names = ", ".join(sorted(unsupported))
-                    raise NotImplementedError(
-                        f"unsupported canonical Text family Write play option(s): {names}"
-                    )
             child_run_time, rate_function, child_lag_ratio = (
                 _canonical_text_write_options(animation)
             )
@@ -2534,6 +2529,7 @@ def _build_canonical_composition_candidate(
                 child_run_time,
                 rate_function,
                 child_lag_ratio,
+                *_canonical_text_play_options(child_kwargs),
             )
             if animation.introducer:
                 family_registrations.append(family)
@@ -2548,15 +2544,6 @@ def _build_canonical_composition_candidate(
             return
         text_write = _canonical_text_write_animation(self, animation)
         if text_write is not None:
-            if child_kwargs:
-                # Flat Scene.play options are already carried by the root request;
-                # nested groups pass their timing through their composition node.
-                unsupported = set(child_kwargs) - {"duration", "run_time", "easing", "rate_func"}
-                if unsupported:
-                    names = ", ".join(sorted(unsupported))
-                    raise NotImplementedError(
-                        f"unsupported canonical Text Write play option(s): {names}"
-                    )
             child_run_time, rate_function, child_lag_ratio = (
                 _canonical_text_write_options(animation)
             )
@@ -2573,6 +2560,7 @@ def _build_canonical_composition_candidate(
                 child_run_time,
                 rate_function,
                 child_lag_ratio,
+                *_canonical_text_play_options(child_kwargs),
             )
             return
         subset = _canonical_subset_display_animation(self, animation)

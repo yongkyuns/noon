@@ -67,6 +67,22 @@ impl AnimationOptions {
         self.introducer = Some(value);
         self
     }
+
+    /// Apply explicitly supplied overrides without materializing defaults.
+    /// Glyph/family-dependent defaults are resolved later by their shared owner.
+    pub fn with_overrides(self, overrides: Self) -> Self {
+        Self {
+            run_time: overrides.run_time.or(self.run_time),
+            rate_func: overrides.rate_func.or(self.rate_func),
+            lag_ratio: overrides.lag_ratio.or(self.lag_ratio),
+            path_arc: overrides.path_arc.or(self.path_arc),
+            reverse_rate_function: overrides
+                .reverse_rate_function
+                .or(self.reverse_rate_function),
+            remover: overrides.remover.or(self.remover),
+            introducer: overrides.introducer.or(self.introducer),
+        }
+    }
 }
 
 /// Concrete defaults applied before animation-local and `Scene.play` overrides.
@@ -172,35 +188,17 @@ fn resolve_animation_options_unchecked(
     animation: AnimationOptions,
     play: AnimationOptions,
 ) -> ResolvedAnimationOptions {
+    let options = animation.with_overrides(play);
     ResolvedAnimationOptions {
-        run_time: play
-            .run_time
-            .or(animation.run_time)
-            .unwrap_or(defaults.run_time),
-        rate_func: play
-            .rate_func
-            .or(animation.rate_func)
-            .unwrap_or(defaults.rate_func),
-        lag_ratio: play
-            .lag_ratio
-            .or(animation.lag_ratio)
-            .unwrap_or(defaults.lag_ratio),
-        path_arc: play
-            .path_arc
-            .or(animation.path_arc)
-            .unwrap_or(defaults.path_arc),
-        reverse_rate_function: play
+        run_time: options.run_time.unwrap_or(defaults.run_time),
+        rate_func: options.rate_func.unwrap_or(defaults.rate_func),
+        lag_ratio: options.lag_ratio.unwrap_or(defaults.lag_ratio),
+        path_arc: options.path_arc.unwrap_or(defaults.path_arc),
+        reverse_rate_function: options
             .reverse_rate_function
-            .or(animation.reverse_rate_function)
             .unwrap_or(defaults.reverse_rate_function),
-        remover: play
-            .remover
-            .or(animation.remover)
-            .unwrap_or(defaults.remover),
-        introducer: play
-            .introducer
-            .or(animation.introducer)
-            .unwrap_or(defaults.introducer),
+        remover: options.remover.unwrap_or(defaults.remover),
+        introducer: options.introducer.unwrap_or(defaults.introducer),
     }
 }
 
@@ -363,6 +361,28 @@ mod tests {
         assert_eq!(resolved.run_time, 0.4);
         assert_eq!(resolved.rate_func, RateFunction::Smooth);
         assert_eq!(resolved.lag_ratio, 0.5);
+    }
+
+    #[test]
+    fn partial_overrides_preserve_omissions_and_explicit_false_or_zero() {
+        let authored = AnimationOptions::new()
+            .run_time(3.0)
+            .lag_ratio(0.2)
+            .remover(true);
+        let merged = authored.with_overrides(AnimationOptions::new().run_time(2.0).remover(false));
+        assert_eq!(merged.run_time, Some(2.0));
+        assert_eq!(merged.lag_ratio, Some(0.2));
+        assert_eq!(merged.remover, Some(false));
+        assert_eq!(merged.rate_func, None);
+        assert_eq!(merged.introducer, None);
+        assert_eq!(merged.path_arc, None);
+        assert_eq!(
+            merged
+                .with_overrides(AnimationOptions::new().lag_ratio(0.0))
+                .lag_ratio,
+            Some(0.0)
+        );
+        assert_eq!(authored.with_overrides(AnimationOptions::new()), authored);
     }
 
     #[test]
