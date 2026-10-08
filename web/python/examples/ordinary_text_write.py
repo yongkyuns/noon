@@ -7,9 +7,10 @@ class OrdinaryTextWrite(Scene):
         font = NativeFontFace.bundled("DejaVu Sans Mono")
         moving = Text("MOVE", font=font).shift(2 * LEFT + DOWN)
         writing = Text("WRITE", font=font).shift(LEFT + UP)
+        self.add(moving)
         self.play(
             moving.animate.shift(2 * RIGHT),
-            Write(writing),
+            Write(writing, run_time=2),
             run_time=2,
             rate_func=linear,
         )
