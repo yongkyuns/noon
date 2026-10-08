@@ -572,6 +572,17 @@ pub(crate) fn placement_authored_transform(
     execution: &ExecutionSession,
     object: &Mobject,
 ) -> Result<Transform2D, AuthoringError> {
+    placement_transform(store, execution, object, false).map(|(transform, _)| transform)
+}
+
+// Only move_to opts into settled callback placement. Other persistent affine
+// operations keep their existing stricter contract until independently qualified.
+fn placement_transform(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    object: &Mobject,
+    allow_settled_callback: bool,
+) -> Result<(Transform2D, bool), AuthoringError> {
     if !Rc::ptr_eq(store, object.integration_store()) {
         return Err(AuthoringError::ForeignStore);
     }
@@ -595,6 +606,16 @@ pub(crate) fn placement_authored_transform(
             ));
         }
         Ok(observed) if observed.object.transform != authored_transform => {
+            if allow_settled_callback
+                && execution.placement_uses_settled_callback_transform(
+                    &store_ref,
+                    object.node_id(),
+                    authored_transform,
+                    observed.object.transform,
+                )
+            {
+                return Ok((observed.object.transform, true));
+            }
             return Err(AuthoringError::Unsupported(
                 crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver,
             ));
@@ -602,7 +623,7 @@ pub(crate) fn placement_authored_transform(
         Ok(_) | Err(ExecutionSessionPublicationError::UnknownObject(_)) => {}
         Err(error) => return Err(error.into()),
     }
-    Ok(authored_transform)
+    Ok((authored_transform, false))
 }
 
 fn effective_member_center(
@@ -773,13 +794,34 @@ pub(crate) fn publish_move_to(
     execution
         .require_published_store(&store.borrow())
         .map_err(AuthoringError::from)?;
-    let transform = placement_authored_transform(store, execution, object)?;
+    let (transform, callback_owned) = placement_transform(store, execution, object, true)?;
     let bounds = object.boundary_bounds_at(transform)?.unwrap_or_else(|| {
         Bounds2D64::point(
             f64::from(transform.translation.x),
             f64::from(transform.translation.y),
         )
     });
+    if callback_owned {
+        let delta = RelativePlacement::Move { edge, mask }.delta(Some(bounds), |x, y| {
+            live_target_point(store, execution, target, x, y)
+        })?;
+        let position = authoring_xy_f64(
+            f64::from(transform.translation.x) + delta.0,
+            f64::from(transform.translation.y) + delta.1,
+        )?;
+        let mut translation = object.state()?.transform.translation;
+        translation.x = position.x;
+        translation.y = position.y;
+        return execution
+            .publish_settled_callback_translation(
+                &mut store.borrow_mut(),
+                root,
+                object.node_id(),
+                translation,
+                transform,
+            )
+            .map_err(AuthoringError::from);
+    }
     publish_layout_translation(
         store,
         root,
@@ -892,3 +934,6 @@ pub(crate) fn publish_next_layout_to_aligned(
         RelativePlacement::Next(args),
     )
 }
+
+#[cfg(test)]
+mod placement_callback_tests;

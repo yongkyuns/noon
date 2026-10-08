@@ -131,24 +131,36 @@ pub fn parse_render_frame_rate(text: &str) -> Result<FrameRate, RenderOptionsErr
         if whole.is_empty() && fraction.is_empty() {
             return Err(RenderOptionsError::FrameRate);
         }
-        if !whole.bytes().chain(fraction.bytes()).all(|c| c.is_ascii_digit()) {
+        if !whole
+            .bytes()
+            .chain(fraction.bytes())
+            .all(|c| c.is_ascii_digit())
+        {
             return Err(RenderOptionsError::FrameRate);
         }
         // Trimming insignificant zeros avoids rejecting e.g. 60.000... solely
         // because an otherwise reducible denominator would overflow u128.
         let fraction = fraction.trim_end_matches('0');
         let mut digits = whole.bytes().chain(fraction.bytes());
-        let mut numerator = digits.try_fold(0_u128, |value, c| {
-            value.checked_mul(10)?.checked_add(u128::from(c - b'0'))
-        }).ok_or(RenderOptionsError::FrameRate)?;
-        let scale = i32::try_from(fraction.len())
-            .map_err(|_| RenderOptionsError::FrameRate)? - exponent;
+        let mut numerator = digits
+            .try_fold(0_u128, |value, c| {
+                value.checked_mul(10)?.checked_add(u128::from(c - b'0'))
+            })
+            .ok_or(RenderOptionsError::FrameRate)?;
+        let scale =
+            i32::try_from(fraction.len()).map_err(|_| RenderOptionsError::FrameRate)? - exponent;
         let denominator = if scale >= 0 {
-            10_u128.checked_pow(scale as u32).ok_or(RenderOptionsError::FrameRate)?
+            10_u128
+                .checked_pow(scale as u32)
+                .ok_or(RenderOptionsError::FrameRate)?
         } else {
-            numerator = numerator.checked_mul(
-                10_u128.checked_pow((-scale) as u32).ok_or(RenderOptionsError::FrameRate)?
-            ).ok_or(RenderOptionsError::FrameRate)?;
+            numerator = numerator
+                .checked_mul(
+                    10_u128
+                        .checked_pow((-scale) as u32)
+                        .ok_or(RenderOptionsError::FrameRate)?,
+                )
+                .ok_or(RenderOptionsError::FrameRate)?;
             1
         };
         (numerator, denominator)
