@@ -2,7 +2,7 @@ use super::*;
 use noon_core::mapped_continuous_progress;
 use noon_runtime::TransientPresentationPainterPlacement;
 
-/// Final P1 proof for ordinary local transform/style publication.
+/// Final P1 proof for ordinary local values and detached object creation.
 ///
 /// This value owns the exclusive semantic preflight and borrows the execution
 /// session mutably until publication, so neither authority can change between
@@ -22,6 +22,12 @@ impl<'session, 'store> PreparedPublication<'session, 'store> {
                 SemanticMutation::SetProperty { .. }
                     | SemanticMutation::SetObjectTransform { .. }
                     | SemanticMutation::ReplaceStyle { .. }
+                    // A new object cannot enter the execution root without a
+                    // membership mutation, which is excluded from this proof.
+                    | SemanticMutation::AddNode {
+                        creation: noon_core::SemanticNodeCreation::Object { .. },
+                        ..
+                    }
             )
         })
     }

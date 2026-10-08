@@ -291,15 +291,20 @@ fn exact_noop_and_sub_f32_edit_have_distinct_publication_rules() {
 }
 
 #[test]
-fn late_lowering_failure_preserves_both_authorities_and_dirty_state() {
+fn detached_creation_rolls_back_with_a_late_lowering_failure() {
     let (mut store, mut session, nodes) = fixture(2);
     let context = session.publication_context();
     let frame = session.frame().clone();
+    let node_count = store.len();
+    let slot_capacity = store.slot_capacity();
     let authored = store
         .semantic_object_state_checked(nodes[0])
         .unwrap()
         .clone();
     let mut tx = translation(nodes[0], 2.0);
+    tx.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 2.0 },
+    )));
     tx.set_property(nodes[1], SemanticObjectProperty::RotationZ, f64::MAX);
     assert!(matches!(
         session.apply_semantic_transaction(&mut store, tx),
@@ -307,6 +312,8 @@ fn late_lowering_failure_preserves_both_authorities_and_dirty_state() {
     ));
     assert_eq!(session.publication_context(), context);
     assert_eq!(store.scene_revision(), context.scene_revision());
+    assert_eq!(store.len(), node_count);
+    assert_eq!(store.slot_capacity(), slot_capacity);
     assert_eq!(
         store.semantic_object_state_checked(nodes[0]).unwrap(),
         &authored
@@ -485,7 +492,7 @@ fn pending_object_is_mutated_attached_and_published_once() {
 
 #[test]
 fn detached_pending_object_publishes_no_execution_work() {
-    let (mut store, mut session, _) = rooted_family_fixture();
+    let (mut store, mut session, root) = rooted_family_fixture();
     let before = session.publication_context();
     let mut transaction = SemanticMutationTransaction::new();
     let pending = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
@@ -498,7 +505,7 @@ fn detached_pending_object_publishes_no_execution_work() {
     );
 
     let result = session
-        .apply_semantic_transaction(&mut store, transaction)
+        .apply_semantic_transaction_at_root(&mut store, root, transaction)
         .unwrap();
     let node = result.resolve(pending).unwrap();
     assert!(session.effective_semantic_object(&store, node).is_err());
@@ -509,6 +516,70 @@ fn detached_pending_object_publishes_no_execution_work() {
         StructuralPublicationStats::default()
     );
     assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
+fn detached_creation_and_local_write_preserve_unrelated_rows_and_later_admission() {
+    let (mut store, mut session, root, nodes) = rooted_slot_fixture(100_000);
+    let before = session.publication_context();
+    let mut transaction = translation(nodes[123], 4.0);
+    let pending = transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 2.0 },
+    )));
+    transaction.set_property(
+        pending,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(8.0, 0.0, 0.0),
+    );
+    let result = session
+        .apply_semantic_transaction_at_root(&mut store, root, transaction)
+        .unwrap();
+    let detached = result.resolve(pending).unwrap();
+    assert_eq!(session.frame().objects.len(), nodes.len());
+    assert_eq!(session.take_frame_changes().object_indices(), &[123]);
+    assert_eq!(session.frame().objects[123].transform.translation.x, 4.0);
+    assert_eq!(session.frame().objects[124].transform.translation.x, 0.0);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(detached)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        8.0
+    );
+    assert!(session.effective_semantic_object(&store, detached).is_err());
+    assert_eq!(
+        session.last_structural_publication_stats().entered_objects,
+        0
+    );
+    assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
+    assert_eq!(
+        session.publication_context().scene_revision(),
+        before.scene_revision().checked_next().unwrap()
+    );
+
+    let mut admit = SemanticMutationTransaction::new();
+    admit.add_member(root, detached);
+    session
+        .apply_semantic_transaction_at_root(&mut store, root, admit)
+        .unwrap();
+    assert_eq!(session.frame().objects.len(), nodes.len() + 1);
+    assert_eq!(
+        session
+            .effective_semantic_object(&store, detached)
+            .unwrap()
+            .object
+            .transform
+            .translation
+            .x,
+        8.0
+    );
+    assert_eq!(
+        session.last_structural_publication_stats().entered_objects,
+        1
+    );
 }
 
 #[test]
