@@ -20,7 +20,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 14;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 15;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -308,7 +308,7 @@ pub struct RetainedTransportObjectState {
     pub render_geometry_resource: Option<u64>,
 }
 
-/// Existing-row update for the three hot fields in dense, nonstructural frames.
+/// Existing-row update for hot fields in dense, nonstructural frames.
 /// The slot generation and object identity must match the installed row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedTransportObjectPatch {
@@ -320,6 +320,10 @@ pub struct RetainedTransportObjectPatch {
     pub style: Option<Style>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub morph: Option<f32>,
+    /// Update an already active derived render frame. Absence leaves it unchanged;
+    /// installing or removing an override requires a complete object row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_transform: Option<Transform2D>,
 }
 
 mod render_geometry_id_json {
@@ -1444,7 +1448,11 @@ impl RetainedExecutionFrameMirror {
                     patch.slot,
                 ));
             }
-            if patch.transform.is_none() && patch.style.is_none() && patch.morph.is_none() {
+            if patch.transform.is_none()
+                && patch.style.is_none()
+                && patch.morph.is_none()
+                && patch.render_transform.is_none()
+            {
                 return Err(RetainedExecutionTransportError::InvalidObjectPatch(
                     patch.slot,
                 ));
@@ -1455,6 +1463,16 @@ impl RetainedExecutionFrameMirror {
                 return Err(RetainedExecutionTransportError::ImageRenderGeometry(
                     patch.slot,
                 ));
+            }
+            if let Some(transform) = patch.render_transform {
+                validate_render_transform(patch.slot, transform)?;
+                if frame.render_transforms[index].is_none()
+                    || frame.render_geometries[index].is_none()
+                {
+                    return Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                        patch.slot,
+                    ));
+                }
             }
             patch_updates.push((index, patch));
         }
@@ -1531,6 +1549,9 @@ impl RetainedExecutionFrameMirror {
             }
             if let Some(morph) = patch.morph {
                 frame.morphs[index] = morph;
+            }
+            if let Some(transform) = patch.render_transform {
+                frame.render_transforms[index] = Some(transform);
             }
             changed.push(index);
         }
@@ -1758,16 +1779,7 @@ fn validate_object_fields(
         return Err(RetainedExecutionTransportError::InvalidZIndex(object.slot));
     }
     if let Some(transform) = object.render_transform {
-        if !transform.translation.x.is_finite()
-            || !transform.translation.y.is_finite()
-            || !transform.scale.x.is_finite()
-            || !transform.scale.y.is_finite()
-            || !transform.rotation.is_finite()
-        {
-            return Err(RetainedExecutionTransportError::InvalidRenderTransform(
-                object.slot,
-            ));
-        }
+        validate_render_transform(object.slot, transform)?;
     }
     if object
         .spatial
@@ -1815,6 +1827,23 @@ fn validate_single_camera(
         if is_camera && camera.replace(object).is_some() {
             return Err(RetainedExecutionTransportError::MultipleCamera3D);
         }
+    }
+    Ok(())
+}
+
+fn validate_render_transform(
+    slot: TransportSlotId,
+    transform: Transform2D,
+) -> Result<(), RetainedExecutionTransportError> {
+    if !transform.translation.x.is_finite()
+        || !transform.translation.y.is_finite()
+        || !transform.scale.x.is_finite()
+        || !transform.scale.y.is_finite()
+        || !transform.rotation.is_finite()
+    {
+        return Err(RetainedExecutionTransportError::InvalidRenderTransform(
+            slot,
+        ));
     }
     Ok(())
 }
@@ -2528,6 +2557,7 @@ mod tests {
                 transform: None,
                 style: None,
                 morph: Some(0.25),
+                render_transform: None,
             });
         assert_eq!(
             mirror.apply(invalid_snapshot),
@@ -2557,6 +2587,7 @@ mod tests {
             transform: Some(next.objects[0].transform),
             style: Some(next.objects[0].style),
             morph: Some(next.morphs[0]),
+            render_transform: None,
         });
         let json = serde_json::to_string(&delta).unwrap();
         let decoded = serde_json::from_str(&json).unwrap();
@@ -2574,6 +2605,103 @@ mod tests {
         let (_, changes) = mirror.apply(decoded).unwrap();
         assert_eq!(changes.object_indices(), &[0]);
         assert_eq!(mirror.frame(), Some(&next));
+    }
+
+    #[test]
+    fn render_transform_patch_preserves_geometry_and_rejects_invalid_updates_atomically() {
+        let mut frame = mixed_frame();
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE),
+        )));
+        frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+        let mut encoder = RetainedExecutionDeltaEncoder::new(82);
+        let initial = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        let slot = initial.objects[0].slot;
+        let object = initial.objects[0].object;
+        let mut mirror = test_mirror();
+        mirror.apply(initial.clone()).unwrap();
+        let installed_geometry = mirror.frame().unwrap().render_geometries[0]
+            .clone()
+            .unwrap();
+        let mut next = frame.clone();
+        next.time = 0.5;
+        next.objects[1].transform.translation = Vec2::new(3.0, 4.0);
+        next.render_transforms[0].as_mut().unwrap().translation = Vec2::new(8.0, 9.0);
+        let mut delta = encoder
+            .encode_incremental_with_context(
+                &next,
+                &FrameChanges::objects(vec![0, 1]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        delta.objects.retain(|row| row.object != object);
+        delta.object_patches.push(RetainedTransportObjectPatch {
+            slot,
+            object,
+            transform: None,
+            style: None,
+            morph: None,
+            render_transform: next.render_transforms[0],
+        });
+        // The valid full text row must also remain unapplied when a later patch
+        // is rejected. Every component uses the same finite validation as rows.
+        for component in 0..5 {
+            let mut invalid = delta.clone();
+            let transform = invalid.object_patches[0].render_transform.as_mut().unwrap();
+            match component {
+                0 => transform.translation.x = f32::NAN,
+                1 => transform.translation.y = f32::INFINITY,
+                2 => transform.scale.x = f32::NEG_INFINITY,
+                3 => transform.scale.y = f32::NAN,
+                _ => transform.rotation = f32::INFINITY,
+            }
+            assert_eq!(
+                mirror.apply(invalid),
+                Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                    slot
+                ))
+            );
+            assert_eq!(mirror.frame(), Some(&frame));
+            assert_eq!(mirror.applied_sequence(), Some(0));
+        }
+        let mut inactive = delta.clone();
+        inactive.objects.clear();
+        inactive.object_patches[0].slot = initial.objects[1].slot;
+        inactive.object_patches[0].object = initial.objects[1].object;
+        assert_eq!(
+            mirror.apply(inactive),
+            Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                initial.objects[1].slot
+            ))
+        );
+        assert_eq!(mirror.frame(), Some(&frame));
+        assert_eq!(mirror.applied_sequence(), Some(0));
+
+        let decoded = serde_json::from_slice(&serde_json::to_vec(&delta).unwrap()).unwrap();
+        let (_, changes) = mirror.apply(decoded).unwrap();
+        assert_eq!(changes.object_indices(), &[0, 1]);
+        assert_eq!(mirror.frame(), Some(&next));
+        assert!(Arc::ptr_eq(
+            &installed_geometry,
+            mirror.frame().unwrap().render_geometries[0]
+                .as_ref()
+                .unwrap()
+        ));
+        let (outcome, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::DroppedStale);
+        assert!(changes.object_indices().is_empty());
+        assert_eq!(mirror.frame(), Some(&next));
+        assert_eq!(mirror.applied_sequence(), Some(1));
     }
 
     #[test]
