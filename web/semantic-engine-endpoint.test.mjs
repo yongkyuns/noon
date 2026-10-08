@@ -38,7 +38,7 @@ function fixture(
   const continuationDriveTimes = [];
   const authoredSampleTimes = [];
   const executionWakeTimes = [];
-  const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 15, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
+  const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 16, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     sealReplay: () => {},
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
@@ -2587,7 +2587,7 @@ for (const transportMode of ["transferable", "shared"]) {
       assert.equal(deltas.length, 1, "configuration without an image change emits nothing");
       // Supply exact output from the mocked shared session after admission. JS
       // must forward this verbatim; it must not invent IDs, rows, or a new clock.
-      pending = { channel: "noon.execution.retained", protocol_version: 15,
+      pending = { channel: "noon.execution.retained", protocol_version: 16,
         session: 7, sequence: sequence++, snapshot: false, time: 0,
         objects: [], selection_overlay: overlay };
       const selected = await request(f.control.port2, "browser_pointer_input", 2, { kind: "release" });
@@ -2597,7 +2597,7 @@ for (const transportMode of ["transferable", "shared"]) {
       assert.deepEqual(deltas[1].objects, []);
       assert.equal(selected.time, 0);
       assert.equal(selected.playing, false);
-      pending = { channel: "noon.execution.retained", protocol_version: 15,
+      pending = { channel: "noon.execution.retained", protocol_version: 16,
         session: 7, sequence: sequence++, snapshot: false, time: 0, objects: [] };
       const cleared = await request(f.control.port2, "pointer_fill_selection", 3, { maxMovement: null });
       assert.equal(cleared.type, "pointer_fill_selection");

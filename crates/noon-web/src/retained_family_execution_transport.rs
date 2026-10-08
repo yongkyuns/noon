@@ -993,7 +993,7 @@ mod tests {
                 transform: None,
                 style: Some(row.style),
                 morph: None,
-                render_transform: None,
+                render_translation: None,
             });
         assert_eq!(
             delta.validate(),

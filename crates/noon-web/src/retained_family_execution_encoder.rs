@@ -239,29 +239,38 @@ impl RetainedFamilyExecutionDeltaEncoder {
                     && previous.presence == row.presence
                     && previous.reveal == row.reveal
                     && previous.render_geometry == row.render_geometry
-                    && previous.render_transform.is_some() == row.render_transform.is_some()
+                    && match (previous.render_transform, row.render_transform) {
+                        (None, None) => true,
+                        (Some(previous), Some(current)) => {
+                            previous.scale == current.scale && previous.rotation == current.rotation
+                        }
+                        _ => false,
+                    }
                     && previous.render_geometry_resource == row.render_geometry_resource
             });
             let patch = previous.and_then(|previous| {
                 let transform = (previous.transform != row.transform).then_some(row.transform);
                 let style = (previous.style != row.style).then_some(row.style);
                 let morph = (previous.morph != row.morph).then_some(row.morph);
-                let render_transform = (previous.render_transform != row.render_transform)
-                    .then_some(row.render_transform)
-                    .flatten();
+                let render_translation = previous
+                    .render_transform
+                    .zip(row.render_transform)
+                    .and_then(|(previous, current)| {
+                        (previous.translation != current.translation).then_some(current.translation)
+                    });
                 (eligible
                     && stable
                     && (transform.is_some()
                         || style.is_some()
                         || morph.is_some()
-                        || render_transform.is_some()))
+                        || render_translation.is_some()))
                 .then_some(crate::RetainedTransportObjectPatch {
                     slot: row.slot,
                     object: row.object,
                     transform,
                     style,
                     morph,
-                    render_transform,
+                    render_translation,
                 })
             });
             if let Some(patch) = patch {
@@ -1097,7 +1106,7 @@ mod tests {
         assert!(serde_json::to_vec(&compact).unwrap().len() < full_bytes);
         for patch in &compact.retained.object_patches {
             assert_eq!(patch.transform, None);
-            assert_eq!(patch.render_transform.is_some(), render_override);
+            assert_eq!(patch.render_translation.is_some(), render_override);
         }
         full_mirror.apply(full.retained).unwrap();
         let decoded =
@@ -1134,7 +1143,7 @@ mod tests {
             patch.transform.is_none()
                 && patch.style.is_none()
                 && patch.morph.is_none()
-                && patch.render_transform.is_some()
+                && patch.render_translation.is_some()
         }));
         full_mirror.apply(full).unwrap();
         compact_mirror.apply(compact.retained).unwrap();
@@ -1147,21 +1156,25 @@ mod tests {
                 .unwrap()
         ));
 
-        // Entry, exit and changed geometry keep complete rows. Other active
+        // Entry, exit, changed geometry and linear frames keep complete rows. Other active
         // overrides still compact and retain their immutable geometry.
-        for step in 0..3 {
+        for step in 0..5 {
             frame.time += 0.1;
             frame.morphs.iter_mut().for_each(|morph| *morph += 0.1);
             if step == 0 {
                 frame.render_geometries[0] = None;
                 frame.render_transforms[0] = None;
-            } else {
+            } else if step < 3 {
                 frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
                     noon_core::VectorPath::new()
                         .move_to(noon_core::Vec2::ZERO)
                         .line_to(noon_core::Vec2::new(2.0 + step as f32, 3.0)),
                 )));
                 frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+            } else if step == 3 {
+                frame.render_transforms[0].as_mut().unwrap().scale = noon_core::Vec2::new(2.0, 3.0);
+            } else {
+                frame.render_transforms[0].as_mut().unwrap().rotation = 0.5;
             }
             let full = base
                 .encode_incremental_with_context(
