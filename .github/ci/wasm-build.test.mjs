@@ -263,7 +263,9 @@ test("offline Cargo validation rejects an incomplete local dependency lock witho
     const result = spawnSync("cargo", args, {
       cwd: checkout,
       encoding: "utf8",
-      env: { ...process.env, CARGO_NET_OFFLINE: "true" },
+      // This metadata-only fixture runs before CI installs compilation caches.
+      env: { ...process.env, CARGO_NET_OFFLINE: "true",
+        RUSTC_WRAPPER: "", RUSTC_WORKSPACE_WRAPPER: "" },
     });
     assert.equal(result.status, 0, "cargo " + args.join(" ") + " failed: " + (result.stderr || result.error));
     return result.stdout;
