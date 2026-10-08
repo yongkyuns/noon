@@ -77,6 +77,16 @@
       "dimensions": ["batching", "dirty-upload", "many-analytic-objects"]
     },
     {
+      "id": "showcase-field-in-motion-600",
+      "source": "./python/examples/showcase_dynamic_scene.py",
+      "minimumObjects": 600,
+      "sourceContinuation": true,
+      "tier": "interactive60",
+      "classification": "representative",
+      "domains": ["P2", "P3", "P4", "P7"],
+      "dimensions": ["600-animated-shapes", "24-animated-labels", "mixed-geometry", "morph", "lifecycle", "frame-gap-distribution"]
+    },
+    {
       "id": "painter-order-overlap",
       "source": "./python/examples/painter_order_overlap.py",
       "tier": "heavy60",
@@ -209,12 +219,12 @@
   ],
   "domainCoverage": {
     "P1": ["getting-started", "timed-composition", "tutorial-value-tracker"],
-    "P2": ["getting-started", "analytic-field-180", "painter-order-overlap", "retained-dynamic-stress", "spatial-camera-only", "spatial-moving-mesh-600-static", "spatial-dense-surface-family", "spatial-moving-point-light", "spatial-mixed-depth-text-hud"],
-    "P3": ["analytic-field-180", "painter-order-overlap", "spatial-camera-only", "spatial-moving-mesh-600-static", "spatial-dense-surface-family", "spatial-moving-point-light", "spatial-mixed-depth-text-hud"],
-    "P4": ["create-shapes", "filled-path-transform", "retained-dynamic-stress"],
+    "P2": ["getting-started", "analytic-field-180", "showcase-field-in-motion-600", "painter-order-overlap", "retained-dynamic-stress", "spatial-camera-only", "spatial-moving-mesh-600-static", "spatial-dense-surface-family", "spatial-moving-point-light", "spatial-mixed-depth-text-hud"],
+    "P3": ["analytic-field-180", "showcase-field-in-motion-600", "painter-order-overlap", "spatial-camera-only", "spatial-moving-mesh-600-static", "spatial-dense-surface-family", "spatial-moving-point-light", "spatial-mixed-depth-text-hud"],
+    "P4": ["create-shapes", "filled-path-transform", "showcase-field-in-motion-600", "retained-dynamic-stress"],
     "P5": ["tutorial-value-tracker", "host-updater-follow"],
     "P6": ["getting-started", "authoring-edit-rerun-seek"],
-    "P7": ["analytic-field-180", "create-shapes", "host-updater-follow", "authoring-edit-rerun-seek", "retained-dynamic-stress", "spatial-camera-only", "spatial-moving-mesh-600-static", "spatial-dense-surface-family", "spatial-moving-point-light", "spatial-mixed-depth-text-hud"]
+    "P7": ["analytic-field-180", "showcase-field-in-motion-600", "create-shapes", "host-updater-follow", "authoring-edit-rerun-seek", "retained-dynamic-stress", "spatial-camera-only", "spatial-moving-mesh-600-static", "spatial-dense-surface-family", "spatial-moving-point-light", "spatial-mixed-depth-text-hud"]
   },
   "futureCoverage": [
     {

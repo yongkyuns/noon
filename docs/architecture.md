@@ -1466,8 +1466,13 @@ Exact `FollowingGraphCamera` source/state/raster qualification was merged in
 [#1882](https://github.com/yongkyuns/noon/pull/1882). Its callback replay remains
 explicitly denied. [#1900](https://github.com/yongkyuns/noon/pull/1900)
 qualifies the exact `ThreeDLightSourcePosition` source, effective light/camera
-state and raster on both WebGPU and WebGL. The other five required camera cases
-remain unresolved under #1879; #254 retains the per-case evidence and dispositions.
+state and raster on both WebGPU and WebGL. The untouched static
+`ThreeDSurfacePlot` case is qualified for source, camera state, raster, seek and
+restart on both backends; this does not qualify animated surfaces or general
+transparency. The other four required camera cases remain unresolved under
+#1879; #254 retains the per-case evidence and dispositions. Exact camera-motion
+handoff and completion observations retain timing differences even when raster
+comparisons pass.
 Straight-Line World-stroke and axes-label qualification can proceed beside
 physical-device pacing attribution. Independent
 geometry/vector-space batches need not wait for general transparency or all
