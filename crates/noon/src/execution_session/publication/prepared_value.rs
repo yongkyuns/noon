@@ -15,20 +15,27 @@ pub(super) struct PreparedPublication<'session, 'store> {
 }
 
 impl<'session, 'store> PreparedPublication<'session, 'store> {
-    pub(super) fn supports(prepared: &PreparedSemanticMutationTransaction<'_>) -> bool {
-        prepared.mutations().iter().all(|mutation| {
-            matches!(
-                mutation,
-                SemanticMutation::SetProperty { .. }
-                    | SemanticMutation::SetObjectTransform { .. }
-                    | SemanticMutation::ReplaceStyle { .. }
-                    // A new object cannot enter the execution root without a
-                    // membership mutation, which is excluded from this proof.
-                    | SemanticMutation::AddNode {
-                        creation: noon_core::SemanticNodeCreation::Object { .. },
-                        ..
-                    }
-            )
+    pub(super) fn supports(
+        session: &ExecutionSession,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+    ) -> bool {
+        prepared.mutations().iter().all(|mutation| match mutation {
+            SemanticMutation::SetProperty { object, .. }
+            | SemanticMutation::SetObjectTransform { object, .. }
+            | SemanticMutation::ReplaceStyle { object, .. } => {
+                // Recording attached writes needs the ordinary inverse history.
+                // Never-lowered and transaction-local targets have no execution row.
+                !session.runtime.replay_scope_active()
+                    || object.existing().is_none_or(|node| {
+                        session.execution_index.execution_object_id(node).is_none()
+                    })
+            }
+            // Membership changes are excluded, so a new object stays detached.
+            SemanticMutation::AddNode {
+                creation: noon_core::SemanticNodeCreation::Object { .. },
+                ..
+            } => true,
+            _ => false,
         })
     }
 

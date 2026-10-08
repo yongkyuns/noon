@@ -80,7 +80,9 @@ impl SceneInstance {
         scene_revision: SceneRevision,
     ) -> Result<Option<PreparedAuthoredValuePublication>, AuthoredPublicationError> {
         self.require_replay_writable()?;
-        if self.replay_scope_active() {
+        // Detached semantic edits emit no execution patches and need no inverse.
+        // All actual execution writes still use the ordinary recording path.
+        if self.replay_scope_active() && !transaction.mutations().is_empty() {
             return Ok(None);
         }
         if transaction.mutations().iter().any(|patch| {

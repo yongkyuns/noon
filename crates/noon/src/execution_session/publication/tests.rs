@@ -583,6 +583,117 @@ fn detached_creation_and_local_write_preserve_unrelated_rows_and_later_admission
 }
 
 #[test]
+fn recording_detached_targets_preserves_history_animation_and_sealed_admission() {
+    let (mut store, mut session, root, nodes) = rooted_slot_fixture(600);
+    session.begin_replay_retention(Default::default()).unwrap();
+    let before = session.publication_context();
+    let history = session.replay_stats();
+    let mut create = SemanticMutationTransaction::new();
+    let pending = create.create_node(SemanticNodeCreation::object(
+        store
+            .semantic_object_state_checked(nodes[0])
+            .unwrap()
+            .clone(),
+    ));
+    create.set_property(
+        pending,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(4.0, 0.0, 0.0),
+    );
+    assert!(session
+        .runtime
+        .prepare_authored_value_publication(
+            &ExecutionMutationTransaction::new(),
+            before,
+            before.scene_revision().checked_next().unwrap(),
+        )
+        .unwrap()
+        .is_some());
+    let result = session
+        .apply_semantic_transaction_at_root(&mut store, root, create)
+        .unwrap();
+    let detached = result.resolve(pending).unwrap();
+    let edit = translation(detached, 8.0);
+    session
+        .apply_semantic_transaction_at_root(&mut store, root, edit)
+        .unwrap();
+    assert_eq!(session.replay_stats(), history);
+    assert_eq!(session.frame().objects.len(), 600);
+    assert!(session.take_frame_changes().is_empty());
+    assert_eq!(
+        session.publication_context().execution_revision(),
+        before.execution_revision()
+    );
+
+    let mut declare = SemanticMutationTransaction::new();
+    let pending_animation = declare.create_transform_animation(
+        nodes[0],
+        detached,
+        AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    );
+    let result = session
+        .apply_semantic_transaction_at_root(&mut store, root, declare)
+        .unwrap();
+    let animation = result.resolve(pending_animation).unwrap();
+    let segment = session
+        .activate_animation_segment(&store, animation, AnimationOptions::new())
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 4.0);
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    session.seal_replay().unwrap();
+    session.seek(0.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 0.0);
+    session.seek(1.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 8.0);
+
+    let sealed = session.publication_context();
+    let state = store
+        .semantic_object_state_checked(detached)
+        .unwrap()
+        .clone();
+    let capacity = store.slot_capacity();
+    assert!(session
+        .apply_semantic_transaction_at_root(&mut store, root, translation(detached, 12.0))
+        .is_err());
+    assert_eq!(session.publication_context(), sealed);
+    assert_eq!(
+        store.semantic_object_state_checked(detached).unwrap(),
+        &state
+    );
+    assert_eq!(store.slot_capacity(), capacity);
+}
+
+#[test]
+fn recording_mixed_attached_and_detached_writes_retains_attached_history() {
+    let (mut store, mut session, root, nodes) = rooted_slot_fixture(600);
+    session.begin_replay_retention(Default::default()).unwrap();
+    session.advance_to(1.0).unwrap();
+    let mut transaction = translation(nodes[0], 4.0);
+    transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 2.0 },
+    )));
+    session
+        .apply_semantic_transaction_at_root(&mut store, root, transaction)
+        .unwrap();
+    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+    assert!(session.replay_stats().revisions_retained > 0);
+    session.advance_to(2.0).unwrap();
+    session.seal_replay().unwrap();
+    session.seek(0.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 0.0);
+    session.seek(1.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 4.0);
+    session.seek(2.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 4.0);
+}
+
+#[test]
 fn aliases_publish_only_net_membership_and_last_parent_retires_the_object() {
     let mut store = SemanticStore::new();
     let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
