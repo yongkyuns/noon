@@ -1,0 +1,51 @@
+name: Physical GPU runner prerequisite (not qualification)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/perf-physical-readiness.yml'
+      - 'scripts/perf-physical-readiness.mjs'
+      - 'scripts/perf-physical-readiness.test.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  protocol:
+    name: Readiness protocol tests (hosted, no GPU verdict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - run: node --test scripts/perf-physical-readiness.test.mjs
+      - run: node --check scripts/perf-physical-readiness.mjs
+
+  physical:
+    name: Physical Mac GPU prerequisite, not product performance
+    needs: protocol
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    runs-on: [self-hosted, macOS, noon-physical]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - name: Install original pinned Chromium browser
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+      - name: Probe real WebGL2 and AC-powered hardware
+        run: node scripts/perf-physical-readiness.mjs perf-artifacts/physical-readiness/report.json
+      - name: Retain prerequisite evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: physical-gpu-readiness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: perf-artifacts/physical-readiness
+          if-no-files-found: warn
+          retention-days: 30
