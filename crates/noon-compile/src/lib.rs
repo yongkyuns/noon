@@ -1073,6 +1073,9 @@ impl std::error::Error for CompileError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
+    InvalidGlowUpdate {
+        object: ObjectId,
+    },
     ReplaySealed,
     TooManyObjects(usize),
     TooManyFamilyAnimations,
@@ -1172,6 +1175,9 @@ impl std::fmt::Display for CompilePatchError {
                 "track {} overlaps track {} on its completion channel",
                 track.get(),
                 other.get()
+            ),
+            Self::InvalidGlowUpdate { object } => write!(
+                formatter, "glow value update must preserve the attachment identity, source mode and radius units for object {}", object.get()
             ),
             Self::InvalidObjectState { object, field } => write!(
                 formatter,
@@ -1294,6 +1300,9 @@ impl CompiledScene {
                         | Property::WorldTransform
                         | Property::CameraProfile
                         | Property::ZIndex
+                        | Property::GlowColor
+                        | Property::GlowRadius
+                        | Property::GlowIntensity
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -1301,6 +1310,11 @@ impl CompiledScene {
             let object_index = self
                 .object_index(track.object)
                 .ok_or(CompilePatchError::UnknownObject(track.object))?;
+            validate_glow_track_attachment(
+                track,
+                self.objects[object_index as usize].glow.as_deref(),
+            )
+            .map_err(CompilePatchError::InvalidTrack)?;
             candidates
                 .entry(CompiledChannelKey::new(object_index, track.property))
                 .or_default()
@@ -1812,6 +1826,11 @@ impl CompiledScene {
             ExecutionPatch::SetStyle { object, style } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_style != *style),
+            ExecutionPatch::SetGlow { object, glow } => {
+                self.object_index(*object).is_none_or(|index| {
+                    self.objects[index as usize].glow.as_deref() != Some(glow.as_ref())
+                })
+            }
             ExecutionPatch::ReplaceTrack(track) => self.track(track.id).is_none_or(|existing| {
                 self.object_index(track.object) != Some(existing.object_index)
                     || existing.property != track.property
@@ -2148,6 +2167,17 @@ impl CompiledScene {
                 validate_style(*object, *style).map_err(map_object_state_error)?;
                 self.objects[index as usize].base_style = *style;
             }
+            ExecutionPatch::SetGlow { object, glow } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                execution_patch::validate_glow_replacement(
+                    *object,
+                    self.objects[index as usize].glow.as_deref(),
+                    glow,
+                )?;
+                self.objects[index as usize].glow = Some(Arc::clone(glow));
+            }
             ExecutionPatch::SetGraphDependencies {
                 owner,
                 dependencies,
@@ -2321,6 +2351,9 @@ impl CompiledScene {
                             | Property::WorldTransform
                             | Property::CameraProfile
                             | Property::ZIndex
+                            | Property::GlowColor
+                            | Property::GlowRadius
+                            | Property::GlowIntensity
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));

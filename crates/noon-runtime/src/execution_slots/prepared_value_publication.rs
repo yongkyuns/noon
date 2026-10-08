@@ -20,6 +20,12 @@ enum PreparedAuthoredValueWrite {
         compiled_spatial: Option<Box<noon_compile::CompiledSpatialState>>,
         changes_execution: bool,
     },
+    Glow {
+        object_index: usize,
+        glow: std::sync::Arc<noon_compile::CompiledGlow>,
+        effective: std::sync::Arc<noon_compile::CompiledGlow>,
+        changes_execution: bool,
+    },
     Style {
         object_index: usize,
         style: Style,
@@ -32,7 +38,8 @@ impl PreparedAuthoredValueWrite {
         match self {
             Self::Transform { object_index, .. }
             | Self::SemanticTransform { object_index, .. }
-            | Self::Style { object_index, .. } => *object_index,
+            | Self::Style { object_index, .. }
+            | Self::Glow { object_index, .. } => *object_index,
         }
     }
 
@@ -46,13 +53,16 @@ impl PreparedAuthoredValueWrite {
             }
             | Self::SemanticTransform {
                 changes_execution, ..
+            }
+            | Self::Glow {
+                changes_execution, ..
             } => *changes_execution,
         }
     }
 }
 
 /// Runtime proof for one already-semantic-prepared batch containing only local
-/// transform, spatial-routing, or style writes.
+/// transform, spatial-routing, style, or existing glow parameter writes.
 ///
 /// Construction validates the exact Runtime identity/context, complete compiled
 /// transaction, object slots, and revision capacity. The execution-session owner
@@ -71,8 +81,8 @@ pub struct PreparedAuthoredValuePublication {
 impl SceneInstance {
     /// Prepare the narrow authored-value publication contract for local rows.
     ///
-    /// `Ok(None)` means the transaction contains something other than transform/style
-    /// base writes and must stay on the existing general publication path.
+    /// `Ok(None)` means the transaction contains more than supported local base
+    /// writes and must stay on the existing general publication path.
     pub fn prepare_authored_value_publication(
         &self,
         transaction: &ExecutionMutationTransaction,
@@ -90,6 +100,7 @@ impl SceneInstance {
                     | ExecutionPatch::SetSemanticTransform { .. }
                     | ExecutionPatch::SetSpatialState { .. }
                     | ExecutionPatch::SetStyle { .. }
+                    | ExecutionPatch::SetGlow { .. }
             )
         }) {
             return Ok(None);
@@ -121,6 +132,7 @@ impl SceneInstance {
                 ExecutionPatch::SetSemanticTransform { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetSpatialState { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetStyle { object, .. } => (*object, 1_u8),
+                ExecutionPatch::SetGlow { object, .. } => (*object, 3_u8),
                 _ => return Ok(None),
             };
             let object_index = self
@@ -174,6 +186,12 @@ impl SceneInstance {
                     spatial: spatial.clone().map(Box::new),
                     changes_execution,
                 },
+                (3, ExecutionPatch::SetGlow { glow, .. }) => PreparedAuthoredValueWrite::Glow {
+                    object_index,
+                    glow: std::sync::Arc::clone(glow),
+                    effective: self.prepare_effective_glow_value(object_index, glow),
+                    changes_execution,
+                },
                 _ => unreachable!("ordinary value publication classified above"),
             });
         }
@@ -222,6 +240,20 @@ impl SceneInstance {
                 continue;
             }
             let object_index = write.object_index();
+            // Glow has no geometry/layout dependencies. Its active channel values
+            // and any Arc copy-on-write were already prepared before semantic commit.
+            if let PreparedAuthoredValueWrite::Glow {
+                glow, effective, ..
+            } = write
+            {
+                self.compiled
+                    .commit_prepared_glow_value(object_index as u32, glow);
+                if self.frame.objects[object_index].glow.as_deref() != Some(effective.as_ref()) {
+                    self.frame.objects[object_index].glow = Some(effective);
+                    self.changes.insert(object_index);
+                }
+                continue;
+            }
             let before = FrameRowState::from_frame(&self.frame, object_index);
             if let Some(anchor_family) = self.frame.objects[object_index]
                 .spatial
@@ -233,6 +265,9 @@ impl SceneInstance {
                 }
             }
             match write {
+                PreparedAuthoredValueWrite::Glow { .. } => {
+                    unreachable!("glow values were committed without spatial invalidation above")
+                }
                 PreparedAuthoredValueWrite::Transform {
                     transform,
                     object_index,
@@ -325,5 +360,35 @@ impl SceneInstance {
             prepared.frame_epoch,
         );
         &self.frame
+    }
+}
+
+impl SceneInstance {
+    fn prepare_effective_glow_value(
+        &self,
+        object_index: usize,
+        base: &std::sync::Arc<noon_compile::CompiledGlow>,
+    ) -> std::sync::Arc<noon_compile::CompiledGlow> {
+        let mut effective = Some(std::sync::Arc::clone(base));
+        for property in [
+            Property::GlowColor,
+            Property::GlowRadius,
+            Property::GlowIntensity,
+        ] {
+            let channel = noon_compile::CompiledChannelKey::new(object_index as u32, property);
+            let Some(mut group) = self.groups.get(&channel).cloned() else {
+                continue;
+            };
+            let tracks = self.compiled.channel_tracks(channel);
+            group.cursor = crate::upper_bound_start(tracks, self.frame.time, &mut 0);
+            crate::apply_glow_channel(
+                Some(base.as_ref()),
+                &mut effective,
+                tracks,
+                &group,
+                self.frame.time,
+            );
+        }
+        effective.expect("existing generation validated before preparation")
     }
 }

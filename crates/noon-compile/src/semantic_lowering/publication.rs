@@ -460,21 +460,21 @@ fn validate_mutations(
     prepared: Option<&PreparedSemanticMutationTransaction<'_>>,
 ) -> Result<(), SemanticPublicationLoweringError> {
     for (position, mutation) in mutations.iter().enumerate() {
-        // Do not publish an accepted-but-invisible appearance into a running
-        // scene. This explicit declaration-only gate is removed by #1897 M1.
+        // Existing value edits use the prepared local lane. Attachment topology
+        // still requires coherent lifecycle/worker publication before admission.
         if matches!(
             mutation,
-            SemanticMutation::UpdateEffect { .. }
-                | SemanticMutation::AddNode {
-                    creation: noon_core::SemanticNodeCreation::Effect { .. },
-                    ..
-                }
+            SemanticMutation::AddNode {
+                creation: noon_core::SemanticNodeCreation::Effect { .. },
+                ..
+            }
         ) {
             return Err(SemanticPublicationLoweringError::UnsupportedMutation { index: position });
         }
         let ordinary = matches!(
             mutation,
             SemanticMutation::SetProperty { .. }
+                | SemanticMutation::UpdateEffect { .. }
                 | SemanticMutation::SetObjectTransform { .. }
                 | SemanticMutation::SetSpatialCompositionDomain { .. }
                 | SemanticMutation::SetCameraProfile { .. }
@@ -1114,6 +1114,18 @@ fn lower_prepared_entry(
     let semantic_id = prepared
         .planned_node_id(object)
         .ok_or(SemanticPublicationLoweringError::PlannedObjectIdUnavailable { object })?;
+    // New effect enrollment/removal is not part of the local value contract.
+    // A detached owner with attachments must never enter with the column dropped.
+    if object.existing().is_some_and(|owner| {
+        prepared
+            .store()
+            .node(owner)
+            .is_some_and(|node| !node.effect_ids().is_empty())
+    }) {
+        return Err(SemanticPublicationLoweringError::Value(
+            SemanticLoweringError::UnsupportedGlowProfile { owner: semantic_id },
+        ));
+    }
     if matches!(
         state.role(),
         noon_core::SemanticObjectRole::Camera2D | noon_core::SemanticObjectRole::Camera3D
@@ -1253,7 +1265,7 @@ fn lower_semantic_publication(
                     domains.entry(object).or_default().style = true;
                 }
             }
-            SemanticMutation::SetBarMetadata { .. } => {}
+            SemanticMutation::SetBarMetadata { .. } | SemanticMutation::UpdateEffect { .. } => {}
             SemanticMutation::AddMember { .. }
             | SemanticMutation::RemoveMember { .. }
             | SemanticMutation::ReorderMember { .. }
@@ -1368,6 +1380,24 @@ fn lower_semantic_publication(
                 style: lower_semantic_style(node, &state)?,
             });
         }
+    }
+    // Attachments are independent semantic nodes, so their changed definitions
+    // are not object-state writes. Visit only the prepared effect overlay.
+    for (attachment, owner, definition) in prepared.effect_updates() {
+        if !reachability.is_reachable(owner) || prepared.node_is_removed(owner) {
+            continue;
+        }
+        let Some(object) = index.execution_object_id(owner) else {
+            continue;
+        };
+        let noon_core::EffectDefinition::Glow(definition) = definition;
+        mutations.push(ExecutionPatch::SetGlow {
+            object,
+            glow: std::sync::Arc::new(crate::CompiledGlow {
+                attachment,
+                definition,
+            }),
+        });
     }
     Ok((
         ExecutionMutationTransaction::from_mutations(mutations),

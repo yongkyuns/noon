@@ -611,6 +611,31 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             })
     }
 
+    /// Final changed definitions of existing attachments in this prepared batch.
+    /// Reads only the sparse preflight overlay, never unrelated objects/effects.
+    /// New attachments and retired identities are not value updates.
+    pub fn effect_updates(
+        &self,
+    ) -> impl Iterator<Item = (SemanticNodeId, SemanticNodeId, crate::EffectDefinition)> + '_ {
+        self.preflight
+            .staged_effects
+            .iter()
+            .filter_map(|(&effect, &definition)| {
+                if self.preflight.removed_existing.contains(&effect) {
+                    return None;
+                }
+                let original = self
+                    .store
+                    .semantic_effect_state(effect)
+                    .expect("prepared existing effect update retains its validated source");
+                (definition != original.definition()).then_some((
+                    effect,
+                    original.owner(),
+                    definition,
+                ))
+            })
+    }
+
     /// Read the final staged authored object state without publishing the batch.
     pub fn object_state(
         &self,

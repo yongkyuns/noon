@@ -217,3 +217,167 @@ fn animated_glow_publication_pixels() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires raster adapter; prepared existing-value publication, not public Scene activation"]
+fn live_glow_value_publication_pixels() {
+    use noon_compile::CompiledGlow;
+    use std::sync::Arc;
+    let (device, queue) = device();
+    for (rectangle, offscreen, transparent) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, true),
+        (false, false, true),
+    ] {
+        let original = Glow::new(
+            GlowUpdate::default()
+                .radius(Pixels(SIGMA))
+                .color(Color::rgba(0.95, 0.35, 0.8, 0.8))
+                .intensity(2.4)
+                .source(if transparent {
+                    GlowSource::Silhouette
+                } else {
+                    GlowSource::Painted
+                }),
+        )
+        .unwrap();
+        let mut runtime = semantic_runtime(&frame(rectangle, offscreen, transparent), original);
+        runtime
+            .apply_execution_patch(&ExecutionPatch::RemoveTrack(TrackId::new(1)))
+            .unwrap();
+        let owner = runtime.frame().objects[1].id;
+        let attachment = runtime.frame().objects[1].glow.as_ref().unwrap().attachment;
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        renderer.set_viewport(&device, &queue, VIEW[0], VIEW[1]);
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
+        );
+        let mut preparer = FramePreparer::new();
+        let output = target(&device, VIEW);
+        let view = output.create_view(&Default::default());
+        let request = PublishedAnalyticGlowRequest {
+            object_index: 1,
+            texture_budget_bytes: 1_000_000,
+        };
+        let definitions = [
+            original,
+            GlowUpdate::default()
+                .intensity(0.8)
+                .apply_to(original)
+                .unwrap(),
+            GlowUpdate::default()
+                .color(Color::rgba(0.2, 0.7, 0.9, 0.75))
+                .radius(Pixels(4.75))
+                .apply_to(original)
+                .unwrap(),
+            GlowUpdate::default()
+                .intensity(0.0)
+                .apply_to(original)
+                .unwrap(),
+            original,
+        ];
+        let mut first = None;
+        for (step, &definition) in definitions.iter().enumerate() {
+            // Staging and dropping a valid value proof never publishes a frame.
+            let old = runtime.frame().clone();
+            let context = runtime.publication_context();
+            let transaction =
+                ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetGlow {
+                    object: owner,
+                    glow: Arc::new(CompiledGlow {
+                        attachment,
+                        definition,
+                    }),
+                }]);
+            let prepare = |runtime: &SceneInstance| {
+                runtime
+                    .prepare_authored_value_publication(
+                        &transaction,
+                        context,
+                        context.scene_revision().checked_next().unwrap(),
+                    )
+                    .unwrap()
+                    .unwrap()
+            };
+            drop(prepare(&runtime));
+            assert_eq!(runtime.frame(), &old);
+            let proof = prepare(&runtime);
+            runtime.commit_prepared_authored_value_publication(proof);
+            let publication = runtime.take_renderer_publication();
+            assert_eq!(
+                publication.frame().objects[1]
+                    .glow
+                    .as_ref()
+                    .unwrap()
+                    .definition,
+                definition
+            );
+            let prepared = preparer.prepare_incremental(publication.frame(), publication.changes());
+            renderer.upload(&device, &queue, &prepared);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let stats = renderer
+                .prepare_published_analytic_glow(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    &prepared,
+                    &publication,
+                    request,
+                )
+                .unwrap();
+            renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::TRANSPARENT);
+            queue.submit([encoder.finish()]);
+            let pixels = readback(&device, &queue, &output);
+            let reference = expected(&device, &queue, publication.frame(), definition);
+            let error = pixels
+                .iter()
+                .zip(&reference)
+                .map(|(&a, &b)| (i32::from(a) - i32::from(b)).abs())
+                .max()
+                .unwrap();
+            assert!(
+                error <= 2,
+                "live existing-value publication pixel mismatch: {error}"
+            );
+            let ordinary = render_plain(&device, &queue, publication.frame(), VIEW);
+            if definition.is_neutral() {
+                assert_eq!(
+                    pixels, ordinary,
+                    "live neutral restores exact ordinary output"
+                );
+            } else {
+                assert!(
+                    pixels
+                        .iter()
+                        .zip(&ordinary)
+                        .any(|(&a, &b)| (i32::from(a) - i32::from(b)).abs() > 2),
+                    "live glow cannot disappear"
+                );
+            }
+            if step == 1 {
+                assert_eq!(stats.source_passes, 0);
+                assert_eq!(stats.source_texture_allocations, 0);
+                assert_eq!(stats.filter.texture_allocations, 0);
+                assert_eq!(stats.filter.kernel_builds, 0);
+                assert_eq!(stats.filter.pipeline_compiles, 0);
+                assert_eq!(stats.filter.bytes_uploaded, 32);
+                assert_eq!(stats.filter.blur_passes, 0);
+                assert_eq!(stats.filter.composite_passes, 1);
+            }
+            if step == 0 {
+                first = Some(pixels.clone());
+            }
+            if step == 4 {
+                assert_eq!(
+                    Some(&pixels),
+                    first.as_ref(),
+                    "restoring live base reproduces pixels"
+                );
+            }
+            eprintln!("live rectangle={rectangle} offscreen={offscreen} silhouette={transparent} step={step} max_byte_error={error}");
+        }
+    }
+}

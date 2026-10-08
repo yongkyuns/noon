@@ -2,6 +2,37 @@ use super::*;
 use crate::Scene;
 
 #[test]
+fn cross_lines_preserve_two_leaf_geometry_and_target_bounds() {
+    let bounds = Bounds2D64 {
+        min_x: -1.0,
+        min_y: 1.0,
+        max_x: 3.0,
+        max_y: 3.0,
+    };
+    let [descending, ascending] = ManimGeometryOptions::cross_lines(Some(bounds), 1.5).unwrap();
+    assert_eq!(
+        descending.geometry,
+        GeometryRef::line(Vec2::new(-2.0, 3.5), Vec2::new(4.0, 0.5))
+    );
+    assert_eq!(
+        ascending.geometry,
+        GeometryRef::line(Vec2::new(4.0, 3.5), Vec2::new(-2.0, 0.5))
+    );
+
+    let [default_descending, default_ascending] =
+        ManimGeometryOptions::cross_lines(None, 1.0).unwrap();
+    assert_eq!(
+        default_descending.geometry,
+        GeometryRef::line(Vec2::new(-1.0, 1.0), Vec2::new(1.0, -1.0))
+    );
+    assert_eq!(
+        default_ascending.geometry,
+        GeometryRef::line(Vec2::new(1.0, 1.0), Vec2::new(-1.0, -1.0))
+    );
+    assert!(ManimGeometryOptions::cross_lines(None, f64::NAN).is_err());
+}
+
+#[test]
 fn aliases_and_copies_share_the_arena_but_only_aliases_share_state() {
     let mut scene = Scene::new();
     let mut circle = scene.circle(2.0).unwrap();

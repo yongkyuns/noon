@@ -71,6 +71,13 @@ pub enum ExecutionPatch {
         object: ObjectId,
         style: Style,
     },
+    /// Replace the authored parameter base of one existing attachment.
+    /// Attachment generation, radius units and source mode must be unchanged;
+    /// structural attachment edits are not ordinary value publication.
+    SetGlow {
+        object: ObjectId,
+        glow: std::sync::Arc<crate::CompiledGlow>,
+    },
     /// Replace one graph root's complete endpoint dependency declaration.
     /// Empty dependencies retire that root without relocating unrelated slots.
     SetGraphDependencies {
@@ -182,4 +189,35 @@ impl CompiledScene {
     pub fn commit_prepared_style_value(&mut self, object_index: u32, style: Style) {
         self.objects[object_index as usize].base_style = style;
     }
+}
+
+impl CompiledScene {
+    /// Commit an already-preflighted existing attachment value on one stable row.
+    #[doc(hidden)]
+    pub fn commit_prepared_glow_value(
+        &mut self,
+        object_index: u32,
+        glow: std::sync::Arc<crate::CompiledGlow>,
+    ) {
+        self.objects[object_index as usize].glow = Some(glow);
+    }
+}
+
+/// Value updates must not rebind compiled track endpoints to another generation
+/// or silently reinterpret radius/source channels. Definition fields are validated
+/// by Glow's typed construction before this boundary.
+pub(crate) fn validate_glow_replacement(
+    object: ObjectId,
+    previous: Option<&crate::CompiledGlow>,
+    next: &crate::CompiledGlow,
+) -> Result<(), crate::CompilePatchError> {
+    let previous = previous
+        .filter(|previous| previous.attachment == next.attachment)
+        .ok_or(crate::CompilePatchError::InvalidGlowUpdate { object })?;
+    noon_core::GlowUpdate::default()
+        .radius(next.definition.radius())
+        .source(next.definition.source())
+        .prepare(previous.definition)
+        .map_err(|_| crate::CompilePatchError::InvalidGlowUpdate { object })?;
+    Ok(())
 }

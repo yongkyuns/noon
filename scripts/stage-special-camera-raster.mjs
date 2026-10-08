@@ -21,13 +21,17 @@ export const CAMERA_SOURCE_HASHES = Object.freeze({
   ThreeDSurfacePlot: "ace9505560e9ae3e666fcb24c73591f4094510578477f8a8f28c72d3a2025b3e",
 });
 
-const CASES = Object.freeze([
-  ["MovingZoomedSceneAround", 12, [0.5, 1.5, 3.5, 9.5, 12]],
-  ["FixedInFrameMObjectTest", 1, [1]],
-  ["ThreeDLightSourcePosition", 0, [0]],
-  ["ThreeDCameraRotation", 3, [0.5, 2.5, 3]],
-  ["ThreeDCameraIllusionRotation", Math.PI / 2, [0.5, Math.PI / 2]],
-  ["ThreeDSurfacePlot", 0, [0]],
+// Observe numeric 3D camera state as well as pixels, including both sides of
+// the ambient/finite-motion barriers. Matching settled images alone cannot
+// qualify the transition or its exact authored endpoint.
+export const PINNED_CAMERA_CASES = Object.freeze([
+  ["MovingZoomedSceneAround", 12, [0.5, 1.5, 3.5, 9.5, 12], false],
+  ["FixedInFrameMObjectTest", 1, [0, 0.5, 1], true],
+  ["ThreeDLightSourcePosition", 0, [0], true],
+  ["ThreeDCameraRotation", 3,
+    [0, 0.5, 29 / 30, 1, 31 / 30, 1.5, 59 / 30, 2, 61 / 30, 2.5, 3], true],
+  ["ThreeDCameraIllusionRotation", Math.PI / 2, [0, 0.5, 1, 47 / 30, Math.PI / 2], true],
+  ["ThreeDSurfacePlot", 0, [0], true],
 ]);
 const digest = value => createHash("sha256").update(value).digest("hex");
 const CLASS_AST = "import ast,sys; m=ast.parse(sys.stdin.read()); " +
@@ -81,7 +85,7 @@ export async function stageSpecialCameraRasterManifest({ rst, repositoryRoot, ou
     path.join(repositoryRoot, "parity/manim-v0.21/manifest.json"), "utf8"));
   const fixtures = [];
   const sources = [];
-  for (const [scene, duration, sampleTimes] of CASES) {
+  for (const [scene, duration, sampleTimes, cameraProfileObservation] of PINNED_CAMERA_CASES) {
     const pinnedClass = extractPinnedScene(rst, scene);
     // The docs gallery supplies these globals around class-only RST snippets.
     const module = "from manim import *\nimport numpy as np\n\n" + pinnedClass;
@@ -95,6 +99,7 @@ export async function stageSpecialCameraRasterManifest({ rst, repositoryRoot, ou
       source: path.relative(repositoryRoot, path.join(stageRoot, file)).split(path.sep).join("/"),
       expected_duration: duration,
       sample_times: sampleTimes,
+      camera_profile_observation: cameraProfileObservation,
       notes: "Exact pinned Manim source staged for observation. Unsupported Noon capabilities remain failures; no source compensation or parity claim.",
     });
   }

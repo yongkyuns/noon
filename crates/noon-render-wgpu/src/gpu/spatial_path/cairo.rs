@@ -11,15 +11,22 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub(super) struct ResidentDraw {
     pub value: Uniform,
+    pub center: SemanticVec3,
     pub buffer: wgpu::Buffer,
     pub binding: wgpu::BindGroup,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct State {
-    pub geometry: HashMap<PathKey, CairoPathGeometry>,
+    pub geometry: HashMap<PathKey, Geometry>,
     pub draws: HashMap<DrawId, ResidentDraw>,
     pub pipelines: Option<Pipelines>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Geometry {
+    pub lighting: CairoPathGeometry,
+    pub center: SemanticVec3,
 }
 
 #[derive(Debug)]
@@ -67,6 +74,8 @@ impl Pipelines {
                     "\n",
                     include_str!("../cairo_lighting.wgsl"),
                     "\n",
+                    include_str!("../../polygon_coverage.wgsl"),
+                    "\n",
                     include_str!("cairo.wgsl"),
                     "\n",
                     include_str!("../../cairo_color.wgsl")
@@ -95,6 +104,7 @@ impl Pipelines {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         value: Uniform,
+        center: SemanticVec3,
     ) -> ResidentDraw {
         let buffer = super::create_buffer_with_data(
             device,
@@ -113,6 +123,7 @@ impl Pipelines {
         });
         ResidentDraw {
             value,
+            center,
             buffer,
             binding,
         }
@@ -132,6 +143,7 @@ impl Uniform {
     pub(super) fn lower(
         geometry: CairoPathGeometry,
         appearance: &CompiledCairoPathAppearance,
+        filtered_line: bool,
     ) -> Result<Self, SpatialPathError> {
         if !appearance.is_valid() {
             return Err(SpatialPathError::InvalidStyle);
@@ -154,7 +166,7 @@ impl Uniform {
                 appearance.sheen_factor as f32,
                 if geometry.world_up_normal { 1. } else { 0. },
                 0.,
-                0.,
+                if filtered_line { 1. } else { 0. },
             ],
         };
         if let Some(direction) = appearance.gradient_direction {
@@ -219,20 +231,20 @@ mod tests {
                 max: SemanticVec3::new(5.25, 0.175, 4.0),
             }),
         };
-        let uniform = Uniform::lower(geometry, &appearance).unwrap();
+        let uniform = Uniform::lower(geometry, &appearance, false).unwrap();
         assert_eq!(uniform.gradient_start, [5.25, 0.175, 1.0, 0.0]);
         assert_eq!(uniform.gradient_end, [-5.25, -0.175, 1.0, 0.0]);
         assert_eq!(uniform.metadata, [0.2, 1.0, 1.0, 0.0]);
         appearance.world_family_bounds = None;
         assert_eq!(
-            Uniform::lower(geometry, &appearance),
+            Uniform::lower(geometry, &appearance, false),
             Err(SpatialPathError::MissingAnchor)
         );
         appearance.gradient_direction = None;
-        assert!(Uniform::lower(geometry, &appearance).is_ok());
+        assert!(Uniform::lower(geometry, &appearance, false).is_ok());
         appearance.sheen_factor = 1.01;
         assert_eq!(
-            Uniform::lower(geometry, &appearance),
+            Uniform::lower(geometry, &appearance, false),
             Err(SpatialPathError::InvalidStyle)
         );
         appearance.sheen_factor = 0.2;
@@ -241,7 +253,7 @@ mod tests {
             max: SemanticVec3::new(5.0, 0.0, 0.0),
         });
         assert_eq!(
-            Uniform::lower(geometry, &appearance),
+            Uniform::lower(geometry, &appearance, false),
             Err(SpatialPathError::InvalidStyle)
         );
     }

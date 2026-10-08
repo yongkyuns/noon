@@ -281,6 +281,7 @@ pub use noon_core::{
     SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticWorldTransform3D,
 };
+pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{
     cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,
     torus_mesh, triangular_polyhedron_mesh, CairoSurfaceGrid, SurfaceError, SurfaceGrid,
@@ -323,13 +324,13 @@ pub use table_display::{
 };
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_authoring::TextAuthoringError;
-#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
-pub use text_authoring::{compiler::text_compiler_diagnostics, TextCompilerDiagnostics};
 #[cfg(feature = "native-text")]
 pub use text_authoring::{
-    MarkupText, NativeFontFace, Text, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+    bundled_native_font_face, MarkupText, NativeFontFace, Text, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
     DEFAULT_NATIVE_TEXT_FONT_SIZE,
 };
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
+pub use text_authoring::{compiler::text_compiler_diagnostics, TextCompilerDiagnostics};
 #[cfg(feature = "typst")]
 pub use text_authoring::{MathTypst, Typst, TypstBackendError, DEFAULT_TYPST_FONT_SIZE};
 #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]

@@ -1317,9 +1317,19 @@ omit triangulation diagonals. Sampled Cairo cells retain four mapped perimeter
 cubics; their fills and borders share a bounded approximation of four chords
 per curved edge. Resource bounds retain the perimeter control hull so world
 bounds and depth ordering include the curves. The renderer derives these buffers
-once and evaluates pixel
-coverage and screen-space stroke extrusion during camera movement. Ordinary
-mesh vertex and instance layouts remain unchanged. Translucency is bounded to
+once. Sampled Cairo fills filter their complete projected face with the shared
+polygon pixel-coverage kernel, including subpixel cells; their screen fringe
+stays within padded face bounds. Curved fills integrate signed perimeter edges
+over the pixel box once, without clipping every fan triangle. For planar sampled
+faces, staging replaces an invalid fan anchor only when the area centroid passes
+every oriented perimeter half-plane. Those corrected planar faces use a bounded
+screen box with the original depth plane as disposable filter support; the
+signed perimeter remains authoritative for coverage. Complex concavity beyond
+that retained profile remains unqualified under #1879.
+Border quads retain analytic pixel coverage
+and screen-space extrusion during camera movement. Ordinary mesh vertex and
+instance layouts remain unchanged. Cairo-only scenes need no multisample target.
+Translucency is bounded to
 individual triangle or canonical quad cells. Opaque world geometry populates
 depth first; translucent and Cairo cells paint each fill and border together in
 camera-depth order, with authored painter order breaking ties. Color-only cell
@@ -1329,6 +1339,14 @@ profiles. General intersecting transparent solids remain outside the profile.
 
 Cairo World-path miter joins use Cairo's 10× limit; the ordinary World-path
 profile retains its 4× limit. ThreeDAxes inherits Cairo miter joins on its tips.
+Straight screen-space Cairo butt strokes derive box-filter pixel coverage from
+their projected endpoints and existing width conversion. Curves, other caps,
+fixed-orientation paths and depth-clipped endpoints retain their existing coverage.
+Cairo World paths share the cached camera-depth order with Cairo and translucent
+mesh faces, testing opaque world depth without writing it. Authored painter
+order breaks depth ties. Retained path bounds supply the ordering center. Clean
+and color-only frames reuse the order; geometry and pose changes update the
+retained center. Fixed-orientation paths retain painter order after world draws.
 
 Spatial mesh-object `get_center()` and default affine pivots share Rust's bounds convention:
 the world bounds of the retained local AABB. They read the current effective pose
@@ -1448,8 +1466,13 @@ Exact `FollowingGraphCamera` source/state/raster qualification was merged in
 [#1882](https://github.com/yongkyuns/noon/pull/1882). Its callback replay remains
 explicitly denied. [#1900](https://github.com/yongkyuns/noon/pull/1900)
 qualifies the exact `ThreeDLightSourcePosition` source, effective light/camera
-state and raster on both WebGPU and WebGL. The other five required camera cases
-remain unresolved under #1879; #254 retains the per-case evidence and dispositions.
+state and raster on both WebGPU and WebGL. The untouched static
+`ThreeDSurfacePlot` case is qualified for source, camera state, raster, seek and
+restart on both backends; this does not qualify animated surfaces or general
+transparency. The other four required camera cases remain unresolved under
+#1879; #254 retains the per-case evidence and dispositions. Exact camera-motion
+handoff and completion observations retain timing differences even when raster
+comparisons pass.
 Straight-Line World-stroke and axes-label qualification can proceed beside
 physical-device pacing attribution. Independent
 geometry/vector-space batches need not wait for general transparency or all

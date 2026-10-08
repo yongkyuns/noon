@@ -118,3 +118,141 @@ fn unsupported_stack_rejects_projection_atomically_without_index_pollution() {
         std::mem::size_of::<usize>()
     );
 }
+
+// Prepared semantic/compiled boundary proof. Runtime/Scene orchestration admission
+// remains independently guarded; these tests do not invent an initial publication.
+#[test]
+fn prepared_existing_glow_updates_merge_fields_without_mutating_either_authority() {
+    use noon_compile::{
+        prepare_semantic_publication, ExecutionPatch, SemanticExecutionReachability,
+    };
+    let mut scene = Scene::new();
+    let mut dot = scene.circle(0.4).unwrap();
+    dot.disable_stroke().unwrap();
+    dot.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    scene.add(&dot).unwrap();
+    scene
+        .set_glow(
+            &dot,
+            GlowUpdate::default().radius(Pixels(3.25)).intensity(0.4),
+        )
+        .unwrap();
+    let handle = scene.get_effect(&dot, "glow").unwrap();
+    let (mut compiled, index) = lower(&scene);
+    let original = compiled.objects()[0].glow.clone().unwrap();
+    let mut store = scene.integration_store().borrow_mut();
+    let revision = store.scene_revision();
+    let reachability = SemanticExecutionReachability::from_root(&store, scene.root()).unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(handle.node_id(), GlowUpdate::default().radius(Pixels(3.25)));
+    tx.update_effect(handle.node_id(), GlowUpdate::default().color(Color::BLUE));
+    tx.update_effect(handle.node_id(), GlowUpdate::default().intensity(1.5));
+    let semantic = tx.prepare(&mut store).unwrap();
+    assert_eq!(semantic.effect_updates().count(), 1);
+    let plan = prepare_semantic_publication(&semantic, &index, &reachability).unwrap();
+    assert_eq!(plan.stats().object_states_lowered, 0);
+    assert_eq!(plan.possible_entry_count(), 0);
+    let [ExecutionPatch::SetGlow { object, glow }] = plan.value_transaction().mutations() else {
+        panic!("one final existing-attachment value patch required")
+    };
+    assert_eq!(*object, index.execution_object_id(dot.node_id()).unwrap());
+    assert_eq!(glow.attachment, handle.node_id());
+    assert_eq!(glow.definition.intensity(), 1.5);
+    assert_eq!(glow.definition.color(), Color::BLUE);
+    assert_eq!(glow.definition.radius(), Pixels(3.25).into());
+    assert_eq!(semantic.store().scene_revision(), revision);
+    assert_eq!(original.definition.intensity(), 0.4);
+    compiled
+        .preflight_execution_transaction(plan.value_transaction())
+        .unwrap();
+    let transaction = plan.value_transaction().clone();
+    semantic.commit();
+    for patch in transaction.mutations() {
+        compiled.apply_execution_patch(patch).unwrap();
+    }
+    assert_eq!(
+        compiled.objects()[0]
+            .glow
+            .as_ref()
+            .unwrap()
+            .definition
+            .intensity(),
+        1.5
+    );
+    assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
+}
+
+#[test]
+fn prepared_glow_noop_and_detached_updates_have_no_execution_patch() {
+    use noon_compile::{prepare_semantic_publication, SemanticExecutionReachability};
+    let mut scene = Scene::new();
+    let mut dot = scene.circle(0.4).unwrap();
+    dot.disable_stroke().unwrap();
+    dot.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    scene.add(&dot).unwrap();
+    scene
+        .set_glow(&dot, GlowUpdate::default().intensity(0.4))
+        .unwrap();
+    let detached = scene.circle(0.2).unwrap();
+    scene.set_glow(&detached, GlowUpdate::default()).unwrap();
+    let active = scene.get_effect(&dot, "glow").unwrap().node_id();
+    let other = scene.get_effect(&detached, "glow").unwrap().node_id();
+    let (_, index) = lower(&scene);
+    let mut store = scene.integration_store().borrow_mut();
+    let reachability = SemanticExecutionReachability::from_root(&store, scene.root()).unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.update_effect(active, GlowUpdate::default().intensity(0.4));
+    tx.update_effect(other, GlowUpdate::default().intensity(1.2));
+    let semantic = tx.prepare(&mut store).unwrap();
+    assert_eq!(semantic.effect_updates().count(), 1);
+    let plan = prepare_semantic_publication(&semantic, &index, &reachability).unwrap();
+    assert!(plan.value_transaction().is_empty());
+    drop(semantic);
+    assert_eq!(
+        store.semantic_effect_state(other).unwrap().definition(),
+        EffectDefinition::Glow(Glow::default())
+    );
+}
+
+#[test]
+fn unsupported_existing_effect_enrollment_rejects_instead_of_losing_glow() {
+    use noon_compile::{prepare_semantic_publication, SemanticExecutionReachability};
+    let mut scene = Scene::new();
+    let mut detached = scene.circle(0.4).unwrap();
+    detached.disable_stroke().unwrap();
+    detached.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    scene.set_glow(&detached, GlowUpdate::default()).unwrap();
+    let (_, index) = lower(&scene);
+    let mut store = scene.integration_store().borrow_mut();
+    let revision = store.scene_revision();
+    let reachability = SemanticExecutionReachability::from_root(&store, scene.root()).unwrap();
+    let mut tx = SemanticMutationTransaction::new();
+    tx.add_member(scene.root(), detached.node_id());
+    let prepared = tx.prepare(&mut store).unwrap();
+    assert!(prepare_semantic_publication(&prepared, &index, &reachability).is_err());
+    drop(prepared);
+    assert_eq!(store.scene_revision(), revision);
+}
+
+#[test]
+fn repeated_semantic_parameter_writes_still_reject_the_whole_batch() {
+    let mut scene = Scene::new();
+    let dot = scene.circle(0.4).unwrap();
+    scene
+        .set_glow(&dot, GlowUpdate::default().intensity(0.4))
+        .unwrap();
+    let effect = scene.get_effect(&dot, "glow").unwrap().node_id();
+    let mut store = scene.integration_store().borrow_mut();
+    let revision = store.scene_revision();
+    let original = store.semantic_effect_state(effect).unwrap().definition();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.update_effect(effect, GlowUpdate::default().color(Color::BLUE));
+    transaction.update_effect(effect, GlowUpdate::default().intensity(0.8));
+    transaction.update_effect(effect, GlowUpdate::default().intensity(1.5));
+    assert!(transaction.prepare(&mut store).is_err());
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(
+        store.semantic_effect_state(effect).unwrap().definition(),
+        original
+    );
+}

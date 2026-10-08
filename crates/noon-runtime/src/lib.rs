@@ -798,6 +798,7 @@ impl SceneInstance {
                 | ExecutionPatch::SetSemanticTransform { .. }
                 | ExecutionPatch::SetSpatialState { .. }
                 | ExecutionPatch::SetStyle { .. }
+                | ExecutionPatch::SetGlow { .. }
         ) {
             self.apply_value_patch(patch)?;
             return Ok(&self.frame);
@@ -1042,7 +1043,14 @@ impl SceneInstance {
                 groups_evaluated: evaluation.groups_evaluated,
                 ..RuntimePatchStats::default()
             };
-            self.mark_changed(channel.object_index as usize);
+            if matches!(
+                channel.property,
+                Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+            ) {
+                self.changes.insert(channel.object_index as usize);
+            } else {
+                self.mark_changed(channel.object_index as usize);
+            }
             return Ok(());
         }
         let old_channel = match patch {
@@ -1139,7 +1147,8 @@ impl SceneInstance {
             | ExecutionPatch::SetTransform { object, .. }
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
-            | ExecutionPatch::SetStyle { object, .. } => *object,
+            | ExecutionPatch::SetStyle { object, .. }
+            | ExecutionPatch::SetGlow { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
         let index = self
@@ -1209,6 +1218,17 @@ impl SceneInstance {
                 self.last_patch_stats.scheduler_events_removed += motion_stats.events_removed;
                 self.last_patch_stats.scheduler_events_inserted += motion_stats.events_inserted;
             }
+            ExecutionPatch::SetGlow { glow, .. } => {
+                self.frame.objects[index].glow = Some(std::sync::Arc::clone(glow));
+                self.reapply_properties(
+                    index,
+                    &[
+                        Property::GlowColor,
+                        Property::GlowRadius,
+                        Property::GlowIntensity,
+                    ],
+                );
+            }
             ExecutionPatch::SetStyle { style, .. } => {
                 self.frame.objects[index].style = *style;
                 self.reapply_properties(
@@ -1224,10 +1244,16 @@ impl SceneInstance {
             }
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         }
-        self.reapply_reactive_for_object(index);
-        self.reapply_numeric_text_for_object(index);
-        if self.frame.objects[index] != before {
-            self.mark_changed(index);
+        if matches!(patch, ExecutionPatch::SetGlow { .. }) {
+            if self.frame.objects[index].glow != before.glow {
+                self.changes.insert(index);
+            }
+        } else {
+            self.reapply_reactive_for_object(index);
+            self.reapply_numeric_text_for_object(index);
+            if self.frame.objects[index] != before {
+                self.mark_changed(index);
+            }
         }
         Ok(())
     }
@@ -2223,7 +2249,15 @@ fn apply_group_to_row(
         group.channel.property,
         Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
     ) {
-        return apply_glow_channel(compiled, &mut row, tracks, group, time);
+        return apply_glow_channel(
+            compiled.objects()[group.channel.object_index as usize]
+                .glow
+                .as_deref(),
+            row.glow,
+            tracks,
+            group,
+            time,
+        );
     }
     if matches!(
         group.channel.property,
@@ -2690,8 +2724,8 @@ fn apply_prepared_morph_values(
 }
 
 fn apply_glow_channel(
-    compiled: &CompiledScene,
-    row: &mut FrameRowMut<'_>,
+    base: Option<&noon_compile::CompiledGlow>,
+    glow: &mut Option<Arc<noon_compile::CompiledGlow>>,
     tracks: &[CompiledTrack],
     group: &TrackGroup,
     time: f64,
@@ -2715,21 +2749,14 @@ fn apply_glow_channel(
     else {
         unreachable!("validated glow channel");
     };
-    let Some(current) = row
-        .glow
-        .as_ref()
-        .filter(|glow| glow.attachment == attachment)
-    else {
+    let Some(current) = glow.as_ref().filter(|glow| glow.attachment == attachment) else {
         return false; // an old generation can never control a replacement
     };
     let patch = if tracks.last().is_some_and(|last| last.id == track.id)
         && track.reconciled
         && time >= track.timing.start_time + track.timing.duration
     {
-        let Some(base) = compiled.objects()[group.channel.object_index as usize]
-            .glow
-            .as_ref()
-        else {
+        let Some(base) = base else {
             return false;
         };
         match track.property {
@@ -2752,7 +2779,7 @@ fn apply_glow_channel(
     if current.definition == next {
         return false;
     }
-    Arc::make_mut(row.glow.as_mut().expect("checked attachment")).definition = next;
+    Arc::make_mut(glow.as_mut().expect("checked attachment")).definition = next;
     true
 }
 

@@ -721,7 +721,7 @@ impl Scene {
         self.apply_semantic_transaction(transaction)
     }
 
-    /// Move one object relative to an effective target through one transaction.
+    /// Move one object using authored layout while cold or coherent effective layout while running.
     pub fn move_to(
         &mut self,
         object: &Mobject,
@@ -729,6 +729,11 @@ impl Scene {
         edge: (f64, f64),
         mask: (f64, f64),
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction =
+                crate::family_layout::prepare_move_to(&self.store, object, target, edge, mask)?;
+            return self.apply_semantic_transaction(transaction);
+        }
         self.with_running_execution(|store, root, execution| {
             crate::family_layout::publish_move_to(
                 store, root, execution, object, target, edge, mask,
@@ -736,7 +741,7 @@ impl Scene {
         })
     }
 
-    /// Move a family relative to an effective target through one transaction.
+    /// Move a family using authored layout while cold or coherent effective layout while running.
     pub fn move_family_to(
         &mut self,
         family: &MobjectFamily,
@@ -744,6 +749,16 @@ impl Scene {
         edge: (f64, f64),
         mask: (f64, f64),
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction = crate::family_layout::prepare_move_family_to(
+                &self.store,
+                family,
+                target,
+                edge,
+                mask,
+            )?;
+            return self.apply_semantic_transaction(transaction);
+        }
         self.with_running_execution(|store, root, execution| {
             crate::family_layout::publish_move_family_to(
                 store, root, execution, family, target, edge, mask,
@@ -751,13 +766,18 @@ impl Scene {
         })
     }
 
-    /// Place a family next to one effective target through one transaction.
+    /// Place a family next to an authored target while cold or effective target while running.
     pub fn next_family_to(
         &mut self,
         family: &MobjectFamily,
         target: crate::LiveLayoutTarget<'_>,
         args: crate::ManimNextToArgs,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction =
+                crate::family_layout::prepare_next_family_to(&self.store, family, target, args)?;
+            return self.apply_semantic_transaction(transaction);
+        }
         self.with_running_execution(|store, root, execution| {
             crate::family_layout::publish_next_family_to(
                 store, root, execution, family, target, args,
@@ -765,13 +785,22 @@ impl Scene {
         })
     }
 
-    /// Align a family to the default frame using current effective bounds.
+    /// Align a family to the default frame using authored or coherent effective bounds.
     pub fn align_family_on_frame(
         &mut self,
         family: &MobjectFamily,
         direction: (f64, f64),
         buff: f64,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction = crate::family_layout::prepare_align_family_on_frame(
+                &self.store,
+                family,
+                direction,
+                buff,
+            )?;
+            return self.apply_semantic_transaction(transaction);
+        }
         self.with_running_execution(|store, root, execution| {
             crate::family_layout::publish_align_family_on_frame(
                 store, root, execution, family, direction, buff,
@@ -779,13 +808,18 @@ impl Scene {
         })
     }
 
-    /// Align a family to one effective target using current effective bounds.
+    /// Align a family to an authored target while cold or effective target while running.
     pub fn align_family_to(
         &mut self,
         family: &MobjectFamily,
         target: crate::LiveLayoutTarget<'_>,
         axis: (f64, f64),
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction =
+                crate::family_layout::prepare_align_family_to(&self.store, family, target, axis)?;
+            return self.apply_semantic_transaction(transaction);
+        }
         self.with_running_execution(|store, root, execution| {
             crate::family_layout::publish_align_family_to(
                 store, root, execution, family, target, axis,
@@ -793,7 +827,7 @@ impl Scene {
         })
     }
 
-    /// Place one selected layout using a distinct selected aligner.
+    /// Place one selected layout using authored observation cold or effective observation running.
     pub fn next_layout_to_aligned(
         &mut self,
         source: &crate::LayoutAnchor,
@@ -801,6 +835,16 @@ impl Scene {
         aligner: &crate::LayoutAnchor,
         args: crate::ManimNextToArgs,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction = crate::family_layout::prepare_next_layout_to_aligned(
+                &self.store,
+                source,
+                target,
+                aligner,
+                args,
+            )?;
+            return self.apply_semantic_transaction(transaction);
+        }
         self.with_running_execution(|store, root, execution| {
             crate::family_layout::publish_next_layout_to_aligned(
                 store, root, execution, source, target, aligner, args,

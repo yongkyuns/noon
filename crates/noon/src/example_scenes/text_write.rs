@@ -1,9 +1,9 @@
 //! Text movement and glyph-by-glyph Write in one shared execution composition.
 
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
-    TransformToRequest,
+    bundled_native_font_face, AnimationCompositionRequest, AnimationOptions, ContinuationStep,
+    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
+    SemanticAnimationCompositionKind, Text, TransformToRequest, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
 };
 
 pub struct TextWrite {
@@ -84,11 +84,17 @@ impl LiveContinuation for TextWrite {
 
 pub fn program() -> Result<LiveProgram<TextWrite>, String> {
     let mut scene = Scene::new();
-    let mut moving = scene.text("MOVE").map_err(|error| error.to_string())?;
+    let font = bundled_native_font_face(DEFAULT_NATIVE_TEXT_FONT_FAMILY)
+        .map_err(|error| error.to_string())?;
+    let mut moving = scene
+        .text(Text::new("MOVE").with_font_face(font.clone()))
+        .map_err(|error| error.to_string())?;
     moving
         .set_translation(-2.0, -1.0)
         .map_err(|error| error.to_string())?;
-    let mut writing = scene.text("WRITE").map_err(|error| error.to_string())?;
+    let mut writing = scene
+        .text(Text::new("WRITE").with_font_face(font))
+        .map_err(|error| error.to_string())?;
     writing
         .set_translation(-1.0, 1.0)
         .map_err(|error| error.to_string())?;

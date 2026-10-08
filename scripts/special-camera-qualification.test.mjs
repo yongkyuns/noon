@@ -9,7 +9,7 @@ import { FOLLOWING_SOURCE, FOLLOWING_TIMES, followingManifest,
   writeSpecialCameraObservations,
   assertFollowingSources, assertFollowingState, assertFollowingReports,
   assertFollowingPythonLifecycle, assertFollowingDirectLifecycle } from "./special-camera-qualification.mjs";
-import { CAMERA_SOURCE_HASHES, extractPinnedScene, PINNED_DOCS_COMMIT,
+import { CAMERA_SOURCE_HASHES, PINNED_CAMERA_CASES, extractPinnedScene, PINNED_DOCS_COMMIT,
   PINNED_DOCS_SHA256 } from "./stage-special-camera-raster.mjs";
 
 const paint = (red, green, blue) => ({ red, green, blue, alpha: 1 });
@@ -138,6 +138,29 @@ test("staged exact-source raster inputs pin all six upstream class hashes", asyn
   const digest = createHash("sha256").update(source).digest("hex");
   assert.equal(extractPinnedScene(rst, "RasterFixture", digest), source);
   assert.throws(() => extractPinnedScene(rst, "RasterFixture", "0".repeat(64)), /source drift/);
+});
+
+test("pinned 3D camera samples cover motion handoffs and exact endpoints", () => {
+  assert.deepEqual(PINNED_CAMERA_CASES.map(([scene]) => scene), Object.keys(CAMERA_SOURCE_HASHES));
+  for (const [scene, duration, times, cameraObservation] of PINNED_CAMERA_CASES) {
+    assert.equal(cameraObservation, scene !== "MovingZoomedSceneAround",
+      `${scene}: 3D camera state must accompany raster observations`);
+    assert.equal(times.at(-1), duration, `${scene}: missing exact source completion`);
+    assert.ok(times.every((time, index) => Number.isFinite(time) && time >= 0
+      && time <= duration && (index === 0 || time > times[index - 1])),
+    `${scene}: samples must advance within authored time`);
+  }
+  const [, , rotationTimes] = PINNED_CAMERA_CASES.find(([scene]) => scene === "ThreeDCameraRotation");
+  for (const barrier of [1, 2]) {
+    for (const offset of [-1 / 30, 0, 1 / 30]) {
+      assert.ok(rotationTimes.some(time => Math.abs(time - barrier - offset) < 1e-9),
+        `camera motion handoff ${barrier}: missing observation at offset ${offset}`);
+    }
+  }
+  assert.ok(rotationTimes.includes(1.5), "finite camera move needs an interior observation");
+  const [, duration, illusionTimes] = PINNED_CAMERA_CASES.find(([scene]) => scene === "ThreeDCameraIllusionRotation");
+  assert.ok(illusionTimes.includes(Math.floor(duration * 30) / 30),
+    "retain the last materialized Manim frame separately from exact completion");
 });
 
 for (const profile of ["fixed-frame", "ambient", "illusion", "light", "surface",

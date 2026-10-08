@@ -141,6 +141,30 @@ impl PreflightOverlay {
         }
     }
 
+    fn set_glow(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+        glow: std::sync::Arc<crate::CompiledGlow>,
+    ) {
+        if let Some(ObjectOverlay::Present { glow: current, .. }) = self.objects.get_mut(&id) {
+            *current = Some(glow);
+            return;
+        }
+        if let Some(index) = scene.object_indices.get(&id).copied() {
+            self.seen_objects.insert(id);
+            self.objects.insert(
+                id,
+                ObjectOverlay::Present {
+                    glow: Some(glow),
+                    index,
+                    is_text: scene.objects[index as usize].text().is_some(),
+                    spatial: scene.objects[index as usize].spatial.clone(),
+                },
+            );
+        }
+    }
+
     fn spatial(
         &mut self,
         scene: &CompiledScene,
@@ -498,6 +522,18 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 super::validate_z_index(*object, *value)?;
             }
+            ExecutionPatch::SetGlow { object, glow } => {
+                if overlay.object_index(scene, *object).is_none() {
+                    return Err(CompilePatchError::UnknownObject(*object));
+                }
+                let previous = overlay.glow(scene, *object);
+                crate::execution_patch::validate_glow_replacement(
+                    *object,
+                    previous.as_deref(),
+                    glow,
+                )?;
+                overlay.set_glow(scene, *object, std::sync::Arc::clone(glow));
+            }
             ExecutionPatch::SetStyle { object, style } => {
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));
@@ -677,6 +713,9 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::WorldTransform
                             | Property::CameraProfile
                             | Property::ZIndex
+                            | Property::GlowColor
+                            | Property::GlowRadius
+                            | Property::GlowIntensity
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));

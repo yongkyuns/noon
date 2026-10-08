@@ -8,7 +8,10 @@ const pythonSource = readFileSync(pythonPath, "utf8");
 const moduleManifest = readFileSync("web/python-compat-modules.js", "utf8");
 
 test("family creation syntax module is valid Python and bundled", () => {
-  const result = spawnSync("python3", ["-m", "py_compile", pythonPath], {
+  const result = spawnSync("python3", [
+    "-c", "import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec')",
+    pythonPath,
+  ], {
     encoding: "utf8",
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);

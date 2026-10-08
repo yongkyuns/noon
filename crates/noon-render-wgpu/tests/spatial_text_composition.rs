@@ -317,6 +317,265 @@ fn retained_world_paths_preserve_direct_edge_coverage_with_and_without_hud() {
 }
 
 #[test]
+fn cairo_butt_lines_preserve_fractional_and_rotated_pixel_area() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let adapter = match instance.request_adapter(&Default::default()).await {
+            Ok(adapter) => adapter,
+            Err(wgpu::RequestAdapterError::NotFound { .. }) => {
+                eprintln!("skipping Cairo line coverage: no adapter is available");
+                return;
+            }
+            Err(error) => panic!("Cairo line adapter request failed: {error}"),
+        };
+        eprintln!("Cairo line coverage adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        for authoring_width in [12.0, 6.0] {
+            // Backdrops: 0 = black; 1 = Cairo line; 2 = unlit face; 3 = Cairo face;
+            // 4 overlays a fixed-orientation path; 5 crosses an opaque depth plane.
+            for (width, offset, angle, backdrop) in [
+                (0.25, 0.0, 0.0, 0),
+                (0.5, 0.5, 0.0, 0),
+                (1.35, 0.0, 0.0, 0),
+                (1.35, 0.25, 0.0, 0),
+                (1.35, 0.5, 0.0, 0),
+                (1.35, 0.75, 0.0, 0),
+                (0.25, 0.5, std::f64::consts::FRAC_PI_4, 0),
+                (1.35, 0.5, std::f64::consts::FRAC_PI_4, 0),
+                (1.35, 0.0, 0.0, 1),
+                (1.35, 0.0, 0.0, 2),
+                (1.35, 0.0, 0.0, 3),
+                (1.35, 0.0, 0.0, 4),
+                (1.35, 0.0, 0.0, 5),
+            ] {
+                let mut store = SemanticStore::new();
+                let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+                camera.set_role(SemanticObjectRole::Camera3D);
+                camera
+                    .set_camera_projection(Some(SemanticProjection3D::Orthographic {
+                        height: 8.0,
+                        near: 0.1,
+                        far: 30.0,
+                    }))
+                    .unwrap();
+                camera.transform.translation = SemanticVec3::new(0.0, 0.0, 8.0);
+                attach(&mut store, camera);
+                // Keep the single-curve World-UP lighting response below byte
+                // precision so this fixture measures coverage independently.
+                let mut light = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+                light.set_role(SemanticObjectRole::PointLight3D);
+                light.transform.translation.z = 1000.0;
+                attach(&mut store, light);
+                let mut line = SemanticObjectState::new(StoredGeometry::Line {
+                    start: Vec2::new(-1.5, 0.0),
+                    end: Vec2::new(1.5, 0.0),
+                });
+                line.transform = SemanticWorldTransform3D::new(
+                    SemanticVec3::new(0.0, offset / 16.0, 0.0),
+                    noon_core::SemanticRotation3D::from_axis_angle(
+                        if backdrop == 5 {
+                            SemanticVec3::new(0.0, 1.0, 0.0)
+                        } else {
+                            SemanticVec3::new(0.0, 0.0, 1.0)
+                        },
+                        if backdrop == 5 {
+                            std::f64::consts::FRAC_PI_6
+                        } else {
+                            angle
+                        },
+                    )
+                    .unwrap(),
+                    SemanticVec3::new(1.0, 1.0, 1.0),
+                )
+                .unwrap()
+                .into();
+                line.style.fill = None;
+                line.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+                line.style.stroke_width = width / 16.0;
+                line.style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
+                line.style.stroke_cap = noon_core::StrokeCap::Butt;
+                line.set_spatial_material(noon_core::SemanticSpatialMaterial::CairoPath);
+                line.set_cairo_path_appearance(Default::default()).unwrap();
+                attach(&mut store, line.clone());
+                if backdrop == 1 {
+                    // A farther opaque red stroke is submitted after the nearer
+                    // white line. Partial white coverage must retain its red
+                    // backdrop, independently of submission order.
+                    line.transform.translation.z = -0.5;
+                    line.style.stroke = Some(SemanticPaint::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0)));
+                    line.style.stroke_width = (width + 2.0) / 16.0;
+                    attach(&mut store, line);
+                }
+                if backdrop >= 2 {
+                    let mut mesh = noon_core::MeshResource::new(
+                        vec![
+                            SemanticVec3::new(-2.0, -1.0, 0.0),
+                            SemanticVec3::new(2.0, -1.0, 0.0),
+                            SemanticVec3::new(2.0, 1.0, 0.0),
+                            SemanticVec3::new(-2.0, 1.0, 0.0),
+                        ],
+                        None,
+                        vec![0, 1, 3, 1, 2, 3],
+                    )
+                    .unwrap();
+                    if matches!(backdrop, 3 | 4) {
+                        mesh = mesh
+                            .with_cairo_appearance(noon_core::CairoSurfaceAppearance {
+                                p0: SemanticVec3::new(-2.0, -1.0, 0.0),
+                                p6: SemanticVec3::new(2.0, 1.0, 0.0),
+                                span_p3_p0: SemanticVec3::new(4.0, 0.0, 0.0),
+                                span_p12_p0: SemanticVec3::new(0.0, 2.0, 0.0),
+                                span_p9_p6: SemanticVec3::new(-4.0, 0.0, 0.0),
+                                span_p3_p6: SemanticVec3::new(0.0, -2.0, 0.0),
+                                boundary_controls: None,
+                            })
+                            .unwrap();
+                    }
+                    let handle = store.insert_geometry_mesh(mesh);
+                    let mut face = SemanticObjectState::new(StoredGeometry::Resource(handle));
+                    // The tilted line crosses this plane at pixel-column boundary 89.
+                    // All MSAA samples in pixel 88 are nearer, and all in 89 farther.
+                    face.transform.translation.z = if backdrop == 5 {
+                        (7.0 / 16.0) * std::f64::consts::FRAC_PI_6.tan()
+                    } else {
+                        -0.5
+                    };
+                    face.style.fill = Some(SemanticPaint::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0)));
+                    face.style.stroke = None;
+                    if matches!(backdrop, 3 | 4) {
+                        face.set_spatial_material(noon_core::SemanticSpatialMaterial::CairoSurface);
+                    }
+                    attach(&mut store, face);
+                }
+                if backdrop == 4 {
+                    let mut hud = SemanticObjectState::new(StoredGeometry::Rectangle {
+                        size: Vec2::new(1.0, 1.0),
+                    });
+                    hud.transform.orientation = noon_core::SemanticOrientation::Spatial(
+                        noon_core::SemanticRotation3D::IDENTITY,
+                    );
+                    hud.style.fill = Some(SemanticPaint::Solid(Color::rgba(0.0, 1.0, 0.0, 1.0)));
+                    hud.style.stroke = None;
+                    hud.set_spatial_composition_domain(
+                        SemanticSpatialCompositionDomain::FixedOrientation,
+                    )
+                    .unwrap();
+                    attach(&mut store, hud);
+                }
+                let (compiled, _) =
+                    lower_semantic_execution(&store, &mut SemanticExecutionIndex::new())
+                        .unwrap()
+                        .into_parts();
+                let mut runtime = SceneInstance::new(compiled);
+                let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+                renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+                renderer.set_camera(
+                    &queue,
+                    Camera2D::new(Vec2::ZERO, Vec2::new(authoring_width, 8.0)).unwrap(),
+                );
+                let mut retained = RetainedFramePreparer::new();
+                let mut text_state = renderer.create_retained_text_state(&device, &queue);
+                let mut previous = None;
+                for pass in 0..2 {
+                    let publication = runtime.take_renderer_publication();
+                    let spatial = renderer
+                        .prepare_spatial(&device, &queue, &publication)
+                        .unwrap();
+                    let visible: Vec<_> = (0..publication.frame().objects.len()).collect();
+                    retained
+                        .prepare_transient_presentations_visible(&publication, &visible)
+                        .unwrap();
+                    let prepared = retained
+                        .prepare_planned_publication_visible(
+                            &device,
+                            &publication,
+                            &visible,
+                            TextDeviceMetrics::uniform(16.0).unwrap(),
+                        )
+                        .unwrap();
+                    renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    renderer
+                        .encode_retained(
+                            &mut encoder,
+                            &target.view,
+                            &prepared,
+                            &text_state,
+                            wgpu::Color::BLACK,
+                            None,
+                        )
+                        .unwrap();
+                    let image = target.read(&device, &queue, encoder);
+                    let area: f64 = image
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|p| f64::from(p[1]) / 255.0)
+                        .sum();
+                    // Doubling the authoring frame's horizontal pixel scale makes
+                    // a 45-degree stroke's perpendicular width sqrt(2.5) larger.
+                    let width_factor = if authoring_width == 6.0 && angle != 0.0 {
+                        2.5_f64.sqrt()
+                    } else {
+                        1.0
+                    };
+                    let expected = 48.0 * width * width_factor;
+                    eprintln!("Cairo line frame_width={authoring_width} width={width} offset={offset} angle={angle} backdrop={backdrop} area={area} expected={expected}");
+                    // Cairo face lighting contributes green to the backdrop.
+                    // The other cases isolate the white line's pixel area.
+                    if backdrop < 3 {
+                        assert!((area - expected).abs() < 1.0, "{area} versus {expected}");
+                    }
+                    if width == 1.35 && offset == 0.0 && angle == 0.0 && backdrop < 3 {
+                        assert!((i16::from(pixel(&image, 96, 63)[1]) - 172).abs() <= 1);
+                        assert!((i16::from(pixel(&image, 96, 64)[1]) - 172).abs() <= 1);
+                    }
+                    if backdrop != 0 && backdrop < 4 {
+                        assert_eq!(pixel(&image, 96, 63)[0], 255, "backdrop survives the edge");
+                    }
+                    if backdrop == 3 {
+                        let base = i16::from(pixel(&image, 96, 60)[1]);
+                        let expected = 172 + base * 83 / 255;
+                        assert!((i16::from(pixel(&image, 96, 63)[1]) - expected).abs() <= 1);
+                    }
+                    if backdrop == 4 {
+                        assert_eq!(
+                            pixel(&image, 96, 63),
+                            [0, 255, 0, 255],
+                            "fixed-orientation painter content remains above world draws"
+                        );
+                    }
+                    if backdrop == 5 {
+                        let near = pixel(&image, 88, 63);
+                        let far = pixel(&image, 89, 63);
+                        eprintln!("Cairo sloped depth near={near:?} far={far:?}");
+                        assert!(
+                            (i16::from(near[1]) - 172).abs() <= 1,
+                            "near stroke remains visible: {near:?}"
+                        );
+                        assert_eq!(far, [255, 0, 0, 255], "far stroke is occluded");
+                    }
+                    if pass == 1 {
+                        assert_eq!(
+                            spatial.bytes_uploaded(),
+                            0,
+                            "clean frame reuses all resources"
+                        );
+                        assert_eq!(spatial.rows_visited, 0);
+                        assert_eq!(previous.as_ref(), Some(&image));
+                    }
+                    previous = Some(image);
+                }
+            }
+        }
+    });
+}
+
+#[test]
 fn retained_spatial_paths_and_text_share_camera_domains_and_cached_geometry() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();
