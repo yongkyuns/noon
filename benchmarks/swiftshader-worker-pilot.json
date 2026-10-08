@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "studyId": "1933-swiftshader-worker-cap-20261008-01",
+  "diagnosticOnly": true,
+  "qualification": false,
+  "mergeApproval": false,
+  "harnessSha": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+  "originalProducerRun": 37710961499,
+  "baseline": {
+    "source": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f",
+    "artifactId": 11523896652,
+    "zipSha256": "23eb7282da981e6272c18b2ba59a9ff8863d45406cd00efae73fc87657d54071",
+    "buildId": "810ea10b60bc3ea023a9c20ff21bc918a791494ba3e7c595bdc657dbea95fc15"
+  },
+  "sourceExample": "parity-square-and-circle",
+  "pairIndex": 1,
+  "expectedBrowser": "151.0.7922.34",
+  "expectedGpuMode": "software-WebGL",
+  "expectedBackend": "WebGL2",
+  "modes": [
+    {"name": "default", "threadCount": null},
+    {"name": "two-workers", "threadCount": 2}
+  ],
+  "pollIntervalSeconds": 0.5,
+  "pairTimeoutSeconds": 180,
+  "execution": {"event": "pull_request.opened", "attempt": 1, "retry": false},
+  "interpretation": "Thread worker-count feasibility only. This is not FPS/CPU/latency qualification; no acceptance score or optimized selection."
+}
