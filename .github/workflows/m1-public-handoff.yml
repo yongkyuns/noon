@@ -21,7 +21,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: cc1aec83c654d9407bfe748f5861015c6c261f9f
+          ref: baf90319baa38dcaab252a4bc0f5a48d6f463ecb
           path: candidate
       - name: Verify source pack, every changed blob and complete product tree
         working-directory: candidate
@@ -30,7 +30,7 @@ jobs:
           python3 - <<'PY'
           import base64, hashlib, json, pathlib, subprocess, zlib
           git = lambda *args: subprocess.check_output(['git', *args])
-          assert git('rev-parse', 'HEAD').decode().strip() == 'cc1aec83c654d9407bfe748f5861015c6c261f9f'
+          assert git('rev-parse', 'HEAD').decode().strip() == 'baf90319baa38dcaab252a4bc0f5a48d6f463ecb'
           encoded = ''.join(pathlib.Path(f'../handoff/.github/ci/m1-public-source-{i}.b64').read_text().strip() for i in [1, 2])
           payload = zlib.decompress(base64.b64decode(encoded, validate=True))
           assert len(payload) == 52930
@@ -41,6 +41,11 @@ jobs:
           for entry in entries:
               path = pathlib.Path(entry['path'])
               assert not path.is_absolute() and '..' not in path.parts
+              if entry['path'] == '.github/workflows/ci.yml':
+                  # The connected GitHub integration already installed the
+                  # exact verified blob. Do not change it with GITHUB_TOKEN.
+                  assert blob(path.read_bytes()) == entry['result']
+                  continue
               if entry['base'] is None:
                   assert not path.exists()
                   before = b''
@@ -59,9 +64,8 @@ jobs:
               path.write_bytes(after)
               subprocess.check_call(['git', 'add', '--', str(path)])
           assert git('write-tree').decode().strip() == 'b0c8df3a026865e29035eb6193ec07cd19d84448'
-          initial_patch = git('diff', '--cached', '--binary', '--full-index')
-          assert len(initial_patch) == 80344
-          assert hashlib.sha256(initial_patch).hexdigest() == '153c8bc7777a5aa142029cc642c2b9805b9f7d8b86d978441762b81bd7394596'
+          staged = git('diff', '--cached', '--name-only').decode().splitlines()
+          assert len(staged) == 25 and '.github/workflows/ci.yml' not in staged, staged
           # The full local gate found one obsolete blanket-admission expectation.
           # Transfer that narrow positive regression without weakening any of the
           # generation, prepared-state, abort or rollback assertions below it.
@@ -77,9 +81,9 @@ jobs:
           path.write_bytes(after)
           subprocess.check_call(['git', 'add', '--', str(path)])
           assert git('write-tree').decode().strip() == 'f75a6ea29cfb75820b95c222bd86455679fee9cc'
-          patch = git('diff', '--cached', '--binary', '--full-index')
-          assert len(patch) == 81606
-          assert hashlib.sha256(patch).hexdigest() == 'bd46d089d66c78fabdec57dfecf6196c5b67c84e13bf4de3fa9c67a4e29b9b9a'
+          assert len(git('diff', '--cached', '--name-only').decode().splitlines()) == 25
+          # The independently verified entire source tree is the acceptance
+          # digest; the staged diff intentionally excludes the workflow edit.
           PY
           git diff --cached --check
       - name: Publish only verified product source to the isolated source branch
