@@ -330,7 +330,7 @@ jobs:
         run: node scripts/camera-density-smoke.mjs
       - name: Test retained worker glow report and independent reference
         if: matrix.backend == 'webgpu'
-        run: node --test scripts/glow-worker-reference.test.mjs scripts/glow-worker-report.test.mjs
+        run: node --test scripts/glow-worker-reference.test.mjs scripts/glow-worker-report.test.mjs scripts/glow-worker-transport.test.mjs
       - name: Qualify retained worker glow images and recovery
         if: matrix.backend == 'webgpu'
         env:
