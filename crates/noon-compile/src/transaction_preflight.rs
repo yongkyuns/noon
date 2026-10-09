@@ -145,10 +145,10 @@ impl PreflightOverlay {
         &mut self,
         scene: &CompiledScene,
         id: ObjectId,
-        glow: std::sync::Arc<crate::CompiledGlow>,
+        glow: Option<std::sync::Arc<crate::CompiledGlow>>,
     ) {
         if let Some(ObjectOverlay::Present { glow: current, .. }) = self.objects.get_mut(&id) {
-            *current = Some(glow);
+            *current = glow;
             return;
         }
         if let Some(index) = scene.object_indices.get(&id).copied() {
@@ -156,7 +156,7 @@ impl PreflightOverlay {
             self.objects.insert(
                 id,
                 ObjectOverlay::Present {
-                    glow: Some(glow),
+                    glow,
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
                     spatial: scene.objects[index as usize].spatial.clone(),
@@ -532,7 +532,31 @@ pub(super) fn preflight_transaction_with_resources(
                     previous.as_deref(),
                     glow,
                 )?;
-                overlay.set_glow(scene, *object, std::sync::Arc::clone(glow));
+                overlay.set_glow(scene, *object, Some(std::sync::Arc::clone(glow)));
+            }
+            ExecutionPatch::SetGlowAttachment {
+                object,
+                expected,
+                glow,
+            } => {
+                let index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let previous = overlay.glow(scene, *object);
+                crate::glow_attachment::validate_change(
+                    *object,
+                    previous.as_deref(),
+                    *expected,
+                    glow.as_deref(),
+                )?;
+                // Respect staged adds/replacements as well as base tracks. A
+                // retired generation cannot retain drivers or block its successor.
+                for property in crate::CompiledGlow::PARAMETER_PROPERTIES {
+                    for track in overlay.channel(scene, index, property) {
+                        overlay.set_track(track.id, None);
+                    }
+                }
+                overlay.set_glow(scene, *object, glow.clone());
             }
             ExecutionPatch::SetStyle { object, style } => {
                 if overlay.object_index(scene, *object).is_none() {

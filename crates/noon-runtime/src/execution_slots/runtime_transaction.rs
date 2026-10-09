@@ -530,6 +530,7 @@ impl SceneInstance {
                     | ExecutionPatch::SetSpatialState { object, .. }
                     | ExecutionPatch::SetStyle { object, .. }
                     | ExecutionPatch::SetGlow { object, .. }
+                    | ExecutionPatch::SetGlowAttachment { object, .. }
                     | ExecutionPatch::ReconcileTrack { object, .. } => Some(*object),
                     _ => None,
                 };

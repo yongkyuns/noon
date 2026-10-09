@@ -7,6 +7,7 @@ use order_index::{move_order_row, reposition_order_row};
 
 mod compaction;
 mod execution_patch;
+mod glow_attachment;
 mod graph_dependencies;
 pub use compaction::{CompiledSceneCompactionError, CompiledSceneCompactionStats};
 mod replay_revision;
@@ -146,6 +147,13 @@ pub struct CompiledGlow {
 }
 
 impl CompiledGlow {
+    /// Ordinary timeline channels owned by one lowered glow attachment.
+    pub const PARAMETER_PROPERTIES: [Property; 3] = [
+        Property::GlowColor,
+        Property::GlowRadius,
+        Property::GlowIntensity,
+    ];
+
     /// Lower a captured parameter request to ordinary independent timeline values.
     /// The caller assigns existing TrackIds, timing and composition maps. Capture
     /// this value from the runtime row at activation, not an earlier authored copy.
@@ -1073,6 +1081,9 @@ impl std::error::Error for CompileError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
+    InvalidGlowAttachmentChange {
+        object: ObjectId,
+    },
     InvalidGlowUpdate {
         object: ObjectId,
     },
@@ -1175,6 +1186,11 @@ impl std::fmt::Display for CompilePatchError {
                 "track {} overlaps track {} on its completion channel",
                 track.get(),
                 other.get()
+            ),
+            Self::InvalidGlowAttachmentChange { object } => write!(
+                formatter,
+                "glow attachment change must match the installed generation and replace or remove it for object {}",
+                object.get()
             ),
             Self::InvalidGlowUpdate { object } => write!(
                 formatter, "glow value update must preserve the attachment identity, source mode and radius units for object {}", object.get()
@@ -1831,6 +1847,21 @@ impl CompiledScene {
                     self.objects[index as usize].glow.as_deref() != Some(glow.as_ref())
                 })
             }
+            ExecutionPatch::SetGlowAttachment {
+                object,
+                expected,
+                glow,
+            } => {
+                self.object_index(*object).is_none_or(|index| {
+                    // Invalid redundant changes must still reach validation. Only
+                    // the exact absent -> absent case is an idempotent no-op.
+                    let previous = self.objects[index as usize].glow.as_deref();
+                    glow_attachment::validate_change(*object, previous, *expected, glow.as_deref())
+                        .is_err()
+                        || previous.is_some()
+                        || glow.is_some()
+                })
+            }
             ExecutionPatch::ReplaceTrack(track) => self.track(track.id).is_none_or(|existing| {
                 self.object_index(track.object) != Some(existing.object_index)
                     || existing.property != track.property
@@ -2177,6 +2208,13 @@ impl CompiledScene {
                     glow,
                 )?;
                 self.objects[index as usize].glow = Some(Arc::clone(glow));
+            }
+            ExecutionPatch::SetGlowAttachment {
+                object,
+                expected,
+                glow,
+            } => {
+                self.apply_glow_attachment(*object, *expected, glow.clone(), &mut stats)?;
             }
             ExecutionPatch::SetGraphDependencies {
                 owner,

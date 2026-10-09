@@ -9,6 +9,7 @@ mod effective_content;
 mod effective_write;
 mod execution_slots;
 mod frame;
+mod glow_attachment;
 mod graph_endpoints;
 mod numeric_text;
 pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
@@ -801,6 +802,10 @@ impl SceneInstance {
                 | ExecutionPatch::SetGlow { .. }
         ) {
             self.apply_value_patch(patch)?;
+            return Ok(&self.frame);
+        }
+        if let ExecutionPatch::SetGlowAttachment { object, glow, .. } = patch {
+            self.apply_glow_attachment_patch(patch, *object, glow.clone())?;
             return Ok(&self.frame);
         }
         if matches!(patch, ExecutionPatch::SetGraphDependencies { .. }) {

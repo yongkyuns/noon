@@ -78,6 +78,16 @@ pub enum ExecutionPatch {
         object: ObjectId,
         glow: std::sync::Arc<crate::CompiledGlow>,
     },
+    /// Attach, remove or replace the single lowered leaf glow at a semantic
+    /// publication boundary. `expected` must match the currently installed
+    /// attachment exactly. A replacement must have a different semantic identity;
+    /// parameter-only writes use `SetGlow` instead. Retires only the old glow's
+    /// parameter tracks; object identity, motion and painter position survive.
+    SetGlowAttachment {
+        object: ObjectId,
+        expected: Option<noon_core::SemanticNodeId>,
+        glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+    },
     /// Replace one graph root's complete endpoint dependency declaration.
     /// Empty dependencies retire that root without relocating unrelated slots.
     SetGraphDependencies {

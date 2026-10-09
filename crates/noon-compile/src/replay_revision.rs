@@ -97,6 +97,17 @@ impl CompiledScene {
             | ExecutionPatch::SetGlow { object, .. } => {
                 rows.insert(index(*object)?);
             }
+            ExecutionPatch::SetGlowAttachment { object, .. } => {
+                let slot = index(*object)?;
+                rows.insert(slot);
+                for property in crate::CompiledGlow::PARAMETER_PROPERTIES {
+                    let channel = CompiledChannelKey::new(slot, property);
+                    if !self.channel_tracks(channel).is_empty() {
+                        channels.insert(channel);
+                        tracks.extend(self.channel_tracks(channel).iter().map(|track| track.id));
+                    }
+                }
+            }
             ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => {
                 tracks.insert(track.id);
                 let slot = index(track.object)?;
