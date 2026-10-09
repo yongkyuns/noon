@@ -26,14 +26,16 @@ jobs:
       SCCACHE_LOCAL_RW_MODE: "READ_ONLY"
       NOON_SHOWCASE_BACKEND: webgl
     steps:
-      - name: Checkout exact product candidate without helper files
+      - name: Checkout complete helper lineage and build event source
         uses: actions/checkout@v7
         with:
-          ref: 0ca5ee4c7057098aad3639a202c95b83b297577c
+          fetch-depth: 0
       - name: Prove exact source and gallery storyboard
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 0ca5ee4c7057098aad3639a202c95b83b297577c
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor 0ca5ee4c7057098aad3639a202c95b83b297577c HEAD
+          test "$(git diff --name-only 0ca5ee4c7057098aad3639a202c95b83b297577c HEAD)" = .github/workflows/m1-glow-showcase-capture.yml
           python3 -m unittest discover -s web/python -p 'test_showcase*.py'
           node --test web/showcase-gallery.test.mjs web/showcase-capture.test.mjs
           python3 - <<'PY'
@@ -63,18 +65,27 @@ jobs:
         run: |
           node --test web/showcase-gallery.test.mjs scripts/showcase-posters.test.mjs web/showcase-capture.test.mjs
           python3 -m unittest discover -s web/python -p 'test_showcase*.py'
-      - name: Publish only captured PNGs and evidence to an isolated branch
+      - name: Publish real captured PNGs without temporary workflow ancestry
         run: |
           set -euo pipefail
+          test -f web/thumbnails/showcase/showcase-gpu-glow.png
+          test -f web/thumbnails/showcase/capture-evidence.json
+          mkdir -p "$RUNNER_TEMP/showcase-posters"
+          cp -a web/thumbnails/showcase/. "$RUNNER_TEMP/showcase-posters/"
+          # Reset to the immutable source candidate so the GitHub app does not
+          # publish helper workflow edits along with the real poster artifacts.
+          git reset --hard
+          git switch --detach 0ca5ee4c7057098aad3639a202c95b83b297577c
+          cp -a "$RUNNER_TEMP/showcase-posters/." web/thumbnails/showcase/
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add web/thumbnails/showcase/
           git diff --cached --check
-          test -f web/thumbnails/showcase/showcase-gpu-glow.png
-          test -f web/thumbnails/showcase/capture-evidence.json
-          git commit -m 'test(showcase): retain 22 real gallery posters and exact source evidence'
+          git diff --cached --name-only | grep -qx 'web/thumbnails/showcase/showcase-gpu-glow.png'
+          git diff --cached --name-only | grep -qx 'web/thumbnails/showcase/capture-evidence.json'
+          git commit -m 'test(showcase): retain genuine source-bound gallery posters'
           git push origin HEAD:refs/heads/codex/m1-glow-showcase-captured-68f
-          echo "Published actual captured gallery PNGs at $(git rev-parse HEAD)"
+          echo "Published actual source-bound capture at $(git rev-parse HEAD)"
       - name: Preserve capture pixels and failure diagnostics
         if: always()
         uses: actions/upload-artifact@v7
