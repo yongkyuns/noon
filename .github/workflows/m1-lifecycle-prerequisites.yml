@@ -1,0 +1,55 @@
+name: M1 lifecycle prerequisites (temporary)
+on:
+  push:
+    branches: [codex/m1-lifecycle-prerequisites-5bd6]
+    paths: [.github/workflows/m1-lifecycle-prerequisites.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: m1-lifecycle-prerequisites-5bd6
+  cancel-in-progress: true
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 5bd666dc68aeec73d00a884357322ae28955b8b8
+          persist-credentials: false
+      - name: Preserve exact product source without helper workflow
+        run: |
+          mkdir -p "$RUNNER_TEMP/m1-lifecycle"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/m1-lifecycle/source.tar.gz"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/m1-lifecycle/source-identity.txt"
+      - name: Recover the already-qualified dependency lock
+        uses: actions/download-artifact@v8
+        with:
+          name: web-pkg
+          run-id: 37882879947
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/m1-prior-web
+      - name: Install pinned Rust and retain offline prerequisites
+        env:
+          CARGO_HOME: ${{ runner.temp }}/m1-cargo
+        run: |
+          cp "$RUNNER_TEMP/m1-prior-web/ci-Cargo.lock" Cargo.lock
+          echo 'd99b5b30a0e48f9a30397d5d6068112e6e84c7ff046c3d271a2fb586260047da  Cargo.lock' | sha256sum --check
+          rustup install --profile minimal
+          rustup component add rustfmt clippy
+          cargo fetch --locked
+          cp Cargo.lock "$RUNNER_TEMP/m1-lifecycle/Cargo.lock"
+          rustc --version --verbose > "$RUNNER_TEMP/m1-lifecycle/rustc-version.txt"
+          cargo --version > "$RUNNER_TEMP/m1-lifecycle/cargo-version.txt"
+          tc=$(rustup show active-toolchain | cut -d ' ' -f 1)
+          tar -C "$HOME/.rustup/toolchains" -czf "$RUNNER_TEMP/m1-lifecycle/toolchain.tar.gz" "$tc"
+          tar -C "$CARGO_HOME" -czf "$RUNNER_TEMP/m1-lifecycle/cargo-sources.tar.gz" registry
+          (cd "$RUNNER_TEMP/m1-lifecycle" && sha256sum *.tar.gz Cargo.lock > checksums.txt)
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m1-lifecycle-prerequisites
+          path: ${{ runner.temp }}/m1-lifecycle/
+          if-no-files-found: error
+          retention-days: 1
