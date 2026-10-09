@@ -28,6 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # Pin the actual immutable PR-opened HEAD, never GitHub's synthetic
+          # merge, so later master changes cannot contaminate this run.
+          ref: ${{ github.event.pull_request.head.sha }}
           path: control
           persist-credentials: false
 
@@ -46,6 +49,13 @@ jobs:
               raise SystemExit("Only the first pull_request.opened event is registered.")
           PY
           git -C control rev-parse HEAD > evidence/control-commit.txt
+          python3 - <<'PY'
+          import json, os, subprocess
+          event=json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+          observed=subprocess.check_output(["git","-C","control","rev-parse","HEAD"], text=True).strip()
+          if observed != event["pull_request"]["head"]["sha"]:
+              raise SystemExit("controller checkout is not the registered PR-opened exact source")
+          PY
           git -C control archive HEAD | gzip > evidence/inputs/control-source.tar.gz
           cp control/benchmarks/product-aa-apple-study.json evidence/inputs/registered-plan.json
           sha256sum evidence/inputs/registered-plan.json > evidence/inputs/plan.sha256
