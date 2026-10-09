@@ -974,6 +974,18 @@ try {
         }
 
         const initial = await waitForFrame();
+        if (expectedGlowPair) {
+          // Python can publish its first frame before the authored segment
+          // completes. Judge the retained halo only at the exact endpoint,
+          // never the neutral attachment's transient activation frame.
+          const paused = await execution.pause();
+          if (paused.playing) throw new Error(`${filename}: halo endpoint did not pause`);
+          const sought = await execution.seek(authored.duration);
+          if (Math.abs(sought.time - authored.duration) > 1e-6) {
+            throw new Error(`${filename}: halo endpoint seek mismatch ${sought.time}`);
+          }
+          await waitForFrame(initial.presentedFrames);
+        }
         let endpoint = null;
         if (endpointTime !== null) {
           const paused = await execution.pause();
