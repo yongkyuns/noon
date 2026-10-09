@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "studyId": "1933-macos-server-preflight-20261009-01",
+  "issue": 1933,
+  "diagnosticOnly": true,
+  "qualification": false,
+  "performanceAcceptance": false,
+  "mergeApproval": false,
+  "reason": "Prior one-shot macOS Apple A/A 37977203253 stopped before scored samples (0/100 pairs), with Python http.server child alive, serverOutput empty, serverStartError null; frozen harness waits for 'Serving HTTP on' before HTTP request.",
+  "priorAttempt": {
+    "run": 37977203253,
+    "artifactId": 11639543175,
+    "archiveSha256": "6c5c4c6339b6b396b73c873eb529047693d04a51b478bc8e0a09d13db2b43074",
+    "completedPairs": 0
+  },
+  "runner": "macos-15",
+  "class": "standard public-repository Apple Silicon, no xlarge, no self-hosted",
+  "node": "22.23.3",
+  "protocol": "One pull_request.opened attempt 1. Acquire exactly one original-process spawn to python3 -u -m http.server on 127.0.0.1:4205 with --directory pointing to checked-out repository; record first 10s banner, response, process exit, local socket owner and HTTP status separately. Use a temporary diagnostic token file, not production artifact, verify exact content, then terminate process. Independently probe child under Python's -c HTTP simple server only if first scenario fails (not a reattempt of any benchmark). No scoring or fallback browser packages.",
+  "windows": [
+    {
+      "id": "original-command",
+      "durationSeconds": 10
+    },
+    {
+      "id": "response-and-owner",
+      "durationSeconds": 5
+    }
+  ],
+  "requirements": [
+    "Python version/path",
+    "server stdout/stderr before first request",
+    "fetch localhost:4205 no gating on output banner",
+    "fetch exact diagnostic nonce text",
+    "child exit/owner PID and lsof if available",
+    "same user's native runner arch and OS",
+    "all errors, no retry"
+  ],
+  "decision": "The server is usable only if exact token GET succeeds and child remains alive; banner presence is recorded but not required. If no HTTP response, server operational failure requires separate fix.",
+  "oneShot": true,
+  "retries": 0,
+  "noSampleSelection": true,
+  "next": "Only after diagnosing preflight, prepare a distinct preregistered v06 original 100-pair Apple A/A; preserve previous v05 negative and never relax product acceptance."
+}
