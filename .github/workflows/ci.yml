@@ -50,6 +50,12 @@ on:
       - "crates/noon-web/src/retained_execution_canvas.rs"
       - "crates/noon-web/src/retained_execution_transport.rs"
       - "crates/noon-web/src/retained_execution_resources.rs"
+      - "crates/noon/tests/glow_scene_raster.rs"
+      - "crates/noon/examples/glow_scene_playback.rs"
+      - "crates/noon/src/effect_authoring*"
+      - "crates/noon/src/effect_authoring/**"
+      - "crates/noon/src/live_session.rs"
+      - "crates/noon/src/effective_capture.rs"
       - "crates/noon/src/example_scenes/spatial_surface.rs"
       - "crates/noon/src/execution_session/**"
       - "crates/noon/src/example_scenes/**"
@@ -151,6 +157,10 @@ jobs:
           cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
+      - name: Qualify public Rust Scene glow playback pixels and lifecycle
+        run: |
+          cargo run -p noon --example glow_scene_playback
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
