@@ -1,0 +1,179 @@
+name: Fixed-work Python host Apple Metal A/A (diagnostic only)
+
+on:
+  pull_request:
+    types: [opened]
+    paths:
+      - '.github/workflows/host-cost-aa-apple.yml'
+      - 'benchmarks/host-cost-aa-apple-study.json'
+      - 'scripts/host-cost-aa-apple-derive.mjs'
+      - 'scripts/host-cost-aa-apple-derive.test.mjs'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: host-aa-1933-apple-host-aa-20261009-03
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Original baseline self-comparison on headed Apple Metal, NOT acceptance
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'research/1933-standard-macos-host-aa-20261009-03' && github.run_attempt == 1
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      NOON_PRODUCT_BASE_SHA: 4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f
+      NOON_PRODUCT_CANDIDATE_SHA: f67d915ad6709d97f5a2ba60827302f87fedfba2
+      NOON_PRODUCT_HEAD_SHA: f5ec15c7a1a9a70c368e141abfc740f5081efc4e
+      NOON_PRODUCT_EVENT_BASE_SHA: 4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f
+      NOON_PRODUCT_PREFLIGHT_SKIPPED: '1'
+      NOON_WASM_PROFILE: release
+      NOON_WASM_SKIP_OPT: '0'
+      NOON_RENDERER_SMOKE: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: study
+          persist-credentials: false
+      - name: Freeze one-shot input and study plan
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          mkdir -p evidence/inputs
+          cp study/benchmarks/host-cost-aa-apple-study.json evidence/inputs/plan.json
+          sha256sum evidence/inputs/plan.json > evidence/inputs/plan.sha256
+          printf '%s/%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > evidence/inputs/attempt.txt
+          printf '%s\n' 'Diagnostic only; NOT PR #1875 qualification, performance acceptance or merge approval.' > evidence/README.txt
+          git -C study rev-parse HEAD > evidence/inputs/study-commit.txt
+          uname -a > evidence/inputs/uname.txt
+          sysctl -n hw.model > evidence/inputs/hw-model.txt
+          sysctl -n hw.logicalcpu > evidence/inputs/hw-logical-cpus.txt
+          sw_vers > evidence/inputs/sw-vers.txt
+          printf '%s\n' "ImageOS=${ImageOS:-unknown}" "ImageVersion=${ImageVersion:-unknown}" > evidence/inputs/image.txt
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - name: Validate diagnostic-only transform protocol
+        run: |
+          set -euo pipefail
+          node --check study/scripts/host-cost-aa-apple-derive.mjs
+          node --test study/scripts/host-cost-aa-apple-derive.test.mjs | tee evidence/inputs/protocol-tests.log
+      - uses: actions/checkout@v7
+        with:
+          ref: f5ec15c7a1a9a70c368e141abfc740f5081efc4e
+          fetch-depth: 1
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f
+          path: first
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f
+          path: second
+          persist-credentials: false
+      - name: Validate exact original harness and immutable source IDs
+        run: |
+          set -euo pipefail
+          test "$(git -C harness rev-parse HEAD)" = f5ec15c7a1a9a70c368e141abfc740f5081efc4e
+          test "$(git -C harness rev-parse 'HEAD^{tree}')" = ecbfa794d50d61a4c3df3ef3111aa22e03998f0c
+          git -C harness diff --exit-code HEAD --
+          test "$(git -C harness rev-parse HEAD:scripts/python-host-perf.mjs)" = 30d766b4f9c0b87d9994adb707c47d5dbb84fe4c
+          test "$(git -C harness rev-parse HEAD:scripts/python-host-perf-protocol.mjs)" = ef9414171c16a331a0b9c1bc3ef1594da835a6c7
+          for root in first second; do
+            test "$(git -C "$root" rev-parse HEAD)" = 4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f
+            git -C "$root" rev-parse HEAD > "evidence/inputs/$root-commit.txt"
+          done
+          git -C harness rev-parse HEAD > evidence/inputs/harness-commit.txt
+      - name: Download and authenticate one original baseline package BEFORE extraction
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, stat, subprocess, zipfile
+          from pathlib import Path, PurePosixPath
+          plan = json.loads(Path('evidence/inputs/plan.json').read_text())
+          endpoint = f'repos/yongkyuns/noon/actions/artifacts/{plan["artifactId"]}'
+          meta = json.loads(subprocess.check_output(['gh', 'api', endpoint]))
+          Path('evidence/inputs/original-artifact.json').write_text(json.dumps(meta, indent=2))
+          if meta.get('id') != plan['artifactId'] or meta.get('expired'):
+              raise SystemExit('Original product archive missing or expired')
+          if meta.get('workflow_run', {}).get('id') != plan['producerRun']:
+              raise SystemExit('Original producer run mismatch')
+          if meta.get('digest') != 'sha256:' + plan['zipSha256']:
+              raise SystemExit('Original producer archive digest mismatch')
+          archive = Path('evidence/inputs/immutable-original-baseline.zip')
+          with archive.open('xb') as stream:
+              subprocess.run(['gh', 'api', endpoint + '/zip'], stdout=stream, check=True)
+          if hashlib.sha256(archive.read_bytes()).hexdigest() != plan['zipSha256']:
+              raise SystemExit('Download hash differs from preregistered archive')
+          with zipfile.ZipFile(archive) as z:
+              for info in z.infolist():
+                  item = PurePosixPath(info.filename)
+                  if item.is_absolute() or '..' in item.parts or '\\' in info.filename:
+                      raise SystemExit('Unsafe original artifact path')
+                  if stat.S_ISLNK(info.external_attr >> 16):
+                      raise SystemExit('Symlink in original artifact')
+              for root in ('first', 'second'):
+                  z.extractall(Path(root) / 'web')
+                  original = json.loads((Path(root) / 'web/ci-artifact.json').read_text())
+                  if original['source'] != plan['baselineSource']:
+                      raise SystemExit('Original baseline package identity mismatch')
+          PY
+      - name: Authenticate BOTH independent original-package checkouts
+        run: |
+          set -euo pipefail
+          node harness/.github/ci/product-artifact.mjs verify baseline first
+          node harness/.github/ci/product-artifact.mjs verify baseline second
+      - name: Install pinned headed Chromium on standard hosted Apple Silicon
+        working-directory: harness
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+          npm ls playwright pngjs > ../evidence/inputs/browser-packages.txt
+          node --version > ../evidence/inputs/node-version.txt
+          system_profiler SPDisplaysDataType -json > ../evidence/inputs/display.json || true
+
+      - name: Derive host-only A/A from the immutable original scorer and pair harness
+        run: |
+          set -euo pipefail
+          node study/scripts/host-cost-aa-apple-derive.mjs \
+            harness/scripts/python-host-perf.mjs harness/scripts/python-host-perf-aa.mjs
+          node --check harness/scripts/python-host-perf-aa.mjs
+          sha256sum harness/scripts/python-host-perf-aa.mjs > evidence/inputs/derived-driver.sha256
+          git -C harness diff --exit-code -- scripts/python-host-perf.mjs scripts/python-host-perf-protocol.mjs
+      - name: Execute the one registered full nine-workload / seven-pair A/A acquisition
+        env:
+          NOON_PERF_BASELINE_ROOT: ${{ github.workspace }}/first
+          NOON_PERF_CANDIDATE_ROOT: ${{ github.workspace }}/second
+        run: |
+          set -euo pipefail
+          node harness/scripts/python-host-perf-aa.mjs
+      - name: Reauthenticate original source and packages after acquisition
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -f first/web/ci-artifact.json && -f second/web/ci-artifact.json ]]; then
+            node harness/.github/ci/product-artifact.mjs verify baseline first
+            node harness/.github/ci/product-artifact.mjs verify baseline second
+          fi
+      - name: Retain complete or partial diagnostic evidence (never substitute for the gate)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: host-aa-1933-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            evidence/
+            second/browser-smoke-artifacts/product-gate/host-cost/
+          if-no-files-found: error
+          retention-days: 30
