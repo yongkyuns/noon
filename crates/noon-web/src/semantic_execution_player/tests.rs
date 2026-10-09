@@ -3346,8 +3346,15 @@ fn wait_observations_advance_without_runtime_frames_or_publications() {
     player.live_complete_segment().unwrap();
     assert_eq!(player.time(), 2.0);
     player.live_wait(1.0).unwrap();
-    player.live_segment_wake(8_000.0).unwrap();
-    assert_eq!(player.playback_time_at(8_500.0).unwrap(), 2.5);
+    // Source handoff does not restart the original monotonic epoch. The next
+    // second starts at wall 3s, not at the next arbitrary browser observation.
+    let next = player.live_segment_wake(3_000.0).unwrap();
+    assert_eq!(next.cadence(), "timer");
+    assert_eq!(next.timer_after_milliseconds(), Some(1_000.0));
+    assert_eq!(player.playback_time_at(3_500.0).unwrap(), 2.5);
+    let overdue = player.live_segment_wake(8_000.0).unwrap();
+    assert_eq!(overdue.timer_after_milliseconds(), Some(0.0));
+    assert_eq!(player.playback_time_at(8_500.0).unwrap(), 3.0);
     assert_eq!(player.playback_time_at(10_000.0).unwrap(), 3.0);
     player.live_drive_segment_to_authored_time(3.0).unwrap();
     player.live_complete_segment().unwrap();
