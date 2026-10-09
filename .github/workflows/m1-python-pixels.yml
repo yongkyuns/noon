@@ -1,0 +1,67 @@
+name: M1 Python continuation pixels (temporary)
+on:
+  push:
+    branches: [codex/m1-python-pixels-68f]
+    paths: [.github/workflows/m1-python-pixels.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: m1-python-pixels-68f
+  cancel-in-progress: true
+jobs:
+  pixel-continuation:
+    name: Source-owned Python glow completion and retained pixels
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable tested product source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove helper changes only workflow and product change only smoke harness
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 68f7b40b877c24c26af2795af776e25deb6a153c
+          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/m1-python-pixels.yml
+          test "$(git diff --name-only cebee8fc0604cb7691c2bac2871eac0d98887c58 HEAD^)" = scripts/shared-authoring-smoke.mjs
+          node --check scripts/shared-authoring-smoke.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          compile(Path("web/python/examples/glow_scene_worker_pixels.py").read_bytes(), "glow_scene_worker_pixels.py", "exec")
+          PY
+      - name: Download prior canonical build with identical Rust/Python/runtime source
+        uses: actions/download-artifact@v8
+        with:
+          name: web-pkg
+          repository: yongkyuns/noon
+          run-id: 37981197592
+          github-token: ${{ github.token }}
+          path: web
+      - name: Verify build provenance and pinned dependency lock
+        run: |
+          node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import fs from "node:fs";
+            import { createHash } from "node:crypto";
+            const a=JSON.parse(fs.readFileSync("web/ci-artifact.json","utf8"));
+            assert.equal(a.source,"cebee8fc0604cb7691c2bac2871eac0d98887c58");
+            for (const [file, sha] of Object.entries(a.files)) {
+              const actual=createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+              assert.equal(actual,sha,file);
+            }
+            console.log("Verified unchanged WebAssembly and Python worker artifact",a.source);
+          '
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Prove completed source-owned continuation contract
+        run: node --test web/semantic-engine-endpoint.test.mjs
+      - name: Qualify real Python continuation and retained-worker glow pixels
+        run: node scripts/shared-authoring-smoke.mjs
