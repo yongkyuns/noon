@@ -715,8 +715,17 @@ fn publish_layout_translation(
     }
     let transaction =
         FamilyTranslation::from_members(leaves, delta.0, delta.1)?.transaction(&store.borrow())?;
-    crate::Scene::publish_running_transaction(store, root, execution, transaction)
-        .map_err(AuthoringError::from)
+    // This is only a translation, not a callback registration or source tick.
+    // Keep an already-completed phase coherent if the publication advances.
+    let callback_time = execution.frame().time;
+    let callback_publication = execution.publication_context();
+    let result = crate::Scene::publish_running_transaction(store, root, execution, transaction)
+        .map_err(AuthoringError::from)?;
+    execution.carry_settled_callback_through_layout_translation(
+        callback_time,
+        callback_publication,
+    );
+    Ok(result)
 }
 
 pub(crate) fn publish_shift_family(

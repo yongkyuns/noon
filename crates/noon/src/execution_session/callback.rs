@@ -1356,6 +1356,34 @@ impl ExecutionSession {
         Ok(result)
     }
 
+    /// An ordinary layout translation changes neither callback registration nor
+    /// authored time. Preserve only a phase completed at the exact old publication;
+    /// a pending, invalidated, or newly registered callback must still run.
+    pub(crate) fn carry_settled_callback_through_layout_translation(
+        &mut self,
+        time: f64,
+        before: PublicationContext,
+    ) {
+        if self.frame().time != time
+            || self.pending_callback.is_some()
+            || self.callback_termination.is_some()
+            || self.callback_schedule.completed_time != Some(time)
+            || self.callback_schedule.completed_publication != Some(before)
+        {
+            return;
+        }
+        let publication = self.publication_context();
+        self.callback_schedule
+            .carry_completed_publication(time, publication);
+        if let Some(receipt) = self
+            .last_callback_receipt
+            .as_mut()
+            .filter(|receipt| receipt.time == time && receipt.publication == before)
+        {
+            receipt.publication = publication;
+        }
+    }
+
     pub(super) fn carry_callback_ownership_through_completion(
         &mut self,
         time: f64,
