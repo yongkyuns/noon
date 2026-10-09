@@ -2,6 +2,7 @@
 
 The two circles have identical paint and differ only in the attached glow.
 The left half therefore provides an in-frame no-effect negative control.
+The browser smoke compares sampled Gaussian pixels; GPU speed is out of scope.
 """
 from noon import BLUE, WHITE, Circle, LEFT, RIGHT, Pixels, Scene
 
