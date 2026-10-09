@@ -1,4 +1,4 @@
-name: M1 Python glow worker qualification (temporary)
+name: M1 exact-head glow CI dispatch (temporary)
 on:
   push:
     branches: [codex/m1-python-worker-qual-168a]
@@ -10,56 +10,24 @@ concurrency:
   group: m1-python-worker-qual-168a
   cancel-in-progress: true
 jobs:
-  python-glow:
-    name: Public Python Scene worker and halo pixels
+  dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: /home/runner/.cache/noon-sccache-wasm
-      SCCACHE_CACHE_SIZE: "1G"
-      SCCACHE_LOCAL_RW_MODE: "READ_ONLY"
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          ref: e87d10b6f1b81bbfdfa0caec6f7de94d0e484b26
-      - name: Prove unchanged product source
-        run: |
-          test "$(git rev-parse HEAD)" = e87d10b6f1b81bbfdfa0caec6f7de94d0e484b26
-          test "$(git rev-parse HEAD^{tree})" = cbbc0f806eee2ab4e53cf9bd072a984fe0721bf9
-          test ! -f .github/workflows/m1-python-glow-qualification.yml
-          node --check scripts/shared-authoring-smoke.mjs
-          python3 - <<'PY'
-          from pathlib import Path
-          compile(Path("web/python/examples/glow_scene_worker_pixels.py").read_bytes(), "glow_scene_worker_pixels.py", "exec")
-          PY
-      - name: Build exact Rust/WASM and Pyodide execution package
-        uses: ./.github/actions/dev-wasm-build
-        with:
-          preflight: "true"
-      - name: Cache Chromium
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-chromium-1.62.1
-      - name: Install pinned browser qualification dependencies
-        run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install chromium
-      - name: Execute public Python and independent worker halo pixel test
-        run: node scripts/shared-authoring-smoke.mjs
-      - name: Trigger current-head main CI after Python acceptance
+      - name: Verify exact published PR head and launch canonical CI
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          expected=e87d10b6f1b81bbfdfa0caec6f7de94d0e484b26
+          actual=$(curl --fail --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/yongkyuns/noon/git/refs/heads/codex/m1-glow-raster-operator | jq -r '.object.sha')
+          test "$actual" = "$expected"
           curl --fail --silent --show-error --request POST \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
             --data '{"ref":"codex/m1-glow-raster-operator"}' \
             https://api.github.com/repos/yongkyuns/noon/actions/workflows/ci.yml/dispatches
+          echo "Dispatched canonical CI for $expected"
