@@ -181,7 +181,7 @@ fn verify_movie(path: &Path, p: u32, q: u32) -> Vec<u8> {
             ]),
     );
     assert_eq!(pixels.len(), frames as usize * FRAME_BYTES);
-    for (index, rgba) in pixels.chunks_exact(FRAME_BYTES).enumerate() {
+    for (index, rgba) in pixels.as_chunks::<FRAME_BYTES>().0.iter().enumerate() {
         let time = index as f64 * f64::from(q) / f64::from(p);
         verify_image_position(rgba, time);
     }
@@ -196,7 +196,7 @@ fn verify_image_position(rgba: &[u8], time: f64) {
     let mut weight = 0.0;
     let mut x = 0.0;
     let mut y = 0.0;
-    for (index, pixel) in rgba.chunks_exact(4).enumerate() {
+    for (index, pixel) in rgba.as_chunks::<4>().0.iter().enumerate() {
         let intensity: u32 = pixel[..3].iter().map(|v| u32::from(*v)).sum();
         if intensity > 36 {
             let intensity = f64::from(intensity);
@@ -246,29 +246,29 @@ fn encoded_timing_and_pixels_are_independent_of_capture_throughput() -> io::Resu
             fast_pixels == slow_pixels,
             "consumer delay changed decoded {p}/{q} pixels"
         );
-        let frame_bytes = FRAME_BYTES;
+        let (raw_frames, raw_remainder) = fast_raw.as_chunks::<FRAME_BYTES>();
+        let (decoded_frames, decoded_remainder) = fast_pixels.as_chunks::<FRAME_BYTES>();
+        assert!(raw_remainder.is_empty());
+        assert!(decoded_remainder.is_empty());
+        assert_eq!(raw_frames.len(), decoded_frames.len());
         assert!(
-            fast_raw
-                .chunks_exact(frame_bytes)
-                .skip(1)
-                .any(|f| f != &fast_raw[..frame_bytes]),
+            raw_frames.iter().skip(1).any(|f| f != &raw_frames[0]),
             "timing proof must contain a moving image"
         );
         // Keep the existing media oracle's per-frame error limits, including
         // foreground error so a frozen or black movie cannot pass on its background.
-        for (raw, decoded) in fast_raw
-            .chunks_exact(frame_bytes)
-            .zip(fast_pixels.chunks_exact(frame_bytes))
-        {
+        for (raw, decoded) in raw_frames.iter().zip(decoded_frames) {
             let total: u64 = raw
                 .iter()
                 .zip(decoded)
                 .map(|(a, b)| u64::from(a.abs_diff(*b)))
                 .sum();
-            assert!(total as f64 / frame_bytes as f64 <= 3.0);
+            assert!(total as f64 / FRAME_BYTES as f64 <= 3.0);
             let mut active_error = 0_u64;
             let mut active_channels = 0_u64;
-            for (a, b) in raw.chunks_exact(4).zip(decoded.chunks_exact(4)) {
+            let (raw_pixels, _) = raw.as_chunks::<4>();
+            let (decoded_pixels, _) = decoded.as_chunks::<4>();
+            for (a, b) in raw_pixels.iter().zip(decoded_pixels) {
                 if a[..3].iter().any(|value| *value > 12) {
                     active_channels += 3;
                     active_error += a[..3]
