@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "studyId": "1933-standard-macos-webgl-feas-20261009-01",
+  "purpose": "Test no-cost standard GitHub-hosted macos-15 arm64 Apple Silicon runner for usable non-software Chromium WebGL2. No owned machine or paid xlarge runner required. Feasibility only.",
+  "qualification": false,
+  "performanceAcceptance": false,
+  "mergeApproval": false,
+  "diagnosticOnly": true,
+  "trigger": "one original pull_request.opened, attempt 1 only; fixed two-case order; no retries, selecting only favorable modes, or benchmark rescores",
+  "runner": "macos-15",
+  "runnerClass": "standard GitHub-hosted, not -large/-xlarge or self-hosted",
+  "node": "22.23.3",
+  "playwright": "1.62.1",
+  "chromium": "151.0.7922.34",
+  "sourceRevision": "fb7d1979a5020a8efc1fdcba88c6195e6552d4e5",
+  "cases": [
+    {
+      "id": "headed",
+      "headless": false
+    },
+    {
+      "id": "headless",
+      "headless": true
+    }
+  ],
+  "flags": "Noon's browserArgs('webgl',{gpuMode:'hardware'}) without forced SwiftShader",
+  "checks": [
+    "actual Chromium version and host OS/arch",
+    "unmasked GL vendor and renderer",
+    "WebGL2 clear and pixel readback",
+    "GLSL triangle draw and pixel readback",
+    "GL error/context loss",
+    "native system_profiler SPDisplaysDataType when available"
+  ],
+  "decision": "Only an unmasked nonsoftware WebGL2 renderer with correct real pixel readback is provisionally usable. A browser-reported hardware-like renderer is not proof of physical GPU provenance; renderer software/fallback is not eligible. No FPS, timing, product-gate or code acceptance measured.",
+  "followup": "If standard runner provides usable acceleration, separately preregister identical-package A/A measurement under controlled conditions; only that can establish precision before a real candidate/baseline run.",
+  "comparisonPrior": "GitHub-hosted Ubuntu SwiftShader/Mesa identical-build A/A had high false-block rate. The already merged physical readiness script required an owned self-hosted macOS machine; this separate feasibility check does not run it."
+}
