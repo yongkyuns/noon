@@ -1552,13 +1552,62 @@ fn live_segment_wake_drives_one_leased_session_without_a_host_timeline() {
     assert_eq!(player.time(), 2.0, "beginning a wait must not advance it");
     let wait_wake = player.live_segment_wake(5_000.0).unwrap();
     assert_eq!(wait_wake.cadence(), "timer");
-    assert_eq!(wait_wake.timer_after_milliseconds(), Some(1_000.0));
+    // The prior animation ended late, but its subsequent wait shares the
+    // source epoch; no extra wall second is added at the handoff.
+    assert_eq!(wait_wake.timer_after_milliseconds(), Some(0.0));
     assert!(player
-        .live_drive_segment_from_wall_time(6_000.0)
+        .live_drive_segment_from_wall_time(5_000.0)
         .unwrap()
         .reached_endpoint());
     player.live_complete_segment().unwrap();
     assert_eq!(player.time(), 3.0);
+}
+
+#[test]
+fn delayed_python_source_handoffs_carry_overdue_wall_time_across_short_waits() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(0.4).unwrap();
+    scene.add(&circle).unwrap();
+    let session = scene.execution_session().unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        session,
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        4.0,
+        83,
+    )
+    .unwrap();
+
+    // Thirty-two waits of 1/64 seconds take exactly 0.5 authored seconds.
+    // A one-second wall stall must complete all intervals at the SAME late
+    // wake, rather than charging 32 additional display frames to the source.
+    for i in 0..32 {
+        let end = player.live_wait(1.0 / 64.0).unwrap();
+        assert!((end - (i + 1) as f64 / 64.0).abs() < 1.0e-12);
+        let wake = player
+            .live_segment_wake(if i == 0 { 1_000.0 } else { 2_000.0 })
+            .unwrap();
+        assert_eq!(wake.cadence(), "timer");
+        if i > 0 {
+            assert_eq!(wake.timer_after_milliseconds(), Some(0.0));
+        }
+        assert!(player
+            .live_drive_segment_from_wall_time(2_000.0)
+            .unwrap()
+            .reached_endpoint());
+        player.live_complete_segment().unwrap();
+        assert!((player.time() - end).abs() < 1.0e-12);
+    }
+    assert_eq!(player.time(), 0.5);
+    assert_eq!(player.live_wait(1.5).unwrap(), 2.0);
+    let wake = player.live_segment_wake(3_000.0).unwrap();
+    assert_eq!(wake.timer_after_milliseconds(), Some(0.0));
+    assert!(player
+        .live_drive_segment_from_wall_time(3_000.0)
+        .unwrap()
+        .reached_endpoint());
+    player.live_complete_segment().unwrap();
+    assert_eq!(player.time(), 2.0);
 }
 
 #[test]
@@ -1711,38 +1760,20 @@ fn callback_segment_drive_pins_time_until_exact_phase_commit() {
     assert!(!ready.reached_endpoint());
     assert_eq!(player.time(), 0.5);
 
-    // Simulate an opaque callback host taking 7.5 seconds after the
-    // midpoint commit. Reanchoring at actual completion keeps the next
-    // 16 ms wake to exactly 16 ms of authored progress.
-    let wake = player.reanchor_live_segment_wake(9_000.0).unwrap();
-    assert_eq!(wake.cadence(), "animation_frame");
-    let after_slow_callback = player.live_drive_segment_from_wall_time(9_016.0).unwrap();
-    let after_slow_callback_phase: serde_json::Value =
-        serde_json::from_str(&after_slow_callback.callback_phase_json().unwrap()).unwrap();
-    assert!((after_slow_callback_phase["time"].as_f64().unwrap() - 0.516).abs() < 1.0e-9);
-    assert_eq!(player.time(), 0.5);
-    player
-        .commit_callback_phase_json(&callback_batch_with_y_and_opacity(
-            &after_slow_callback_phase,
-        ))
-        .unwrap();
-    let ready = player.live_drive_segment_from_wall_time(9_016.0).unwrap();
-    assert!(ready.callback_phase_json().is_none());
-    assert!(!ready.reached_endpoint());
-    assert!((player.time() - 0.516).abs() < 1.0e-9);
-    player.reanchor_live_segment_wake(12_000.0).unwrap();
-
-    // The endpoint follows the same phase/commit protocol before reporting
-    // readiness for completion and source resumption.
-    let endpoint = player.live_drive_segment_from_wall_time(12_484.0).unwrap();
+    // An opaque callback takes 7.5 seconds. This is elapsed wall time
+    // during an ACTIVE source, not a user pause. The first late sample
+    // must reach its authored endpoint instead of restarting at 0.5s.
+    // The runtime still pins the required callback and retries the same
+    // wall timestamp only after its exact token commits.
+    let overdue = player.live_drive_segment_from_wall_time(9_000.0).unwrap();
     let endpoint_phase: serde_json::Value =
-        serde_json::from_str(&endpoint.callback_phase_json().unwrap()).unwrap();
+        serde_json::from_str(&overdue.callback_phase_json().unwrap()).unwrap();
     assert_eq!(endpoint_phase["time"], serde_json::json!(1.0));
-    assert!((player.time() - 0.516).abs() < 1.0e-9);
+    assert_eq!(player.time(), 0.5);
     player
         .commit_callback_phase_json(&callback_batch_with_y_and_opacity(&endpoint_phase))
         .unwrap();
-    let ready = player.live_drive_segment_from_wall_time(12_484.0).unwrap();
+    let ready = player.live_drive_segment_from_wall_time(9_000.0).unwrap();
     assert!(ready.callback_phase_json().is_none());
     assert!(ready.reached_endpoint());
     assert_eq!(player.time(), 1.0);
