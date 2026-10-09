@@ -23,7 +23,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/m1-lifecycle"
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/m1-lifecycle/source.tar.gz"
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/m1-lifecycle/source-identity.txt"
-      - name: Recover the already-qualified dependency lock
+      - uses: actions/upload-artifact@v7
+        with:
+          name: m1-lifecycle-source
+          path: |
+            ${{ runner.temp }}/m1-lifecycle/source.tar.gz
+            ${{ runner.temp }}/m1-lifecycle/source-identity.txt
+          if-no-files-found: error
+          retention-days: 1
+      - name: Recover the prior CI dependency lock
         uses: actions/download-artifact@v8
         with:
           name: web-pkg
@@ -35,7 +43,7 @@ jobs:
           CARGO_HOME: ${{ runner.temp }}/m1-cargo
         run: |
           cp "$RUNNER_TEMP/m1-prior-web/ci-Cargo.lock" Cargo.lock
-          echo 'd99b5b30a0e48f9a30397d5d6068112e6e84c7ff046c3d271a2fb586260047da  Cargo.lock' | sha256sum --check
+          echo '913894f9908da7c6cd1ea771c19eef7cfde0c7ab176eb55193d80db3e07233cd  Cargo.lock' | sha256sum --check
           rustup install --profile minimal
           rustup component add rustfmt clippy
           cargo fetch --locked
