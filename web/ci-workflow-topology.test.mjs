@@ -308,3 +308,19 @@ test("automatic glow qualification selects its retained preparation and real hos
   assert.ok(contracts?.includes("cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests"),
     "dedicated raster job must run the automatic source/budget/retry contracts");
 });
+
+
+test("real worker glow pixels run in the existing canonical browser job", async () => {
+  const workflow = await readFile(new URL("ci.yml", workflowDir), "utf8");
+  const selection = workflow.split("  pull_request:\n")[1]?.split("  workflow_dispatch:")[0];
+  for (const path of ["scripts/glow-worker-*.mjs", "crates/noon-web/src/glow_worker_smoke.rs",
+    "crates/noon-web/src/retained_execution_canvas.rs", "crates/noon-web/src/retained_execution_transport.rs",
+    "crates/noon-web/src/retained_execution_resources.rs"]) {
+    assert.ok(selection?.includes(`      - "${path}"`), `worker qualification must select ${path}`);
+  }
+  const step = workflow.split("      - name: Qualify retained worker glow images and recovery\n")[1]?.split("      - name:")[0];
+  assert.ok(step, "worker pixel qualification cannot silently disappear");
+  assert.match(step, /if: matrix\.backend == 'webgpu'/);
+  assert.match(step, /run: node scripts\/glow-worker-qualification\.mjs/);
+  assert.doesNotMatch(step, /continue-on-error|\|\| true/);
+});

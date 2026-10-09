@@ -997,13 +997,19 @@ The current implementation keeps the semantic context and its existing compiler/
 
 Required Python callbacks can hold authored progress at the shared barrier while the last coherent frame remains presentable. Playback with no host callbacks does not require per-frame interpreter execution. Source reruns currently replace a session; this diagram does not claim incremental hot-reload identity preservation.
 
+A `WebAssembly.RuntimeError` crossing the Python authoring adapter retires that
+worker through its existing fatal-error channel. Rust borrows and publication
+state cannot be recovered after a trap; queued requests and late results are
+discarded, and the next Run creates a fresh host. Ordinary Python and typed
+Noon errors remain recoverable within the existing host.
+
 Exact worker placement remains an integration decision, not a semantic boundary. A future placement that separates semantic authoring from execution must still satisfy the same ownership, callback, revision and atomic-publication contracts.
 
 A browser worker/process boundary may require a typed transport representation because it is a real cross-context boundary. That transport is derived from authoritative semantic/execution state and must not become another scene model.
 
 The retained execution channel may send changed style, transform, and morph fields for an existing row in a dense incremental publication. The receiver validates the session sequence, slot generation, object identity, and the whole patch set before applying it to the same retained frame mirror used by full rows. Snapshots and changes to content, resources, structure, or family plans retain their complete transport form. This is a wire-size optimization at the worker boundary; it does not add semantic state or a second execution model.
 
-Effect-bearing rows use the **same** full-row worker transport when their effective parameters change. Retained protocol v15 adds one optional validated `glow` field with the original semantic attachment generation, color, radius unit/value, intensity and source mode. No-effect rows omit it entirely; snapshot and incremental receivers validate the complete definition and finite supported primitive profile before installing anything or consuming a sequence number. Older protocol versions fail closed, so a worker cannot silently drop a new halo. This is derived wire data at the existing genuine Python/render worker boundary, **not** a new in-process scene representation. The validated worker mirror now reborrows that same effective runtime frame and installed immutable resources for the retained renderer. Its own coherent glow preparation and painter capture execute on the existing encoder after the ordinary retained GPU upload; they do not round-trip through a new host effect store. This wiring does not lift the public Scene guard: supported worker playback must still be qualified through the actual authoring/worker channel.
+Effect-bearing rows use the **same** full-row worker transport when their effective parameters change. Retained protocol v17 combines render-geometry retirement with one optional validated `glow` field with the original semantic attachment generation, color, radius unit/value, intensity and source mode. No-effect rows omit it entirely; snapshot and incremental receivers validate the complete definition and finite supported primitive profile before installing anything or consuming a sequence number. Older protocol versions fail closed, so a worker cannot silently drop a new halo. This is derived wire data at the existing genuine Python/render worker boundary, **not** a new in-process scene representation. V17 also retains the current explicit render-geometry retirement contract; the independently changed V15/V16 schemas are not treated as interchangeable. The validated worker mirror now reborrows that same effective runtime frame and installed immutable resources for the retained renderer. Its own coherent glow preparation and painter capture execute on the existing encoder after the ordinary retained GPU upload; they do not round-trip through a new host effect store. This wiring does not lift the public Scene guard: supported worker playback must still be qualified through the actual authoring/worker channel.
 
 JSON may exist for debugging/export/tests or an explicitly justified external boundary. It is not the normal typed Rust authoring API, not an internal Rust layer boundary, and not a per-frame mutation protocol.
 
@@ -1578,6 +1584,8 @@ long-running edit/add/remove/resource/input churn
 ```
 
 Performance regressions should be measured in terms of authoring/host bridge calls and bytes, effective driver writes versus authored semantic mutations, validation/preflight work, active channels, ordered updater regions/barriers, dirty dependencies, affected slots/domains/materialized leaves, visible candidates, resource versions and GPU ranges—not only total FPS.
+
+The debug/renderer-smoke-only retained glow fixture uses ordinary compiled tracks and runtime frames, then the actual retained encoder, to qualify real transferable and shared-memory render-worker boundaries. The test does not enable public Scene execution. Its reference uses extended no-effect primitive renders for source coverage and an independent full two-dimensional Gaussian, encoded source-over composition, and viewport crop. The existing browser-rendering job owns the full-frame comparisons, exact neutral/rewind checks, source retirement, invalid-payload preservation, and worker recreation. Primitive antialiasing is shared with the production renderer, so this is not an independent geometry-rasterization oracle. Missing browser access, setup failures, and compilation alone cannot count as pixel qualification.
 
 ### Diagram maintenance
 

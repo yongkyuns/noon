@@ -231,7 +231,7 @@ pub(crate) fn compiled_render_geometry_preparations(
         .filter_map(|track| {
             let noon_compile::TransformGeometryPlan::PathPair {
                 geometry,
-                render_transform,
+                render_frame,
                 ..
             } = track.transform_geometry_plan.as_ref()?
             else {
@@ -241,7 +241,7 @@ pub(crate) fn compiled_render_geometry_preparations(
                 return None;
             };
             if from.style.stroke_width_mode != to.style.stroke_width_mode
-                || (render_transform.is_none()
+                || (render_frame.is_none()
                     && from.style.stroke_width_mode == noon_core::StrokeWidthMode::ScreenSpace)
             {
                 return None;
@@ -249,7 +249,7 @@ pub(crate) fn compiled_render_geometry_preparations(
             Some(RenderGeometryPreparation {
                 resource: *indices.get(&(Arc::as_ptr(geometry) as usize))?,
                 style: from.style,
-                transform: render_transform.unwrap_or(Transform2D::IDENTITY),
+                transform: render_frame.map_or(Transform2D::IDENTITY, |frame| frame.from),
             })
         })
         .collect())
@@ -265,13 +265,13 @@ pub(crate) fn compiled_render_geometries(
         .filter_map(|track| {
             let noon_compile::TransformGeometryPlan::PathPair {
                 geometry,
-                render_transform,
+                render_frame,
                 ..
             } = track.transform_geometry_plan.as_ref()?
             else {
                 return None;
             };
-            if render_transform.is_none()
+            if render_frame.is_none()
                 && matches!(&track.values,
                 noon_core::TrackValues::Object { from, to }
                     if from.style.stroke_width_mode == noon_core::StrokeWidthMode::ScreenSpace

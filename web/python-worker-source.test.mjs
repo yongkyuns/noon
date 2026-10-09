@@ -183,10 +183,29 @@ test("detached ValueTracker construction stays in the shared authoring store", a
   assert.doesNotMatch(example, /self\.value_tracker\(/);
 });
 
-test("semantic continuation control bypasses the blocked interpreter request queue", () => {
+test("semantic continuation control bypasses the blocked interpreter request queue", async () => {
   assert.match(source, /if\s*\(isContinuationControl\(event\.data\)\)/);
   assert.match(source, /void\s+handleContinuationControl\(event\.data\)/);
-  assert.match(source, /requestQueue\s*=\s*requestQueue\.then\(\(\)\s*=>\s*handleRequest/);
+  let releaseQueue;
+  const blocked = new Promise(resolve => { releaseQueue = resolve; });
+  const calls = [];
+  let onMessage;
+  const drained = new Function("self", "blocked", "handleRequest", "handleContinuationControl", `
+    let fatalAuthoringFailure = false;
+    let requestQueue = blocked;
+    const AUTHORING_CHANNEL = "noon.authoring";
+    ${source.slice(source.indexOf("function isRecord(value)"))}
+    ${source.slice(source.indexOf("function isContinuationControl"), source.indexOf("async function handleContinuationControl"))}
+    ${source.slice(source.indexOf('self.addEventListener("message"'), source.indexOf("async function initializePyodide"))}
+    return () => requestQueue;
+  `)({ addEventListener(_name, handler) { onMessage = handler; } }, blocked,
+    request => calls.push(request.type), request => calls.push(request.type));
+  onMessage({ data: { channel: "noon.authoring", type: "run" } });
+  onMessage({ data: { channel: "noon.authoring", type: "cancel_semantic_continuation" } });
+  assert.deepEqual(calls, ["cancel_semantic_continuation"]);
+  releaseQueue();
+  await drained();
+  assert.deepEqual(calls, ["cancel_semantic_continuation", "run"]);
   assert.match(
     source,
     /await\s+execute_construct\(\s*__noon_result,\s*portable_constructs=__noon_portable_constructs,\s*\)/,
@@ -491,30 +510,70 @@ test("retired callback sessions release only after the active Python run unwinds
 });
 
 
-test("fatal interpreter rejection is forwarded once and closes the dead worker", () => {
-  const handlerSource = source.slice(
-    source.indexOf('self.addEventListener("unhandledrejection"'),
-    source.indexOf('self.addEventListener("message"'),
-  );
-  const handlers = new Map();
-  const errors = [];
-  let closes = 0;
-  let prevented = 0;
-  const scope = {
-    addEventListener(name, handler) { handlers.set(name, handler); },
-    close() { closes += 1; },
-  };
-  new Function("self", "postError", `let fatalAuthoringFailure = false; ${handlerSource}`)(
-    scope, (requestId, error) => errors.push({ requestId, error }),
-  );
-  const error = new Error("interpreter suspension failed");
-  const event = { reason: error, preventDefault() { prevented += 1; } };
-  handlers.get("unhandledrejection")(event);
-  handlers.get("unhandledrejection")(event);
-  assert.deepEqual(errors, [{ requestId: null, error }]);
-  assert.equal(closes, 1);
-  assert.equal(prevented, 2);
-  assert.match(source, /if \(fatalAuthoringFailure\) return;/);
+for (const trigger of ["interpreter rejection", "WASM trap"]) {
+  test(`fatal ${trigger} closes the worker and discards queued requests`, async () => {
+    const handlerSource = source.slice(
+      source.indexOf('self.addEventListener("unhandledrejection"'),
+      source.indexOf('async function initializePyodide'),
+    );
+    const handlers = new Map();
+    const errors = [];
+    let closes = 0;
+    let prevented = 0;
+    let requests = 0;
+    const scope = {
+      addEventListener(name, handler) { handlers.set(name, handler); },
+      close() { closes += 1; },
+    };
+    const drained = new Function("self", "postError", "handleRequest", "isContinuationControl",
+      `let fatalAuthoringFailure = false; let requestQueue = Promise.resolve();
+       ${handlerSource}; return () => requestQueue;`)(
+      scope, (requestId, error) => errors.push({ requestId, error }),
+      () => { requests += 1; }, () => false,
+    );
+    // Diagnostic wording and names cannot classify an ordinary error as a trap.
+    const ordinary = new Error("out of bounds memory access");
+    ordinary.name = "RuntimeError";
+    scope.noonReportEngineTrap(ordinary);
+    scope.noonReportEngineTrap(new TypeError("unreachable"));
+    scope.noonReportEngineTrap(Object.assign(new Error("invalid input"), { noonErrorVersion: 1 }));
+    assert.equal(closes, 0);
+    handlers.get("message")({ data: { requestId: 1 } });
+    handlers.get("message")({ data: { requestId: 2 } });
+    const error = trigger === "WASM trap"
+      ? new WebAssembly.RuntimeError("test trap") : new Error("interpreter suspension failed");
+    const event = { reason: error, preventDefault() { prevented += 1; } };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (trigger === "WASM trap") scope.noonReportEngineTrap(error);
+      else handlers.get("unhandledrejection")(event);
+    }
+    handlers.get("message")({ data: { requestId: 3 } });
+    await drained();
+    assert.deepEqual(errors, [{ requestId: null, error }]);
+    assert.equal(closes, 1);
+    assert.equal(requests, 0);
+    assert.equal(prevented, trigger === "WASM trap" ? 0 : 2);
+  });
+}
+
+test("a trapped host never publishes late success or request errors", () => {
+  const posted = [];
+  const dispatch = new Function("self", `
+    const AUTHORING_CHANNEL = "noon.authoring";
+    const AUTHORING_PROTOCOL_VERSION = 7;
+    let fatalAuthoringFailure = false;
+    ${source.slice(source.indexOf('function post(type,'), source.indexOf('function isRecord(value)'))}
+    return { post, fail: () => { fatalAuthoringFailure = true; } };
+  `)({ postMessage: message => posted.push(message) });
+  dispatch.post("result", { requestId: 1 });
+  dispatch.fail();
+  dispatch.post("error", { requestId: null, message: "original trap" });
+  dispatch.post("error", { requestId: 1, message: "late failure" });
+  dispatch.post("result", { requestId: 2 });
+  dispatch.post("semantic_continuation_registered", { requestId: 2 });
+  assert.deepEqual(posted.map(({ type, requestId }) => ({ type, requestId })), [
+    { type: "result", requestId: 1 }, { type: "error", requestId: null },
+  ]);
 });
 
 test("source compilation never replays module effects or changes fixtures", () => {

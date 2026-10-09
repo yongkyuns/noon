@@ -397,6 +397,86 @@ async function editAndRerun(page, expectedExampleId) {
   assert.ok(source.includes(editMarker), `${browserName}/${profileName}: edited source was not retained`);
 }
 
+async function exerciseAuthoringTrapRecovery(browser) {
+  const context = await browser.newContext(profile);
+  try {
+    // Test-only wrapper imports the unchanged, attested production worker.
+    await context.addInitScript(() => {
+      window.Worker = new Proxy(window.Worker, { construct(target, args, newTarget) {
+        const workerArgs = [...args];
+        const url = new URL(workerArgs[0], window.location.href);
+        if (url.pathname.endsWith("/python-worker.js")) {
+          workerArgs[0] = new URL("./python-worker-trap-test.js", url);
+        }
+        return Reflect.construct(target, workerArgs, newTarget);
+      } });
+    });
+    await context.route("**/python-worker-trap-test.js", route => route.fulfill({
+      contentType: "text/javascript",
+      body: `
+        const trap = new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array([
+          0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,0,7,8,1,4,116,114,97,112,0,0,10,5,1,3,0,0,11
+        ]))).exports.trap;
+        self.noonTestTrap = trap;
+        self.noonTestTrapAsync = () => Promise.resolve().then(() => trap());
+        await import('./python-worker.js');
+      `,
+    }));
+    const probe = await context.newPage();
+    await probe.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`);
+    const report = await probe.evaluate(async () => {
+      const { PythonAuthoringClient } = await import("./authoring-client.js");
+      const attempt = async promise => {
+        try { return { status: "fulfilled", result: await promise }; }
+        catch (error) { return { status: "rejected", message: error.message }; }
+      };
+      const source = "from noon import Scene, Circle, Text\nresult = Scene()\nresult.add(Circle().set_stroke(width=1), Text('fresh host', font_size=18))\n";
+      const results = [];
+      for (const mode of ["call", "await", "caught"]) {
+        const client = new PythonAuthoringClient();
+        let fresh = null;
+        try {
+          await client.ready();
+          const ordinary = await attempt(client.run("raise ValueError('recoverable input')"));
+          const ordinaryTerminated = client.terminated;
+          const ordinaryRecovery = await attempt(client.run(source));
+          let trapSource = "from js import noonTestTrap\nfrom _noon_errors import engine_call\nengine_call(noonTestTrap)";
+          if (mode === "await") {
+            trapSource = "from js import noonTestTrapAsync\nfrom _noon_errors import engine_await\nawait engine_await(noonTestTrapAsync())";
+          } else if (mode === "caught") {
+            trapSource = "from noon import Scene\nfrom js import noonTestTrap\nfrom _noon_errors import engine_call\ntry:\n    engine_call(noonTestTrap)\nexcept Exception:\n    pass\nresult = Scene()";
+          }
+          const trapped = attempt(client.run(trapSource));
+          const queued = attempt(client.run(source));
+          const failures = await Promise.all([trapped, queued]);
+          const deadHostRetry = await attempt(client.run(source));
+          fresh = new PythonAuthoringClient();
+          results.push({ mode, ordinary, ordinaryTerminated, ordinaryRecovery, failures,
+            trapTerminated: client.terminated, diagnostics: client.diagnostics,
+            deadHostRetry,
+            freshHostRecovery: await attempt(fresh.run(source)) });
+        } finally { client.terminate(); fresh?.terminate(); }
+      }
+      return results;
+    });
+    await writeDiagnostics("trap-recovery.json", { browser: browserName, profile: profileName,
+      realWasmTrapInjected: true, originalStartupTrapReproduced: false, cases: report });
+    for (const result of report) {
+      assert.equal(result.ordinary.status, "rejected");
+      assert.equal(result.ordinaryTerminated, false, "ordinary Python error retired its host");
+      assert.equal(result.ordinaryRecovery.status, "fulfilled");
+      assert.ok(result.failures.every(failure => failure.status === "rejected"));
+      assert.equal(result.failures[0].message, result.failures[1].message,
+        "queued run did not receive the original fatal failure");
+      assert.equal(result.trapTerminated, true, `${result.mode}: trapped host was reused`);
+      assert.equal(result.diagnostics.pendingRequests, 0);
+      assert.equal(result.deadHostRetry.status, "rejected");
+      assert.equal(result.freshHostRecovery.status, "fulfilled");
+    }
+    return report;
+  } finally { await context.close(); }
+}
+
 async function exerciseResize(page) {
   const sequence =
     profileName.startsWith("mobile-")
@@ -527,6 +607,7 @@ try {
       `showcase retained only ${showcaseMetrics.objectCount} objects`);
     assert.equal(showcasePlayback.controls.controllable, "true", "showcase replay was not admitted");
     finalRuntime = await runtimeSnapshot(page);
+    const trapRecovery = await exerciseAuthoringTrapRecovery(browser);
 
     assert.deepEqual(
       pageErrors,
@@ -562,6 +643,7 @@ ${consoleErrors.join("\n")}`,
         replayFps: showcasePlayback.fps,
         metrics: showcaseMetrics,
       },
+      trapRecovery,
       pageErrors,
       consoleErrors,
     });
