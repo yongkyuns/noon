@@ -27,11 +27,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          fetch-depth: 0
+          ref: e87d10b6f1b81bbfdfa0caec6f7de94d0e484b26
       - name: Prove unchanged product source
         run: |
-          git merge-base --is-ancestor 168a6c81da3505063a7bfe13b442b6fc492111d3 HEAD
-          test "$(git diff --name-only 168a6c81da3505063a7bfe13b442b6fc492111d3 HEAD)" = .github/workflows/m1-python-glow-qualification.yml
+          test "$(git rev-parse HEAD)" = e87d10b6f1b81bbfdfa0caec6f7de94d0e484b26
+          test "$(git rev-parse HEAD^{tree})" = cbbc0f806eee2ab4e53cf9bd072a984fe0721bf9
+          test ! -f .github/workflows/m1-python-glow-qualification.yml
           node --check scripts/shared-authoring-smoke.mjs
           python3 - <<'PY'
           from pathlib import Path
@@ -40,7 +41,7 @@ jobs:
       - name: Build exact Rust/WASM and Pyodide execution package
         uses: ./.github/actions/dev-wasm-build
         with:
-          preflight: "false"
+          preflight: "true"
       - name: Cache Chromium
         uses: actions/cache@v6
         with:
