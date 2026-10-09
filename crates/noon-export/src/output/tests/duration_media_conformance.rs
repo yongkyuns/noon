@@ -66,9 +66,11 @@ fn capture_movie(path: &Path, p: u32, q: u32, delayed: bool) -> Vec<u8> {
         })
         .unwrap();
     let rate = FrameRate::new(p, q).unwrap();
-    let mut capture = CaptureOptions::new(WIDTH, HEIGHT);
-    capture.backends = Backends::VULKAN;
-    capture.force_fallback_adapter = true;
+    let capture = CaptureOptions {
+        backends: Backends::VULKAN,
+        force_fallback_adapter: true,
+        ..CaptureOptions::new(WIDTH, HEIGHT)
+    };
     let mut sink = FileSink::new(
         OutputOptions::mp4(path),
         rate,
