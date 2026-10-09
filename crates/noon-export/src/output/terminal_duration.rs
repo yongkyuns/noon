@@ -96,10 +96,8 @@ fn child(bytes: &[u8], parent: Atom, wanted: [u8; 4]) -> io::Result<Atom> {
     let mut found = None;
     while cursor < parent.end {
         let (kind, entry) = atom_at(bytes, cursor, parent.end)?;
-        if kind == wanted {
-            if found.replace(entry).is_some() {
-                return Err(invalid("duplicated MP4 timing atom or track"));
-            }
+        if kind == wanted && found.replace(entry).is_some() {
+            return Err(invalid("duplicated MP4 timing atom or track"));
         }
         cursor = entry.end;
     }
