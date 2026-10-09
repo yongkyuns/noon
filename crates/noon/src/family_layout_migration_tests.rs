@@ -48,7 +48,7 @@ fn scene_family_shift_uses_the_same_route_before_and_after_bootstrap() {
 
 #[test]
 fn consecutive_live_placements_preserve_one_completed_callback_phase() {
-    use crate::{CallbackAdvance, EffectiveSemanticPropertyWrite};
+    use crate::execution_session::{CallbackAdvance, EffectiveSemanticPropertyWrite};
     use noon_core::{HostCallbackId, SemanticMutationTransaction, Vec2};
 
     let mut scene = Scene::new();
