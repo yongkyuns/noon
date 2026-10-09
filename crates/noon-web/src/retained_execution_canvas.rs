@@ -163,7 +163,10 @@ mod wasm {
     use super::{RenderSubstageSample, RenderSubstageSamples};
     use crate::{
         finish_renderer_observation,
-        gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
+        gpu_diagnostics::{
+            install_wgpu_error_handler, GpuCompletionSample, GpuCompletionSamples,
+            GpuDiagnosticMailbox,
+        },
         resolve_renderer_observation_target,
         webgl_context_lifecycle::{
             ensure_webgl_context_available, webgl_context_is_lost, WebGlContextLifecycle,
@@ -252,6 +255,7 @@ mod wasm {
         presentation_sequence: u64,
         render_substage_profiling: bool,
         render_substage_samples: RenderSubstageSamples,
+        gpu_completion_samples: GpuCompletionSamples,
     }
 
     #[wasm_bindgen(js_class = RetainedExecutionCanvasRenderer)]
@@ -330,6 +334,7 @@ mod wasm {
             self.last_geometry_cache_misses = 0;
             self.last_outline_cache_misses = 0;
             self.gpu_generation = next_generation;
+            self.gpu_completion_samples.restart();
             self.pending_changes = FrameChanges::all();
             self.pending_frame = self.mirror.frame().is_some();
             self.webgl_context_lifecycle.finish_recovery();
@@ -418,6 +423,7 @@ mod wasm {
                 presentation_sequence: 0,
                 render_substage_profiling: false,
                 render_substage_samples: RenderSubstageSamples::new(),
+                gpu_completion_samples: GpuCompletionSamples::default(),
             };
             result.update_camera()?;
             Ok(result)
@@ -710,6 +716,31 @@ mod wasm {
             self.render_substage_samples.take_json().map_err(js_error)
         }
 
+        /// Observe bounded asynchronous queue-completion callbacks. Elapsed time
+        /// includes callback dispatch delay; it is not GPU duration or scanout.
+        #[wasm_bindgen(js_name = setGpuCompletionProfiling)]
+        pub fn set_gpu_completion_profiling(&mut self, enabled: bool) {
+            self.gpu_completion_samples.set_enabled(enabled);
+        }
+
+        #[wasm_bindgen(js_name = takeGpuCompletionSamplesJson)]
+        pub fn take_gpu_completion_samples_json(&self) -> Result<String, JsValue> {
+            // WebGL callbacks otherwise wait for a later submit when playback
+            // has settled. Only an explicit diagnostic query polls, never waits.
+            if self.gpu_completion_samples.is_enabled() && self.backend == wgpu::Backend::Gl {
+                self.device.poll(wgpu::PollType::Poll).map_err(js_error)?;
+                if self
+                    .gpu_diagnostics
+                    .device_loss_pending(self.gpu_generation)
+                {
+                    return Err(js_message(
+                        "GPU completion observations invalidated by device loss",
+                    ));
+                }
+            }
+            self.gpu_completion_samples.take_json().map_err(js_error)
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
             if self.webgl_context_lifecycle.is_lost()
                 || self.webgl_context_lifecycle.recovery_pending()
@@ -978,7 +1009,31 @@ mod wasm {
                 timings.encode_cpu_wall_ms = performance_now_ms() - started;
             }
             let submit_started = profiling.then(performance_now_ms);
+            let completion_ticket = self
+                .gpu_completion_samples
+                .is_enabled()
+                .then(|| {
+                    self.gpu_completion_samples.reserve(GpuCompletionSample {
+                        session: self.mirror.transport_mirror().session(),
+                        sequence: self.mirror.transport_mirror().applied_sequence(),
+                        presentation_sequence: self.presentation_sequence.saturating_add(1),
+                        gpu_generation: self.gpu_generation,
+                        submission_started_ms: performance_now_ms(),
+                        completion_observed_ms: 0.0,
+                    })
+                })
+                .flatten();
             self.queue.submit(Some(command_buffer));
+            if let Some(ticket) = completion_ticket {
+                let diagnostics = self.gpu_diagnostics.clone();
+                let generation = self.gpu_generation;
+                self.queue.on_submitted_work_done(move || {
+                    ticket.complete(
+                        performance_now_ms(),
+                        diagnostics.device_loss_pending(generation),
+                    );
+                });
+            }
             self.queue.present(surface_texture);
             // Returning to no-effect content restores the original worker fast
             // path once the last old retained GPU scope has been retired.

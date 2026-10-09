@@ -615,12 +615,20 @@ async function clickIndicateParity(backend, { moving = false } = {}) {
       if (host === "direct") {
         await pages.direct.waitForFunction(() => clickIndicateParity.driver.stats().idle);
       } else {
-        await waitUntil("worker Indicate restoration", () => pages.worker.evaluate(async baseScaleX => {
+        await waitUntil("worker Indicate restoration", () => pages.worker.evaluate(async base => {
           const frame = await clickIndicateParity.execution.debugFrame();
           const { metrics } = await clickIndicateParity.execution.metrics();
-          return Math.abs(frame.objects[0].transform.scale.x - baseScaleX) < 1e-5 &&
-            !metrics.needsPresent && metrics.bufferedDeltas === 0;
-        }, initial.worker.objects[0].transform.scale.x));
+          const restored = frame.objects[0];
+          // Scale can settle below its tolerance before the interaction's
+          // yellow-to-authored-fill transition reaches its exact endpoint.
+          // Require the original four color channels too; never promote a
+          // nearly-restored transient as a completed state.
+          const fillRestored = restored?.fill != null && base.fill != null &&
+            ["red", "green", "blue", "alpha"].every(channel =>
+              restored.fill[channel] === base.fill[channel]);
+          return Math.abs(restored.transform.scale.x - base.transform.scale.x) < 1e-5 &&
+            fillRestored && !metrics.needsPresent && metrics.bufferedDeltas === 0;
+        }, initial.worker.objects[0]));
       }
     }
     if (moving) {

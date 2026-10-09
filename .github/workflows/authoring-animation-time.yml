@@ -1,0 +1,35 @@
+name: Authored animation time conformance
+on:
+  pull_request:
+    paths:
+      - 'crates/noon/**'
+      - 'crates/noon-core/**'
+      - 'crates/noon-runtime/**'
+      - 'crates/noon-compile/**'
+      - 'crates/noon-web/**'
+      - 'crates/noon-native/**'
+      - 'crates/noon-export/**'
+      - '.github/workflows/authoring-animation-time.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: animation-time-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  authored-time:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install repository-pinned Rust
+        run: rustup install
+      - name: Check shared runtime sampling and explicit playback clock
+        run: |
+          cargo test -p noon --no-default-features --test authored_duration_conformance
+          cargo test -p noon-web --no-default-features --test playback_duration_conformance

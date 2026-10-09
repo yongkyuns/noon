@@ -1,4 +1,7 @@
-use noon::integration::{ExecutionViewportQuery, RendererPublication, TimelineWakeState};
+use noon::integration::{
+    ExecutionViewportQuery, ForwardSample, ForwardSampleStatus, RendererPublication,
+    TimelineWakeState,
+};
 use noon::integration::{NativePointerInputToken, PointerFrameSnapshot, PointerFrameView};
 use noon::{
     ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
@@ -17,7 +20,8 @@ mod viewport_tests;
 ///
 /// Both implementations retain their canonical runtime owner. This trait only
 /// lets the common event loop drive time, deliver normalized input, query
-/// visibility, and acknowledge a publication after successful presentation.
+/// visibility, and acknowledge a publication after the renderer has retained it.
+/// Physical presentation is a separate, potentially coalesced operation.
 pub(crate) trait NativeExecutionSource {
     fn frame_time(&self) -> f64;
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError>;
@@ -40,7 +44,7 @@ pub(crate) trait NativeExecutionSource {
     ) -> Result<(), NativeHostError> {
         frame.validate_presentation(self.session(), frame.view())?;
         self.refresh_pointer_hover(frame)?;
-        self.admit_presented_publication(frame.publication())
+        self.admit_retained_publication(frame.publication())
     }
     fn refresh_pointer_hover(
         &mut self,
@@ -50,16 +54,21 @@ pub(crate) trait NativeExecutionSource {
     fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError>;
     fn timeline(&self) -> TimelineWakeState;
     fn frame_pending(&self) -> bool;
-    /// Advance canonical execution and report whether this call committed at
-    /// least one opaque host callback phase.
-    ///
-    /// The bit is platform timing metadata only. The execution session remains
-    /// the sole callback schedule and authored-time authority.
-    fn advance_to(&mut self, requested_time: f64) -> Result<bool, NativeHostError>;
+    /// An unfinished source is still playing while an internal publication
+    /// barrier temporarily suppresses its timeline wake. This is not user idle.
+    fn source_active(&self) -> bool {
+        false
+    }
+    /// A coherent endpoint that the renderer must retain before source resumes.
+    fn pending_endpoint(&self) -> Option<PublicationContext> {
+        None
+    }
+    /// Advance through the existing shared runtime/source protocol. Work is
+    /// bounded per call; the caller retains its absolute wall-time target when
+    /// more source work or a renderer publication is required.
+    fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError>;
     /// Resume one authoring continuation when its shared program is ready.
-    ///
-    /// The return value lets the platform clock reanchor only when application
-    /// code actually supplied the next segment.
+    /// Source execution latency does not start a new playback epoch.
     fn resume_ready(&mut self) -> Result<bool, NativeHostError>;
     fn configure_native_pointer_input(
         &mut self,
@@ -79,7 +88,7 @@ pub(crate) trait NativeExecutionSource {
     ) -> Result<(), NativeHostError>;
     fn emit_native_event(&mut self, event: NativeEventOccurrence) -> Result<(), NativeHostError>;
     fn take_renderer_publication(&mut self) -> RendererPublication<'_>;
-    fn admit_presented_publication(
+    fn admit_retained_publication(
         &mut self,
         publication: PublicationContext,
     ) -> Result<(), NativeHostError>;
@@ -148,11 +157,11 @@ impl NativeExecutionSource for StaticExecutionSource {
         self.session.wake_state().frame_pending()
     }
 
-    fn advance_to(&mut self, requested_time: f64) -> Result<bool, NativeHostError> {
+    fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError> {
         self.callbacks
             .advance_to(&mut self.session, requested_time)
-            .map_err(NativeHostError::from)?;
-        Ok(self.callbacks.last_advance_completed_callback_phase())
+            .map(|_| ())
+            .map_err(NativeHostError::from)
     }
 
     fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
@@ -206,7 +215,7 @@ impl NativeExecutionSource for StaticExecutionSource {
         self.session.take_renderer_publication()
     }
 
-    fn admit_presented_publication(
+    fn admit_retained_publication(
         &mut self,
         _publication: PublicationContext,
     ) -> Result<(), NativeHostError> {
@@ -309,11 +318,47 @@ where
         self.program.session().wake_state().frame_pending()
     }
 
-    fn advance_to(&mut self, requested_time: f64) -> Result<bool, NativeHostError> {
-        self.program
-            .drive_to(&mut self.callbacks, requested_time)
-            .map_err(|error| NativeHostError::Program(error.to_string()))?;
-        Ok(self.callbacks.last_advance_completed_callback_phase())
+    fn source_active(&self) -> bool {
+        !matches!(
+            self.program.status(),
+            LiveProgramStatus::Finished | LiveProgramStatus::Terminal
+        )
+    }
+
+    fn pending_endpoint(&self) -> Option<PublicationContext> {
+        match self.program.status() {
+            LiveProgramStatus::PublicationPending(context) => Some(context),
+            _ => None,
+        }
+    }
+
+    fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError> {
+        // Reuse the same shared forward-sampling protocol as offline Rust
+        // output. It alone orders callbacks, clipped endpoints, continuations,
+        // and same-time edits. No host-side segment schedule is introduced.
+        const MAX_STEPS: u32 = 64;
+        let mut sample = ForwardSample::new(
+            &mut self.program,
+            &mut self.callbacks,
+            requested_time,
+            MAX_STEPS,
+        )
+        .map_err(|error| NativeHostError::Program(error.to_string()))?;
+        for _ in 0..MAX_STEPS {
+            match sample
+                .advance()
+                .map_err(|error| NativeHostError::Program(error.to_string()))?
+            {
+                ForwardSampleStatus::Progress => {}
+                ForwardSampleStatus::PublicationPending(_)
+                | ForwardSampleStatus::Ready(_)
+                | ForwardSampleStatus::SourceFinished(_) => return Ok(()),
+            }
+        }
+        // Yield before ForwardSample's transition limit would be exceeded.
+        // The canonical program keeps its phase; the next host wake continues
+        // toward the SAME epoch's elapsed time rather than discarding lateness.
+        Ok(())
     }
 
     fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
@@ -373,14 +418,14 @@ where
         self.program.take_renderer_publication()
     }
 
-    fn admit_presented_publication(
+    fn admit_retained_publication(
         &mut self,
         publication: PublicationContext,
     ) -> Result<(), NativeHostError> {
         if let LiveProgramStatus::PublicationPending(expected) = self.program.status() {
             if publication != expected {
                 return Err(NativeHostError::Program(format!(
-                    "presented publication {publication:?} does not match live endpoint {expected:?}"
+                    "retained publication {publication:?} does not match live endpoint {expected:?}"
                 )));
             }
             self.program

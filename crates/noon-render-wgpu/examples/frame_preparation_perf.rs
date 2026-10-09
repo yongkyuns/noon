@@ -38,7 +38,6 @@ struct CommandMetrics {
     upload_bytes: usize,
     draw_calls: usize,
     instances: usize,
-    bundle_rebuilds: usize,
 }
 
 struct CommandObservation {
@@ -92,8 +91,8 @@ fn benchmark_gpu_commands(config: Config) {
         "\nGPU command measurements ({:?} {:?}; {} warmups, {} samples)",
         adapter_info.backend, adapter_info.device_type, config.warmups, config.samples
     );
-    println!("| Objects | Operation | Median | p95 | p99 | Initial bytes | Dirty bytes | Draw calls | Instances | Bundle rebuilds / samples |");
-    println!("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!("| Objects | Operation | Median | p95 | p99 | Initial bytes | Dirty bytes | Draw calls | Instances |");
+    println!("|---:|---|---:|---:|---:|---:|---:|---:|---:|");
     for (object_count, case) in [
         (10_000, GeometryCase::Transform),
         (100_000, GeometryCase::Transform),
@@ -150,8 +149,6 @@ fn benchmark_gpu_geometry(
         let initial = preparer.prepare(&frame);
         renderer.upload(device, queue, &initial).bytes_uploaded
     };
-    let initial_bundle_count = renderer.path_render_bundle_rebuilds();
-    let mut previous_bundle_count = initial_bundle_count;
     let (_target_texture, view) = benchmark_target(device);
     let measurements = measure_command_frames(device, queue, config, |iteration| {
         let update_started = Instant::now();
@@ -184,9 +181,6 @@ fn benchmark_gpu_geometry(
         let mut encoder = device.create_command_encoder(&Default::default());
         let draws = renderer.encode(&mut encoder, &view, &prepared, wgpu::Color::BLACK);
         let command_buffer = encoder.finish();
-        let bundle_count = renderer.path_render_bundle_rebuilds();
-        let bundle_rebuilds = bundle_count.saturating_sub(previous_bundle_count);
-        previous_bundle_count = bundle_count;
         CommandObservation {
             command_buffer,
             update,
@@ -196,7 +190,6 @@ fn benchmark_gpu_geometry(
                 upload_bytes: upload.bytes_uploaded,
                 draw_calls: draws.draw_calls,
                 instances: draws.instances_drawn,
-                bundle_rebuilds,
             },
         }
     });
@@ -244,8 +237,6 @@ fn benchmark_gpu_text(device: &wgpu::Device, queue: &wgpu::Queue, config: Config
             .upload_retained(device, queue, &initial, &mut text_state)
             .bytes_uploaded()
     };
-    let initial_bundle_count = renderer.path_render_bundle_rebuilds();
-    let mut previous_bundle_count = initial_bundle_count;
     let (_target_texture, view) = benchmark_target(device);
     let measurements = measure_command_frames(device, queue, config, |iteration| {
         frame.objects[target].transform.translation.x = base_x + iteration as f32 * 0.0005;
@@ -276,9 +267,6 @@ fn benchmark_gpu_text(device: &wgpu::Device, queue: &wgpu::Queue, config: Config
             )
             .unwrap();
         let command_buffer = encoder.finish();
-        let bundle_count = renderer.path_render_bundle_rebuilds();
-        let bundle_rebuilds = bundle_count.saturating_sub(previous_bundle_count);
-        previous_bundle_count = bundle_count;
         CommandObservation {
             command_buffer,
             update,
@@ -288,7 +276,6 @@ fn benchmark_gpu_text(device: &wgpu::Device, queue: &wgpu::Queue, config: Config
                 upload_bytes: upload.bytes_uploaded(),
                 draw_calls: draws.draw_calls(),
                 instances: draws.instances_drawn(),
-                bundle_rebuilds,
             },
         }
     });
@@ -418,9 +405,6 @@ fn measure_command_frames(
             metrics.upload_bytes = observation.metrics.upload_bytes;
             metrics.draw_calls = observation.metrics.draw_calls;
             metrics.instances = observation.metrics.instances;
-            metrics.bundle_rebuilds = metrics
-                .bundle_rebuilds
-                .saturating_add(observation.metrics.bundle_rebuilds);
         }
     }
     // Drain outside the timed regions to keep later cases from inheriting this
@@ -445,7 +429,7 @@ fn print_command_measurements(
         ("queue.submit host call", measurements.submit),
     ] {
         println!(
-            "| {object_count} | {label} | {:.6} ms | {:.6} ms | {:.6} ms | {} | {} | {} | {} | {} |",
+            "| {object_count} | {label} | {:.6} ms | {:.6} ms | {:.6} ms | {} | {} | {} | {} |",
             milliseconds(timing.median),
             milliseconds(timing.p95),
             milliseconds(timing.p99),
@@ -453,7 +437,6 @@ fn print_command_measurements(
             measurements.metrics.upload_bytes,
             measurements.metrics.draw_calls,
             measurements.metrics.instances,
-            measurements.metrics.bundle_rebuilds,
         );
     }
 }

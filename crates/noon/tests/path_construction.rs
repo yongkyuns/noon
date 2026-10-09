@@ -46,19 +46,29 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
         .live(&mut session)
         .add_line_to(&object, Vec2::new(4., 3.))
         .unwrap();
-    scene
-        .live(&mut session)
-        .add_quadratic_bezier_curve_to(&object, Vec2::new(5., 4.), Vec2::new(6., 3.))
-        .unwrap();
-    scene
-        .live(&mut session)
-        .add_cubic_bezier_curve_to(
-            &object,
-            Vec2::new(7., 3.),
-            Vec2::new(7., 1.),
-            Vec2::new(6., 1.),
-        )
-        .unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Quadratic {
+            object: &object,
+            control: Vec2::new(5., 4.),
+            anchor: Vec2::new(6., 3.),
+        },
+    )
+    .unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Cubic {
+            object: &object,
+            control1: Vec2::new(7., 3.),
+            control2: Vec2::new(7., 1.),
+            anchor: Vec2::new(6., 1.),
+        },
+    )
+    .unwrap();
     scene.live(&mut session).close_path(&object).unwrap();
     let query =
         noon::integration::effective_path_query(scene.integration_store(), &session, &object)
@@ -86,10 +96,16 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
             .stats(),
         resources
     );
-    scene
-        .live(&mut session)
-        .start_new_path(&object, Vec2::new(-2., -1.))
-        .unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Start {
+            object: &object,
+            point: Vec2::new(-2., -1.),
+        },
+    )
+    .unwrap();
     scene
         .live(&mut session)
         .add_line_to(&object, Vec2::new(-1., 0.))

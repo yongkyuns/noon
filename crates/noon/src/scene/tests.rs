@@ -743,3 +743,132 @@ fn scene_family_placement_surface_is_available_before_execution_bootstrap() {
 
     assert!(scene.revision().get() > revision.get());
 }
+
+#[test]
+fn scene_running_path_edits_reject_cold_and_foreign_without_mutation() {
+    let mut scene = Scene::new();
+    let source = scene.line((0.0, 0.0), (4.0, 0.0)).unwrap();
+    let destination = scene.line((10.0, 0.0), (12.0, 0.0)).unwrap();
+    scene.add(&source).unwrap();
+    scene.add(&destination).unwrap();
+
+    let revision = scene.revision();
+    let cold = scene
+        .pointwise_become_partial(&destination, &source, 0.25, 0.75)
+        .unwrap_err();
+    assert!(matches!(
+        cold,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        destination.path_query().unwrap().start().unwrap(),
+        (10.0, 0.0)
+    );
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    scene
+        .pointwise_become_partial(&destination, &source, 0.25, 0.75)
+        .unwrap();
+    assert_eq!(
+        destination.path_query().unwrap().start().unwrap(),
+        (1.0, 0.0)
+    );
+    assert_eq!(destination.path_query().unwrap().end().unwrap(), (3.0, 0.0));
+    assert!(scene.revision().get() > revision.get());
+
+    let foreign = Scene::new().line((0.0, 0.0), (1.0, 0.0)).unwrap();
+    let revision = scene.revision();
+    let state = destination.state().unwrap();
+    assert!(matches!(
+        scene.pointwise_become_partial(&destination, &foreign, 0.0, 1.0),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(destination.state().unwrap(), state);
+}
+
+#[test]
+fn scene_path_edit_surface_rejects_cold_invalid_and_foreign_before_publication() {
+    let mut scene = Scene::new();
+    let object = scene.square(2.0).unwrap();
+    let family = scene.family(&[MobjectTarget::Object(&object)]).unwrap();
+    scene.add(&object).unwrap();
+    let revision = scene.revision();
+    let before = object.state().unwrap();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    let straight = [noon_core::Vec2::ZERO, noon_core::Vec2::new(1.0, 0.0)];
+    assert!(scene.set_points_smoothly(&object, &straight).is_err());
+    assert!(scene.make_family_jagged(&family).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let invalid = [noon_core::Vec2::ZERO, noon_core::Vec2::new(f32::NAN, 0.0)];
+    let revision = scene.revision();
+    assert!(scene.set_points_smoothly(&object, &invalid).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+
+    let foreign = Scene::new().square(1.0).unwrap();
+    assert!(matches!(
+        scene.set_points_smoothly(
+            &foreign,
+            &[
+                noon_core::Vec2::new(-1.0, 0.0),
+                noon_core::Vec2::new(1.0, 0.0)
+            ]
+        ),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+
+    scene
+        .set_points_smoothly(
+            &object,
+            &[
+                noon_core::Vec2::new(-1.0, 0.0),
+                noon_core::Vec2::new(0.0, 1.0),
+                noon_core::Vec2::new(1.0, 0.0),
+            ],
+        )
+        .unwrap();
+    assert_eq!(object.path_query().unwrap().curve_count(), 2);
+    scene.make_family_smooth(&family).unwrap();
+    scene.make_family_jagged(&family).unwrap();
+    assert!(scene.revision().get() > revision.get());
+}
