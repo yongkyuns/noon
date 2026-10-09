@@ -24,6 +24,7 @@
 mod export_frames;
 mod forward_sample;
 mod frame_grid;
+mod path_edits;
 mod pixel_readback;
 mod svg_failure;
 
@@ -36,6 +37,7 @@ pub use forward_sample::{
     ForwardSample, ForwardSampleError, ForwardSampleStatus, SampleObservation,
 };
 pub use frame_grid::{FrameGrid, FrameGridError, FrameRate, FrameSample};
+pub use path_edits::{publish_borrowed_path_edit, BorrowedPathEdit};
 pub use pixel_readback::{
     PixelChannelOrder, PixelReadbackError, PixelRowOrder, Rgba8ReadbackLayout,
 };

@@ -81,20 +81,6 @@ impl LiveSession<'_> {
         .map_err(LiveSessionError::from)
     }
 
-    pub fn set_points_smoothly(
-        &mut self,
-        object: &Mobject,
-        points: &[noon_core::Vec2],
-    ) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::SmoothCorners(points),
-        )
-        .map_err(LiveSessionError::from)
-    }
     pub fn make_smooth(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
         crate::path_editing::publish_running_object_edit(
             self.store,
@@ -130,20 +116,7 @@ impl LiveSession<'_> {
         )
         .map_err(LiveSessionError::from)
     }
-    pub fn start_new_path(
-        &mut self,
-        object: &Mobject,
-        point: noon_core::Vec2,
-    ) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::Start(point),
-        )
-        .map_err(LiveSessionError::from)
-    }
+
     pub fn add_line_to(
         &mut self,
         object: &Mobject,
@@ -158,37 +131,7 @@ impl LiveSession<'_> {
         )
         .map_err(LiveSessionError::from)
     }
-    pub fn add_quadratic_bezier_curve_to(
-        &mut self,
-        object: &Mobject,
-        control: noon_core::Vec2,
-        anchor: noon_core::Vec2,
-    ) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::Quadratic(control, anchor),
-        )
-        .map_err(LiveSessionError::from)
-    }
-    pub fn add_cubic_bezier_curve_to(
-        &mut self,
-        object: &Mobject,
-        c1: noon_core::Vec2,
-        c2: noon_core::Vec2,
-        anchor: noon_core::Vec2,
-    ) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::Cubic(c1, c2, anchor),
-        )
-        .map_err(LiveSessionError::from)
-    }
+
     pub fn close_path(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
         crate::path_editing::publish_running_object_edit(
             self.store,
@@ -199,20 +142,7 @@ impl LiveSession<'_> {
         )
         .map_err(LiveSessionError::from)
     }
-    pub fn insert_n_curves(
-        &mut self,
-        object: &Mobject,
-        additional: usize,
-    ) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::Subdivide(additional),
-        )
-        .map_err(LiveSessionError::from)
-    }
+
     pub fn reverse_direction(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
         crate::path_editing::publish_running_object_edit(
             self.store,
@@ -220,26 +150,6 @@ impl LiveSession<'_> {
             self.session,
             object,
             PathEdit::Reverse,
-        )
-        .map_err(LiveSessionError::from)
-    }
-    /// Capture both operands from one coherent runtime publication; active
-    /// render overrides use the normal capture rejection, never stale geometry.
-    pub fn pointwise_become_partial(
-        &mut self,
-        object: &Mobject,
-        source: &Mobject,
-        a: f64,
-        b: f64,
-    ) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_pointwise_partial(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            source,
-            a,
-            b,
         )
         .map_err(LiveSessionError::from)
     }
@@ -262,19 +172,6 @@ impl crate::LiveSession<'_> {
             self.session,
             family,
             true,
-        )
-        .map_err(crate::LiveSessionError::from)
-    }
-    pub fn make_family_jagged(
-        &mut self,
-        family: &MobjectFamily,
-    ) -> Result<(), crate::LiveSessionError> {
-        crate::path_editing::publish_running_family_anchor_mode(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            false,
         )
         .map_err(crate::LiveSessionError::from)
     }

@@ -1,3 +1,5 @@
+mod duration_media_conformance;
+
 use super::*;
 use crate::CaptureWork;
 use noon::integration::{ExportFrame, FrameGrid, SampleObservation};

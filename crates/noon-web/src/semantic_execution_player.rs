@@ -759,12 +759,31 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    fn publish_borrowed_path_edit(
+        &mut self,
+        edit: noon::integration::BorrowedPathEdit<'_>,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let root = self
+            .semantic_root
+            .expect("live semantic store has one scene root");
+        noon::integration::publish_borrowed_path_edit(&semantics, root, &mut self.session, edit)
+            .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_start_new_path(
         &mut self,
         source: &noon::Mobject,
         point: noon_core::Vec2,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.start_new_path(source, point))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Start {
+            object: source,
+            point,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -783,7 +802,11 @@ impl SemanticExecutionPlayer {
         control: noon_core::Vec2,
         anchor: noon_core::Vec2,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.add_quadratic_bezier_curve_to(source, control, anchor))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Quadratic {
+            object: source,
+            control,
+            anchor,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -794,8 +817,11 @@ impl SemanticExecutionPlayer {
         control2: noon_core::Vec2,
         anchor: noon_core::Vec2,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.add_cubic_bezier_curve_to(source, control1, control2, anchor)
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Cubic {
+            object: source,
+            control1,
+            control2,
+            anchor,
         })
     }
 
@@ -805,7 +831,10 @@ impl SemanticExecutionPlayer {
         object: &noon::Mobject,
         points: &[noon_core::Vec2],
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_points_smoothly(object, points))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SmoothCorners {
+            object,
+            points,
+        })
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_change_anchor_mode(
@@ -827,13 +856,13 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         smooth: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            if smooth {
-                live.make_family_smooth(family)
-            } else {
-                live.make_family_jagged(family)
-            }
-        })
+        if smooth {
+            self.with_live_session(|live| live.make_family_smooth(family))
+        } else {
+            self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyJagged {
+                family,
+            })
+        }
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_insert_n_curves(
@@ -841,7 +870,10 @@ impl SemanticExecutionPlayer {
         object: &noon::Mobject,
         additional: usize,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.insert_n_curves(object, additional))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Subdivide {
+            object,
+            additional,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -885,7 +917,12 @@ impl SemanticExecutionPlayer {
         a: f64,
         b: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.pointwise_become_partial(object, source, a, b))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Partial {
+            object,
+            source,
+            a,
+            b,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
