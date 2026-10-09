@@ -310,10 +310,10 @@ export async function attachSemanticEngine(
     }
     return externalInteractionTickTime;
   };
-  const observeContinuationWake = (wallTime, force = false, emit = true, reanchor = false) => {
-    const wake = reanchor
-      ? player.reanchorLiveSegmentWake(wallTime)
-      : player.liveSegmentWake(wallTime);
+  const observeContinuationWake = (wallTime, force = false, emit = true) => {
+    // A required callback or publication barrier is not a user pause.
+    // Only the Rust-owned original monotonic source epoch determines deadlines.
+    const wake = player.liveSegmentWake(wallTime);
     const cadence = wake.cadence;
     const timerAfterMilliseconds = wake.timerAfterMilliseconds;
     wake.free?.();
@@ -682,11 +682,9 @@ export async function attachSemanticEngine(
       // frames as well as endpoints so realtime continuation remains visible.
       const readyPublication = drainAndSendDelta();
       if (!reachedEndpoint) {
-        // A required callback stalls simulation; exclude its wall latency from
-        // the next Rust wake anchor after all same-timestamp retries finish.
-        observeContinuationWake(
-          phaseCount > 0 ? performance.now() : wallTime, true, true, phaseCount > 0,
-        );
+        // Commit every required callback at its original authored time, then
+        // observe the actual wall clock without restarting the Rust source epoch.
+        observeContinuationWake(phaseCount > 0 ? performance.now() : wallTime, true);
         return;
       }
 
