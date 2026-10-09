@@ -66,10 +66,16 @@ fn refinement_preserves_shape_discontinuities_identity_and_live_publication() {
         assert_eq!(scene.revision(), revision);
         let mut session = scene.execution_session().unwrap();
         if live_mode {
-            scene
-                .live(&mut session)
-                .insert_n_curves(&object, 3)
-                .unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::Subdivide {
+                    object: &object,
+                    additional: 3,
+                },
+            )
+            .unwrap();
         } else {
             object.insert_n_curves(3).unwrap();
         }
