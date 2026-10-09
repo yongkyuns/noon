@@ -27,6 +27,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Prove unchanged product source
         run: |
           git merge-base --is-ancestor 168a6c81da3505063a7bfe13b442b6fc492111d3 HEAD
