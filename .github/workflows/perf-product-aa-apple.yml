@@ -1,0 +1,169 @@
+name: Product A/A standard Apple Metal precision diagnostic (not qualification)
+
+on:
+  pull_request:
+    types: [opened]
+    paths:
+      - ".github/workflows/perf-product-aa-apple.yml"
+      - "benchmarks/product-aa-apple-study.json"
+      - "scripts/product-aa-apple-study.mjs"
+      - "scripts/product-aa-apple-study.test.mjs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-aa-1933-product-aa-20261009-05
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Identical-package headed Apple Metal A/A 7+3 — not acceptance
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'research/1933-standard-macos-product-aa-20261009-05' && github.run_attempt == 1
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: control
+          persist-credentials: false
+
+      - name: Record this single registered attempt
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/inputs
+          printf '%s\n' "Diagnostic only; never a qualification or merge approval." > evidence/README.txt
+          printf '%s\n' "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > evidence/attempt.txt
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          if event.get("action") != "opened":
+              raise SystemExit("Only the first pull_request.opened event is registered.")
+          PY
+          git -C control rev-parse HEAD > evidence/control-commit.txt
+          git -C control archive HEAD | gzip > evidence/inputs/control-source.tar.gz
+          cp control/benchmarks/product-aa-apple-study.json evidence/inputs/registered-plan.json
+          sha256sum evidence/inputs/registered-plan.json > evidence/inputs/plan.sha256
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.23.3"
+
+      - name: Test diagnostic schedule, provenance and failure handling
+        run: |
+          set -euo pipefail
+          node --check control/scripts/product-aa-apple-study.mjs
+          node --test control/scripts/product-aa-apple-study.test.mjs 2>&1 | tee evidence/controller-tests.log
+
+      - name: Checkout the frozen measurement and scoring implementation
+        uses: actions/checkout@v7
+        with:
+          ref: aa30610e1b69f6c7bbbe85bedc82eab1392980d2
+          fetch-depth: 2 # Include both overlay commits AND frozen source f5ec15c7 for exact diff attestation.
+          path: harness
+          persist-credentials: false
+
+      - name: Checkout original baseline source
+        uses: actions/checkout@v7
+        with:
+          ref: 4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f
+          fetch-depth: 2
+          path: baseline
+          persist-credentials: false
+
+      - name: Checkout original tested candidate merge
+        uses: actions/checkout@v7
+        with:
+          ref: f67d915ad6709d97f5a2ba60827302f87fedfba2
+          fetch-depth: 2
+          path: candidate
+          persist-credentials: false
+
+      - name: Fetch exact original archives and authenticate before extraction
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, stat, subprocess, zipfile
+          from pathlib import Path, PurePosixPath
+          plan = json.loads(Path("control/benchmarks/product-aa-apple-study.json").read_text())
+          for build in plan["builds"]:
+              endpoint = f'repos/yongkyuns/noon/actions/artifacts/{build["artifactId"]}'
+              metadata = json.loads(subprocess.check_output(["gh", "api", endpoint]))
+              Path(f'evidence/inputs/{build["name"]}-artifact.json').write_text(json.dumps(metadata, indent=2))
+              if metadata["id"] != build["artifactId"] or metadata.get("expired"):
+                  raise SystemExit("Missing or expired frozen artifact")
+              if metadata.get("workflow_run", {}).get("id") != plan["producerRun"]:
+                  raise SystemExit("Artifact came from a different producer")
+              if metadata.get("digest") != "sha256:" + build["zipSha256"]:
+                  raise SystemExit("Producer archive digest differs from preregistration")
+              archive = Path(f'evidence/inputs/{build["name"]}-original.zip')
+              with archive.open("xb") as output:
+                  subprocess.run(["gh", "api", endpoint + "/zip"], stdout=output, check=True)
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != build["zipSha256"]:
+                  raise SystemExit("Downloaded archive checksum mismatch")
+              root = Path(build["name"]) / "web"
+              with zipfile.ZipFile(archive) as z:
+                  for info in z.infolist():
+                      item = PurePosixPath(info.filename)
+                      if item.is_absolute() or ".." in item.parts or "\\" in info.filename:
+                          raise SystemExit("Unsafe archive path")
+                      if stat.S_ISLNK(info.external_attr >> 16):
+                          raise SystemExit("Archive symlink is not accepted")
+                  z.extractall(root)
+              identity = json.loads((root / "ci-artifact.json").read_text())
+              if identity["source"] != build["source"]:
+                  raise SystemExit("Original production source changed")
+          PY
+
+      - name: Preserve source inputs and runner image without recompiling
+        run: |
+          set -euo pipefail
+          for side in harness baseline candidate; do
+            git -C "$side" rev-parse HEAD > "evidence/inputs/$side-commit.txt"
+            git -C "$side" rev-parse 'HEAD^{tree}' > "evidence/inputs/$side-tree.txt"
+            git -C "$side" archive HEAD | gzip > "evidence/inputs/$side-source.tar.gz"
+          done
+          uname -a > evidence/inputs/uname.txt
+          sysctl -n hw.model > evidence/inputs/hw-model.txt
+          sw_vers > evidence/inputs/sw-vers.txt
+          system_profiler SPDisplaysDataType -json > evidence/inputs/display-hardware.json || true
+          printf '%s\n' "ImageOS=${ImageOS:-unavailable}" "ImageVersion=${ImageVersion:-unavailable}" > evidence/inputs/runner-image.txt
+
+      - name: Install pinned Chromium on STANDARD macos-15 Apple Silicon and authenticate launcher overlay
+        working-directory: harness
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+          npm ls playwright pngjs > ../evidence/inputs/node-packages.txt
+          node --version > ../evidence/inputs/node-version.txt
+          git diff --name-only f5ec15c7a1a9a70c368e141abfc740f5081efc4e HEAD > ../evidence/inputs/apple-harness-overlay.txt
+          grep -Fx 'scripts/playground-product-pair.mjs' ../evidence/inputs/apple-harness-overlay.txt
+          grep -Fx 'scripts/playground-product-e2e.mjs' ../evidence/inputs/apple-harness-overlay.txt
+          test "$(wc -l < ../evidence/inputs/apple-harness-overlay.txt | tr -d ' ')" -eq 2
+
+      - name: Collect the entire registered A/A schedule, then classify all retained cohorts
+        run: |
+          set -euo pipefail
+          node control/scripts/product-aa-apple-study.mjs \
+            control/benchmarks/product-aa-apple-study.json \
+            "$GITHUB_WORKSPACE/harness" "$GITHUB_WORKSPACE/baseline" \
+            "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/evidence/study"
+
+      - name: Preserve diagnostic inputs, all trials, and any partial failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: diagnostic-aa-1933-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
