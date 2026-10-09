@@ -14,6 +14,7 @@ import {
   decodeTransferableExecutionDelta,
   executionDeltaMetadata,
   prepareExecutionDeltaMetadataForSend,
+  prepareExecutionDeltaTransportForSend,
   selectExecutionTransportMode,
 } from "./execution-transport.js";
 
@@ -284,4 +285,72 @@ test("delta send reuses only metadata validated for the identical JSON payload",
     port1.close();
     port2.close();
   }
+});
+
+
+test("canonical worker header avoids a full producer parse while receivers validate the unchanged body", async () => {
+  const header = { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL, session: 1,
+    sequence: 0, snapshot: true, pointer_view: { revision: 8, width: 640, height: 360 } };
+  const json = JSON.stringify({ ...header, time: 0,
+    objects: Array.from({ length: 600 }, (_, id) => ({ id, geometry: "●\n".repeat(256) })) });
+  const packet = `${JSON.stringify(header)}\n${json}`;
+  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(json).length);
+  const shared = new SharedExecutionDeltaWriter(mailbox);
+  const reader = new SharedExecutionDeltaReader(mailbox);
+  const { port1, port2 } = new MessageChannel();
+  try {
+    const sender = new TransferableExecutionDeltaSender(port1);
+    const incoming = new Promise(resolve => port2.once("message", resolve));
+    const parsedLengths = [];
+    const originalParse = JSON.parse;
+    let prepared;
+    JSON.parse = function (text, ...args) {
+      parsedLengths.push(text.length);
+      return originalParse.call(this, text, ...args);
+    };
+    try {
+      prepared = prepareExecutionDeltaTransportForSend(packet);
+      assert.equal(prepared.json, json);
+      assert.equal(shared.send(prepared.json, prepared.metadata), true);
+      const second = prepareExecutionDeltaTransportForSend(packet);
+      assert.equal(sender.send(second.json, second.metadata), true);
+    } finally { JSON.parse = originalParse; }
+    assert.deepEqual(parsedLengths, [JSON.stringify(header).length, JSON.stringify(header).length],
+      "only the constant-size headers are parsed at the producer");
+    assert.ok(Object.isFrozen(prepared.metadata) && Object.isFrozen(prepared.metadata.pointerView));
+    let sharedBody;
+    assert.equal(reader.drain((body, metadata) => {
+      sharedBody = body;
+      assert.deepEqual(metadata, executionDeltaMetadata(json));
+    }), 1);
+    assert.equal(sharedBody, json);
+    const received = decodeTransferableExecutionDelta(await incoming);
+    assert.equal(received.json, json);
+    assert.deepEqual(received.metadata, prepared.metadata);
+  } finally { port1.close(); port2.close(); }
+});
+
+test("worker carrier validates bounded metadata and never relaxes generic JSON or receiver validation", () => {
+  const header = JSON.parse(delta(0));
+  const packet = value => `${JSON.stringify(value)}\n${delta(0)}`;
+  assert.throws(() => prepareExecutionDeltaTransportForSend(null), /header\/body string/);
+  for (const bad of ["", delta(0), `${delta(0)}\n`, `${" ".repeat(513)}\n${delta(0)}`]) {
+    assert.throws(() => prepareExecutionDeltaTransportForSend(bad), /bounded metadata header/);
+  }
+  for (const [field, value, error] of [
+    ["channel", "other", /invalid channel/], ["session", -1, /invalid session/],
+    ["sequence", Number.MAX_SAFE_INTEGER + 1, /invalid sequence/],
+    ["snapshot", 1, /snapshot flag/], ["pointer_view", { revision: 0, width: 0, height: 1 }, /pointer view/],
+  ]) assert.throws(() => prepareExecutionDeltaTransportForSend(packet({ ...header, [field]: value })), error);
+  assert.throws(() => prepareExecutionDeltaMetadataForSend("not JSON"), /invalid JSON/);
+  assert.throws(() => decodeTransferableExecutionDelta({ type: "execution_delta", session: 1,
+    sequence: 99, buffer: new TextEncoder().encode(delta(0)).buffer }), /does not match/);
+  const mailbox = createSharedExecutionMailbox(4096);
+  const writer = new SharedExecutionDeltaWriter(mailbox);
+  const reader = new SharedExecutionDeltaReader(mailbox);
+  const malformed = prepareExecutionDeltaTransportForSend(`${JSON.stringify(header)}\nnot JSON`);
+  assert.equal(writer.send(malformed.json, malformed.metadata), true);
+  let applied = false;
+  assert.throws(() => reader.drain(() => { applied = true; }), /invalid JSON/);
+  assert.equal(applied, false, "an invalid body must not reach the consumer");
 });

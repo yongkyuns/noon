@@ -3068,14 +3068,21 @@ impl SemanticExecutionPlayer {
         Ok(Some(delta))
     }
 
-    fn encoded_delta(&mut self, snapshot: bool) -> Result<Option<String>, String> {
+    fn compact_delta(
+        &mut self,
+        snapshot: bool,
+    ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
         let Some(mut delta) = self.delta(snapshot)? else {
             return Ok(None);
         };
         self.encoder.compact_dense_rows(&mut delta);
-        serde_json::to_string(&delta)
-            .map(Some)
-            .map_err(|error| error.to_string())
+        Ok(Some(delta))
+    }
+
+    fn encoded_delta(&mut self, snapshot: bool) -> Result<Option<String>, String> {
+        self.compact_delta(snapshot)?
+            .map(|delta| serde_json::to_string(&delta).map_err(|error| error.to_string()))
+            .transpose()
     }
 }
 
@@ -4592,6 +4599,46 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaJson))]
     pub fn drain_delta_json(&mut self) -> Result<Option<String>, String> {
         self.encoded_delta(false)
+    }
+
+    /// Atomically serialize one canonical worker publication and its bounded
+    /// metadata header. The host forwards the body unchanged; the receiving
+    /// transport still validates it. This avoids parsing every object in JS
+    /// merely to rediscover metadata already known by the Rust encoder.
+    /// Native/direct execution never uses this derived worker carrier.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaTransportJson))]
+    pub fn drain_delta_transport_json(&mut self) -> Result<Option<String>, String> {
+        #[derive(Serialize)]
+        struct Header<'a> {
+            channel: &'a str,
+            session: u32,
+            sequence: u64,
+            snapshot: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pointer_view: Option<crate::worker_pointer_presentation::PointerPresentationView>,
+        }
+
+        let Some(delta) = self.compact_delta(false)? else {
+            return Ok(None);
+        };
+        let header = Header {
+            channel: &delta.retained.channel,
+            session: delta.retained.session,
+            sequence: delta.retained.sequence,
+            snapshot: delta.retained.snapshot,
+            pointer_view: delta.pointer_view,
+        };
+        // One serialization buffer; no duplicated body or retained metadata.
+        let mut bytes = serde_json::to_vec(&header).map_err(|error| error.to_string())?;
+        if bytes.len() > 512 {
+            return Err("worker publication metadata exceeds its bounded header".into());
+        }
+        bytes.push(b'\n');
+        serde_json::to_writer(&mut bytes, &delta).map_err(|error| error.to_string())?;
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
 
     /// Drain one callback-published retained delta together with an exact,

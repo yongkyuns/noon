@@ -126,6 +126,53 @@ fn clicked_indicate_live_player() -> SemanticExecutionPlayer {
 }
 
 #[test]
+fn worker_delta_header_is_bound_to_the_exact_canonical_body_and_retires_with_it() {
+    for with_view in [false, true] {
+        let (mut ordinary, _) = translation_drag_player();
+        let (mut worker, _) = translation_drag_player();
+        if with_view {
+            let view = r#"{"revision":12,"width":640,"height":360}"#;
+            ordinary.set_browser_pointer_view_json(view).unwrap();
+            worker.set_browser_pointer_view_json(view).unwrap();
+        }
+        let expected = ordinary.drain_delta_json().unwrap().unwrap();
+        let packet = worker.drain_delta_transport_json().unwrap().unwrap();
+        let (header, body) = packet.split_once('\n').unwrap();
+        assert!(header.len() <= 512);
+        assert_eq!(
+            body, expected,
+            "the worker carrier must not change canonical JSON"
+        );
+        let header: serde_json::Value = serde_json::from_str(header).unwrap();
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
+        for field in ["channel", "session", "sequence", "snapshot", "pointer_view"] {
+            assert_eq!(header[field], body[field], "mismatched metadata: {field}");
+        }
+        assert_eq!(header["snapshot"], true);
+        assert_eq!(
+            header.as_object().unwrap().len(),
+            if with_view { 5 } else { 4 }
+        );
+        assert!(worker.drain_delta_transport_json().unwrap().is_none());
+
+        let view = r#"{"revision":13,"width":800,"height":450}"#;
+        ordinary.set_browser_pointer_view_json(view).unwrap();
+        worker.set_browser_pointer_view_json(view).unwrap();
+        let expected = ordinary.drain_delta_json().unwrap().unwrap();
+        let packet = worker.drain_delta_transport_json().unwrap().unwrap();
+        let (header, body) = packet.split_once('\n').unwrap();
+        assert_eq!(body, expected);
+        let header: serde_json::Value = serde_json::from_str(header).unwrap();
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(header["sequence"], body["sequence"]);
+        assert_eq!(header["snapshot"], false);
+        assert_eq!(header["pointer_view"], body["pointer_view"]);
+        assert_eq!(header["pointer_view"]["revision"], 13);
+        assert!(worker.drain_delta_transport_json().unwrap().is_none());
+    }
+}
+
+#[test]
 fn browser_player_retains_one_drag_undo_and_publishes_one_shot_reversal() {
     let (mut player, target) = translation_drag_player();
     player.initial_delta_json().unwrap();
