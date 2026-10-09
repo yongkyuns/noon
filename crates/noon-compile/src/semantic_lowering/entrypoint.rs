@@ -162,11 +162,6 @@ pub fn lower_semantic_execution(
     store: &SemanticStore,
     index: &mut SemanticExecutionIndex,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
-    // Reject unsupported host orchestration before profile/object projection.
-    if store.has_effect_attachments() {
-        return Err(SemanticLoweringError::EffectExecutionUnavailable.into());
-    }
-
     let roots = store.scene_roots().collect::<Vec<_>>();
     let mut staged_index = index.clone();
     let projection = staged_index.lower_scene(store)?;
@@ -186,11 +181,6 @@ pub fn lower_semantic_execution_root(
     root: SemanticNodeId,
     index: &mut SemanticExecutionIndex,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
-    // Reject unsupported host orchestration before profile/object projection.
-    if store.has_effect_attachments() {
-        return Err(SemanticLoweringError::EffectExecutionUnavailable.into());
-    }
-
     let mut staged_index = index.clone();
     let projection = staged_index.lower_root(store, root)?;
     finish_semantic_execution(store, &[root], index, staged_index, projection, None)
@@ -219,11 +209,6 @@ pub fn lower_semantic_execution_root_with_animation_root_at(
     animation_root: SemanticNodeId,
     origin: f64,
 ) -> Result<SemanticExecutionLoweringOutput, SemanticExecutionLoweringError> {
-    // Reject unsupported host orchestration before profile/object projection.
-    if store.has_effect_attachments() {
-        return Err(SemanticLoweringError::EffectExecutionUnavailable.into());
-    }
-
     let mut staged_index = index.clone();
     let projection = staged_index.lower_root(store, root)?;
     finish_semantic_execution(

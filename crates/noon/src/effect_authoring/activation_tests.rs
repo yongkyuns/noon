@@ -135,10 +135,7 @@ fn declaration_activates_motion_and_glow_from_exact_effective_values() {
     runtime.seek(0.5).unwrap();
     assert_eq!(effective(&runtime, object), midpoint);
     assert_eq!(scene.revision(), before);
-    assert!(
-        scene.execution_session().is_err(),
-        "host orchestration is not admitted by a lowerer test"
-    );
+    assert!(scene.execution_session().is_ok());
 }
 
 #[test]
@@ -456,7 +453,7 @@ fn unsupported_target_schema_rejects_while_prepared_membership_retains_glow() {
 }
 
 #[test]
-fn host_guard_precedes_profile_projection_even_for_unsupported_stacks() {
+fn initial_execution_rejects_unsupported_stacks_without_index_pollution() {
     let (mut scene, source) = fixture();
     scene
         .add_effect(&source, Glow::default(), "second")
@@ -466,9 +463,7 @@ fn host_guard_precedes_profile_projection_even_for_unsupported_stacks() {
     let error =
         noon_compile::lower_semantic_execution_root(&store, scene.root(), &mut index).unwrap_err();
     assert!(
-        error
-            .to_string()
-            .contains("effect declarations cannot execute"),
+        error.to_string().contains("requires one attachment"),
         "{error}"
     );
     assert!(index.is_empty());

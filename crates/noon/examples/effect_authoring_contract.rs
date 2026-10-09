@@ -1,4 +1,4 @@
-//! Runnable declaration-only M0 contract. No Python or renderer required.
+//! Runnable declaration ownership and unsupported-stack contract. No Python or renderer required.
 use noon::effects::{EffectDefinition, Glow, GlowUpdate, Pixels};
 use noon::{AnimationOptions, Scene};
 
@@ -25,8 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(base.intensity(), 0.25);
     assert_ne!(original.node_id(), target.get_effect("glow")?.node_id());
 
-    // M0 cannot render these declarations yet. Fail closed, including detached
-    // targets, instead of silently ignoring their appearance.
+    // Multiple attachments and this unfilled source are outside the finite profile.
+    // Reject the reachable source instead of silently dropping its appearance.
     assert!(scene.execution_session().is_err());
     scene.remove_effect(&dot, &original)?;
     assert!(original.authored_definition().is_err());
@@ -39,6 +39,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     scene.wait(0.1)?;
     assert_eq!(scene.time(), 0.1);
     assert!(scene.execution_session().is_ok());
-    println!("Rust effect declaration/copy checks passed; GPU effects remain unavailable.");
+    println!("Rust declaration/copy checks passed; unsupported stack rejected.");
     Ok(())
 }

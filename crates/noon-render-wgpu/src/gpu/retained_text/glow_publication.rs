@@ -3,8 +3,8 @@
 //! This is a disposable sparse index of the existing runtime column, not an
 //! effect-value store. No frontend request, object scan on clean publications,
 //! or additional clock is involved. The genuine worker reborrows this exact
-//! publication from its validated retained mirror; public Scene activation is
-//! still gated until end-to-end cross-worker playback is qualified.
+//! publication from its validated retained mirror. Scene admission belongs to
+//! shared lowering; actual cross-worker playback has a separate qualification.
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -116,8 +116,11 @@ fn prepared_attachment_is_inert_until_commit_and_uses_the_reserved_semantic_iden
     let revision = f.store.scene_revision();
     let mut tx = SemanticMutationTransaction::new();
     let pending = tx.create_effect(f.source, "glow", glow(0.4));
-    // Normal public session admission is a separate unfinished acceptance gate.
-    assert!(validate_semantic_publication(&tx).is_err());
+    // Raw syntax admits the request; the held preparation below still owns
+    // profile validation, identity reservation and atomic publication.
+    validate_semantic_publication(&tx).unwrap();
+    assert_eq!(f.store.scene_revision(), revision);
+    assert_eq!(f.runtime.frame(), &frame);
     let prepared = tx.prepare(&mut f.store).unwrap();
     let id = prepared.planned_node_id(pending).unwrap();
     let publication = prepare_semantic_publication(&prepared, &f.index, &f.reachability).unwrap();

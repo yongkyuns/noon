@@ -472,7 +472,6 @@ impl std::fmt::Display for SemanticExecutionField {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticLoweringError {
-    EffectExecutionUnavailable,
     UnsupportedGlowProfile {
         owner: SemanticNodeId,
     },
@@ -537,7 +536,6 @@ impl From<noon_core::SemanticSceneOperationError> for SemanticLoweringError {
 impl std::fmt::Display for SemanticLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EffectExecutionUnavailable => formatter.write_str("effect declarations cannot execute before the effect rendering profile is implemented"),
             Self::UnsupportedGlowProfile { owner } => write!(formatter,
                 "glow on {}:{} requires one attachment on a filled, unstroked, planar circle or rectangle",
                 owner.slot(), owner.generation()),

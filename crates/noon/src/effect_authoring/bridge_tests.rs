@@ -55,7 +55,7 @@ fn authored_static_attachment_reaches_coherent_runtime_without_new_identity() {
     let publication = runtime.take_renderer_publication();
     assert!(publication.changes().is_empty());
     // No source query or renderer-owned authoring cache is needed per frame.
-    assert!(scene.execution_session().is_err());
+    assert!(scene.execution_session().is_ok());
 }
 
 #[test]

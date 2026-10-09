@@ -831,6 +831,9 @@ try {
     // Runs actual Python -> WASM/Rust declarations, then verifies explicit rejection
     // and cleanup. Its final plain frame is not an enabled-glow visual oracle.
     { filename: "effect_authoring_contract.py", objectCount: 1, expectedDuration: 0.1, endpointTime: null },
+    // Real Python .animate/play and live removal. The final ordinary frame is
+    // semantic/completion evidence, not an independent glow-pixel reference.
+    { filename: "glow_scene_playback.py", objectCount: 1, expectedDuration: 1.75, endpointTime: null, expectedFinalCenter: [2, 0] },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },

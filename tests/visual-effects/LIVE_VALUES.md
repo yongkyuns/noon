@@ -30,7 +30,8 @@ geometry, layout, or picking.
 `noon-runtime/tests/glow_live.rs` tests value preparation/abort, rollback,
 independent lane coalescing, stale context, exact no-op, active/reconciled channels,
 and one affected row among 4,096 unrelated rows. The semantic bridge tests exercise
-prepared projection and unchanged duplicate-write rejection, not an enabled Scene.
+prepared projection and unchanged duplicate-write rejection. Public Scene integration
+is tested separately below.
 
 The canonical native raster runner includes `live-value-publication`, a distinct
 25-frame test of live intensity/color/radius changes, offscreen and silhouette
@@ -38,12 +39,11 @@ sources, neutral output, restored base values, and retained intensity-only reuse
 It uses the existing full-image Gaussian/composition reference and unchanged
 two-byte output tolerance. It is not physical performance evidence.
 
-Public effect-target activation/completion orchestration and full Scene lifecycle
-qualification remain unfinished. Automatic host preparation and retained worker
-transport are implemented and separately qualified; those checks do not qualify
-public Rust/Python `Scene.play` with glow.
+Automatic host preparation and retained worker transport are separately qualified.
+Their lower-level fixtures do not replace public Scene playback checks or
+actual Python/browser execution of the paired example.
 
-## Structural execution projection (not public Scene admission)
+## Structural execution projection
 
 `ExecutionPatch::SetGlowAttachment` is the structural companion to the existing
 `SetGlow` value lane. Its expected attachment must match the installed semantic
@@ -66,8 +66,7 @@ boundary: removal during animation, new-generation attachment, stale rejection,
 atomic failure, coalescing, staged and moved tracks, bounded 4,097-row locality,
 and repeated forward/rewind restoration. These are **not** public Rust/Python
 Scene, browser-pixel or physical-GPU results. The prepared semantic bridge below
-now supplies this structural operation. Public Scene bootstrap and direct live
-attachment creation remain guarded pending their separate qualification.
+supplies this structural operation to ordinary public Scene/LiveSession calls.
 
 
 ## Prepared semantic attachment publication
@@ -99,6 +98,50 @@ semantic/compiler/runtime boundaries: preparation abort, pending IDs, replacemen
 detached re-entry, alias membership, cancellation, source retirement, final-state
 profile validation, stale runtime rejection, bounded dirty rows and replay of the
 retired drivers. These are boundary tests, not an alternative product session.
-The raw public publication validator still rejects new attachment declarations;
-initial Scene execution still retains its effect-admission guard. This bridge
-alone does not claim end-to-end Rust/Python Scene playback or new GPU pixels.
+
+## Public Scene playback and finite admission
+
+Initial Scene lowering and ordinary LiveSession publication now admit one glow on
+an eligible filled, unstroked analytic circle or rectangle. Unsupported reachable
+profiles/stacks reject through the same compiler validation; unsupported detached
+targets remain inert until enrollment. Removing blanket store-wide gates does not
+weaken the source-profile validator or the existing pending-segment/callback barrier.
+
+`LiveSession::target_editor` stages both the object and an independent attachment
+in the same semantic transaction, with allocator-resolved target identity. It
+captures a resident source's effective glow by exact generation rather than losing
+appearance or copying an obsolete authored base. A detached source copies its
+own authored attachments. No frontend mirror or effect-specific target allocator
+is added. Ordinary target activation, interpolation, completion reconciliation,
+live removal and finite replay use their existing shared owners.
+
+`noon/src/effect_authoring/playback_tests.rs` exercises the real public APIs for
+bootstrap, motion plus glow, independent live targets, completion, live creation/
+removal, stale handles, unsupported-profile rollback, ordinary publication
+barriers, reversed/returning easing, and repeated replay after source glow removal.
+`noon-web` adapter tests verify the same retained player identity and its actual
+encoded glow/removal publications; these native Rust tests are not a Python run.
+
+`noon/tests/glow_scene_raster.rs` uses public Scenes for both the effect and a
+separate no-effect source, then the production retained renderer. Its independent
+full 2D Gaussian uses only the ordinary white source's coverage and authored
+palette endpoints. Five sampled animation frames retain the frozen maximum
+2-byte full-image allowance and a visible-halo negative control. Clean-frame,
+neutral, removal, and new-generation reattachment comparisons are exact. This
+central-source test complements rather than replaces the existing offscreen,
+silhouette, painter-order and real-worker fixtures.
+
+The equivalent `glow_scene_playback.rs` and `glow_scene_playback.py` examples
+exercise movement with persistent appearance, completion, fade-to-neutral,
+explicit removal, stale-handle rejection, and ordinary continuation. The Python
+example is registered in the existing shared-authoring browser gate. Compilation
+or the native adapter tests alone do not qualify that Python/browser execution.
+
+Still unsupported: adding an absent attachment through `.animate` (use explicit
+persistent creation before animation), attachment schema/source-mode or radius-unit
+changes during target interpolation, multiple/composed-group/view effects, and
+callback-staged effect edits. Temporary `GlowPulse` lifecycle is M2. Active family
+animation/inset combinations retain the renderer's explicit finite-profile rejection.
+State-replacement APIs retain their separate effect-bearing-store guard. Complete
+cross-language/browser/current-head and physical-GPU qualification remain required;
+exact current results belong in PR #1921, not inferred from these test descriptions.

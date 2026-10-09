@@ -461,19 +461,6 @@ fn validate_mutations(
     prepared: Option<&PreparedSemanticMutationTransaction<'_>>,
 ) -> Result<(), SemanticPublicationLoweringError> {
     for (position, mutation) in mutations.iter().enumerate() {
-        // Public session admission stays guarded until its orchestration is
-        // qualified. Prepared compiler callers have the staged identity/profile
-        // proof needed by the shared attachment projection below.
-        if let SemanticMutation::AddNode {
-            creation: noon_core::SemanticNodeCreation::Effect { .. },
-            ..
-        } = mutation
-        {
-            if prepared.is_some() {
-                continue;
-            }
-            return Err(SemanticPublicationLoweringError::UnsupportedMutation { index: position });
-        }
         let ordinary = matches!(
             mutation,
             SemanticMutation::SetProperty { .. }

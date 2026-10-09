@@ -794,6 +794,9 @@ impl From<noon_compile::SemanticPublicationLoweringError> for AuthoringFailure {
             E::UnsupportedTextMembership { .. } => "lowering.unsupported_text_membership",
             E::UnsupportedCameraMembership { .. } => "lowering.unsupported_camera_membership",
             E::UnsupportedNodeRemoval { .. } => "lowering.unsupported_node_removal",
+            E::Value(noon_compile::SemanticLoweringError::UnsupportedGlowProfile { .. }) => {
+                "effect.unsupported_source_profile"
+            }
             // Other lowering producer domains are consumed by later R2 slices.
             _ => return Self::unclassified("lowering.unclassified", &error),
         };
