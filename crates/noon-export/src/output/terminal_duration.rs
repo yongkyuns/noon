@@ -68,8 +68,11 @@ fn atom_at(bytes: &[u8], start: usize, end: usize) -> io::Result<([u8; 4], Atom)
     name.copy_from_slice(&raw[4..8]);
     let word = u32::from_be_bytes(raw[..4].try_into().expect("four bytes"));
     let (size, header) = if word == 1 {
-        (usize::try_from(u64_at(bytes, start + 8)?)
-            .map_err(|_| invalid("oversized MP4 atom"))?, 16)
+        (
+            usize::try_from(u64_at(bytes, start + 8)?)
+                .map_err(|_| invalid("oversized MP4 atom"))?,
+            16,
+        )
     } else if word >= 8 {
         (word as usize, 8)
     } else {
@@ -78,7 +81,14 @@ fn atom_at(bytes: &[u8], start: usize, end: usize) -> io::Result<([u8; 4], Atom)
     if size < header || start.checked_add(size).is_none_or(|stop| stop > end) {
         return Err(invalid("malformed MP4 atom extent"));
     }
-    Ok((name, Atom { start, end: start + size, header }))
+    Ok((
+        name,
+        Atom {
+            start,
+            end: start + size,
+            header,
+        },
+    ))
 }
 
 fn child(bytes: &[u8], parent: Atom, wanted: [u8; 4]) -> io::Result<Atom> {
@@ -155,7 +165,10 @@ pub(super) fn finish_mp4_source_end(
     authored_end: f64,
 ) -> io::Result<bool> {
     if !authored_end.is_finite() || authored_end < 0.0 || frames == 0 {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid authored movie endpoint"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid authored movie endpoint",
+        ));
     }
     let Some(media_ticks) = integer_ticks(authored_end, rate.numerator()) else {
         return Ok(false);
@@ -170,7 +183,9 @@ pub(super) fn finish_mp4_source_end(
         return Ok(false);
     }
     if u64::from(media_ticks) <= last_start || u64::from(media_ticks) > full_end {
-        return Err(invalid("authored endpoint does not follow the last exported PTS"));
+        return Err(invalid(
+            "authored endpoint does not follow the last exported PTS",
+        ));
     }
     let last_delta = u32::try_from(u64::from(media_ticks) - last_start)
         .map_err(|_| invalid("MP4 final sample duration overflow"))?;
@@ -234,7 +249,9 @@ pub(super) fn finish_mp4_source_end(
         || u32_at(&moov, mdhd.payload() + 16)? != full_end_u32
         || stts.len() != 24
     {
-        return Err(invalid("MP4 timing table does not match exact exported frame grid"));
+        return Err(invalid(
+            "MP4 timing table does not match exact exported frame grid",
+        ));
     }
     // All preflight errors above leave the on-disk file unchanged. From here,
     // modify only the atom metadata, then consume the eight-byte padding.

@@ -173,9 +173,14 @@ fn mp4_terminal_duration_uses_partial_last_sample_without_changing_pts() {
     sink.finish_with_source_end(120, Some(2.0)).unwrap();
     let probe = Command::new("ffprobe")
         .args([
-            "-v", "error", "-select_streams", "v:0", "-show_entries",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
             "stream=duration_ts,nb_frames,r_frame_rate",
-            "-of", "default=noprint_wrappers=1",
+            "-of",
+            "default=noprint_wrappers=1",
         ])
         .arg(&path)
         .output()
@@ -188,8 +193,15 @@ fn mp4_terminal_duration_uses_partial_last_sample_without_changing_pts() {
 
     let probe = Command::new("ffprobe")
         .args([
-            "-v", "error", "-select_streams", "v:0", "-show_packets",
-            "-show_entries", "packet=pts,duration", "-of", "csv=p=0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_packets",
+            "-show_entries",
+            "packet=pts,duration",
+            "-of",
+            "csv=p=0",
         ])
         .arg(&path)
         .output()

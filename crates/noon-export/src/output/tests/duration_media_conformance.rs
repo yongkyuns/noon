@@ -168,8 +168,15 @@ fn verify_movie(path: &Path, p: u32, q: u32) -> Vec<u8> {
     let packets = command_output(
         Command::new("ffprobe")
             .args([
-                "-v", "error", "-select_streams", "v:0", "-show_packets",
-                "-show_entries", "packet=pts,duration", "-of", "csv=p=0",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_packets",
+                "-show_entries",
+                "packet=pts,duration",
+                "-of",
+                "csv=p=0",
             ])
             .arg(path),
     );
@@ -194,7 +201,10 @@ fn verify_movie(path: &Path, p: u32, q: u32) -> Vec<u8> {
             "only the last packet may have a partial display duration"
         );
     }
-    assert_eq!(packet_times.last().map(|(pts, duration)| pts + duration), Some(2 * u64::from(p)));
+    assert_eq!(
+        packet_times.last().map(|(pts, duration)| pts + duration),
+        Some(2 * u64::from(p))
+    );
     let pixels = command_output(
         Command::new("ffmpeg")
             .args(["-v", "error", "-nostdin", "-i"])
