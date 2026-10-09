@@ -444,7 +444,7 @@ try {
       browserVersion: browser.version(),
       viewport: { width: 1280, height: 800 },
       deviceScaleFactor: 1,
-      gpuMode: "software-WebGL",
+      gpuMode: "hardware-WebGL", // #1933 exact diagnostic overlay; no timing logic changed.
       sharedBrowserProcess: browserWsEndpoint !== null,
     },
     pageErrors,
