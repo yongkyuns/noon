@@ -14,5 +14,5 @@ pub(crate) mod decimal_labels;
 pub(crate) use objects::prepare_native_text;
 #[cfg(feature = "native-text")]
 mod number_labels;
-#[cfg(feature = "latex")]
+#[cfg(all(feature = "native-text", feature = "latex"))]
 pub(crate) use decimal_labels::PreparedDecimalLabels;

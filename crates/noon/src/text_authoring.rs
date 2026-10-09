@@ -9,7 +9,7 @@ pub use compiler::TextCompilerDiagnostics;
 pub use markup::MarkupText;
 #[cfg(feature = "native-text")]
 pub(crate) use semantic::prepare_native_text;
-#[cfg(feature = "latex")]
+#[cfg(all(feature = "native-text", feature = "latex"))]
 pub(crate) use semantic::PreparedDecimalLabels;
 #[cfg(feature = "typst")]
 pub(crate) use semantic::{prepare_math_typst, prepare_typst, TypstAdmission};

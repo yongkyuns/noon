@@ -72,6 +72,7 @@ jobs:
           cargo clippy -p noon --no-default-features --lib -- -D warnings
           cargo test -p noon --no-default-features --features native-text --test composite_provider_admission
           cargo test -p noon --no-default-features --features latex --test composite_provider_admission
+          cargo clippy -p noon --no-default-features --features latex --lib -- -D warnings
       - name: Build real native CPython extension
         run: python3 scripts/build-native-python.py --profile release
       - name: Same-source native conformance and retirement

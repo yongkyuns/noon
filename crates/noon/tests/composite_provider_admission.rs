@@ -85,3 +85,90 @@ fn matrix_queries_preserve_original_entries_without_compiling_tex() {
     assert_eq!(matrix.left_bracket(), &left);
     assert_eq!(matrix.right_bracket(), &right);
 }
+
+#[cfg(feature = "latex")]
+mod latex_labels {
+    use noon::plot_presentation::{NumberLabelAuthoringError, NumberLabelOptions};
+    use noon::{DviFontResource, LatexBackend, LatexFormat, ManimNumberLineOptions, Scene};
+
+    // Empty selections and invalid options must not need a compiler. A valid
+    // nonempty selection must reach this explicit host backend, never native
+    // shaping. Backend failure must leave the semantic store unchanged.
+    #[derive(Default)]
+    struct RejectingBackend {
+        compile_calls: usize,
+    }
+
+    impl LatexBackend for RejectingBackend {
+        fn identity(&self) -> &str {
+            "isolated-latex-label-provider-regression"
+        }
+
+        fn format(&self) -> LatexFormat {
+            LatexFormat::Preloaded
+        }
+
+        fn compile(&mut self, _: &str) -> Result<Vec<u8>, String> {
+            self.compile_calls += 1;
+            Err("intentional isolated LaTeX backend failure".into())
+        }
+
+        fn font(&mut self, _: &str) -> Result<DviFontResource, String> {
+            panic!("failed compilation must not request fonts")
+        }
+    }
+
+    #[test]
+    fn empty_decimal_labels_publish_without_native_shaping_or_tex() {
+        let mut scene = Scene::new();
+        let line = scene
+            .number_line(&ManimNumberLineOptions::default())
+            .unwrap();
+        let options = NumberLabelOptions::default();
+        let mut backend = RejectingBackend::default();
+        let labels = line
+            .add_decimal_numbers(&mut backend, Some(&[]), &options)
+            .unwrap();
+        assert_eq!(backend.compile_calls, 0);
+        labels.validate().unwrap();
+        let store = scene.integration_store().borrow();
+        assert!(store
+            .semantic_family_members_checked(labels.node_id())
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .semantic_family_members_checked(line.family().node_id())
+            .unwrap()
+            .contains(&labels.node_id()));
+    }
+
+    #[test]
+    fn latex_label_validation_and_backend_errors_do_not_publish() {
+        let mut scene = Scene::new();
+        let line = scene
+            .number_line(&ManimNumberLineOptions::default())
+            .unwrap();
+        let revision = scene.integration_store().borrow().scene_revision();
+        let mut backend = RejectingBackend::default();
+        let invalid = NumberLabelOptions {
+            direction: [0.0, 0.0],
+            ..Default::default()
+        };
+        assert!(matches!(
+            line.add_decimal_numbers(&mut backend, Some(&[1.0]), &invalid),
+            Err(NumberLabelAuthoringError::Authoring(_))
+        ));
+        assert_eq!(backend.compile_calls, 0);
+        assert_eq!(scene.integration_store().borrow().scene_revision(), revision);
+
+        let error = line
+            .add_decimal_numbers(&mut backend, Some(&[1.0]), &NumberLabelOptions::default())
+            .unwrap_err();
+        assert!(matches!(&error, NumberLabelAuthoringError::Numeric(_)));
+        assert!(error
+            .to_string()
+            .contains("intentional isolated LaTeX backend failure"));
+        assert_eq!(backend.compile_calls, 1);
+        assert_eq!(scene.integration_store().borrow().scene_revision(), revision);
+    }
+}
