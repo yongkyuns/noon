@@ -109,7 +109,7 @@ async function requireActualMesaWebgl() {
       proof.lpNumThreadsConfigured = process.env.LP_NUM_THREADS || null;
       proof.galliumDriverConfigured = process.env.GALLIUM_DRIVER || null;
       // Preserve the original observed renderer even on a non-Mesa fallback.
-      await writeFile(path.join(evidenceRoot, "mesa-renderer-proof.json"),
+      await writeFile(path.join(evidenceRoot, `mesa-renderer-proof-${pairIndex}.json`),
         JSON.stringify(proof, null, 2) + "\n", { flag: "wx" });
       assert.equal(proof.backend, "WebGL2", "diagnostic Mesa study needs actual WebGL2");
       assert.match(proof.unmaskedRenderer, /llvmpipe/i,
