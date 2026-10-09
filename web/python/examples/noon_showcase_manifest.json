@@ -128,7 +128,7 @@
       "duration": 3.5, "thumbnail_time": 3.1,
       "thumbnail": "thumbnails/showcase/showcase-latex-create.png", "thumbnail_alt": "Labeled blue Create and yellow Write equations with retained glyphs and fraction bars",
       "still_intervals": [[2.0, 3.5]],
-      "beats": [{"time": 0.8, "label": "Compare glyph strokes"}, {"time": 1.6, "label": "Reveal the fractions"}, {"time": 3.1, "label": "Compare completed equations"}]
+      "beats": [{"time": 0.8, "label": "Create the blue equation"}, {"time": 1.6, "label": "Write the yellow equation"}, {"time": 3.1, "label": "Compare completed equations"}]
     },
     {
       "id": "showcase-coordinate-plotting", "title": "Functions and samples",
