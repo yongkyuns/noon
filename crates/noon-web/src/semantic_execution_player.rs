@@ -887,9 +887,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         object: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Reverse {
-            object,
-        })
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Reverse { object })
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_subcurve(
