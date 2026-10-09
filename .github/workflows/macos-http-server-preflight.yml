@@ -1,0 +1,68 @@
+name: Standard macOS Python HTTP startup preflight (diagnostic only)
+
+on:
+  pull_request:
+    types: [opened]
+    paths:
+      - ".github/workflows/macos-http-server-preflight.yml"
+      - "benchmarks/macos-server-preflight.json"
+      - "scripts/macos-http-server-preflight.mjs"
+      - "scripts/macos-http-server-preflight.test.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-http-preflight-1933-20261009-01
+  cancel-in-progress: false
+
+jobs:
+  diagnosis:
+    name: Original Python HTTP process vs browser readiness, NOT qualification
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'research/1933-macos-server-preflight-20261009-01' && github.run_attempt == 1
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.23.3"
+      - name: Freeze input and host identity
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          mkdir -p evidence/inputs
+          cp benchmarks/macos-server-preflight.json evidence/inputs/registered-plan.json
+          shasum -a 256 evidence/inputs/registered-plan.json > evidence/inputs/registered-plan.sha256
+          git rev-parse HEAD > evidence/inputs/source-head.txt
+          git archive HEAD | gzip > evidence/inputs/source.tar.gz
+          python3 --version > evidence/inputs/python-version.txt 2>&1
+          which python3 > evidence/inputs/python-path.txt
+          uname -a > evidence/inputs/uname.txt
+          sysctl -n hw.model > evidence/inputs/model.txt
+          sw_vers > evidence/inputs/sw-vers.txt
+          printf '%s\n' "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > evidence/inputs/run-attempt.txt
+          echo "Diagnostic only; no scored performance samples or user-owned GPU" > evidence/README.txt
+      - name: Validate frozen server-readiness protocol
+        run: |
+          set -euo pipefail
+          node --check scripts/macos-http-server-preflight.mjs
+          node --test scripts/macos-http-server-preflight.test.mjs | tee evidence/inputs/protocol-tests.log
+      - name: Acquire one Python HTTP startup vs actual response diagnosis
+        run: |
+          set -euo pipefail
+          node scripts/macos-http-server-preflight.mjs \
+            benchmarks/macos-server-preflight.json \
+            "$GITHUB_WORKSPACE" evidence/observations.json \
+            | tee evidence/observations-stdout.jsonl
+      - name: Retain all evidence even when preflight fails
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-http-preflight-1933-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
