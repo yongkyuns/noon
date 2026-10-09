@@ -1238,7 +1238,9 @@ mod tests {
         app.advance_realtime_timeline(late_resume).unwrap();
 
         assert!((app.session().frame().time - 1.7).abs() < 1.0e-9);
-        let clock = app.realtime_clock.expect("the next animation needs a clock");
+        let clock = app
+            .realtime_clock
+            .expect("the next animation needs a clock");
         assert_eq!(clock.wall_origin, origin);
         assert_eq!(clock.scene_origin, 0.0);
         assert!(
@@ -1249,7 +1251,10 @@ mod tests {
         app.advance_realtime_timeline(origin + Duration::from_secs(2))
             .unwrap();
         assert_eq!(app.session().frame().time, 2.0);
-        assert_eq!(app.session().frame().objects[0].transform.translation.x, 2.0);
+        assert_eq!(
+            app.session().frame().objects[0].transform.translation.x,
+            2.0
+        );
         // The source's endpoint admission is internal waiting, not user idle.
         assert!(app.execution.pending_endpoint().is_some());
         assert_eq!(app.realtime_clock.unwrap().wall_origin, origin);

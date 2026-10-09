@@ -74,7 +74,10 @@ fn foreground_frame_density_does_not_scale_native_animation_speed() {
             assert_eq!(app.realtime_clock.unwrap().wall_origin, origin);
         }
         assert_eq!(app.session().frame().time, 2.0);
-        assert_eq!(app.session().frame().objects[0].transform.translation.x, 4.0);
+        assert_eq!(
+            app.session().frame().objects[0].transform.translation.x,
+            4.0
+        );
         assert!(app.execution.pending_endpoint().is_some());
     }
 }
@@ -95,7 +98,10 @@ fn jitter_and_late_short_waits_share_one_native_playback_epoch() {
         assert_eq!(app.realtime_clock.unwrap().wall_origin, origin);
     }
     assert_eq!(app.session().frame().time, 2.5);
-    assert_eq!(app.session().frame().objects[0].transform.translation.x, 4.0);
+    assert_eq!(
+        app.session().frame().objects[0].transform.translation.x,
+        4.0
+    );
 }
 
 #[test]
@@ -145,7 +151,10 @@ fn cooperative_work_budget_preserves_debt_instead_of_restarting_time() {
         assert_eq!(app.realtime_clock.unwrap().wall_origin, origin);
     }
     assert_eq!(app.session().frame().time, 8.5);
-    assert_eq!(app.session().frame().objects[0].transform.translation.x, 1.0);
+    assert_eq!(
+        app.session().frame().objects[0].transform.translation.x,
+        1.0
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -228,7 +237,10 @@ fn late_native_surface_retains_all_endpoints_but_presents_only_the_caught_up_fra
     assert!(app.error.is_none(), "{:?}", app.error);
     assert_eq!(app.presented_frame_time, Some(2.0));
     assert_eq!(app.session().frame().time, 2.0);
-    assert_eq!(app.session().frame().objects[0].transform.translation.x, 2.0);
+    assert_eq!(
+        app.session().frame().objects[0].transform.translation.x,
+        2.0
+    );
     assert_eq!(resumes.get(), 33);
     assert!(!app.execution.source_active());
     assert!(app.realtime_clock.is_none());
