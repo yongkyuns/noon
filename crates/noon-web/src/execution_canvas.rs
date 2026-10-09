@@ -16,8 +16,8 @@ mod wasm {
     };
     use crate::direct_pointer_presentation::DirectPointerPresentation;
     use noon::integration::{
-        NativePointerInputPublication, NativePointerInputToken, PointerSelectionPresentation,
-        RendererPublication,
+        ForwardSample, ForwardSampleStatus, NativePointerInputPublication, NativePointerInputToken,
+        PointerSelectionPresentation, RendererPublication,
     };
     use noon::{
         ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
@@ -86,6 +86,7 @@ mod wasm {
         fn wake_plan(&self) -> BrowserExecutionWakePlan;
         /// A pending authoring/publication barrier is not a user pause.
         fn source_active(&self) -> bool;
+        fn pending_endpoint(&self) -> Option<noon_core::PublicationContext>;
         fn query_viewports(&mut self, bounds: &[Rect])
             -> noon::integration::ExecutionViewportQuery;
         /// Returns whether this operation resumed a subsequent continuation stage.
@@ -175,6 +176,13 @@ mod wasm {
             )
         }
 
+        fn pending_endpoint(&self) -> Option<noon_core::PublicationContext> {
+            match self.program.status() {
+                LiveProgramStatus::PublicationPending(context) => Some(context),
+                _ => None,
+            }
+        }
+
         fn query_viewports(
             &mut self,
             bounds: &[Rect],
@@ -191,10 +199,24 @@ mod wasm {
         }
 
         fn drive_to(&mut self, requested_time: f64) -> Result<(), JsValue> {
-            self.program
-                .drive_to(&mut self.callbacks, requested_time)
-                .map_err(js_error)?;
-            self.resume_if_ready()?;
+            // Share the native/export forward sampler for bounded ordered
+            // callbacks and zero-dirty waits; never skip renderer publications.
+            const MAX_TRANSITIONS: u32 = 64;
+            let mut sampler = ForwardSample::new(
+                &mut self.program,
+                &mut self.callbacks,
+                requested_time,
+                MAX_TRANSITIONS,
+            )
+            .map_err(js_error)?;
+            for _ in 0..MAX_TRANSITIONS {
+                match sampler.advance().map_err(js_error)? {
+                    ForwardSampleStatus::Progress => {}
+                    ForwardSampleStatus::PublicationPending(_)
+                    | ForwardSampleStatus::Ready(_)
+                    | ForwardSampleStatus::SourceFinished(_) => return Ok(()),
+                }
+            }
             Ok(())
         }
 
@@ -369,6 +391,13 @@ mod wasm {
             match &self.authority {
                 DirectSourceAuthority::Session { .. } => false,
                 DirectSourceAuthority::Program(program) => program.source_active(),
+            }
+        }
+
+        fn pending_endpoint(&self) -> Option<noon_core::PublicationContext> {
+            match &self.authority {
+                DirectSourceAuthority::Session { .. } => None,
+                DirectSourceAuthority::Program(program) => program.pending_endpoint(),
             }
         }
 
@@ -574,6 +603,8 @@ mod wasm {
         drawable: bool,
         source: DirectExecutionSource,
         direct_wake_clock: BrowserExecutionWakeClock,
+        /// One observed wall-time target, not a second semantic scheduler.
+        sampled_scene_target: Option<f64>,
         direct_preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
         direct_text_gpu: RetainedTextGpuState,
@@ -922,6 +953,7 @@ mod wasm {
             };
             self.sync_camera(camera)?;
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            self.sampled_scene_target = None;
             Ok(pending || self.selection_pending())
         }
 
@@ -994,9 +1026,9 @@ mod wasm {
                 self.source.advance_interactions(wall_time_ms / 1_000.0)?;
                 return Ok(self.source.session().wake_state().frame_pending());
             };
-            // A late host callback stops at the authored play/wait endpoint.
-            // Internal track events remain traversable in one sample. Interactions
-            // still use wall time, independently of authored time.
+            // Hold the original wall-derived sample across required endpoint
+            // admissions. Initial work still clips at its first publication.
+            let wall_sample_target = target_time;
             let target_time = self.source.session().bounded_realtime_target(target_time);
             let (pending, camera) = {
                 let direct = &mut self.source;
@@ -1008,6 +1040,7 @@ mod wasm {
             // Callback commits and ordinary source handoffs are elapsed wall
             // time, not explicit pauses. Preserve the same active epoch.
             self.sync_camera(camera)?;
+            self.sampled_scene_target = Some(wall_sample_target);
             let (next_plan, next_scene_time) = self.direct_wake_observation();
             self.direct_wake_clock
                 .directive_for_source(
@@ -1354,6 +1387,7 @@ mod wasm {
             };
             self.sync_camera(camera)?;
             self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            self.sampled_scene_target = None;
             Ok(pending)
         }
 
@@ -1486,6 +1520,7 @@ mod wasm {
                 drawable: true,
                 source,
                 direct_wake_clock: BrowserExecutionWakeClock::default(),
+                sampled_scene_target: None,
                 direct_preparer: RetainedFramePreparer::new(),
                 renderer,
                 direct_text_gpu,
@@ -1511,11 +1546,124 @@ mod wasm {
             Ok(result)
         }
 
+        /// Keep one exact endpoint in the production retained GPU renderer
+        /// before resuming authoring, without a physical present/pointer receipt.
+        /// This is invoked only after the browser surface has been acquired.
+        fn retain_direct_endpoint(
+            &mut self,
+            expected: noon_core::PublicationContext,
+        ) -> Result<(usize, usize), JsValue> {
+            let camera = self.renderer.camera();
+            let metrics = TextDeviceMetrics::new(Vec2::new(
+                self.config.width as f32 / camera.world_size.x,
+                self.config.height as f32 / camera.world_size.y,
+            ))
+            .and_then(|metrics| {
+                metrics.with_world_origin_pixels(Vec2::new(
+                    self.config.width as f32 * 0.5
+                        - camera.center.x * metrics.pixels_per_world.x,
+                    self.config.height as f32 * 0.5
+                        + camera.center.y * metrics.pixels_per_world.y,
+                ))
+            })
+            .map_err(js_error)?;
+            let half_extent = camera.world_size * 0.5;
+            let direct = &mut self.source;
+            let inset_views = direct.session().inset_2d_views().map_err(js_error)?;
+            let mut view_bounds = vec![Rect::new(
+                camera.center - half_extent,
+                camera.center + half_extent,
+            )];
+            view_bounds.extend(
+                inset_views
+                    .iter()
+                    .copied()
+                    .filter_map(noon_core::Inset2DViewState::camera_bounds),
+            );
+            let visibility = direct.query_viewports(&view_bounds);
+            self.direct_preparer
+                .set_inset_views_active(!inset_views.is_empty());
+            self.renderer
+                .set_inset_2d_views(
+                    &self.device,
+                    &self.queue,
+                    &mut self.direct_text_gpu,
+                    &inset_views,
+                )
+                .map_err(js_error)?;
+            let publication = direct.take_renderer_publication();
+            if publication.context() != expected {
+                return Err(js_message(
+                    "intermediate direct endpoint changed during retained preparation",
+                ));
+            }
+            let spatial_upload = self
+                .renderer
+                .prepare_spatial(&self.device, &self.queue, &publication)
+                .map_err(js_error)?;
+            let derived = self
+                .direct_preparer
+                .prepare_transient_presentations_visible(
+                    &publication,
+                    visibility.object_indices(),
+                )
+                .map_err(js_error)?;
+            let prepared = self
+                .direct_preparer
+                .prepare_planned_publication_visible(
+                    &self.device,
+                    &publication,
+                    visibility.object_indices(),
+                    metrics,
+                )
+                .map_err(js_error)?;
+            let upload = self.renderer.upload_retained(
+                &self.device,
+                &self.queue,
+                &prepared,
+                &mut self.direct_text_gpu,
+            );
+            let derived_bytes = if !derived.slots.is_empty() {
+                self.renderer
+                    .upload_derived(&self.device, &self.queue, &derived)
+                    .bytes_uploaded
+            } else {
+                0
+            };
+            let misses = prepared.geometry_stats().geometry_cache_misses;
+            let bytes = upload
+                .bytes_uploaded()
+                .saturating_add(spatial_upload.bytes_uploaded())
+                .saturating_add(derived_bytes);
+            Ok((bytes, misses))
+        }
+
         fn render_direct(
             &mut self,
             surface_texture: wgpu::SurfaceTexture,
             reconfigure_after_present: bool,
         ) -> Result<bool, JsValue> {
+            // Retain every required GPU publication, but coalesce obsolete
+            // physical images. Bounded work retains leftover elapsed-time debt.
+            let mut retained_bytes = 0_usize;
+            let mut retained_misses = 0_usize;
+            if let Some(target) = self.sampled_scene_target {
+                const MAX_RETAINED_ENDPOINTS: usize = 64;
+                for _ in 0..MAX_RETAINED_ENDPOINTS {
+                    let Some(expected) = self.source.pending_endpoint() else {
+                        break;
+                    };
+                    let (bytes, misses) = self.retain_direct_endpoint(expected)?;
+                    retained_bytes = retained_bytes.saturating_add(bytes);
+                    retained_misses = retained_misses.saturating_add(misses);
+                    self.source.admit_rendered_publication(expected)?;
+                    if self.source.source_active() {
+                        self.source.drive_to(target)?;
+                    }
+                    let camera = self.source.session().inspection_camera().map_err(js_error)?;
+                    self.sync_camera(camera)?;
+                }
+            }
             let metrics = {
                 let camera = self.renderer.camera();
                 TextDeviceMetrics::new(Vec2::new(
@@ -1610,9 +1758,10 @@ mod wasm {
                     self.renderer
                         .upload_derived(&self.device, &self.queue, &derived)
                 });
-                self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
-                self.last_bytes_uploaded = upload
-                    .bytes_uploaded()
+                self.last_geometry_cache_misses = retained_misses
+                    .saturating_add(prepared.geometry_stats().geometry_cache_misses);
+                self.last_bytes_uploaded = retained_bytes
+                    .saturating_add(upload.bytes_uploaded())
                     .saturating_add(spatial_upload.bytes_uploaded())
                     .saturating_add(derived_upload.map_or(0, |stats| stats.bytes_uploaded))
                     .saturating_add(overlay_upload.bytes_uploaded);
@@ -1689,6 +1838,7 @@ mod wasm {
             // original source epoch remains active until genuine completion.
             self.source
                 .admit_rendered_publication(publication_context)?;
+            self.sampled_scene_target = None;
             Ok(true)
         }
 
