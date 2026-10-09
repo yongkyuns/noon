@@ -2767,6 +2767,15 @@ class SelectedAlignment(Scene):
     let execution = null;
     let registration = null;
     let settled = false;
+    let resolveAttached;
+    let rejectAttached;
+    const attached = new Promise((resolve, reject) => {
+      resolveAttached = resolve;
+      rejectAttached = reject;
+    });
+    const startupTimeout = setTimeout(() => {
+      rejectAttached(new Error("synchronous execution did not start within 30 seconds"));
+    }, 30_000);
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -2779,9 +2788,19 @@ class SelectedAlignment(Scene):
           loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
         });
+        resolveAttached();
       },
     });
-    authoredPromise.then(() => { settled = true; });
+    authoredPromise.then(() => {
+      settled = true;
+      rejectAttached(new Error("synchronous source returned before execution startup"));
+    }, (error) => {
+      settled = true;
+      rejectAttached(error);
+    });
+    // Allocation precedes worker/renderer startup. Start the live-frame window
+    // only after attachment, while retaining a separate bounded startup failure.
+    await attached.finally(() => clearTimeout(startupTimeout));
 
     let progressed = null;
     for (let attempt = 0; attempt < 150; attempt += 1) {
