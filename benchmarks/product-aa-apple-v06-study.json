@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "studyId": "1933-product-aa-20261009-06",
+  "kind": "diagnostic-only",
+  "qualification": false,
+  "issue": 1933,
+  "qualificationPr": 1875,
+  "producerRun": 37710961499,
+  "harnessSha": "77fd82d2fae388ee426e89cc8452c683b8d3681c",
+  "harnessTree": "7dde80d9c2a227a929575f500f5226bcf853ac8b",
+  "sourcePair": {
+    "schema": 1,
+    "candidate": "f67d915ad6709d97f5a2ba60827302f87fedfba2",
+    "baseline": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f",
+    "head": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+    "eventBase": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f"
+  },
+  "builds": [
+    {
+      "name": "baseline",
+      "source": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f",
+      "artifactId": 11523896652,
+      "zipSha256": "23eb7282da981e6272c18b2ba59a9ff8863d45406cd00efae73fc87657d54071",
+      "buildId": "810ea10b60bc3ea023a9c20ff21bc918a791494ba3e7c595bdc657dbea95fc15"
+    },
+    {
+      "name": "candidate",
+      "source": "f67d915ad6709d97f5a2ba60827302f87fedfba2",
+      "artifactId": 11523836933,
+      "zipSha256": "786064af906bf68d237bc72c567c4466c5e3ef4c877e5323a11bc2409a5d68b0",
+      "buildId": "b469b22dc7b96fe706d19d6f96604527af23f6765a94763c40314cd7a8ac6932"
+    }
+  ],
+  "workloads": [
+    "parity-square-and-circle",
+    "showcase-camera-follows-path",
+    "showcase-first-scene",
+    "showcase-raster-images",
+    "showcase-bezier-paths"
+  ],
+  "cohorts": [
+    {
+      "name": "seven-pair",
+      "pairs": 7
+    },
+    {
+      "name": "three-pair",
+      "pairs": 3
+    }
+  ],
+  "environment": {
+    "runner": "macos-15",
+    "playwright": "1.62.1",
+    "pngjs": "7.0.0",
+    "browserVersion": "151.0.7922.34",
+    "renderer": "WebGL2",
+    "browserMode": "hardware-WebGL",
+    "port": 4205,
+    "node": "22.23.3",
+    "runnerNote": "Standard public-repo GitHub-hosted macos-15-arm64 Apple Silicon (not -xlarge), headed Chromium ANGLE Metal Paravirtual; one actual-renderer-and-pixel proof before each original paired workload, 100 commands unchanged.",
+    "headless": false,
+    "display": "native macOS headed display",
+    "expectedUnmaskedRenderer": "Apple Paravirtual"
+  },
+  "pairRunner": "scripts/playground-product-pair.mjs",
+  "comparator": "scripts/playground-product-compare.mjs",
+  "scorer": "scripts/paired-product-metrics.mjs",
+  "schedule": "cohort, workload, pair; alternating build order; original alternating side order within each fresh browser pair",
+  "retries": 0,
+  "stopOnTrialError": true,
+  "scopeNote": "New registered v06 full 100 original A/A pair commands on standard headed macOS Apple Paravirtual Metal. The sole additional diagnostic harness change vs failed v05 uses direct Python 3.14 socketserver.ThreadingTCPServer and verifies a unique HTTP readiness token plus exact original production package identity BEFORE any scored sample. Original product timings/scorer/thresholds unchanged; v05 failed at 0 scored pairs.",
+  "retention": "All original 100 pair commands and 200 runtime reports; 100 per-pair Apple Metal shader/readPixels proofs; preflight Python ThreadingTCPServer smoke, raw logs, all successes and failures, both immutable original production package artifacts.",
+  "plannedPairCommands": 100,
+  "plannedObservations": 200,
+  "execution": {
+    "event": "pull_request.opened",
+    "allowedRunAttempt": 1,
+    "pairDeadlineSeconds": 420,
+    "termGraceSeconds": 5,
+    "jobDeadlineMinutes": 180
+  },
+  "priorInvalidStudy": {
+    "studyId": "1933-product-aa-20261008-01",
+    "runId": 37797078117,
+    "artifactId": 11558563159,
+    "artifactSha256": "0b1ba75f6559b492455a924c7a22ed509abf11a34a63af807322fcb1c5e24d47",
+    "completedPairCommands": 0,
+    "reason": "Diagnostic used raw example source SHA instead of frozen product harness authored-source SHA"
+  },
+  "authoredSourceHashes": {
+    "parity-square-and-circle": "554ac4dbf786c030896747bf3f21021ad850cffa1090098bae000bee8f7547bc",
+    "showcase-camera-follows-path": "c56944687b2a12d61b2a7ad8b74dd349cafd53132182b14c62b6397d5ee90e5a",
+    "showcase-first-scene": "1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8",
+    "showcase-raster-images": "7901ef5acf95d33125c853c7aef65f6b12e8cc659441c13d4a7c26b6c507492d",
+    "showcase-bezier-paths": "60e5708b4a235f68c8b0788fd57fb219fdc4a2949aa61573d1aa0cef267ff84b"
+  },
+  "apple": {
+    "diagnosticOverlaySource": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+    "diagnosticOverlayFiles": [
+      "scripts/playground-product-pair.mjs",
+      "scripts/playground-product-e2e.mjs",
+      "scripts/product-aa-apple-http-server.py"
+    ],
+    "actualRenderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device)",
+    "rendererProof": "macos-renderer-proof-${pair}.json",
+    "browserFlags": [
+      "--disable-features=WebGPU",
+      "--use-gpu-in-tests",
+      "--ignore-gpu-blocklist",
+      "--force-high-performance-gpu",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage"
+    ],
+    "environment": {
+      "os": "macos-15",
+      "arch": "arm64",
+      "browserHeadless": false,
+      "runnerTier": "standard public-repository GitHub hosted"
+    },
+    "feasibility": {
+      "run": 37968230377,
+      "artifactId": 11634228899,
+      "sha256": "3991d67fe47e3b0eb75796f342bd8d99e7e8a538ea54943e7763e1e9e4a76607"
+    },
+    "expectedPairProofCount": 100,
+    "requiresAttestedDeviceEachPair": true,
+    "qualification": false,
+    "performanceAcceptance": false,
+    "mergeApproval": false
+  },
+  "priorAppleFailedAttempt": {
+    "studyId": "1933-product-aa-20261009-05",
+    "run": 37977203253,
+    "artifactId": 11639543175,
+    "zipSha256": "6c5c4c6339b6b396b73c873eb529047693d04a51b478bc8e0a09d13db2b43074",
+    "completedPairCommands": 0,
+    "reason": "Python 3.14 -m http.server spawned but never listened; initial A/A static E2E readiness timed out before sample"
+  },
+  "serverPreflight": {
+    "run": 37980247462,
+    "artifactId": 11640943016,
+    "zipSha256": "99b3dfd118c46e47ee54ca979d5425b3a77000c2b085408f4a9d979a0d47bf65",
+    "originalPythonHttpCli": false,
+    "directSocketServerSucceeded": true,
+    "staticServerScript": "scripts/product-aa-apple-http-server.py",
+    "readiness": "unique random token HTTP response, then complete runtime-build-identity.json comparison; no dependence on stdout banner",
+    "threaded": true,
+    "expectedPython": "3.14.7"
+  }
+}
