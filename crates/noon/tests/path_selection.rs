@@ -180,20 +180,18 @@ fn live_partial_rejects_unrepresentable_source_before_allocating() {
         .borrow()
         .geometry_resources()
         .len();
-    assert!(
-        noon::integration::publish_borrowed_path_edit(
-            scene.integration_store(),
-            scene.root(),
-            &mut session,
-            noon::integration::BorrowedPathEdit::Partial {
-                object: &destination,
-                source: &source,
-                a: 0.2,
-                b: 0.8,
-            },
-        )
-        .is_err()
-    );
+    assert!(noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Partial {
+            object: &destination,
+            source: &source,
+            a: 0.2,
+            b: 0.8,
+        },
+    )
+    .is_err());
     assert_eq!(destination.state().unwrap(), before);
     assert_eq!(
         source
