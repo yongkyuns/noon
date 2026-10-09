@@ -799,14 +799,25 @@ fn scene_path_edit_surface_rejects_cold_invalid_and_foreign_before_publication()
     scene.add(&object).unwrap();
     let revision = scene.revision();
     let before = object.state().unwrap();
-    let resources = scene.integration_store().borrow().geometry_resources().len();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
 
     let straight = [noon_core::Vec2::ZERO, noon_core::Vec2::new(1.0, 0.0)];
     assert!(scene.set_points_smoothly(&object, &straight).is_err());
     assert!(scene.make_family_jagged(&family).is_err());
     assert_eq!(scene.revision(), revision);
     assert_eq!(object.state().unwrap(), before);
-    assert_eq!(scene.integration_store().borrow().geometry_resources().len(), resources);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
 
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
@@ -815,19 +826,36 @@ fn scene_path_edit_surface_rejects_cold_invalid_and_foreign_before_publication()
     assert!(scene.set_points_smoothly(&object, &invalid).is_err());
     assert_eq!(scene.revision(), revision);
     assert_eq!(object.state().unwrap(), before);
-    assert_eq!(scene.integration_store().borrow().geometry_resources().len(), resources);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
 
     let foreign = Scene::new().square(1.0).unwrap();
     assert!(matches!(
         scene.set_points_smoothly(
             &foreign,
-            &[noon_core::Vec2::new(-1.0, 0.0), noon_core::Vec2::new(1.0, 0.0)]
+            &[
+                noon_core::Vec2::new(-1.0, 0.0),
+                noon_core::Vec2::new(1.0, 0.0)
+            ]
         ),
         Err(crate::AuthoringError::ForeignStore)
     ));
     assert_eq!(scene.revision(), revision);
     assert_eq!(object.state().unwrap(), before);
-    assert_eq!(scene.integration_store().borrow().geometry_resources().len(), resources);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
 
     scene
         .set_points_smoothly(
