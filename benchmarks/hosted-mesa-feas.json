@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "studyId": "1933-hosted-mesa-feas-20261009-01",
+  "diagnosticOnly": true,
+  "qualification": false,
+  "performanceAcceptance": false,
+  "mergeApproval": false,
+  "purpose": "Find whether the free GitHub-hosted Ubuntu 24.04 Chromium 151 can run actual WebGL2 via Mesa llvmpipe with explicit LP_NUM_THREADS=2, without fallback to SwiftShader; no scored performance or gate threshold change.",
+  "trigger": "one initial pull_request.opened event, attempt 1; no retry, favorable-run replacement or environment selection after data",
+  "os": "ubuntu-24.04",
+  "node": "22.23.3",
+  "playwright": "1.62.1",
+  "chromium": "151.0.7922.34",
+  "scenarios": [
+    {
+      "id": "frozen-swiftshader-control",
+      "order": 1,
+      "source": "Noon browserArgs('webgl') with original SwiftShader flags",
+      "requiredRendererPattern": "SwiftShader",
+      "llvmpipeThreads": null
+    },
+    {
+      "id": "mesa-angle-gl",
+      "order": 2,
+      "source": "Chrome ANGLE GL backend --use-gl=angle --use-angle=gl; LIBGL_ALWAYS_SOFTWARE=true; GALLIUM_DRIVER=llvmpipe; LP_NUM_THREADS=2",
+      "requiredRendererPattern": "llvmpipe",
+      "llvmpipeThreads": 2
+    },
+    {
+      "id": "mesa-angle-gl-egl",
+      "order": 3,
+      "source": "Chrome ANGLE GL/EGL backend --use-gl=angle --use-angle=gl-egl; LIBGL_ALWAYS_SOFTWARE=true; GALLIUM_DRIVER=llvmpipe; LP_NUM_THREADS=2; EGL_PLATFORM=surfaceless",
+      "requiredRendererPattern": "llvmpipe",
+      "llvmpipeThreads": 2
+    }
+  ],
+  "browserHeadless": false,
+  "display": "Xvfb 1280x800x24",
+  "checks": [
+    "chromium exact revision",
+    "unmasked WebGL2 renderer",
+    "pixel clear readPixels",
+    "fragment shader compile/link",
+    "triangle raster draw readPixels",
+    "getError and contextLost"
+  ],
+  "acceptanceOfPilot": "Mesa candidate is feasible only if observed unmasked renderer identifies llvmpipe and all actual WebGL2 draw/readback proofs pass; a fallback to SwiftShader, unavailable identity, invalid readback or mismatched browser is not feasible.",
+  "next": "If a Mesa configuration passes: separate preregistered identical-package A/A precision study with original workloads and scorer. This pilot is never PR #1875 candidate acceptance."
+}
