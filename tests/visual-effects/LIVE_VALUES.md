@@ -137,10 +137,25 @@ explicit removal, stale-handle rejection, and ordinary continuation. The Python
 example is registered in the existing shared-authoring browser gate. Compilation
 or the native adapter tests alone do not qualify that Python/browser execution.
 
-Still unsupported: adding an absent attachment through `.animate` (use explicit
-persistent creation before animation), attachment schema/source-mode or radius-unit
-changes during target interpolation, multiple/composed-group/view effects, and
-callback-staged effect edits. Temporary `GlowPulse` lifecycle is M2. Active family
+A live `TransformTo` from a missing canonical glow to a target carrying that
+attachment stages an allocator-owned zero-intensity copy at activation. It is
+published together with its ordinary intensity track, never when the builder is
+created. The same combined compiler/runtime preflight validates staged attachment
+identity, reconcilable-channel ownership and publication before committing either
+semantic or runtime state. The source object's geometry/motion identity remains
+unchanged. Completing the track preserves the new attachment; returning rates
+reconcile back to neutral; removal retires it, and finite runtime replay restores
+its original generation without resurrecting authored handles. The public Rust
+regressions cover neutral/midpoint/completion, stale-handle rejection, unsupported
+stacks with unchanged revisions and repeated replay. The Python worker example
+now exercises the same absent-to-glow target animation; real browser qualification
+remains a separate CI result, not inferred from the Rust test.
+
+Still unsupported: adding an absent glow via a **predeclared, immutable**
+`play_animation` declaration (the supported enrollment is the live atomic
+`declare_and_activate_transform_to` path), attachment schema/source-mode or
+radius-unit changes during target interpolation, multiple/composed-group/view
+effects, and callback-staged effect edits. Temporary `GlowPulse` lifecycle is M2. Active family
 animation/inset combinations retain the renderer's explicit finite-profile rejection.
 State-replacement APIs retain their separate effect-bearing-store guard. Complete
 cross-language/browser/current-head and physical-GPU qualification remain required;

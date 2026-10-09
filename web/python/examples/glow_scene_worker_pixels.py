@@ -2,9 +2,8 @@
 
 The two circles have identical paint and differ only in the attached glow.
 The left half therefore provides an in-frame no-effect negative control.
-The browser smoke compares sampled Gaussian pixels; GPU speed is out of scope.
 """
-from noon import BLUE, WHITE, Circle, LEFT, RIGHT, Pixels, Scene
+from noon import BLUE, WHITE, Circle, LEFT, RIGHT, Pixels, Scene, linear
 
 
 class GlowSceneWorkerPixels(Scene):
@@ -13,6 +12,9 @@ class GlowSceneWorkerPixels(Scene):
         ordinary.shift(LEFT * 2)
         glowing = Circle(radius=0.4, fill=WHITE, fill_opacity=1, stroke=None)
         glowing.shift(RIGHT * 2)
-        glowing.set_glow(color=BLUE, radius=Pixels(6.5), intensity=1.4)
         self.add(ordinary, glowing)
-        self.wait(0.25)
+        # The glow is absent until activation; the shared Rust transaction
+        # installs it neutral and animates intensity through the normal driver.
+        self.play(glowing.animate.set_glow(
+            color=BLUE, radius=Pixels(6.5), intensity=1.4),
+            run_time=0.25, rate_func=linear)
