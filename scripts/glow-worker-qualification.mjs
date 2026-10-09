@@ -34,7 +34,7 @@ try {
         const { default: init, glowWorkerSmokeFixture } = await import("./pkg/noon_web.js");
         await init();
         const fixture = JSON.parse(glowWorkerSmokeFixture());
-        const { TransferableExecutionDeltaSender, SharedExecutionDeltaWriter, createSharedExecutionMailbox } = await import("./execution-transport.js");
+        const { createGlowWorkerTransport } = await import("../scripts/glow-worker-transport.mjs");
         const endpoints = new Map();
         async function create(id, width, height) {
           document.getElementById(id)?.remove();
@@ -71,13 +71,7 @@ try {
           state.port.start();
           worker.postMessage({ channel: "noon.render", protocolVersion: 1, type: "init",
             mode: "retained", transportMode: mode, canvas: offscreen, width, height, port: ports.port2 }, [offscreen, ports.port2]);
-          if (mode === "shared") {
-            const mailbox = createSharedExecutionMailbox(1024 * 1024);
-            state.sender = new SharedExecutionDeltaWriter(mailbox);
-            state.port.postMessage({ type: "transport_setup", mode, mailbox });
-          } else { state.sender = new TransferableExecutionDeltaSender(state.port); }
-          const resources = new Uint8Array(fixture.resources);
-          state.port.postMessage({ type: "retained_resources", bytes: resources }, [resources.buffer]);
+          state.sender = createGlowWorkerTransport(state.port, mode, fixture.resources);
           endpoints.set(id, state);
         }
         async function send(id, delta) {
