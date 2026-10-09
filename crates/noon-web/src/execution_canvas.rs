@@ -71,12 +71,6 @@ mod wasm {
         timestamp_query_supported: bool,
     }
 
-    #[derive(Clone, Copy, Debug, Default)]
-    struct DirectDriveOutcome {
-        resumed: bool,
-        completed_callback_phase: bool,
-    }
-
     /// Narrow direct-host view of a shared live continuation program.
     ///
     /// A continuation keeps its scene and session encapsulated; the canvas may
@@ -90,10 +84,12 @@ mod wasm {
         fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), JsValue>;
         fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), JsValue>;
         fn wake_plan(&self) -> BrowserExecutionWakePlan;
+        /// A pending authoring/publication barrier is not a user pause.
+        fn source_active(&self) -> bool;
         fn query_viewports(&mut self, bounds: &[Rect])
             -> noon::integration::ExecutionViewportQuery;
         /// Returns whether this operation resumed a subsequent continuation stage.
-        fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue>;
+        fn drive_to(&mut self, requested_time: f64) -> Result<(), JsValue>;
         fn take_renderer_publication(&mut self) -> RendererPublication<'_>;
         fn admit_rendered_publication(
             &mut self,
@@ -172,6 +168,13 @@ mod wasm {
             BrowserExecutionWakePlan::from_runtime(self.program.wake_state())
         }
 
+        fn source_active(&self) -> bool {
+            !matches!(
+                self.program.status(),
+                LiveProgramStatus::Finished | LiveProgramStatus::Terminal
+            )
+        }
+
         fn query_viewports(
             &mut self,
             bounds: &[Rect],
@@ -187,14 +190,12 @@ mod wasm {
                 .expect("fresh viewport queries share this publication")
         }
 
-        fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue> {
+        fn drive_to(&mut self, requested_time: f64) -> Result<(), JsValue> {
             self.program
                 .drive_to(&mut self.callbacks, requested_time)
                 .map_err(js_error)?;
-            Ok(DirectDriveOutcome {
-                resumed: self.resume_if_ready()?,
-                completed_callback_phase: self.callbacks.last_advance_completed_callback_phase(),
-            })
+            self.resume_if_ready()?;
+            Ok(())
         }
 
         fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
@@ -364,6 +365,13 @@ mod wasm {
             }
         }
 
+        fn source_active(&self) -> bool {
+            match &self.authority {
+                DirectSourceAuthority::Session { .. } => false,
+                DirectSourceAuthority::Program(program) => program.source_active(),
+            }
+        }
+
         fn query_viewports(
             &mut self,
             bounds: &[Rect],
@@ -391,16 +399,13 @@ mod wasm {
             }
         }
 
-        fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue> {
+        fn drive_to(&mut self, requested_time: f64) -> Result<(), JsValue> {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, callbacks } => {
                     callbacks
                         .advance_to(session, requested_time)
                         .map_err(js_error)?;
-                    Ok(DirectDriveOutcome {
-                        resumed: false,
-                        completed_callback_phase: callbacks.last_advance_completed_callback_phase(),
-                    })
+                    Ok(())
                 }
                 DirectSourceAuthority::Program(program) => program.drive_to(requested_time),
             }
@@ -928,7 +933,7 @@ mod wasm {
             let (plan, scene_time) = self.direct_wake_observation();
             let directive = self
                 .direct_wake_clock
-                .directive(plan, wall_time_ms, scene_time)
+                .directive_for_source(plan, wall_time_ms, scene_time, self.source.source_active())
                 .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
             let (cadence, delay_ms) = if self.source.session().interactions_active() {
                 ("animation-frame", None)
@@ -962,7 +967,7 @@ mod wasm {
             let (plan, scene_time) = self.direct_wake_observation();
             let directive = self
                 .direct_wake_clock
-                .directive(plan, wall_time_ms, scene_time)
+                .directive_for_source(plan, wall_time_ms, scene_time, self.source.source_active())
                 .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
 
             let target_time = match (directive.wake(), plan.cadence()) {
@@ -993,34 +998,25 @@ mod wasm {
             // Internal track events remain traversable in one sample. Interactions
             // still use wall time, independently of authored time.
             let target_time = self.source.session().bounded_realtime_target(target_time);
-            let (pending, camera, outcome) = {
+            let (pending, camera) = {
                 let direct = &mut self.source;
-                let outcome = direct.drive_to(target_time)?;
+                direct.drive_to(target_time)?;
                 direct.advance_interactions(wall_time_ms / 1_000.0)?;
                 let camera = direct.session().inspection_camera().map_err(js_error)?;
-                (
-                    direct.session().wake_state().frame_pending(),
-                    camera,
-                    outcome,
-                )
+                (direct.session().wake_state().frame_pending(), camera)
             };
-            if outcome.resumed || outcome.completed_callback_phase {
-                // The program has started a distinct canonical segment. Re-anchor
-                // after that transition or a required callback phase so neither
-                // continuation setup nor opaque host latency is charged to the
-                // next authored interval.
-                self.direct_wake_clock = BrowserExecutionWakeClock::default();
-            }
+            // Callback commits and ordinary source handoffs are elapsed wall
+            // time, not explicit pauses. Preserve the same active epoch.
             self.sync_camera(camera)?;
-
             let (next_plan, next_scene_time) = self.direct_wake_observation();
-            if !outcome.completed_callback_phase {
-                self.direct_wake_clock
-                    .directive(next_plan, wall_time_ms, next_scene_time)
-                    .ok_or_else(|| {
-                        js_message("direct execution wake clock received invalid time")
-                    })?;
-            }
+            self.direct_wake_clock
+                .directive_for_source(
+                    next_plan,
+                    wall_time_ms,
+                    next_scene_time,
+                    self.source.source_active(),
+                )
+                .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
             Ok(pending)
         }
 
@@ -1689,14 +1685,10 @@ mod wasm {
                 self.surface_frame_pending = true;
                 self.surface.configure(&self.device, &self.config);
             }
-            let resumed = self
-                .source
+            // A valid renderer receipt may release a continuation, but the
+            // original source epoch remains active until genuine completion.
+            self.source
                 .admit_rendered_publication(publication_context)?;
-            if resumed {
-                // Endpoint admission is the only place presentation may release a
-                // continuation. Its next wake must start from that host boundary.
-                self.direct_wake_clock = BrowserExecutionWakeClock::default();
-            }
             Ok(true)
         }
 
