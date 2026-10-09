@@ -328,6 +328,9 @@ jobs:
           NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
           NOON_CAMERA_DENSITY_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}/camera-density
         run: node scripts/camera-density-smoke.mjs
+      - name: Test retained worker glow report and independent reference
+        if: matrix.backend == 'webgpu'
+        run: node --test scripts/glow-worker-reference.test.mjs scripts/glow-worker-report.test.mjs
       - name: Qualify retained worker glow images and recovery
         if: matrix.backend == 'webgpu'
         env:

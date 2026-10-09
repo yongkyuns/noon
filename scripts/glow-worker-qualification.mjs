@@ -8,6 +8,7 @@ import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { referenceGlow, maxChannelError } from "./glow-worker-reference.mjs";
+import { encodeGlowWorkerReport } from "./glow-worker-report.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const out = path.resolve(root, process.env.NOON_GLOW_WORKER_ARTIFACTS ?? "browser-smoke-artifacts/glow-worker");
@@ -210,6 +211,6 @@ try {
   report.error = String(error.stack ?? error);
   throw error;
 } finally {
-  await writeFile(path.join(out, "report.json"), JSON.stringify(report, null, 2) + "\n");
+  await writeFile(path.join(out, "report.json"), encodeGlowWorkerReport(report));
   await browser?.close(); await server.close();
 }
