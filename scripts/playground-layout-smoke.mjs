@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 
 import playwright from "playwright";
 
+import { holdPlaygroundPreload } from "./playground-browser-support.mjs";
+
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_LAYOUT_PORT ?? "4174");
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -133,14 +135,7 @@ try {
     if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
   });
 
-  // Hold the optional post-paint preload at its real module-load boundary so
-  // cold-layout assertions cannot race the automatic first source run.
-  let releasePreload;
-  const preloadGate = new Promise((resolve) => { releasePreload = resolve; });
-  await page.route("**/live-authoring-bootstrap.js", async (route) => {
-    await preloadGate;
-    await route.continue();
-  });
+  const releasePreload = await holdPlaygroundPreload(page);
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "domcontentloaded",
   });

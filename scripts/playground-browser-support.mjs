@@ -1,6 +1,18 @@
 import { lstat, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+// Hold automatic startup at the real module boundary while a smoke check
+// observes the cold page. Releasing it preserves the normal post-paint Run.
+export async function holdPlaygroundPreload(page) {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route("**/live-authoring-bootstrap.js", async (route) => {
+    await gate;
+    await route.continue();
+  });
+  return release;
+}
+
 // Shared software graphics configuration for the playground browser gates.
 export function playgroundLaunchOptions(browserName) {
   if (browserName === "chromium") {
