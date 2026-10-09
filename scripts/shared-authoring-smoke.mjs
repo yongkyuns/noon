@@ -664,6 +664,7 @@ try {
     expectText = false,
     staticTextColor = null,
     expectedFinalCenter = null,
+    expectedGlowPair = false,
     expectedFinalColor = null,
     expectedComposition = false,
     expectedCamera = false,
@@ -834,6 +835,9 @@ try {
     // Real Python .animate/play and live removal. The final ordinary frame is
     // semantic/completion evidence, not an independent glow-pixel reference.
     { filename: "glow_scene_playback.py", objectCount: 1, expectedDuration: 1.75, endpointTime: null, expectedFinalCenter: [2, 0] },
+    // Actual Python -> shared Rust -> retained worker; the matching ordinary
+    // circle is an in-frame no-effect negative control for off-source pixels.
+    { filename: "glow_scene_worker_pixels.py", objectCount: 2, expectedDuration: 0.25, endpointTime: null, expectedGlowPair: true },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
@@ -903,6 +907,7 @@ try {
       endpointTime,
       expectText,
       expectedFinalCenter,
+      expectedGlowPair,
       expectedComposition,
       expectedCamera,
       expectedDifferentRotations,
@@ -977,13 +982,13 @@ try {
           const rendered = await waitForFrame(initial.presentedFrames);
           endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
         }
-        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera || expectedDifferentRotations;
+        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedGlowPair || expectedComposition || expectedCamera || expectedDifferentRotations;
         if (retainForInspection) harness.liveExampleExecution = execution;
         return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
       } finally {
         if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, expectedDifferentRotations, filename });
+    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedGlowPair, expectedComposition, expectedCamera, expectedDifferentRotations, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
     if (objectCount === 0) {
       assert.equal(result.metrics.drawCalls, 0, `${filename}: removed object still draws`);
@@ -1040,6 +1045,54 @@ try {
             finalPixels.meanGreen > finalPixels.meanBlue + 30,
           `${filename}: post-completion yellow paint edit was not rendered: ${JSON.stringify(finalPixels)}`,
         );
+      }
+    }
+    if (expectedGlowPair) {
+      // Source radii are 0.4 world units (~18px). Samples are outside the
+      // ordinary silhouette and inside the 3*sigma halo support.
+      const png = PNG.sync.read(await page.locator(`#${result.canvasId}`).screenshot());
+      assert.equal(png.width, 640); assert.equal(png.height, 360);
+      const pixel = (x, y) => {
+        const offset = (y * png.width + x) * 4;
+        return [png.data[offset], png.data[offset + 1], png.data[offset + 2]];
+      };
+      for (const c of [pixel(230, 180), pixel(410, 180)]) {
+        assert.ok(c.every(v => v > 230), `${filename}: source coverage missing ${c}`);
+      }
+      let ordinaryBlue = 0, glowBlue = 0, glowGreen = 0, glowRed = 0;
+      for (const dx of [26, 29, 32]) for (const dy of [-3, 0, 3]) {
+        ordinaryBlue += pixel(230 + dx, 180 + dy)[2];
+        const [r, g, b] = pixel(410 + dx, 180 + dy);
+        glowRed += r; glowGreen += g; glowBlue += b;
+      }
+      assert.ok(glowBlue > ordinaryBlue + 9 * 8,
+        `${filename}: off-source halo missing: ${glowBlue} versus ${ordinaryBlue}`);
+      assert.ok(glowBlue > glowRed + 9 * 4 && glowGreen > glowRed + 9 * 4,
+        `${filename}: wrong BLUE halo: ${JSON.stringify({glowRed, glowGreen, glowBlue})}`);
+      // Independent truncated full-2D Gaussian at nine measured pixels, using
+      // only the ordinary no-glow source as mask/coverage (not production
+      // intermediate textures, shader coefficients, or glow output).
+      const sigma = 6.5, radius = Math.ceil(3 * sigma);
+      const kernel = [];
+      let normalizer = 0;
+      for (let y = -radius; y <= radius; y++) for (let x = -radius; x <= radius; x++) {
+        const weight = Math.exp(-(x*x + y*y) / (2*sigma*sigma));
+        normalizer += weight;
+        kernel.push([x, y, weight]);
+      }
+      const tint = [88, 196, 221]; // Noon BLUE_C, an authored endpoint.
+      for (const dx of [26, 29, 32]) for (const dy of [-3, 0, 3]) {
+        const base = pixel(230 + dx, 180 + dy)[0] / 255;
+        const blurred = kernel.reduce((sum, [x, y, weight]) =>
+          sum + pixel(230 + dx - x, 180 + dy - y)[0] / 255 * weight, 0) / normalizer;
+        const halo = Math.min(1, 1.4 * blurred);
+        const expected = tint.map(channel => Math.round(255 *
+          (base + (1-base) * channel/255 * halo)));
+        const actual = pixel(410 + dx, 180 + dy);
+        const difference = Math.max(...actual.map((v, i) => Math.abs(v - expected[i])));
+        assert.ok(difference <= 2,
+          `${filename}: independent Python worker halo at ${dx},${dy} differs by ${difference}: ` +
+          `${JSON.stringify({actual, expected})}`);
       }
     }
     if (expectedComposition) {
@@ -1113,7 +1166,7 @@ try {
         assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
       }
     }
-    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera || expectedDifferentRotations) {
+    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedGlowPair || expectedComposition || expectedCamera || expectedDifferentRotations) {
       await page.evaluate(() => {
         window.sharedAuthoringSmoke.liveExampleExecution.terminate();
         window.sharedAuthoringSmoke.liveExampleExecution = null;
