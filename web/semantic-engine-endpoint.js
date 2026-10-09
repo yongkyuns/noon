@@ -5,7 +5,7 @@ import {
   EXECUTION_TRANSPORT_SHARED, EXECUTION_TRANSPORT_TRANSFERABLE,
   SharedExecutionDeltaWriter, TransferableExecutionDeltaSender,
   createSharedExecutionMailbox, executionDeltaMetadata,
-  prepareExecutionDeltaMetadataForSend,
+  prepareExecutionDeltaMetadataForSend, prepareExecutionDeltaTransportForSend,
 } from "./execution-transport.js";
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
@@ -105,10 +105,12 @@ export async function attachSemanticEngine(
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
   const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
   const writable = () => typeof transport.canSend === "function" ? transport.canSend() : transport.inFlight() < 2;
-  const send = (json, timing = null) => {
+  const send = (json, timing = null, workerCarrier = false) => {
     if (json == null) return null;
     const metadataStartedAtMs = timing === null ? 0 : performance.now();
-    const publication = prepareExecutionDeltaMetadataForSend(json);
+    const prepared = workerCarrier ? prepareExecutionDeltaTransportForSend(json) : null;
+    const publication = prepared?.metadata ?? prepareExecutionDeltaMetadataForSend(json);
+    if (prepared !== null) json = prepared.json;
     if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
     const transportStartedAtMs = timing === null ? 0 : performance.now();
     if (!transport.send(json, publication)) {
@@ -432,7 +434,7 @@ export async function attachSemanticEngine(
     return {
       phaseToken,
       publication: rendererObservation?.publication ?? (emitDelta
-        ? send(initial ? player.initialDeltaJson() : player.drainDeltaJson())
+        ? (initial ? send(player.initialDeltaJson()) : drainAndSendDelta())
         : null),
       rendererObservation,
       interrupted: false,
@@ -607,7 +609,7 @@ export async function attachSemanticEngine(
       }
       if (stopped || player === null || !continuationActive) return false;
       if (applyPointerInvalidation()) {
-        publication = send(player.drainDeltaJson());
+        publication = drainAndSendDelta();
         continue;
       }
       if (controls.length === 0) return true;
@@ -632,7 +634,7 @@ export async function attachSemanticEngine(
         appliedInput = true;
       }
       if (!appliedInput) return true;
-      publication = send(player.drainDeltaJson());
+      publication = drainAndSendDelta();
     }
     return false;
   }
@@ -678,7 +680,7 @@ export async function attachSemanticEngine(
       }
       // Ready means the entire ordered phase is coherent. Publish intermediate
       // frames as well as endpoints so realtime continuation remains visible.
-      const readyPublication = send(player.drainDeltaJson());
+      const readyPublication = drainAndSendDelta();
       if (!reachedEndpoint) {
         // A required callback stalls simulation; exclude its wall latency from
         // the next Rust wake anchor after all same-timestamp retries finish.
@@ -691,7 +693,7 @@ export async function attachSemanticEngine(
       emitExecutionWake("idle", null, true);
       if (!await settleContinuationPublication(readyPublication)) return;
       player.completeLiveSegment();
-      const completionPublication = send(player.drainDeltaJson());
+      const completionPublication = drainAndSendDelta();
       if (!await settleContinuationPublication(completionPublication)) return;
       const completedPlayer = player;
       returnedPlaybackTime = completedPlayer.time();
@@ -704,13 +706,12 @@ export async function attachSemanticEngine(
     }
   }
 
-  const drainAndSendDelta = (timing) => {
-    if (timing === null) return send(player.drainDeltaJson());
-    const drainStartedAtMs = performance.now();
-    const deltaJson = player.drainDeltaJson();
-    timing.deltaDrainMs += performance.now() - drainStartedAtMs;
-    return send(deltaJson, timing);
-  };
+  function drainAndSendDelta(timing = null) {
+    const drainStartedAtMs = timing === null ? 0 : performance.now();
+    const packet = player.drainDeltaTransportJson();
+    if (timing !== null) timing.deltaDrainMs += performance.now() - drainStartedAtMs;
+    return send(packet, timing, true);
+  }
 
   async function sampleContinuationToAuthoredTime(targetTime, stopAtSourceCompletion, timing = null) {
     const phaseTokens = new Set();
@@ -751,9 +752,7 @@ export async function attachSemanticEngine(
           continue;
         }
 
-        const readyPublication = timing === null
-          ? send(player.drainDeltaJson())
-          : drainAndSendDelta(timing);
+        const readyPublication = drainAndSendDelta(timing);
         if (!reachedEndpoint) {
           const presentationStartedAtMs = timing === null ? 0 : performance.now();
           await awaitPresentation(readyPublication);
@@ -768,9 +767,7 @@ export async function attachSemanticEngine(
         const handoffStartedAtMs = timing === null ? 0 : performance.now();
         player.completeLiveSegment();
         if (timing !== null) timing.segmentHandoffMs += performance.now() - handoffStartedAtMs;
-        const completionPublication = timing === null
-          ? send(player.drainDeltaJson())
-          : drainAndSendDelta(timing);
+        const completionPublication = drainAndSendDelta(timing);
         if (!await settleContinuationPublication(completionPublication, timing)) return;
         const completedPlayer = player;
         returnedPlaybackTime = completedPlayer.time();
@@ -830,7 +827,7 @@ export async function attachSemanticEngine(
     draining = true;
     try {
       if (player !== null && writable() && applyPointerInvalidation()) {
-        send(player.drainDeltaJson());
+        drainAndSendDelta();
       }
       while (controls.length && writable()) {
       const message = controls.shift();
@@ -874,7 +871,7 @@ export async function attachSemanticEngine(
           case "undo_translation_drag": {
             latestTick = null;
             if (player.undoTranslationDrag()) {
-              const publication = send(player.drainDeltaJson());
+              const publication = drainAndSendDelta();
               await awaitPresentation(publication);
             }
             observeExecutionWake(performance.now());
@@ -935,7 +932,7 @@ export async function attachSemanticEngine(
           case "browser_pointer_view": {
             pointerInputAccepted = applyNativeInput(message);
             if (player === null) break;
-            const publication = send(player.drainDeltaJson());
+            const publication = drainAndSendDelta();
             // Unavailable mappings cannot be presented. Acknowledging their
             // registration authorizes no input and must not block the reveal
             // command behind an impossible surface-presentation barrier.
@@ -1259,7 +1256,7 @@ export async function attachSemanticEngine(
       continuationActive = true;
       callbackFault = null;
       latestTick = null;
-      const publication = send(player.drainDeltaJson());
+      const publication = drainAndSendDelta();
       if (pendingExternalContinuation !== null) {
         const { resolve } = pendingExternalContinuation;
         pendingExternalContinuation = null;

@@ -52,6 +52,12 @@ function fixture(
       return null;
     },
     drainDeltaJson: () => { drained += 1; return null; },
+    drainDeltaTransportJson: () => {
+      const payload = player.drainDeltaJson();
+      if (payload == null) return null;
+      const { channel, session, sequence, snapshot, pointer_view } = JSON.parse(payload);
+      return `${JSON.stringify({ channel, session, sequence, snapshot, pointer_view })}\n${payload}`;
+    },
     commitCallbackPhaseJson: () => { committedPhases += 1; },
     drainRendererObservationPublicationJson: () => {
       throw new Error("fixture did not configure a renderer observation publication");

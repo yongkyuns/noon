@@ -38,6 +38,24 @@ export function prepareExecutionDeltaMetadataForSend(json) {
   return metadata;
 }
 
+// Only accepts the atomic header/body carrier from drainDeltaTransportJson.
+// The body remains the ordinary worker delta; both receiving transports still
+// parse/validate it before admission. Generic/untrusted JSON uses the reader
+// above, which never treats a supplied header as proof of its body.
+export function prepareExecutionDeltaTransportForSend(packet) {
+  if (typeof packet !== "string") {
+    throw new TypeError("worker publication must be a header/body string");
+  }
+  const separator = packet.indexOf("\n");
+  if (separator < 1 || separator > 512 || separator === packet.length - 1) {
+    throw new Error("worker publication has an invalid bounded metadata header");
+  }
+  const metadata = parseExecutionDeltaMetadata(packet.slice(0, separator));
+  const json = packet.slice(separator + 1);
+  validatedDeltaJson.set(metadata, json);
+  return { json, metadata };
+}
+
 function parseExecutionDeltaMetadata(json) {
   if (typeof json !== "string") {
     throw new TypeError("execution delta must be a JSON string");
