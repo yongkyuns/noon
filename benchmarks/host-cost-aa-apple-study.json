@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "studyId": "1933-apple-host-aa-20261009-02",
+  "diagnosticOnly": true,
+  "qualification": false,
+  "performanceAcceptance": false,
+  "mergeApproval": false,
+  "intent": "Investigate strict original 7-pair Python host-cost A/A precision on independently verified headed Apple Paravirtual Metal WebGL2 using identical original baseline bytes on both labels. Diagnostic only.",
+  "trigger": "one pull_request.opened event, attempt 1 only, no retries or replacement samples",
+  "producerRun": 37710961499,
+  "artifactId": 11523896652,
+  "zipSha256": "23eb7282da981e6272c18b2ba59a9ff8863d45406cd00efae73fc87657d54071",
+  "baselineSource": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f",
+  "producerMerge": "f67d915ad6709d97f5a2ba60827302f87fedfba2",
+  "producerHead": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+  "harnessSource": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+  "runner": "Standard macos-15 arm64 public-repository GitHub-hosted Apple Silicon, not paid xlarge or self-hosted",
+  "node": "22.23.3",
+  "playwright": "1.62.1",
+  "browser": "Playwright Chromium 151.0.7922.34, headed, ANGLE Apple Paravirtual Metal real WebGL2 with GLSL/triangle/readPixels proof before any timed host-cost work; headless SwiftShader rejected.",
+  "identicalParticipants": "baseline artifact 11523896652 extracted twice, each into an independent checkout of the same commit",
+  "modes": [
+    "async",
+    "portable",
+    "jspi"
+  ],
+  "workloads": [
+    "deterministic",
+    "segments",
+    "callbacks"
+  ],
+  "pairCountPerModeWorkload": 7,
+  "warmupsPerScoredWorker": 1,
+  "workerLifetime": "fresh-per-pair-warmed",
+  "totalScoredPairs": 63,
+  "totalScoredReports": 126,
+  "scoredMetrics": [
+    "creation_ms",
+    "local_ms",
+    "execution_ms"
+  ],
+  "fixedEstimator": "seven paired log ratios, Student-t two-sided 95%, df=6; score point <=1.03 and upper95 <=1.05 using original pairedCost()",
+  "excluded": "product FPS A/A, profiling, worker-history diagnostics, scored candidate-versus-baseline qualification",
+  "retention": "all raw ordered pairs, warmups, role/source provenance, scores even when inconclusive/point-fail, and partial evidence; one acquisition only",
+  "analysisPlan": "Classify all 27 original cost metric strict statuses (pass/inconclusive/point limit); compare widths and paired log SD with independent predeclared Ubuntu/Mesa and SwiftShader A/A studies, preserving raw samples. Completion is not qualification or causal proof of improved precision. v01 was skipped before any measurement; v02 merely corrects exact branch guard with new preregistered one-shot source.",
+  "harnessTree": "ecbfa794d50d61a4c3df3ef3111aa22e03998f0c",
+  "originalHarness": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+  "originalHostBlob": "30d766b4f9c0b87d9994adb707c47d5dbb84fe4c",
+  "originalProtocolBlob": "ef9414171c16a331a0b9c1bc3ef1594da835a6c7",
+  "environment": {
+    "runner": "macos-15",
+    "node": "22.23.3",
+    "playwright": "1.62.1",
+    "chromium": "151.0.7922.34",
+    "headless": false,
+    "arch": "arm64",
+    "tier": "standard public-repository hosted",
+    "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device)",
+    "actualRendererRequired": true,
+    "webgl2ReadbackRequired": true
+  },
+  "priorAARun": 37920232143,
+  "priorAASummary": {
+    "pass": 6,
+    "inconclusive": 12,
+    "pointLimitFail": 9,
+    "metrics": 27
+  },
+  "acceptance": "Full 9 workloads x 7 same-package original-pair observations, original pairedCost frozen point <=1.03, upper95 <=1.05. Acquisition success is not precision success. All results saved including failures. Never re-run/omit/relabel.",
+  "appleFeasibility": {
+    "run": 37968230377,
+    "artifact": 11634228899,
+    "sha256": "3991d67fe47e3b0eb75796f342bd8d99e7e8a538ea54943e7763e1e9e4a76607",
+    "headedRenderer": "Apple Paravirtual Metal",
+    "headless": "SwiftShader fallback not acceptable"
+  },
+  "comparatorSource": "original frozen scripts/python-host-perf.mjs and scripts/python-host-perf-protocol.mjs from #1875 f5ec15c7, derived A/A relabeling and pre-scored Apple GL guard only; no scored workload/score change",
+  "priorHostAA": {
+    "mesa": {
+      "run": 37929817514,
+      "artifact": 11615899356,
+      "strictPass": 12,
+      "strictBlocked": 15
+    },
+    "swiftShader": {
+      "run": 37920232143,
+      "artifact": 11611802796,
+      "strictPass": 6,
+      "strictBlocked": 21
+    }
+  },
+  "priorSkipped": {
+    "pr": 1969,
+    "workflowRun": 37983414232,
+    "completedPairs": 0,
+    "reason": "Initial pull_request.opened workflow job skipped because exact branch guard did not match the registered research/1933-standard-macos-host-aa-20261009-01 branch."
+  }
+}
