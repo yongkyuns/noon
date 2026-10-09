@@ -1,27 +1,42 @@
-name: M1 exact merge-base snapshot (temporary)
+name: M1 verified browser source transfer (temporary)
 on:
   push:
     branches: [codex/m1-browser-prerequisites-ca12]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  snapshot:
+  transfer:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: b13c09055fd1f837fd9ad10f1f04b5de3af91095
+          path: transfer
           persist-credentials: false
-      - name: Archive verified merge-base for local three-way integration
-        run: |
-          mkdir -p "$RUNNER_TEMP/m1-base"
-          test "$(git rev-parse HEAD^{tree})" = 6a2320edb3385903ed7ba410bc9fec141259358a
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/m1-base/base.tar.gz"
-          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/m1-base/identity.txt"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/checkout@v7
         with:
-          name: m1-exact-base-b13
-          path: ${{ runner.temp }}/m1-base/
+          ref: ca12b315db431b0bfe5c15ebad2a5bda0e7ee2cc
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: b13c09055fd1f837fd9ad10f1f04b5de3af91095
+          path: base
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: e0459b34a9db795f28c82066c6b28402b124a476
+          path: master
+          persist-credentials: false
+      - name: Verify merge and exact candidate, upload source blobs only
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 "$GITHUB_WORKSPACE/transfer/.m1-browser-transfer.py"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m1-browser-source-receipt
+          path: ${{ runner.temp }}/m1-browser-source-receipt.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 3
