@@ -967,8 +967,11 @@ test("continuation presents admitted native input before completing and returnin
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("continuation keeps one Rust wake epoch after a slow callback and retries the exact phase time", async () => {
+test("continuation keeps one Rust wake epoch after a slow callback and retries the exact phase time", async (t) => {
+  let now = 1_000;
+  t.mock.method(performance, "now", () => now);
   const f = fixture("transferable", async (phase) => {
+    now = 9_000; // Deliberate 8-second opaque callback stall.
     await turn();
     return JSON.stringify({ token: phase.token, writes: [] });
   }, { generation: 24, onComplete: () => {}, onError: (_generation, error) => { throw error; } });
@@ -992,15 +995,15 @@ test("continuation keeps one Rust wake epoch after a slow callback and retries t
     endpoint = await f.attach();
     await ready;
     const resumedWake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
-    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    f.render.port2.postMessage({ type: "tick", timestamp: 1_000 });
     await resumedWake;
     await turn();
     await turn();
     assert.equal(drives.length, 2);
     assert.equal(drives[0], drives[1]);
     assert.ok(observations.length > 0, "callback completion still observes its wake");
-    assert.ok(observations.some((time) => time >= drives[1]));
-    f.render.port2.postMessage({ type: "tick", timestamp: 2 });
+    assert.ok(observations.includes(9_000), "next wake sees callback wall latency");
+    f.render.port2.postMessage({ type: "tick", timestamp: 9_001 });
     await turn();
     await turn();
     assert.equal(drives.length, 3);
