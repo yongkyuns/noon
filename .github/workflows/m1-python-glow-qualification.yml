@@ -18,7 +18,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          expected=e87d10b6f1b81bbfdfa0caec6f7de94d0e484b26
+          expected=28ef95accb372ec4176e584511e712bbcb6c09bb
           actual=$(curl --fail --silent --show-error \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
