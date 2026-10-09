@@ -33,7 +33,16 @@ const logicalOrder = productPairOrder(pairIndex);
 const browserServer = await chromium.launchServer({
   channel: "chromium",
   headless: false, // #1933 headed standard macOS; headless falls back to SwiftShader.
-  args: browserArgs("webgl", { gpuMode: "hardware" }),
+  args: (() => {
+    // #1933 original production engine untouched. Chromium 151 standard macOS
+    // ignores disabling only the WebGPU frontend; the GPU service features must
+    // also be disabled to make real Noon cold playback choose WebGL2.
+    const original = browserArgs("webgl", { gpuMode: "hardware" });
+    assert.equal(original.filter(arg => arg === "--disable-features=WebGPU").length, 1,
+      "frozen browserArgs WebGPU switch changed");
+    return original.map(arg => arg === "--disable-features=WebGPU"
+      ? "--disable-features=WebGPU,WebGPUService,WebGPUBlobCache" : arg);
+  })(),
 });
 
 async function runSide(role, position) {
