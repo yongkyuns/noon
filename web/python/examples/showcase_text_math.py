@@ -11,6 +11,6 @@ class TextAndMathematics(Scene):
         self.play(Write(title), run_time=1.2, rate_func=smooth)
         self.play(FadeIn(styled, shift=0.2 * UP), run_time=1.0)
         self.wait(0.5)
-        self.play(FadeIn(equation, shift=0.2 * UP), run_time=1.2)
+        self.play(Write(equation), run_time=1.2)
         self.play(Write(caption), run_time=1.2)
         self.wait(1.4)

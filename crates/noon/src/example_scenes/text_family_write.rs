@@ -162,11 +162,27 @@ impl LiveContinuation for TextFamilyWrite {
 }
 
 pub fn program() -> Result<LiveProgram<TextFamilyWrite>, String> {
+    program_with_text(|scene, source| scene.text(source).map_err(|error| error.to_string()))
+}
+
+/// Exercise the same lifecycle and family plan with compiled mathematical glyphs.
+#[cfg(feature = "typst")]
+pub fn math_program() -> Result<LiveProgram<TextFamilyWrite>, String> {
+    program_with_text(|scene, source| {
+        scene
+            .math_typst(crate::MathTypst::new(format!("\"{source}\"")))
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn program_with_text(
+    mut text: impl FnMut(&mut Scene, &str) -> Result<Mobject, String>,
+) -> Result<LiveProgram<TextFamilyWrite>, String> {
     let mut scene = Scene::new();
-    let mut left = scene.text("I").map_err(|error| error.to_string())?;
+    let mut left = text(&mut scene, "I")?;
     left.set_translation(-3.0, 0.75)
         .map_err(|error| error.to_string())?;
-    let mut right = scene.text("LONG").map_err(|error| error.to_string())?;
+    let mut right = text(&mut scene, "LONG")?;
     right
         .set_translation(0.0, 0.75)
         .map_err(|error| error.to_string())?;
@@ -232,7 +248,16 @@ mod tests {
 
     #[test]
     fn native_family_write_uses_one_global_five_glyph_order_and_cleans_up() {
-        let mut program = program().unwrap();
+        qualify_family_lifecycle(program().unwrap());
+    }
+
+    #[cfg(feature = "typst")]
+    #[test]
+    fn compiled_math_preserves_family_timing_atomicity_and_cleanup() {
+        qualify_family_lifecycle(math_program().unwrap());
+    }
+
+    fn qualify_family_lifecycle(mut program: LiveProgram<TextFamilyWrite>) {
         let mut callbacks = RustHostCallbackTable::new();
         assert!(matches!(
             program.resume().unwrap(),

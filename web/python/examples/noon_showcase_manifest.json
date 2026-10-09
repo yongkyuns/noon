@@ -118,17 +118,17 @@
       "duration": 6.5, "thumbnail_time": 5.0,
       "thumbnail": "thumbnails/showcase/showcase-text-math.png", "thumbnail_alt": "Styled words above a typeset summation identity, captured from Noon's text rendering",
       "still_intervals": [[2.2, 2.7], [5.1, 6.5]],
-      "beats": [{"time": 0.8, "label": "Write the heading"}, {"time": 3.5, "label": "Typeset mathematics"}, {"time": 5.0, "label": "Complete composition"}]
+      "beats": [{"time": 0.8, "label": "Write the heading"}, {"time": 3.5, "label": "Write the equation"}, {"time": 5.0, "label": "Complete composition"}]
     },
     {
-      "id": "showcase-latex-create", "title": "Draw a LaTeX equation",
-      "lesson": "Draw compiled LaTeX glyphs and a vector fraction bar, then move the completed equation.",
+      "id": "showcase-latex-create", "title": "Draw and write LaTeX",
+      "lesson": "Compare Create and Write on compiled LaTeX glyphs and fraction bars, then move both equations.",
       "primary_feature": "latex-create", "category": "Text and mathematics",
-      "path": "python/examples/showcase_latex_create.py", "features": ["MathTex", "prepare_latex", "Create", "animate", "fraction"],
+      "path": "python/examples/showcase_latex_create.py", "features": ["MathTex", "prepare_latex", "Create", "Write", "animate", "fraction"],
       "duration": 3.5, "thumbnail_time": 3.1,
-      "thumbnail": "thumbnails/showcase/showcase-latex-create.png", "thumbnail_alt": "A blue LaTeX equation with its glyphs and fraction bar drawn before moving upward",
+      "thumbnail": "thumbnails/showcase/showcase-latex-create.png", "thumbnail_alt": "Labeled blue Create and yellow Write equations with retained glyphs and fraction bars",
       "still_intervals": [[2.8, 3.5]],
-      "beats": [{"time": 0.8, "label": "Draw the first glyphs"}, {"time": 1.6, "label": "Draw the fraction"}, {"time": 3.1, "label": "Move the completed equation"}]
+      "beats": [{"time": 0.8, "label": "Compare glyph strokes"}, {"time": 1.6, "label": "Reveal the fractions"}, {"time": 3.1, "label": "Move both equations"}]
     },
     {
       "id": "showcase-coordinate-plotting", "title": "Functions and samples",

@@ -852,7 +852,7 @@ result = Scene()
     latexCreateSource,
   );
   assert.equal(latexCreate.duration, 3.5, "MathTex Create must preserve authored timing");
-  assert.equal(latexCreate.metrics.objectCount, 1, "MathTex Create must retain its equation");
+  assert.equal(latexCreate.metrics.objectCount, 4, "MathTex Create/Write must retain both equations and labels");
   assert.ok(latexCreate.metrics.presentedFrames > 0, "MathTex Create must present");
 
   const spatialMeshAdapters = await page.evaluate(

@@ -3574,3 +3574,30 @@ class LateFailure(Scene):
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
 }
+
+// The same compiled-math family programs run through typed direct Rust/WASM
+// and the ordinary Python worker. Existing native-text programs remain unchanged.
+{
+  const { qualifyPairedAuthoring } = await import("./paired-authoring-qualification.mjs");
+  const { disableAuthoringJspi } = await import("./playground-browser-support.mjs");
+  const cases = [];
+  for (const [operation, factory, count] of [
+    ["write", "createDirectMathFamilyWriteSmokeRenderer", 3],
+    ["reveal", "createDirectMathFamilyRevealSmokeRenderer", 4],
+  ]) {
+    const source = (await readFile(path.join(repoRoot, `web/python/examples/ordinary_text_family_${operation}.py`), "utf8"))
+      .replace("from noon import ", "from noon import MathTypst, ")
+      .replace(/Text\("(I|LONG|ONE)"\)/g, "MathTypst('\"$1\"')")
+      .replace("    def construct(self):", "    async def construct(self):")
+      .replaceAll("self.play(", "await self.play(")
+      .replaceAll("self.wait(", "await self.wait(");
+    for (const sampleTime of [1, 2.5, 3.25]) {
+      cases.push({ id: `math-family-${operation}-${sampleTime}`, source, factory,
+        playback: "live", duration: 3.25, sampleTime, boundaries: [2, 3],
+        objectCount: sampleTime === 3.25 ? 1 : count });
+    }
+  }
+  await qualifyPairedAuthoring({ cases,
+    artifactDirectory: "browser-smoke-artifacts/shared-math-family",
+    prepareContext: disableAuthoringJspi });
+}

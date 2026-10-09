@@ -20,7 +20,7 @@ const base = external ?? `http://127.0.0.1:${port}/web/`;
 const artifacts = path.resolve(root, process.env.NOON_PLAYGROUND_MATRIX_ARTIFACTS ??
   `browser-smoke-artifacts/gallery/${browserName}-${profile}`);
 const stringify = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v, 2);
-const curatedLessons = ['showcase-spatial-scene', 'showcase-three-d-axes', 'showcase-linear-algebra', 'showcase-camera-follows-path'];
+const curatedLessons = ['showcase-spatial-scene', 'showcase-three-d-axes', 'showcase-linear-algebra', 'showcase-camera-follows-path', 'showcase-text-math', 'showcase-latex-create'];
 const affected = ['compatible-timed-composition', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square', 'showcase-always-redraw', ...curatedLessons];
 await mkdir(artifacts, { recursive: true });
 let server, browser, runtimeCache;

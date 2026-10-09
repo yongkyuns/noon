@@ -749,6 +749,24 @@ pub async fn create_direct_text_family_fade_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct host for compiled mathematical family Write/Unwrite.
+#[wasm_bindgen(js_name = createDirectMathFamilyWriteSmokeRenderer)]
+pub async fn create_direct_math_family_write_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::text_family_write::math_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Direct host for compiled mathematical family Create/Uncreate.
+#[wasm_bindgen(js_name = createDirectMathFamilyRevealSmokeRenderer)]
+pub async fn create_direct_math_family_reveal_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::text_family_reveal::math_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct host for an empty wait followed by live Text construction and fading.
 #[wasm_bindgen(js_name = createDirectAutomaticWaitTextSmokeRenderer)]
 pub async fn create_direct_automatic_wait_text_smoke_renderer(

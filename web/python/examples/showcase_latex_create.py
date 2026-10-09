@@ -1,4 +1,4 @@
-"""Reveal compiled LaTeX glyphs and a fraction rule with one retained Create plan."""
+"""Compare Create and Write on compiled LaTeX glyphs and a vector fraction rule."""
 
 from noon import *
 
@@ -6,7 +6,12 @@ from noon import *
 class LatexCreate(Scene):
     async def construct(self):
         await prepare_latex()
-        equation = MathTex(r"x^2+\frac{1}{2}", font_size=88, color=BLUE).shift(0.5 * DOWN)
-        await self.play(Create(equation), run_time=2.0, rate_func=linear)
-        await self.play(equation.animate.shift(UP), run_time=0.8, rate_func=linear)
+        drawn = MathTex(r"x^2+\frac{1}{2}", font_size=88, color=BLUE).shift(1.5 * UP)
+        written = MathTex(r"x^2+\frac{1}{2}", font_size=88, color=YELLOW).shift(1.5 * DOWN)
+        self.add(
+            Text("Create()", font_size=28).shift(3.8 * LEFT + 1.5 * UP),
+            Text("Write()", font_size=28).shift(3.8 * LEFT + 1.5 * DOWN),
+        )
+        await self.play(Create(drawn), Write(written), run_time=2.0, rate_func=linear)
+        await self.play(drawn.animate.shift(RIGHT), written.animate.shift(RIGHT), run_time=0.8, rate_func=linear)
         await self.wait(0.7)
