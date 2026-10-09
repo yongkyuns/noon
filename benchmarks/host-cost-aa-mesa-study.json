@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "studyId": "1933-mesa-host-aa-20261009-02",
+  "diagnosticOnly": true,
+  "qualification": false,
+  "performanceAcceptance": false,
+  "mergeApproval": false,
+  "intent": "Evaluate exact frozen seven-pair Python host-cost scorer metrology on separately verified Mesa llvmpipe WebGL2, same authenticated original baseline on both labels; strictly diagnostic, never #1875 acceptance.",
+  "trigger": "one pull_request.opened event, attempt 1 only, no retries or replacement samples",
+  "producerRun": 37710961499,
+  "artifactId": 11523896652,
+  "zipSha256": "23eb7282da981e6272c18b2ba59a9ff8863d45406cd00efae73fc87657d54071",
+  "baselineSource": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f",
+  "producerMerge": "f67d915ad6709d97f5a2ba60827302f87fedfba2",
+  "producerHead": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+  "harnessSource": "bd5df8ed40358e6ce39fd95c2a3b52f0acb3ab9e",
+  "runner": "ubuntu-24.04 hosted (diagnostic environment, not hardware-qualified)",
+  "node": "22.23.3",
+  "playwright": "1.62.1",
+  "browser": "Playwright Chromium 151.0.7922.34, headed Xvfb, WebGL2 Mesa llvmpipe ANGLE gl, observed/attested independently before scored trials",
+  "identicalParticipants": "baseline artifact 11523896652 extracted twice, each into an independent checkout of the same commit",
+  "modes": [
+    "async",
+    "portable",
+    "jspi"
+  ],
+  "workloads": [
+    "deterministic",
+    "segments",
+    "callbacks"
+  ],
+  "pairCountPerModeWorkload": 7,
+  "warmupsPerScoredWorker": 1,
+  "workerLifetime": "fresh-per-pair-warmed",
+  "totalScoredPairs": 63,
+  "totalScoredReports": 126,
+  "scoredMetrics": [
+    "creation_ms",
+    "local_ms",
+    "execution_ms"
+  ],
+  "fixedEstimator": "seven paired log ratios, Student-t two-sided 95%, df=6; score point <=1.03 and upper95 <=1.05 using original pairedCost()",
+  "excluded": "product FPS A/A, profiling, worker-history diagnostics, scored candidate-versus-baseline qualification",
+  "retention": "all raw ordered pairs, warmups, role/source provenance, scores even when inconclusive/point-fail, and partial evidence; one acquisition only",
+  "analysisPlan": "Report all 27 statuses (pass/inconclusive/point-fail), paired log SD and confidence half widths. Identical-source status must never imply PR #1875 passes.",
+  "harnessTree": "3a5dc0dab7b3b51e343b570dc9a84cbf0425b759",
+  "originalHarness": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+  "originalHostBlob": "30d766b4f9c0b87d9994adb707c47d5dbb84fe4c",
+  "originalProtocolBlob": "ef9414171c16a331a0b9c1bc3ef1594da835a6c7",
+  "environment": {
+    "runner": "ubuntu-24.04 hosted",
+    "node": "22.23.3",
+    "playwright": "1.62.1",
+    "chromium": "151.0.7922.34",
+    "headless": false,
+    "display": "Xvfb 1280x800x24",
+    "mesa": {
+      "LIBGL_ALWAYS_SOFTWARE": "true",
+      "GALLIUM_DRIVER": "llvmpipe",
+      "LP_NUM_THREADS": "2"
+    },
+    "rendererRequired": "actual unmasked Mesa llvmpipe, no SwiftShader fallback, clear/readPixels pass, real triangle draw/readPixels pass"
+  },
+  "priorAARun": 37920232143,
+  "priorAASummary": {
+    "pass": 6,
+    "inconclusive": 12,
+    "pointLimitFail": 9,
+    "metrics": 27
+  },
+  "mesaFeasibility": {
+    "pr": 1947,
+    "run": 37922411355,
+    "artifact": 11612634997,
+    "sha256": "cf8b6df539be3e3096aa84d8b288819b82868dfc9f606dadd02e23dc770bd812"
+  },
+  "acceptance": "Full 9 workloads x 7 same-package original-pair observations, original pairedCost frozen point <=1.03, upper95 <=1.05. Acquisition success is not precision success. All results saved including failures. Never re-run/omit/relabel."
+}
