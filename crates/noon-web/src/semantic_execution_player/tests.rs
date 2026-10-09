@@ -1566,6 +1566,46 @@ fn live_segment_wake_drives_one_leased_session_without_a_host_timeline() {
 }
 
 #[test]
+fn consecutive_short_live_waits_preserve_the_same_monotonic_epoch() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(0.4).unwrap();
+    scene.add(&circle).unwrap();
+    let session = scene.execution_session().unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        session,
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        72,
+    )
+    .unwrap();
+
+    // All 32 waits together last exactly 0.5 seconds. One 1000-ms gap
+    // makes them overdue; the worker must not require 32 new frame waits.
+    for i in 1..=32 {
+        player.live_wait(1.0 / 64.0).unwrap();
+        let wake = player
+            .live_segment_wake(if i == 1 { 1_000.0 } else { 2_000.0 })
+            .unwrap();
+        assert_eq!(wake.cadence(), "timer");
+        if i > 1 {
+            assert_eq!(
+                wake.timer_after_milliseconds(),
+                Some(0.0),
+                "overdue wait {i} must not restart its authored-time clock"
+            );
+        }
+        assert!(player
+            .live_drive_segment_from_wall_time(2_000.0)
+            .unwrap()
+            .reached_endpoint());
+        player.live_complete_segment().unwrap();
+        assert_eq!(player.time(), f64::from(i) / 64.0);
+    }
+    assert_eq!(player.time(), 0.5);
+}
+
+#[test]
 fn external_authored_samples_are_monotonic_and_reuse_the_live_player() {
     let mut scene = noon::Scene::new();
     let circle = scene.circle(0.4).unwrap();
