@@ -1,0 +1,70 @@
+name: M1 absent-to-glow source handoff (temporary)
+on:
+  push:
+    branches: [codex/m1-absent-handoff-168a]
+    paths: [.github/workflows/m1-absent-handoff.yml]
+permissions:
+  contents: read
+concurrency:
+  group: m1-absent-to-glow-handoff-168a
+  cancel-in-progress: true
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: handoff
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 168a6c81da3505063a7bfe13b442b6fc492111d3
+          path: candidate
+      - name: Verify exact patch and complete source tree
+        working-directory: candidate
+        run: |
+          mkdir -p "$RUNNER_TEMP/m1-absent-receipt"
+          python3 - <<'PY'
+          import base64, hashlib, pathlib, zlib
+          encoded = pathlib.Path('../handoff/.github/ci/m1-absent-glow.b64').read_text().strip()
+          assert len(encoded) == 7808
+          patch = zlib.decompress(base64.b64decode(encoded, validate=True))
+          assert len(patch) == 22753
+          assert hashlib.sha256(patch).hexdigest() == 'aebb1442536514bcadaf1281a3e5c0a610249ed5ba0a91a516ca7232a3007730'
+          pathlib.Path('../absent.patch').write_bytes(patch)
+          PY
+          test "$(git rev-parse HEAD)" = 168a6c81da3505063a7bfe13b442b6fc492111d3
+          test "$(git rev-parse HEAD^{tree})" = 3283860e22673825da94f2944ef076094729ca1c
+          git apply --index --check ../absent.patch
+          git apply --index ../absent.patch
+          git diff --cached --check
+          test "$(git write-tree)" = aa09a7aa1c4064d1d523f61de232b93c37aac5b2
+          test "$(git diff --cached --name-only | wc -l)" -eq 8
+      - name: Publish only the verified source tree
+        working-directory: candidate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(glow): animate absent attachments from neutral activation'
+          git push origin HEAD:refs/heads/codex/m1-absent-source-168a
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          git=lambda *args: subprocess.check_output(['git',*args],text=True).strip()
+          d={'parent':git('rev-parse','HEAD^'),'commit':git('rev-parse','HEAD'),
+             'tree':git('rev-parse','HEAD^{tree}'),
+             'patch_sha256':'aebb1442536514bcadaf1281a3e5c0a610249ed5ba0a91a516ca7232a3007730',
+             'files':git('diff','--name-only','HEAD^','HEAD').splitlines(),
+             'scope':'source transfer only; local tests not a current-head CI pass'}
+          pathlib.Path(os.environ['RUNNER_TEMP'],'m1-absent-receipt','receipt.json').write_text(json.dumps(d,indent=2)+'\n')
+          print(json.dumps(d,indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m1-absent-source-receipt
+          path: ${{ runner.temp }}/m1-absent-receipt/
+          if-no-files-found: error
+          retention-days: 1
