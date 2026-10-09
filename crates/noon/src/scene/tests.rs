@@ -743,3 +743,50 @@ fn scene_family_placement_surface_is_available_before_execution_bootstrap() {
 
     assert!(scene.revision().get() > revision.get());
 }
+
+#[test]
+fn scene_running_path_edits_reject_cold_and_foreign_without_mutation() {
+    let mut scene = Scene::new();
+    let source = scene.line((0.0, 0.0), (4.0, 0.0)).unwrap();
+    let destination = scene.line((10.0, 0.0), (12.0, 0.0)).unwrap();
+    scene.add(&source).unwrap();
+    scene.add(&destination).unwrap();
+
+    let revision = scene.revision();
+    let cold = scene
+        .pointwise_become_partial(&destination, &source, 0.25, 0.75)
+        .unwrap_err();
+    assert!(matches!(
+        cold,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        destination.path_query().unwrap().start().unwrap(),
+        (10.0, 0.0)
+    );
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    scene
+        .pointwise_become_partial(&destination, &source, 0.25, 0.75)
+        .unwrap();
+    assert_eq!(
+        destination.path_query().unwrap().start().unwrap(),
+        (1.0, 0.0)
+    );
+    assert_eq!(destination.path_query().unwrap().end().unwrap(), (3.0, 0.0));
+    assert!(scene.revision().get() > revision.get());
+
+    let foreign = Scene::new().line((0.0, 0.0), (1.0, 0.0)).unwrap();
+    let revision = scene.revision();
+    let state = destination.state().unwrap();
+    assert!(matches!(
+        scene.pointwise_become_partial(&destination, &foreign, 0.0, 1.0),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(destination.state().unwrap(), state);
+}
