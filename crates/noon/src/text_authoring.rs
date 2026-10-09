@@ -17,14 +17,14 @@ pub(crate) use semantic::{prepare_math_typst, prepare_typst, TypstAdmission};
 use std::sync::Arc;
 
 use noon_compile::CompileError;
+#[cfg(any(feature = "native-text", feature = "typst"))]
+use noon_core::{Color, TextSourceKind, Transform2D, Vec2, WHITE};
 use noon_core::{
-    Color, FontResourceArena, FontResourceError, GeometryResourceArena, TextResource,
-    TextResourceValidationError, Transform2D, WHITE,
+    FontResourceArena, FontResourceError, GeometryResourceArena, TextResource,
+    TextResourceValidationError,
 };
 #[cfg(feature = "native-text")]
 use noon_core::{TextSourceFill, TextSourceSpan, TextSourceStyleError};
-#[cfg(any(feature = "native-text", feature = "typst"))]
-use noon_core::{TextSourceKind, Vec2};
 #[cfg(feature = "native-text")]
 pub use noon_text::shaping::NativeFontFace;
 #[cfg(feature = "native-text")]
@@ -54,6 +54,7 @@ pub const DEFAULT_NATIVE_TEXT_FONT_SIZE: f32 = 48.0;
 #[cfg(feature = "native-text")]
 pub const DEFAULT_NATIVE_TEXT_FONT_FAMILY: &str = "DejaVu Sans Mono";
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
 #[derive(Clone, Debug, PartialEq)]
 struct TextPresentation {
     color: Color,
@@ -61,6 +62,7 @@ struct TextPresentation {
     transform: Transform2D,
 }
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
 impl Default for TextPresentation {
     fn default() -> Self {
         Self {
@@ -71,6 +73,7 @@ impl Default for TextPresentation {
     }
 }
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
 impl TextPresentation {
     fn validate(&self) -> Result<(), TextAuthoringError> {
         if !self.opacity.is_finite() || !(0.0..=1.0).contains(&self.opacity) {

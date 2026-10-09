@@ -18,6 +18,7 @@ use std::{
 
 const MAX_ENTRIES: usize = 128;
 const MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
+#[cfg(feature = "native-text")]
 const NATIVE_BACKEND_VERSION: &str = "noon-native-swash-0.2.10-v2";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -242,6 +243,7 @@ fn push_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
 fn push_text(bytes: &mut Vec<u8>, value: &str) {
     push_bytes(bytes, value.as_bytes());
 }
+#[cfg(feature = "native-text")]
 fn push_color(bytes: &mut Vec<u8>, color: Color) {
     for value in [color.red, color.green, color.blue, color.alpha] {
         bytes.extend_from_slice(&value.to_bits().to_le_bytes());

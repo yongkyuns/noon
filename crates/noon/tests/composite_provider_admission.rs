@@ -122,7 +122,7 @@ mod latex_labels {
     fn empty_decimal_labels_publish_without_native_shaping_or_tex() {
         let mut scene = Scene::new();
         let line = scene
-            .number_line(&ManimNumberLineOptions::default())
+            .number_line(&ManimNumberLineOptions::new([-2.0, 2.0, 1.0]))
             .unwrap();
         let options = NumberLabelOptions::default();
         let mut backend = RejectingBackend::default();
@@ -146,7 +146,7 @@ mod latex_labels {
     fn latex_label_validation_and_backend_errors_do_not_publish() {
         let mut scene = Scene::new();
         let line = scene
-            .number_line(&ManimNumberLineOptions::default())
+            .number_line(&ManimNumberLineOptions::new([-2.0, 2.0, 1.0]))
             .unwrap();
         let revision = scene.integration_store().borrow().scene_revision();
         let mut backend = RejectingBackend::default();
