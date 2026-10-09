@@ -770,13 +770,8 @@ impl SemanticExecutionPlayer {
         let root = self
             .semantic_root
             .expect("live semantic store has one scene root");
-        noon::integration::publish_borrowed_path_edit(
-            &semantics,
-            root,
-            &mut self.session,
-            edit,
-        )
-        .map_err(AuthoringFailure::from)
+        noon::integration::publish_borrowed_path_edit(&semantics, root, &mut self.session, edit)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]

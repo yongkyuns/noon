@@ -62,30 +62,50 @@ pub fn publish_borrowed_path_edit(
     match edit {
         BorrowedPathEdit::SmoothCorners { object, points } => {
             path_editing::publish_running_object_edit(
-                store, root, execution, object, PathEdit::SmoothCorners(points),
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::SmoothCorners(points),
             )
         }
-        BorrowedPathEdit::Start { object, point } => {
-            path_editing::publish_running_object_edit(
-                store, root, execution, object, PathEdit::Start(point),
-            )
-        }
-        BorrowedPathEdit::Quadratic { object, control, anchor } => {
-            path_editing::publish_running_object_edit(
-                store, root, execution, object, PathEdit::Quadratic(control, anchor),
-            )
-        }
+        BorrowedPathEdit::Start { object, point } => path_editing::publish_running_object_edit(
+            store,
+            root,
+            execution,
+            object,
+            PathEdit::Start(point),
+        ),
+        BorrowedPathEdit::Quadratic {
+            object,
+            control,
+            anchor,
+        } => path_editing::publish_running_object_edit(
+            store,
+            root,
+            execution,
+            object,
+            PathEdit::Quadratic(control, anchor),
+        ),
         BorrowedPathEdit::Cubic {
             object,
             control1,
             control2,
             anchor,
         } => path_editing::publish_running_object_edit(
-            store, root, execution, object, PathEdit::Cubic(control1, control2, anchor),
+            store,
+            root,
+            execution,
+            object,
+            PathEdit::Cubic(control1, control2, anchor),
         ),
         BorrowedPathEdit::Subdivide { object, additional } => {
             path_editing::publish_running_object_edit(
-                store, root, execution, object, PathEdit::Subdivide(additional),
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::Subdivide(additional),
             )
         }
         BorrowedPathEdit::Partial {
@@ -97,9 +117,7 @@ pub fn publish_borrowed_path_edit(
             store, root, execution, object, source, a, b,
         ),
         BorrowedPathEdit::FamilyJagged { family } => {
-            path_editing::publish_running_family_anchor_mode(
-                store, root, execution, family, false,
-            )
+            path_editing::publish_running_family_anchor_mode(store, root, execution, family, false)
         }
     }
 }
@@ -129,7 +147,10 @@ mod tests {
             &store,
             root,
             &mut execution,
-            BorrowedPathEdit::SmoothCorners { object: &object, points: &invalid },
+            BorrowedPathEdit::SmoothCorners {
+                object: &object,
+                points: &invalid
+            },
         )
         .is_err());
         let foreign = Scene::new().square(2.0).unwrap();
@@ -138,7 +159,10 @@ mod tests {
                 &store,
                 root,
                 &mut execution,
-                BorrowedPathEdit::Start { object: &foreign, point: Vec2::ZERO },
+                BorrowedPathEdit::Start {
+                    object: &foreign,
+                    point: Vec2::ZERO
+                },
             ),
             Err(AuthoringError::ForeignStore)
         ));
@@ -155,7 +179,10 @@ mod tests {
             &store,
             root,
             &mut execution,
-            BorrowedPathEdit::SmoothCorners { object: &object, points: &points },
+            BorrowedPathEdit::SmoothCorners {
+                object: &object,
+                points: &points,
+            },
         )
         .unwrap();
         assert_eq!(object.path_query().unwrap().curve_count(), 2);
@@ -170,7 +197,10 @@ mod tests {
             &store,
             root,
             &mut execution,
-            BorrowedPathEdit::Start { object: &object, point: Vec2::new(-2.0, -1.0) },
+            BorrowedPathEdit::Start {
+                object: &object,
+                point: Vec2::new(-2.0, -1.0),
+            },
         )
         .unwrap();
         publish_borrowed_path_edit(
@@ -200,14 +230,22 @@ mod tests {
             &store,
             root,
             &mut execution,
-            BorrowedPathEdit::Subdivide { object: &object, additional: 1 },
+            BorrowedPathEdit::Subdivide {
+                object: &object,
+                additional: 1,
+            },
         )
         .unwrap();
         publish_borrowed_path_edit(
             &store,
             root,
             &mut execution,
-            BorrowedPathEdit::Partial { object: &object, source: &source, a: 0.25, b: 0.75 },
+            BorrowedPathEdit::Partial {
+                object: &object,
+                source: &source,
+                a: 0.25,
+                b: 0.75,
+            },
         )
         .unwrap();
         assert_eq!(object.path_query().unwrap().start().unwrap(), (1.0, 0.0));
