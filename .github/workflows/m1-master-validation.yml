@@ -19,7 +19,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          expected=cebee8fc0604cb7691c2bac2871eac0d98887c58
+          expected=68f7b40b877c24c26af2795af776e25deb6a153c
           actual=$(curl --fail --silent --show-error \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
@@ -29,7 +29,12 @@ jobs:
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
             https://api.github.com/repos/yongkyuns/noon/git/commits/$actual | jq -r '[.parents[].sha] | join(" ")')
-          test "$parents" = "28ef95accb372ec4176e584511e712bbcb6c09bb 7efc1a0fbfb94bfba1cdb28b35b396f047fe98a6"
+          test "$parents" = "cebee8fc0604cb7691c2bac2871eac0d98887c58"
+          merge_parents=$(curl --fail --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/yongkyuns/noon/git/commits/cebee8fc0604cb7691c2bac2871eac0d98887c58 | jq -r '[.parents[].sha] | join(" ")')
+          test "$merge_parents" = "28ef95accb372ec4176e584511e712bbcb6c09bb 7efc1a0fbfb94bfba1cdb28b35b396f047fe98a6"
           curl --fail --silent --show-error --request POST \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
