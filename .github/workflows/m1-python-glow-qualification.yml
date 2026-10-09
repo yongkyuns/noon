@@ -40,7 +40,7 @@ jobs:
       - name: Build exact Rust/WASM and Pyodide execution package
         uses: ./.github/actions/dev-wasm-build
         with:
-          preflight: "true"
+          preflight: "false"
       - name: Cache Chromium
         uses: actions/cache@v6
         with:
