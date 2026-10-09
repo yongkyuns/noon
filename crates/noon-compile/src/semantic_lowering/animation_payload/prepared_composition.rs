@@ -578,11 +578,29 @@ where
                     )
                     .map_err(glow_error)?;
                 }
+                // A new canonical attachment may be staged by this very
+                // prepared animation. Before the commit the runtime still has
+                // no glow, so its newly reserved generation starts with the
+                // neutral authored definition, not a fake persistent default.
+                // Existing/stale generations may NEVER take this path.
+                let effective_glow = from.glow.or_else(|| {
+                    let [source_effect] = source_effects.as_slice() else {
+                        return None;
+                    };
+                    if prepared.store().node(source_effect.attachment).is_some() {
+                        return None;
+                    }
+                    let noon_core::EffectDefinition::Glow(definition) = source_effect.definition;
+                    (definition.intensity() == 0.0).then_some(crate::CompiledGlow {
+                        attachment: source_effect.attachment,
+                        definition,
+                    })
+                });
                 let glow_channels = super::glow_target::channels(
                     snapshot,
                     &source_effects,
                     &target_effects,
-                    from.glow,
+                    effective_glow,
                 )
                 .map_err(glow_error)?;
                 for channel in channels {

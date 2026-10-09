@@ -1297,6 +1297,18 @@ impl CompiledScene {
         &self,
         tracks: &[TrackDefinition],
     ) -> Result<(), CompilePatchError> {
+        self.preflight_reconcilable_track_additions_with_staged_glow(tracks, &BTreeMap::new())
+    }
+
+    /// Validate completion/overlap admission when the *same prepared semantic
+    /// transaction* installs a fresh attachment immediately before its tracks.
+    /// This is not an alternate publication path: the complete patch sequence
+    /// still requires strict compiler/runtime preflight before semantic commit.
+    pub fn preflight_reconcilable_track_additions_with_staged_glow(
+        &self,
+        tracks: &[TrackDefinition],
+        staged_glow: &BTreeMap<ObjectId, CompiledGlow>,
+    ) -> Result<(), CompilePatchError> {
         let mut candidates = BTreeMap::<CompiledChannelKey, Vec<&TrackDefinition>>::new();
         for track in tracks {
             validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
@@ -1326,11 +1338,15 @@ impl CompiledScene {
             let object_index = self
                 .object_index(track.object)
                 .ok_or(CompilePatchError::UnknownObject(track.object))?;
-            validate_glow_track_attachment(
-                track,
-                self.objects[object_index as usize].glow.as_deref(),
-            )
-            .map_err(CompilePatchError::InvalidTrack)?;
+            let resident_glow = self.objects[object_index as usize].glow.as_deref();
+            let staged = staged_glow.get(&track.object);
+            if staged.is_some() && resident_glow.is_some() {
+                return Err(CompilePatchError::InvalidGlowAttachmentChange {
+                    object: track.object,
+                });
+            }
+            validate_glow_track_attachment(track, staged.or(resident_glow))
+                .map_err(CompilePatchError::InvalidTrack)?;
             candidates
                 .entry(CompiledChannelKey::new(object_index, track.property))
                 .or_default()

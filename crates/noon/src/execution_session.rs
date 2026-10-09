@@ -1705,8 +1705,39 @@ impl ExecutionSession {
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
         let mut declaration = SemanticMutationTransaction::new();
+        // Adding a glow through an ordinary target animation creates one
+        // neutral attachment only at activation, never during target editing.
+        // The semantic allocator owns its generation; prepared publication
+        // installs this row together with the intensity track, atomically.
+        let neutral_glow = match (
+            store.animation_effect_snapshot(source),
+            store.animation_effect_snapshot(target_state),
+        ) {
+            (Ok(source_effects), Ok(target_effects)) if source_effects.is_empty() => {
+                match target_effects.as_slice() {
+                    [effect] if effect.name.as_ref() == "glow" => {
+                        let noon_core::EffectDefinition::Glow(destination) = effect.definition;
+                        Some(
+                            noon_core::GlowUpdate::default()
+                                .intensity(0.0)
+                                .apply_to(destination)
+                                .map_err(|error| {
+                                    ExecutionSessionAnimationError::InvalidComposition(
+                                        error.to_string(),
+                                    )
+                                })?,
+                        )
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
         let target_state =
             self.stage_animation_target_state(store, &mut declaration, target_state)?;
+        if let Some(neutral) = neutral_glow {
+            declaration.create_effect(source, "glow", neutral);
+        }
         let root = declaration.create_transform_animation(source, target_state, options);
         self.declare_and_activate_prepared_animation(
             store,
@@ -4306,23 +4337,56 @@ impl ExecutionSession {
             next_track_id = raw_id.checked_add(1);
         }
 
-        if lifecycle
+        // Staged effect enrollment is not yet resident while this preflight
+        // runs. Pass only the exact allocator-proven new attachment generations
+        // of this prepared transaction; the combined publication still
+        // validates SetGlowAttachment before AddTrack and commits atomically.
+        let mut staged_glow = BTreeMap::new();
+        for mutation in prepared.candidate_mutations() {
+            let noon_core::SemanticMutation::AddNode {
+                token,
+                creation:
+                    SemanticNodeCreation::Effect {
+                        owner,
+                        definition: noon_core::EffectDefinition::Glow(definition),
+                        ..
+                    },
+            } = mutation
+            else {
+                continue;
+            };
+            if let (Some(owner), Some(attachment)) =
+                (owner.existing(), prepared.planned_node_id(*token))
+            {
+                if let Some(object) = self.execution_index.execution_object_id(owner) {
+                    staged_glow.insert(
+                        object,
+                        noon_compile::CompiledGlow {
+                            attachment,
+                            definition: *definition,
+                        },
+                    );
+                }
+            }
+        }
+        let candidate_tracks = if lifecycle
             .as_ref()
             .is_some_and(PreparedAnimationLifecycle::admits)
         {
-            let existing_tracks = definitions
+            definitions
                 .iter()
                 .filter(|definition| self.runtime.contains_object(definition.object))
                 .cloned()
-                .collect::<Vec<_>>();
-            self.runtime
-                .preflight_reconcilable_track_additions(&existing_tracks)
-                .map_err(ExecutionSessionAnimationError::Publication)?;
+                .collect::<Vec<_>>()
         } else {
-            self.runtime
-                .preflight_reconcilable_track_additions(&definitions)
-                .map_err(ExecutionSessionAnimationError::Publication)?;
-        }
+            definitions.clone()
+        };
+        self.runtime
+            .preflight_reconcilable_track_additions_with_staged_glow(
+                &candidate_tracks,
+                &staged_glow,
+            )
+            .map_err(ExecutionSessionAnimationError::Publication)?;
 
         let (token, next_segment_sequence) = if definitions.is_empty()
             && projection.family_animations().is_empty()

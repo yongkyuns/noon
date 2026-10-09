@@ -330,6 +330,18 @@ impl SceneInstance {
         self.compiled.preflight_reconcilable_track_additions(tracks)
     }
 
+    /// A staged, allocator-owned new attachment may be the source of a track
+    /// in this one atomic semantic/runtime commit. The final transaction still
+    /// proves that the attachment precedes the track before publication.
+    pub fn preflight_reconcilable_track_additions_with_staged_glow(
+        &self,
+        tracks: &[TrackDefinition],
+        staged_glow: &std::collections::BTreeMap<noon_core::ObjectId, noon_compile::CompiledGlow>,
+    ) -> Result<(), CompilePatchError> {
+        self.compiled
+            .preflight_reconcilable_track_additions_with_staged_glow(tracks, staged_glow)
+    }
+
     pub fn new(compiled: CompiledScene) -> Self {
         let frame = base_frame(&compiled, 0.0);
         let path_motion_plans = prepare_path_motion_plans(&compiled);
