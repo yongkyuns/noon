@@ -155,6 +155,61 @@ fn frame<'a>(pixels: &'a [u8], width: u32, height: u32, index: u64) -> CapturedF
 
 #[test]
 #[ignore = "requires FFmpeg; selected by native output gate"]
+fn mp4_terminal_duration_uses_partial_last_sample_without_changing_pts() {
+    let root = Temp::new();
+    let path = root.0.join("exact-two-seconds.mp4");
+    let mut sink = FileSink::new(
+        OutputOptions::mp4(&path),
+        rate(),
+        4,
+        4,
+        CaptureCancellation::default(),
+    )
+    .unwrap();
+    let pixels = [255_u8; 64];
+    for index in 0..120 {
+        sink.write(frame(&pixels, 4, 4, index)).unwrap();
+    }
+    sink.finish_with_source_end(120, Some(2.0)).unwrap();
+    let probe = Command::new("ffprobe")
+        .args([
+            "-v", "error", "-select_streams", "v:0", "-show_entries",
+            "stream=duration_ts,nb_frames,r_frame_rate",
+            "-of", "default=noprint_wrappers=1",
+        ])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(probe.status.success());
+    let summary = String::from_utf8(probe.stdout).unwrap();
+    assert!(summary.contains("r_frame_rate=60000/1001"));
+    assert!(summary.contains("duration_ts=120000"));
+    assert!(summary.contains("nb_frames=120"));
+
+    let probe = Command::new("ffprobe")
+        .args([
+            "-v", "error", "-select_streams", "v:0", "-show_packets",
+            "-show_entries", "packet=pts,duration", "-of", "csv=p=0",
+        ])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(probe.status.success());
+    let packets = String::from_utf8(probe.stdout).unwrap();
+    let packets = packets.lines().collect::<Vec<_>>();
+    assert_eq!(packets.len(), 120);
+    for (index, packet) in packets.iter().enumerate() {
+        let (pts, duration) = packet.split_once(',').unwrap();
+        assert_eq!(pts.parse::<u64>().unwrap(), index as u64 * 1_001);
+        assert_eq!(
+            duration.parse::<u64>().unwrap(),
+            if index == 119 { 881 } else { 1_001 }
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires FFmpeg; selected by native output gate"]
 fn png_sink_roundtrips_odd_size_bytes_and_records_fractional_timing() {
     let root = Temp::new();
     let mut sink = FileSink::new(

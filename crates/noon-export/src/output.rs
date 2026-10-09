@@ -5,6 +5,7 @@
 //! is reported successful before EOF, encoder exit and destination publication.
 mod destination;
 mod process;
+mod terminal_duration;
 
 use std::error::Error;
 use std::fmt;
@@ -153,6 +154,9 @@ pub fn export_file<C: LiveContinuation>(
             "PNG frame limit exceeds image2 numbering",
         )));
     }
+    // Only an unpadded source-completed movie has an exact authored terminal
+    // endpoint. Explicit terminal holds retain their original frame-grid extent.
+    let exact_source_terminal = frame_options.final_hold_seconds == 0.0;
     let cancellation = capture_options.cancellation.clone();
     let mut sink = FileSink::new(
         output,
@@ -174,7 +178,14 @@ pub fn export_file<C: LiveContinuation>(
         return Err(FileExportError::Capture(CaptureRunError::Cancelled));
     }
     let (path, format, encoder_diagnostics) = sink
-        .finish(capture.sampling.frames)
+        .finish_with_source_end(
+            capture.sampling.frames,
+            if exact_source_terminal {
+                capture.sampling.source_end
+            } else {
+                None
+            },
+        )
         .map_err(FileExportError::Output)?;
     Ok(FileExportSummary {
         capture,
@@ -322,7 +333,16 @@ impl FileSink {
         result
     }
 
-    fn finish(mut self, expected_frames: u64) -> io::Result<(PathBuf, OutputFormat, String)> {
+    #[cfg(test)]
+    fn finish(self, expected_frames: u64) -> io::Result<(PathBuf, OutputFormat, String)> {
+        self.finish_with_source_end(expected_frames, None)
+    }
+
+    fn finish_with_source_end(
+        mut self,
+        expected_frames: u64,
+        source_end: Option<f64>,
+    ) -> io::Result<(PathBuf, OutputFormat, String)> {
         if self.failed || self.frames == 0 || self.frames != expected_frames {
             return Err(io::Error::other(
                 "sampling and encoder frame counts disagree",
@@ -333,6 +353,18 @@ impl FileSink {
             .take()
             .ok_or_else(|| io::Error::other("encoder is inactive"))?
             .finish()?;
+        check_publication_cancellation(&self.cancellation)?;
+        if self.options.format == OutputFormat::Mp4 {
+            if let Some(end) = source_end {
+                let staged = self
+                    .destination
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("output destination is missing"))?
+                    .work
+                    .join("video.mp4");
+                terminal_duration::finish_mp4_source_end(&staged, self.rate, self.frames, end)?;
+            }
+        }
         check_publication_cancellation(&self.cancellation)?;
         if let Some(mut manifest) = self.manifest.take() {
             writeln!(manifest, "# complete frames={}", self.frames)?;
