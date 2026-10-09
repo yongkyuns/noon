@@ -29,8 +29,8 @@ jobs:
           persist-credentials: false
       - name: Prove unchanged product source
         run: |
-          test "$(git rev-parse HEAD^)" = 168a6c81da3505063a7bfe13b442b6fc492111d3
-          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/m1-python-glow-qualification.yml
+          git merge-base --is-ancestor 168a6c81da3505063a7bfe13b442b6fc492111d3 HEAD
+          test "$(git diff --name-only 168a6c81da3505063a7bfe13b442b6fc492111d3 HEAD)" = .github/workflows/m1-python-glow-qualification.yml
           node --check scripts/shared-authoring-smoke.mjs
           python3 - <<'PY'
           from pathlib import Path
