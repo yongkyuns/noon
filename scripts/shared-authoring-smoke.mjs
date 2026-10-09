@@ -987,16 +987,26 @@ try {
 
         const initial = await waitForFrame();
         if (expectedGlowPair) {
-          // Python can publish its first frame before the authored segment
-          // completes. Judge the retained halo only at the exact endpoint,
-          // never the neutral attachment's transient activation frame.
-          const paused = await execution.pause();
-          if (paused.playing) throw new Error(`${filename}: halo endpoint did not pause`);
-          const sought = await execution.seek(authored.duration);
-          if (Math.abs(sought.time - authored.duration) > 1e-6) {
-            throw new Error(`${filename}: halo endpoint seek mismatch ${sought.time}`);
+          // A source-owned Python continuation never admits external pause/seek.
+          // harness.authoring.run resolves only after its final Rust execution
+          // lease has returned and the final retained publication was presented.
+          // Observe that exact endpoint without taking ownership from Python.
+          const completed = await execution.state();
+          if (completed.playing || Math.abs(completed.time - authored.duration) > 1e-6) {
+            throw new Error(
+              `${filename}: Python continuation did not complete at the exact endpoint: ` +
+              JSON.stringify({ time: completed.time, playing: completed.playing, duration: authored.duration }),
+            );
           }
-          await waitForFrame(initial.presentedFrames);
+          const finalMetrics = (await execution.metrics()).metrics;
+          if (finalMetrics.objectCount !== objectCount ||
+              finalMetrics.drawCalls === 0 || finalMetrics.presentedFrames === 0) {
+            throw new Error(
+              `${filename}: endpoint publication was not retained: ` +
+              JSON.stringify({ objectCount: finalMetrics.objectCount,
+                drawCalls: finalMetrics.drawCalls, presentedFrames: finalMetrics.presentedFrames }),
+            );
+          }
         }
         let endpoint = null;
         if (endpointTime !== null) {
