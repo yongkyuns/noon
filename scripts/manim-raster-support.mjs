@@ -295,12 +295,15 @@ export function browserArgs(backend, { gpuMode = "software" } = {}) {
       "--disable-dev-shm-usage",
     ];
   }
+  // #1933 diagnostic-only overlay: exact preregistered hosted Mesa ANGLE GL path.
+  // Production hardware/software launch defaults are unchanged on the PR branch.
+  // This frozen harness intentionally uses LP_NUM_THREADS=2 via the workflow env.
   return [
     "--disable-features=WebGPU",
-    "--enable-unsafe-swiftshader",
+    "--use-gpu-in-tests",
     "--ignore-gpu-blocklist",
     "--use-gl=angle",
-    "--use-angle=swiftshader",
+    "--use-angle=gl",
     "--disable-gpu-sandbox",
     "--disable-dev-shm-usage",
   ];
