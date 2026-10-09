@@ -1,63 +1,76 @@
-name: M1 lifecycle prerequisites (temporary)
+name: M1 lifecycle source handoff (temporary)
 on:
   push:
     branches: [codex/m1-lifecycle-prerequisites-5bd6]
     paths: [.github/workflows/m1-lifecycle-prerequisites.yml]
 permissions:
   contents: read
-  actions: read
 concurrency:
-  group: m1-lifecycle-prerequisites-5bd6
+  group: m1-lifecycle-source-handoff-5bd6
   cancel-in-progress: true
 jobs:
-  snapshot:
+  source:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 5bd666dc68aeec73d00a884357322ae28955b8b8
+          path: handoff
           persist-credentials: false
-      - name: Preserve exact product source without helper workflow
-        run: |
-          mkdir -p "$RUNNER_TEMP/m1-lifecycle"
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/m1-lifecycle/source.tar.gz"
-          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/m1-lifecycle/source-identity.txt"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/checkout@v7
         with:
-          name: m1-lifecycle-source
-          path: |
-            ${{ runner.temp }}/m1-lifecycle/source.tar.gz
-            ${{ runner.temp }}/m1-lifecycle/source-identity.txt
-          if-no-files-found: error
-          retention-days: 1
-      - name: Recover the prior CI dependency lock
-        uses: actions/download-artifact@v8
-        with:
-          name: web-pkg
-          run-id: 37882879947
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/m1-prior-web
-      - name: Install pinned Rust and retain offline prerequisites
-        env:
-          CARGO_HOME: ${{ runner.temp }}/m1-cargo
+          ref: 5bd666dc68aeec73d00a884357322ae28955b8b8
+          path: candidate
+      - name: Verify complete patch and candidate tree
+        working-directory: candidate
         run: |
-          cp "$RUNNER_TEMP/m1-prior-web/ci-Cargo.lock" Cargo.lock
-          echo '913894f9908da7c6cd1ea771c19eef7cfde0c7ab176eb55193d80db3e07233cd  Cargo.lock' | sha256sum --check
-          rustup install --profile minimal
-          rustup component add rustfmt clippy
-          cargo fetch --locked
-          cp Cargo.lock "$RUNNER_TEMP/m1-lifecycle/Cargo.lock"
-          rustc --version --verbose > "$RUNNER_TEMP/m1-lifecycle/rustc-version.txt"
-          cargo --version > "$RUNNER_TEMP/m1-lifecycle/cargo-version.txt"
-          tc=$(rustup show active-toolchain | cut -d ' ' -f 1)
-          tar -C "$HOME/.rustup/toolchains" -czf "$RUNNER_TEMP/m1-lifecycle/toolchain.tar.gz" "$tc"
-          tar -C "$CARGO_HOME" -czf "$RUNNER_TEMP/m1-lifecycle/cargo-sources.tar.gz" registry
-          (cd "$RUNNER_TEMP/m1-lifecycle" && sha256sum *.tar.gz Cargo.lock > checksums.txt)
+          mkdir -p "$RUNNER_TEMP/m1-lifecycle-receipt"
+          cp ../handoff/.github/ci/m1-lifecycle-source.b64 "$RUNNER_TEMP/m1-lifecycle-receipt/received-source.b64"
+          python3 - <<'PY'
+          import base64, hashlib, pathlib, zlib
+          encoded = pathlib.Path('../handoff/.github/ci/m1-lifecycle-source.b64').read_text().strip()
+          # Repair literal transcription errors in the temporary handoff only.
+          # The independently recorded patch SHA and full product tree below
+          # remain mandatory; nothing is committed if either proof fails.
+          for before, after in [('RyfuMnMnRRT', 'RyfuMnRRT'), ('JVs7e3t3tP2', 'JVs7e3tP2'), ('Za2b2u+Fx', 'Za2u+Fx')]:
+              encoded = encoded.replace(before, after)
+          patch = zlib.decompress(base64.b64decode(encoded, validate=True))
+          digest = hashlib.sha256(patch).hexdigest()
+          assert digest == '837d0a746dc2e85f6f327d8468419f01bc82d50acf86e4d3dabde4d839b0fd26', digest
+          assert len(patch) == 32884, len(patch)
+          pathlib.Path('../lifecycle.patch').write_bytes(patch)
+          PY
+          test "$(git rev-parse HEAD)" = 5bd666dc68aeec73d00a884357322ae28955b8b8
+          git apply --index --check ../lifecycle.patch
+          git apply --index ../lifecycle.patch
+          git diff --cached --check
+          test "$(git write-tree)" = 898e01cd04419e106b07c1e11ad7c893616fbcce
+      - name: Publish only the verified product tree to the isolated source branch
+        working-directory: candidate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(glow): add generation-safe attachment lifecycle to shared execution'
+          git push origin HEAD:refs/heads/codex/m1-lifecycle-source-5bd6
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
+          receipt = {
+              'parent': git('rev-parse', 'HEAD^'), 'commit': git('rev-parse', 'HEAD'),
+              'tree': git('rev-parse', 'HEAD^{tree}'),
+              'patch_sha256': '837d0a746dc2e85f6f327d8468419f01bc82d50acf86e4d3dabde4d839b0fd26',
+              'scope': 'source integrity only; local and current-head CI qualification remain separate',
+              'files': git('diff', '--name-only', 'HEAD^', 'HEAD').splitlines(),
+          }
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'm1-lifecycle-receipt', 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps(receipt, indent=2))
+          PY
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: m1-lifecycle-prerequisites
-          path: ${{ runner.temp }}/m1-lifecycle/
+          name: m1-lifecycle-source-receipt
+          path: ${{ runner.temp }}/m1-lifecycle-receipt/
           if-no-files-found: error
           retention-days: 1
