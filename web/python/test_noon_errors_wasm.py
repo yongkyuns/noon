@@ -193,10 +193,9 @@ class WasmErrorProjectionTests(unittest.TestCase):
             return (player.debugFrameJson(), bytes(player.resourceBundleBytes()),
                     player.callbackTerminationJson(), context.liveExecutionOwnership())
 
-        # All four actual worker-drive entrypoints retain the very same guard.
+        # All three actual worker-drive entrypoints retain the very same guard.
         calls = [(player.driveLiveSegmentToAuthoredTime, 0.25),
                  (player.driveLiveSegmentFromWallTime, 1000),
-                 (player.reanchorLiveSegmentWake, 1000),
                  (player.liveSegmentWake, 1000)]
         before = state()
         for function, value in calls:

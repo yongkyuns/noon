@@ -967,7 +967,7 @@ test("continuation presents admitted native input before completing and returnin
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("continuation reanchors Rust wake after callback completion but preserves phase retry time", async () => {
+test("continuation preserves Rust wake epoch after callback completion and retries one sample", async () => {
   const f = fixture("transferable", async (phase) => {
     await turn();
     return JSON.stringify({ token: phase.token, writes: [] });
@@ -985,7 +985,7 @@ test("continuation reanchors Rust wake after callback completion but preserves p
     };
     f.player.reanchorLiveSegmentWake = (wallTime) => {
       anchors.push(wallTime);
-      return { cadence: "animation_frame", timerAfterMilliseconds: undefined };
+      throw new Error("an internal callback must not reanchor the authored clock");
     };
     const ready = next(f.control.port2);
     endpoint = await f.attach();
@@ -997,13 +997,12 @@ test("continuation reanchors Rust wake after callback completion but preserves p
     await turn();
     assert.equal(drives.length, 2);
     assert.equal(drives[0], drives[1]);
-    assert.equal(anchors.length, 1);
-    assert.ok(anchors[0] >= drives[1]);
+    assert.equal(anchors.length, 0, "callback latency must not reset the authored epoch");
     f.render.port2.postMessage({ type: "tick", timestamp: 2 });
     await turn();
     await turn();
     assert.equal(drives.length, 3);
-    assert.equal(anchors.length, 1, "callback-free drive keeps its original wake anchor");
+    assert.equal(anchors.length, 0, "subsequent samples preserve the same clock");
   } finally { endpoint?.stop(); f.close(); }
 });
 
