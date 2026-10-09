@@ -10,6 +10,7 @@ on:
       - "crates/noon-web/**"
       - "scripts/build-web-demo.sh"
       - "scripts/playground-lifecycle-smoke.mjs"
+      - "scripts/playground-browser-support.mjs"
       - "web/**"
   workflow_dispatch:
 

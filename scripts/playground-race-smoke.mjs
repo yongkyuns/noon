@@ -5,6 +5,7 @@ import playwright from "playwright";
 
 import { PlaygroundGeneration } from "../web/playground-generation.js";
 import { NEWEST_SOURCE, SUPERSEDED_SOURCE } from "./playground-source-edit-race-fixture.mjs";
+import { holdPlaygroundPreload } from "./playground-browser-support.mjs";
 
 function stressGenerationGate() {
   const generations = new PlaygroundGeneration();
@@ -103,7 +104,7 @@ async function waitForApplied(page, exampleId, browserErrors) {
   );
 }
 
-async function startDeferredRuntime(page) {
+async function startDeferredRuntime(page, releasePreload) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   const deferred = await page.evaluate(() => {
     const status = document.querySelector("#status");
@@ -116,7 +117,7 @@ async function startDeferredRuntime(page) {
   assert.equal(deferred.runtimeStartup, "deferred", "race page load must leave runtime deferred");
   assert.equal(deferred.rendererBackend, "", "deferred race page must not initialize a renderer");
   assert.equal(deferred.presentedFrames, 0, "deferred race page must not present frames");
-  await page.locator("#replace-scene").click();
+  releasePreload();
 }
 
 let browser = null;
@@ -182,10 +183,11 @@ try {
     };
   });
 
+  const releasePreload = await holdPlaygroundPreload(page);
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
-    waitUntil: "load",
+    waitUntil: "domcontentloaded",
   });
-  await startDeferredRuntime(page);
+  await startDeferredRuntime(page, releasePreload);
   await waitForApplied(page, "parity-square-and-circle", browserErrors);
 
   const raceBaseline = await page.evaluate(() => window.__noonRace.reconciles.length);
