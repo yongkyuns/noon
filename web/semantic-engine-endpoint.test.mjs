@@ -967,14 +967,14 @@ test("continuation presents admitted native input before completing and returnin
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("continuation reanchors Rust wake after callback completion but preserves phase retry time", async () => {
+test("continuation preserves Rust wake epoch after callback and retries original phase time", async () => {
   const f = fixture("transferable", async (phase) => {
     await turn();
     return JSON.stringify({ token: phase.token, writes: [] });
   }, { generation: 24, onComplete: () => {}, onError: (_generation, error) => { throw error; } });
   let endpoint;
   const drives = [];
-  const anchors = [];
+  const observedWakes = [];
   try {
     f.player.driveLiveSegmentFromWallTime = (wallTime) => {
       drives.push(wallTime);
@@ -983,9 +983,12 @@ test("continuation reanchors Rust wake after callback completion but preserves p
         reachedEndpoint: false,
       };
     };
-    f.player.reanchorLiveSegmentWake = (wallTime) => {
-      anchors.push(wallTime);
+    f.player.liveSegmentWake = (wallTime) => {
+      observedWakes.push(wallTime);
       return { cadence: "animation_frame", timerAfterMilliseconds: undefined };
+    };
+    f.player.reanchorLiveSegmentWake = () => {
+      assert.fail("required callbacks must not restart the authored-time epoch");
     };
     const ready = next(f.control.port2);
     endpoint = await f.attach();
@@ -997,13 +1000,13 @@ test("continuation reanchors Rust wake after callback completion but preserves p
     await turn();
     assert.equal(drives.length, 2);
     assert.equal(drives[0], drives[1]);
-    assert.equal(anchors.length, 1);
-    assert.ok(anchors[0] >= drives[1]);
+    assert.ok(observedWakes.length >= 3, "worker observes wake after callback commit");
+    assert.ok(observedWakes.at(-1) >= drives[1], "callback completion observes current wall time");
     f.render.port2.postMessage({ type: "tick", timestamp: 2 });
     await turn();
     await turn();
     assert.equal(drives.length, 3);
-    assert.equal(anchors.length, 1, "callback-free drive keeps its original wake anchor");
+    assert.ok(observedWakes.length >= 3, "callback-free drive uses the same Rust epoch");
   } finally { endpoint?.stop(); f.close(); }
 });
 
