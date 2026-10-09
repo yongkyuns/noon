@@ -1,35 +1,143 @@
-name: M1 Glow Showcase canonical build dispatch (temporary)
+name: GPU glow showcase canonical capture (temporary)
 on:
   push:
     branches: [codex/m1-glow-showcase-capture-68f]
     paths: [.github/workflows/m1-glow-showcase-capture.yml]
 permissions:
   contents: read
-  actions: write
 concurrency:
-  group: m1-glow-showcase-build-dispatch
+  group: m1-glow-showcase-capture-68f
   cancel-in-progress: true
 jobs:
-  dispatch:
-    name: Dispatch exact-source canonical CI build
+  capture:
+    name: Exact-source CI package, genuine GPU Glow pixels and posters
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      actions: write
+    env:
+      NOON_SHOWCASE_BACKEND: webgpu
     steps:
-      - name: Verify exact source head and dispatch unmodified CI workflow
+      - name: Checkout exactly the gallery product source, never a helper workflow
+        uses: actions/checkout@v7
+        with:
+          ref: 0ca5ee4c7057098aad3639a202c95b83b297577c
+          fetch-depth: 0
+      - name: Prove source identity, manifest, and storyboard
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 0ca5ee4c7057098aad3639a202c95b83b297577c
+          git diff --quiet HEAD --
+          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
+          node --test web/showcase-gallery.test.mjs web/showcase-capture.test.mjs
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+          scene = Path("web/python/examples/showcase_gpu_glow.py").read_bytes()
+          compile(scene, "showcase_gpu_glow.py", "exec")
+          assert hashlib.sha1(b"blob " + str(len(scene)).encode() + bytes([0]) + scene).hexdigest() == "257bacd0e074653c011de70b22b0b2c0d4983593"
+          manifest = json.loads(Path("web/python/examples/noon_showcase_manifest.json").read_text())
+          assert len(manifest["entries"]) == 22
+          assert sum(e["id"] == "showcase-gpu-glow" for e in manifest["entries"]) == 1
+          PY
+      - name: Dispatch canonical clean-source WebAssembly build
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          expected=0ca5ee4c7057098aad3639a202c95b83b297577c
           actual=$(curl --fail --silent --show-error \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/yongkyuns/noon/git/refs/heads/codex/m1-glow-showcase-source-68f | jq -r '.object.sha')
-          test "$actual" = "$expected"
+          test "$actual" = 0ca5ee4c7057098aad3639a202c95b83b297577c
           curl --fail --silent --show-error --request POST \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
             --data '{"ref":"codex/m1-glow-showcase-source-68f"}' \
             https://api.github.com/repos/yongkyuns/noon/actions/workflows/ci.yml/dispatches
-          echo "Exact gallery source $expected dispatched through canonical CI; normal source and artifact identity guards remain active."
+      - name: Find completed canonical Web package with exact source
+        id: package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api=https://api.github.com/repos/yongkyuns/noon
+          for attempt in $(seq 1 110); do
+            runs=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "$api/actions/runs?branch=codex%2Fm1-glow-showcase-source-68f&event=workflow_dispatch&per_page=20")
+            for run in $(jq -r '.workflow_runs[] | select(.head_sha == "0ca5ee4c7057098aad3639a202c95b83b297577c" and .name == "CI") | .id' <<< "$runs"); do
+              artifacts=$(curl --fail --silent --show-error \
+                -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                "$api/actions/runs/$run/artifacts?per_page=100")
+              count=$(jq '[.artifacts[] | select(.name == "web-pkg" and .expired == false)] | length' <<< "$artifacts")
+              if [ "$count" = 1 ]; then
+                echo "run_id=$run" >> "$GITHUB_OUTPUT"
+                echo "Found source-bound web-pkg from canonical CI run $run"
+                exit 0
+              fi
+            done
+            echo "Canonical source-bound package not uploaded yet (poll $attempt/110)"
+            sleep 30
+          done
+          echo "::error::Canonical exact-source CI package unavailable"
+          exit 1
+      - name: Download build artifact generated by canonical CI on the same source
+        uses: actions/download-artifact@v8
+        with:
+          name: web-pkg
+          repository: yongkyuns/noon
+          run-id: ${{ steps.package.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: web
+      - name: Verify exact-source WebAssembly and Pyodide package provenance
+        run: |
+          set -euo pipefail
+          # This is a cross-workflow consumer: the Actions event is a helper,
+          # while checkout + package are exact source. Verify against the Git
+          # checkout and signed artifact, not the helper's unrelated event SHA.
+          env -u GITHUB_SHA node .github/ci/wasm-build.mjs verify
+          test "$(git rev-parse HEAD)" = 0ca5ee4c7057098aad3639a202c95b83b297577c
+          git diff --quiet HEAD --
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned browser smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Capture every real showcase lesson and GPU Glow poster
+        run: node scripts/showcase-capture.mjs
+      - name: Require all captured source-bound poster and gallery contracts
+        run: |
+          node --test web/showcase-gallery.test.mjs scripts/showcase-posters.test.mjs web/showcase-capture.test.mjs
+          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
+      - name: Publish captured gallery pixels only, with no helper workflows
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 0ca5ee4c7057098aad3639a202c95b83b297577c
+          test -s web/thumbnails/showcase/showcase-gpu-glow.png
+          test -s web/thumbnails/showcase/capture-evidence.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/thumbnails/showcase/
+          git diff --cached --check
+          git diff --cached --name-only | grep -qx web/thumbnails/showcase/showcase-gpu-glow.png
+          git diff --cached --name-only | grep -qx web/thumbnails/showcase/capture-evidence.json
+          git diff --cached --name-only | grep -Ev '^web/thumbnails/showcase/' && exit 1 || true
+          git commit -m 'feat(showcase): publish source-verified GPU glow poster and curated gallery'
+          git push origin HEAD:refs/heads/codex/m1-glow-showcase-captured-68f
+      - name: Preserve real pixels, report, and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m1-glow-showcase-true-pixels
+          path: |
+            browser-smoke-artifacts/showcase/webgpu/
+            web/thumbnails/showcase/showcase-gpu-glow.png
+            web/thumbnails/showcase/capture-evidence.json
+          if-no-files-found: warn
+          retention-days: 7
