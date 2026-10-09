@@ -35,7 +35,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = 0ca5ee4c7057098aad3639a202c95b83b297577c
           python3 -m unittest discover -s web/python -p 'test_showcase*.py'
-          node --test web/showcase-gallery.test.mjs scripts/showcase-capture-checks.test.mjs
+          node --test web/showcase-gallery.test.mjs web/showcase-capture.test.mjs
           python3 - <<'PY'
           from pathlib import Path
           import hashlib, json
@@ -61,7 +61,7 @@ jobs:
         run: node scripts/showcase-capture.mjs
       - name: Qualify retained poster sources, frames, and gallery contracts
         run: |
-          node --test web/showcase-gallery.test.mjs scripts/showcase-posters.test.mjs scripts/showcase-capture-checks.test.mjs
+          node --test web/showcase-gallery.test.mjs scripts/showcase-posters.test.mjs web/showcase-capture.test.mjs
           python3 -m unittest discover -s web/python -p 'test_showcase*.py'
       - name: Publish only captured PNGs and evidence to an isolated branch
         run: |
