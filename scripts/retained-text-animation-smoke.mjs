@@ -178,6 +178,8 @@ try {
     );
     assert.ok(execution.metrics.presentedFrames > 0, `Text case ${index}: no rendered frame`);
   }
+  assert.deepEqual(errors, [], `browser errors while testing typed Text animation:\n${errors.join("\n")}`);
+  await page.close();
   const cache = createPyodideResourceCache(await readFile(path.join(repoRoot, "web/python-worker.js"), "utf8"));
   const mathContext = await browser.newContext({ viewport: { width: 1000, height: 650 } });
   await cache.install(mathContext);
@@ -227,7 +229,6 @@ class MathReveal(Scene):
       }
     }
   } finally { await mathContext.close(); }
-  assert.deepEqual(errors, [], `browser errors while testing typed Text animation:\n${errors.join("\n")}`);
 
   console.log(
     "Text/Typst/MathTypst animation smoke passed through shared live execution: scale, rotation, opacity, relative/absolute movement, FadeIn/FadeOut, re-add, and canvas reuse.",
