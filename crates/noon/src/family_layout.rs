@@ -721,10 +721,8 @@ fn publish_layout_translation(
     let callback_publication = execution.publication_context();
     let result = crate::Scene::publish_running_transaction(store, root, execution, transaction)
         .map_err(AuthoringError::from)?;
-    execution.carry_settled_callback_through_layout_translation(
-        callback_time,
-        callback_publication,
-    );
+    execution
+        .carry_settled_callback_through_layout_translation(callback_time, callback_publication);
     Ok(result)
 }
 
