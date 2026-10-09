@@ -2284,7 +2284,6 @@ impl SemanticExecutionPlayer {
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -2316,7 +2315,6 @@ impl SemanticExecutionPlayer {
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -2369,7 +2367,6 @@ impl SemanticExecutionPlayer {
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -2528,7 +2525,6 @@ impl SemanticExecutionPlayer {
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -2574,7 +2570,7 @@ impl SemanticExecutionPlayer {
         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
         let directive = self
             .live_wake_clock
-            .directive(plan, wall_time_ms, self.session.frame().time)
+            .directive(plan, wall_time_ms, self.session.frame().time, true)
             .ok_or("invalid browser wall timestamp or authored continuation time")?;
         let timer_after_milliseconds = match directive.wake() {
             BrowserHostWake::TimerAfterMilliseconds(delay) => Some(delay),
@@ -2683,24 +2679,6 @@ impl SemanticExecutionPlayer {
             .timer_delay_milliseconds(deadline, wall_time_ms, current)
             .map_err(|error| error.to_string())?;
         Ok((deadline - remaining / 1_000.0).min(deadline).max(current))
-    }
-
-    /// Begin the next browser wall-time interval after required host work.
-    ///
-    /// The endpoint calls this only after retrying the callback-bearing drive
-    /// with its captured timestamp. The session's published time is therefore
-    /// unchanged while this resets the derived wall-time conversion.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn reanchor_live_segment_wake(
-        &mut self,
-        wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, AuthoringFailure> {
-        self.require_callback_progression_available()?;
-        self.live_segment()?;
-        self.live_wake_clock
-            .reanchor(wall_time_ms, self.session.frame().time)
-            .ok_or("invalid browser wall timestamp or authored continuation time")?;
-        self.live_segment_wake(wall_time_ms)
     }
 
     /// Drive the current segment from one Rust-derived browser wall-time mapping.
@@ -2815,7 +2793,6 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)?;
         self.clock = clock;
         self.live_segment = Some(LiveSegmentReceipt::Completed(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
 
@@ -4152,17 +4129,6 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = playbackTimeAt))]
     pub fn playback_time_at_wasm(&self, wall_time_ms: f64) -> Result<f64, String> {
         self.playback_time_at(wall_time_ms)
-    }
-
-    /// Reanchor the next browser interval after a required callback completes.
-    #[cfg(target_arch = "wasm32")]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reanchorLiveSegmentWake))]
-    pub fn reanchor_live_segment_wake_wasm(
-        &mut self,
-        wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
-        self.reanchor_live_segment_wake(wall_time_ms)
-            .map_err(crate::authoring_error::js_error)
     }
 
     /// Advance one active ordinary continuation segment from an anchored browser timestamp.
