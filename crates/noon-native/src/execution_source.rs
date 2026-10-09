@@ -1,6 +1,5 @@
 use noon::integration::{
-    ExecutionViewportQuery, ForwardSample, ForwardSampleStatus, RendererPublication,
-    TimelineWakeState,
+    ExecutionViewportQuery, ForwardSample, ForwardSampleStatus, RendererPublication, TimelineWakeState,
 };
 use noon::integration::{NativePointerInputToken, PointerFrameSnapshot, PointerFrameView};
 use noon::{
