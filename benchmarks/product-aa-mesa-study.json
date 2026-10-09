@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "studyId": "1933-product-aa-20261009-03",
+  "kind": "diagnostic-only",
+  "qualification": false,
+  "issue": 1933,
+  "qualificationPr": 1875,
+  "producerRun": 37710961499,
+  "harnessSha": "bd5df8ed40358e6ce39fd95c2a3b52f0acb3ab9e",
+  "harnessTree": "3a5dc0dab7b3b51e343b570dc9a84cbf0425b759",
+  "sourcePair": {
+    "schema": 1,
+    "candidate": "f67d915ad6709d97f5a2ba60827302f87fedfba2",
+    "baseline": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f",
+    "head": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+    "eventBase": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f"
+  },
+  "builds": [
+    {
+      "name": "baseline",
+      "source": "4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f",
+      "artifactId": 11523896652,
+      "zipSha256": "23eb7282da981e6272c18b2ba59a9ff8863d45406cd00efae73fc87657d54071",
+      "buildId": "810ea10b60bc3ea023a9c20ff21bc918a791494ba3e7c595bdc657dbea95fc15"
+    },
+    {
+      "name": "candidate",
+      "source": "f67d915ad6709d97f5a2ba60827302f87fedfba2",
+      "artifactId": 11523836933,
+      "zipSha256": "786064af906bf68d237bc72c567c4466c5e3ef4c877e5323a11bc2409a5d68b0",
+      "buildId": "b469b22dc7b96fe706d19d6f96604527af23f6765a94763c40314cd7a8ac6932"
+    }
+  ],
+  "workloads": [
+    "parity-square-and-circle",
+    "showcase-camera-follows-path",
+    "showcase-first-scene",
+    "showcase-raster-images",
+    "showcase-bezier-paths"
+  ],
+  "cohorts": [
+    {
+      "name": "seven-pair",
+      "pairs": 7
+    },
+    {
+      "name": "three-pair",
+      "pairs": 3
+    }
+  ],
+  "environment": {
+    "runner": "ubuntu-24.04",
+    "playwright": "1.62.1",
+    "pngjs": "7.0.0",
+    "browserVersion": "151.0.7922.34",
+    "renderer": "WebGL2",
+    "browserMode": "software-WebGL",
+    "port": 4205,
+    "node": "22.23.3",
+    "runnerNote": "GitHub hosted ubuntu-24.04; headed Chromium 151 via Xvfb and Mesa LLVMpipe ANGLE GL with LP_NUM_THREADS=2; per-pair actual renderer/readback guard; no physical GPU or performance acceptance.",
+    "headless": false,
+    "display": "Xvfb 1280x800x24",
+    "expectedUnmaskedRenderer": "llvmpipe"
+  },
+  "pairRunner": "scripts/playground-product-pair.mjs",
+  "comparator": "scripts/playground-product-compare.mjs",
+  "scorer": "scripts/paired-product-metrics.mjs",
+  "schedule": "cohort, workload, pair; alternating build order; original alternating side order within each fresh browser pair",
+  "retries": 0,
+  "stopOnTrialError": true,
+  "scopeNote": "Full original 7+3 identical-package product A/A on verified Mesa llvmpipe WebGL2 backend; unchanged scorer, production packages, fixtures, thresholds, 100 pair commands. This is metrology-only, never PR #1875 qualification.",
+  "retention": "All 100 one-shot pair commands and 200 original runtime reports plus per-pair actual LLVMpipe renderer identity/readback proofs; preserve all pass/inconclusive/fail outcomes and original package archives.",
+  "plannedPairCommands": 100,
+  "plannedObservations": 200,
+  "execution": {
+    "event": "pull_request.opened",
+    "allowedRunAttempt": 1,
+    "pairDeadlineSeconds": 420,
+    "termGraceSeconds": 5,
+    "jobDeadlineMinutes": 180
+  },
+  "priorInvalidStudy": {
+    "studyId": "1933-product-aa-20261008-01",
+    "runId": 37797078117,
+    "artifactId": 11558563159,
+    "artifactSha256": "0b1ba75f6559b492455a924c7a22ed509abf11a34a63af807322fcb1c5e24d47",
+    "completedPairCommands": 0,
+    "reason": "Diagnostic used raw example source SHA instead of frozen product harness authored-source SHA"
+  },
+  "authoredSourceHashes": {
+    "parity-square-and-circle": "554ac4dbf786c030896747bf3f21021ad850cffa1090098bae000bee8f7547bc",
+    "showcase-camera-follows-path": "c56944687b2a12d61b2a7ad8b74dd349cafd53132182b14c62b6397d5ee90e5a",
+    "showcase-first-scene": "1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8",
+    "showcase-raster-images": "7901ef5acf95d33125c853c7aef65f6b12e8cc659441c13d4a7c26b6c507492d",
+    "showcase-bezier-paths": "60e5708b4a235f68c8b0788fd57fb219fdc4a2949aa61573d1aa0cef267ff84b"
+  },
+  "mesa": {
+    "diagnosticOverlaySource": "f5ec15c7a1a9a70c368e141abfc740f5081efc4e",
+    "diagnosticOverlayFiles": [
+      "scripts/manim-raster-support.mjs",
+      "scripts/playground-product-pair.mjs"
+    ],
+    "actualRenderer": "Mesa LLVMpipe via ANGLE gl",
+    "rendererProof": "mesa-renderer-proof-${pair}.json",
+    "browserFlags": [
+      "--disable-features=WebGPU",
+      "--use-gpu-in-tests",
+      "--ignore-gpu-blocklist",
+      "--use-gl=angle",
+      "--use-angle=gl",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage"
+    ],
+    "softwareEnvironment": {
+      "LIBGL_ALWAYS_SOFTWARE": "true",
+      "GALLIUM_DRIVER": "llvmpipe",
+      "LP_NUM_THREADS": "2"
+    },
+    "feasibility": {
+      "run": 37922411355,
+      "artifactId": 11612634997,
+      "sha256": "cf8b6df539be3e3096aa84d8b288819b82868dfc9f606dadd02e23dc770bd812"
+    },
+    "expectedPairProofCount": 100,
+    "requiresAttestedDeviceEachPair": true,
+    "qualification": false,
+    "performanceAcceptance": false,
+    "mergeApproval": false
+  }
+}
