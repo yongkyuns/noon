@@ -1,0 +1,92 @@
+name: M1 public Scene source handoff (temporary)
+on:
+  push:
+    branches: [codex/m1-public-handoff-cc1a]
+    paths: [.github/workflows/m1-public-handoff.yml]
+permissions:
+  contents: read
+concurrency:
+  group: m1-public-source-handoff-cc1a
+  cancel-in-progress: true
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: handoff
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: cc1aec83c654d9407bfe748f5861015c6c261f9f
+          path: candidate
+      - name: Verify source pack, every changed blob and complete product tree
+        working-directory: candidate
+        run: |
+          mkdir -p "$RUNNER_TEMP/m1-public-receipt"
+          python3 - <<'PY'
+          import base64, hashlib, json, pathlib, subprocess, zlib
+          git = lambda *args: subprocess.check_output(['git', *args])
+          assert git('rev-parse', 'HEAD').decode().strip() == 'cc1aec83c654d9407bfe748f5861015c6c261f9f'
+          encoded = ''.join(pathlib.Path(f'../handoff/.github/ci/m1-public-source-{i}.b64').read_text().strip() for i in [1, 2])
+          payload = zlib.decompress(base64.b64decode(encoded, validate=True))
+          assert len(payload) == 52930
+          assert hashlib.sha256(payload).hexdigest() == 'e5a9088db055053024a42872e78ff77b70f00fa0c9e3350162eda07017647f53'
+          blob = lambda data: hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          entries = json.loads(payload)
+          assert len(entries) == 26
+          for entry in entries:
+              path = pathlib.Path(entry['path'])
+              assert not path.is_absolute() and '..' not in path.parts
+              if entry['base'] is None:
+                  assert not path.exists()
+                  before = b''
+              else:
+                  before = path.read_bytes()
+                  assert blob(before) == entry['base'], str(path)
+              text = before.decode('utf-8')
+              limit = len(text)
+              for start, end, replacement in reversed(entry['edits']):
+                  assert 0 <= start <= end <= limit
+                  text = text[:start] + replacement + text[end:]
+                  limit = start
+              after = text.encode('utf-8')
+              assert blob(after) == entry['result'], str(path)
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(after)
+              subprocess.check_call(['git', 'add', '--', str(path)])
+          assert git('write-tree').decode().strip() == 'b0c8df3a026865e29035eb6193ec07cd19d84448'
+          patch = git('diff', '--cached', '--binary', '--full-index')
+          assert len(patch) == 80344
+          assert hashlib.sha256(patch).hexdigest() == '153c8bc7777a5aa142029cc642c2b9805b9f7d8b86d978441762b81bd7394596'
+          PY
+          git diff --cached --check
+      - name: Publish only verified product source to the isolated source branch
+        working-directory: candidate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(glow): admit public Scene playback with generation-safe live targets'
+          git push origin HEAD:refs/heads/codex/m1-public-source-cc1a
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
+          receipt = {'parent': git('rev-parse', 'HEAD^'), 'commit': git('rev-parse', 'HEAD'),
+              'tree': git('rev-parse', 'HEAD^{tree}'),
+              'patch_sha256': '153c8bc7777a5aa142029cc642c2b9805b9f7d8b86d978441762b81bd7394596',
+              'source_pack_sha256': 'e5a9088db055053024a42872e78ff77b70f00fa0c9e3350162eda07017647f53',
+              'scope': 'source integrity only; local tests and current-head CI are separate',
+              'files': git('diff', '--name-only', 'HEAD^', 'HEAD').splitlines()}
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'm1-public-receipt', 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps(receipt, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m1-public-source-receipt
+          path: ${{ runner.temp }}/m1-public-receipt/
+          if-no-files-found: warn
+          retention-days: 1
