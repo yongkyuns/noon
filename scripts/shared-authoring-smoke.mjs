@@ -3588,6 +3588,7 @@ class LateFailure(Scene):
     const source = (await readFile(path.join(repoRoot, `web/python/examples/ordinary_text_family_${operation}.py`), "utf8"))
       .replace("from noon import ", "from noon import MathTypst, ")
       .replace(/Text\("(I|LONG|ONE)"\)/g, "MathTypst('\"$1\"')")
+      .replace("Square(0.6)", "Square(0.6).set_fill(opacity=1)")
       .replace("    def construct(self):", "    async def construct(self):")
       .replaceAll("self.play(", "await self.play(")
       .replaceAll("self.wait(", "await self.wait(");

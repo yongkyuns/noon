@@ -203,13 +203,15 @@ impl LiveContinuation for TextFamilyReveal {
 }
 
 pub fn program() -> Result<LiveProgram<TextFamilyReveal>, String> {
-    program_with_text(|scene, source| scene.text(source).map_err(|error| error.to_string()))
+    program_with_text(false, |scene, source| {
+        scene.text(source).map_err(|error| error.to_string())
+    })
 }
 
 /// Exercise the same lifecycle and family plan with compiled mathematical glyphs.
 #[cfg(feature = "typst")]
 pub fn math_program() -> Result<LiveProgram<TextFamilyReveal>, String> {
-    program_with_text(|scene, source| {
+    program_with_text(true, |scene, source| {
         scene
             .math_typst(crate::MathTypst::new(format!("\"{source}\"")))
             .map_err(|error| error.to_string())
@@ -217,6 +219,7 @@ pub fn math_program() -> Result<LiveProgram<TextFamilyReveal>, String> {
 }
 
 fn program_with_text(
+    solid_mover: bool,
     mut text: impl FnMut(&mut Scene, &str) -> Result<Mobject, String>,
 ) -> Result<LiveProgram<TextFamilyReveal>, String> {
     let mut scene = Scene::new();
@@ -235,6 +238,12 @@ fn program_with_text(
     solo.set_translation(-2.0, -1.25)
         .map_err(|error| error.to_string())?;
     let mut moving = scene.square(0.6).map_err(|error| error.to_string())?;
+    if solid_mover {
+        // Retain a visible comparison anchor after all compiled glyphs are removed.
+        moving
+            .set_fill_opacity(1.0)
+            .map_err(|error| error.to_string())?;
+    }
     moving
         .set_translation(1.0, -1.25)
         .map_err(|error| error.to_string())?;
