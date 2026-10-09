@@ -20,7 +20,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 16;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 17;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -320,6 +320,9 @@ pub struct RetainedTransportObjectPatch {
     pub style: Option<Style>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub morph: Option<f32>,
+    /// Replace only the runtime-derived Create/Uncreate reveal fraction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reveal: Option<f32>,
     /// Move an already active derived frame without repeating its linear part.
     /// Absence leaves it unchanged; other override changes require a complete row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -406,6 +409,7 @@ pub enum RetainedExecutionTransportError {
     DuplicateObject(ObjectId),
     UnknownSlot(TransportSlotId),
     InvalidObjectPatch(TransportSlotId),
+    InvalidReveal(TransportSlotId),
     SlotIdentityChanged(TransportSlotId),
     TextRenderGeometry(TransportSlotId),
     InvalidRenderGeometryResource(u64),
@@ -504,6 +508,11 @@ impl std::fmt::Display for RetainedExecutionTransportError {
             Self::InvalidObjectPatch(slot) => write!(
                 formatter,
                 "invalid retained execution patch for slot {}:{}",
+                slot.slot, slot.generation
+            ),
+            Self::InvalidReveal(slot) => write!(
+                formatter,
+                "retained slot {}:{} has an invalid reveal fraction",
                 slot.slot, slot.generation
             ),
             Self::SlotIdentityChanged(slot) => write!(
@@ -1451,14 +1460,19 @@ impl RetainedExecutionFrameMirror {
             if patch.transform.is_none()
                 && patch.style.is_none()
                 && patch.morph.is_none()
+                && patch.reveal.is_none()
                 && patch.render_translation.is_none()
             {
                 return Err(RetainedExecutionTransportError::InvalidObjectPatch(
                     patch.slot,
                 ));
             }
+            if let Some(reveal) = patch.reveal {
+                validate_reveal(patch.slot, reveal)?;
+            }
             if frame.objects[index].content.image().is_some()
-                && patch.morph.is_some_and(|morph| morph != 0.0)
+                && (patch.morph.is_some_and(|morph| morph != 0.0)
+                    || patch.reveal.is_some_and(|reveal| reveal != 1.0))
             {
                 return Err(RetainedExecutionTransportError::ImageRenderGeometry(
                     patch.slot,
@@ -1549,6 +1563,9 @@ impl RetainedExecutionFrameMirror {
             }
             if let Some(morph) = patch.morph {
                 frame.morphs[index] = morph;
+            }
+            if let Some(reveal) = patch.reveal {
+                frame.reveals[index] = reveal;
             }
             if let Some(translation) = patch.render_translation {
                 frame.render_transforms[index]
@@ -1778,6 +1795,7 @@ fn validate_object_state(
 fn validate_object_fields(
     object: &RetainedTransportObjectState,
 ) -> Result<(), RetainedExecutionTransportError> {
+    validate_reveal(object.slot, object.reveal)?;
     if !object.z_index.is_finite() {
         return Err(RetainedExecutionTransportError::InvalidZIndex(object.slot));
     }
@@ -1818,6 +1836,16 @@ fn validate_object_fields(
         return Err(RetainedExecutionTransportError::TextRenderGeometry(
             object.slot,
         ));
+    }
+    Ok(())
+}
+
+fn validate_reveal(
+    slot: TransportSlotId,
+    reveal: f32,
+) -> Result<(), RetainedExecutionTransportError> {
+    if !reveal.is_finite() || !(0.0..=1.0).contains(&reveal) {
+        return Err(RetainedExecutionTransportError::InvalidReveal(slot));
     }
     Ok(())
 }
@@ -2549,6 +2577,93 @@ mod tests {
     }
 
     #[test]
+    fn reveal_patch_and_complete_rows_reject_invalid_values_atomically() {
+        let mut frame = mixed_frame();
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE),
+        )));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(83);
+        let initial = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        let slot = initial.objects[0].slot;
+        let object = initial.objects[0].object;
+        let mut mirror = test_mirror();
+        mirror.apply(initial.clone()).unwrap();
+        let installed = mirror.frame().unwrap().render_geometries[0]
+            .clone()
+            .unwrap();
+        let mut next = frame.clone();
+        next.time = 0.5;
+        next.reveals[0] = 0.5;
+        next.objects[1].transform.translation = Vec2::new(2.0, 3.0);
+        let full = encoder
+            .encode_incremental_with_context(
+                &next,
+                &FrameChanges::objects(vec![0, 1]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let mut compact = full.clone();
+        compact.objects.retain(|row| row.object != object);
+        compact.object_patches.push(RetainedTransportObjectPatch {
+            slot,
+            object,
+            transform: None,
+            style: None,
+            morph: None,
+            reveal: Some(0.5),
+            render_translation: None,
+        });
+        for reveal in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1, 1.1] {
+            let mut invalid = compact.clone();
+            invalid.object_patches[0].reveal = Some(reveal);
+            assert_eq!(
+                mirror.apply(invalid),
+                Err(RetainedExecutionTransportError::InvalidReveal(slot))
+            );
+            let mut invalid = full.clone();
+            invalid.objects[0].reveal = reveal;
+            assert_eq!(
+                mirror.apply(invalid),
+                Err(RetainedExecutionTransportError::InvalidReveal(slot))
+            );
+            let mut invalid = initial.clone();
+            invalid.objects[0].reveal = reveal;
+            let mut empty = test_mirror();
+            assert_eq!(
+                empty.apply(invalid),
+                Err(RetainedExecutionTransportError::InvalidReveal(slot))
+            );
+            assert!(empty.frame().is_none());
+            assert_eq!(mirror.frame(), Some(&frame));
+            assert_eq!(mirror.applied_sequence(), Some(0));
+        }
+        let decoded = serde_json::from_slice(&serde_json::to_vec(&compact).unwrap()).unwrap();
+        let (_, changes) = mirror.apply(decoded).unwrap();
+        assert_eq!(changes.object_indices(), &[0, 1]);
+        assert_eq!(mirror.frame(), Some(&next));
+        assert!(Arc::ptr_eq(
+            &installed,
+            mirror.frame().unwrap().render_geometries[0]
+                .as_ref()
+                .unwrap()
+        ));
+        let (outcome, changes) = mirror.apply(compact).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::DroppedStale);
+        assert!(changes.object_indices().is_empty());
+        assert_eq!(mirror.frame(), Some(&next));
+    }
+
+    #[test]
     fn object_patch_updates_existing_row_and_rejects_conflicts_atomically() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(81);
@@ -2571,6 +2686,7 @@ mod tests {
                 transform: None,
                 style: None,
                 morph: Some(0.25),
+                reveal: None,
                 render_translation: None,
             });
         assert_eq!(
@@ -2601,6 +2717,7 @@ mod tests {
             transform: Some(next.objects[0].transform),
             style: Some(next.objects[0].style),
             morph: Some(next.morphs[0]),
+            reveal: None,
             render_translation: None,
         });
         let json = serde_json::to_string(&delta).unwrap();
@@ -2669,6 +2786,7 @@ mod tests {
             transform: None,
             style: None,
             morph: None,
+            reveal: None,
             render_translation: next.render_transforms[0].map(|transform| transform.translation),
         });
         // The valid full text row must also remain unapplied when a later patch

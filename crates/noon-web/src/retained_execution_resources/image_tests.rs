@@ -58,6 +58,41 @@ fn family_delta(retained: RetainedExecutionDeltaEnvelope) -> RetainedFamilyExecu
 }
 
 #[test]
+fn reveal_patch_cannot_install_vector_reveal_on_an_image() {
+    let (bytes, initial) = initial();
+    let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&bytes).unwrap();
+    mirror.apply_family(family_delta(initial.clone())).unwrap();
+    let before = mirror.frame().unwrap().clone();
+    let row = initial.objects[0].clone();
+    let mut delta = initial;
+    delta.snapshot = false;
+    delta.sequence = 1;
+    delta.objects.clear();
+    delta
+        .object_patches
+        .push(crate::RetainedTransportObjectPatch {
+            slot: row.slot,
+            object: row.object,
+            transform: None,
+            style: None,
+            morph: None,
+            reveal: Some(0.5),
+            render_translation: None,
+        });
+    assert!(matches!(
+        mirror.apply_family(family_delta(delta.clone())),
+        Err(InstalledExecutionError::Transport(
+            RetainedExecutionTransportError::ImageRenderGeometry(slot)
+        )) if slot == row.slot
+    ));
+    assert_eq!(mirror.frame(), Some(&before));
+    assert_eq!(mirror.resources().image_count(), 1);
+    delta.object_patches[0].reveal = Some(1.0);
+    mirror.apply_family(family_delta(delta)).unwrap();
+    assert_eq!(mirror.frame(), Some(&before));
+}
+
+#[test]
 fn rejected_family_delta_does_not_run_resident_preparation() {
     let (bytes, initial) = initial();
     let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(&bytes).unwrap();

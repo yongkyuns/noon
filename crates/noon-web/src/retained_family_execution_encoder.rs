@@ -237,7 +237,6 @@ impl RetainedFamilyExecutionDeltaEncoder {
                     && previous.appearance == row.appearance
                     && previous.text_bounds == row.text_bounds
                     && previous.presence == row.presence
-                    && previous.reveal == row.reveal
                     && previous.render_geometry == row.render_geometry
                     && match (previous.render_transform, row.render_transform) {
                         (None, None) => true,
@@ -252,6 +251,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 let transform = (previous.transform != row.transform).then_some(row.transform);
                 let style = (previous.style != row.style).then_some(row.style);
                 let morph = (previous.morph != row.morph).then_some(row.morph);
+                let reveal = (previous.reveal != row.reveal).then_some(row.reveal);
                 let render_translation = previous
                     .render_transform
                     .zip(row.render_transform)
@@ -263,6 +263,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
                     && (transform.is_some()
                         || style.is_some()
                         || morph.is_some()
+                        || reveal.is_some()
                         || render_translation.is_some()))
                 .then_some(crate::RetainedTransportObjectPatch {
                     slot: row.slot,
@@ -270,6 +271,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
                     transform,
                     style,
                     morph,
+                    reveal,
                     render_translation,
                 })
             });
@@ -1082,6 +1084,9 @@ mod tests {
 
         frame.time = 0.6;
         frame.morphs.fill(0.4);
+        for (index, reveal) in frame.reveals.iter_mut().enumerate() {
+            *reveal = index as f32 / 128.0;
+        }
         frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::circle(4.0));
         if render_override {
             for (index, transform) in frame.render_transforms.iter_mut().enumerate() {
@@ -1106,6 +1111,7 @@ mod tests {
         assert!(serde_json::to_vec(&compact).unwrap().len() < full_bytes);
         for patch in &compact.retained.object_patches {
             assert_eq!(patch.transform, None);
+            assert!(patch.reveal.is_some());
             assert_eq!(patch.render_translation.is_some(), render_override);
         }
         full_mirror.apply(full.retained).unwrap();
@@ -1114,6 +1120,40 @@ mod tests {
         compact_mirror.apply(decoded).unwrap();
         assert_eq!(full_mirror.frame(), Some(&frame));
         assert_eq!(compact_mirror.frame(), full_mirror.frame());
+
+        // Create/Uncreate changes only reveal, including both endpoints and reverse
+        // progress. Its wire round-trip must match the full row literally.
+        for (step, reveal) in [0.0, 1.0, 0.25].into_iter().enumerate() {
+            frame.time = 0.61 + step as f64 * 0.01;
+            frame.reveals.fill(reveal);
+            let full = base
+                .encode_incremental_with_context(
+                    &frame,
+                    &FrameChanges::objects((0..128).collect()),
+                    Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
+                )
+                .unwrap()
+                .unwrap();
+            let mut compact = wrap(full.clone());
+            compactor.compact_dense_rows(&mut compact);
+            // A row already at this endpoint may remain complete; changed rows
+            // carry exactly one reveal scalar and keep every other field installed.
+            assert!(compact.retained.object_patches.len() >= 127);
+            assert!(compact.retained.object_patches.iter().all(|patch| {
+                patch.reveal == Some(reveal)
+                    && patch.transform.is_none()
+                    && patch.style.is_none()
+                    && patch.morph.is_none()
+                    && patch.render_translation.is_none()
+            }));
+            full_mirror.apply(full).unwrap();
+            let decoded =
+                serde_json::from_slice(&serde_json::to_vec(&compact.retained).unwrap()).unwrap();
+            compact_mirror.apply(decoded).unwrap();
+            assert_eq!(compact_mirror.frame(), Some(&frame));
+            assert_eq!(compact_mirror.frame(), full_mirror.frame());
+        }
 
         if !render_override {
             return;
@@ -1143,6 +1183,7 @@ mod tests {
             patch.transform.is_none()
                 && patch.style.is_none()
                 && patch.morph.is_none()
+                && patch.reveal.is_none()
                 && patch.render_translation.is_some()
         }));
         full_mirror.apply(full).unwrap();
