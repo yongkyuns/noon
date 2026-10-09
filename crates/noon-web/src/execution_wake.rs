@@ -170,23 +170,6 @@ pub struct BrowserExecutionWakeClock {
 }
 
 impl BrowserExecutionWakeClock {
-    /// Start the next wall-time interval at an already-published authored time.
-    ///
-    /// Required host callback execution may take arbitrary wall time while the
-    /// runtime is pinned at its barrier. Reanchoring after that phase commits
-    /// prevents host latency from advancing authored time. Both values use the
-    /// same units as directive: milliseconds and seconds respectively.
-    pub fn reanchor(&mut self, wall_time_ms: f64, scene_time: f64) -> Option<()> {
-        if !wall_time_ms.is_finite() || !scene_time.is_finite() {
-            return None;
-        }
-        self.anchor = Some(BrowserRealtimeAnchor {
-            wall_origin_ms: wall_time_ms,
-            scene_origin: scene_time,
-        });
-        Some(())
-    }
-
     /// Realize one target-neutral wake plan against a browser monotonic timestamp.
     ///
     /// `wall_time_ms` is expected to share the `performance.now()` / RAF timestamp
@@ -197,13 +180,29 @@ impl BrowserExecutionWakeClock {
         wall_time_ms: f64,
         current_scene_time: f64,
     ) -> Option<BrowserExecutionWakeDirective> {
+        self.directive_with_source_activity(plan, wall_time_ms, current_scene_time, false)
+    }
+
+    /// A publication/callback barrier may suppress a pending source's wake.
+    /// Retain its monotonic epoch until the source actually finishes; only
+    /// genuine inactivity or explicit host lifecycle changes start a new epoch.
+    /// This changes clock conversion, never the runtime's wake/scheduling plan.
+    pub fn directive_with_source_activity(
+        &mut self,
+        plan: BrowserExecutionWakePlan,
+        wall_time_ms: f64,
+        current_scene_time: f64,
+        source_active: bool,
+    ) -> Option<BrowserExecutionWakeDirective> {
         if !wall_time_ms.is_finite() || !current_scene_time.is_finite() {
             return None;
         }
 
         let wake = match plan.cadence() {
             BrowserExecutionCadence::Idle => {
-                self.anchor = None;
+                if !source_active {
+                    self.anchor = None;
+                }
                 BrowserHostWake::Idle
             }
             BrowserExecutionCadence::AnimationFrame => {
@@ -390,15 +389,39 @@ mod tests {
     }
 
     #[test]
-    fn browser_realtime_clock_reanchors_after_opaque_host_work() {
+    fn browser_realtime_clock_keeps_elapsed_debt_through_internal_source_barriers() {
         let mut clock = BrowserExecutionWakeClock::default();
         let active = BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Continuous);
-        clock.directive(active, 1_000.0, 0.0).unwrap();
+        let idle = BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Quiescent);
+        clock
+            .directive_with_source_activity(active, 1_000.0, 0.0, true)
+            .unwrap();
         assert_eq!(clock.scene_time_at(1_500.0), Some(0.5));
 
-        clock.reanchor(9_000.0, 0.5).unwrap();
-        assert_eq!(clock.scene_time_at(9_000.0), Some(0.5));
-        assert_eq!(clock.scene_time_at(9_016.0), Some(0.516));
+        // An unfinished source is stuck at a required callback/publication at
+        // t=0.5. The callback takes 7.5 seconds: do not discard that time.
+        assert_eq!(
+            clock
+                .directive_with_source_activity(idle, 9_000.0, 0.5, true)
+                .unwrap()
+                .wake(),
+            BrowserHostWake::Idle
+        );
+        assert_eq!(clock.scene_time_at(9_000.0), Some(8.0));
+        let deadline = BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Deadline(2.0));
+        assert_eq!(
+            clock
+                .directive_with_source_activity(deadline, 9_000.0, 0.5, true)
+                .unwrap()
+                .wake(),
+            BrowserHostWake::TimerAfterMilliseconds(0.0)
+        );
+        // A finished source retires its mapping; later independent animation
+        // starts at its own first monotonic observation.
+        clock.directive_with_source_activity(idle, 9_100.0, 2.0, false).unwrap();
+        assert_eq!(clock.scene_time_at(9_100.0), None);
+        clock.directive(active, 10_000.0, 2.0).unwrap();
+        assert_eq!(clock.scene_time_at(11_000.0), Some(3.0));
     }
 
     #[test]
