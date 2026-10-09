@@ -29,7 +29,10 @@ fn require_effect_free_operands(
     }
     for operand in operands {
         for id in store.ordered_authoring_nodes(operand)? {
-            if store.node(id).is_some_and(|node| !node.effect_ids().is_empty()) {
+            if store
+                .node(id)
+                .is_some_and(|node| !node.effect_ids().is_empty())
+            {
                 return Err(AuthoringError::EffectStateReplacementUnavailable);
             }
         }
