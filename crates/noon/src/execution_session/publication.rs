@@ -509,7 +509,8 @@ impl ExecutionSession {
             && effective.is_none()
             && frame.is_none()
             && scalar.is_none()
-            && PreparedPublication::supports(self, &prepared)?
+            && !self.runtime.replay_scope_active()
+            && PreparedPublication::supports(&prepared)
         {
             return Ok((
                 PreparedPublication::prepare(self, prepared, order_root)?.publish(),

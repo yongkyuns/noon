@@ -15,37 +15,15 @@ pub(super) struct PreparedPublication<'session, 'store> {
 }
 
 impl<'session, 'store> PreparedPublication<'session, 'store> {
-    pub(super) fn supports(
-        session: &ExecutionSession,
-        prepared: &PreparedSemanticMutationTransaction<'_>,
-    ) -> Result<bool, ExecutionSessionPublicationError> {
-        if !prepared.mutations().iter().all(|mutation| {
+    pub(super) fn supports(prepared: &PreparedSemanticMutationTransaction<'_>) -> bool {
+        prepared.mutations().iter().all(|mutation| {
             matches!(
                 mutation,
                 SemanticMutation::SetProperty { .. }
                     | SemanticMutation::SetObjectTransform { .. }
                     | SemanticMutation::ReplaceStyle { .. }
             )
-        }) {
-            return Ok(false);
-        }
-        if !session.runtime.replay_scope_active() {
-            return Ok(true);
-        }
-        session.require_publication_ready(SemanticPublicationPurpose::AuthoredMutation)?;
-        session.require_published_store(prepared.store())?;
-        // Prove absence of execution work through the existing compiler. A
-        // wrapper's detached status alone cannot rule out derived dependencies.
-        let plan =
-            prepare_semantic_publication(prepared, &session.execution_index, &session.reachability)
-                .map_err(ExecutionSessionPublicationError::Lowering)?;
-        Ok(plan.value_transaction().mutations().is_empty()
-            && plan.conservative_graph_patches().next().is_none()
-            && plan.possible_entry_count() == 0
-            && plan.possible_exits().is_empty()
-            && plan.resource_additions().text_count() == 0
-            && plan.resource_additions().font_count() == 0
-            && plan.resource_additions().geometry_count() == 0)
+        })
     }
 
     pub(super) fn prepare(
