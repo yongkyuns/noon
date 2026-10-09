@@ -1,0 +1,72 @@
+name: Standard hosted macOS WebGL2 capability (diagnostic only)
+
+on:
+  pull_request:
+    types: [opened]
+    paths:
+      - ".github/workflows/perf-standard-macos-webgl-feas.yml"
+      - "benchmarks/standard-macos-webgl-feas.json"
+      - "scripts/perf-standard-macos-webgl-feas.mjs"
+      - "scripts/perf-standard-macos-webgl-feas.test.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standard-macos-webgl-1933-20261009-01
+  cancel-in-progress: false
+
+jobs:
+  feasibility:
+    name: Free standard hosted macOS, actual WebGL2, NOT performance acceptance
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'research/1933-standard-macos-webgl-feas-20261009-01' && github.run_attempt == 1
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.23.3"
+      - name: Freeze source, plan and one-shot attempt
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          mkdir -p evidence/inputs
+          cp benchmarks/standard-macos-webgl-feas.json evidence/inputs/frozen-plan.json
+          shasum -a 256 evidence/inputs/frozen-plan.json > evidence/inputs/plan.sha256
+          git rev-parse HEAD > evidence/inputs/source-commit.txt
+          git archive HEAD | gzip > evidence/inputs/source.tar.gz
+          printf '%s\n' "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > evidence/inputs/attempt.txt
+          uname -a > evidence/inputs/uname.txt
+          sw_vers > evidence/inputs/sw-vers.txt
+          sysctl -n hw.model > evidence/inputs/hw-model.txt
+          node --version > evidence/inputs/node-version.txt
+          echo "No owned runner, no paid -xlarge/-large runner, no performance qualification" > evidence/README.txt
+      - name: Validate fail-closed protocol
+        run: |
+          set -euo pipefail
+          node --check scripts/perf-standard-macos-webgl-feas.mjs
+          node --check scripts/perf-standard-macos-webgl-feas.test.mjs
+          node --test scripts/perf-standard-macos-webgl-feas.test.mjs | tee evidence/inputs/protocol-tests.log
+      - name: Install pinned Chromium 151
+        run: |
+          set -euo pipefail
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install chromium
+          npm ls playwright > evidence/inputs/browser-packages.txt
+      - name: Collect both registered real WebGL2 cases once
+        run: |
+          set -euo pipefail
+          node scripts/perf-standard-macos-webgl-feas.mjs \
+            benchmarks/standard-macos-webgl-feas.json \
+            evidence/observations.json | tee evidence/probe-stdout.jsonl
+      - name: Preserve all outcomes including failures or software fallback
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: standard-macos-webgl-feas-20261009-01
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
