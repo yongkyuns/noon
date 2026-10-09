@@ -61,6 +61,9 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
                     target.calls.append("targetEditor")
                     return target
 
+                def centerCoordinates(self):
+                    return (self.centerX, self.centerY)
+
                 @property
                 def centerX(self):
                     self.calls.append("centerX")

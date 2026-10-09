@@ -104,6 +104,9 @@ def is_reverse_smooth_rate_func(rate_func: object) -> bool:
     if (
         not inspect.isfunction(rate_func)
         or code is None
+        # The admitted bytecode necessarily loads the global smooth callable.
+        # Reject ordinary easing without building Instruction objects per leaf.
+        or "smooth" not in code.co_names
         or global_smooth is not smooth
         or getattr(rate_func, "__defaults__", None) is not None
         or getattr(rate_func, "__kwdefaults__", None) is not None

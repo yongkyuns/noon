@@ -563,6 +563,16 @@ test("product gate resolves one matching dependency lock before its first packag
   assert.match(producer, /Build candidate production package[\s\S]*?prepare candidate candidate/);
 });
 
+test("standalone host measurements revalidate the producer pair before opening a browser", async () => {
+  const runner = await readFile(new URL("../../scripts/python-host-perf.mjs", import.meta.url), "utf8");
+  assert.match(runner, /import \{ verifyProductArtifact \} from "\.\.\/\.github\/ci\/product-artifact\.mjs"/);
+  const check = runner.indexOf("identities.push(await verifyProductArtifact(root, process.env, role))");
+  assert.ok(check >= 0 && check < runner.indexOf("browser = await playwright.chromium.launch"));
+  assert.doesNotMatch(runner, /process\.env\.GITHUB_SHA|import.*\{ verify \}/);
+  // No private source resolver may compete with the upstream artifact contract.
+  await assert.rejects(readFile(new URL("./product-baseline.mjs", import.meta.url)), { code: "ENOENT" });
+});
+
 test("product gate requires PNG comparison controls after dependency setup", async () => {
   const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
   const compareJob = workflow.slice(workflow.indexOf("  compare:"));
@@ -570,18 +580,23 @@ test("product gate requires PNG comparison controls after dependency setup", asy
   assert.ok(controls > compareJob.indexOf("npm install --no-save --ignore-scripts"));
   const controlStep = compareJob.slice(controls, compareJob.indexOf("      - name:", controls + 10));
   assert.match(controlStep, /NOON_PRODUCT_IMAGE_TESTS: "1"/);
-  assert.match(controlStep, /node --test web\/playground-product-compare-validation\.test\.mjs/);
+  assert.match(controlStep, /node --test scripts\/paired-product-metrics\.test\.mjs web\/playground-product-compare-validation\.test\.mjs/);
 });
 
-test("product camera measurements reuse the restored packages and fixed alternating pairs", async () => {
+test("product camera measurements reuse the restored packages and seven fixed alternating pairs", async () => {
   const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
-  const measurements = workflow.slice(workflow.indexOf("      - name: Measure three alternating product pairs"),
+  const measurements = workflow.slice(workflow.indexOf("      - name: Measure seven alternating product pairs"),
     workflow.indexOf("      - name: Upload product regression evidence"));
   assert.match(measurements, /product-performance-anchor.mjs cohorts/);
   assert.match(measurements, /read -r noon_example noon_directory/);
-  assert.match(measurements, /for noon_pair in 1 2 3/);
+  assert.match(measurements, /for noon_pair in 1 2 3 4 5 6 7/);
+  assert.match(measurements, /node scripts\/playground-product-pair\.mjs/);
+  assert.match(measurements, /NOON_PRODUCT_REFERENCE_ROOT="\$NOON_PRODUCT_WORKSPACE\/baseline"/);
+  assert.match(measurements, /NOON_PRODUCT_REFERENCE_ROOT="\$NOON_PRODUCT_WORKSPACE\/anchor"/);
   assert.match(measurements, /NOON_PRODUCT_EXAMPLE="\$noon_example"/);
-  assert.match(measurements, /"\$noon_root\/\$noon_directory\/candidate" --pairs 3/);
+  assert.match(measurements, /noon_pairs=7/);
+  assert.match(measurements, /noon_pairs=3/);
+  assert.match(measurements, /"\$noon_root\/\$noon_directory\/candidate" --pairs "\$noon_pairs"/);
   assert.doesNotMatch(measurements, /build-web-demo|cargo |wasm-pack/);
 });
 

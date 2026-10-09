@@ -129,3 +129,23 @@ test('pinned optional LaTeX assets share unchanged response bytes across context
   assert.equal(fetches, 2);
   assert.equal(cache.stats().hits, 2);
 });
+
+test('offline snapshot copies only already-fetched successful pinned interpreter assets', async () => {
+  const cache = createPyodideResourceCache(source);
+  const handler = await attach(cache);
+  const bytes = Buffer.from('interpreter bytes');
+  await handler(request(async () => response(bytes)));
+  await handler(request(async () => response(Buffer.from('latex')), 'GET', LATEX_ASSETS.bundle));
+  await handler(request(async () => response(Buffer.from('bad'), 503), 'GET', url + '.missing'));
+  const before = cache.stats();
+  const snapshot = await cache.snapshot();
+  assert.equal(snapshot.length, 1);
+  assert.equal(snapshot[0].url, url);
+  assert.deepEqual(snapshot[0].body, bytes);
+  assert.equal(snapshot[0].headers['set-cookie'], undefined);
+  snapshot[0].body[0] = 0; snapshot[0].headers['content-type'] = 'changed';
+  const next = (await cache.snapshot())[0];
+  assert.deepEqual(next.body, bytes);
+  assert.equal(next.headers['content-type'], 'application/wasm');
+  assert.deepEqual(cache.stats(), before, 'archiving must not refetch or change cache accounting');
+});

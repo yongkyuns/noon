@@ -1,39 +1,17 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { browserArgs } from "./manim-raster-support.mjs";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const port = 4191;
-const baseUrl = `http://127.0.0.1:${port}`;
-
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/manim-compat-smoke.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`typed text animation smoke server did not start: ${lastError}\n${serverOutput}`);
-}
+const server = await serveRepository(repoRoot, port, { crossOriginIsolated: true });
+const baseUrl = server.baseUrl;
 
 const textAnimateSource = `
 from noon import *
@@ -142,13 +120,12 @@ class TypstAnimation(Scene):
 
 let browser = null;
 try {
-  await waitForServer();
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
-    args: ["--disable-dev-shm-usage"],
+    args: browserArgs("webgpu"),
   });
-  const page = await browser.newPage();
+  const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
   page.on("console", (message) => {
@@ -157,7 +134,8 @@ try {
 
   await page.goto(`${baseUrl}/web/manim-compat-smoke.html`, { waitUntil: "load" });
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
-  await page.evaluate(() => window.noonManimCompat.ready());
+  // The source runner owns the test lifecycle. Do not pre-run unrelated
+  // animated readiness probes on the same long-lived Python worker.
 
   const result = await page.evaluate(
     (sources) => window.noonManimCompat.runLiveSources(sources),
@@ -181,5 +159,5 @@ try {
   );
 } finally {
   await browser?.close();
-  server.kill("SIGTERM");
+  await server.close();
 }

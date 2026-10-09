@@ -24,8 +24,11 @@ on:
       - "scripts/playground-layout-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
       - "scripts/playground-product-e2e.mjs"
+      - "scripts/playground-product-pair.mjs"
       - "scripts/playground-product-fps.mjs"
       - "scripts/playground-product-fps.test.mjs"
+      - "scripts/python-host-perf*.mjs"
+      - "scripts/paired-product-metrics*.mjs"
       - "scripts/playground-product-compare.mjs"
       - "scripts/renderer-init-failure-smoke.mjs"
       - "scripts/retained-text-animation-smoke.mjs"
@@ -273,7 +276,7 @@ jobs:
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 90
     env:
       NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
       NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
@@ -283,6 +286,9 @@ jobs:
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "0"
       NOON_RENDERER_SMOKE: "0"
+      # Producer job pins NOON_SKIP_WEB_PREFLIGHT=1. This attests that the
+      # extra candidate pair-runner syntax check was never a build step.
+      NOON_PRODUCT_PREFLIGHT_SKIPPED: "1"
     steps:
       - name: Require successful production builds
         env:
@@ -354,11 +360,15 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
 
+      - name: Test fixed-work performance controls
+        working-directory: candidate
+        run: node --test scripts/python-host-perf*.test.mjs
+
       - name: Test product comparison with PNG controls
         working-directory: candidate
         env:
           NOON_PRODUCT_IMAGE_TESTS: "1"
-        run: node --test web/playground-product-compare-validation.test.mjs
+        run: node --test scripts/paired-product-metrics.test.mjs web/playground-product-compare-validation.test.mjs
 
       - name: Recheck executable tutorial corpus
         working-directory: candidate
@@ -403,35 +413,30 @@ jobs:
           path: candidate/web
 
       - name: Reverify candidate production package
+        id: production-verified
         working-directory: candidate
         run: node .github/ci/product-artifact.mjs verify candidate .
 
-      - name: Measure three alternating product pairs
+      - name: Measure seven alternating product pairs
         working-directory: candidate
         env:
           NOON_PRODUCT_WORKSPACE: ${{ github.workspace }}
         run: |
-          # Fixed before measurement: B/C, C/B, B/C. Every run is retained;
+          # Fixed before measurement: seven alternating pairs, starting B/C. Every run is retained;
           # a failed run fails the cohort rather than selecting another sample.
           # Reuse the same immutable packages for every declared workload.
           noon_workloads="$(node .github/ci/product-performance-anchor.mjs cohorts)"
           while IFS=$'\t' read -r noon_example noon_directory; do
             noon_evidence="browser-smoke-artifacts/product-gate/$noon_directory"
-            for noon_pair in 1 2 3; do
-              noon_order="baseline candidate"
-              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
-              noon_position=0
-              for noon_side in $noon_order; do
-                noon_position=$((noon_position + 1))
-                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
-                NOON_PRODUCT_PORT=4205 \
-                NOON_PRODUCT_EXAMPLE="$noon_example" \
-                NOON_PRODUCT_LABEL="$noon_side" \
-                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
-                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
-                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
-                  node scripts/playground-product-e2e.mjs
-              done
+            for noon_pair in 1 2 3 4 5 6 7; do
+              NOON_PRODUCT_REFERENCE_ROOT="$NOON_PRODUCT_WORKSPACE/baseline" \
+              NOON_PRODUCT_REFERENCE_ARTIFACT_ROLE=baseline \
+              NOON_PRODUCT_CANDIDATE_ROOT="$NOON_PRODUCT_WORKSPACE/candidate" \
+              NOON_PRODUCT_EVIDENCE_ROOT="$noon_evidence" \
+              NOON_PRODUCT_PORT=4205 \
+              NOON_PRODUCT_EXAMPLE="$noon_example" \
+              NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                node scripts/playground-product-pair.mjs
             done
           done <<< "$noon_workloads"
 
@@ -447,22 +452,14 @@ jobs:
           while IFS=$'\t' read -r noon_example noon_directory; do
             noon_evidence="browser-smoke-artifacts/product-gate/cumulative/$noon_directory"
             for noon_pair in 1 2 3; do
-              noon_order="anchor candidate"
-              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate anchor"; fi
-              noon_position=0
-              for noon_side in $noon_order; do
-                noon_position=$((noon_position + 1))
-                noon_label="$noon_side"
-                if [[ "$noon_side" == anchor ]]; then noon_label="baseline"; fi
-                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
-                NOON_PRODUCT_PORT=4205 \
-                NOON_PRODUCT_EXAMPLE="$noon_example" \
-                NOON_PRODUCT_LABEL="$noon_label" \
-                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
-                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
-                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
-                  node scripts/playground-product-e2e.mjs
-              done
+              NOON_PRODUCT_REFERENCE_ROOT="$NOON_PRODUCT_WORKSPACE/anchor" \
+              NOON_PRODUCT_REFERENCE_ARTIFACT_ROLE=anchor \
+              NOON_PRODUCT_CANDIDATE_ROOT="$NOON_PRODUCT_WORKSPACE/candidate" \
+              NOON_PRODUCT_EVIDENCE_ROOT="$noon_evidence" \
+              NOON_PRODUCT_PORT=4205 \
+              NOON_PRODUCT_EXAMPLE="$noon_example" \
+              NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                node scripts/playground-product-pair.mjs
             done
           done <<< "$noon_workloads"
 
@@ -472,6 +469,7 @@ jobs:
           NOON_PRODUCT_MAX_LATENCY_RATIO: "1.25"
           NOON_PRODUCT_LATENCY_SLACK_MS: "350"
           NOON_PRODUCT_MIN_FPS_RATIO: "0.80"
+          NOON_PRODUCT_STRICT_MIN_FPS_RATIO: "0.97"
           NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO: "0.015"
         run: |
           # Evaluate every complete cohort even if an earlier comparison failed.
@@ -481,21 +479,31 @@ jobs:
           for noon_scope in adjacent cumulative; do
             noon_root="browser-smoke-artifacts/product-gate"
             noon_baseline=baseline
+            noon_pairs=7
             if [[ "$noon_scope" == cumulative ]]; then
               noon_root="$noon_root/cumulative"
               noon_baseline=anchor
+              noon_pairs=3
               printf '\nCumulative pinned-anchor comparisons (%s):\n' "$NOON_PRODUCT_ANCHOR_SHA"
             fi
             while IFS=$'\t' read -r noon_example noon_directory; do
               printf '\n%s / %s\n' "$noon_scope" "$noon_example"
               if ! node scripts/playground-product-compare.mjs \
                 "$noon_root/$noon_directory/$noon_baseline" \
-                "$noon_root/$noon_directory/candidate" --pairs 3; then
+                "$noon_root/$noon_directory/candidate" --pairs "$noon_pairs"; then
                 noon_failed=1
               fi
             done <<< "$noon_workloads"
           done
           exit "$noon_failed"
+
+      - name: Measure fixed-work Python host overhead on matched packages
+        if: ${{ !cancelled() && steps.production-verified.outcome == 'success' }}
+        working-directory: candidate
+        env:
+          NOON_PERF_BASELINE_ROOT: ${{ github.workspace }}/baseline
+          NOON_PERF_CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+        run: node scripts/python-host-perf.mjs
 
       - name: Upload product regression evidence
         if: always()
