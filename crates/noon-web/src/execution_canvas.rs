@@ -1560,10 +1560,8 @@ mod wasm {
             ))
             .and_then(|metrics| {
                 metrics.with_world_origin_pixels(Vec2::new(
-                    self.config.width as f32 * 0.5
-                        - camera.center.x * metrics.pixels_per_world.x,
-                    self.config.height as f32 * 0.5
-                        + camera.center.y * metrics.pixels_per_world.y,
+                    self.config.width as f32 * 0.5 - camera.center.x * metrics.pixels_per_world.x,
+                    self.config.height as f32 * 0.5 + camera.center.y * metrics.pixels_per_world.y,
                 ))
             })
             .map_err(js_error)?;
@@ -1603,10 +1601,7 @@ mod wasm {
                 .map_err(js_error)?;
             let derived = self
                 .direct_preparer
-                .prepare_transient_presentations_visible(
-                    &publication,
-                    visibility.object_indices(),
-                )
+                .prepare_transient_presentations_visible(&publication, visibility.object_indices())
                 .map_err(js_error)?;
             let prepared = self
                 .direct_preparer
@@ -1660,7 +1655,11 @@ mod wasm {
                     if self.source.source_active() {
                         self.source.drive_to(target)?;
                     }
-                    let camera = self.source.session().inspection_camera().map_err(js_error)?;
+                    let camera = self
+                        .source
+                        .session()
+                        .inspection_camera()
+                        .map_err(js_error)?;
                     self.sync_camera(camera)?;
                 }
             }
@@ -1758,8 +1757,8 @@ mod wasm {
                     self.renderer
                         .upload_derived(&self.device, &self.queue, &derived)
                 });
-                self.last_geometry_cache_misses = retained_misses
-                    .saturating_add(prepared.geometry_stats().geometry_cache_misses);
+                self.last_geometry_cache_misses =
+                    retained_misses.saturating_add(prepared.geometry_stats().geometry_cache_misses);
                 self.last_bytes_uploaded = retained_bytes
                     .saturating_add(upload.bytes_uploaded())
                     .saturating_add(spatial_upload.bytes_uploaded())

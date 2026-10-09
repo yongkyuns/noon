@@ -51,7 +51,7 @@ pub async fn create_direct_overdue_short_animation_renderer(
     marker.set_stroke_width(0.0).map_err(js_error)?;
     scene.add(&marker).map_err(js_error)?;
     let targets = (1..=32)
-        .map(|index| {
+        .map(|index| -> Result<Mobject, noon::AuthoringError> {
             let mut target = marker.target_editor()?;
             target.set_translation(f64::from(index) / 16.0, 0.0)?;
             Ok(target)
