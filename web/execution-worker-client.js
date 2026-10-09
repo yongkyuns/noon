@@ -682,14 +682,15 @@ export class ExecutionWorkerClient {
   }
 
   async metrics({ profilePublicationStages = false, profileRenderSubstages = false,
-    includeGpuIdentity = false } = {}) {
+    profileGpuCompletion = false, includeGpuIdentity = false } = {}) {
     if (typeof profilePublicationStages !== "boolean" ||
-        typeof profileRenderSubstages !== "boolean" || typeof includeGpuIdentity !== "boolean") {
+        typeof profileRenderSubstages !== "boolean" || typeof profileGpuCompletion !== "boolean" ||
+        typeof includeGpuIdentity !== "boolean") {
       throw new TypeError("renderer profiling options must be booleans");
     }
     const [render, engine] = await Promise.all([
       this.#requestRender("metrics", { profilePublicationStages, profileRenderSubstages,
-        includeGpuIdentity }),
+        profileGpuCompletion, includeGpuIdentity }),
       this.#requestEngine("metrics", {}),
     ]);
     return { ...render, engineMetrics: engine.metrics, renderHost: this.#renderHost };
