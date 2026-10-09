@@ -1705,39 +1705,9 @@ impl ExecutionSession {
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
         let mut declaration = SemanticMutationTransaction::new();
-        // Adding a glow through an ordinary target animation creates one
-        // neutral attachment only at activation, never during target editing.
-        // The semantic allocator owns its generation; prepared publication
-        // installs this row together with the intensity track, atomically.
-        let neutral_glow = match (
-            store.animation_effect_snapshot(source),
-            store.animation_effect_snapshot(target_state),
-        ) {
-            (Ok(source_effects), Ok(target_effects)) if source_effects.is_empty() => {
-                match target_effects.as_slice() {
-                    [effect] if effect.name.as_ref() == "glow" => {
-                        let noon_core::EffectDefinition::Glow(destination) = effect.definition;
-                        Some(
-                            noon_core::GlowUpdate::default()
-                                .intensity(0.0)
-                                .apply_to(destination)
-                                .map_err(|error| {
-                                    ExecutionSessionAnimationError::InvalidComposition(
-                                        error.to_string(),
-                                    )
-                                })?,
-                        )
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
+        self.stage_neutral_glow_attachment(store, &mut declaration, source, target_state)?;
         let target_state =
             self.stage_animation_target_state(store, &mut declaration, target_state)?;
-        if let Some(neutral) = neutral_glow {
-            declaration.create_effect(source, "glow", neutral);
-        }
         let root = declaration.create_transform_animation(source, target_state, options);
         self.declare_and_activate_prepared_animation(
             store,
@@ -2280,6 +2250,7 @@ impl ExecutionSession {
                 if !(reuse_compatible_admission && admitted.seen.contains(&(*source).into())) {
                     admit(*source, admitted)?;
                 }
+                self.stage_neutral_glow_attachment(store, declaration, *source, *target_state)?;
                 let target_state =
                     self.stage_animation_target_state(store, declaration, *target_state)?;
                 let animation = declaration.create_transform_animation_with_interpolation(
@@ -3109,6 +3080,7 @@ impl ExecutionSession {
                 if !self.reachability.is_object_reachable(*source) {
                     return Err(ExecutionSessionAnimationError::CreateTarget { target: *source, error: ExecutionSessionCreateError::TargetIsNotDetached });
                 }
+                self.stage_neutral_glow_attachment(store, declaration, *source, *target_state)?;
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
                 Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *complete_priority, *options))
             }
@@ -3849,6 +3821,50 @@ impl ExecutionSession {
         let actual = store.scene_revision();
         if actual != expected {
             return Err(ExecutionSessionAnimationError::StaleSceneRevision { expected, actual });
+        }
+        Ok(())
+    }
+
+    /// One shared activation rule for direct Transform and nested/ordinary
+    /// compositions.  An absent glow exists only on the detached target until
+    /// activation; the same semantic transaction reserves the real source's
+    /// attachment generation at zero intensity before any execution track.
+    ///
+    /// Keep this in Rust staging (not the Python adapter or renderer). Failed
+    /// preparation commits neither the new semantic identity nor a runtime row.
+    fn stage_neutral_glow_attachment(
+        &self,
+        store: &SemanticStore,
+        declaration: &mut SemanticMutationTransaction,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        let neutral = match (
+            store.animation_effect_snapshot(source),
+            store.animation_effect_snapshot(target_state),
+        ) {
+            (Ok(source_effects), Ok(target_effects)) if source_effects.is_empty() => {
+                match target_effects.as_slice() {
+                    [effect] if effect.name.as_ref() == "glow" => {
+                        let noon_core::EffectDefinition::Glow(destination) = effect.definition;
+                        Some(
+                            noon_core::GlowUpdate::default()
+                                .intensity(0.0)
+                                .apply_to(destination)
+                                .map_err(|error| {
+                                    ExecutionSessionAnimationError::InvalidComposition(
+                                        error.to_string(),
+                                    )
+                                })?,
+                        )
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(neutral) = neutral {
+            declaration.create_effect(source, "glow", neutral);
         }
         Ok(())
     }

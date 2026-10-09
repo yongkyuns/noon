@@ -586,3 +586,118 @@ fn unsupported_absent_target_glow_does_not_allocate_or_publish() {
     assert!(source.get_effect("glow").is_err());
     assert!(row(&session, &source).glow.is_none());
 }
+
+#[test]
+fn ordinary_composition_enrolls_absent_glow_at_activation_and_replays_exact_generation() {
+    use crate::{AnimationCompositionRequest, TransformToRequest};
+
+    let (scene, source) = fixture(false);
+    let mut session = scene.execution_session().unwrap();
+    session
+        .begin_replay_retention(noon_runtime::ReplayLimits::default())
+        .unwrap();
+    let target = scene.live(&mut session).target_editor(&source).unwrap();
+    scene
+        .live(&mut session)
+        .set_glow(&target, initial())
+        .unwrap();
+    assert!(source.get_effect("glow").is_err());
+    let before = session.publication_context();
+    let request = AnimationCompositionRequest::Composition {
+        kind: noon_core::SemanticAnimationCompositionKind::Parallel,
+        children: vec![AnimationCompositionRequest::TransformTo(
+            TransformToRequest::new(&source, &target, options()),
+        )],
+        options: AnimationOptions::new(),
+    };
+    let segment = scene
+        .live(&mut session)
+        .declare_and_activate_composition(&request, AnimationOptions::new())
+        .unwrap();
+    assert_ne!(session.publication_context(), before);
+    let effect = source.get_effect("glow").unwrap();
+    let generation = effect.node_id();
+    assert_ne!(generation, target.get_effect("glow").unwrap().node_id());
+    assert_eq!(definition(&source).intensity(), 0.0);
+    assert_eq!(
+        row(&session, &source).glow.as_ref().unwrap().attachment,
+        generation
+    );
+
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 0.5)
+        .unwrap();
+    assert_eq!(
+        row(&session, &source)
+            .glow
+            .as_ref()
+            .unwrap()
+            .definition
+            .intensity(),
+        initial().intensity.unwrap() * 0.5
+    );
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 1.0)
+        .unwrap();
+    scene.live(&mut session).complete_segment(segment).unwrap();
+    assert_eq!(
+        definition(&source).intensity(),
+        initial().intensity.unwrap()
+    );
+    scene.live(&mut session).remove_glow(&source).unwrap();
+    assert!(effect.authored_definition().is_err());
+    session.seal_replay().unwrap();
+    for _ in 0..2 {
+        session.seek(0.5).unwrap();
+        assert_eq!(
+            row(&session, &source).glow.as_ref().unwrap().attachment,
+            generation
+        );
+        assert_eq!(
+            row(&session, &source)
+                .glow
+                .as_ref()
+                .unwrap()
+                .definition
+                .intensity(),
+            initial().intensity.unwrap() * 0.5
+        );
+        session.seek(1.0).unwrap();
+        assert!(row(&session, &source).glow.is_none());
+    }
+}
+
+#[test]
+fn ordinary_composition_rejects_stacked_absent_glow_without_any_publication() {
+    use crate::{AnimationCompositionRequest, TransformToRequest};
+
+    let (scene, source) = fixture(false);
+    let mut session = scene.execution_session().unwrap();
+    let target = scene.live(&mut session).target_editor(&source).unwrap();
+    scene
+        .live(&mut session)
+        .set_glow(&target, initial())
+        .unwrap();
+    scene
+        .live(&mut session)
+        .add_effect(&target, noon_core::Glow::default(), "second")
+        .unwrap();
+    let before = session.publication_context();
+    let old_frame = session.frame().clone();
+    let node_count = scene.integration_store().borrow().len();
+    let request = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+        &source,
+        &target,
+        options(),
+    ));
+    assert!(scene
+        .live(&mut session)
+        .declare_and_activate_composition(&request, AnimationOptions::new())
+        .is_err());
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.frame(), &old_frame);
+    assert_eq!(scene.integration_store().borrow().len(), node_count);
+    assert!(source.get_effect("glow").is_err());
+}
