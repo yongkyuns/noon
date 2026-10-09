@@ -32,18 +32,6 @@ struct FamilyOrderLink {
 }
 
 impl FamilyEdgePreflight {
-    pub(super) fn pending_is_detached(&self, token: super::SemanticLocalNodeToken) -> bool {
-        let member = SemanticTransactionNodeRef::Pending(token);
-        !self.added_parents.get(&member).is_some_and(|parents| {
-            parents.iter().any(|parent| {
-                self.overrides
-                    .get(&(*parent, member))
-                    .copied()
-                    .unwrap_or(false)
-            })
-        })
-    }
-
     pub(super) fn is_detached(
         &self,
         catalog: &TransactionNodeCatalog<'_>,

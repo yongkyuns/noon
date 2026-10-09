@@ -48,15 +48,6 @@ pub(super) fn effect_snapshot(
 }
 
 impl PreparedSemanticMutationTransaction<'_> {
-    /// New target copies may retain inert attachments without enrolling them in
-    /// execution. Existing owners and candidate membership edges do not qualify.
-    pub fn is_detached_effect_target(&self, owner: SemanticTransactionNodeRef) -> bool {
-        let SemanticTransactionNodeRef::Pending(token) = owner else {
-            return false;
-        };
-        self.object_state(owner).is_ok() && self.preflight.family_edges.pending_is_detached(token)
-    }
-
     /// Allocator-proven identities are preparation-local until commit; no
     /// mutable store/attachment or resource allocation is exposed to a caller.
     pub fn animation_effect_snapshot(

@@ -7,9 +7,10 @@ existing runtime row. No independent scene, clock, scheduling policy, renderer,
 or host-owned parameter state is introduced.
 
 Only color, intensity, and same-unit radius edits on an already admitted attachment
-are accepted. Attachment enrollment/removal, source-mode changes, and radius-unit
-changes remain outside this value contract. Detached effect-bearing owners cannot
-enter via a structural publication that silently strips their effect column.
+use the value lane. Attachment enrollment/removal use the distinct structural
+projection below; source-mode and radius-unit changes on an existing attachment
+remain outside the value contract. Detached effect-bearing owners entering through
+a structural publication carry their final staged effect column.
 
 The semantic layer retains its established rejection of duplicate writes to the
 same parameter in one transaction. Distinct parameter writes combine. The lower
@@ -37,9 +38,10 @@ sources, neutral output, restored base values, and retained intensity-only reuse
 It uses the existing full-image Gaussian/composition reference and unchanged
 two-byte output tolerance. It is not physical performance evidence.
 
-Public effect-target activation/completion orchestration, live topology, automatic
-host preparation, and worker transport remain guarded/unfinished. Passing this
-slice does not enable or qualify public Rust/Python `Scene.play` with glow.
+Public effect-target activation/completion orchestration and full Scene lifecycle
+qualification remain unfinished. Automatic host preparation and retained worker
+transport are implemented and separately qualified; those checks do not qualify
+public Rust/Python `Scene.play` with glow.
 
 ## Structural execution projection (not public Scene admission)
 
@@ -63,6 +65,40 @@ allocator, semantic scene, replay engine or renderer path is introduced.
 boundary: removal during animation, new-generation attachment, stale rejection,
 atomic failure, coalescing, staged and moved tracks, bounded 4,097-row locality,
 and repeated forward/rewind restoration. These are **not** public Rust/Python
-Scene, browser-pixel or physical-GPU results. Semantic publication of live
-attachment topology and public Scene admission remain guarded pending their
-separate integration and qualification.
+Scene, browser-pixel or physical-GPU results. The prepared semantic bridge below
+now supplies this structural operation. Public Scene bootstrap and direct live
+attachment creation remain guarded pending their separate qualification.
+
+
+## Prepared semantic attachment publication
+
+The existing `prepare_semantic_publication` path reads final staged attachment
+snapshots and emits at most one `SetGlowAttachment` for each affected resident
+owner. The expected generation comes from the committed semantic scene; the next
+generation is reserved by that same scene's prepared transaction allocator. No
+new identity allocator or effect mutation protocol is introduced. Unchanged
+identity/definition is idle; same-generation parameter changes still use `SetGlow`.
+
+Newly reachable owners receive the column in their ordinary `CreateObject` patch,
+including objects and attachments both created in the same transaction. Detached
+owners remain inert until enrollment. Removing an attachment does not create an
+object-exit patch; removing the owner uses the existing object retirement path.
+Only touched owners and their own attachment lists are read. Unrelated scene
+objects, families, resources and animation channels are not traversed.
+
+The compiler validates the final staged source/profile, not an intermediate
+mutation order or stale committed style. An unsupported stack, stroked/unfilled
+source, or unsupported spatial/geometry state fails before publication. Removing
+the attachment and making the source unfilled in the same transaction is valid.
+The semantic transaction's existing rules are unchanged: removals form a suffix,
+so replacement declares the new attachment before retiring the old one, and a
+write targeting a node retired by the same transaction still rejects atomically.
+
+`noon-runtime/tests/glow_semantic_publication.rs` exercises the existing prepared
+semantic/compiler/runtime boundaries: preparation abort, pending IDs, replacement,
+detached re-entry, alias membership, cancellation, source retirement, final-state
+profile validation, stale runtime rejection, bounded dirty rows and replay of the
+retired drivers. These are boundary tests, not an alternative product session.
+The raw public publication validator still rejects new attachment declarations;
+initial Scene execution still retains its effect-admission guard. This bridge
+alone does not claim end-to-end Rust/Python Scene playback or new GPU pixels.

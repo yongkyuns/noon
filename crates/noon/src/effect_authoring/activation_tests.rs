@@ -403,7 +403,7 @@ fn pending_effect_target_is_inert_and_prepared_identity_matches_its_commit() {
 }
 
 #[test]
-fn effect_target_enrollment_and_unsupported_schema_reject_without_publication() {
+fn unsupported_target_schema_rejects_while_prepared_membership_retains_glow() {
     for discrete in [0, 1, 2] {
         let (scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
@@ -437,10 +437,20 @@ fn effect_target_enrollment_and_unsupported_schema_reject_without_publication() 
             .unwrap()
             .clone(),
     ));
-    tx.create_effect(target, "glow", Glow::default());
+    let attachment = tx.create_effect(target, "glow", Glow::default());
     tx.add_member(scene.root(), target);
     let prepared = tx.prepare(&mut store).unwrap();
-    assert!(noon_compile::prepare_semantic_publication(&prepared, &index, &reachability).is_err());
+    let publication =
+        noon_compile::prepare_semantic_publication(&prepared, &index, &reachability).unwrap();
+    assert!(publication.value_transaction().is_empty());
+    let patches = publication.conservative_entry_patches(&prepared);
+    let [ExecutionPatch::CreateObject(object)] = patches.as_slice() else {
+        panic!("one inert prepared entry with its reserved attachment")
+    };
+    assert_eq!(
+        Some(object.glow.as_ref().unwrap().attachment),
+        prepared.planned_node_id(attachment)
+    );
     drop(prepared);
     assert_eq!(store.scene_revision(), before);
 }

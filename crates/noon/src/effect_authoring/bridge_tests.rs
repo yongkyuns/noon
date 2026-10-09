@@ -215,7 +215,7 @@ fn prepared_glow_noop_and_detached_updates_have_no_execution_patch() {
 }
 
 #[test]
-fn unsupported_existing_effect_enrollment_rejects_instead_of_losing_glow() {
+fn prepared_existing_effect_enrollment_preserves_the_staged_glow_column() {
     use noon_compile::{prepare_semantic_publication, SemanticExecutionReachability};
     let mut scene = Scene::new();
     let mut detached = scene.circle(0.4).unwrap();
@@ -229,7 +229,20 @@ fn unsupported_existing_effect_enrollment_rejects_instead_of_losing_glow() {
     let mut tx = SemanticMutationTransaction::new();
     tx.add_member(scene.root(), detached.node_id());
     let prepared = tx.prepare(&mut store).unwrap();
-    assert!(prepare_semantic_publication(&prepared, &index, &reachability).is_err());
+    let publication = prepare_semantic_publication(&prepared, &index, &reachability).unwrap();
+    assert!(publication.value_transaction().is_empty());
+    let patches = publication.conservative_entry_patches(&prepared);
+    let [noon_compile::ExecutionPatch::CreateObject(object)] = patches.as_slice() else {
+        panic!("one newly reachable object with its existing attachment")
+    };
+    assert_eq!(
+        object.glow.as_ref().unwrap().attachment,
+        prepared
+            .store()
+            .effect_by_name(detached.node_id(), "glow")
+            .unwrap()
+            .unwrap()
+    );
     drop(prepared);
     assert_eq!(store.scene_revision(), revision);
 }
