@@ -103,6 +103,13 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
         self.program.session()
     }
 
+    /// Read the existing Rust program's phase without advancing or creating a
+    /// second source state. A realtime host may keep an exact-time continuation
+    /// barrier visible while an offline sampler can continue through it.
+    pub fn program_status(&self) -> LiveProgramStatus {
+        self.program.status()
+    }
+
     /// Query the existing runtime-owned spatial cache without advancing time,
     /// invoking callbacks, consuming a publication or admitting a continuation.
     pub fn query_viewport(

@@ -210,8 +210,24 @@ mod wasm {
             )
             .map_err(js_error)?;
             for _ in 0..MAX_TRANSITIONS {
+                let before = sampler.program_status();
                 match sampler.advance().map_err(js_error)? {
-                    ForwardSampleStatus::Progress => {}
+                    ForwardSampleStatus::Progress => {
+                        // A newly resumed continuation that starts at the
+                        // *exact* observed wall-time target belongs to the
+                        // next browser wake. In particular, a zero-duration
+                        // final wait must expose its timer-at-now barrier; do
+                        // not silently consume it while preparing this frame.
+                        //
+                        // When the host is late, the frame time is still below
+                        // its original requested target, so the shared sampler
+                        // continues across overdue waits and source handoffs.
+                        if matches!(before, LiveProgramStatus::ReadyToResume)
+                            && sampler.session().frame().time >= requested_time
+                        {
+                            return Ok(());
+                        }
+                    }
                     ForwardSampleStatus::PublicationPending(_)
                     | ForwardSampleStatus::Ready(_)
                     | ForwardSampleStatus::SourceFinished(_) => return Ok(()),
