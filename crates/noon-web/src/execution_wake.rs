@@ -420,10 +420,8 @@ mod tests {
     #[test]
     fn active_source_keeps_its_epoch_across_idle_publication_and_late_callbacks() {
         let mut clock = BrowserExecutionWakeClock::default();
-        let wait = BrowserExecutionWakePlan::from_parts(
-            false,
-            TimelineWakeState::Deadline(1.0 / 64.0),
-        );
+        let wait =
+            BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Deadline(1.0 / 64.0));
         assert_eq!(
             clock
                 .directive_for_source(wait, 1_000.0, 0.0, true)
@@ -445,10 +443,8 @@ mod tests {
             BrowserHostWake::Idle
         );
         assert_eq!(clock.scene_time_at(9_000.0), Some(8.0));
-        let next_wait = BrowserExecutionWakePlan::from_parts(
-            false,
-            TimelineWakeState::Deadline(2.0 / 64.0),
-        );
+        let next_wait =
+            BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Deadline(2.0 / 64.0));
         assert_eq!(
             clock
                 .directive_for_source(next_wait, 9_000.0, 1.0 / 64.0, true)

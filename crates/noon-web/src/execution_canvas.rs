@@ -933,12 +933,7 @@ mod wasm {
             let (plan, scene_time) = self.direct_wake_observation();
             let directive = self
                 .direct_wake_clock
-                .directive_for_source(
-                    plan,
-                    wall_time_ms,
-                    scene_time,
-                    self.source.source_active(),
-                )
+                .directive_for_source(plan, wall_time_ms, scene_time, self.source.source_active())
                 .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
             let (cadence, delay_ms) = if self.source.session().interactions_active() {
                 ("animation-frame", None)
@@ -972,12 +967,7 @@ mod wasm {
             let (plan, scene_time) = self.direct_wake_observation();
             let directive = self
                 .direct_wake_clock
-                .directive_for_source(
-                    plan,
-                    wall_time_ms,
-                    scene_time,
-                    self.source.source_active(),
-                )
+                .directive_for_source(plan, wall_time_ms, scene_time, self.source.source_active())
                 .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
 
             let target_time = match (directive.wake(), plan.cadence()) {
