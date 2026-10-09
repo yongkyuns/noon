@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,10 +32,17 @@ const browserWsEndpoint = process.env.NOON_PRODUCT_BROWSER_WS_ENDPOINT?.trim() |
 
 await mkdir(artifactDir, { recursive: true });
 
+// #1933 Apple A/A diagnostic-only server: the Python 3.14 CLI -m http.server
+// did not bind on macos-15. ThreadingTCPServer binds directly and preserves
+// SimpleHTTPRequestHandler's normal static-file semantics/concurrency.
+// Every child gets a new random identity so stale localhost servers fail closed.
+const serverReadyToken = randomBytes(16).toString("hex");
 let serverOutput = "";
 const server = spawn(
   "python3",
-  ["-u", "-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", siteRoot],
+  ["-u", path.join(scriptDir, "product-aa-apple-http-server.py"),
+    "--port", String(port), "--directory", siteRoot,
+    "--ready-token", serverReadyToken],
   { cwd: siteRoot, stdio: ["ignore", "pipe", "pipe"] },
 );
 server.stdout.on("data", (chunk) => (serverOutput += chunk));
@@ -47,24 +54,38 @@ const serverClosed = new Promise((resolve) => {
 });
 
 async function waitForServer() {
+  // Probe the *real* listening service instead of trusting a stdout banner.
+  // All probes happen BEFORE shell/runtime/scored timing starts.
+  const expectedIdentity = JSON.parse(await readFile(
+    path.join(siteRoot, "web/runtime-build-identity.json"), "utf8"));
   let lastError = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (serverStartError !== null || server.exitCode !== null) {
-      throw new Error(`product E2E server failed: ${serverStartError ?? server.exitCode}\n${serverOutput}`);
+    if (serverStartError !== null || server.exitCode !== null || server.signalCode !== null) {
+      throw new Error(`product E2E server failed: ${serverStartError ?? server.exitCode ?? server.signalCode}\n${serverOutput}`);
     }
     try {
-      // A pre-existing server on this port must not masquerade as our checkout.
-      if (serverOutput.includes("Serving HTTP on")) {
-        const response = await fetch(`${baseUrl}/web/index.html`);
-        if (response.ok) return;
-        lastError = new Error(`HTTP ${response.status}`);
+      // No other server on this port can know this new process's random token.
+      const proof = await fetch(`${baseUrl}/__noon_aa_ready__/${serverReadyToken}`, {
+        cache: "no-store", signal: AbortSignal.timeout(900),
+      });
+      if (!proof.ok || await proof.text() !== serverReadyToken + "\n") {
+        throw new Error(`incorrect local server identity: HTTP ${proof.status}`);
       }
+      // Also confirm that static source files come from this authenticated
+      // producer checkout; a stale/wrong original build must never be scored.
+      const identityResponse = await fetch(`${baseUrl}/web/runtime-build-identity.json`, {
+        cache: "no-store", signal: AbortSignal.timeout(900),
+      });
+      if (!identityResponse.ok) throw new Error(`static source HTTP ${identityResponse.status}`);
+      const identity = await identityResponse.json();
+      assert.deepEqual(identity, expectedIdentity, "HTTP server returned wrong production build");
+      return;
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`product E2E server did not start: ${lastError}\n${serverOutput}`);
+  throw new Error(`product E2E server not operational or identity mismatch: ${lastError}\n${serverOutput}`);
 }
 
 async function waitForApplied(page) {
