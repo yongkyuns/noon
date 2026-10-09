@@ -1,14 +1,14 @@
 //! Real encoded duration must follow authored time, never producer throughput.
 #![cfg(not(target_arch = "wasm32"))]
 
+use super::super::{FileSink, OutputOptions};
+use crate::{capture_frames, Backends, CaptureOptions};
 use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveSession, LiveSessionError,
-    Mobject, RateFunction, RustHostCallbackTable, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveSession, LiveSessionError, Mobject,
+    RateFunction, RustHostCallbackTable, Scene,
 };
 use noon_core::DEFAULT_FRAME_HEIGHT;
-use noon_export::output::{FileSink, OutputOptions};
-use noon_export::{capture_frames, Backends, CaptureOptions};
 use std::{fs, io, path::Path, process::Command, time::Duration};
 
 const WIDTH: u32 = 256;

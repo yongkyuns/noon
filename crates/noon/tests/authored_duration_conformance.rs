@@ -1,12 +1,11 @@
 //! FPS controls sample density, never authored duration (#1948).
 //! CPU/runtime proof; this does not qualify live host clock lifecycle or pixels.
 use noon::integration::{
-    ExportFrameOptions, ExportFrameSummary, ExportFrames, ExportFramesStatus, ExportStop,
-    FrameRate,
+    ExportFrameOptions, ExportFrameSummary, ExportFrames, ExportFramesStatus, ExportStop, FrameRate,
 };
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveSession, LiveSessionError,
-    Mobject, RateFunction, RustHostCallbackTable, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveSession, LiveSessionError, Mobject,
+    RateFunction, RustHostCallbackTable, Scene,
 };
 use std::time::Duration;
 
