@@ -513,6 +513,18 @@ try {
       authoring,
       execution: null,
       workerUrls,
+      createExecutionAttachment(label) {
+        let resolve;
+        let reject;
+        const attached = new Promise((onReady, onError) => {
+          resolve = onReady;
+          reject = onError;
+        });
+        const timeout = setTimeout(() => {
+          reject(new Error(`${label} execution did not start within 30 seconds`));
+        }, 30_000);
+        return { ready: attached.finally(() => clearTimeout(timeout)), resolve, reject };
+      },
     };
   });
 
@@ -2767,15 +2779,7 @@ class SelectedAlignment(Scene):
     let execution = null;
     let registration = null;
     let settled = false;
-    let resolveAttached;
-    let rejectAttached;
-    const attached = new Promise((resolve, reject) => {
-      resolveAttached = resolve;
-      rejectAttached = reject;
-    });
-    const startupTimeout = setTimeout(() => {
-      rejectAttached(new Error("synchronous execution did not start within 30 seconds"));
-    }, 30_000);
+    const attachment = harness.createExecutionAttachment("synchronous");
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -2788,19 +2792,19 @@ class SelectedAlignment(Scene):
           loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
         });
-        resolveAttached();
+        attachment.resolve();
       },
     });
     authoredPromise.then(() => {
       settled = true;
-      rejectAttached(new Error("synchronous source returned before execution startup"));
+      attachment.reject(new Error("synchronous source returned before execution startup"));
     }, (error) => {
       settled = true;
-      rejectAttached(error);
+      attachment.reject(error);
     });
     // Allocation precedes worker/renderer startup. Start the live-frame window
     // only after attachment, while retaining a separate bounded startup failure.
-    await attached.finally(() => clearTimeout(startupTimeout));
+    await attachment.ready;
 
     let progressed = null;
     for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -2877,6 +2881,7 @@ class SelectedAlignment(Scene):
     document.body.append(canvas);
     let execution = null;
     let registration = null;
+    const attachment = harness.createExecutionAttachment("fade");
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -2889,11 +2894,14 @@ class SelectedAlignment(Scene):
           loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
         });
+        attachment.resolve();
       },
     });
-    for (let attempt = 0; attempt < 150 && execution === null; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    authoredPromise.then(
+      () => attachment.reject(new Error("fade source returned before execution startup")),
+      attachment.reject,
+    );
+    await attachment.ready;
     if (execution === null || registration === null) {
       throw new Error("fade source did not register its semantic continuation");
     }
