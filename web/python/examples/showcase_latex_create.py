@@ -13,5 +13,4 @@ class LatexCreate(Scene):
             Text("Write()", font_size=28).shift(3.8 * LEFT + 1.5 * DOWN),
         )
         await self.play(Create(drawn), Write(written), run_time=2.0, rate_func=linear)
-        await self.play(drawn.animate.shift(RIGHT), written.animate.shift(RIGHT), run_time=0.8, rate_func=linear)
-        await self.wait(0.7)
+        await self.wait(1.5)
