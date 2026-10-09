@@ -73,97 +73,49 @@ pub fn publish_borrowed_path_edit(
     execution: &mut ExecutionSession,
     edit: BorrowedPathEdit<'_>,
 ) -> Result<(), AuthoringError> {
-    match edit {
+    // Ordinary in-place object edits share one capture/prepare/publish path.
+    // Cross-object partial selection and family edits have their own coherent
+    // capture requirements, but still publish through the same Rust authority.
+    let (object, operation) = match edit {
         BorrowedPathEdit::SmoothCorners { object, points } => {
-            path_editing::publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::SmoothCorners(points),
-            )
+            (object, PathEdit::SmoothCorners(points))
         }
-        BorrowedPathEdit::Corners { object, points } => {
-            path_editing::publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::Corners(points),
-            )
-        }
-        BorrowedPathEdit::Line { object, point } => path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            object,
-            PathEdit::Line(point),
-        ),
-        BorrowedPathEdit::Close { object } => path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            object,
-            PathEdit::Close,
-        ),
-        BorrowedPathEdit::Reverse { object } => path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            object,
-            PathEdit::Reverse,
-        ),
-        BorrowedPathEdit::Start { object, point } => path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            object,
-            PathEdit::Start(point),
-        ),
+        BorrowedPathEdit::Corners { object, points } => (object, PathEdit::Corners(points)),
+        BorrowedPathEdit::Line { object, point } => (object, PathEdit::Line(point)),
+        BorrowedPathEdit::Close { object } => (object, PathEdit::Close),
+        BorrowedPathEdit::Reverse { object } => (object, PathEdit::Reverse),
+        BorrowedPathEdit::Start { object, point } => (object, PathEdit::Start(point)),
         BorrowedPathEdit::Quadratic {
             object,
             control,
             anchor,
-        } => path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            object,
-            PathEdit::Quadratic(control, anchor),
-        ),
+        } => (object, PathEdit::Quadratic(control, anchor)),
         BorrowedPathEdit::Cubic {
             object,
             control1,
             control2,
             anchor,
-        } => path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            object,
-            PathEdit::Cubic(control1, control2, anchor),
-        ),
+        } => (object, PathEdit::Cubic(control1, control2, anchor)),
         BorrowedPathEdit::Subdivide { object, additional } => {
-            path_editing::publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::Subdivide(additional),
-            )
+            (object, PathEdit::Subdivide(additional))
         }
         BorrowedPathEdit::Partial {
             object,
             source,
             a,
             b,
-        } => path_editing::publish_running_pointwise_partial(
-            store, root, execution, object, source, a, b,
-        ),
-        BorrowedPathEdit::FamilyJagged { family } => {
-            path_editing::publish_running_family_anchor_mode(store, root, execution, family, false)
+        } => {
+            return path_editing::publish_running_pointwise_partial(
+                store, root, execution, object, source, a, b,
+            );
         }
-    }
+        BorrowedPathEdit::FamilyJagged { family } => {
+            return path_editing::publish_running_family_anchor_mode(
+                store, root, execution, family, false,
+            );
+        }
+    };
+    path_editing::publish_running_object_edit(store, root, execution, object, operation)
 }
 
 #[cfg(test)]
