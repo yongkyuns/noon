@@ -2991,7 +2991,7 @@ mod tests {
 
     use super::*;
 
-    fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
+    pub(crate) fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
             spatial: None,
             z_index: 0.0,
@@ -3004,7 +3004,7 @@ mod tests {
         }
     }
 
-    fn frame(objects: Vec<FrameObjectState>) -> FrameState {
+    pub(crate) fn frame(objects: Vec<FrameObjectState>) -> FrameState {
         let presences = vec![true; objects.len()];
         let reveals = vec![1.0; objects.len()];
         let morphs = vec![0.0; objects.len()];

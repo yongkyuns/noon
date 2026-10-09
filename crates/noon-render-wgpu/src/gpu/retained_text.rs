@@ -3879,7 +3879,7 @@ impl GpuRenderer {
         let mut stats = RetainedDrawStats::default();
         let mut binding = None;
         let mut images = prepared.image_draw.items().iter().peekable();
-        let batch_paths = prepared.image_draw.items().is_empty()
+        let batch_geometry = prepared.image_draw.items().is_empty()
             && self.inset_views.is_empty()
             && excluded.is_empty()
             && text_camera_index.is_none();
@@ -3944,12 +3944,12 @@ impl GpuRenderer {
                 }
                 RetainedRenderItem::Geometry { batch, .. } => {
                     pass.set_bind_group(0, camera, &[]);
-                    let groups = super::path_batching::DisjointPathBatches::collect(
+                    let groups = super::path_batching::GeometryDrawBatches::collect(
                         batch,
                         &mut items,
                         &prepared.geometry,
                         pixel,
-                        batch_paths,
+                        batch_geometry,
                     );
                     for batch in groups.batches() {
                         let mega = match batch.primitive {

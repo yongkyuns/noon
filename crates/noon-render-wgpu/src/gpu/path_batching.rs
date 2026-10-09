@@ -1,19 +1,19 @@
-//! Bounded submission-only compaction of mutually disjoint compact paths.
+//! Submission compaction of adjacent instances and bounded disjoint geometry.
 //! No instance relocation, mesh duplication, or persistent draw-order cache.
 use noon_core::{Rect, Vec2};
 
 use super::retained_text::RetainedRenderItem;
-use crate::{OrderedRenderBatch, PreparedFrame, RenderPrimitive};
+use crate::{OrderedRenderBatch, PackedTransform, PreparedFrame, RenderPrimitive};
 
 const WINDOW: usize = 32;
 
-pub(super) struct DisjointPathBatches {
+pub(super) struct GeometryDrawBatches {
     batches: [Option<(OrderedRenderBatch, std::ops::Range<u32>)>; WINDOW],
     bounds: [Option<Rect>; WINDOW],
     count: usize,
 }
 
-impl DisjointPathBatches {
+impl GeometryDrawBatches {
     pub(super) fn collect<'a>(
         first: &OrderedRenderBatch,
         rest: &mut std::iter::Peekable<std::slice::Iter<'a, RetainedRenderItem>>,
@@ -21,6 +21,35 @@ impl DisjointPathBatches {
         pixel: Vec2,
         enabled: bool,
     ) -> Self {
+        let mut first = first.clone();
+        if enabled {
+            // This prefix keeps the existing primitive and instance order, so
+            // overlapping and polygon-covered paths need no bounds test. Mixed
+            // items still stop the prefix; exclusions/insets disable collection.
+            while let Some(RetainedRenderItem::Geometry { batch, .. }) = rest.peek() {
+                let mut next = batch.clone();
+                if let (
+                    RenderPrimitive::Path { batch: first_path },
+                    RenderPrimitive::Path { batch: next_path },
+                ) = (first.primitive, next.primitive)
+                {
+                    let first_path = &prepared.path_batches[first_path];
+                    let next_path = &prepared.path_batches[next_path];
+                    // Structural appends can alias the same resident geometry
+                    // through different batch IDs. Only identical indices and
+                    // pipeline classification permit sharing the first draw.
+                    if first_path.index_range == next_path.index_range
+                        && first_path.polygon_coverage == next_path.polygon_coverage
+                    {
+                        next.primitive = first.primitive;
+                    }
+                }
+                if !first.merge_adjacent(&next) {
+                    break;
+                }
+                rest.next();
+            }
+        }
         let mut result = Self {
             batches: std::array::from_fn(|_| None),
             bounds: [None; WINDOW],
@@ -28,35 +57,22 @@ impl DisjointPathBatches {
         };
         result.batches[0] = Some((first.clone(), 0..0));
         let Some(bounds) = enabled
-            .then(|| path_bounds(prepared, first, pixel))
+            .then(|| geometry_bounds(prepared, &first, pixel))
             .flatten()
         else {
             return result;
         };
-        let RenderPrimitive::Path { batch: path } = first.primitive else {
-            unreachable!()
-        };
-        result.batches[0] = Some((
-            first.clone(),
-            prepared.path_batches[path].index_range.clone(),
-        ));
+        result.batches[0] = Some((first.clone(), path_indices(prepared, &first)));
         result.bounds[0] = Some(bounds);
         result.count = 1;
         while result.count < WINDOW {
             let Some(RetainedRenderItem::Geometry { batch, .. }) = rest.peek() else {
                 break;
             };
-            let Some(bounds) = path_bounds(prepared, batch, pixel) else {
+            let Some(bounds) = geometry_bounds(prepared, batch, pixel) else {
                 break;
             };
-            let RenderPrimitive::Path { batch: path } = batch.primitive else {
-                unreachable!()
-            };
-            if !result.push(
-                batch,
-                bounds,
-                prepared.path_batches[path].index_range.clone(),
-            ) {
+            if !result.push(batch, bounds, path_indices(prepared, batch)) {
                 break;
             }
             rest.next();
@@ -80,7 +96,13 @@ impl DisjointPathBatches {
         }
         let slot = self.batches.iter_mut().find(|slot| {
             slot.as_ref().is_some_and(|(prior, prior_indices)| {
-                *prior_indices == indices && prior.instance_range.end == batch.instance_range.start
+                (prior.primitive == batch.primitive
+                    || matches!(
+                        (prior.primitive, batch.primitive),
+                        (RenderPrimitive::Path { .. }, RenderPrimitive::Path { .. })
+                    ))
+                    && *prior_indices == indices
+                    && prior.instance_range.end == batch.instance_range.start
             })
         });
         if let Some(Some((prior, _))) = slot {
@@ -106,6 +128,73 @@ fn overlaps(a: Rect, b: Rect) -> bool {
     a.min.x <= b.max.x && b.min.x <= a.max.x && a.min.y <= b.max.y && b.min.y <= a.max.y
 }
 
+fn path_indices(prepared: &PreparedFrame<'_>, batch: &OrderedRenderBatch) -> std::ops::Range<u32> {
+    match batch.primitive {
+        RenderPrimitive::Path { batch } => prepared.path_batches[batch].index_range.clone(),
+        _ => 0..0,
+    }
+}
+
+fn geometry_bounds(
+    prepared: &PreparedFrame<'_>,
+    batch: &OrderedRenderBatch,
+    pixel: Vec2,
+) -> Option<Rect> {
+    if batch.instance_range.len() != 1 {
+        return None;
+    }
+    let index = batch.instance_range.start as usize;
+    let (half_size, transform, style, outlined) = match batch.primitive {
+        RenderPrimitive::Circle => {
+            let instance = &prepared.circles[index];
+            if !instance.radius.is_finite() {
+                return None;
+            }
+            let radius = instance.radius.abs().max(0.000001);
+            (
+                Vec2::new(radius, radius),
+                instance.transform,
+                instance.style,
+                instance.style.stroke_enabled & 1 != 0
+                    || (instance.padding[0] < 1.0 && instance.style.fill_enabled & 1 != 0),
+            )
+        }
+        RenderPrimitive::Rectangle => {
+            let instance = &prepared.rectangles[index];
+            (
+                Vec2::new(instance.size[0].abs() * 0.5, instance.size[1].abs() * 0.5),
+                instance.transform,
+                instance.style,
+                instance.style.stroke_enabled & 1 != 0,
+            )
+        }
+        _ => return path_bounds(prepared, batch, pixel),
+    };
+    if !style.stroke_width.is_finite() || !pixel.x.is_finite() || !pixel.y.is_finite() {
+        return None;
+    }
+    let half_width = if outlined {
+        style.stroke_width.max(0.0) * 0.5
+    } else {
+        0.0
+    };
+    let outline = if style.stroke_enabled & 2 != 0 {
+        Vec2::new(
+            half_width / transform.scale[0].abs().max(0.000001),
+            half_width / transform.scale[1].abs().max(0.000001),
+        )
+    } else {
+        Vec2::new(half_width, half_width)
+    };
+    let extent = half_size + outline;
+    let bounds = Rect::new(Vec2::ZERO - extent, extent);
+    // Each analytic quad axis adds at most one pixel in world length.
+    // Two maximum-axis pixels conservatively cover their rotated sum, including
+    // nonuniform/mirrored scales and screen-space stroke padding.
+    let fringe = pixel.x.max(pixel.y) * 2.0;
+    transformed_bounds(bounds, [bounds; 2], transform, Vec2::new(fringe, fringe))
+}
+
 fn path_bounds(
     prepared: &PreparedFrame<'_>,
     batch: &OrderedRenderBatch,
@@ -128,7 +217,15 @@ fn path_bounds(
         source.min * (1.0 - progress) + target.min * progress,
         source.max * (1.0 - progress) + target.max * progress,
     );
-    let transform = instance.transform;
+    transformed_bounds(bounds, [source, target], instance.transform, pixel)
+}
+
+fn transformed_bounds(
+    bounds: Rect,
+    [source, target]: [Rect; 2],
+    transform: PackedTransform,
+    pixel: Vec2,
+) -> Option<Rect> {
     // WGSL gives a finite sin/cos accuracy guarantee only inside [-pi, pi].
     // Keep the ordinary painter path outside that range (including NaN).
     if !transform.rotation.is_finite() || transform.rotation.abs() > std::f32::consts::PI {
@@ -192,13 +289,184 @@ mod tests {
     fn bounds(x: f32) -> Rect {
         Rect::new(Vec2::new(x, 0.0), Vec2::new(x + 0.5, 0.5))
     }
-    fn empty() -> DisjointPathBatches {
-        DisjointPathBatches {
+    fn empty() -> GeometryDrawBatches {
+        GeometryDrawBatches {
             batches: std::array::from_fn(|_| None),
             bounds: [None; WINDOW],
             count: 0,
         }
     }
+
+    #[test]
+    fn adjacent_overlapping_instances_keep_order_and_stop_at_text_or_gaps() {
+        use noon_core::{GeometryRef, ObjectId, VectorPath};
+        use noon_runtime::FrameChanges;
+        let polygon = VectorPath::new()
+            .move_to(Vec2::new(-0.5, -0.5))
+            .line_to(Vec2::new(0.5, -0.5))
+            .line_to(Vec2::new(0.5, 0.5))
+            .line_to(Vec2::new(-0.5, 0.5))
+            .close();
+        for (geometry, primitive) in [
+            (GeometryRef::circle(0.5), RenderPrimitive::Circle),
+            (GeometryRef::rectangle(1.0, 1.0), RenderPrimitive::Rectangle),
+            (
+                GeometryRef::line(Vec2::ZERO, Vec2::new(1.0, 0.0)),
+                RenderPrimitive::Line,
+            ),
+            (
+                GeometryRef::path(polygon),
+                RenderPrimitive::Path { batch: 0 },
+            ),
+        ] {
+            let frame = crate::tests::frame(
+                (0..601)
+                    .map(|index| {
+                        let mut object = crate::tests::object(index, geometry.clone());
+                        object.style.stroke = None;
+                        object.style.stroke_width = 0.0;
+                        object.style.opacity = 0.5;
+                        object
+                    })
+                    .collect(),
+            );
+            let mut preparer = crate::FramePreparer::new();
+            preparer.prepare(&crate::tests::frame(vec![frame.objects[0].clone()]));
+            let prepared = preparer.prepare_incremental(
+                &frame,
+                &FrameChanges::structural((1..601).collect(), Vec::new()),
+            );
+            assert_eq!(prepared.stats.full_rebuilds, 0);
+            assert_eq!(prepared.stats.path_vertices_repacked, 0);
+            assert_eq!(prepared.stats.path_indices_repacked, 0);
+            if matches!(primitive, RenderPrimitive::Path { .. }) {
+                assert_eq!(prepared.path_batches.len(), 601);
+                assert!(prepared.path_batches[0].polygon_coverage);
+                assert!(prepared.path_batches.iter().all(|batch| {
+                    batch.index_range == prepared.path_batches[0].index_range
+                        && batch.polygon_coverage
+                }));
+            }
+            let first = OrderedRenderBatch {
+                primitive,
+                instance_range: 0..1,
+            };
+            let item = |index| RetainedRenderItem::Geometry {
+                object_id: ObjectId::new(u64::from(index)),
+                batch: OrderedRenderBatch {
+                    primitive: match primitive {
+                        RenderPrimitive::Path { .. } => RenderPrimitive::Path {
+                            batch: index as usize,
+                        },
+                        other => other,
+                    },
+                    instance_range: index..index + 1,
+                },
+            };
+            let glyph = RetainedRenderItem::Glyph {
+                object_id: ObjectId::new(999),
+                object_index: 601,
+                run_index: 0,
+            };
+            let mut items: Vec<_> = (1..600).map(item).collect();
+            items.push(glyph);
+            items.push(item(600));
+            let mut rest = items.iter().peekable();
+            let collected = GeometryDrawBatches::collect(
+                &first,
+                &mut rest,
+                &prepared,
+                Vec2::new(0.01, 0.01),
+                true,
+            );
+            let batches: Vec<_> = collected.batches().collect();
+            assert_eq!(batches.len(), 1, "600 overlapping {primitive:?} instances");
+            assert_eq!(batches[0].instance_range, 0..600);
+            assert_eq!(
+                rest.count(),
+                2,
+                "text and the later instance remain ordered"
+            );
+
+            // Exclusions/images/insets disable collection at the existing caller.
+            let mut rest = items.iter().peekable();
+            let uncollected = GeometryDrawBatches::collect(
+                &first,
+                &mut rest,
+                &prepared,
+                Vec2::new(0.01, 0.01),
+                false,
+            );
+            assert_eq!(uncollected.batches().next().unwrap(), &first);
+            assert_eq!(rest.count(), items.len());
+
+            let gap = [item(2)];
+            let mut rest = gap.iter().peekable();
+            let collected = GeometryDrawBatches::collect(
+                &first,
+                &mut rest,
+                &prepared,
+                Vec2::new(0.01, 0.01),
+                true,
+            );
+            assert_eq!(collected.batches().next().unwrap(), &first);
+            assert_eq!(rest.count(), 1, "an absent instance must stay absent");
+
+            if matches!(primitive, RenderPrimitive::Path { .. }) {
+                let original = prepared.path_batches;
+                let mut different_indices = original.to_vec();
+                different_indices[1].index_range.end += 1;
+                let mut different_pipeline = original.to_vec();
+                different_pipeline[1].polygon_coverage = false;
+                let mut prepared = prepared;
+                for aliases in [&different_indices[..], &different_pipeline[..]] {
+                    prepared.path_batches = aliases;
+                    let next = [item(1)];
+                    let mut rest = next.iter().peekable();
+                    let collected = GeometryDrawBatches::collect(
+                        &first,
+                        &mut rest,
+                        &prepared,
+                        Vec2::new(0.01, 0.01),
+                        true,
+                    );
+                    assert_eq!(collected.batches().next().unwrap(), &first);
+                    assert_eq!(
+                        rest.count(),
+                        1,
+                        "a different index range or pipeline cannot alias"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn disjoint_analytic_primitives_keep_their_separate_instance_arrays() {
+        let mut group = empty();
+        for index in 0..WINDOW {
+            let primitive = if index % 2 == 0 {
+                RenderPrimitive::Circle
+            } else {
+                RenderPrimitive::Rectangle
+            };
+            let instance = (index / 2) as u32;
+            assert!(group.push(
+                &OrderedRenderBatch {
+                    primitive,
+                    instance_range: instance..instance + 1
+                },
+                bounds(index as f32),
+                0..0,
+            ));
+        }
+        let batches: Vec<_> = group.batches().collect();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].primitive, RenderPrimitive::Circle);
+        assert_eq!(batches[1].primitive, RenderPrimitive::Rectangle);
+        assert!(batches.iter().all(|batch| batch.instance_range == (0..16)));
+    }
+
     #[test]
     fn disjoint_alternating_meshes_share_existing_contiguous_instances() {
         let mut group = empty();
@@ -315,7 +583,7 @@ mod tests {
         let items = [glyph];
         let mut rest = items.iter().peekable();
         assert_eq!(
-            DisjointPathBatches::collect(&first, &mut rest, &prepared, Vec2::new(0.01, 0.02), true)
+            GeometryDrawBatches::collect(&first, &mut rest, &prepared, Vec2::new(0.01, 0.02), true)
                 .batches()
                 .count(),
             1

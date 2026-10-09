@@ -188,6 +188,186 @@ fn render(
 }
 
 #[test]
+fn mixed_retained_pass_batches_six_hundred_instances_without_changing_pixels() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping ordered path coalescing regression: no adapter is available");
+            return;
+        };
+        eprintln!("ordered geometry adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        // Exact resident-path instancing, disjoint analytic primitives, and
+        // overlapping analytic primitives exercise both compaction boundaries.
+        for (analytic, disjoint) in [(false, false), (true, true), (true, false)] {
+            let mut store = SemanticStore::new();
+            let path = noon_core::VectorPath::new()
+                .move_to(Vec2::new(-1.0, -1.0))
+                .line_to(Vec2::new(1.0, -1.0))
+                .line_to(Vec2::new(1.0, 1.0))
+                .line_to(Vec2::new(-1.0, 1.0))
+                .close();
+            let geometry = store.insert_geometry_path(path).unwrap();
+            for index in 0..600 {
+                let mut object = SemanticObjectState::new(if !analytic {
+                    StoredGeometry::Resource(geometry)
+                } else if index % 2 == 0 {
+                    StoredGeometry::Circle { radius: 0.04 }
+                } else {
+                    StoredGeometry::Rectangle {
+                        size: Vec2::new(0.08, 0.08),
+                    }
+                });
+                if disjoint {
+                    object.transform.translation = SemanticVec3::new(
+                        (f64::from(index % 30) - 14.5) * 0.375,
+                        (9.5 - f64::from(index / 30)) * 0.375,
+                        0.0,
+                    );
+                    if index % 2 != 0 {
+                        object.transform.scale = SemanticVec3::new(-1.2, 0.7, 1.0);
+                        object.transform.orientation = noon_core::SemanticOrientation::Planar(0.45);
+                    }
+                }
+                // The last two translucent layers make reversal observable even
+                // after the dense white prefix saturates the center pixel.
+                let color = match index {
+                    598 => Color::RED,
+                    599 => Color::BLUE,
+                    _ => Color::WHITE,
+                };
+                object.style.fill = Some(SemanticPaint::Solid(color));
+                object.style.stroke = analytic.then_some(SemanticPaint::Solid(color));
+                object.style.stroke_width = if analytic { 0.01 } else { 0.0 };
+                if disjoint && index % 4 != 0 {
+                    object.style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
+                }
+                object.style.object_opacity = 0.5;
+                attach(&mut store, object);
+            }
+            let text = compile_typst_resource("HUD", TypstMode::Markup).unwrap();
+            let bounds = text.resource.bounds;
+            let handle = store
+                .import_text_resource(text.resource, &text.fonts, &text.geometry)
+                .unwrap();
+            let hud = fitted_text(
+                handle,
+                bounds,
+                SemanticVec3::new(-3.0, 3.0, 0.0),
+                [1.0, 0.3],
+            );
+            let mut index = SemanticExecutionIndex::new();
+            let mut images = Vec::new();
+            for retained_pass in [false, true] {
+                if retained_pass {
+                    attach(&mut store, hud.clone());
+                }
+                let (compiled, _) = lower_semantic_execution(&store, &mut index)
+                    .unwrap()
+                    .into_parts();
+                let mut runtime = SceneInstance::new(compiled);
+                let publication = runtime.take_renderer_publication();
+                let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+                renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+                renderer.set_camera(
+                    &queue,
+                    Camera2D::new(Vec2::ZERO, Vec2::new(12.0, 8.0)).unwrap(),
+                );
+                let mut encoder = device.create_command_encoder(&Default::default());
+                if !retained_pass {
+                    let mut preparer = FramePreparer::new();
+                    let prepared = preparer.prepare(publication.frame());
+                    renderer.upload(&device, &queue, &prepared);
+                    renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);
+                } else {
+                    let mut retained = RetainedFramePreparer::new();
+                    let visible: Vec<_> = (0..publication.frame().objects.len()).collect();
+                    retained
+                        .prepare_transient_presentations_visible(&publication, &visible)
+                        .unwrap();
+                    let prepared = retained
+                        .prepare_planned_publication_visible(
+                            &device,
+                            &publication,
+                            &visible,
+                            TextDeviceMetrics::uniform(16.0).unwrap(),
+                        )
+                        .unwrap();
+                    let mut text_state = renderer.create_retained_text_state(&device, &queue);
+                    renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
+                    let stats = renderer
+                        .encode_retained(
+                            &mut encoder,
+                            &target.view,
+                            &prepared,
+                            &text_state,
+                            wgpu::Color::BLACK,
+                            None,
+                        )
+                        .unwrap();
+                    if disjoint {
+                        assert!(
+                            stats.geometry.draw_calls <= 40,
+                            "bounded disjoint instancing: {:?}",
+                            stats.geometry
+                        );
+                    } else {
+                        assert_eq!(
+                            stats.geometry.draw_calls,
+                            if analytic { 600 } else { 1 },
+                            "overlap retains painter order"
+                        );
+                    }
+                    assert_eq!(stats.geometry.instances_drawn, 600);
+                    assert!(
+                        stats.text.draw_calls > 0,
+                        "a real glyph pass follows the paths"
+                    );
+                }
+                images.push(target.read(&device, &queue, encoder));
+            }
+            if !disjoint {
+                let center = pixel(&images[0], WIDTH / 2, HEIGHT / 2);
+                assert!(
+                    center[2] > center[0],
+                    "blue must paint after red: {center:?}"
+                );
+            } else {
+                assert!(
+                    non_black_pixels(&images[0], 0, WIDTH, 24, HEIGHT) > 600,
+                    "the field is visible"
+                );
+            }
+            for y in 24..HEIGHT {
+                for x in 0..WIDTH {
+                    assert_eq!(
+                        pixel(&images[0], x, y),
+                        pixel(&images[1], x, y),
+                        "mixed-pass batching must preserve direct coverage and alpha order"
+                    );
+                }
+            }
+            assert!(
+                non_black_pixels(&images[1], 40, 64, 8, 20) > 5,
+                "HUD remains visible"
+            );
+            assert!(
+                (8..20)
+                    .flat_map(|y| (40..64).map(move |x| (x, y)))
+                    .filter(|&(x, y)| pixel(&images[0], x, y) != pixel(&images[1], x, y))
+                    .count()
+                    > 5,
+                "glyphs add actual pixels"
+            );
+        }
+    });
+}
+
+#[test]
 fn retained_world_paths_preserve_direct_edge_coverage_with_and_without_hud() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();

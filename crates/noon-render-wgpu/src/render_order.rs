@@ -28,6 +28,18 @@ pub struct OrderedRenderBatch {
     pub instance_range: Range<u32>,
 }
 
+impl OrderedRenderBatch {
+    /// Join consecutive instances without changing their painter order.
+    pub(crate) fn merge_adjacent(&mut self, next: &Self) -> bool {
+        if self.primitive != next.primitive || self.instance_range.end != next.instance_range.start
+        {
+            return false;
+        }
+        self.instance_range.end = next.instance_range.end;
+        true
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VisibleRenderError {
     ObjectIndexOutOfRange { index: usize, objects: usize },

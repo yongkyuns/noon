@@ -436,13 +436,7 @@ impl ResolvedOrderedBatch {
                 current.path_count += next.path_count;
                 true
             }
-            (None, None)
-                if self.batch.primitive == next.batch.primitive
-                    && self.batch.instance_range.end == next.batch.instance_range.start =>
-            {
-                self.batch.instance_range.end = next.batch.instance_range.end;
-                true
-            }
+            (None, None) => self.batch.merge_adjacent(&next.batch),
             _ => false,
         }
     }
