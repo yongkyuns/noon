@@ -96,6 +96,7 @@ export function createAuthoringRenderController(host) {
   // rolling window so diagnostics cannot grow with a long-running session.
   let publicationStageProfiling = false;
   let renderSubstageProfiling = false;
+  let gpuCompletionProfiling = false;
   const publicationStageSamples = [];
   let pendingPublicationStageSample = null;
   let webglRecoveryPromise = null;
@@ -149,8 +150,13 @@ export function createAuthoringRenderController(host) {
             renderSubstageProfiling = true;
             renderer?.setRenderSubstageProfiling(true);
           }
+          if (message.profileGpuCompletion === true) {
+            gpuCompletionProfiling = true;
+            renderer?.setGpuCompletionProfiling(true);
+          }
           {
             const metrics = currentMetrics();
+            if (gpuCompletionProfiling && !drainGpuDiagnostics()) return;
             if (message.includeGpuIdentity === true) {
               if (renderer === null || typeof renderer.rendererAdapterInfo !== "function") {
                 throw new Error("renderer GPU identity diagnostics are unavailable");
@@ -640,6 +646,7 @@ export function createAuthoringRenderController(host) {
     try {
       const createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
       if (renderSubstageProfiling) createdRenderer.setRenderSubstageProfiling(true);
+      if (gpuCompletionProfiling) createdRenderer.setGpuCompletionProfiling(true);
       // create() resolves after GPU setup; keep this separate from first render.
       rendererReadyAtMs ??= performance.now();
       if (stopped) {
@@ -1075,6 +1082,12 @@ export function createAuthoringRenderController(host) {
       renderSubstageSamples: renderer === null
         ? []
         : JSON.parse(renderer.takeRenderSubstageSamplesJson()),
+    } : {}),
+    ...(gpuCompletionProfiling ? {
+      gpuCompletionProfiling: true,
+      gpuCompletion: renderer === null
+        ? null
+        : JSON.parse(renderer.takeGpuCompletionSamplesJson()),
     } : {}),
     };
     if (renderer === null) {

@@ -306,6 +306,8 @@ function createRenderer(renderResults) {
     observationResult: null,
     renderSubstageProfiling: false,
     renderSubstageSamplesJson: "[]",
+    gpuCompletionProfiling: false,
+    gpuCompletionSamplesJson: "null",
     applyDeltaJson: () => true,
     setRendererObservationRequestJson(json) { this.observationRequests.push(json); },
     takeRendererObservationJson() {
@@ -317,6 +319,12 @@ function createRenderer(renderResults) {
     takeRenderSubstageSamplesJson() {
       const result = this.renderSubstageSamplesJson;
       this.renderSubstageSamplesJson = "[]";
+      return result;
+    },
+    setGpuCompletionProfiling(enabled) { this.gpuCompletionProfiling = enabled; },
+    takeGpuCompletionSamplesJson() {
+      const result = this.gpuCompletionSamplesJson;
+      this.gpuCompletionSamplesJson = JSON.stringify({ samples: [] });
       return result;
     },
     resize() {},
@@ -571,6 +579,30 @@ test("render substage timing is opt-in and drains bounded renderer samples", asy
   assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext(
     "currentMetrics().renderSubstageSamples", harness.context,
   ))), [], "taking metrics drains samples instead of retaining an unbounded history");
+});
+
+test("queue completion diagnostics are separately opt-in and drain host observations", async () => {
+  const harness = await createManagedWakeHarness();
+  assert.equal(vm.runInContext("currentMetrics().gpuCompletionProfiling", harness.context), undefined);
+  assert.equal(harness.createdRenderer.gpuCompletionProfiling, false);
+  const observed = {
+    observation: "queue_work_done_callback", includesCallbackDispatchDelay: true,
+    callbackReportsSuccess: false,
+    gpuDurationMeasured: false, displayScanoutMeasured: false,
+    inFlight: 1, dropped: 2, failed: 0,
+    samples: [{ session: 53, sequence: 7, presentationSequence: 9, gpuGeneration: 1,
+      submissionStartedMs: 10, completionObservedMs: 12 }],
+  };
+  harness.createdRenderer.gpuCompletionSamplesJson = JSON.stringify(observed);
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:75, profileGpuCompletion:true});`, harness.context);
+  const response = harness.mainMessages.find((message) => message.requestId === 75);
+  assert.equal(response.metrics.gpuCompletionProfiling, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(response.metrics.gpuCompletion)), observed);
+  assert.equal(harness.createdRenderer.gpuCompletionProfiling, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext(
+    "currentMetrics().gpuCompletion.samples", harness.context,
+  ))), []);
 });
 
 test("renderer transition discards an old timing sample even when publication identity repeats", async () => {

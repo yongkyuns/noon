@@ -289,6 +289,31 @@ try {
           entry.status = "passed";
           continue;
         }
+        assert.equal((await metrics()).gpuCompletionProfiling, undefined,
+          "ordinary metrics must leave queue observation disabled");
+        await page.evaluate(async () => {
+          const h = workerInspection;
+          h.completion = { samples: [], failed: 0, dropped: 0, maxInFlight: 0 };
+          const original = h.execution.metrics.bind(h.execution);
+          h.execution.metrics = async (...args) => {
+            const result = await original(...args), observed = result.metrics.gpuCompletion;
+            if (observed) {
+              if (observed.observation !== "queue_work_done_callback" ||
+                  observed.includesCallbackDispatchDelay !== true ||
+                  observed.callbackReportsSuccess !== false ||
+                  observed.gpuDurationMeasured !== false || observed.displayScanoutMeasured !== false) {
+                throw new Error("queue callback observations must keep their measurement limits explicit");
+              }
+              h.completion.samples.push(...observed.samples);
+              if (h.completion.samples.length > 64) throw new Error("static diagnostic observation budget exceeded");
+              h.completion.failed = observed.failed;
+              h.completion.dropped = observed.dropped;
+              h.completion.maxInFlight = Math.max(h.completion.maxInFlight, observed.inFlight);
+            }
+            return result;
+          };
+          await h.execution.metrics({ profileGpuCompletion: true });
+        });
         let before = (await metrics()).presentedFrames;
         assert.equal(await page.evaluate(() => workerInspection.wheel(-500 * Math.log(2))), true);
         await page.evaluate(() => Promise.all(workerInspection.pending)); await settled(before);
@@ -333,7 +358,23 @@ try {
         await page.evaluate(() => Promise.all(workerInspection.pending)); await settled(before);
         assert.deepEqual(await page.evaluate(() => workerInspection.outcomes), [true, null, true, true]);
         assert.deepEqual(await page.evaluate(() => workerInspection.execution.debugFrame()), authored);
+        await waitForBrowserObservation(page, async () =>
+          (await workerInspection.execution.metrics()).metrics.gpuCompletion.inFlight === 0);
+        entry.gpuCompletion = await page.evaluate(() => workerInspection.completion);
+        assert.ok(entry.gpuCompletion.samples.length > 0, "real queue callbacks must be observed");
+        assert.ok(entry.gpuCompletion.maxInFlight <= 4);
+        assert.equal(entry.gpuCompletion.failed, 0);
+        assert.equal(entry.gpuCompletion.dropped, 0);
+        assert.equal(new Set(entry.gpuCompletion.samples.map(s => s.presentationSequence)).size,
+          entry.gpuCompletion.samples.length, "each submission has one host presentation identity");
+        for (const sample of entry.gpuCompletion.samples) {
+          assert.ok(Number.isSafeInteger(sample.session) && Number.isSafeInteger(sample.sequence));
+          assert.equal(sample.gpuGeneration, (await metrics()).gpuGeneration);
+          assert.ok(Number.isFinite(sample.submissionStartedMs) &&
+            Number.isFinite(sample.completionObservedMs) && sample.completionObservedMs >= sample.submissionStartedMs);
+        }
         entry.checks.push("anchored-pixel-zoom", "pick-through-composed-view", "exact-overlay-clear", "delayed-wheel-rejected", "reverse-zoom", "one-in-flight-burst", "authored-time-and-frame-unchanged");
+        entry.checks.push("opt-in-bounded-queue-callbacks-after-static-settle");
         entry.pixels = { baseline: b, zoomed: z, restored }; entry.status = "passed";
       } catch (error) {
         entry.status = "failed"; entry.error = String(error.stack ?? error);
