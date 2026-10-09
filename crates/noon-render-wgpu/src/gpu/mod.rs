@@ -517,9 +517,6 @@ pub struct GpuRenderer {
     mega_path_vertex_instance_buffer: wgpu::Buffer,
     derived_display: DerivedDisplayGpu,
     images: Option<raster_image_gpu::RasterImageGpuRenderer>,
-    path_render_bundle: Option<wgpu::RenderBundle>,
-    path_render_bundle_batches: Vec<PathBatch>,
-    path_render_bundle_rebuilds: usize,
     circle_capacity_bytes: usize,
     rectangle_capacity_bytes: usize,
     line_capacity_bytes: usize,
@@ -804,9 +801,6 @@ impl GpuRenderer {
             mega_path_vertex_instance_buffer,
             derived_display,
             images: None,
-            path_render_bundle: None,
-            path_render_bundle_batches: Vec::new(),
-            path_render_bundle_rebuilds: 0,
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
             line_capacity_bytes: 0,
@@ -1011,8 +1005,6 @@ impl GpuRenderer {
         self.path_vertex_capacity_bytes = vertex_bytes_len;
         self.compact_path_vertex_capacity_bytes = compact_vertex_bytes_len;
         self.path_index_capacity_bytes = index_bytes_len;
-        self.path_render_bundle = None;
-        self.path_render_bundle_batches.clear();
 
         Ok(UploadStats {
             bytes_uploaded,
@@ -1162,15 +1154,6 @@ impl GpuRenderer {
         );
         buffer_reallocations += usize::from(mega_path_vertex_instance_reallocated);
 
-        self.prepare_path_render_bundle(
-            device,
-            prepared,
-            path_vertex_reallocated
-                || compact_path_vertex_reallocated
-                || path_index_reallocated
-                || path_instance_reallocated,
-        );
-
         let bytes_uploaded = upload_dirty(
             queue,
             &self.circle_buffer,
@@ -1249,64 +1232,6 @@ impl GpuRenderer {
             bytes_uploaded,
             buffer_reallocations,
         }
-    }
-
-    fn prepare_path_render_bundle(
-        &mut self,
-        device: &wgpu::Device,
-        prepared: &PreparedFrame<'_>,
-        path_buffer_reallocated: bool,
-    ) {
-        if prepared.path_batches.is_empty() {
-            self.path_render_bundle = None;
-            self.path_render_bundle_batches.clear();
-            return;
-        }
-
-        let layout_changed = self.path_render_bundle_batches != prepared.path_batches;
-        if !path_buffer_reallocated && !layout_changed {
-            return;
-        }
-        if prepared
-            .path_batches
-            .iter()
-            .any(|batch| path_batch_uses_polygon_coverage(prepared, batch))
-        {
-            self.path_render_bundle = None;
-            self.path_render_bundle_batches.clear();
-            self.path_render_bundle_batches
-                .extend_from_slice(prepared.path_batches);
-            return;
-        }
-
-        let color_formats = [Some(self.target_format)];
-        let mut bundle =
-            device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
-                label: Some("Noon path render bundle encoder"),
-                color_formats: &color_formats,
-                depth_stencil: None,
-                sample_count: PATH_SAMPLE_COUNT,
-                multiview: None,
-            });
-        bundle.set_bind_group(0, &self.camera_bind_group, &[]);
-        bundle.set_pipeline(&self.path_pipeline);
-        bundle.set_vertex_buffer(0, self.compact_path_vertex_buffer.slice(..));
-        bundle.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
-        bundle.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        for batch in prepared
-            .path_batches
-            .iter()
-            .filter(|batch| !batch.index_range.is_empty())
-        {
-            bundle.draw_indexed(batch.index_range.clone(), 0, batch.instance_range.clone());
-        }
-        self.path_render_bundle = Some(bundle.finish(&wgpu::RenderBundleDescriptor {
-            label: Some("Noon path render bundle"),
-        }));
-        self.path_render_bundle_batches.clear();
-        self.path_render_bundle_batches
-            .extend_from_slice(prepared.path_batches);
-        self.path_render_bundle_rebuilds += 1;
     }
 
     pub fn encode(
@@ -1846,10 +1771,6 @@ impl GpuRenderer {
     pub const fn mega_path_vertex_instance_capacity_bytes(&self) -> usize {
         self.mega_path_vertex_instance_capacity_bytes
     }
-
-    pub const fn path_render_bundle_rebuilds(&self) -> usize {
-        self.path_render_bundle_rebuilds
-    }
 }
 
 pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -2341,20 +2262,6 @@ mod tests {
         assert_eq!(compact[2].surface, 9);
     }
 
-    #[test]
-    fn exact_polygon_eligibility_invalidates_path_bundle_layout() {
-        let ordinary = PathBatch {
-            index_range: 0..6,
-            instance_range: 0..1,
-            polygon_coverage: false,
-        };
-        let exact_polygon = PathBatch {
-            polygon_coverage: true,
-            ..ordinary.clone()
-        };
-        assert_ne!(ordinary, exact_polygon);
-    }
-
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
     fn test_frame() -> FrameState {
@@ -2802,7 +2709,6 @@ mod tests {
         // The compact ordinary-path stream is a distinct retained GPU buffer.
         assert_eq!(upload.buffer_reallocations, 7);
         assert!(upload.bytes_uploaded > size_of::<CircleInstance>());
-        assert_eq!(renderer.path_render_bundle_rebuilds(), 1);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Noon path noop render target"),
@@ -2831,7 +2737,6 @@ mod tests {
         let unchanged_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(unchanged_upload.buffer_reallocations, 0);
         assert_eq!(unchanged_upload.bytes_uploaded, 0);
-        assert_eq!(renderer.path_render_bundle_rebuilds(), 1);
     }
 }
 
