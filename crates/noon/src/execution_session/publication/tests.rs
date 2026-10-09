@@ -512,6 +512,130 @@ fn detached_pending_object_publishes_no_execution_work() {
 }
 
 #[test]
+fn detached_target_values_during_replay_preserve_frame_and_history() {
+    let (mut store, mut session, _) = fixture(600);
+    session.begin_replay_retention(Default::default()).unwrap();
+    let mut creation = SemanticMutationTransaction::new();
+    let pending = (0..600)
+        .map(|_| {
+            creation.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+                StoredGeometry::Circle { radius: 2.0 },
+            )))
+        })
+        .collect::<Vec<_>>();
+    let created = session
+        .apply_semantic_transaction(&mut store, creation)
+        .unwrap();
+    let targets = pending
+        .into_iter()
+        .map(|pending| created.resolve(pending).unwrap())
+        .collect::<Vec<_>>();
+    let frame = session.frame().clone();
+    let before = session.publication_context();
+    let history = session.replay_stats();
+
+    for &target in &targets {
+        let mut transaction = translation(target, 8.0);
+        transaction.replace_style(
+            target,
+            SemanticStyle {
+                object_opacity: 0.25,
+                ..Default::default()
+            },
+        );
+        session
+            .apply_semantic_transaction(&mut store, transaction)
+            .unwrap();
+        assert_eq!(
+            store
+                .semantic_object_state_checked(target)
+                .unwrap()
+                .transform
+                .translation
+                .x,
+            8.0
+        );
+        assert_eq!(session.frame(), &frame);
+        assert!(session.take_frame_changes().is_empty());
+        assert_eq!(session.replay_stats(), history);
+        assert_eq!(
+            session.last_structural_publication_stats(),
+            StructuralPublicationStats::default()
+        );
+    }
+    assert_eq!(
+        session.publication_context().execution_revision(),
+        before.execution_revision()
+    );
+    assert_eq!(
+        session.publication_context().scene_revision(),
+        store.scene_revision()
+    );
+    session.seal_replay().unwrap();
+    let before = session.publication_context();
+    assert!(session
+        .apply_semantic_transaction(&mut store, translation(targets[0], 9.0))
+        .is_err());
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(targets[0])
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        8.0
+    );
+}
+
+#[test]
+fn mixed_visible_and_detached_value_batch_still_records_visible_replay_revision() {
+    let (mut store, mut session, nodes) = fixture(2);
+    session.begin_replay_retention(Default::default()).unwrap();
+    let mut creation = SemanticMutationTransaction::new();
+    let pending = creation.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 2.0 },
+    )));
+    let created = session
+        .apply_semantic_transaction(&mut store, creation)
+        .unwrap();
+    let target = created.resolve(pending).unwrap();
+    session.advance_to(0.5).unwrap();
+    session.take_frame_changes();
+    let before_history = session.replay_stats();
+    let mut transaction = translation(target, 8.0);
+    transaction.set_property(
+        nodes[0],
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(4.0, 0.0, 0.0),
+    );
+    session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 4.0);
+    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(
+        session.replay_stats().revisions_retained,
+        before_history.revisions_retained + 1
+    );
+    session.advance_to(1.0).unwrap();
+    session.seal_replay().unwrap();
+    session.seek(0.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 0.0);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        8.0
+    );
+    session.seek(1.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 4.0);
+}
+
+#[test]
 fn aliases_publish_only_net_membership_and_last_parent_retires_the_object() {
     let mut store = SemanticStore::new();
     let object = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {

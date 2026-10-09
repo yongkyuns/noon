@@ -80,7 +80,9 @@ impl SceneInstance {
         scene_revision: SceneRevision,
     ) -> Result<Option<PreparedAuthoredValuePublication>, AuthoredPublicationError> {
         self.require_replay_writable()?;
-        if self.replay_scope_active() {
+        // An empty execution transaction only advances publication provenance.
+        // Detached semantic target edits have no inverse execution rows to save.
+        if self.replay_scope_active() && !transaction.mutations().is_empty() {
             return Ok(None);
         }
         if transaction.mutations().iter().any(|patch| {
@@ -216,6 +218,7 @@ impl SceneInstance {
         debug_assert_eq!(prepared.runtime, self.runtime_identity());
         debug_assert_eq!(prepared.expected, self.publication_context());
         self.last_patch_stats = crate::RuntimePatchStats::default();
+        let has_writes = !prepared.writes.is_empty();
 
         for write in prepared.writes {
             if !write.changes_execution() {
@@ -317,7 +320,9 @@ impl SceneInstance {
             }
         }
 
-        self.flush_spatial_anchor_changes();
+        if has_writes {
+            self.flush_spatial_anchor_changes();
+        }
 
         self.publication = PublicationContext::new(
             prepared.scene_revision,
