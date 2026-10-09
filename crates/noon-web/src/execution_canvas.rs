@@ -1668,7 +1668,15 @@ mod wasm {
                     retained_bytes = retained_bytes.saturating_add(bytes);
                     retained_misses = retained_misses.saturating_add(misses);
                     self.source.admit_rendered_publication(expected)?;
-                    if self.source.source_active() {
+                    // An endpoint exactly at this browser wake is already
+                    // settled. Re-driving a freshly resumed segment at that
+                    // identical timestamp replays live callbacks (e.g. the
+                    // sparse value-tracker updater at t=1.25) and can silently
+                    // consume a required zero-duration continuation barrier.
+                    // Only late frames have outstanding authored-time debt.
+                    if self.source.source_active()
+                        && self.source.session().frame().time < target
+                    {
                         self.source.drive_to(target)?;
                     }
                     let camera = self
