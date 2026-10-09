@@ -1,0 +1,130 @@
+name: Standard Apple Metal true Noon WebGL2 selection (diagnostic only)
+
+on:
+  pull_request:
+    types: [opened]
+    paths:
+      - ".github/workflows/macos-product-webgl-select.yml"
+      - "benchmarks/macos-product-webgl-select.json"
+      - "scripts/macos-product-webgl-select.mjs"
+      - "scripts/macos-product-webgl-select.test.mjs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: macos-product-webgl-select-1933-20261009-01
+  cancel-in-progress: false
+
+jobs:
+  backend-selection:
+    name: Four fixed original Noon cold playback modes, NOT performance qualification
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'research/1933-macos-product-webgl-select-20261009-01' && github.run_attempt == 1
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: control
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.23.3"
+
+      - name: Freeze original single registered attempt and protocol
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          mkdir -p evidence/inputs
+          cp control/benchmarks/macos-product-webgl-select.json evidence/inputs/registered-plan.json
+          shasum -a 256 evidence/inputs/registered-plan.json > evidence/inputs/plan.sha256
+          git -C control rev-parse HEAD > evidence/inputs/control-head.txt
+          git -C control archive HEAD | gzip > evidence/inputs/control-source.tar.gz
+          printf '%s\n' "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > evidence/inputs/attempt.txt
+          uname -a > evidence/inputs/uname.txt
+          sysctl -n hw.model > evidence/inputs/model.txt
+          sw_vers > evidence/inputs/sw-vers.txt
+          printf '%s\n' "Diagnostic only: four original cold playback backend checks, zero performance scores" > evidence/README.txt
+      - name: Unit test exact fixed case protocol
+        run: |
+          set -euo pipefail
+          node --check control/scripts/macos-product-webgl-select.mjs
+          node --test control/scripts/macos-product-webgl-select.test.mjs | tee evidence/inputs/unit-tests.log
+
+      - uses: actions/checkout@v7
+        with:
+          ref: f5ec15c7a1a9a70c368e141abfc740f5081efc4e
+          path: harness
+          persist-credentials: false
+
+      - uses: actions/checkout@v7
+        with:
+          ref: 4d8d61646cabb1c8c4e47c72bd3d7e77802d6c0f
+          path: baseline
+          persist-credentials: false
+
+      - name: Download and authenticate original baseline optimized package once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, hashlib, subprocess, stat, zipfile
+          from pathlib import Path, PurePosixPath
+          plan=json.loads(Path("control/benchmarks/macos-product-webgl-select.json").read_text())
+          source=plan["source"]
+          meta=json.loads(subprocess.check_output(["gh","api",f'repos/yongkyuns/noon/actions/artifacts/{source["baselineArtifact"]}']))
+          Path("evidence/inputs/original-artifact.json").write_text(json.dumps(meta,indent=2))
+          if meta["id"]!=source["baselineArtifact"] or meta.get("expired"):
+              raise SystemExit("Original baseline archive unavailable")
+          if meta.get("digest")!="sha256:"+source["baselineArchiveSha256"] or meta.get("workflow_run",{}).get("id")!=source["producer"]:
+              raise SystemExit("Original baseline provenance changed")
+          output=Path("evidence/inputs/original-baseline.zip")
+          with output.open("xb") as f:
+              subprocess.run(["gh","api",f'repos/yongkyuns/noon/actions/artifacts/{source["baselineArtifact"]}/zip'],stdout=f,check=True)
+          if hashlib.sha256(output.read_bytes()).hexdigest()!=source["baselineArchiveSha256"]:
+              raise SystemExit("Original baseline ZIP bytes changed")
+          with zipfile.ZipFile(output) as archive:
+              for info in archive.infolist():
+                  entry=PurePosixPath(info.filename)
+                  if entry.is_absolute() or ".." in entry.parts or "\\" in info.filename or stat.S_ISLNK(info.external_attr>>16):
+                      raise SystemExit("Unsafe archive path")
+              archive.extractall(Path("baseline")/"web")
+          manifest=json.loads(Path("baseline/web/ci-artifact.json").read_text())
+          identity=json.loads(Path("baseline/web/runtime-build-identity.json").read_text())
+          if manifest["source"]!=source["baselineSource"] or identity["sourceRevision"]!=source["baselineSource"]:
+              raise SystemExit("Original production artifact has wrong source revision")
+          print("Original optimized package and producer verified")
+          PY
+
+      - name: Install only pinned browser tools, no production recompilation
+        working-directory: harness
+        run: |
+          set -euo pipefail
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+          npm ls playwright pngjs > ../evidence/inputs/browser-packages.txt
+          node --version > ../evidence/inputs/node-version.txt
+
+      - name: Run all four original-production cold backend cases exactly once
+        working-directory: control
+        run: |
+          set -euo pipefail
+          node scripts/macos-product-webgl-select.mjs \
+            "$GITHUB_WORKSPACE/control/benchmarks/macos-product-webgl-select.json" \
+            "$GITHUB_WORKSPACE/harness" \
+            "$GITHUB_WORKSPACE/baseline" \
+            "$GITHUB_WORKSPACE/evidence/observations.json" \
+            | tee "$GITHUB_WORKSPACE/evidence/observations-summary.jsonl"
+
+      - name: Retain all raw and partial outcomes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-product-webgl-select-1933-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
