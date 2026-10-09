@@ -81,7 +81,7 @@ jobs:
           path.write_bytes(after)
           subprocess.check_call(['git', 'add', '--', str(path)])
           assert git('write-tree').decode().strip() == 'f75a6ea29cfb75820b95c222bd86455679fee9cc'
-          assert len(git('diff', '--cached', '--name-only').decode().splitlines()) == 25
+          assert len(git('diff', '--cached', '--name-only').decode().splitlines()) == 26
           # The independently verified entire source tree is the acceptance
           # digest; the staged diff intentionally excludes the workflow edit.
           PY
