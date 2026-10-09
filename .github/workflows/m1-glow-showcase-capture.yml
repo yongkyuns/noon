@@ -41,7 +41,7 @@ jobs:
           import hashlib, json
           scene = Path("web/python/examples/showcase_gpu_glow.py").read_bytes()
           compile(scene, "showcase_gpu_glow.py", "exec")
-          assert hashlib.sha1(b"blob " + str(len(scene)).encode() + b"\\0" + scene).hexdigest() == "257bacd0e074653c011de70b22b0b2c0d4983593"
+          assert hashlib.sha1(b"blob " + str(len(scene)).encode() + bytes([0]) + scene).hexdigest() == "257bacd0e074653c011de70b22b0b2c0d4983593"
           manifest = json.loads(Path("web/python/examples/noon_showcase_manifest.json").read_text())
           assert len(manifest["entries"]) == 22 and sum(e["id"] == "showcase-gpu-glow" for e in manifest["entries"]) == 1
           PY
