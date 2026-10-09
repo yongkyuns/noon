@@ -1,0 +1,72 @@
+name: M1 semantic source handoff (temporary)
+on:
+  push:
+    branches: [codex/m1-semantic-handoff-e337]
+    paths: [.github/workflows/m1-semantic-handoff.yml]
+permissions:
+  contents: read
+concurrency:
+  group: m1-semantic-source-handoff-e337
+  cancel-in-progress: true
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: handoff
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: e3376f73e95756e6d2cfea9d3f761463c371b255
+          path: candidate
+      - name: Verify exact patch and complete candidate tree
+        working-directory: candidate
+        run: |
+          mkdir -p "$RUNNER_TEMP/m1-semantic-receipt"
+          cp ../handoff/.github/ci/m1-semantic-source.b64 "$RUNNER_TEMP/m1-semantic-receipt/received-source.b64"
+          python3 - <<'PY'
+          import base64, hashlib, pathlib, zlib
+          encoded = pathlib.Path('../handoff/.github/ci/m1-semantic-source.b64').read_text().strip()
+          # Correct one literal handoff transcription; the independent patch
+          # digest and complete product-tree identity below remain mandatory.
+          encoded = encoded.replace('B0V8noaH5kj', 'B0V8noaJ5kj')
+          patch = zlib.decompress(base64.b64decode(encoded, validate=True))
+          digest = hashlib.sha256(patch).hexdigest()
+          assert digest == '325d482bfc227c3fe3b4e8712bfa10d219e9a01a3a6096b9e41418c969330cc7', digest
+          assert len(patch) == 44165, len(patch)
+          pathlib.Path('../semantic.patch').write_bytes(patch)
+          PY
+          test "$(git rev-parse HEAD)" = e3376f73e95756e6d2cfea9d3f761463c371b255
+          git apply --index --check ../semantic.patch
+          git apply --index ../semantic.patch
+          git diff --cached --check
+          test "$(git write-tree)" = ea0175e404f00001beabfc4d6902fb262179ba34
+      - name: Commit only the verified source to an isolated branch
+        working-directory: candidate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(glow): project prepared semantic attachment lifecycle into shared execution'
+          git push origin HEAD:refs/heads/codex/m1-semantic-source-e337
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
+          receipt = {'parent': git('rev-parse', 'HEAD^'), 'commit': git('rev-parse', 'HEAD'),
+              'tree': git('rev-parse', 'HEAD^{tree}'),
+              'patch_sha256': '325d482bfc227c3fe3b4e8712bfa10d219e9a01a3a6096b9e41418c969330cc7',
+              'scope': 'source integrity only; local tests and current-head CI are separate',
+              'files': git('diff', '--name-only', 'HEAD^', 'HEAD').splitlines()}
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'm1-semantic-receipt', 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps(receipt, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m1-semantic-source-receipt
+          path: ${{ runner.temp }}/m1-semantic-receipt/
+          if-no-files-found: error
+          retention-days: 1
