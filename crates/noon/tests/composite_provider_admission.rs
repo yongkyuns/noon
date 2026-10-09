@@ -159,7 +159,10 @@ mod latex_labels {
             Err(NumberLabelAuthoringError::Authoring(_))
         ));
         assert_eq!(backend.compile_calls, 0);
-        assert_eq!(scene.integration_store().borrow().scene_revision(), revision);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let error = line
             .add_decimal_numbers(&mut backend, Some(&[1.0]), &NumberLabelOptions::default())
@@ -169,6 +172,9 @@ mod latex_labels {
             .to_string()
             .contains("intentional isolated LaTeX backend failure"));
         assert_eq!(backend.compile_calls, 1);
-        assert_eq!(scene.integration_store().borrow().scene_revision(), revision);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
     }
 }
