@@ -25,6 +25,7 @@ mod export_frames;
 mod forward_sample;
 mod frame_grid;
 mod pixel_readback;
+mod render_options;
 mod svg_failure;
 
 pub use export_frames::{
@@ -38,6 +39,11 @@ pub use forward_sample::{
 pub use frame_grid::{FrameGrid, FrameGridError, FrameRate, FrameSample};
 pub use pixel_readback::{
     PixelChannelOrder, PixelReadbackError, PixelRowOrder, Rgba8ReadbackLayout,
+};
+
+pub use render_options::{
+    parse_render_frame_rate, RenderFormat, RenderOptionInputs, RenderOptionsError,
+    ResolvedRenderOptions,
 };
 
 /// Conversion from Manim Cairo pixel stroke widths to Noon scene units.

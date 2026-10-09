@@ -165,7 +165,7 @@ fn require_token(
     }
     Ok(())
 }
-fn phase<'py>(
+pub(crate) fn phase<'py>(
     py: Python<'py>,
     overlay: CallbackPhaseOverlay,
     invocations: Vec<RequiredCallbackInvocation>,
@@ -191,7 +191,7 @@ fn phase<'py>(
     d.set_item("invocations", calls)?;
     Ok(d)
 }
-fn event<'py>(
+pub(crate) fn event<'py>(
     py: Python<'py>,
     kind: &str,
     phase: Option<Bound<'py, PyDict>>,

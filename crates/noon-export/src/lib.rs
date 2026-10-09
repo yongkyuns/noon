@@ -80,7 +80,8 @@ impl CaptureOptions {
         }
     }
 
-    fn layout(&self) -> Result<Rgba8ReadbackLayout, CaptureError> {
+    /// Validate capture configuration before a language host creates output files.
+    pub fn layout(&self) -> Result<Rgba8ReadbackLayout, CaptureError> {
         let supported = Backends::VULKAN | Backends::METAL | Backends::DX12;
         if self.backends.is_empty() || !supported.contains(self.backends) {
             return Err(CaptureError::Configuration("unsupported capture backend"));

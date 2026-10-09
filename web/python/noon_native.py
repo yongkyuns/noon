@@ -1,34 +1,20 @@
 """Native CPython entry point for Noon's finite, sampled authoring profile.
 
-The scene source is shared with Pyodide. This host is renderer-free and uses
-explicit logical samples, not a native realtime window. Optional text/resources,
+The scene source is shared with Pyodide. Execution-only builds are renderer-free;
+--output uses the optional native export feature, never a realtime window. Optional text/resources,
 spatial/family construction and callback structural/content producers are outside
 this binding's initial profile; they are not silently replaced or emulated.
 """
 from __future__ import annotations
 
-from _noon_native_host import run_scene, run_source, close_scene
+from _noon_native_host import run_scene, run_source, close_scene, export_scene, export_source
 
 
 def main():
-    import argparse
-    import asyncio
-    from pathlib import Path
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path)
-    parser.add_argument("--sample-hz", type=float, default=60.0)
-    parser.add_argument("--portable-source", action="store_true")
-    args = parser.parse_args()
-    async def run():
-        scene = await run_source(args.source.read_text(encoding="utf8"),
-                                 sample_hz=args.sample_hz, portable=args.portable_source,
-                                 filename=str(args.source))
-        try:
-            return scene.time
-        finally:
-            close_scene(scene)
-    asyncio.run(run())
+    # One CLI parser/resolver, not a native-only set of render option meanings.
+    from _noon_render_cli import main as render_main
+    return render_main()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

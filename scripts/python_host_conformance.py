@@ -16,7 +16,7 @@ import weakref
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ("sequential", "lifecycle", "callbacks", "atomicity", "cancellation",
-         "callback_failure", "synchronous", "portable")
+         "callback_failure", "synchronous", "portable", "render_options", "placement_callbacks")
 EXPECTED_TERMINAL = {"cancellation": "CancelledError", "callback_failure": "NoonCallbackError"}
 PREFIX = "NOON_HOST_REPORT "
 

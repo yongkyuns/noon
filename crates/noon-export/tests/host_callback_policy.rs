@@ -129,7 +129,9 @@ fn reference(options: ExportFrameOptions) -> Run {
             })
             .unwrap();
     }
-    let mut program = scene.into_live_program(Source { marker, stage: 0 }).unwrap();
+    let mut program = scene
+        .into_live_program(Source { marker, stage: 0 })
+        .unwrap();
     let mut images = Vec::new();
     let summary = capture_frames(
         &mut program,

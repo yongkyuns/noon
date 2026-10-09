@@ -47,6 +47,136 @@ fn scene_family_shift_uses_the_same_route_before_and_after_bootstrap() {
 }
 
 #[test]
+fn consecutive_live_placements_preserve_one_completed_callback_phase() {
+    use crate::execution_session::{CallbackAdvance, EffectiveSemanticPropertyWrite};
+    use noon_core::{HostCallbackId, SemanticMutationTransaction, Vec2};
+
+    let mut scene = Scene::new();
+    let marker = scene.square(0.75).unwrap();
+    scene.add(&marker).unwrap();
+    let mut register = SemanticMutationTransaction::new();
+    register.add_updater(marker.node_id(), HostCallbackId::new(1), 0.0, None);
+    register.add_updater(marker.node_id(), HostCallbackId::new(2), 0.0, None);
+    register
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+
+    // Two ordered updater callbacks are admitted at the original time.
+    let zero = match scene
+        .owned_execution_mut()
+        .advance_to_callback_barrier(0.0)
+        .unwrap()
+    {
+        CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } => {
+            assert_eq!(invocations.len(), 2);
+            overlay
+        }
+        CallbackAdvance::Ready(_) => panic!("time-zero callbacks must run"),
+    };
+    scene
+        .owned_execution_mut()
+        .commit_required_callback_phase(zero.finish())
+        .unwrap();
+    let mut settled = match scene
+        .owned_execution_mut()
+        .advance_to_callback_barrier(0.25)
+        .unwrap()
+    {
+        CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } => {
+            assert_eq!(invocations.len(), 2);
+            assert_eq!(overlay.delta_time(), 0.25);
+            overlay
+        }
+        CallbackAdvance::Ready(_) => panic!("quarter-second callbacks must run"),
+    };
+    settled
+        .write(EffectiveSemanticPropertyWrite::Translation {
+            object: marker.node_id(),
+            translation: Vec2::new(0.25, 0.25),
+        })
+        .unwrap();
+    scene
+        .owned_execution_mut()
+        .commit_required_callback_phase(settled.finish())
+        .unwrap();
+
+    // First move_to resets an effective callback-owned position to the authored
+    // origin. The second uses the normal authored translation path at the same
+    // time; neither may invent a new zero-dt updater invocation.
+    for (x, y) in [(0.0, 0.0), (0.5, 1.0)] {
+        scene
+            .move_to(
+                &marker,
+                LiveLayoutTarget::Point(x, y),
+                (0.0, 0.0),
+                (1.0, 1.0),
+            )
+            .unwrap();
+    }
+    assert_eq!(scene.owned_execution().frame().time, 0.25);
+    assert!(matches!(
+        scene
+            .owned_execution_mut()
+            .advance_to_callback_barrier(0.25)
+            .unwrap(),
+        CallbackAdvance::Ready(_)
+    ));
+
+    // Deliberately changing the callback plan at the same authored instant
+    // must invalidate the receipt and allow the newly registered occurrence.
+    let mut extra = SemanticMutationTransaction::new();
+    extra.add_updater(marker.node_id(), HostCallbackId::new(3), 0.25, None);
+    scene.apply_semantic_transaction(extra).unwrap();
+    let changed = match scene
+        .owned_execution_mut()
+        .advance_to_callback_barrier(0.25)
+        .unwrap()
+    {
+        CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } => {
+            assert_eq!(invocations.len(), 3);
+            assert_eq!(overlay.delta_time(), 0.0);
+            overlay
+        }
+        CallbackAdvance::Ready(_) => panic!("new callback must run at its activation"),
+    };
+    scene
+        .owned_execution_mut()
+        .commit_required_callback_phase(changed.finish())
+        .unwrap();
+
+    let next = match scene
+        .owned_execution_mut()
+        .advance_to_callback_barrier(0.5)
+        .unwrap()
+    {
+        CallbackAdvance::HostRequired {
+            invocations,
+            overlay,
+        } => {
+            assert_eq!(invocations.len(), 3);
+            assert_eq!(overlay.delta_time(), 0.25);
+            overlay
+        }
+        CallbackAdvance::Ready(_) => panic!("later callback time must still run"),
+    };
+    scene
+        .owned_execution_mut()
+        .commit_required_callback_phase(next.finish())
+        .unwrap();
+}
+
+#[test]
 fn scene_family_arrangement_and_placement_publish_through_one_owner() {
     let mut scene = Scene::new();
     let first = scene.square(2.0).unwrap();

@@ -4,6 +4,19 @@ pub use crate::family_layout::LiveLayoutTarget;
 use crate::semantic_mobject::ManimNextToArgs;
 
 impl LiveSession<'_> {
+    #[cfg(any(feature = "native-text", feature = "latex"))]
+    pub(crate) fn composite_entry_state(
+        &self,
+        source: &Mobject,
+    ) -> Result<SemanticObjectState, crate::AuthoringError> {
+        crate::family_layout::composite_entry_state(
+            self.store,
+            Some(self.session),
+            self.root,
+            source,
+        )
+    }
+
     /// Stretch a selected live object/family through the shared world-axis operation.
     pub fn stretch(
         &mut self,

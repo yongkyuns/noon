@@ -962,18 +962,6 @@ impl Scene {
         }
     }
 
-    pub(crate) fn composite_entry_state(
-        &self,
-        object: &Mobject,
-    ) -> Result<noon_core::SemanticObjectState, AuthoringError> {
-        crate::family_layout::composite_entry_state(
-            &self.store,
-            self.execution.as_ref(),
-            self.root,
-            object,
-        )
-    }
-
     pub(crate) fn owned_execution_mut(&mut self) -> &mut ExecutionSession {
         self.execution
             .as_mut()

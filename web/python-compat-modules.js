@@ -1,4 +1,5 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
+  { sourcePath: "python/_noon_render_options.py", runtimePath: "/tmp/_noon_render_options.py", label: "Noon shared Rust render option projection" },
   { sourcePath: "python/_noon_source.py", runtimePath: "/tmp/_noon_source.py", label: "Noon shared Python source lifecycle" },
   { sourcePath: "python/_noon_host.py", runtimePath: "/tmp/_noon_host.py", label: "Noon host binding selection" },
   { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },

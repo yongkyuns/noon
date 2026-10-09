@@ -1,10 +1,13 @@
 //! Canonical text objects and atomic numeric-label families.
+#[cfg(any(feature = "native-text", feature = "typst"))]
 use super::TextAuthoringError;
 #[cfg(feature = "typst")]
 use super::{MathTypst, Typst, TypstSpec};
 #[cfg(feature = "native-text")]
 use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
 
+// Compiled native/Typst object admission is separate from LaTeX numeric labels.
+#[cfg(any(feature = "native-text", feature = "typst"))]
 mod objects;
 #[cfg(feature = "typst")]
 pub(crate) use objects::{prepare_math_typst, prepare_typst, TypstAdmission};
@@ -14,5 +17,5 @@ pub(crate) mod decimal_labels;
 pub(crate) use objects::prepare_native_text;
 #[cfg(feature = "native-text")]
 mod number_labels;
-#[cfg(feature = "latex")]
+#[cfg(all(feature = "native-text", feature = "latex"))]
 pub(crate) use decimal_labels::PreparedDecimalLabels;

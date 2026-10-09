@@ -18,7 +18,7 @@ const native = JSON.parse(await readFile(path.join(evidence, "native.json"), "ut
 assert.equal(native.schema, 1);
 assert.equal(native.host, "native-cpython");
 assert.equal(native.sample_hz, 4);
-assert.equal(native.cases.length, 8);
+assert.equal(native.cases.length, 10);
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 const server = await serveRepository(root, 0, { crossOriginIsolated: true });
 const results = [];
@@ -171,7 +171,7 @@ try {
       // Prove fallback portability separately; do not pretend synchronous helpers
       // use JSPI when the source compiler actually inserted await statements.
       if (backend === "webgl") {
-        for (const name of ["sequential", "callbacks", "portable"]) {
+        for (const name of ["sequential", "callbacks", "portable", "placement_callbacks"]) {
           await qualifyCase(browser, backend, true, native.cases.find(c => c.case === name));
         }
       }
@@ -182,4 +182,4 @@ try {
   await server.close();
 }
 assert.deepEqual(failures, [], "Python host conformance failures");
-assert.equal(results.length, 19);
+assert.equal(results.length, 24);
