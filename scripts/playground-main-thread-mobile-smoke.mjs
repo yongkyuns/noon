@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
+import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 
 const { webkit, devices } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -155,10 +156,12 @@ try {
     releasePendingStartup = null;
     let metrics;
     const samples = [];
-    let observation = null;
+    let liveIntermediate = null;
+    let reachedEndpoint = false;
     const sampleDeadline = Date.now() + 60_000;
     while (Date.now() < sampleDeadline) {
-      // Retain the observations so a missed frame has actionable evidence.
+      // Retain wall-time samples for diagnostics. A busy browser is allowed to
+      // catch up between polls; exact intermediate pixels are tested below.
       const sample = await page.evaluate(async () => {
         const gallery = window.__noonExampleGallery;
         const patch = document.querySelector("#patch-status");
@@ -175,13 +178,16 @@ try {
       if (samples.length < 1000) samples.push(sample);
       assert.ok(!sample?.error, sample?.error);
       if (sample?.time > 1.15 && sample.time < 1.85 && sample.objectCount === 1) {
-        observation = sample;
+        liveIntermediate ??= sample;
+      }
+      if (sample?.time >= 3 - 1e-6 && sample.objectCount === 0) {
+        reachedEndpoint = true;
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     await writeFile(path.join(artifactDir, `${variant.name}-samples.json`), JSON.stringify(samples, null, 2));
-    assert.ok(observation, "mobile source did not publish its intermediate transformation");
+    assert.ok(reachedEndpoint, "mobile live source did not complete FadeOut at its authored endpoint");
     if (variant.disableJspi) {
       assert.equal(
         await page.evaluate(() => window.__noonNoJspiWorkerWrapped),
@@ -189,9 +195,6 @@ try {
         "mobile no-JSPI smoke did not wrap the production authoring worker",
       );
     }
-    const intermediate = await page.locator("#scene").screenshot();
-    await writeFile(path.join(artifactDir, `${variant.name}-intermediate.png`), intermediate);
-    assert.ok(changedPixels(intermediate, background) > 20, "mobile intermediate frame is blank");
     await waitForIdle(page);
     await assertApplied(page, "parity-square-to-circle");
     const final = await page.locator("#scene").screenshot();
@@ -200,6 +203,35 @@ try {
     assert.equal(metrics?.metrics?.objectCount, 0, "FadeOut did not remove the object");
     assert.ok(Math.abs(metrics.metrics.time - 3) < 1e-6, "source did not complete at its authored time");
     assert.equal(changedPixels(final, background), 0, "mobile final FadeOut frame retained visible geometry");
+
+    // A real-time source must catch up after slow frames. On a busy mobile
+    // runner, polling can observe t=1 and then t=2 without catching t=1.5.
+    // Verify the actual intermediate transformation at exact authored times
+    // through the production playback controls, rather than weakening the
+    // shape/pixel assertion or depending on host scheduling luck.
+    const frames = new Map();
+    let observation = null;
+    for (const [time, label] of [[1, "square"], [1.5, "intermediate"], [2, "circle"]]) {
+      await seekPausedGallery(page, 3, time);
+      const replay = await waitForPublishedGalleryFrame(page, time, 3);
+      assert.equal(replay?.metrics?.objectCount, 1, `${label} frame must retain the transforming object`);
+      assert.ok(Math.abs(replay.metrics.time - time) < 1e-7, `${label} frame has wrong authored time`);
+      if (label === "intermediate") {
+        observation = {
+          time: replay.metrics.time,
+          backend: replay.metrics.backend,
+          objectCount: replay.metrics.objectCount,
+        };
+      }
+      const pixels = await page.locator("#scene").screenshot();
+      await writeFile(path.join(artifactDir, `${variant.name}-${label}.png`), pixels);
+      assert.ok(changedPixels(pixels, background) > 20, `${label} frame is blank`);
+      frames.set(label, pixels);
+    }
+    assert.ok(changedPixels(frames.get("intermediate"), frames.get("square")) > 20,
+      "mobile square-to-circle transformation did not change from the square");
+    assert.ok(changedPixels(frames.get("intermediate"), frames.get("circle")) > 20,
+      "mobile square-to-circle transformation did not change toward the circle");
 
     await page.evaluate(() => window.__noonExampleGallery.select("parity-create-circle"));
     await assertApplied(page, "parity-create-circle");
@@ -261,6 +293,8 @@ try {
     const diagnostics = {
       variant,
       intermediate: observation,
+      liveIntermediate,
+      reachedEndpoint,
       renderHost: metrics.renderHost,
       rendererBackend: metrics.metrics?.backend ?? null,
       presentedFrames: metrics.metrics?.presentedFrames ?? null,
