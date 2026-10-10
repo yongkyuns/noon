@@ -115,6 +115,12 @@ test("both measurement cohorts and the required comparator fail closed on unavai
     assert.match(section, /needs.build-candidate.result == 'success'/);
   }
   assert.match(compare, /needs: \[build, build-baseline, build-anchor, build-candidate, measure-adjacent, measure-cumulative\]/);
+  for (const [label, dependency] of [["BUILD", "build"], ["BASELINE", "build-baseline"],
+    ["ANCHOR", "build-anchor"], ["CANDIDATE", "build-candidate"],
+    ["ADJACENT", "measure-adjacent"], ["CUMULATIVE", "measure-cumulative"]]) {
+    assert.ok(compare.includes("NOON_PRODUCT_" + label + "_RESULT: ${{ needs." + dependency + ".result }}"),
+      "comparator does not bind actual " + dependency + " status");
+  }
   for (const name of ["BUILD", "BASELINE", "ANCHOR", "CANDIDATE", "ADJACENT", "CUMULATIVE"]) {
     assert.match(compare, new RegExp('test "\\$NOON_PRODUCT_' + name + '_RESULT" = success'));
   }

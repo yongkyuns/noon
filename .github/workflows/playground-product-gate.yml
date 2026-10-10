@@ -846,6 +846,9 @@ jobs:
       - name: Require successful production builds and both complete measurement cohorts
         env:
           NOON_PRODUCT_BUILD_RESULT: ${{ needs.build.result }}
+          NOON_PRODUCT_BASELINE_RESULT: ${{ needs.build-baseline.result }}
+          NOON_PRODUCT_ANCHOR_RESULT: ${{ needs.build-anchor.result }}
+          NOON_PRODUCT_CANDIDATE_RESULT: ${{ needs.build-candidate.result }}
           NOON_PRODUCT_ADJACENT_RESULT: ${{ needs.measure-adjacent.result }}
           NOON_PRODUCT_CUMULATIVE_RESULT: ${{ needs.measure-cumulative.result }}
         run: |
