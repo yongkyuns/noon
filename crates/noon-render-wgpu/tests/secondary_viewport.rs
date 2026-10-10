@@ -170,7 +170,7 @@ fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples(
             let mut reused_text = reused.create_retained_text_state(&device, &queue);
             let mut reused_preparer = RetainedFramePreparer::new();
             reused_preparer.set_inset_views_active(true);
-            for scale in [2.0, 1.5, 2.9, 1.2, 0.3, 0.3] {
+            for scale in [2.0, 1.5, 2.9, 2.9, 2.9, 1.2, 0.3, 0.3] {
                 let mut objects = vec![
                     CompiledObject::new(
                         ObjectId::new(0),
