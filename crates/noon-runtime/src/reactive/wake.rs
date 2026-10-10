@@ -83,9 +83,10 @@ impl SceneInstance {
     /// This is an O(1) derived query over the scheduler's existing channel index. It is
     /// useful to looping hosts after the final channel has settled: a quiescent scheduler
     /// may still need one wake at the loop boundary so that deterministic history can be
-    /// replayed. The runtime remains the owner of the channels and their event cursor.
+    /// replayed. A sealed time-zero snapshot alone has no elapsed interval to replay.
+    /// The runtime remains the owner of the channels and their event cursor.
     pub fn has_timeline_channels(&self) -> bool {
-        self.timeline_scheduler.live_group_count() != 0 || self.replay_is_sealed()
+        self.timeline_scheduler.live_group_count() != 0 || self.has_replay_interval()
     }
 
     /// Current runtime-owned dirty/deadline/completion state for platform hosts.

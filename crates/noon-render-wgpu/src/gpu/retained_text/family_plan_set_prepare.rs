@@ -5,7 +5,7 @@ use crate::{
     retained_family_reveal_members_for_object, RetainedDrawBorderThenFillPhase,
     RetainedFamilyRevealMember,
 };
-use noon_core::RetainedFamilyAnimationPlan;
+use noon_core::{RetainedFamilyAnimationPlan, TextAnimationMemberKind};
 
 use noon_runtime::{RetainedPlannedFamilyFrame, RetainedPlannedFamilyFrameError};
 
@@ -407,7 +407,7 @@ impl RetainedFramePreparer {
                                 .copied()
                                 .filter(|(owner, _)| *owner == object_index);
                             if let Some((_, vector_index)) = text_vector {
-                                if let Some(reveal) = self.family_text_vector_reveal(
+                                if let Some(reveal) = self.family_text_vector_progress(
                                     &family_frame,
                                     plan,
                                     object_index,
@@ -444,6 +444,30 @@ impl RetainedFramePreparer {
                             });
                         }
                         noon_core::FamilyAnimationMode::DrawBorderThenFill => {
+                            let scratch_slot = usize::try_from(scratch_id.get()).map_err(|_| {
+                                RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
+                            })?;
+                            let text_vector = self
+                                .text_vector_member_by_scratch_slot
+                                .get(&scratch_slot)
+                                .copied()
+                                .filter(|(owner, _)| *owner == object_index);
+                            if let Some((_, vector_index)) = text_vector {
+                                self.apply_family_vector_draw_border(
+                                    &family_frame,
+                                    plan,
+                                    object_index,
+                                    object_id,
+                                    vector_index,
+                                    scratch_slot,
+                                    texts,
+                                )?;
+                                self.sources.push(SourceItem::Geometry {
+                                    object_id,
+                                    scratch_id,
+                                });
+                                continue;
+                            }
                             return Err(
                                 RetainedFamilyDrawBorderPrepareError::UnsupportedTextOutlineBaseline(
                                     object_id,
@@ -747,11 +771,6 @@ impl RetainedFramePreparer {
                     let resource = texts
                         .get(text)
                         .ok_or(RetainedPrepareError::MissingTextResource)?;
-                    let Some(slots) = self.family_plan_scratch_slots.get(&object_index) else {
-                        // An active Text whose glyph outlines are all empty has no geometry
-                        // rows to update, but still participates in the stable active set.
-                        continue;
-                    };
                     let Some(members) = retained_family_draw_border_then_fill_members_for_object(
                         &family_frame,
                         plan,
@@ -763,14 +782,39 @@ impl RetainedFramePreparer {
                     };
                     for member in members {
                         let member = member.map_err(RetainedFamilyDrawBorderPrepareError::from)?;
-                        let Some(&scratch_slot) = slots.get(&member.glyph) else {
+                        let glyph = match member.member {
+                            TextAnimationMemberKind::Vector(vector) => {
+                                let scratch_slot = *self
+                                    .text_vector_scratch_slots
+                                    .get(&(object_index, vector.vector_index))
+                                    .ok_or(RetainedFamilyPrepareError::InvalidTextVector {
+                                        object: object.id,
+                                        vector_index: vector.vector_index,
+                                    })?;
+                                self.set_draw_border_vector_phase(
+                                    object,
+                                    resource,
+                                    vector.vector_index,
+                                    scratch_slot,
+                                    member.phase,
+                                )?;
+                                scratch_changes.push(scratch_slot);
+                                continue;
+                            }
+                            TextAnimationMemberKind::Glyph(glyph) => glyph.glyph,
+                        };
+                        let Some(&scratch_slot) = self
+                            .family_plan_scratch_slots
+                            .get(&object_index)
+                            .and_then(|slots| slots.get(&glyph))
+                        else {
                             // Glyphs with empty outlines deliberately have no geometry row.
                             continue;
                         };
-                        let run = resource.runs.get(member.glyph.run_index as usize).ok_or(
+                        let run = resource.runs.get(glyph.run_index as usize).ok_or(
                             RetainedFamilyDrawBorderPrepareError::InvalidTextRun {
                                 object: object.id,
-                                run_index: member.glyph.run_index,
+                                run_index: glyph.run_index,
                             },
                         )?;
                         let reveal = match member.phase {
@@ -925,7 +969,7 @@ mod tests {
         RateFunction, RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena,
         TextSourceKind, Transform2D,
     };
-    use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+    use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RetainedFamilyFrame};
     use noon_typst::{compile_typst_resource, TypstMode};
 
     use super::*;
@@ -964,6 +1008,154 @@ mod tests {
             }
         }
         order
+    }
+
+    #[test]
+    fn compiled_math_write_preserves_vector_style_and_cached_rows_when_seeking() {
+        let mut artifact = compile_typst_resource("x^2+frac(1,2)", TypstMode::Math).unwrap();
+        assert!(
+            !artifact.resource.vector_items.is_empty(),
+            "fraction rule is retained"
+        );
+        let mut texts = TextResourceArena::new();
+        let text = texts.insert(artifact.resource).unwrap();
+        let fonts = std::mem::take(&mut artifact.fonts);
+        let geometries = std::mem::take(&mut artifact.geometry);
+        let images = noon_core::RasterImageResourceArena::new();
+        let object = semantic_object(10, ObjectContentRef::Text(text));
+        let mut semantics = SemanticStore::new();
+        let leaf = semantics.insert_authoring_object();
+        let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, leaf).unwrap();
+        builder
+            .accept_leaf(leaf, object.id, &object.content, &texts)
+            .unwrap();
+        let plans = [builder.finish().unwrap()];
+        let mut retained = FrameState {
+            objects: vec![object],
+            presences: vec![true],
+            reveals: vec![1.0],
+            morphs: vec![0.0],
+            render_geometries: vec![None],
+            render_transforms: vec![None],
+            family_animations: vec![None],
+            family_animation_plan_indices: vec![None],
+            time: 0.0,
+        };
+        let (device, _) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let mut preparer = RetainedFramePreparer::new();
+        let active = std::collections::BTreeSet::from([0]);
+        let mut row_ids = None;
+        let mut outline_instances = None;
+        let mut baseline_stats = None;
+        for (index, progress) in [0.0, 0.25, 0.375, 0.75, 1.0, 0.25].into_iter().enumerate() {
+            retained.time = f64::from(progress);
+            let animations = [Some(FamilyAnimationState {
+                mode: FamilyAnimationMode::DrawBorderThenFill,
+                ..family_state(progress)
+            })];
+            let family = RetainedPlannedFamilyFrame {
+                retained: &retained,
+                family_animations: &animations,
+                family_plan_indices: &[Some(0)],
+            };
+            let changes = if index == 0 {
+                FrameChanges::all()
+            } else {
+                FrameChanges::objects(vec![0])
+            };
+            let (ids, paths, stats) = {
+                let prepared = preparer
+                    .prepare_active_family_plan_set_with_changes(
+                        &device,
+                        &family,
+                        &plans,
+                        &active,
+                        &changes,
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        &images,
+                        metrics,
+                    )
+                    .unwrap();
+                (
+                    prepared.geometry.path_ids.to_vec(),
+                    prepared.geometry.paths.to_vec(),
+                    prepared.geometry_stats(),
+                )
+            };
+            if let Some(expected) = &row_ids {
+                assert_eq!(&ids, expected);
+                assert_eq!(stats.full_rebuilds, 0);
+                // Outline progress changes instance reveal only. The fill transition
+                // retains rows/order but uses the existing stroke-width mesh variants.
+                if progress < 0.5 {
+                    assert_eq!(stats.geometry_cache_misses, 0, "outline {progress}");
+                    if index < 3 {
+                        assert_eq!(stats.path_vertices_repacked, 0);
+                        assert_eq!(stats.path_indices_repacked, 0);
+                    }
+                }
+                assert_eq!(
+                    Some(preparer.incremental_stats().mixed_order_rebuilds),
+                    baseline_stats
+                );
+            } else {
+                assert!(!ids.is_empty());
+                row_ids = Some(ids);
+                baseline_stats = Some(preparer.incremental_stats().mixed_order_rebuilds);
+            }
+            if progress == 0.25 {
+                if let Some(expected) = &outline_instances {
+                    assert_eq!(
+                        &paths, expected,
+                        "seeking back restores glyphs and fraction rule"
+                    );
+                } else {
+                    outline_instances = Some(paths);
+                }
+            }
+            let resource = texts.get(text).unwrap();
+            for (vector_index, vector) in resource.vector_items.iter().enumerate() {
+                let slot = preparer.text_vector_scratch_slots[&(0, vector_index as u32)];
+                let scratch = &preparer.scratch.objects[slot];
+                assert_eq!(
+                    preparer.scratch.reveals[slot],
+                    if progress < 0.5 { progress * 2.0 } else { 1.0 }
+                );
+                if progress < 0.5 {
+                    assert_eq!(scratch.style.fill, None);
+                }
+                if progress == 1.0 {
+                    assert_eq!(
+                        scratch.style,
+                        resolved_text_vector_style(retained.objects[0].style, vector)
+                    );
+                }
+            }
+        }
+        // The single-plan entry point shares the same vector presentation.
+        preparer.release_planned_family_realization();
+        let animations = [Some(FamilyAnimationState {
+            mode: FamilyAnimationMode::DrawBorderThenFill,
+            ..family_state(1.0)
+        })];
+        let family = RetainedFamilyFrame {
+            retained: &retained,
+            family_animations: &animations,
+        };
+        preparer
+            .prepare_family_draw_border_then_fill(
+                &device,
+                &family,
+                &plans[0],
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
     }
 
     #[test]

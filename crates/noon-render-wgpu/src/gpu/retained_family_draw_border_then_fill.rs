@@ -1,6 +1,6 @@
 use noon_core::{
     FamilyAnimationMode, ObjectId, RetainedAnimationMember, RetainedFamilyAnimationEvaluationError,
-    RetainedFamilyAnimationLeafFrame, RetainedFamilyAnimationPlan, TextAnimationGlyphRef,
+    RetainedFamilyAnimationLeafFrame, RetainedFamilyAnimationPlan, TextAnimationMemberKind,
 };
 use noon_runtime::{RetainedFamilyFrame, RetainedFamilyFramePlanError};
 
@@ -31,14 +31,14 @@ impl RetainedDrawBorderThenFillPhase {
     }
 }
 
-/// One Text-glyph realization command for DrawBorderThenFill.
+/// One retained glyph or vector realization command for DrawBorderThenFill.
 ///
 /// Glyph identity is renderer-local and derived from the immutable retained Text
 /// resource. It is never added to the semantic family request or execution wire.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RetainedFamilyDrawBorderThenFillMember {
     pub object: ObjectId,
-    pub glyph: TextAnimationGlyphRef,
+    pub member: TextAnimationMemberKind,
     pub phase: RetainedDrawBorderThenFillPhase,
 }
 
@@ -167,12 +167,16 @@ impl Iterator for RetainedFamilyDrawBorderThenFillMembers<'_> {
             RetainedAnimationMember::Geometry => Err(
                 RetainedFamilyDrawBorderThenFillError::UnsupportedGeometry(object),
             ),
-            RetainedAnimationMember::TextVector(_) => Err(
-                RetainedFamilyDrawBorderThenFillError::UnsupportedGeometry(object),
-            ),
+            RetainedAnimationMember::TextVector(vector) => {
+                Ok(RetainedFamilyDrawBorderThenFillMember {
+                    object,
+                    member: TextAnimationMemberKind::Vector(vector),
+                    phase: RetainedDrawBorderThenFillPhase::from_member_progress(progress),
+                })
+            }
             RetainedAnimationMember::Text(member) => Ok(RetainedFamilyDrawBorderThenFillMember {
                 object,
-                glyph: member.glyph,
+                member: TextAnimationMemberKind::Glyph(member),
                 phase: RetainedDrawBorderThenFillPhase::from_member_progress(progress),
             }),
         })
@@ -351,13 +355,19 @@ mod tests {
 
         assert_eq!(members.len(), 2);
         assert_eq!(members[0].object, ObjectId::new(10));
-        assert_eq!(members[0].glyph.run_index, 0);
-        assert_eq!(members[0].glyph.glyph_index, 0);
+        let TextAnimationMemberKind::Glyph(first) = members[0].member else {
+            panic!("missing first glyph")
+        };
+        assert_eq!(first.glyph.run_index, 0);
+        assert_eq!(first.glyph.glyph_index, 0);
         assert_eq!(
             members[0].phase,
             RetainedDrawBorderThenFillPhase::Outline { reveal: 0.75 }
         );
-        assert_eq!(members[1].glyph.glyph_index, 1);
+        let TextAnimationMemberKind::Glyph(second) = members[1].member else {
+            panic!("missing second glyph")
+        };
+        assert_eq!(second.glyph.glyph_index, 1);
         assert_eq!(
             members[1].phase,
             RetainedDrawBorderThenFillPhase::Outline { reveal: 0.75 }

@@ -219,6 +219,7 @@ export async function attachSemanticEngine(
         publication.sequence < lastPresentedPublication.sequence) {
       return;
     }
+    const firstPresentation = lastPresentedPublication === null;
     lastPresentedPublication = publication;
     if (publication.pointerReceipt && player !== null) {
       // The render port is ordered. An invalidation received before this repaint
@@ -234,6 +235,11 @@ export async function attachSemanticEngine(
       const { resolve } = pendingPresentation;
       pendingPresentation = null;
       resolve();
+    }
+    if (firstPresentation && continuationActive && player !== null &&
+        pacing === SEMANTIC_PACING_REALTIME) {
+      try { observeContinuationWake(performance.now(), true); }
+      catch (error) { terminateProgression(error); }
     }
   };
   const state = (type) => {
@@ -310,10 +316,17 @@ export async function attachSemanticEngine(
     }
     return externalInteractionTickTime;
   };
-  const observeContinuationWake = (wallTime, force = false, emit = true, reanchor = false) => {
-    const wake = reanchor
-      ? player.reanchorLiveSegmentWake(wallTime)
-      : player.liveSegmentWake(wallTime);
+  const observeContinuationWake = (wallTime, force = false, emit = true) => {
+    // Cold renderer preparation belongs before the first live clock epoch.
+    // The existing presentation receipt admits that epoch exactly once; later
+    // source segments and callback barriers retain the Rust wall-time mapping.
+    if (pacing === SEMANTIC_PACING_REALTIME && lastPresentedPublication === null) {
+      if (emit) emitExecutionWake("idle", null, force);
+      return { cadence: "idle", timerAfterMilliseconds: null };
+    }
+    // A callback/presentation barrier never restarts the source's monotonic
+    // epoch. Only the Rust source/session chooses authored time.
+    const wake = player.liveSegmentWake(wallTime);
     const cadence = wake.cadence;
     const timerAfterMilliseconds = wake.timerAfterMilliseconds;
     wake.free?.();
@@ -682,11 +695,10 @@ export async function attachSemanticEngine(
       // frames as well as endpoints so realtime continuation remains visible.
       const readyPublication = drainAndSendDelta();
       if (!reachedEndpoint) {
-        // A required callback stalls simulation; exclude its wall latency from
-        // the next Rust wake anchor after all same-timestamp retries finish.
-        observeContinuationWake(
-          phaseCount > 0 ? performance.now() : wallTime, true, true, phaseCount > 0,
-        );
+        // Retry callback phases at the original authored sample. Afterwards,
+        // observe the actual current wall time without reanchoring: a slow
+        // callback must leave its elapsed-time debt for the next wake.
+        observeContinuationWake(phaseCount > 0 ? performance.now() : wallTime, true);
         return;
       }
 

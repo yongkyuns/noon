@@ -15,9 +15,9 @@ pub enum RetainedAnimationMember {
     Geometry,
     /// One immutable raster-image leaf, with no vector/glyph reveal members.
     Image,
-    /// One rendered Text or TeX glyph member in retained painter order.
+    /// One rendered retained-text glyph member in retained painter order.
     Text(TextAnimationMember),
-    /// One rendered TeX vector item in retained painter order.
+    /// One rendered compiled-text vector item in retained painter order.
     TextVector(TextAnimationVectorRef),
 }
 
@@ -332,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_or_unsupported_text_resources_fail_closed() {
+    fn missing_text_resources_fail_closed() {
         let texts = TextResourceArena::new();
         let missing = TextResourceHandle {
             arena: 0,
@@ -342,17 +342,6 @@ mod tests {
         assert_eq!(
             RetainedAnimationMembers::resolve(&ObjectContentRef::Text(missing), &texts),
             Err(RetainedAnimationMemberError::MissingTextResource(missing))
-        );
-
-        let mut texts = TextResourceArena::new();
-        let mut typst = plain_resource("A", vec![glyph(TextSourceSpan::new(0, 1), 1, 0.0)]);
-        typst.kind = TextSourceKind::Typst;
-        let handle = texts.insert(typst).unwrap();
-        assert_eq!(
-            RetainedAnimationMembers::resolve(&ObjectContentRef::Text(handle), &texts),
-            Err(RetainedAnimationMemberError::Text(
-                TextAnimationMemberError::UnsupportedSourceKind(TextSourceKind::Typst)
-            ))
         );
     }
 

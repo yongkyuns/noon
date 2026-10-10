@@ -655,6 +655,9 @@ Playback admission is an engine decision. The host must enable seek/restart/loop
 controls only after the Rust execution owner validates the advertised capability.
 A non-replayable completed execution may retain its final presentation and explain
 the limitation, but may not fall back to seeking a destructively updated plan.
+An unfinished live segment, including a pure wait with no animation tracks, cannot
+be sealed as completed history. A sealed snapshot with no elapsed interval has no
+loop cadence; paused playback observations remain at the committed runtime time.
 
 Replay capability and forward execution admission are distinct. Denying backward
 replay must not reject a paused, explicit forward authored-time observation through
@@ -1083,6 +1086,13 @@ Any execution channel whose value is evaluated on the GPU but is also required f
 Platform integration shells provide lifecycle mechanics and reuse the same renderer:
 
 The [direct Rust execution diagram](#direct-rust-execution-invariant) shows both platform shells around the same typed engine. Both hosts own surface/device/queue configuration, resize and input ingress, and acquire/submit/present/recovery policy. They reuse `noon-runtime` and `noon-render-wgpu`; neither owns another scene or scheduler.
+
+Cold browser renderer startup precedes admission of a source's realtime epoch.
+The first WebGPU submission must complete and pass GPU diagnostics before its
+presentation receipt can admit playback. This is one asynchronous startup barrier
+per renderer generation, not a display-scanout claim or a per-frame queue fence.
+Later source segments, callbacks and presentation barriers preserve the existing
+Rust wall-to-authored-time mapping; they do not restart it.
 
 Whether native host integration deserves a separate crate such as `noon-native` or remains a module is a dependency/compilation decision, not an architectural naming requirement.
 

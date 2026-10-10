@@ -3531,23 +3531,11 @@ impl ExecutionSession {
                             "family glyph animation lost a Text resource".into(),
                         )
                     })?;
-                    let members = match operation {
-                        FamilyGlyphOperation::Write { .. } => {
-                            if resource.kind != noon_core::TextSourceKind::Plain {
-                                return Err(ExecutionSessionAnimationError::InvalidComposition(
-                                    "family Write supports only plain Text leaves".into(),
-                                ));
-                            }
-                            noon_core::plain_text_animation_members(resource)
-                                .map(|members| members.len())
-                        }
-                        FamilyGlyphOperation::Reveal { .. } => {
-                            noon_core::text_animation_members(resource).map(|members| members.len())
-                        }
-                    }
-                    .map_err(|error| {
-                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-                    })?;
+                    let members = noon_core::text_animation_members(resource)
+                        .map(|members| members.len())
+                        .map_err(|error| {
+                            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                        })?;
                     u32::try_from(members).map_err(|_| {
                         ExecutionSessionAnimationError::InvalidComposition(
                             "family glyph member count exceeds u32".into(),
@@ -3556,7 +3544,7 @@ impl ExecutionSession {
                 }
                 _ => {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
-                        "family Write supports only plain Text leaves".into(),
+                        "family Write requires retained text leaves".into(),
                     ));
                 }
             };
@@ -3568,7 +3556,7 @@ impl ExecutionSession {
         }
         if total == 0 && matches!(operation, FamilyGlyphOperation::Write { .. }) {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
-                "family TextWrite requires at least one visible glyph".into(),
+                "family TextWrite requires at least one rendered member".into(),
             ));
         }
         if introducer && !admitted.insert(target.into()) {

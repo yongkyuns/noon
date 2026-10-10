@@ -15,6 +15,19 @@ const nextMatching = (port, predicate) => new Promise((resolve) => {
   port.on("message", receive);
 });
 const turn = () => new Promise((resolve) => setImmediate(resolve));
+const present = (port, publication) => {
+  port.postMessage({ type: "execution_ack", session: publication.session, sequence: publication.sequence });
+  port.postMessage({ type: "execution_presented", session: publication.session, sequence: publication.sequence });
+};
+async function attachPresented(f) {
+  const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+  const endpoint = await f.attach();
+  const wake = nextMatching(f.render.port2, message =>
+    message.type === "execution_wake" && message.cadence !== "idle");
+  present(f.render.port2, await initial);
+  await wake;
+  return endpoint;
+}
 const request = (port, type, requestId, fields = {}) => {
   const result = next(port);
   port.postMessage({ channel: "noon.engine", protocolVersion: 1, type, requestId, ...fields });
@@ -404,7 +417,7 @@ test("semantic continuation returns one completed player before resuming and ret
       foreignWorkerTimestamp,
       "render ticks must not supply the authoring worker's continuation clock",
     );
-    assert.deepEqual(wakes, ["animation_frame", "idle"]);
+    assert.deepEqual(wakes, ["idle", "animation_frame", "idle"]);
     const idleState = await request(f.control.port2, "state", 90);
     assert.equal(idleState.time, 1);
     assert.equal(idleState.playing, false);
@@ -832,7 +845,10 @@ test("continuation sends coherent intermediate publications before its endpoint"
     endpoint = await f.attach();
     await ready;
     const initialDelta = await initial;
-    f.render.port2.postMessage({ type: "execution_ack", session: initialDelta.session, sequence: initialDelta.sequence });
+    const activeWake = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "animation_frame");
+    present(f.render.port2, initialDelta);
+    await activeWake;
     const intermediate = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
     f.render.port2.postMessage({ type: "tick", timestamp: 1 });
     const publication = await intermediate;
@@ -843,7 +859,7 @@ test("continuation sends coherent intermediate publications before its endpoint"
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("initial continuation attachment drives its first wake through presentation and completion", async () => {
+test("initial continuation waits for presentation before starting its first clock wake", { timeout: 5000 }, async () => {
   const completions = [];
   const f = fixture("transferable", null, {
     generation: 26,
@@ -851,6 +867,11 @@ test("initial continuation attachment drives its first wake through presentation
     onError: (_generation, error) => { throw error; },
   });
   let endpoint;
+  const clockObservations = [];
+  f.player.liveSegmentWake = wallTime => {
+    clockObservations.push(wallTime);
+    return { cadence: "animation_frame" };
+  };
   const acknowledge = (publication) => {
     f.render.port2.postMessage({
       type: "execution_ack", session: publication.session, sequence: publication.sequence,
@@ -860,8 +881,8 @@ test("initial continuation attachment drives its first wake through presentation
     });
   };
   try {
-    // The initial attachment must use the same renderer wake path as a resumed
-    // segment.  It has no later `startContinuation` call to kick progress.
+    // Cold resource/GPU preparation must not consume a short first animation.
+    // A transport acknowledgement alone does not prove that it was presented.
     f.player.drainDeltaJson = () => f.player.seekDeltaJson(f.player.time());
     const ready = next(f.control.port2);
     const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
@@ -873,8 +894,21 @@ test("initial continuation attachment drives its first wake through presentation
     await ready;
     const initialDelta = await initial;
     const wake = await initialWake;
-    assert.equal(wake.cadence, "animation_frame");
-    acknowledge(initialDelta);
+    assert.equal(wake.cadence, "idle");
+    f.render.port2.postMessage({ type: "execution_ack", session: initialDelta.session, sequence: initialDelta.sequence });
+    f.render.port2.postMessage({ type: "tick", timestamp: 9_000_000 });
+    await turn();
+    await turn();
+    assert.deepEqual(clockObservations, []);
+    assert.deepEqual(f.stats().continuationDriveTimes, []);
+    const activeWake = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "animation_frame");
+    f.render.port2.postMessage({ type: "execution_presented", session: initialDelta.session, sequence: initialDelta.sequence });
+    await activeWake;
+    assert.equal(clockObservations.length, 1);
+    f.render.port2.postMessage({ type: "execution_presented", session: initialDelta.session, sequence: initialDelta.sequence });
+    await turn();
+    assert.equal(clockObservations.length, 1, "a duplicate receipt must not restart the source epoch");
 
     const endpointPublication = nextMatching(
       f.render.port2,
@@ -967,14 +1001,17 @@ test("continuation presents admitted native input before completing and returnin
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("continuation reanchors Rust wake after callback completion but preserves phase retry time", async () => {
+test("continuation keeps one Rust wake epoch after a slow callback and retries the exact phase time", async (t) => {
+  let now = 1_000;
+  t.mock.method(performance, "now", () => now);
   const f = fixture("transferable", async (phase) => {
+    now = 9_000; // Deliberate 8-second opaque callback stall.
     await turn();
     return JSON.stringify({ token: phase.token, writes: [] });
   }, { generation: 24, onComplete: () => {}, onError: (_generation, error) => { throw error; } });
   let endpoint;
   const drives = [];
-  const anchors = [];
+  const observations = [];
   try {
     f.player.driveLiveSegmentFromWallTime = (wallTime) => {
       drives.push(wallTime);
@@ -983,27 +1020,28 @@ test("continuation reanchors Rust wake after callback completion but preserves p
         reachedEndpoint: false,
       };
     };
-    f.player.reanchorLiveSegmentWake = (wallTime) => {
-      anchors.push(wallTime);
+    f.player.liveSegmentWake = (wallTime) => {
+      observations.push(wallTime);
       return { cadence: "animation_frame", timerAfterMilliseconds: undefined };
     };
+    f.player.reanchorLiveSegmentWake = () => assert.fail("active-source callbacks must not reset elapsed time");
     const ready = next(f.control.port2);
-    endpoint = await f.attach();
+    endpoint = await attachPresented(f);
     await ready;
     const resumedWake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
-    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    f.render.port2.postMessage({ type: "tick", timestamp: 1_000 });
     await resumedWake;
     await turn();
     await turn();
     assert.equal(drives.length, 2);
     assert.equal(drives[0], drives[1]);
-    assert.equal(anchors.length, 1);
-    assert.ok(anchors[0] >= drives[1]);
-    f.render.port2.postMessage({ type: "tick", timestamp: 2 });
+    assert.ok(observations.length > 0, "callback completion still observes its wake");
+    assert.ok(observations.includes(9_000), "next wake sees callback wall latency");
+    f.render.port2.postMessage({ type: "tick", timestamp: 9_001 });
     await turn();
     await turn();
     assert.equal(drives.length, 3);
-    assert.equal(anchors.length, 1, "callback-free drive keeps its original wake anchor");
+    assert.ok(observations.length >= 2, "later wake still observes the retained epoch");
   } finally { endpoint?.stop(); f.close(); }
 });
 
@@ -1032,15 +1070,18 @@ test("semantic continuation drives a pure wait only when its Rust deadline is du
     await ready;
     assert.deepEqual(await initialWake, {
       type: "execution_wake",
-      cadence: "timer",
-      timerAfterMilliseconds: 1_000,
+      cadence: "idle",
+      timerAfterMilliseconds: null,
     });
     const initialDelta = await initial;
+    const firstTimer = nextMatching(f.render.port2, message =>
+      message.type === "execution_wake" && message.cadence === "timer");
     f.render.port2.postMessage({
       type: "execution_presented",
       session: initialDelta.session,
       sequence: initialDelta.sequence,
     });
+    assert.equal((await firstTimer).timerAfterMilliseconds, 1_000);
 
     const rearmedWake = nextMatching(
       f.render.port2,
@@ -2003,8 +2044,8 @@ test("stalled native-event queue rejects overflow and preserves accepted command
 });
 
 
-for (const reachedEndpoint of [false, true]) {
-  test(`renderer failure terminates ${reachedEndpoint ? "endpoint" : "intermediate"} continuation once`, async () => {
+for (const stage of ["initial", "intermediate", "endpoint"]) {
+  test(`renderer failure terminates ${stage} continuation once`, async () => {
     const failures = [];
     let completed = 0;
     let drives = 0;
@@ -2017,16 +2058,19 @@ for (const reachedEndpoint of [false, true]) {
     try {
       f.player.driveLiveSegmentFromWallTime = () => {
         drives += 1;
-        return { callbackPhaseJson: null, reachedEndpoint };
+        return { callbackPhaseJson: null, reachedEndpoint: stage === "endpoint" };
       };
       f.player.drainDeltaJson = () => f.player.seekDeltaJson(0.5);
-      const initial = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
-      endpoint = await f.attach();
-      const initialDelta = await initial;
-      f.render.port2.postMessage({ type: "execution_ack", session: initialDelta.session, sequence: initialDelta.sequence });
-      const publication = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
-      f.render.port2.postMessage({ type: "tick", timestamp: 1 });
-      await publication;
+      if (stage === "initial") {
+        const publication = nextMatching(f.render.port2, message => message.type === "execution_delta");
+        endpoint = await f.attach();
+        await publication;
+      } else {
+        endpoint = await attachPresented(f);
+        const publication = nextMatching(f.render.port2, (message) => message.type === "execution_delta");
+        f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+        await publication;
+      }
       const error = nextMatching(f.control.port2, (message) => message.type === "error");
       f.render.port2.postMessage({ type: "render_error", message: "upload failed" });
       await error;
@@ -2036,7 +2080,7 @@ for (const reachedEndpoint of [false, true]) {
       assert.equal(failures.length, 1);
       assert.equal(failures[0].generation, 26);
       assert.match(failures[0].error.message, /upload failed/);
-      assert.equal(drives, 1);
+      assert.equal(drives, stage === "initial" ? 0 : 1);
       assert.equal(completed, 0);
       assert.equal(f.stats().completedSegments, 0);
       assert.equal(f.stats().returned, 0);
@@ -2120,6 +2164,8 @@ for (const pacing of ["realtime", "external_samples"]) {
         f.render.port2.postMessage({ type: "execution_presented", session: message.session, sequence: message.sequence });
       });
       const ready = next(f.control.port2);
+      const activeWake = pacing === "realtime" ? nextMatching(f.render.port2, message =>
+        message.type === "execution_wake" && message.cadence === "animation_frame") : null;
       endpoint = await f.attach();
       await ready;
       let sampled;
@@ -2132,6 +2178,7 @@ for (const pacing of ["realtime", "external_samples"]) {
         f.control.port2.postMessage({ channel: "noon.engine", protocolVersion: 1,
           type: "sample_to_authored_time", requestId: 700, time: 1 });
       } else {
+        await activeWake;
         f.render.port2.postMessage({ type: "tick", timestamp: 1 });
       }
       await returned;
@@ -2201,11 +2248,13 @@ for (const [inputType, fields] of continuationWakeInputCases) {
         const initialWake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
         endpoint = await f.attach();
         await ready;
-        assert.equal((await initialWake).cadence, cadence);
+        assert.equal((await initialWake).cadence, "idle");
         const publication = await initial;
+        const activeWake = nextMatching(f.render.port2, message =>
+          message.type === "execution_wake" && message.cadence === cadence);
         f.render.port2.postMessage({ type: "execution_ack", session: publication.session, sequence: publication.sequence });
         f.render.port2.postMessage({ type: "execution_presented", session: publication.session, sequence: publication.sequence });
-        await turn();
+        await activeWake;
 
         const inputWake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
         const reply = await request(f.control.port2, inputType, 170, fields);
@@ -2283,13 +2332,13 @@ test("rejected continuation pointer input preserves its existing wake", { timeou
       if (message.type === "execution_wake") wakes.push(message.cadence);
     });
     const ready = next(f.control.port2);
-    endpoint = await f.attach();
+    endpoint = await attachPresented(f);
     await ready;
     const reply = await request(f.control.port2, "browser_pointer_input", 190, continuationWakeInputCases[2][1]);
     assert.equal(reply.type, "error");
     assert.match(reply.message, /pointer rejected/);
     await turn();
-    assert.deepEqual(wakes, ["timer"]);
+    assert.deepEqual(wakes, ["idle", "timer"]);
     assert.equal(segmentReads, 1);
     assert.equal(ordinaryReads, 0);
     assert.equal(f.stats().nativeInputs.length, 0);

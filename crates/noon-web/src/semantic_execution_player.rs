@@ -2283,8 +2283,9 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
+        // This is another interval in the same active source. Internal
+        // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -2315,8 +2316,9 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
+        // This is another interval in the same active source. Internal
+        // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -2368,8 +2370,9 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
+        // This is another interval in the same active source. Internal
+        // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -2527,8 +2530,9 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
+        // This is another interval in the same active source. Internal
+        // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -2564,6 +2568,10 @@ impl SemanticExecutionPlayer {
     }
 
     /// Observe browser wake mechanics for the active shared continuation segment.
+    ///
+    /// The monotonic epoch is owned by this retained source lease. Source
+    /// play/wait completion, exact callback phases and Python continuation
+    /// handoffs retain it; rebinding a genuinely new transport lease resets it.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_segment_wake(
         &mut self,
@@ -2653,7 +2661,10 @@ impl SemanticExecutionPlayer {
             return Err("playback observation requires a finite wall timestamp".to_owned());
         }
         let current = self.time();
-        if self.pending_callback_phase.is_some() || self.session.callback_termination().is_some() {
+        if !self.clock.is_playing()
+            || self.pending_callback_phase.is_some()
+            || self.session.callback_termination().is_some()
+        {
             return Ok(current);
         }
         if let Some(LiveSegmentReceipt::Pending(segment)) = self.live_segment {
@@ -2666,9 +2677,6 @@ impl SemanticExecutionPlayer {
                     .max(current),
                 TimelineWakeState::Continuous | TimelineWakeState::Quiescent => current,
             });
-        }
-        if !self.clock.is_playing() {
-            return Ok(current);
         }
         let BrowserExecutionCadence::TimerAtSceneTime(deadline) =
             self.execution_wake_plan().cadence()
@@ -2683,24 +2691,6 @@ impl SemanticExecutionPlayer {
             .timer_delay_milliseconds(deadline, wall_time_ms, current)
             .map_err(|error| error.to_string())?;
         Ok((deadline - remaining / 1_000.0).min(deadline).max(current))
-    }
-
-    /// Begin the next browser wall-time interval after required host work.
-    ///
-    /// The endpoint calls this only after retrying the callback-bearing drive
-    /// with its captured timestamp. The session's published time is therefore
-    /// unchanged while this resets the derived wall-time conversion.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn reanchor_live_segment_wake(
-        &mut self,
-        wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, AuthoringFailure> {
-        self.require_callback_progression_available()?;
-        self.live_segment()?;
-        self.live_wake_clock
-            .reanchor(wall_time_ms, self.session.frame().time)
-            .ok_or("invalid browser wall timestamp or authored continuation time")?;
-        self.live_segment_wake(wall_time_ms)
     }
 
     /// Drive the current segment from one Rust-derived browser wall-time mapping.
@@ -2814,8 +2804,9 @@ impl SemanticExecutionPlayer {
         .complete_segment(segment)
         .map_err(AuthoringFailure::from)?;
         self.clock = clock;
+        // The source may immediately activate another interval after this
+        // completion. Only a genuinely new/rebound source resets the epoch.
         self.live_segment = Some(LiveSegmentReceipt::Completed(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
 
@@ -4154,17 +4145,6 @@ impl SemanticExecutionPlayer {
         self.playback_time_at(wall_time_ms)
     }
 
-    /// Reanchor the next browser interval after a required callback completes.
-    #[cfg(target_arch = "wasm32")]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reanchorLiveSegmentWake))]
-    pub fn reanchor_live_segment_wake_wasm(
-        &mut self,
-        wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
-        self.reanchor_live_segment_wake(wall_time_ms)
-            .map_err(crate::authoring_error::js_error)
-    }
-
     /// Advance one active ordinary continuation segment from an anchored browser timestamp.
     ///
     /// A callback phase must be committed before this is retried with the same wall
@@ -4733,6 +4713,12 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sealReplay))]
     pub fn seal_replay(&mut self) -> Result<(), String> {
         if self.session.replay_scope_active() {
+            // A wait has no animation completion barrier in the runtime, but its
+            // live receipt still owns an unfinished authored interval.
+            #[cfg(any(target_arch = "wasm32", test))]
+            if self.has_pending_live_segment() {
+                return Err(noon_runtime::ReplayError::Incomplete.to_string());
+            }
             self.session
                 .seal_replay()
                 .map_err(|error| error.to_string())?;

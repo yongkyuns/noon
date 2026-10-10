@@ -1147,6 +1147,41 @@ mod wasm {
             self.gpu_generation
         }
 
+        /// Cold-start admission only: wait for previously submitted WebGPU work.
+        /// Ordinary rendering remains asynchronous; this is not a scanout receipt.
+        #[wasm_bindgen(js_name = waitForSubmittedWork)]
+        pub fn wait_for_submitted_work(&self) -> js_sys::Promise {
+            if self.backend != wgpu::Backend::BrowserWebGpu {
+                return js_sys::Promise::resolve(&JsValue::UNDEFINED);
+            }
+            let completion =
+                std::sync::Arc::new(std::sync::Mutex::new((false, None::<std::task::Waker>)));
+            let completed = completion.clone();
+            self.queue.on_submitted_work_done(move || {
+                let wake = {
+                    let mut state = completed.lock().unwrap_or_else(|error| error.into_inner());
+                    state.0 = true;
+                    state.1.take()
+                };
+                if let Some(wake) = wake {
+                    wake.wake();
+                }
+            });
+            wasm_bindgen_futures::future_to_promise(async move {
+                std::future::poll_fn(move |context| {
+                    let mut state = completion.lock().unwrap_or_else(|error| error.into_inner());
+                    if state.0 {
+                        std::task::Poll::Ready(())
+                    } else {
+                        state.1 = Some(context.waker().clone());
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+                Ok(JsValue::UNDEFINED)
+            })
+        }
+
         #[wasm_bindgen(js_name = flushGpuDiagnostics)]
         pub fn flush_gpu_diagnostics(&mut self) -> js_sys::Promise {
             let Some(scope) = self.gpu_validation_scope.take() else {

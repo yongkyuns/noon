@@ -328,6 +328,7 @@ function createRenderer(renderResults) {
       return result;
     },
     resize() {},
+    waitForSubmittedWork: async () => {},
     render() {
       this.renderCalls += 1;
       return renderResults.shift() ?? true;
@@ -347,7 +348,7 @@ function createRenderer(renderResults) {
   };
 }
 
-function createWorkerHarness(renderResults = [false, true]) {
+function createWorkerHarness(renderResults = [false, true], publication = null) {
   const creation = deferred();
   const animationFrames = [];
   const mainMessages = [];
@@ -388,6 +389,7 @@ function createWorkerHarness(renderResults = [false, true]) {
   context.oldPort = oldPort;
   context.nextPort = nextPort;
   context.oldRenderer = oldRenderer;
+  context.initialPublication = publication;
   vm.runInContext(
     `
 canvas = {};
@@ -403,13 +405,77 @@ beginRendererTransition(
   "mode_switched",
 );
 handleRetainedResources({ bytes: new Uint8Array([1]) });
-consumeDelta("initial");
+consumeDelta("initial", initialPublication);
 `,
     context,
   );
   const createdRenderer = createRenderer([...renderResults]);
   return { context, creation, animationFrames, mainMessages, nextPort, oldRenderer, createdRenderer };
 }
+
+test("cold WebGPU work withholds source admission once, including resize repaints", async () => {
+  const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
+  const completion = deferred();
+  let waits = 0;
+  harness.createdRenderer.waitForSubmittedWork = () => { waits += 1; return completion.promise; };
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  assert.equal(waits, 1);
+  assert.equal(harness.nextPort.messages.length, 0);
+  assert.equal(harness.mainMessages.length, 0, "GPU submission alone is not startup readiness");
+  vm.runInContext("resize({width:2,height:2});", harness.context);
+  assert.equal(harness.nextPort.messages.length, 0, "a cold resize cannot admit the source early");
+  completion.resolve();
+  await flushTasks();
+  const receipts = () => harness.nextPort.messages.filter(message => message.type === "execution_presented");
+  assert.deepEqual(receipts().map(({session, sequence}) => ({session, sequence})),
+    [{ session: 11, sequence: 0 }]);
+  assert.equal(harness.mainMessages.filter(message => message.type === "mode_switched").length, 1);
+  vm.runInContext('consumeDelta("next", {session:11, sequence:1});', harness.context);
+  assert.equal(receipts().at(-1).sequence, 1);
+  assert.equal(waits, 1, "steady-state presentation does not fence the GPU queue");
+});
+
+for (const stopped of [false, true]) {
+  test(`cold GPU failure ${stopped ? "after stop stays inert" : "cannot admit playback"}`, async () => {
+    const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
+    const completion = deferred();
+    harness.createdRenderer.waitForSubmittedWork = () => completion.promise;
+    harness.creation.resolve(harness.createdRenderer);
+    await flushTasks();
+    if (stopped) vm.runInContext("stop();", harness.context);
+    completion.reject(new Error("cold GPU work failed"));
+    await flushTasks();
+    assert.equal(harness.nextPort.messages.some(message => message.type === "execution_presented"), false);
+    assert.equal(harness.mainMessages.some(message => message.type === "mode_switched"), false);
+    assert.equal(harness.mainMessages.filter(message => message.type === "error").length, stopped ? 0 : 1);
+    assert.equal(harness.createdRenderer.freed, stopped);
+  });
+}
+
+test("completion of retired cold GPU work cannot revive its renderer", async () => {
+  const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
+  const completion = deferred();
+  harness.createdRenderer.waitForSubmittedWork = () => completion.promise;
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  vm.runInContext("stop();", harness.context);
+  completion.resolve();
+  await flushTasks();
+  assert.equal(harness.createdRenderer.freed, true);
+  assert.equal(harness.mainMessages.length, 0);
+  assert.equal(harness.nextPort.messages.length, 0);
+});
+
+test("WebGL startup admits its first presentation without a queue fence", async () => {
+  const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
+  harness.createdRenderer.rendererBackend = () => "WebGL2";
+  harness.createdRenderer.waitForSubmittedWork = () => assert.fail("WebGL must not wait on WebGPU");
+  harness.creation.resolve(harness.createdRenderer);
+  await flushTasks();
+  assert.equal(harness.nextPort.messages.filter(message => message.type === "execution_presented").length, 1);
+  assert.equal(harness.mainMessages.filter(message => message.type === "mode_switched").length, 1);
+});
 
 test("delayed retained transition gates stale ticks and retries presentation before ready", async () => {
   const harness = createWorkerHarness();
@@ -558,11 +624,33 @@ test("publication stage metrics are opt-in, exact-publication keyed, and bounded
   assert.deepEqual(JSON.parse(JSON.stringify(samples.map(({ session, sequence }) => [session, sequence]))),
     Array.from({ length: 32 }, (_, index) => [53, index + 1]));
   for (const sample of samples) {
+    assert.equal(sample.time, 0);
+    assert.ok(Number.isSafeInteger(sample.presentation) && sample.presentation > 0);
     assert.ok(Number.isFinite(sample.applyMs));
     assert.ok(Number.isFinite(sample.renderMs));
     assert.ok(Number.isFinite(sample.receiveToPresentMs));
     assert.ok(Number.isFinite(sample.ackPostMs));
   }
+});
+
+test("publication profiling retains displayed time across delayed metrics polls", async () => {
+  const harness = await createManagedWakeHarness([true, false, true]);
+  let authoredTime = 0.25;
+  harness.createdRenderer.time = () => authoredTime;
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:75, profilePublicationStages:true});`, harness.context);
+  vm.runInContext('consumeDelta("{}", {session:53, sequence:7});', harness.context);
+  assert.equal(vm.runInContext("currentMetrics().publicationStageSamples.length", harness.context), 0,
+    "a pending render is not a presentation");
+  harness.setClock(50);
+  assert.equal(vm.runInContext("tryPresent()", harness.context), true);
+  authoredTime = 1.25;
+  const metrics = vm.runInContext("currentMetrics()", harness.context);
+  assert.equal(metrics.time, 1.25);
+  assert.equal(metrics.publicationStageSamples.length, 1);
+  assert.equal(metrics.publicationStageSamples[0].time, 0.25);
+  assert.equal(metrics.publicationStageSamples[0].presentation, 2);
+  assert.equal(metrics.publicationStageSamples[0].presentedAtMs, 50);
 });
 
 test("render substage timing is opt-in and drains bounded renderer samples", async () => {
