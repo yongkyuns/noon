@@ -558,11 +558,33 @@ test("publication stage metrics are opt-in, exact-publication keyed, and bounded
   assert.deepEqual(JSON.parse(JSON.stringify(samples.map(({ session, sequence }) => [session, sequence]))),
     Array.from({ length: 32 }, (_, index) => [53, index + 1]));
   for (const sample of samples) {
+    assert.equal(sample.time, 0);
+    assert.ok(Number.isSafeInteger(sample.presentation) && sample.presentation > 0);
     assert.ok(Number.isFinite(sample.applyMs));
     assert.ok(Number.isFinite(sample.renderMs));
     assert.ok(Number.isFinite(sample.receiveToPresentMs));
     assert.ok(Number.isFinite(sample.ackPostMs));
   }
+});
+
+test("publication profiling retains displayed time across delayed metrics polls", async () => {
+  const harness = await createManagedWakeHarness([true, false, true]);
+  let authoredTime = 0.25;
+  harness.createdRenderer.time = () => authoredTime;
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:75, profilePublicationStages:true});`, harness.context);
+  vm.runInContext('consumeDelta("{}", {session:53, sequence:7});', harness.context);
+  assert.equal(vm.runInContext("currentMetrics().publicationStageSamples.length", harness.context), 0,
+    "a pending render is not a presentation");
+  harness.setClock(50);
+  assert.equal(vm.runInContext("tryPresent()", harness.context), true);
+  authoredTime = 1.25;
+  const metrics = vm.runInContext("currentMetrics()", harness.context);
+  assert.equal(metrics.time, 1.25);
+  assert.equal(metrics.publicationStageSamples.length, 1);
+  assert.equal(metrics.publicationStageSamples[0].time, 0.25);
+  assert.equal(metrics.publicationStageSamples[0].presentation, 2);
+  assert.equal(metrics.publicationStageSamples[0].presentedAtMs, 50);
 });
 
 test("render substage timing is opt-in and drains bounded renderer samples", async () => {

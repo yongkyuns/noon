@@ -764,6 +764,9 @@ export function createAuthoringRenderController(host) {
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
     if (stageSample !== null) {
+      // Preserve the displayed authored time even when metrics polling is late.
+      stageSample.time = renderer.time();
+      stageSample.presentation = presentedFrames;
       stageSample.presentedAtMs = presentedAtMs;
       stageSample.applyMs = lastDeltaApplyMs;
       stageSample.receiveToPresentMs = Math.max(0, presentedAtMs - stageSample.receivedAtMs);
