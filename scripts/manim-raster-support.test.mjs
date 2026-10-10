@@ -19,6 +19,40 @@ test("automatic paired qualification records either actual supported backend", (
   assert.equal(resolveQualifiedBackend("automatic", "WebGL2"), "WebGL2");
 });
 
+test("same-device browser identity can identify a redacted WebGPU description", () => {
+  const redacted = { backend: "BrowserWebGpu", vendor: 0, device: 0,
+    name: "", deviceType: "Other", driver: "", driverInfo: "" };
+  const info = { ...redacted, browserDeviceInfo: {
+    vendor: "amd", architecture: "rdna-1", device: "", description: "",
+    isFallbackAdapter: false,
+  } };
+  assert.equal(validateRendererGpuMode("hardware", info, "webgpu"), "hardware-like-unverified");
+  assert.equal(classifyRendererGpuIdentity(info, "webgl"), "unknown");
+  assert.equal(classifyRendererGpuIdentity({ ...info, backend: "Gl" }, "webgl"), "unknown");
+  const empty = { ...info, browserDeviceInfo: { vendor: "", architecture: "",
+    device: "", description: "", isFallbackAdapter: false } };
+  assert.equal(classifyRendererGpuIdentity(empty, "webgpu"), "unknown");
+  assert.equal(classifyRendererGpuIdentity({ ...empty, browserDeviceInfo: {
+    ...empty.browserDeviceInfo, vendor: "Unknown", device: "n/a", description: "Other",
+  } }, "webgpu"), "unknown");
+  assert.equal(classifyRendererGpuIdentity({ ...redacted, browserDeviceInfo: {
+    vendor: null, device: 0, description: false,
+  } }, "webgpu"), "unknown");
+});
+
+test("browser fallback and software architecture retain software classification", () => {
+  const info = { backend: "BrowserWebGpu", vendor: 0, device: 0,
+    name: "", deviceType: "Other", driver: "", driverInfo: "",
+    browserDeviceInfo: { vendor: "google", architecture: "swiftshader",
+      device: "", description: "", isFallbackAdapter: false } };
+  assert.equal(classifyRendererGpuIdentity(info, "webgpu"), "software");
+  assert.throws(() => validateRendererGpuMode("hardware", info, "webgpu"), /known software/);
+  const fallback = { ...info, browserDeviceInfo: { ...info.browserDeviceInfo,
+    vendor: "amd", architecture: "rdna-1", isFallbackAdapter: true } };
+  assert.equal(classifyRendererGpuIdentity(fallback, "webgpu"), "software");
+  assert.equal(validateRendererGpuMode("software", fallback, "webgpu"), "software");
+});
+
 test("explicit paired qualification retains strict backend matching", () => {
   assert.equal(resolveQualifiedBackend("WebGL2", "WebGL2"), "WebGL2");
   assert.throws(() => resolveQualifiedBackend("WebGL2", "WebGPU"), /expected WebGL2/);
