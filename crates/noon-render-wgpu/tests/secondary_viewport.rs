@@ -240,7 +240,7 @@ fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples(
                 let scene =
                     SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
                 let inset = Inset2DViewState {
-                    camera_frame: ObjectId::new(4),
+                    camera_frame: ObjectId::new(5),
                     display: display_id,
                     camera: Camera2DState {
                         center: Vec2::ZERO,
@@ -272,6 +272,8 @@ fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples(
                     Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 4.0)).unwrap(),
                 );
                 let mut fresh_text = fresh.create_retained_text_state(&device, &queue);
+                // Incremental upload ranges belong to their renderer lifetime.
+                // A fresh renderer needs a fresh preparation publication too.
                 let mut fresh_preparer = RetainedFramePreparer::new();
                 fresh_preparer.set_inset_views_active(true);
                 let fresh_prepared = fresh_preparer

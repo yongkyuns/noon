@@ -187,15 +187,17 @@ impl GpuRenderer {
             });
             // A retained target may be larger than this frame's capture. Keep
             // projection, pixel phase and sampling at the exact requested size.
-            pass.set_viewport(
-                0.0,
-                0.0,
-                inset.capture_size[0] as f32,
-                inset.capture_size[1] as f32,
-                0.0,
-                1.0,
-            );
-            pass.set_scissor_rect(0, 0, inset.capture_size[0], inset.capture_size[1]);
+            if target.capacity != inset.capture_size {
+                pass.set_viewport(
+                    0.0,
+                    0.0,
+                    inset.capture_size[0] as f32,
+                    inset.capture_size[1] as f32,
+                    0.0,
+                    1.0,
+                );
+                pass.set_scissor_rect(0, 0, inset.capture_size[0], inset.capture_size[1]);
+            }
             let mut excluded = HashSet::new();
             if !inset.state.capture_own_display {
                 excluded.insert(inset.state.display);
