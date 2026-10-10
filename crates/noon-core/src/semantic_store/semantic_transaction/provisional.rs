@@ -191,15 +191,7 @@ impl<'a> TransactionNodeCatalog<'a> {
         match (mode, state.content) {
             (_, crate::SemanticObjectContent::Geometry(_)) if family_member.is_some() => {}
             (_, crate::SemanticObjectContent::Text(handle)) => {
-                let Some(resource) = self.store.text_resources().get(handle) else {
-                    return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
-                };
-                if !matches!(
-                    resource.kind,
-                    crate::TextSourceKind::Plain
-                        | crate::TextSourceKind::Tex
-                        | crate::TextSourceKind::MathTex
-                ) {
+                if self.store.text_resources().get(handle).is_none() {
                     return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
                 }
             }

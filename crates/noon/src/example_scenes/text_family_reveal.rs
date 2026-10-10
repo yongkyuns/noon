@@ -203,22 +203,47 @@ impl LiveContinuation for TextFamilyReveal {
 }
 
 pub fn program() -> Result<LiveProgram<TextFamilyReveal>, String> {
+    program_with_text(false, |scene, source| {
+        scene.text(source).map_err(|error| error.to_string())
+    })
+}
+
+/// Exercise the same lifecycle and family plan with compiled mathematical glyphs.
+#[cfg(feature = "typst")]
+pub fn math_program() -> Result<LiveProgram<TextFamilyReveal>, String> {
+    program_with_text(true, |scene, source| {
+        scene
+            .math_typst(crate::MathTypst::new(format!("\"{source}\"")))
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn program_with_text(
+    solid_mover: bool,
+    mut text: impl FnMut(&mut Scene, &str) -> Result<Mobject, String>,
+) -> Result<LiveProgram<TextFamilyReveal>, String> {
     let mut scene = Scene::new();
     let root = scene.root();
-    let mut left = scene.text("I").map_err(|error| error.to_string())?;
+    let mut left = text(&mut scene, "I")?;
     left.set_translation(-3.0, 0.75)
         .map_err(|error| error.to_string())?;
-    let mut right = scene.text("LONG").map_err(|error| error.to_string())?;
+    let mut right = text(&mut scene, "LONG")?;
     right
         .set_translation(0.0, 0.75)
         .map_err(|error| error.to_string())?;
     let family = scene
         .family(&[(&left).into(), (&right).into()])
         .map_err(|error| error.to_string())?;
-    let mut solo = scene.text("ONE").map_err(|error| error.to_string())?;
+    let mut solo = text(&mut scene, "ONE")?;
     solo.set_translation(-2.0, -1.25)
         .map_err(|error| error.to_string())?;
     let mut moving = scene.square(0.6).map_err(|error| error.to_string())?;
+    if solid_mover {
+        // Retain a visible comparison anchor after all compiled glyphs are removed.
+        moving
+            .set_fill_opacity(1.0)
+            .map_err(|error| error.to_string())?;
+    }
     moving
         .set_translation(1.0, -1.25)
         .map_err(|error| error.to_string())?;
@@ -279,7 +304,16 @@ mod tests {
 
     #[test]
     fn native_text_reveal_uses_global_family_timing_and_cleans_up_both_roots() {
-        let mut program = program().unwrap();
+        qualify_family_lifecycle(program().unwrap());
+    }
+
+    #[cfg(feature = "typst")]
+    #[test]
+    fn compiled_math_preserves_family_timing_atomicity_and_cleanup() {
+        qualify_family_lifecycle(math_program().unwrap());
+    }
+
+    fn qualify_family_lifecycle(mut program: LiveProgram<TextFamilyReveal>) {
         let mut callbacks = RustHostCallbackTable::new();
         assert!(matches!(
             program.resume().unwrap(),

@@ -3284,6 +3284,69 @@ fn generic_wake_settles_a_playing_static_session() {
 }
 
 #[test]
+fn sealed_static_replay_does_not_invent_elapsed_history() {
+    for time in [0.0, 7.0] {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(0.4).unwrap();
+        scene.add(&circle).unwrap();
+        let mut player =
+            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 10.0, 72)
+                .unwrap();
+        player.seek_delta_json(time).unwrap();
+        player.begin_replay_retention().unwrap();
+        player.seal_replay().unwrap();
+        player.initial_delta_json().unwrap();
+        let frame = player.session.frame().clone();
+        let history = player.session.replay_stats();
+        assert_eq!(player.execution_wake(1_000.0).unwrap().cadence(), "idle");
+        assert!(!player.session.has_replay_timeline_work());
+        assert_eq!(player.playback_time_at(9_000.0).unwrap(), time);
+        player.pause();
+        assert_eq!(player.playback_time_at(20_000.0).unwrap(), time);
+        player.resume();
+        assert_eq!(player.execution_wake(30_000.0).unwrap().cadence(), "idle");
+        assert_eq!(player.session.frame(), &frame);
+        assert_eq!(player.session.replay_stats(), history);
+        assert!(player.drain_delta_json().unwrap().is_none());
+    }
+}
+
+#[test]
+fn unfinished_wait_cannot_seal_a_shorter_replay_interval() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(0.4).unwrap();
+    scene.add(&circle).unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        73,
+    )
+    .unwrap();
+    player.begin_replay_retention().unwrap();
+    player.initial_delta_json().unwrap();
+    player.live_wait(0.2).unwrap();
+    let frame = player.session.frame().clone();
+    let clock = player.clock.clone();
+    assert_eq!(
+        player.seal_replay(),
+        Err(noon_runtime::ReplayError::Incomplete.to_string())
+    );
+    assert!(!player.session.replay_is_sealed());
+    assert_eq!(player.session.frame(), &frame);
+    assert_eq!(player.clock, clock);
+    player.live_segment_wake(1_000.0).unwrap();
+    player.pause();
+    assert_eq!(player.playback_time_at(1_100.0).unwrap(), 0.0);
+    player.live_drive_segment_to_authored_time(0.2).unwrap();
+    player.live_complete_segment().unwrap();
+    player.seal_replay().unwrap();
+    assert!(player.session.replay_is_sealed());
+    assert!(player.session.has_replay_timeline_work());
+}
+
+#[test]
 fn generic_wake_uses_runtime_activity_then_the_real_loop_boundary() {
     let mut player = animated_player();
     player.initial_delta_json().unwrap();
