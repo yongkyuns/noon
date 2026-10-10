@@ -1504,12 +1504,14 @@ impl GpuRenderer {
         clear: wgpu::Color,
         samples: u32,
     ) -> DrawStats {
-        if samples == 1 {
-            self.spatial.encode(encoder, scene, None, clear, samples)
+        let color = if samples == 1 {
+            scene
         } else {
-            self.spatial
-                .encode(encoder, &self.path_msaa_view, Some(scene), clear, samples)
-        }
+            &self.path_msaa_view
+        };
+        // The following painter pass adds planar content to this same target
+        // and resolves once, after the complete scene has been composed.
+        self.spatial.encode(encoder, color, clear, samples)
     }
 
     pub(crate) fn finalize_frame(
