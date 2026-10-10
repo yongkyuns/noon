@@ -16,6 +16,30 @@ use noon_core::{
     SemanticNodeKind, SemanticObjectState, SemanticStore, SemanticTransactionNodeRef, VectorPath,
 };
 
+/// A state-only replacement cannot preserve an attachment on either operand.
+/// Effects elsewhere in the semantic store are irrelevant: this check visits
+/// only the receiver/target ownership graphs and leaves all unrelated effects
+/// and their generations untouched.
+fn require_effect_free_operands(
+    store: &SemanticStore,
+    operands: impl IntoIterator<Item = SemanticNodeId>,
+) -> Result<(), AuthoringError> {
+    if !store.has_effect_attachments() {
+        return Ok(());
+    }
+    for operand in operands {
+        for id in store.ordered_authoring_nodes(operand)? {
+            if store
+                .node(id)
+                .is_some_and(|node| !node.effect_ids().is_empty())
+            {
+                return Err(AuthoringError::EffectStateReplacementUnavailable);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Pair through the same topology/alias contract as ordinary family Transform.
 /// All captures and fitting succeed before a caller can publish any edit.
 pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
@@ -29,9 +53,10 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     }
     source.validate()?;
     target.validate()?;
-    if source.integration_store().borrow().has_effect_attachments() {
-        return Err(AuthoringError::EffectStateReplacementUnavailable.into());
-    }
+    require_effect_free_operands(
+        &source.integration_store().borrow(),
+        [source.node_id(), target.node_id()],
+    )?;
     let pairing = source
         .integration_store()
         .borrow()
@@ -450,15 +475,14 @@ pub struct ManimBecomeOptions {
 pub(crate) fn prepare_become(
     store: &SemanticStore,
     node: SemanticNodeId,
+    other_node: SemanticNodeId,
     source: &SemanticObjectState,
     target: SemanticObjectState,
     options: ManimBecomeOptions,
 ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
-    // This state-only capture has no attachment correspondence. Fail explicitly
-    // until #1897 supplies the lifecycle-aware replacement contract.
-    if store.has_effect_attachments() {
-        return Err(AuthoringError::EffectStateReplacementUnavailable);
-    }
+    // State-only capture cannot import an effect from its counterpart, but a
+    // glow on an unrelated object must not poison ordinary become operations.
+    require_effect_free_operands(store, [node, other_node])?;
     let (target, path) =
         prepare_become_states(store, std::slice::from_ref(source), vec![target], options)?
             .pop()

@@ -989,6 +989,7 @@ impl<'a> LiveSession<'a> {
         let prepared = prepare_become(
             &self.store.borrow(),
             target.node_id(),
+            other.node_id(),
             &source,
             candidate,
             options,
