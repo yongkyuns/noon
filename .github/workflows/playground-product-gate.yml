@@ -184,15 +184,6 @@ jobs:
           artifact-ids: ${{ needs.build.outputs.locks-artifact }}
           path: .
 
-      - name: Validate all pinned Cargo locks and selected dependency graphs
-        shell: bash
-        run: |
-          set -euo pipefail
-          sha256sum --check product-lock-digests.txt
-          for noon_checkout in candidate baseline; do
-            (cd "$noon_checkout" && cargo metadata --locked --format-version 1 > /dev/null)
-          done
-
       - name: Use each selected checkout's pinned Rust and WASM toolchain
         shell: bash
         run: |
@@ -204,6 +195,15 @@ jobs:
               rustup show active-toolchain
               rustup target add wasm32-unknown-unknown
             )
+          done
+
+      - name: Validate all pinned Cargo locks and selected dependency graphs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check product-lock-digests.txt
+          for noon_checkout in candidate baseline; do
+            (cd "$noon_checkout" && cargo metadata --locked --format-version 1 > /dev/null)
           done
 
       - name: Cache Cargo sources
@@ -308,15 +308,6 @@ jobs:
           artifact-ids: ${{ needs.build.outputs.locks-artifact }}
           path: .
 
-      - name: Validate all pinned Cargo locks and selected dependency graphs
-        shell: bash
-        run: |
-          set -euo pipefail
-          sha256sum --check product-lock-digests.txt
-          for noon_checkout in candidate anchor; do
-            (cd "$noon_checkout" && cargo metadata --locked --format-version 1 > /dev/null)
-          done
-
       - name: Use each selected checkout's pinned Rust and WASM toolchain
         shell: bash
         run: |
@@ -328,6 +319,15 @@ jobs:
               rustup show active-toolchain
               rustup target add wasm32-unknown-unknown
             )
+          done
+
+      - name: Validate all pinned Cargo locks and selected dependency graphs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check product-lock-digests.txt
+          for noon_checkout in candidate anchor; do
+            (cd "$noon_checkout" && cargo metadata --locked --format-version 1 > /dev/null)
           done
 
       - name: Cache Cargo sources
@@ -426,15 +426,6 @@ jobs:
           artifact-ids: ${{ needs.build.outputs.locks-artifact }}
           path: .
 
-      - name: Validate all pinned Cargo locks and selected dependency graphs
-        shell: bash
-        run: |
-          set -euo pipefail
-          sha256sum --check product-lock-digests.txt
-          for noon_checkout in candidate; do
-            (cd "$noon_checkout" && cargo metadata --locked --format-version 1 > /dev/null)
-          done
-
       - name: Use each selected checkout's pinned Rust and WASM toolchain
         shell: bash
         run: |
@@ -446,6 +437,15 @@ jobs:
               rustup show active-toolchain
               rustup target add wasm32-unknown-unknown
             )
+          done
+
+      - name: Validate all pinned Cargo locks and selected dependency graphs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check product-lock-digests.txt
+          for noon_checkout in candidate; do
+            (cd "$noon_checkout" && cargo metadata --locked --format-version 1 > /dev/null)
           done
 
       - name: Cache Cargo sources
