@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
+import { isSquareToCircleTransformFrame } from "./playground-mobile-frame-contract.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 
 const { webkit, devices } = playwright;
@@ -177,7 +178,7 @@ try {
       });
       if (samples.length < 1000) samples.push(sample);
       assert.ok(!sample?.error, sample?.error);
-      if (sample?.time > 1.15 && sample.time < 1.85 && sample.objectCount === 1) {
+      if (isSquareToCircleTransformFrame(sample)) {
         liveIntermediate ??= sample;
       }
       if (sample?.time >= 3 - 1e-6 && sample.objectCount === 0) {
