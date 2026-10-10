@@ -1,0 +1,154 @@
+name: GPU Glow merged-master source-bound gallery recapture (temporary)
+on:
+  push:
+    branches: [codex/m1-glow-master-recapture-helper-129c]
+    paths: [.github/workflows/m1-glow-master-recapture.yml]
+permissions:
+  contents: read
+concurrency:
+  group: m1-glow-master-recapture
+  cancel-in-progress: true
+jobs:
+  capture:
+    name: Rebuild 22 real gallery posters from exact merged-source WASM
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      actions: write
+    env:
+      NOON_SHOWCASE_BACKEND: webgpu
+    steps:
+      - name: Checkout only the clean merged product commit
+        uses: actions/checkout@v7
+        with:
+          ref: 129ceef896256f00526e32e7e40f021d0a3451a4
+          fetch-depth: 0
+      - name: Check exact source, storyboard, and canonical web package metadata
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 129ceef896256f00526e32e7e40f021d0a3451a4
+          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          manifest = json.loads(Path('web/python/examples/noon_showcase_manifest.json').read_text())
+          entries = manifest['entries']
+          assert len(entries) == 22, len(entries)
+          assert sum(x['id'] == 'showcase-gpu-glow' for x in entries) == 1
+          assert Path('web/python/examples/showcase_gpu_glow.py').is_file()
+          PY
+      - name: Wait for canonical exact-source CI package, not helper-built WASM
+        id: package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api=https://api.github.com/repos/yongkyuns/noon
+          for attempt in $(seq 1 120); do
+            run=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "$api/actions/runs/38041947022")
+            test "$(jq -r .head_sha <<< "$run")" = 129ceef896256f00526e32e7e40f021d0a3451a4
+            artifacts=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "$api/actions/runs/38041947022/artifacts?per_page=100")
+            count=$(jq '[.artifacts[] | select(.name == "web-pkg" and .expired == false)] | length' <<< "$artifacts")
+            if [ "$count" = 1 ]; then
+              echo "Source-bound canonical package exists"
+              exit 0
+            fi
+            if [ "$(jq -r .status <<< "$run")" = completed ]; then
+              echo "::error::Source CI completed without source-bound WebAssembly artifact"
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "::error::Source-bound canonical WebAssembly package missing"
+          exit 1
+      - name: Download signed canonical WASM package from same source CI
+        uses: actions/download-artifact@v8
+        with:
+          name: web-pkg
+          repository: yongkyuns/noon
+          run-id: 38041947022
+          github-token: ${{ github.token }}
+          path: web
+      - name: Verify build identity against product checkout
+        run: |
+          set -euo pipefail
+          env -u GITHUB_SHA node .github/ci/wasm-build.mjs verify
+          test "$(git rev-parse HEAD)" = 129ceef896256f00526e32e7e40f021d0a3451a4
+          git diff --quiet HEAD --
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned capture/browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Capture all 22 actual showcase lessons from merged source
+        run: node scripts/showcase-capture.mjs
+      - name: Require image hashes, source-bound poster and gallery tests
+        run: |
+          set -euo pipefail
+          node --test web/showcase-gallery.test.mjs scripts/showcase-posters.test.mjs web/showcase-capture.test.mjs
+          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
+          test -s web/thumbnails/showcase/showcase-gpu-glow.png
+          test -s web/thumbnails/showcase/capture-evidence.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          evidence=json.loads(Path('web/thumbnails/showcase/capture-evidence.json').read_text())
+          assert evidence['captureRevision'] == '129ceef896256f00526e32e7e40f021d0a3451a4', evidence['captureRevision']
+          posters=evidence['posters']
+          assert len(posters) == 22, len(posters)
+          assert {p['id'] for p in posters} == {e['id'] for e in json.loads(Path('web/python/examples/noon_showcase_manifest.json').read_text())['entries']}
+          assert evidence['runtimeBuildIdentity']['sourceRevision'] == evidence['captureRevision']
+          PY
+      - name: Publish real poster pixels and consistent evidence to isolated candidate only
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 129ceef896256f00526e32e7e40f021d0a3451a4
+          python3 - <<'PY'
+          import subprocess
+          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          assert changed, 'gallery recapture must change source-bound evidence'
+          assert all(x.startswith('web/thumbnails/showcase/') for x in changed), changed
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/thumbnails/showcase/
+          git diff --cached --check
+          git diff --cached --name-only | grep -qx 'web/thumbnails/showcase/capture-evidence.json'
+          git commit -m "feat(glow): recapture all 22 gallery posters against integrated master"
+          test "$(git rev-parse HEAD^)" = 129ceef896256f00526e32e7e40f021d0a3451a4
+          branch=refs/heads/codex/m1-glow-master-source-6bca
+          actual=$(git ls-remote origin "$branch" | cut -f1)
+          test "$actual" = 129ceef896256f00526e32e7e40f021d0a3451a4
+          git push origin "HEAD:$branch"
+          git rev-parse HEAD > gallery-integrated-head.txt
+      - name: Dispatch canonical CI on the completed isolated source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --request POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data '{"ref":"codex/m1-glow-master-source-6bca"}' \
+            https://api.github.com/repos/yongkyuns/noon/actions/workflows/ci.yml/dispatches
+      - name: Save exact pixels, capture metadata, and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m1-glow-integrated-master-true-posters
+          path: |
+            browser-smoke-artifacts/showcase/webgpu/
+            web/thumbnails/showcase/showcase-gpu-glow.png
+            web/thumbnails/showcase/capture-evidence.json
+            gallery-integrated-head.txt
+          if-no-files-found: warn
+          retention-days: 7
