@@ -166,11 +166,18 @@ try {
         if (gallery.selectedExampleId !== "parity-square-to-circle" ||
             patch?.dataset.exampleId !== "parity-square-to-circle") return null;
         if (patch.dataset.state === "error") return { error: patch.value };
+        const requestedAtMs = performance.now();
         const result = await gallery.executionMetrics();
+        const receivedAtMs = performance.now();
         return result?.metrics ? {
           time: result.metrics.time,
           backend: result.metrics.backend,
           objectCount: result.metrics.objectCount,
+          requestedAtMs, receivedAtMs,
+          metricsRoundTripMs: receivedAtMs - requestedAtMs,
+          presentedFrames: result.metrics.presentedFrames,
+          rendererSampledAtMs: result.metrics.sampledAtMs,
+          lastFrameTimestamp: result.metrics.lastFrameTimestamp,
         } : null;
       });
       if (samples.length < 1000) samples.push(sample);

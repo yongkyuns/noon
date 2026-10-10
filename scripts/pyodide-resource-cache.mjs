@@ -15,6 +15,7 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
     hits: 0,
     upstreamRequests: 0,
     upstreamFailures: 0,
+    upstreamFailureDetails: [],
     fulfillFailures: 0,
     fulfillFailureDetails: [],
     retainedBytes: 0,
@@ -24,7 +25,9 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
     counts.upstreamRequests++;
     let response;
     try {
-      response = await route.fetch();
+      // Retry only failed upstream GET transport, not any scored test or browser case.
+      // Playwright maxRetries does not retry HTTP error responses.
+      response = await route.fetch({ maxRetries: 2 });
       const body = await response.body();
       const headers = { ...response.headers() };
       // APIResponse exposes decoded bytes. Do not reuse compressed lengths or
@@ -41,6 +44,10 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
       return value;
     } catch (error) {
       counts.upstreamFailures++;
+      counts.upstreamFailureDetails.push({
+        url: url.slice(0, 500), error: String(error?.message ?? error).slice(0, 240),
+      });
+      if (counts.upstreamFailureDetails.length > 5) counts.upstreamFailureDetails.shift();
       entries.delete(url);
       throw error;
     } finally {
@@ -99,6 +106,7 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
         baseUrl,
         ...counts,
         fulfillFailureDetails: counts.fulfillFailureDetails.map((detail) => ({ ...detail })),
+        upstreamFailureDetails: counts.upstreamFailureDetails.map((detail) => ({ ...detail })),
       };
     },
   };

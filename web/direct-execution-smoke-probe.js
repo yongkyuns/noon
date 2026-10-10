@@ -36,6 +36,7 @@ const {
   createDirectDrawBorderThenFillSmokeRenderer,
   createDirectOrdinarySubsetDisplaySmokeRenderer,
   createDirectOrdinaryMembershipSmokeRenderer,
+  createDirectOverdueShortAnimationRenderer,
   createDirectOrdinaryTextWriteSmokeRenderer,
   createDirectAutomaticWaitTextSmokeRenderer,
   createDirectExactPropertyTracksSmokeRenderer,
@@ -2774,6 +2775,40 @@ async function directNativeSignalsProof(expectedBackend) {
   return metrics;
 }
 
+async function directOverdueShortAnimationProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(320, 180);
+  const renderer = await createDirectOverdueShortAnimationRenderer(canvas);
+  try {
+    if (!renderer.render()) throw new Error("initial direct source frame was not presented");
+    renderer.directWakeDirectiveJson(1_000);
+    // All thirty-two 1/16-second animations are already overdue at this wake.
+    renderer.advanceDirectRealtime(3_000);
+    if (!renderer.render()) throw new Error("late direct source could not present a frame");
+    const frame = JSON.parse(renderer.debugSelectionFrameJson());
+    const finalLuma = await sampleRenderedNeighborhood(canvas, 2.0, 0.0, 2);
+    const oldLuma = await sampleRenderedNeighborhood(canvas, 0.0, 0.0, 2);
+    const result = {
+      backend: renderer.rendererBackend(),
+      time: renderer.time(),
+      objectX: frame.objects[0]?.center?.[0],
+      draws: renderer.lastDrawCalls(),
+      bytesUploaded: renderer.lastBytesUploaded(),
+      finalLuma,
+      oldLuma,
+    };
+    if (result.backend !== expectedBackend ||
+        Math.abs(result.time - 2.0) > 1e-9 ||
+        Math.abs(result.objectX - 2.0) > 0.02 ||
+        result.draws <= 0 || result.bytesUploaded <= 0 ||
+        finalLuma < 180 || oldLuma > 60) {
+      throw new Error(`direct overdue first presented frame did not catch up: ${JSON.stringify(result)}`);
+    }
+    return result;
+  } finally {
+    renderer.free();
+  }
+}
+
 async function start() {
   if (typeof createDirectExecutionSmokeRenderer !== "function") {
     state.metrics = {
@@ -2850,6 +2885,7 @@ async function start() {
     throw new Error("direct execution renderer prepared a static frame without a publication");
   }
 
+  metrics.overdueShortAnimation = await directOverdueShortAnimationProof(expectedBackend);
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.callbackPaint = await directCallbackPaintProof(expectedBackend);
   metrics.lineMatch = await directLineMatchProof(expectedBackend);

@@ -20,7 +20,11 @@ const base = external ?? `http://127.0.0.1:${port}/web/`;
 const artifacts = path.resolve(root, process.env.NOON_PLAYGROUND_MATRIX_ARTIFACTS ??
   `browser-smoke-artifacts/gallery/${browserName}-${profile}`);
 const stringify = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v, 2);
-const curatedLessons = ['showcase-spatial-scene', 'showcase-three-d-axes', 'showcase-linear-algebra', 'showcase-camera-follows-path'];
+const curatedLessons = ['showcase-spatial-scene', 'showcase-three-d-axes', 'showcase-linear-algebra', 'showcase-camera-follows-path', 'showcase-text-math', 'showcase-latex-create'];
+const liveMathAnimations = {
+  'showcase-latex-create': [['Create', 0, 1], ['Write', 1, 2]],
+  'showcase-text-math': [['Write', 0, 1.2]],
+};
 const affected = ['compatible-timed-composition', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square', 'showcase-always-redraw', ...curatedLessons];
 await mkdir(artifacts, { recursive: true });
 let server, browser, runtimeCache;
@@ -155,7 +159,8 @@ try {
     }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
-    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [] };
+    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [], presentations: [] };
+    const observedPublications = new Set();
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
     const pendingRequests = new Map();
     context.on('request', request => pendingRequests.set(request, {
@@ -192,11 +197,11 @@ try {
           // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
           const deadline = Date.now() + 105000;
           while (Date.now() < deadline) {
-            const { workerMessages, ...state } = await page.evaluate(() => {
+            const { workerMessages, ...state } = await page.evaluate(profilePublicationStages => {
               const gallery = window.__noonExampleGallery;
               if (!window.__galleryMetricsPending) {
                 window.__galleryMetricsPending = true;
-                Promise.resolve(gallery.executionMetrics()).then(value => { window.__galleryMetrics = value; }, error => { window.__galleryMetricsError = String(error); })
+                Promise.resolve(gallery.executionMetrics({ profilePublicationStages })).then(value => { window.__galleryMetrics = value; }, error => { window.__galleryMetricsError = String(error); })
                   .finally(() => { window.__galleryMetricsPending = false; });
               }
               return { workerMessages: window.__galleryWorkerMessages ?? [],
@@ -209,13 +214,20 @@ try {
                 rendererBackend: document.querySelector('#status')?.dataset.rendererBackend,
                 renderHost: document.querySelector('#status')?.dataset.renderHost,
                 metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError };
-            });
+            }, Object.hasOwn(liveMathAnimations, entry.id));
             lastWorkerMessages = workerMessages;
             result.state = state;
             assert.equal(state.selected, entry.id);
             assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
             assert.equal(state.metricsError, undefined);
             const metric = state.metrics?.metrics;
+            for (const presentation of metric?.publicationStageSamples ?? []) {
+              const key = `${presentation.session}:${presentation.sequence}`;
+              if (!observedPublications.has(key)) {
+                observedPublications.add(key);
+                result.presentations.push(presentation);
+              }
+            }
             if (metric && result.samples.at(-1)?.time !== metric.time) result.samples.push({
               time: metric.time, objects: metric.objectCount, frames: metric.presentedFrames,
               ...(entry.id === 'showcase-camera-follows-path' ? {
@@ -227,6 +239,11 @@ try {
             await page.waitForTimeout(100);
           }
           assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
+          for (const [animation, start, end] of liveMathAnimations[entry.id] ?? []) {
+            assert.ok(result.presentations.some(sample => sample.time > start && sample.time < end &&
+              sample.presentation > 0 && Number.isFinite(sample.presentedAtMs)),
+              `${animation}: live math animation skipped all intermediate frames`);
+          }
           if (process.env.NOON_GALLERY_COI === '1') {
             assert.equal(result.state.crossOriginIsolated, true, 'gallery COI test did not isolate the browser');
             assert.equal(result.state.transportMode, 'shared', 'gallery COI test did not use the shared mailbox');
@@ -367,7 +384,17 @@ try {
   // Keep WebKit's cold WASM compilation and GPU contexts sequential on CI.
   // Cold startup itself is covered by the public playground workflow.
   const concurrency = browserName === 'webkit' ? 1 : 2;
-  await Promise.all(Array.from({ length: concurrency }, async () => { while (next < queue.length) await check(queue[next++]); }));
+  const liveMathCases = [];
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (next < queue.length) {
+      const spec = queue[next++];
+      // The live reveal probe observes a single gallery's wall-clock playback.
+      // Other cold software-GPU/WASM contexts can consume its entire interval.
+      if (liveMathAnimations[spec.entry.id]) liveMathCases.push(spec);
+      else await check(spec);
+    }
+  }));
+  for (const spec of liveMathCases) await check(spec);
   assert.equal(results.length, queue.length, 'incomplete inventory');
   const failed = results.filter(result => result.outcome !== 'pass');
   assert.deepEqual(failed.map(result => [result.id, result.noJspi, result.failure]), [], 'gallery runtime failures');

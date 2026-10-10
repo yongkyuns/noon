@@ -57,7 +57,10 @@ test('independent contexts share one in-flight fetch and identical resource byte
 test('failed fetches still fail their cases and do not poison later requests', async () => {
   const cache = createPyodideResourceCache(source);
   const handler = await attach(cache);
-  const failed = request(async () => { throw new Error('network failure'); });
+  const failed = request(async (options) => {
+    assert.deepEqual(options, { maxRetries: 2 }, 'only transport-level GET retries are allowed');
+    throw new Error('network failure');
+  });
   await handler(failed);
   assert.equal(failed.result.aborted, 'failed');
   assert.equal(failed.result.response, undefined);
@@ -66,6 +69,9 @@ test('failed fetches still fail their cases and do not poison later requests', a
   assert.equal(later.result.response.body.toString(), 'ok');
   assert.equal(cache.stats().upstreamRequests, 2);
   assert.equal(cache.stats().upstreamFailures, 1);
+  assert.deepEqual(cache.stats().upstreamFailureDetails, [
+    { url, error: 'network failure' },
+  ]);
   assert.equal(cache.stats().fulfillFailures, 0);
 });
 

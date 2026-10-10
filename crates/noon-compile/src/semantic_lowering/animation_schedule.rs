@@ -578,7 +578,7 @@ impl std::fmt::Display for SemanticAnimationScheduleError {
             ),
             Self::InvalidTextWriteTarget { animation, target } => write!(
                 formatter,
-                "semantic TextWrite animation {}:{} target {}:{} has no valid plain-Text glyph plan",
+                "semantic TextWrite animation {}:{} target {}:{} has no valid retained-text member plan",
                 animation.slot(),
                 animation.generation(),
                 target.slot(),
@@ -1107,7 +1107,6 @@ trait AnimationScheduleLookup {
     fn family_animation_member_count(
         &self,
         target: Self::Reference,
-        mode: noon_core::FamilyAnimationMode,
         family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     ) -> Option<u32>;
 }
@@ -1115,14 +1114,9 @@ trait AnimationScheduleLookup {
 fn cached_family_animation_member_count(
     store: &SemanticStore,
     family: SemanticNodeId,
-    mode: noon_core::FamilyAnimationMode,
-    cache: &std::cell::RefCell<std::collections::HashMap<(SemanticNodeId, bool), Option<u32>>>,
+    cache: &std::cell::RefCell<std::collections::HashMap<SemanticNodeId, Option<u32>>>,
 ) -> Option<u32> {
-    let key = (
-        family,
-        matches!(mode, noon_core::FamilyAnimationMode::Reveal),
-    );
-    if let Some(count) = cache.borrow().get(&key) {
+    if let Some(count) = cache.borrow().get(&family) {
         return *count;
     }
     let count = (|| {
@@ -1130,27 +1124,12 @@ fn cached_family_animation_member_count(
         let mut total = 0_u32;
         for leaf in leaves {
             let state = store.semantic_object_state_checked(leaf).ok()?;
-            let count = match (mode, state.content) {
-                (
-                    _,
-                    noon_core::SemanticObjectContent::Geometry(_)
-                    | noon_core::SemanticObjectContent::Image(_),
-                ) => 1,
-                (_, noon_core::SemanticObjectContent::Text(handle)) => {
+            let count = match state.content {
+                noon_core::SemanticObjectContent::Geometry(_)
+                | noon_core::SemanticObjectContent::Image(_) => 1,
+                noon_core::SemanticObjectContent::Text(handle) => {
                     let resource = store.text_resources().get(handle)?;
-                    let members = match mode {
-                        noon_core::FamilyAnimationMode::DrawBorderThenFill => {
-                            if resource.kind != noon_core::TextSourceKind::Plain {
-                                return None;
-                            }
-                            noon_core::plain_text_animation_members(resource)
-                                .ok()?
-                                .len()
-                        }
-                        noon_core::FamilyAnimationMode::Reveal => {
-                            noon_core::text_animation_members(resource).ok()?.len()
-                        }
-                    };
+                    let members = noon_core::text_animation_members(resource).ok()?.len();
                     u32::try_from(members).ok()?
                 }
             };
@@ -1158,7 +1137,7 @@ fn cached_family_animation_member_count(
         }
         Some(total)
     })();
-    cache.borrow_mut().insert(key, count);
+    cache.borrow_mut().insert(family, count);
     count
 }
 
@@ -1166,7 +1145,7 @@ struct PublishedAnimationLookup<'a> {
     store: &'a SemanticStore,
     index: &'a SemanticExecutionIndex,
     family_animation_member_counts:
-        std::cell::RefCell<std::collections::HashMap<(SemanticNodeId, bool), Option<u32>>>,
+        std::cell::RefCell<std::collections::HashMap<SemanticNodeId, Option<u32>>>,
 }
 
 impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
@@ -1400,14 +1379,12 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
     fn family_animation_member_count(
         &self,
         target: Self::Reference,
-        mode: noon_core::FamilyAnimationMode,
         family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     ) -> Option<u32> {
         if let Some(member) = family_member {
             return cached_family_animation_member_count(
                 self.store,
                 member.family,
-                mode,
                 &self.family_animation_member_counts,
             );
         }
@@ -1416,16 +1393,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
             return None;
         };
         let resource = self.store.text_resources().get(handle)?;
-        let count = match mode {
-            noon_core::FamilyAnimationMode::DrawBorderThenFill => {
-                noon_core::plain_text_animation_members(resource)
-                    .ok()?
-                    .len()
-            }
-            noon_core::FamilyAnimationMode::Reveal => {
-                noon_core::text_animation_members(resource).ok()?.len()
-            }
-        };
+        let count = noon_core::text_animation_members(resource).ok()?.len();
         u32::try_from(count).ok()
     }
 }
@@ -1434,7 +1402,7 @@ struct PreparedAnimationLookup<'a, 'store> {
     prepared: &'a PreparedSemanticMutationTransaction<'store>,
     index: &'a SemanticExecutionIndex,
     family_animation_member_counts:
-        std::cell::RefCell<std::collections::HashMap<(SemanticNodeId, bool), Option<u32>>>,
+        std::cell::RefCell<std::collections::HashMap<SemanticNodeId, Option<u32>>>,
 }
 
 impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
@@ -1857,14 +1825,12 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
     fn family_animation_member_count(
         &self,
         target: Self::Reference,
-        mode: noon_core::FamilyAnimationMode,
         family_member: Option<noon_core::SemanticFamilyAnimationMember>,
     ) -> Option<u32> {
         if let Some(member) = family_member {
             return cached_family_animation_member_count(
                 self.prepared.store(),
                 member.family,
-                mode,
                 &self.family_animation_member_counts,
             );
         }
@@ -1873,16 +1839,7 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
             return None;
         };
         let resource = self.prepared.store().text_resources().get(handle)?;
-        let count = match mode {
-            noon_core::FamilyAnimationMode::DrawBorderThenFill => {
-                noon_core::plain_text_animation_members(resource)
-                    .ok()?
-                    .len()
-            }
-            noon_core::FamilyAnimationMode::Reveal => {
-                noon_core::text_animation_members(resource).ok()?.len()
-            }
-        };
+        let count = noon_core::text_animation_members(resource).ok()?.len();
         u32::try_from(count).ok()
     }
 }
@@ -2389,7 +2346,7 @@ where
                 .or_else(|| lookup.entering_execution_object_id(target))
                 .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
             let member_count = lookup
-                .family_animation_member_count(target, mode, family_member)
+                .family_animation_member_count(target, family_member)
                 .ok_or(AnimationSchedulePlanError::InvalidTextWriteTarget { animation, target })?;
             let (default_duration, default_rate, default_lag_ratio) = match mode {
                 noon_core::FamilyAnimationMode::DrawBorderThenFill => (

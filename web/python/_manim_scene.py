@@ -23,7 +23,6 @@ import _manim_composition as _composition
 import _manim_draw_border_then_fill as _draw_border_then_fill
 import _manim_family_creation as _family_creation
 import _manim_indication as _indication
-import _manim_latex as _latex
 import _manim_lifecycle as _lifecycle
 import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
@@ -1973,24 +1972,24 @@ def _canonical_draw_border_then_fill_animation(scene: _base.Scene, animation: ob
 
 
 def _canonical_text_write_animation(scene: _base.Scene, animation: object):
-    """Classify single plain-Text Write/Unwrite without deriving glyph state."""
+    """Classify retained-text Write/Unwrite without deriving glyph state."""
     if not isinstance(animation, _family_creation.Write):
         return None
     target = animation.target
-    if not isinstance(target, _typst.Text) or isinstance(target, _compat.Group):
+    if not isinstance(target, _typst._RetainedTextMobject) or isinstance(target, _compat.Group):
         return None
     if getattr(target, "_semantic_handle", None) is None:
-        raise NotImplementedError("canonical Text Write requires a typed plain Text target")
+        raise NotImplementedError("canonical Text Write requires a typed retained text target")
     if animation.introducer:
         if target._scene is not None and target._scene is not scene:
             raise ValueError("Text Write target belongs to another Scene")
     elif target._scene is not scene:
-        raise ValueError("reverse Text Write requires a plain Text target in this Scene")
+        raise ValueError("reverse Text Write requires a retained text target in this Scene")
     return target
 
 
 def _canonical_text_family_write_animation(scene: _base.Scene, animation: object):
-    """Classify a plain-Text family Write/Unwrite without traversing glyphs."""
+    """Classify retained-text family Write/Unwrite without traversing glyphs."""
     if not isinstance(animation, _family_creation.Write):
         return None
     family = animation.target
@@ -1999,10 +1998,10 @@ def _canonical_text_family_write_animation(scene: _base.Scene, animation: object
     leaves = _compat._leaf_mobjects(family)
     if not leaves:
         raise ValueError("canonical Text family Write requires at least one leaf")
-    if not all(isinstance(member, _typst.Text) for member in leaves):
+    if not all(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
         if any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
             raise NotImplementedError(
-                "canonical family Write supports plain Text; Typst and MathTypst remain #959"
+                "canonical family Write requires retained text leaves"
             )
         return None
     if getattr(family, "_semantic_family_handle", None) is None:
@@ -2022,13 +2021,7 @@ def _canonical_text_reveal_animation(scene: _base.Scene, animation: object):
     target = getattr(animation, "target", None)
     if isinstance(target, _compat.Group):
         return None
-    if isinstance(target, _typst._RetainedTextMobject) and not isinstance(
-        target, (_typst.Text, _latex.MathTexPart)
-    ):
-        raise NotImplementedError(
-            "canonical Text Create/Uncreate supports Text and compiled Tex/MathTex parts"
-        )
-    if not isinstance(target, (_typst.Text, _latex.MathTexPart)):
+    if not isinstance(target, _typst._RetainedTextMobject):
         return None
     if getattr(target, "_semantic_handle", None) is None:
         raise NotImplementedError(
@@ -2054,15 +2047,6 @@ def _canonical_family_reveal_animation(scene: _base.Scene, animation: object):
     leaves = _compat._leaf_mobjects(family)
     if not leaves:
         raise ValueError("canonical family Create/Uncreate requires at least one leaf")
-    if any(
-        isinstance(member, _typst._RetainedTextMobject)
-        and not isinstance(member, (_typst.Text, _latex.MathTexPart))
-        for member in leaves
-    ):
-        raise NotImplementedError(
-            "canonical family Create/Uncreate supports Text, compiled Tex/MathTex, "
-            "and ordinary vector leaves"
-        )
     if any(
         not isinstance(member, _base.Mobject)
         or getattr(member, "_semantic_handle", None) is None

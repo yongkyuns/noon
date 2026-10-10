@@ -648,6 +648,7 @@ try {
     expectedComposition = false,
     expectedCamera = false,
     expectedDifferentRotations = false,
+    expectedReplayUnavailable = null,
   } of [
     {
       filename: "live_semantic_scene.py",
@@ -801,7 +802,7 @@ try {
       endpointTime: null,
     },
     { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
-    { filename: "ordinary_family_membership_order.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_membership_order.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null, expectedReplayUnavailable: "Incomplete" },
     { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
     { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_replacement.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
@@ -883,6 +884,7 @@ try {
       expectedComposition,
       expectedCamera,
       expectedDifferentRotations,
+      expectedReplayUnavailable,
       filename,
     }) => {
       const harness = window.sharedAuthoringSmoke;
@@ -946,6 +948,19 @@ try {
         }
 
         const initial = await waitForFrame();
+        if (expectedReplayUnavailable !== null) {
+          // This explicit live example starts a wait without driving/completing
+          // it. Its final coherent frame remains usable, but it has not authored
+          // the history required for replay or elapsed playback observation.
+          const paused = await execution.pause();
+          if (paused.replaySupported || paused.replayUnavailable !== expectedReplayUnavailable ||
+              paused.playing || paused.time !== 0) {
+            throw new Error(`${filename}: unfinished source did not retain its paused frontier`);
+          }
+          if ((await execution.state()).time !== 0) {
+            throw new Error(`${filename}: paused source projected unauthored elapsed time`);
+          }
+        }
         let endpoint = null;
         if (endpointTime !== null) {
           const paused = await execution.pause();
@@ -960,7 +975,7 @@ try {
       } finally {
         if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, expectedDifferentRotations, filename });
+    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, expectedDifferentRotations, expectedReplayUnavailable, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
     if (objectCount === 0) {
       assert.equal(result.metrics.drawCalls, 0, `${filename}: removed object still draws`);
@@ -3526,4 +3541,32 @@ class LateFailure(Scene):
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
+}
+
+// The same compiled-math family programs run through typed direct Rust/WASM
+// and the ordinary Python worker. Existing native-text programs remain unchanged.
+{
+  const { qualifyPairedAuthoring } = await import("./paired-authoring-qualification.mjs");
+  const { disableAuthoringJspi } = await import("./playground-browser-support.mjs");
+  const cases = [];
+  for (const [operation, factory, count] of [
+    ["write", "createDirectMathFamilyWriteSmokeRenderer", 3],
+    ["reveal", "createDirectMathFamilyRevealSmokeRenderer", 4],
+  ]) {
+    const source = (await readFile(path.join(repoRoot, `web/python/examples/ordinary_text_family_${operation}.py`), "utf8"))
+      .replace("from noon import ", "from noon import MathTypst, ")
+      .replace(/Text\("(I|LONG|ONE)"\)/g, "MathTypst('\"$1\"')")
+      .replace("Square(0.6)", "Square(0.6).set_fill(opacity=1)")
+      .replace("    def construct(self):", "    async def construct(self):")
+      .replaceAll("self.play(", "await self.play(")
+      .replaceAll("self.wait(", "await self.wait(");
+    for (const sampleTime of [1, 2.5, 3.25]) {
+      cases.push({ id: `math-family-${operation}-${sampleTime}`, source, factory,
+        playback: "live", duration: 3.25, sampleTime, boundaries: [2, 3],
+        objectCount: sampleTime === 3.25 ? 1 : count });
+    }
+  }
+  await qualifyPairedAuthoring({ cases,
+    artifactDirectory: "browser-smoke-artifacts/shared-math-family",
+    prepareContext: disableAuthoringJspi });
 }

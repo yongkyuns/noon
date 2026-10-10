@@ -246,7 +246,7 @@ impl RetainedFramePreparer {
                         .copied()
                         .filter(|(owner, _)| *owner == object_index);
                     let reveal = if let Some((_, vector_index)) = text_vector {
-                        self.family_text_vector_reveal(
+                        self.family_text_vector_progress(
                             frame,
                             plan,
                             object_index,
@@ -337,7 +337,7 @@ impl RetainedFramePreparer {
         }
     }
 
-    pub(super) fn family_text_vector_reveal(
+    pub(super) fn family_text_vector_progress(
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
