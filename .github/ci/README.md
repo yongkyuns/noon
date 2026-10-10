@@ -211,9 +211,17 @@ and a measured tool-image decision remain separate #1265 acceptance work.
 
 ### Product measurement protocol
 
-`playground-product-gate.yml` builds the baseline, pinned anchor, and candidate release packages
-in one producer, preserving the job-local compiler cache between fresh source
-builds. Its measurement job downloads the producer's immutable artifact IDs and
+`playground-product-gate.yml` pins the exact tested merge, first-parent
+baseline, and cumulative anchor in a common preparation job. That job resolves
+all three Cargo dependency locks under one source identity, validates them with
+`cargo metadata --locked`, hashes their bytes, and uploads one immutable
+same-run lock artifact. Three independent Linux runners then build the baseline,
+anchor, and candidate release packages in parallel. Candidate renderer-smoke
+and production variants are still built sequentially on the same runner, sharing
+its job-local compiler-object cache but never restoring an executable from a
+previous PR. Each builder verifies the pinned lock hashes and selected full
+Cargo dependency graph before compiling.
+The measurement jobs download the builders' immutable artifact IDs and
 verifies each checkout SHA, release feature set, compiler pin, resolved lockfile,
 and runtime-file hashes using the shared WASM artifact contract. The candidate is
 GitHub's exact tested PR merge commit; the baseline is that merge's actual first
@@ -223,8 +231,8 @@ event base remains provenance and is never substituted for the actual baseline.
 Comparison retries check out the producer's pinned commits and verify the recorded
 pair alongside package contents, so a moving PR ref cannot change the comparison.
 
-Before the first product build, the producer resolves the baseline Cargo lock once.
-It reuses that lock for checkouts whose tracked Cargo manifests, `.cargo` settings,
+Before releasing the lock bundle, the common producer resolves the baseline
+Cargo lock once. It reuses that lock for checkouts whose tracked Cargo manifests, `.cargo` settings,
 and Rust toolchain pin match; changed dependency inputs are resolved independently
 and logged. Existing tracked `Cargo.lock` files are preserved. Every lock is checked
 with `cargo metadata --locked` over the full dependency graph, so missing entries fail rather
@@ -262,7 +270,10 @@ cohorts are never treated as skipped/passing evidence. The two measurement jobs
 retain their 55-minute execution allowance; the aggregation/comparison job
 has a 20-minute allowance. No latency/FPS/visual acceptance threshold changes.
 Compiler cache remains job-local; release executables are not reused from
-untrusted prior PR runs.
+untrusted prior PR runs. The final required comparison fails closed if any of
+the three parallel build jobs, the lock producer, or either measurement cohort
+fails, is skipped or is cancelled. Additional builder jobs may increase runner
+consumption; measure both actual wall-clock latency and total runner time.
 The preview stays visible during measurement. The sampler sends read-only queries
 through the existing renderer metrics channel, consumes only its test-owned replies,
 and never adds aggregate source-owner queries to the callback lane. Replayable
