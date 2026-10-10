@@ -80,7 +80,7 @@ test("original strict comparison policy and the complete original five workloads
   assert.doesNotMatch(workflow, /best[- ]of|retry.*performance/i);
 });
 
-test("blocking comparison fails closed when either upstream cohort is missing, failed, or cancelled", () => {
+test("blocking comparison fails closed for any failed, cancelled, or missing build/cohort job", () => {
   const title = "      - name: Require successful production builds and both complete measurement cohorts\n";
   const parts = gate.split(title);
   assert.equal(parts.length, 2, "one blocking dependency gate");
@@ -89,23 +89,23 @@ test("blocking comparison fails closed when either upstream cohort is missing, f
   assert.ok(block.includes(marker), "missing executable dependency guard");
   const script = block.split(marker)[1].split("\n\n")[0].trimEnd()
     .split("\n").map(line => line.slice(10)).join("\n");
-  const run = (build, adjacentResult, cumulativeResult) => spawnSync("bash", ["-e", "-c", script], {
+  const results = ["BUILD", "BASELINE", "ANCHOR", "CANDIDATE", "ADJACENT", "CUMULATIVE"];
+  for (const name of results) assert.ok(block.includes("NOON_PRODUCT_" + name + "_RESULT"), name);
+  const run = values => spawnSync("bash", ["-e", "-c", script], {
     encoding: "utf8",
     env: {
       PATH: process.env.PATH,
-      NOON_PRODUCT_BUILD_RESULT: build,
-      NOON_PRODUCT_ADJACENT_RESULT: adjacentResult,
-      NOON_PRODUCT_CUMULATIVE_RESULT: cumulativeResult,
+      ...Object.fromEntries(results.map((name, index) => ["NOON_PRODUCT_" + name + "_RESULT", values[index]])),
     },
   });
-  assert.equal(run("success", "success", "success").status, 0);
-  for (const [build, adjacentResult, cumulativeResult] of [
-    ["failure", "success", "success"], ["success", "failure", "success"],
-    ["success", "success", "failure"], ["success", "cancelled", "success"],
-    ["success", "success", "skipped"], ["", "success", "success"],
-  ]) {
-    const result = run(build, adjacentResult, cumulativeResult);
-    assert.notEqual(result.status, 0,
-      "invalid cohort states were accepted: " + [build, adjacentResult, cumulativeResult].join(","));
+  const success = results.map(() => "success");
+  assert.equal(run(success).status, 0);
+  for (const index of results.keys()) {
+    for (const bad of ["failure", "cancelled", "skipped", ""]) {
+      const statuses = [...success];
+      statuses[index] = bad;
+      assert.notEqual(run(statuses).status, 0,
+        "failed or missing producer was accepted: " + results[index] + " " + bad);
+    }
   }
 });
