@@ -390,6 +390,11 @@ try {
   }));
   for (const spec of liveMathCases) await check(spec);
   assert.equal(results.length, queue.length, 'incomplete inventory');
+  assert.deepEqual(
+    results.map(({ id, noJspi }) => id + ":" + noJspi).sort(),
+    queue.map(({ entry, noJspi }) => entry.id + ":" + noJspi).sort(),
+    'missing or duplicated case execution in this shard',
+  );
   const failed = results.filter(result => result.outcome !== 'pass');
   assert.deepEqual(failed.map(result => [result.id, result.noJspi, result.failure]), [], 'gallery runtime failures');
   console.log(`All ${selectedEntries.length} ${selectedIds ? 'selected' : 'selectable'} examples and ${queue.length - selectedEntries.length} no-JSPI controls passed.`);
