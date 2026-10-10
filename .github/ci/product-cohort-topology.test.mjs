@@ -4,11 +4,11 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
-const jobNames = ["build", "measure-adjacent", "measure-cumulative", "compare"];
+const jobNames = ["build", "build-baseline", "build-anchor", "build-candidate", "measure-adjacent", "measure-cumulative", "compare"];
 const boundaries = [...workflow.matchAll(/^  ([a-z][a-z-]*):\s*$/gm)]
   .filter(match => jobNames.includes(match[1]));
 assert.deepEqual(boundaries.map(match => match[1]), jobNames,
-  "all four Product Gate jobs must exist in dependency order");
+  "all seven Product Gate jobs must exist in dependency order");
 
 function job(name) {
   const index = boundaries.findIndex(match => match[1] === name);
@@ -23,11 +23,11 @@ const gate = job("compare");
 
 test("both immutable-source measurement cohorts depend only on the common producer", () => {
   for (const [name, section] of [["adjacent", adjacent], ["cumulative", cumulative]]) {
-    assert.match(section, /^    needs: build$/m, name + " must not wait for the other cohort");
-    assert.ok(section.includes("if: ${{ needs.build.result == 'success' }}"), name + " cannot start on an unsuccessful producer");
+    assert.match(section, /^    needs: \[build, build-baseline, build-anchor, build-candidate\]$/m, name + " must not wait for the other cohort");
+    assert.ok(section.includes("if: ${{ always() && needs.build.result == 'success' && needs.build-baseline.result == 'success' && needs.build-anchor.result == 'success' && needs.build-candidate.result == 'success' }}"), name + " cannot start on an unsuccessful producer");
     assert.match(section, /Require successful production builds/);
     assert.match(section, /ref: \$\{\{ needs\.build\.outputs\.candidate-sha \}\}/);
-    assert.match(section, /artifact-ids: \$\{\{ needs\.build\.outputs\.candidate-artifact \}\}/);
+    assert.match(section, /artifact-ids: \$\{\{ needs\.build-candidate\.outputs\.candidate-artifact \}\}/);
     assert.match(section, /product-artifact\.mjs verify candidate candidate/);
     assert.match(section, /NOON_PRODUCT_HEAD_SHA: \$\{\{ needs\.build\.outputs\.head-sha \}\}/);
     assert.match(section, /NOON_PRODUCT_ANCHOR_SHA: \$\{\{ needs\.build\.outputs\.anchor-sha \}\}/);
@@ -48,7 +48,7 @@ test("both immutable-source measurement cohorts depend only on the common produc
 test("both cohorts upload exact same-run evidence IDs for the final comparator", () => {
   assert.match(adjacent, /evidence-artifact: \$\{\{ steps\.adjacent-evidence\.outputs\.artifact-id \}\}/);
   assert.match(cumulative, /evidence-artifact: \$\{\{ steps\.cumulative-evidence\.outputs\.artifact-id \}\}/);
-  assert.match(gate, /needs: \[build, measure-adjacent, measure-cumulative\]/);
+  assert.match(gate, /needs: \[build, build-baseline, build-anchor, build-candidate, measure-adjacent, measure-cumulative\]/);
   assert.match(gate, /artifact-ids: \$\{\{ needs\.measure-adjacent\.outputs\.evidence-artifact \}\}/);
   assert.match(gate, /artifact-ids: \$\{\{ needs\.measure-cumulative\.outputs\.evidence-artifact \}\}/);
   assert.match(gate, /node candidate\/\.github\/ci\/product-artifact\.mjs verify candidate candidate/);
