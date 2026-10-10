@@ -250,8 +250,19 @@ raster-image transforms (3.4–6.4 s), and vector-path construction/reveal (Béz
 These are representative product cases, not a dense-scene or live-allocation proof.
 All five workloads reuse the same downloaded packages and three-pair protocol,
 with no per-workload builds: 60 runs and ten comparisons across the two source
-cohorts. The comparison job has a 55-minute execution allowance; this does not
-change any latency/FPS/visual threshold.
+cohorts. The adjacent-base and cumulative pinned-anchor cohorts run concurrently
+on **different GitHub-hosted runners** to avoid GPU/CPU contention. Each
+30-run cohort still runs its unchanged B/C, C/B, B/C pairs serially, in the
+prescribed order, and uploads its full evidence under a distinct artifact ID.
+The original required **Runtime, visual, latency, and FPS regression** job
+downloads these exact same-run evidence IDs, re-verifies the immutable product
+packages, and performs all ten unchanged comparisons. It fails closed unless
+the producer and both complete measurement jobs succeeded; missing or failed
+cohorts are never treated as skipped/passing evidence. The two measurement jobs
+retain their 55-minute execution allowance; the aggregation/comparison job
+has a 20-minute allowance. No latency/FPS/visual acceptance threshold changes.
+Compiler cache remains job-local; release executables are not reused from
+untrusted prior PR runs.
 The preview stays visible during measurement. The sampler sends read-only queries
 through the existing renderer metrics channel, consumes only its test-owned replies,
 and never adds aggregate source-owner queries to the callback lane. Replayable

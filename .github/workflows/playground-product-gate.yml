@@ -266,14 +266,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  compare:
-    # Preserve the required check name. Retrying this job reuses the successful
-    # producer's exact artifact IDs, including when its run attempt is older.
-    name: Runtime, visual, latency, and FPS regression
+  measure-adjacent:
+    name: Adjacent product measurements
     needs: build
-    if: ${{ !cancelled() }}
+    if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
+    outputs:
+      evidence-artifact: ${{ steps.adjacent-evidence.outputs.artifact-id }}
     env:
       NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
       NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
@@ -435,6 +435,84 @@ jobs:
             done
           done <<< "$noon_workloads"
 
+      - name: Upload adjacent measurement evidence
+        id: adjacent-evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-adjacent-evidence-${{ github.run_attempt }}
+          path: candidate/browser-smoke-artifacts/product-gate
+          if-no-files-found: error
+          retention-days: 14
+
+  measure-cumulative:
+    name: Pinned-anchor product measurements
+    needs: build
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      evidence-artifact: ${{ steps.cumulative-evidence.outputs.artifact-id }}
+    env:
+      NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
+      NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
+      NOON_PRODUCT_HEAD_SHA: ${{ needs.build.outputs.head-sha }}
+      NOON_PRODUCT_EVENT_BASE_SHA: ${{ needs.build.outputs.event-base-sha }}
+      NOON_PRODUCT_ANCHOR_SHA: ${{ needs.build.outputs.anchor-sha }}
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
+    steps:
+      - name: Require successful production builds
+        env:
+          NOON_PRODUCT_BUILD_RESULT: ${{ needs.build.result }}
+        run: test "$NOON_PRODUCT_BUILD_RESULT" = success
+
+      - name: Checkout producer candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.candidate-sha }}
+          fetch-depth: 2
+          path: candidate
+
+      - name: Checkout cumulative performance anchor
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.anchor-sha }}
+          path: anchor
+
+      - name: Download cumulative anchor production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.anchor-artifact }}
+          path: anchor/web
+
+      - name: Download candidate production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          path: candidate/web
+
+      - name: Verify candidate production package for pinned-anchor measurement
+        run: node candidate/.github/ci/product-artifact.mjs verify candidate candidate
+
+      - name: Verify cumulative anchor source, configuration and package contents
+        env:
+          NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.anchor-sha }}
+        run: node candidate/.github/ci/product-artifact.mjs verify baseline anchor
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install browser measurement dependencies
+        working-directory: candidate
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
       - name: Measure three alternating cumulative-anchor pairs
         working-directory: candidate
         env:
@@ -465,6 +543,105 @@ jobs:
               done
             done
           done <<< "$noon_workloads"
+
+      - name: Upload cumulative-anchor measurement evidence
+        id: cumulative-evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-cumulative-evidence-${{ github.run_attempt }}
+          path: candidate/browser-smoke-artifacts/product-gate/cumulative
+          if-no-files-found: error
+          retention-days: 14
+
+  compare:
+    name: Runtime, visual, latency, and FPS regression
+    needs: [build, measure-adjacent, measure-cumulative]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
+      NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
+      NOON_PRODUCT_HEAD_SHA: ${{ needs.build.outputs.head-sha }}
+      NOON_PRODUCT_EVENT_BASE_SHA: ${{ needs.build.outputs.event-base-sha }}
+      NOON_PRODUCT_ANCHOR_SHA: ${{ needs.build.outputs.anchor-sha }}
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
+    steps:
+      - name: Require successful production builds and both complete measurement cohorts
+        env:
+          NOON_PRODUCT_BUILD_RESULT: ${{ needs.build.result }}
+          NOON_PRODUCT_ADJACENT_RESULT: ${{ needs.measure-adjacent.result }}
+          NOON_PRODUCT_CUMULATIVE_RESULT: ${{ needs.measure-cumulative.result }}
+        run: |
+          test "$NOON_PRODUCT_BUILD_RESULT" = success
+          test "$NOON_PRODUCT_ADJACENT_RESULT" = success
+          test "$NOON_PRODUCT_CUMULATIVE_RESULT" = success
+
+      - name: Checkout producer candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.candidate-sha }}
+          fetch-depth: 2
+          path: candidate
+
+      - name: Checkout producer baseline
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.baseline-sha }}
+          path: baseline
+
+      - name: Checkout cumulative performance anchor
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.anchor-sha }}
+          path: anchor
+
+      - name: Download baseline production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.baseline-artifact }}
+          path: baseline/web
+
+      - name: Download cumulative anchor production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.anchor-artifact }}
+          path: anchor/web
+
+      - name: Download candidate production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          path: candidate/web
+
+      - name: Verify source, configuration and package contents
+        run: |
+          node candidate/.github/ci/product-artifact.mjs verify baseline baseline
+          node candidate/.github/ci/product-artifact.mjs verify candidate candidate
+
+      - name: Verify cumulative anchor source, configuration and package contents
+        env:
+          NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.anchor-sha }}
+        run: node candidate/.github/ci/product-artifact.mjs verify baseline anchor
+
+      - name: Download exact adjacent measurement evidence
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.measure-adjacent.outputs.evidence-artifact }}
+          path: candidate/browser-smoke-artifacts/product-gate
+
+      - name: Download exact cumulative measurement evidence
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.measure-cumulative.outputs.evidence-artifact }}
+          path: candidate/browser-smoke-artifacts/product-gate/cumulative
+
+      - name: Install pinned comparison image dependency
+        working-directory: candidate
+        run: npm install --no-save --ignore-scripts pngjs@7.0.0
 
       - name: Compare product behavior
         working-directory: candidate
@@ -498,7 +675,7 @@ jobs:
           exit "$noon_failed"
 
       - name: Upload product regression evidence
-        if: always()
+        if: ${{ always() && needs.measure-adjacent.result == 'success' && needs.measure-cumulative.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: playground-product-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
