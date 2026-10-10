@@ -358,7 +358,7 @@ jobs:
       - name: Build cumulative anchor production package
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
-          NOON_PRODUCT_BASE_SHA: ${{ steps.anchor.outputs.anchor-sha }}
+          NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.anchor-sha }}
         run: |
           node candidate/.github/ci/product-artifact.mjs prepare baseline anchor
           mv anchor .product-source
