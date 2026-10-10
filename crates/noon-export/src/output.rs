@@ -5,6 +5,7 @@
 //! is reported successful before EOF, encoder exit and destination publication.
 mod destination;
 mod process;
+mod terminal_duration;
 
 use std::error::Error;
 use std::fmt;
@@ -19,7 +20,7 @@ use crate::{
     CaptureSummary, CapturedFrame,
 };
 use destination::Destination;
-use noon::integration::{ExportFrameOptions, ExportFrames, FrameRate};
+use noon::integration::{ExportEndReason, ExportFrameOptions, ExportFrames, FrameRate};
 use noon::{LiveContinuation, LiveProgram, RustHostCallbackTable};
 use process::Encoder;
 
@@ -153,6 +154,10 @@ pub fn export_file<C: LiveContinuation>(
             "PNG frame limit exceeds image2 numbering",
         )));
     }
+    // Only a naturally completed, unpadded source has an exact terminal
+    // endpoint. Video PTS restart at zero after start_frame: the MP4 duration
+    // must be measured from that cropped source sample, not absolute scene zero.
+    // Explicit frame-count/time limits and terminal holds keep their grid extent.
     let cancellation = capture_options.cancellation.clone();
     let mut sink = FileSink::new(
         output,
@@ -173,8 +178,18 @@ pub fn export_file<C: LiveContinuation>(
     if cancellation.is_cancelled() {
         return Err(FileExportError::Capture(CaptureRunError::Cancelled));
     }
+    let source_duration = if frame_options.final_hold_seconds == 0.0
+        && capture.sampling.reason == ExportEndReason::SourceEnd
+    {
+        capture
+            .sampling
+            .source_end
+            .map(|end| end - capture.sampling.start_time)
+    } else {
+        None
+    };
     let (path, format, encoder_diagnostics) = sink
-        .finish(capture.sampling.frames)
+        .finish_with_source_end(capture.sampling.frames, source_duration)
         .map_err(FileExportError::Output)?;
     Ok(FileExportSummary {
         capture,
@@ -322,7 +337,16 @@ impl FileSink {
         result
     }
 
-    fn finish(mut self, expected_frames: u64) -> io::Result<(PathBuf, OutputFormat, String)> {
+    #[cfg(test)]
+    fn finish(self, expected_frames: u64) -> io::Result<(PathBuf, OutputFormat, String)> {
+        self.finish_with_source_end(expected_frames, None)
+    }
+
+    fn finish_with_source_end(
+        mut self,
+        expected_frames: u64,
+        source_end: Option<f64>,
+    ) -> io::Result<(PathBuf, OutputFormat, String)> {
         if self.failed || self.frames == 0 || self.frames != expected_frames {
             return Err(io::Error::other(
                 "sampling and encoder frame counts disagree",
@@ -333,6 +357,18 @@ impl FileSink {
             .take()
             .ok_or_else(|| io::Error::other("encoder is inactive"))?
             .finish()?;
+        check_publication_cancellation(&self.cancellation)?;
+        if self.options.format == OutputFormat::Mp4 {
+            if let Some(end) = source_end {
+                let staged = self
+                    .destination
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("output destination is missing"))?
+                    .work
+                    .join("video.mp4");
+                terminal_duration::finish_mp4_source_end(&staged, self.rate, self.frames, end)?;
+            }
+        }
         check_publication_cancellation(&self.cancellation)?;
         if let Some(mut manifest) = self.manifest.take() {
             writeln!(manifest, "# complete frames={}", self.frames)?;
