@@ -967,14 +967,17 @@ test("continuation presents admitted native input before completing and returnin
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("continuation reanchors Rust wake after callback completion but preserves phase retry time", async () => {
+test("continuation keeps one Rust wake epoch after a slow callback and retries the exact phase time", async (t) => {
+  let now = 1_000;
+  t.mock.method(performance, "now", () => now);
   const f = fixture("transferable", async (phase) => {
+    now = 9_000; // Deliberate 8-second opaque callback stall.
     await turn();
     return JSON.stringify({ token: phase.token, writes: [] });
   }, { generation: 24, onComplete: () => {}, onError: (_generation, error) => { throw error; } });
   let endpoint;
   const drives = [];
-  const anchors = [];
+  const observations = [];
   try {
     f.player.driveLiveSegmentFromWallTime = (wallTime) => {
       drives.push(wallTime);
@@ -983,27 +986,28 @@ test("continuation reanchors Rust wake after callback completion but preserves p
         reachedEndpoint: false,
       };
     };
-    f.player.reanchorLiveSegmentWake = (wallTime) => {
-      anchors.push(wallTime);
+    f.player.liveSegmentWake = (wallTime) => {
+      observations.push(wallTime);
       return { cadence: "animation_frame", timerAfterMilliseconds: undefined };
     };
+    f.player.reanchorLiveSegmentWake = () => assert.fail("active-source callbacks must not reset elapsed time");
     const ready = next(f.control.port2);
     endpoint = await f.attach();
     await ready;
     const resumedWake = nextMatching(f.render.port2, (message) => message.type === "execution_wake");
-    f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+    f.render.port2.postMessage({ type: "tick", timestamp: 1_000 });
     await resumedWake;
     await turn();
     await turn();
     assert.equal(drives.length, 2);
     assert.equal(drives[0], drives[1]);
-    assert.equal(anchors.length, 1);
-    assert.ok(anchors[0] >= drives[1]);
-    f.render.port2.postMessage({ type: "tick", timestamp: 2 });
+    assert.ok(observations.length > 0, "callback completion still observes its wake");
+    assert.ok(observations.includes(9_000), "next wake sees callback wall latency");
+    f.render.port2.postMessage({ type: "tick", timestamp: 9_001 });
     await turn();
     await turn();
     assert.equal(drives.length, 3);
-    assert.equal(anchors.length, 1, "callback-free drive keeps its original wake anchor");
+    assert.ok(observations.length >= 2, "later wake still observes the retained epoch");
   } finally { endpoint?.stop(); f.close(); }
 });
 

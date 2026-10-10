@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
+import { isSquareToCircleTransformFrame } from "./playground-mobile-frame-contract.mjs";
 
 const { webkit, devices } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -174,7 +175,12 @@ try {
       });
       if (samples.length < 1000) samples.push(sample);
       assert.ok(!sample?.error, sample?.error);
-      if (sample?.time > 1.15 && sample.time < 1.85 && sample.objectCount === 1) {
+      // The original SquareToCircle transform occupies authored time (1, 2).
+      // Preserve the full strict interior under the monotonic realtime
+      // clock: late browser callbacks may jump over a narrower midpoint
+      // without changing scene semantics. Pixel and endpoint checks below
+      // still require an actual nonblank intermediate image and final FadeOut.
+      if (isSquareToCircleTransformFrame(sample)) {
         observation = sample;
         break;
       }
