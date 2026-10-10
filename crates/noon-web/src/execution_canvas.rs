@@ -1674,9 +1674,7 @@ mod wasm {
                     // sparse value-tracker updater at t=1.25) and can silently
                     // consume a required zero-duration continuation barrier.
                     // Only late frames have outstanding authored-time debt.
-                    if self.source.source_active()
-                        && self.source.session().frame().time < target
-                    {
+                    if self.source.source_active() && self.source.session().frame().time < target {
                         self.source.drive_to(target)?;
                     }
                     let camera = self
