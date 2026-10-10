@@ -227,6 +227,12 @@ try {
             await page.waitForTimeout(100);
           }
           assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
+          if (entry.id === 'showcase-latex-create') {
+            for (const [animation, start, end] of [['Create', 0, 1], ['Write', 1, 2]]) {
+              assert.ok(result.samples.some(sample => sample.time > start && sample.time < end &&
+                sample.frames > 0), `${animation}: live math animation skipped all intermediate frames`);
+            }
+          }
           if (process.env.NOON_GALLERY_COI === '1') {
             assert.equal(result.state.crossOriginIsolated, true, 'gallery COI test did not isolate the browser');
             assert.equal(result.state.transportMode, 'shared', 'gallery COI test did not use the shared mailbox');

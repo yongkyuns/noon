@@ -219,6 +219,7 @@ export async function attachSemanticEngine(
         publication.sequence < lastPresentedPublication.sequence) {
       return;
     }
+    const firstPresentation = lastPresentedPublication === null;
     lastPresentedPublication = publication;
     if (publication.pointerReceipt && player !== null) {
       // The render port is ordered. An invalidation received before this repaint
@@ -234,6 +235,11 @@ export async function attachSemanticEngine(
       const { resolve } = pendingPresentation;
       pendingPresentation = null;
       resolve();
+    }
+    if (firstPresentation && continuationActive && player !== null &&
+        pacing === SEMANTIC_PACING_REALTIME) {
+      try { observeContinuationWake(performance.now(), true); }
+      catch (error) { terminateProgression(error); }
     }
   };
   const state = (type) => {
@@ -311,6 +317,13 @@ export async function attachSemanticEngine(
     return externalInteractionTickTime;
   };
   const observeContinuationWake = (wallTime, force = false, emit = true) => {
+    // Cold renderer preparation belongs before the first live clock epoch.
+    // The existing presentation receipt admits that epoch exactly once; later
+    // source segments and callback barriers retain the Rust wall-time mapping.
+    if (pacing === SEMANTIC_PACING_REALTIME && lastPresentedPublication === null) {
+      if (emit) emitExecutionWake("idle", null, force);
+      return { cadence: "idle", timerAfterMilliseconds: null };
+    }
     // A callback/presentation barrier never restarts the source's monotonic
     // epoch. Only the Rust source/session chooses authored time.
     const wake = player.liveSegmentWake(wallTime);
