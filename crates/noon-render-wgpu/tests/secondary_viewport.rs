@@ -286,14 +286,10 @@ fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples(
 
                 let left = (0.5 + (2.1 - scale * 0.5) / 8.0) * WIDTH as f32;
                 let top = (0.5 - (0.2 + scale * 0.5) / 4.0) * HEIGHT as f32;
-                let edge = rgba(
-                    &reused_pixels,
-                    (left + 0.5).floor() as u32,
-                    (top + 0.5).floor() as u32,
-                );
+                let edge = rgba(&reused_pixels, left.ceil() as u32, top.ceil() as u32);
                 assert!(
                     edge[1] > edge[0].saturating_mul(2) && edge[1] > 150,
-                    "filtered edge should clamp to the colored source background: {edge:?}"
+                    "filtered edge should clamp to the colored source background: scale={scale}, path={with_path}, {edge:?}"
                 );
                 let center = rgba(
                     &reused_pixels,
