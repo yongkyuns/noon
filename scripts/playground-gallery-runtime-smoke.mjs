@@ -21,6 +21,10 @@ const artifacts = path.resolve(root, process.env.NOON_PLAYGROUND_MATRIX_ARTIFACT
   `browser-smoke-artifacts/gallery/${browserName}-${profile}`);
 const stringify = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v, 2);
 const curatedLessons = ['showcase-spatial-scene', 'showcase-three-d-axes', 'showcase-linear-algebra', 'showcase-camera-follows-path', 'showcase-text-math', 'showcase-latex-create'];
+const liveMathAnimations = {
+  'showcase-latex-create': [['Create', 0, 1], ['Write', 1, 2]],
+  'showcase-text-math': [['Write', 2.7, 3.9]],
+};
 const affected = ['compatible-timed-composition', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square', 'showcase-always-redraw', ...curatedLessons];
 await mkdir(artifacts, { recursive: true });
 let server, browser, runtimeCache;
@@ -227,11 +231,9 @@ try {
             await page.waitForTimeout(100);
           }
           assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
-          if (entry.id === 'showcase-latex-create') {
-            for (const [animation, start, end] of [['Create', 0, 1], ['Write', 1, 2]]) {
-              assert.ok(result.samples.some(sample => sample.time > start && sample.time < end &&
-                sample.frames > 0), `${animation}: live math animation skipped all intermediate frames`);
-            }
+          for (const [animation, start, end] of liveMathAnimations[entry.id] ?? []) {
+            assert.ok(result.samples.some(sample => sample.time > start && sample.time < end &&
+              sample.frames > 0), `${animation}: live math animation skipped all intermediate frames`);
           }
           if (process.env.NOON_GALLERY_COI === '1') {
             assert.equal(result.state.crossOriginIsolated, true, 'gallery COI test did not isolate the browser');
@@ -379,7 +381,7 @@ try {
       const spec = queue[next++];
       // The live reveal probe observes a single gallery's wall-clock playback.
       // Other cold software-GPU/WASM contexts can consume its entire interval.
-      if (spec.entry.id === 'showcase-latex-create') liveMathCases.push(spec);
+      if (liveMathAnimations[spec.entry.id]) liveMathCases.push(spec);
       else await check(spec);
     }
   }));
