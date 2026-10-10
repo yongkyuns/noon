@@ -11,6 +11,63 @@ use web_sys::OffscreenCanvas;
 
 use crate::WasmExecutionCanvasRenderer;
 
+/// Direct Rust/WASM first-presented-frame proof shared with native semantics:
+/// thirty-two individually admitted, 1/16-second animated endpoints.
+struct OverdueShortAnimation {
+    marker: Mobject,
+    targets: Vec<Mobject>,
+    next: usize,
+}
+
+impl noon::LiveContinuation for OverdueShortAnimation {
+    type Error = noon::LiveSessionError;
+
+    fn resume(
+        &mut self,
+        live: &mut noon::LiveSession<'_>,
+    ) -> Result<noon::ContinuationStep, Self::Error> {
+        let Some(target) = self.targets.get(self.next) else {
+            return Ok(noon::ContinuationStep::Finished);
+        };
+        self.next += 1;
+        live.declare_and_activate_transform_to(
+            &self.marker,
+            target,
+            AnimationOptions::new()
+                .run_time(1.0 / 16.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .map(noon::ContinuationStep::Await)
+    }
+}
+
+#[wasm_bindgen(js_name = createDirectOverdueShortAnimationRenderer)]
+pub async fn create_direct_overdue_short_animation_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let mut scene = Scene::new();
+    let mut marker = scene.square(0.5).map_err(js_error)?;
+    marker.set_fill(1.0, 1.0, 1.0, 1.0).map_err(js_error)?;
+    marker.set_stroke_width(0.0).map_err(js_error)?;
+    scene.add(&marker).map_err(js_error)?;
+    let targets = (1..=32)
+        .map(|index| -> Result<Mobject, noon::AuthoringError> {
+            let mut target = marker.target_editor()?;
+            target.set_translation(f64::from(index) / 16.0, 0.0)?;
+            Ok(target)
+        })
+        .collect::<Result<Vec<Mobject>, _>>()
+        .map_err(js_error)?;
+    let program = scene
+        .into_live_program(OverdueShortAnimation {
+            marker,
+            targets,
+            next: 0,
+        })
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 struct FinishedNativeDragSmoke;
 
 impl noon::LiveContinuation for FinishedNativeDragSmoke {
