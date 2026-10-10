@@ -23,7 +23,7 @@ const stringify = value => JSON.stringify(value, (_, v) => typeof v === 'bigint'
 const curatedLessons = ['showcase-spatial-scene', 'showcase-three-d-axes', 'showcase-linear-algebra', 'showcase-camera-follows-path', 'showcase-text-math', 'showcase-latex-create'];
 const liveMathAnimations = {
   'showcase-latex-create': [['Create', 0, 1], ['Write', 1, 2]],
-  'showcase-text-math': [['Write', 2.7, 3.9]],
+  'showcase-text-math': [['Write', 0, 1.2]],
 };
 const affected = ['compatible-timed-composition', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square', 'showcase-always-redraw', ...curatedLessons];
 await mkdir(artifacts, { recursive: true });

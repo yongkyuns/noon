@@ -117,8 +117,8 @@
       "path": "python/examples/showcase_text_math.py", "features": ["Text", "MarkupText", "MathTypst", "Write", "FadeIn"],
       "duration": 6.5, "thumbnail_time": 5.0,
       "thumbnail": "thumbnails/showcase/showcase-text-math.png", "thumbnail_alt": "Styled words above a typeset summation identity, captured from Noon's text rendering",
-      "still_intervals": [[2.2, 2.7], [5.1, 6.5]],
-      "beats": [{"time": 0.8, "label": "Write the heading"}, {"time": 3.5, "label": "Write the equation"}, {"time": 5.0, "label": "Complete composition"}]
+      "still_intervals": [[3.4, 3.9], [5.1, 6.5]],
+      "beats": [{"time": 0.8, "label": "Write the equation"}, {"time": 2.0, "label": "Write the heading"}, {"time": 5.0, "label": "Complete composition"}]
     },
     {
       "id": "showcase-latex-create", "title": "Draw and write LaTeX",
