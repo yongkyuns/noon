@@ -1397,7 +1397,7 @@ mod tests {
         let mut scale_context = ScaleContext::new();
         let mut drawable = 0;
 
-        for glyph in &artifact.resource.runs[0].glyphs {
+        for glyph in artifact.resource.runs[0].glyphs.iter() {
             let path = canonical_glyph_outline(
                 &mut scale_context,
                 font_ref,
