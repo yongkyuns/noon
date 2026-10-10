@@ -19,6 +19,20 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         points: &'a [Vec2],
     },
+    Corners {
+        object: &'a Mobject,
+        points: &'a [Vec2],
+    },
+    Line {
+        object: &'a Mobject,
+        point: Vec2,
+    },
+    Close {
+        object: &'a Mobject,
+    },
+    Reverse {
+        object: &'a Mobject,
+    },
     Start {
         object: &'a Mobject,
         point: Vec2,
@@ -59,67 +73,49 @@ pub fn publish_borrowed_path_edit(
     execution: &mut ExecutionSession,
     edit: BorrowedPathEdit<'_>,
 ) -> Result<(), AuthoringError> {
-    match edit {
+    // Ordinary in-place object edits share one capture/prepare/publish path.
+    // Cross-object partial selection and family edits have their own coherent
+    // capture requirements, but still publish through the same Rust authority.
+    let (object, operation) = match edit {
         BorrowedPathEdit::SmoothCorners { object, points } => {
-            path_editing::publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::SmoothCorners(points),
-            )
+            (object, PathEdit::SmoothCorners(points))
         }
-        BorrowedPathEdit::Start { object, point } => path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            object,
-            PathEdit::Start(point),
-        ),
+        BorrowedPathEdit::Corners { object, points } => (object, PathEdit::Corners(points)),
+        BorrowedPathEdit::Line { object, point } => (object, PathEdit::Line(point)),
+        BorrowedPathEdit::Close { object } => (object, PathEdit::Close),
+        BorrowedPathEdit::Reverse { object } => (object, PathEdit::Reverse),
+        BorrowedPathEdit::Start { object, point } => (object, PathEdit::Start(point)),
         BorrowedPathEdit::Quadratic {
             object,
             control,
             anchor,
-        } => path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            object,
-            PathEdit::Quadratic(control, anchor),
-        ),
+        } => (object, PathEdit::Quadratic(control, anchor)),
         BorrowedPathEdit::Cubic {
             object,
             control1,
             control2,
             anchor,
-        } => path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            object,
-            PathEdit::Cubic(control1, control2, anchor),
-        ),
+        } => (object, PathEdit::Cubic(control1, control2, anchor)),
         BorrowedPathEdit::Subdivide { object, additional } => {
-            path_editing::publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::Subdivide(additional),
-            )
+            (object, PathEdit::Subdivide(additional))
         }
         BorrowedPathEdit::Partial {
             object,
             source,
             a,
             b,
-        } => path_editing::publish_running_pointwise_partial(
-            store, root, execution, object, source, a, b,
-        ),
-        BorrowedPathEdit::FamilyJagged { family } => {
-            path_editing::publish_running_family_anchor_mode(store, root, execution, family, false)
+        } => {
+            return path_editing::publish_running_pointwise_partial(
+                store, root, execution, object, source, a, b,
+            );
         }
-    }
+        BorrowedPathEdit::FamilyJagged { family } => {
+            return path_editing::publish_running_family_anchor_mode(
+                store, root, execution, family, false,
+            );
+        }
+    };
+    path_editing::publish_running_object_edit(store, root, execution, object, operation)
 }
 
 #[cfg(test)]
@@ -190,6 +186,17 @@ mod tests {
             &store,
             root,
             &mut execution,
+            BorrowedPathEdit::Corners {
+                object: &object,
+                points: &points,
+            },
+        )
+        .unwrap();
+        assert_eq!(object.path_query().unwrap().curve_count(), 2);
+        publish_borrowed_path_edit(
+            &store,
+            root,
+            &mut execution,
             BorrowedPathEdit::FamilyJagged { family: &family },
         )
         .unwrap();
@@ -200,6 +207,16 @@ mod tests {
             BorrowedPathEdit::Start {
                 object: &object,
                 point: Vec2::new(-2.0, -1.0),
+            },
+        )
+        .unwrap();
+        publish_borrowed_path_edit(
+            &store,
+            root,
+            &mut execution,
+            BorrowedPathEdit::Line {
+                object: &object,
+                point: Vec2::new(-1.0, -1.0),
             },
         )
         .unwrap();
@@ -224,6 +241,20 @@ mod tests {
                 control2: Vec2::new(2.0, 2.0),
                 anchor: Vec2::new(3.0, 0.0),
             },
+        )
+        .unwrap();
+        publish_borrowed_path_edit(
+            &store,
+            root,
+            &mut execution,
+            BorrowedPathEdit::Close { object: &object },
+        )
+        .unwrap();
+        publish_borrowed_path_edit(
+            &store,
+            root,
+            &mut execution,
+            BorrowedPathEdit::Reverse { object: &object },
         )
         .unwrap();
         publish_borrowed_path_edit(

@@ -101,58 +101,6 @@ impl LiveSession<'_> {
         )
         .map_err(LiveSessionError::from)
     }
-    /// Replace persistent world-space corners at a coherent publication boundary.
-    pub fn set_points_as_corners(
-        &mut self,
-        object: &Mobject,
-        points: &[noon_core::Vec2],
-    ) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::Corners(points),
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    pub fn add_line_to(
-        &mut self,
-        object: &Mobject,
-        point: noon_core::Vec2,
-    ) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::Line(point),
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    pub fn close_path(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::Close,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    pub fn reverse_direction(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::Reverse,
-        )
-        .map_err(LiveSessionError::from)
-    }
 }
 
 impl From<noon_core::GeometryResourceError> for LiveSessionError {

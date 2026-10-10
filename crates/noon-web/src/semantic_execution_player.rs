@@ -755,7 +755,10 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         points: &[noon_core::Vec2],
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_points_as_corners(source, points))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Corners {
+            object: source,
+            points,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -792,7 +795,10 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         point: noon_core::Vec2,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.add_line_to(source, point))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Line {
+            object: source,
+            point,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -881,7 +887,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         object: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.reverse_direction(object))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Reverse { object })
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_subcurve(
@@ -930,7 +936,9 @@ impl SemanticExecutionPlayer {
         &mut self,
         source: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.close_path(source))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Close {
+            object: source,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
