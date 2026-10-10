@@ -28,7 +28,7 @@ on:
       - "scripts/spatial-surface-light-qualification.mjs"
       - "scripts/special-camera-qualification.mjs"
       - "web/python/examples/noon_spatial_surface_lighting.py"
-      - "crates/noon-render-wgpu/src/gpu/mesh*"
+      - "crates/noon-render-wgpu/src/gpu/**"
       - "crates/noon/src/example_scenes/spatial_surface.rs"
       - "crates/noon/src/execution_session/**"
       - "crates/noon/src/example_scenes/**"

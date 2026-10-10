@@ -5,6 +5,7 @@ on:
     branches:
       - master
     paths:
+      - "crates/noon-render-wgpu/src/gpu/**"
       - "crates/noon-web/src/authoring_mobject.rs"
       - "crates/noon-web/src/canonical_authoring_scene.rs"
       - "crates/noon-web/src/semantic_execution_player.rs"
@@ -21,6 +22,7 @@ on:
       - ".github/workflows/retained-typst-authoring.yml"
   pull_request:
     paths:
+      - "crates/noon-render-wgpu/src/gpu/**"
       - "crates/noon-web/src/authoring_mobject.rs"
       - "crates/noon-web/src/canonical_authoring_scene.rs"
       - "crates/noon-web/src/semantic_execution_player.rs"
