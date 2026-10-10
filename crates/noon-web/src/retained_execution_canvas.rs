@@ -1058,6 +1058,18 @@ mod wasm {
         #[wasm_bindgen(js_name = rendererAdapterInfo)]
         pub fn renderer_adapter_info(&self) -> Result<String, JsValue> {
             let info = self.device.adapter_info();
+            // Browsers may redact the description mapped into AdapterInfo while
+            // retaining vendor/architecture on this same device's adapterInfo.
+            let browser_device_info = self.device.as_webgpu().map(|device| {
+                let browser = device.adapter_info();
+                serde_json::json!({
+                    "vendor": browser.vendor(),
+                    "architecture": browser.architecture(),
+                    "device": browser.device(),
+                    "description": browser.description(),
+                    "isFallbackAdapter": browser.is_fallback_adapter(),
+                })
+            });
             serde_json::to_string(&serde_json::json!({
                 "backend": format!("{:?}", info.backend),
                 "vendor": info.vendor,
@@ -1066,6 +1078,7 @@ mod wasm {
                 "deviceType": format!("{:?}", info.device_type),
                 "driver": info.driver,
                 "driverInfo": info.driver_info,
+                "browserDeviceInfo": browser_device_info,
             }))
             .map_err(js_error)
         }
