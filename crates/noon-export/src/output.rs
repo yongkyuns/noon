@@ -20,7 +20,7 @@ use crate::{
     CaptureSummary, CapturedFrame,
 };
 use destination::Destination;
-use noon::integration::{ExportFrameOptions, ExportFrames, FrameRate};
+use noon::integration::{ExportEndReason, ExportFrameOptions, ExportFrames, FrameRate};
 use noon::{LiveContinuation, LiveProgram, RustHostCallbackTable};
 use process::Encoder;
 
@@ -154,9 +154,10 @@ pub fn export_file<C: LiveContinuation>(
             "PNG frame limit exceeds image2 numbering",
         )));
     }
-    // Only an unpadded source-completed movie has an exact authored terminal
-    // endpoint. Explicit terminal holds retain their original frame-grid extent.
-    let exact_source_terminal = frame_options.final_hold_seconds == 0.0;
+    // Only a naturally completed, unpadded source has an exact terminal
+    // endpoint. Video PTS restart at zero after start_frame: the MP4 duration
+    // must be measured from that cropped source sample, not absolute scene zero.
+    // Explicit frame-count/time limits and terminal holds keep their grid extent.
     let cancellation = capture_options.cancellation.clone();
     let mut sink = FileSink::new(
         output,
@@ -177,15 +178,18 @@ pub fn export_file<C: LiveContinuation>(
     if cancellation.is_cancelled() {
         return Err(FileExportError::Capture(CaptureRunError::Cancelled));
     }
+    let source_duration = if frame_options.final_hold_seconds == 0.0
+        && capture.sampling.reason == ExportEndReason::SourceEnd
+    {
+        capture
+            .sampling
+            .source_end
+            .map(|end| end - capture.sampling.start_time)
+    } else {
+        None
+    };
     let (path, format, encoder_diagnostics) = sink
-        .finish_with_source_end(
-            capture.sampling.frames,
-            if exact_source_terminal {
-                capture.sampling.source_end
-            } else {
-                None
-            },
-        )
+        .finish_with_source_end(capture.sampling.frames, source_duration)
         .map_err(FileExportError::Output)?;
     Ok(FileExportSummary {
         capture,

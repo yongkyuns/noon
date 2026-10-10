@@ -82,6 +82,73 @@ fn export_camera_to_mp4_and_png_at_integer_and_fractional_rates() {
 }
 
 #[test]
+#[ignore = "requires software Vulkan and FFmpeg; native output gate verifies decoded results"]
+fn cropped_export_mp4_uses_source_end_relative_to_crop_start() {
+    let root = std::env::var_os("NOON_OUTPUT_PROOF_DIR")
+        .map(std::path::PathBuf::from)
+        .expect("set NOON_OUTPUT_PROOF_DIR for cropped output evidence");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("cropped-camera-2997.mp4");
+    let mut frame_options = options(30_000, 1_001);
+    frame_options.start_frame = 20;
+    let (mut program, mut callbacks) =
+        noon::example_scenes::following_graph_camera::program().unwrap();
+    let result = export_file(
+        &mut program,
+        &mut callbacks,
+        frame_options,
+        capture_options(),
+        OutputOptions::mp4(&path),
+    )
+    .unwrap();
+    assert_eq!(result.capture.sampling.frames, 70);
+    assert_eq!(result.capture.sampling.source_end, Some(3.0));
+    let expected_start = 20.0 * 1_001.0 / 30_000.0;
+    assert!((result.capture.sampling.start_time - expected_start).abs() < 1e-12);
+
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_packets",
+            "-show_entries",
+            "stream=duration_ts,nb_frames:packet=pts,duration",
+            "-of",
+            "default=noprint_wrappers=1",
+        ])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let probe = String::from_utf8(output.stdout).unwrap();
+    assert!(probe.contains("duration_ts=69980"), "{probe}");
+    assert!(probe.contains("nb_frames=70"), "{probe}");
+    assert!(probe.contains("pts=69069"), "{probe}");
+    assert!(probe.contains("duration=911"), "{probe}");
+
+    let (mut raw_program, mut raw_callbacks) =
+        noon::example_scenes::following_graph_camera::program().unwrap();
+    let raw = capture_frames(
+        &mut raw_program,
+        &mut raw_callbacks,
+        frame_options,
+        capture_options(),
+        |frame| {
+            assert_eq!(frame.frame.source_sample.index(), frame.frame.pts + 20);
+            let clip_time = frame.frame.source_sample.authored_time() - expected_start;
+            let expected_pts =
+                frame.frame.pts as f64 * 1_001.0 / 30_000.0;
+            assert!((clip_time - expected_pts).abs() < 1e-12);
+            Ok::<_, io::Error>(())
+        },
+    )
+    .unwrap();
+    assert_eq!(raw.sampling.frames, 70);
+}
+
+#[test]
 #[ignore = "requires software Vulkan and FFmpeg"]
 fn source_failure_never_replaces_an_existing_video() {
     struct Fails(bool);

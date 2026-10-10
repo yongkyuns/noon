@@ -2,8 +2,9 @@
 //!
 //! The pinned FFmpeg H.264 writer uses one video track, version-0 timing boxes,
 //! one constant STTS run, faststart MOOV before MDAT, and an 8-byte free atom
-//! between them. Replace that padding with a second STTS run for the *last*
-//! sample. The MDAT offset and every frame PTS stay byte-for-byte unchanged.
+//! between them. For multiple samples, replace that padding with a second
+//! STTS run for the last sample. For a one-frame clip, update its only STTS
+//! duration in place. The MDAT offset and every PTS remain unchanged.
 //! Reject unfamiliar layouts instead of publishing a video with unverified timing.
 
 use std::fs::{File, OpenOptions};
@@ -187,10 +188,6 @@ pub(super) fn finish_mp4_source_end(
     }
     let last_delta = u32::try_from(u64::from(media_ticks) - last_start)
         .map_err(|_| invalid("MP4 final sample duration overflow"))?;
-    if frames_u32 < 2 {
-        return Ok(false);
-    }
-
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     let length = file.metadata()?.len();
     let (ftyp, ftyp_size) = disk_atom(&mut file, 0, length)?;
@@ -257,19 +254,26 @@ pub(super) fn finish_mp4_source_end(
     set_u32(&mut moov, tkhd.payload() + 20, movie_ticks)?;
     set_u32(&mut moov, elst.payload() + 8, movie_ticks)?;
     set_u32(&mut moov, mdhd.payload() + 16, media_ticks)?;
-    set_u32(&mut moov, stts.payload() + 4, 2)?;
-    set_u32(&mut moov, stts.payload() + 8, frames_u32 - 1)?;
-    let extra = [1_u32.to_be_bytes(), last_delta.to_be_bytes()].concat();
-    moov.splice(stts.end..stts.end, extra);
-    for atom in [stts, stbl, minf, mdia, trak, root] {
-        let expanded = u32::try_from(atom.len() + 8)
-            .map_err(|_| invalid("expanded MP4 atom exceeds version-zero length"))?;
-        set_u32(&mut moov, atom.start, expanded)?;
+    if frames_u32 == 1 {
+        // A one-frame clip has no earlier STTS run to preserve. Changing its
+        // sole packet duration needs no metadata expansion or offset rewrite.
+        set_u32(&mut moov, stts.payload() + 12, last_delta)?;
+    } else {
+        set_u32(&mut moov, stts.payload() + 4, 2)?;
+        set_u32(&mut moov, stts.payload() + 8, frames_u32 - 1)?;
+        let extra = [1_u32.to_be_bytes(), last_delta.to_be_bytes()].concat();
+        moov.splice(stts.end..stts.end, extra);
+        for atom in [stts, stbl, minf, mdia, trak, root] {
+            let expanded = u32::try_from(atom.len() + 8)
+                .map_err(|_| invalid("expanded MP4 atom exceeds version-zero length"))?;
+            set_u32(&mut moov, atom.start, expanded)?;
+        }
+        if moov.len() as u64 != moov_size + 8 {
+            return Err(invalid("MP4 final sample expansion was inconsistent"));
+        }
     }
-    if moov.len() as u64 != moov_size + 8 {
-        return Err(invalid("MP4 final sample expansion was inconsistent"));
-    }
-    // Writes occupy the old moov PLUS old 8-byte free atom, not any MDAT byte.
+    // For multiple frames the expanded MOOV occupies the old eight-byte free
+    // atom. One-frame edits stay inside the original MOOV. No MDAT byte moves.
     file.seek(SeekFrom::Start(moov_offset))?;
     file.write_all(&moov)?;
     file.flush()?;

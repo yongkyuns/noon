@@ -222,6 +222,69 @@ fn mp4_terminal_duration_uses_partial_last_sample_without_changing_pts() {
 
 #[test]
 #[ignore = "requires FFmpeg; selected by native output gate"]
+fn one_frame_mp4_ends_exactly_at_shorter_authored_time() {
+    let root = Temp::new();
+    let path = root.0.join("single-frame-short.mp4");
+    let rate = FrameRate::new(30_000, 1_001).unwrap();
+    let mut sink = FileSink::new(
+        OutputOptions::mp4(&path),
+        rate,
+        4,
+        4,
+        CaptureCancellation::default(),
+    )
+    .unwrap();
+    let mut scene = noon::Scene::new();
+    let square = scene.square(0.25).unwrap();
+    scene.add(&square).unwrap();
+    let session = scene.execution_session().unwrap();
+    let sample = FrameGrid::new(rate, 0.0).unwrap().sample(0).unwrap();
+    let rgba = [255_u8; 64];
+    sink.write(CapturedFrame {
+        frame: ExportFrame {
+            source_sample: sample,
+            pts: 0,
+            held: false,
+        },
+        observation: SampleObservation {
+            requested_time: 0.0,
+            published_time: 0.0,
+            publication: session.publication_context(),
+        },
+        width: 4,
+        height: 4,
+        format: CapturePixelFormat::RendererRgba8UnormOpaque,
+        rgba: &rgba,
+        work: CaptureWork::default(),
+    })
+    .unwrap();
+    sink.finish_with_source_end(1, Some(0.01)).unwrap();
+
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=duration_ts,nb_frames:packet=pts,duration",
+            "-show_packets",
+            "-of",
+            "default=noprint_wrappers=1",
+        ])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let probe = String::from_utf8(output.stdout).unwrap();
+    assert!(probe.contains("duration_ts=300"), "{probe}");
+    assert!(probe.contains("nb_frames=1"), "{probe}");
+    assert!(probe.contains("pts=0"), "{probe}");
+    assert!(probe.contains("duration=300"), "{probe}");
+}
+
+#[test]
+#[ignore = "requires FFmpeg; selected by native output gate"]
 fn png_sink_roundtrips_odd_size_bytes_and_records_fractional_timing() {
     let root = Temp::new();
     let mut sink = FileSink::new(
