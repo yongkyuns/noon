@@ -373,7 +373,17 @@ try {
   // Keep WebKit's cold WASM compilation and GPU contexts sequential on CI.
   // Cold startup itself is covered by the public playground workflow.
   const concurrency = browserName === 'webkit' ? 1 : 2;
-  await Promise.all(Array.from({ length: concurrency }, async () => { while (next < queue.length) await check(queue[next++]); }));
+  const liveMathCases = [];
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (next < queue.length) {
+      const spec = queue[next++];
+      // The live reveal probe observes a single gallery's wall-clock playback.
+      // Other cold software-GPU/WASM contexts can consume its entire interval.
+      if (spec.entry.id === 'showcase-latex-create') liveMathCases.push(spec);
+      else await check(spec);
+    }
+  }));
+  for (const spec of liveMathCases) await check(spec);
   assert.equal(results.length, queue.length, 'incomplete inventory');
   const failed = results.filter(result => result.outcome !== 'pass');
   assert.deepEqual(failed.map(result => [result.id, result.noJspi, result.failure]), [], 'gallery runtime failures');
