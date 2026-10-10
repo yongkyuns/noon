@@ -44,13 +44,20 @@ fn local_effect_on_either_operand_still_rejects_and_rolls_back() {
     assert_eq!(receiver.state().unwrap(), before_state);
     assert_eq!(scene.revision(), before_revision);
 
+    // Test the receiver independently: leaving the donor's glow installed
+    // would let a broken receiver-side guard pass this second assertion.
+    donor.remove_glow().unwrap();
+    assert!(donor.get_effect("glow").is_err());
     receiver.set_glow(GlowUpdate::default()).unwrap();
+    let generation = receiver.get_effect("glow").unwrap().node_id();
+    let before_state = receiver.state().unwrap();
     let before_revision = scene.revision();
     assert!(receiver
         .become_handle(&donor, ManimBecomeOptions::default())
         .is_err());
+    assert_eq!(receiver.state().unwrap(), before_state);
     assert_eq!(scene.revision(), before_revision);
-    assert!(receiver.get_effect("glow").is_ok());
+    assert_eq!(receiver.get_effect("glow").unwrap().node_id(), generation);
 }
 
 #[test]
