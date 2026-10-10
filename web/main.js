@@ -1539,8 +1539,8 @@ try {
     get runInFlight() {
       return sceneRunPromise !== null;
     },
-    async executionMetrics() {
-      return player?.metrics() ?? null;
+    async executionMetrics(options) {
+      return player?.metrics(options) ?? null;
     },
     get generationDiagnostics() {
       return generations.diagnostics;

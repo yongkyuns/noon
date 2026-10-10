@@ -44,6 +44,29 @@ fn runtime() -> SceneInstance {
 }
 
 #[test]
+fn static_replay_requires_an_elapsed_interval_to_request_a_loop_wake() {
+    for (start, end, has_interval) in [
+        (0.0, 0.0, false),
+        (7.0, 7.0, false),
+        (0.0, 2.0, true),
+        (7.0, 9.0, true),
+    ] {
+        let mut runtime = runtime();
+        runtime.advance_to(start).unwrap();
+        runtime
+            .begin_replay_retention(ReplayLimits::default())
+            .unwrap();
+        runtime.advance_to(end).unwrap();
+        runtime.seal_replay().unwrap();
+        assert_eq!(runtime.has_timeline_channels(), has_interval);
+        assert_eq!(
+            runtime.wake_state().timeline(),
+            crate::TimelineWakeState::Quiescent
+        );
+    }
+}
+
+#[test]
 fn family_replay_matches_first_pass_across_mapped_reverse_and_membership_changes() {
     let mut runtime = runtime();
     runtime

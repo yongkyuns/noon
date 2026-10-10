@@ -7,6 +7,24 @@ from pathlib import Path
 
 
 class ManimAnimationConstructorOptionsTests(unittest.TestCase):
+    def test_compiled_text_write_rejects_unsupported_outline_style(self) -> None:
+        python_dir = Path(__file__).resolve().parent
+        source = textwrap.dedent("""
+            from noon import Text, MarkupText, Typst, MathTypst, Write, Unwrite
+            from _manim_latex import MathTexPart
+            for text_type in (Text, MarkupText, Typst, MathTypst, MathTexPart):
+                target = object.__new__(text_type)
+                for animation in (Write, Unwrite):
+                    animation(target)
+                    for options in ({"stroke_width": 3}, {"stroke_color": "red"}):
+                        try:
+                            animation(target, **options)
+                            raise AssertionError("compiled text silently ignored custom outline style")
+                        except NotImplementedError:
+                            pass
+        """)
+        subprocess.run([sys.executable, "-c", source], cwd=python_dir, check=True)
+
     def test_constructor_options_remain_inert_shared_requests(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()

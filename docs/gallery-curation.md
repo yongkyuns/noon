@@ -43,7 +43,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | Match by shape | Geometry matching despite changed order | Duplicate-key and unmatched edge cases |
 | Accumulate or step through | Ordered visibility comparison | Smoothing away discrete semantics |
 | Words and equations | Text, emphasis, real mathematics | Full LaTeX parity |
-| Draw a LaTeX equation | Create compiled MathTex glyphs and a fraction bar | Full LaTeX feature parity |
+| Draw and write LaTeX | Compare Create and Write on compiled MathTex glyphs and fraction bars | Full LaTeX feature parity |
 | Functions and samples | Function/sample overlay and legend | Pretending samples are measured data |
 | A surface in three dimensions | Inspect a point-lit surface while the camera, light, marker, and fixed labels move | General material/transparency parity |
 | Coordinates in three dimensions | Place a marker with ThreeDAxes.c2p and inspect it from two camera angles | Nonlinear axes or arbitrary label options |

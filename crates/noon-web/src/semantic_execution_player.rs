@@ -2669,7 +2669,10 @@ impl SemanticExecutionPlayer {
             return Err("playback observation requires a finite wall timestamp".to_owned());
         }
         let current = self.time();
-        if self.pending_callback_phase.is_some() || self.session.callback_termination().is_some() {
+        if !self.clock.is_playing()
+            || self.pending_callback_phase.is_some()
+            || self.session.callback_termination().is_some()
+        {
             return Ok(current);
         }
         if let Some(LiveSegmentReceipt::Pending(segment)) = self.live_segment {
@@ -2682,9 +2685,6 @@ impl SemanticExecutionPlayer {
                     .max(current),
                 TimelineWakeState::Continuous | TimelineWakeState::Quiescent => current,
             });
-        }
-        if !self.clock.is_playing() {
-            return Ok(current);
         }
         let BrowserExecutionCadence::TimerAtSceneTime(deadline) =
             self.execution_wake_plan().cadence()
@@ -4721,6 +4721,12 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sealReplay))]
     pub fn seal_replay(&mut self) -> Result<(), String> {
         if self.session.replay_scope_active() {
+            // A wait has no animation completion barrier in the runtime, but its
+            // live receipt still owns an unfinished authored interval.
+            #[cfg(any(target_arch = "wasm32", test))]
+            if self.has_pending_live_segment() {
+                return Err(noon_runtime::ReplayError::Incomplete.to_string());
+            }
             self.session
                 .seal_replay()
                 .map_err(|error| error.to_string())?;

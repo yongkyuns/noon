@@ -363,7 +363,7 @@ pub enum SemanticAnimationIntent {
         count: usize,
         mode: SemanticSubsetDisplayMode,
     },
-    /// Draw one plain Text object's derived glyph members in retained painter order.
+    /// Draw one retained text object's glyph and vector members in painter order.
     TextGlyph {
         target: SemanticNodeId,
         mode: FamilyAnimationMode,
@@ -618,7 +618,7 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidSubsetDisplayMember => formatter
                 .write_str("subset display member requires a nonempty count and an in-range index"),
             Self::InvalidTextWriteTarget => {
-                formatter.write_str("TextWrite requires one plain Text semantic object")
+                formatter.write_str("TextWrite requires one retained text semantic object")
             }
             Self::InvalidFadeEndpoint => formatter
                 .write_str("Fade scale, translation, and scale center must be finite 2D values"),
@@ -1208,7 +1208,7 @@ impl SemanticStore {
         )
     }
 
-    /// Insert one forward plain-Text Write declaration.
+    /// Insert one forward retained-text Write declaration.
     pub fn insert_semantic_text_write_animation(
         &mut self,
         target: SemanticNodeId,
@@ -1237,18 +1237,9 @@ impl SemanticStore {
         match (mode, state.content) {
             (_, crate::SemanticObjectContent::Geometry(_)) if family_member.is_some() => {}
             (_, crate::SemanticObjectContent::Text(handle)) => {
-                let resource = self
-                    .text_resources()
+                self.text_resources()
                     .get(handle)
                     .ok_or(SemanticAnimationError::InvalidTextWriteTarget)?;
-                if !matches!(
-                    resource.kind,
-                    crate::TextSourceKind::Plain
-                        | crate::TextSourceKind::Tex
-                        | crate::TextSourceKind::MathTex
-                ) {
-                    return Err(SemanticAnimationError::InvalidTextWriteTarget);
-                }
             }
             _ => {
                 return Err(SemanticAnimationError::InvalidTextWriteTarget);

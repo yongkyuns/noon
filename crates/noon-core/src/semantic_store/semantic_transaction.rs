@@ -1600,7 +1600,7 @@ impl SemanticMutationTransaction {
         token
     }
 
-    /// Stage one forward plain-Text Write declaration.
+    /// Stage one forward retained-text Write declaration.
     pub fn create_text_write_animation(
         &mut self,
         target: SemanticNodeId,
@@ -1616,7 +1616,7 @@ impl SemanticMutationTransaction {
         )
     }
 
-    /// Stage one plain-Text leaf in a globally indexed family Write plan.
+    /// Stage one retained-text leaf in a globally indexed family Write plan.
     pub fn create_family_text_write_member_animation(
         &mut self,
         target: SemanticNodeId,
@@ -1633,7 +1633,7 @@ impl SemanticMutationTransaction {
         )
     }
 
-    /// Stage one retained Text or TeX Create/Uncreate through the shared Reveal mode.
+    /// Stage one retained-text Create/Uncreate through the shared Reveal mode.
     pub fn create_text_reveal_animation(
         &mut self,
         target: SemanticNodeId,
@@ -4713,7 +4713,7 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             ),
             Self::InvalidTextWriteTarget { index } => write!(
                 formatter,
-                "semantic mutation {index} requires one plain Text object"
+                "semantic mutation {index} requires one retained text object"
             ),
             Self::InvalidFadeEndpoint { index } => write!(
                 formatter,

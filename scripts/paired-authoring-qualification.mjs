@@ -24,7 +24,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
   }
   assert.ok(cases.length > 0, "paired qualification requires at least one fixture");
   const fixtures = await Promise.all(cases.map(async fixture => {
-    const rawSource = await readFile(path.join(root, fixture.sourcePath ?? `web/python/examples/${fixture.file}`), "utf8");
+    const rawSource = fixture.source ?? await readFile(path.join(root, fixture.sourcePath ?? `web/python/examples/${fixture.file}`), "utf8");
     const source = fixture.scene ? rasterFixtureSource(rawSource, fixture.scene) : rawSource;
     return { ...fixture, source, sourceHash: createHash("sha256").update(source).digest("hex") };
   }));

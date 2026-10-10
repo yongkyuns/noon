@@ -56,6 +56,7 @@ export function createAuthoringRenderController(host) {
   let height = 1;
   let bootstrapQueue = [];
   let bootstrapPromise = null;
+  let rendererStartupPending = false;
   let transitionRequestId = null;
   let transitionResponseType = null;
   let transitionMode = null;
@@ -642,6 +643,7 @@ export function createAuthoringRenderController(host) {
 
   async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = null) {
     const bootstrapGeneration = frameLoopGeneration;
+    rendererStartupPending = true;
     surfaceCreationError = null;
     try {
       const createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
@@ -680,7 +682,17 @@ export function createAuthoringRenderController(host) {
           return;
         }
       }
+      // First submission may still be compiling/realizing GPU work after
+      // render() returns. Admit the source clock only after that cold work;
+      // subsequent presentations never fence the queue or restart its epoch.
+      if (renderer.rendererBackend() === "WebGPU") {
+        await renderer.waitForSubmittedWork();
+        if (stopped || bootstrapGeneration !== frameLoopGeneration) return;
+        if (!(await flushGpuDiagnostics())) return;
+      }
       if (stopped || bootstrapGeneration !== frameLoopGeneration || !drainGpuDiagnostics()) return;
+      rendererStartupPending = false;
+      acknowledgePresented(lastPresentedPublication);
 
       const ready = {
         mode,
@@ -714,6 +726,7 @@ export function createAuthoringRenderController(host) {
         running = false;
       }
     } catch (error) {
+      if (stopped || bootstrapGeneration !== frameLoopGeneration) return;
       const requestId = transitionRequestId;
       transitionRequestId = null;
       transitionResponseType = null;
@@ -764,6 +777,9 @@ export function createAuthoringRenderController(host) {
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
     if (stageSample !== null) {
+      // Preserve the displayed authored time even when metrics polling is late.
+      stageSample.time = renderer.time();
+      stageSample.presentation = presentedFrames;
       stageSample.presentedAtMs = presentedAtMs;
       stageSample.applyMs = lastDeltaApplyMs;
       stageSample.receiveToPresentMs = Math.max(0, presentedAtMs - stageSample.receivedAtMs);
@@ -815,7 +831,7 @@ export function createAuthoringRenderController(host) {
   }
 
   function acknowledgePresented(publication) {
-    if (publication === null || renderPort === null) {
+    if (rendererStartupPending || publication === null || renderPort === null) {
       return;
     }
     renderPort.postMessage({
