@@ -16,9 +16,25 @@ const manifests = await Promise.all(galleryManifestPaths.map(async path =>
 ));
 const entries = galleryEntriesFromManifests(manifests);
 const shardCount = 3;
+// Freeze the portable cases independently of the implementation. Otherwise a
+// future edit could delete a no-JSPI control from both runtime and assertions.
+const requiredPortableControls = [
+  "compatible-timed-composition",
+  "parity-moving-dots",
+  "parity-rotation-updater",
+  "compatible-indicate-square",
+  "showcase-always-redraw",
+  "showcase-spatial-scene",
+  "showcase-three-d-axes",
+  "showcase-linear-algebra",
+  "showcase-camera-follows-path",
+  "showcase-text-math",
+  "showcase-latex-create",
+];
 const caseKey = ({ entry, noJspi }) => entry.id + ":" + (noJspi ? "no-jspi" : "normal");
 
 test("every current gallery entry and no-JSPI control is covered exactly once per browser", () => {
+  assert.deepEqual([...affected], requiredPortableControls, "portable coverage policy was changed");
   for (const browser of ["chromium", "firefox", "webkit"]) {
     const expected = galleryCaseQueue(entries, browser).map(caseKey).sort();
     const shards = Array.from({ length: shardCount },
@@ -26,7 +42,7 @@ test("every current gallery entry and no-JSPI control is covered exactly once pe
     assert.ok(shards.every(shard => shard.length > 0), browser + ": empty shard");
     const actual = shards.flatMap(shard => galleryCaseQueue(shard, browser)).map(caseKey).sort();
     assert.deepEqual(actual, expected, browser + ": missing or duplicated gallery cases");
-    for (const id of affected) {
+    for (const id of requiredPortableControls) {
       assert.ok(actual.includes(id + ":normal"), browser + ": missing affected case " + id);
       assert.equal(actual.includes(id + ":no-jspi"), browser !== "firefox",
         browser + ": portable control mismatch for " + id);
