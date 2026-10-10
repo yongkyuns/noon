@@ -10,6 +10,7 @@ import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReport
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
+import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? 'webkit';
@@ -20,12 +21,10 @@ const base = external ?? `http://127.0.0.1:${port}/web/`;
 const artifacts = path.resolve(root, process.env.NOON_PLAYGROUND_MATRIX_ARTIFACTS ??
   `browser-smoke-artifacts/gallery/${browserName}-${profile}`);
 const stringify = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v, 2);
-const curatedLessons = ['showcase-spatial-scene', 'showcase-three-d-axes', 'showcase-linear-algebra', 'showcase-camera-follows-path', 'showcase-text-math', 'showcase-latex-create'];
 const liveMathAnimations = {
   'showcase-latex-create': [['Create', 0, 1], ['Write', 1, 2]],
   'showcase-text-math': [['Write', 0, 1.2]],
 };
-const affected = ['compatible-timed-composition', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square', 'showcase-always-redraw', ...curatedLessons];
 await mkdir(artifacts, { recursive: true });
 let server, browser, runtimeCache;
 const startedAt = performance.now();
@@ -86,37 +85,32 @@ try {
   runtimeCache = createPyodideResourceCache(await workerResponse.text());
   const revision = external ? await json(`build-info.json?t=${Date.now()}`) : null;
   if (process.env.NOON_GALLERY_REVISION) assert.equal(revision?.commit, process.env.NOON_GALLERY_REVISION);
-  const entries = [];
-  for (const manifest of ['manim_tutorial_manifest.json', 'manim_compatibility_manifest.json', 'manim_stress_manifest.json']) {
-    entries.push(...(await json(`python/examples/${manifest}`)).entries.filter(e => e.status === 'ready'));
+  const manifests = await Promise.all(galleryManifestPaths.map(relative => json(relative)));
+  const entries = galleryEntriesFromManifests(manifests);
+  const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
+  if (selectedIds) for (const id of selectedIds) {
+    assert.ok(entries.some(entry => entry.id === id), "unknown gallery case: " + id);
   }
-  // Curated performance scenes need the same mobile/WebKit lifecycle coverage.
-  const showcase = await json('python/examples/noon_showcase_manifest.json');
-  entries.push(...showcase.entries.filter(entry => entry.performance ||
-    entry.id === 'showcase-always-redraw' || curatedLessons.includes(entry.id))
-    .map(entry => ({ ...entry, expected_duration: entry.duration })));
-  assert.equal(new Set(entries.map(e => e.id)).size, entries.length, 'duplicate gallery IDs');
-  for (const id of affected) assert.ok(entries.some(e => e.id === id), `${id} is no longer selectable`);
+  const selectedPool = selectedIds ? entries.filter(entry => selectedIds.includes(entry.id)) : entries;
+  const shard = galleryShardFromEnvironment(process.env);
+  const selectedEntries = shard ? shardGalleryEntries(selectedPool, shard.index, shard.count) : selectedPool;
+  assert.ok(selectedEntries.length > 0, "gallery selection is empty");
+  const queue = galleryCaseQueue(selectedEntries, browserName);
+  await writeFile(path.join(artifacts, 'shard-inventory.json'), stringify({
+    schemaVersion: 1,
+    browser: browserName,
+    profile,
+    shard,
+    sourceCaseCount: entries.length,
+    selectedCaseIds: selectedEntries.map(entry => entry.id),
+    expectedCases: queue.map(({ entry, noJspi }) => ({ id: entry.id, noJspi })),
+  }));
+  console.log("Gallery case inventory:", selectedEntries.length, "cases", queue.length, "executions");
   const engine = playwright[browserName];
-  assert.ok(engine, `unknown browser ${browserName}`);
+  assert.ok(engine, "unknown gallery browser " + browserName);
   if (browserName !== 'webkit') browser = await engine.launch(playgroundLaunchOptions(browserName));
   const options = profile === 'android' ? playwright.devices['Pixel 7'] : profile.startsWith('mobile') ?
     playwright.devices['iPhone 13'] : { viewport: { width: 1280, height: 900 }, deviceScaleFactor: profile.endsWith('dpr2') ? 2 : 1 };
-  const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
-  if (selectedIds) for (const id of selectedIds) {
-    assert.ok(entries.some(entry => entry.id === id), `unknown gallery case: ${id}`);
-  }
-  const selectedEntries = selectedIds ? entries.filter(entry => selectedIds.includes(entry.id)) : entries;
-  assert.ok(selectedEntries.length > 0, 'gallery selection is empty');
-  const queue = selectedEntries.map(entry => ({ entry, noJspi: false }));
-  // Mapped composition and callback examples must also finish without JSPI.
-  // The geometry-only composition has a paired Rust example; the upstream
-  // LaggedStartMap tutorial requires unsupported Tex and stays blocked.
-  // This includes Chromium so a working desktop synchronous path cannot mask a
-  // failure to enter the portable path.
-  if (browserName !== 'firefox') for (const entry of selectedEntries) {
-    if (affected.includes(entry.id)) queue.push({ entry, noJspi: true });
-  }
   let next = 0;
   async function runCase(caseBrowser, { entry, noJspi }) {
     const caseStartedAt = performance.now();
@@ -396,6 +390,11 @@ try {
   }));
   for (const spec of liveMathCases) await check(spec);
   assert.equal(results.length, queue.length, 'incomplete inventory');
+  assert.deepEqual(
+    results.map(({ id, noJspi }) => id + ":" + noJspi).sort(),
+    queue.map(({ entry, noJspi }) => entry.id + ":" + noJspi).sort(),
+    'missing or duplicated case execution in this shard',
+  );
   const failed = results.filter(result => result.outcome !== 'pass');
   assert.deepEqual(failed.map(result => [result.id, result.noJspi, result.failure]), [], 'gallery runtime failures');
   console.log(`All ${selectedEntries.length} ${selectedIds ? 'selected' : 'selectable'} examples and ${queue.length - selectedEntries.length} no-JSPI controls passed.`);

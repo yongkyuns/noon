@@ -204,16 +204,13 @@ jobs:
           node scripts/python-editor-input-smoke.mjs
           node scripts/python-editor-smoke.mjs
 
-  browser-rendering:
-    name: Browser rendering (${{ matrix.backend }})
+  # All renderer assertions and the visual cross-backend comparison execute
+  # on one runner. This avoids queueing a 17-second parity-only job after the
+  # two renderer matrix jobs while retaining every assertion and artifact.
+  browser-rendering-parity:
+    name: Browser rendering parity
     runs-on: ubuntu-latest
     needs: web-build
-    strategy:
-      fail-fast: false
-      matrix:
-        backend:
-          - webgpu
-          - webgl
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -229,69 +226,73 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
-      - name: Install browser smoke dependencies
+      - name: Install browser smoke and visual comparison dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Test browser rendering
+      - name: Test WebGL browser rendering
         env:
-          NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
-          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}
+          NOON_BROWSER_SMOKE_BACKEND: webgl
+          NOON_BROWSER_SMOKE_PORT: "4174"
+          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgl
         run: node scripts/browser-smoke.mjs
-      - name: Qualify point-lit surface through direct WASM and Python worker
+      - name: Qualify WebGL point-lit surface through direct WASM and Python worker
         env:
-          NOON_SPATIAL_SURFACE_BACKEND: ${{ matrix.backend }}
-          NOON_SPATIAL_SURFACE_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}/spatial-surface-light
+          NOON_SPATIAL_SURFACE_BACKEND: webgl
+          NOON_SPATIAL_SURFACE_PORT: "4214"
+          NOON_SPATIAL_SURFACE_ARTIFACTS: browser-smoke-artifacts/webgl/spatial-surface-light
+        run: node scripts/spatial-surface-light-qualification.mjs
+      - name: Test WebGL camera backing-density invariance
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: webgl
+          NOON_CAMERA_DENSITY_PORT: "4195"
+          NOON_CAMERA_DENSITY_ARTIFACTS: browser-smoke-artifacts/webgl/camera-density
+        run: node scripts/camera-density-smoke.mjs
+      - name: Test WebGPU browser rendering
+        env:
+          NOON_BROWSER_SMOKE_BACKEND: webgpu
+          NOON_BROWSER_SMOKE_ARTIFACTS: browser-smoke-artifacts/webgpu
+        run: node scripts/browser-smoke.mjs
+      - name: Qualify WebGPU point-lit surface through direct WASM and Python worker
+        env:
+          NOON_SPATIAL_SURFACE_BACKEND: webgpu
+          NOON_SPATIAL_SURFACE_ARTIFACTS: browser-smoke-artifacts/webgpu/spatial-surface-light
         run: node scripts/spatial-surface-light-qualification.mjs
       - name: Qualify shared camera and surface-cell capability cases
-        if: matrix.backend == 'webgpu'
         env:
           NOON_CAMERA_ARTIFACTS: browser-smoke-artifacts/webgpu/special-camera
         run: |
           node scripts/special-camera-qualification.mjs
           NOON_CAMERA_NO_JSPI=1 NOON_PAIRED_CASES=following_graph_camera-1.5,moving_zoomed_scene_around-9.5 node scripts/special-camera-qualification.mjs
-      - name: Test camera backing-density invariance
+      - name: Test WebGPU camera backing-density invariance
         env:
-          NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
-          NOON_CAMERA_DENSITY_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}/camera-density
+          NOON_BROWSER_SMOKE_BACKEND: webgpu
+          NOON_CAMERA_DENSITY_ARTIFACTS: browser-smoke-artifacts/webgpu/camera-density
         run: node scripts/camera-density-smoke.mjs
       - name: Test mixed painter order in WebGPU
-        if: matrix.backend == 'webgpu'
         run: node scripts/painter-order-browser-smoke.mjs
-      - name: Upload browser smoke screenshots
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: browser-smoke-screenshots-${{ matrix.backend }}
-          path: browser-smoke-artifacts
-          if-no-files-found: ignore
-          retention-days: 7
-
-  browser-rendering-parity:
-    name: Browser rendering parity
-    runs-on: ubuntu-latest
-    needs: browser-rendering
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Install visual diff dependency
-        run: npm install --no-save --ignore-scripts pngjs@7.0.0
-      - name: Download WebGPU screenshots
-        uses: actions/download-artifact@v8
-        with:
-          name: browser-smoke-screenshots-webgpu
-          path: browser-backend-parity
-      - name: Download WebGL screenshots
-        uses: actions/download-artifact@v8
-        with:
-          name: browser-smoke-screenshots-webgl
-          path: browser-backend-parity
       - name: Compare WebGPU and WebGL foreground coverage
         run: |
           node scripts/browser-backend-visual-parity.mjs \
-            browser-backend-parity/webgpu \
-            browser-backend-parity/webgl \
+            browser-smoke-artifacts/webgpu \
+            browser-smoke-artifacts/webgl \
             browser-backend-parity-report
+      - name: Upload WebGPU browser smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-smoke-screenshots-webgpu
+          path: browser-smoke-artifacts/webgpu
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload WebGL browser smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-smoke-screenshots-webgl
+          path: browser-smoke-artifacts/webgl
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload backend visual parity report
         if: always()
         uses: actions/upload-artifact@v7
