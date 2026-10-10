@@ -41,14 +41,13 @@ concurrency:
 
 jobs:
   build:
+    # Preserve this job's check name: it is the source and dependency-lock
+    # producer for three independent same-run release build jobs.
     name: Build product comparison packages
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 20
     outputs:
-      baseline-artifact: ${{ steps.baseline-artifact.outputs.artifact-id }}
-      anchor-artifact: ${{ steps.anchor-artifact.outputs.artifact-id }}
-      candidate-artifact: ${{ steps.candidate-artifact.outputs.artifact-id }}
-      candidate-fixture-artifact: ${{ steps.candidate-fixture-artifact.outputs.artifact-id }}
+      locks-artifact: ${{ steps.locks-artifact.outputs.artifact-id }}
       baseline-sha: ${{ steps.sources.outputs.baseline-sha }}
       candidate-sha: ${{ steps.sources.outputs.candidate-sha }}
       head-sha: ${{ steps.sources.outputs.head-sha }}
@@ -57,13 +56,6 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
-      RUSTC_WRAPPER: sccache
-      # Reuse dependency compilations between four fresh builds at one stable path.
-      # The cache lives only in this job; no executable or cross-PR seed is restored.
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.product-sccache
-      SCCACHE_CACHE_SIZE: "1G"
-      SCCACHE_LOCAL_RW_MODE: "READ_WRITE"
       NOON_SKIP_WEB_PREFLIGHT: "1"
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "0"
@@ -124,6 +116,106 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
 
+      - name: Resolve product dependency locks before builds
+        run: node candidate/.github/ci/product-artifact.mjs dependencies baseline anchor candidate
+
+
+      - name: Bind all three resolved dependency locks to one producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum baseline/Cargo.lock anchor/Cargo.lock candidate/Cargo.lock > product-lock-digests.txt
+          sha256sum --check product-lock-digests.txt
+
+      - name: Upload producer-pinned dependency locks
+        id: locks-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-locks-${{ github.run_attempt }}
+          path: |
+            baseline/Cargo.lock
+            anchor/Cargo.lock
+            candidate/Cargo.lock
+            product-lock-digests.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  build-baseline:
+    name: Baseline optimized WASM
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      baseline-artifact: ${{ steps.baseline-artifact.outputs.artifact-id }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.product-sccache
+      SCCACHE_CACHE_SIZE: "1G"
+      SCCACHE_LOCAL_RW_MODE: "READ_WRITE"
+      NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
+      NOON_PRODUCT_HEAD_SHA: ${{ needs.build.outputs.head-sha }}
+      NOON_PRODUCT_EVENT_BASE_SHA: ${{ needs.build.outputs.event-base-sha }}
+      NOON_PRODUCT_ANCHOR_SHA: ${{ needs.build.outputs.anchor-sha }}
+      NOON_SKIP_WEB_PREFLIGHT: "1"
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
+      NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
+    steps:
+      - name: Checkout exact tested product candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.candidate-sha }}
+          fetch-depth: 2
+          path: candidate
+
+      - name: Checkout exact baseline source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.baseline-sha }}
+          path: baseline
+
+      - name: Download same-run dependency lock bundle
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.locks-artifact }}
+          path: .
+
+      - name: Validate all pinned Cargo locks and selected dependency graphs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check product-lock-digests.txt
+          for noon_checkout in candidate baseline; do
+            (cd "$noon_checkout" && cargo metadata --locked --format-version 1 > /dev/null)
+          done
+
+      - name: Use each selected checkout's pinned Rust and WASM toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          for noon_checkout in candidate baseline; do
+            (
+              cd "$noon_checkout"
+              rustup install
+              rustup show active-toolchain
+              rustup target add wasm32-unknown-unknown
+            )
+          done
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('candidate/Cargo.toml', 'candidate/crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
       - name: Use pinned sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
@@ -138,8 +230,6 @@ jobs:
       - name: Install pinned wasm-opt
         uses: ./candidate/.github/actions/install-wasm-opt
 
-      - name: Resolve product dependency locks before builds
-        run: node candidate/.github/ci/product-artifact.mjs dependencies baseline anchor candidate
 
       - name: Build baseline production package
         env:
@@ -157,6 +247,113 @@ jobs:
           printf 'Baseline release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
           sccache --show-stats
           node candidate/.github/ci/product-artifact.mjs stamp baseline .product-source
+
+      - name: Upload baseline production package
+        id: baseline-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-baseline-${{ github.run_attempt }}
+          path: |
+            baseline/web/pkg
+            baseline/web/python-worker.js
+            baseline/web/runtime-build-identity.json
+            baseline/web/python/compat-bundle.*.json
+            baseline/web/ci-artifact.json
+            baseline/web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+
+  build-anchor:
+    name: Pinned-anchor optimized WASM
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      anchor-artifact: ${{ steps.anchor-artifact.outputs.artifact-id }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.product-sccache
+      SCCACHE_CACHE_SIZE: "1G"
+      SCCACHE_LOCAL_RW_MODE: "READ_WRITE"
+      NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
+      NOON_PRODUCT_HEAD_SHA: ${{ needs.build.outputs.head-sha }}
+      NOON_PRODUCT_EVENT_BASE_SHA: ${{ needs.build.outputs.event-base-sha }}
+      NOON_PRODUCT_ANCHOR_SHA: ${{ needs.build.outputs.anchor-sha }}
+      NOON_SKIP_WEB_PREFLIGHT: "1"
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
+      NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.anchor-sha }}
+    steps:
+      - name: Checkout exact tested product candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.candidate-sha }}
+          fetch-depth: 2
+          path: candidate
+
+      - name: Checkout exact anchor source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.anchor-sha }}
+          path: anchor
+
+      - name: Download same-run dependency lock bundle
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.locks-artifact }}
+          path: .
+
+      - name: Validate all pinned Cargo locks and selected dependency graphs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check product-lock-digests.txt
+          for noon_checkout in candidate anchor; do
+            (cd "$noon_checkout" && cargo metadata --locked --format-version 1 > /dev/null)
+          done
+
+      - name: Use each selected checkout's pinned Rust and WASM toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          for noon_checkout in candidate anchor; do
+            (
+              cd "$noon_checkout"
+              rustup install
+              rustup show active-toolchain
+              rustup target add wasm32-unknown-unknown
+            )
+          done
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('candidate/Cargo.toml', 'candidate/crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use pinned sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Install pinned wasm-opt
+        uses: ./candidate/.github/actions/install-wasm-opt
+
 
       - name: Build cumulative anchor production package
         env:
@@ -188,6 +385,93 @@ jobs:
             anchor/web/ci-Cargo.lock
           if-no-files-found: error
           retention-days: 14
+
+
+  build-candidate:
+    name: Candidate fixture and optimized WASM
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      candidate-artifact: ${{ steps.candidate-artifact.outputs.artifact-id }}
+      candidate-fixture-artifact: ${{ steps.candidate-fixture-artifact.outputs.artifact-id }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.product-sccache
+      SCCACHE_CACHE_SIZE: "1G"
+      SCCACHE_LOCAL_RW_MODE: "READ_WRITE"
+      NOON_PRODUCT_CANDIDATE_SHA: ${{ needs.build.outputs.candidate-sha }}
+      NOON_PRODUCT_HEAD_SHA: ${{ needs.build.outputs.head-sha }}
+      NOON_PRODUCT_EVENT_BASE_SHA: ${{ needs.build.outputs.event-base-sha }}
+      NOON_PRODUCT_ANCHOR_SHA: ${{ needs.build.outputs.anchor-sha }}
+      NOON_SKIP_WEB_PREFLIGHT: "1"
+      NOON_WASM_PROFILE: "release"
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
+      NOON_PRODUCT_BASE_SHA: ${{ needs.build.outputs.baseline-sha }}
+    steps:
+      - name: Checkout exact tested product candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.candidate-sha }}
+          fetch-depth: 2
+          path: candidate
+
+      - name: Download same-run dependency lock bundle
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.locks-artifact }}
+          path: .
+
+      - name: Validate all pinned Cargo locks and selected dependency graphs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check product-lock-digests.txt
+          for noon_checkout in candidate; do
+            (cd "$noon_checkout" && cargo metadata --locked --format-version 1 > /dev/null)
+          done
+
+      - name: Use each selected checkout's pinned Rust and WASM toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          for noon_checkout in candidate; do
+            (
+              cd "$noon_checkout"
+              rustup install
+              rustup show active-toolchain
+              rustup target add wasm32-unknown-unknown
+            )
+          done
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('candidate/Cargo.toml', 'candidate/crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+
+      - name: Use pinned sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Install pinned wasm-opt
+        uses: ./candidate/.github/actions/install-wasm-opt
+
 
       - name: Build candidate renderer-smoke fixture package
         env:
@@ -251,25 +535,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload baseline production package
-        id: baseline-artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: product-baseline-${{ github.run_attempt }}
-          path: |
-            baseline/web/pkg
-            baseline/web/python-worker.js
-            baseline/web/runtime-build-identity.json
-            baseline/web/python/compat-bundle.*.json
-            baseline/web/ci-artifact.json
-            baseline/web/ci-Cargo.lock
-          if-no-files-found: error
-          retention-days: 14
 
   measure-adjacent:
     name: Adjacent product measurements
-    needs: build
-    if: ${{ needs.build.result == 'success' }}
+    needs: [build, build-baseline, build-anchor, build-candidate]
+    if: ${{ always() && needs.build.result == 'success' && needs.build-baseline.result == 'success' && needs.build-anchor.result == 'success' && needs.build-candidate.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     outputs:
@@ -287,6 +557,9 @@ jobs:
       - name: Require successful production builds
         env:
           NOON_PRODUCT_BUILD_RESULT: ${{ needs.build.result }}
+          NOON_PRODUCT_BASELINE_RESULT: ${{ needs.build-baseline.result }}
+          NOON_PRODUCT_ANCHOR_RESULT: ${{ needs.build-anchor.result }}
+          NOON_PRODUCT_CANDIDATE_RESULT: ${{ needs.build-candidate.result }}
         run: test "$NOON_PRODUCT_BUILD_RESULT" = success
 
       - name: Checkout producer candidate
@@ -311,25 +584,25 @@ jobs:
       - name: Download baseline production package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.baseline-artifact }}
+          artifact-ids: ${{ needs.build-baseline.outputs.baseline-artifact }}
           path: baseline/web
 
       - name: Download cumulative anchor production package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.anchor-artifact }}
+          artifact-ids: ${{ needs.build-anchor.outputs.anchor-artifact }}
           path: anchor/web
 
       - name: Download candidate production package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          artifact-ids: ${{ needs.build-candidate.outputs.candidate-artifact }}
           path: candidate/web
 
       - name: Download candidate renderer-smoke fixture package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.candidate-fixture-artifact }}
+          artifact-ids: ${{ needs.build-candidate.outputs.candidate-fixture-artifact }}
           path: candidate-fixture
 
       - name: Verify source, configuration and package contents
@@ -399,7 +672,7 @@ jobs:
       - name: Restore candidate production package for benchmark
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          artifact-ids: ${{ needs.build-candidate.outputs.candidate-artifact }}
           path: candidate/web
 
       - name: Reverify candidate production package
@@ -447,8 +720,8 @@ jobs:
 
   measure-cumulative:
     name: Pinned-anchor product measurements
-    needs: build
-    if: ${{ needs.build.result == 'success' }}
+    needs: [build, build-baseline, build-anchor, build-candidate]
+    if: ${{ always() && needs.build.result == 'success' && needs.build-baseline.result == 'success' && needs.build-anchor.result == 'success' && needs.build-candidate.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     outputs:
@@ -484,13 +757,13 @@ jobs:
       - name: Download cumulative anchor production package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.anchor-artifact }}
+          artifact-ids: ${{ needs.build-anchor.outputs.anchor-artifact }}
           path: anchor/web
 
       - name: Download candidate production package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          artifact-ids: ${{ needs.build-candidate.outputs.candidate-artifact }}
           path: candidate/web
 
       - name: Verify candidate production package for pinned-anchor measurement
@@ -556,7 +829,7 @@ jobs:
 
   compare:
     name: Runtime, visual, latency, and FPS regression
-    needs: [build, measure-adjacent, measure-cumulative]
+    needs: [build, build-baseline, build-anchor, build-candidate, measure-adjacent, measure-cumulative]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -577,6 +850,9 @@ jobs:
           NOON_PRODUCT_CUMULATIVE_RESULT: ${{ needs.measure-cumulative.result }}
         run: |
           test "$NOON_PRODUCT_BUILD_RESULT" = success
+          test "$NOON_PRODUCT_BASELINE_RESULT" = success
+          test "$NOON_PRODUCT_ANCHOR_RESULT" = success
+          test "$NOON_PRODUCT_CANDIDATE_RESULT" = success
           test "$NOON_PRODUCT_ADJACENT_RESULT" = success
           test "$NOON_PRODUCT_CUMULATIVE_RESULT" = success
 
@@ -602,19 +878,19 @@ jobs:
       - name: Download baseline production package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.baseline-artifact }}
+          artifact-ids: ${{ needs.build-baseline.outputs.baseline-artifact }}
           path: baseline/web
 
       - name: Download cumulative anchor production package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.anchor-artifact }}
+          artifact-ids: ${{ needs.build-anchor.outputs.anchor-artifact }}
           path: anchor/web
 
       - name: Download candidate production package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          artifact-ids: ${{ needs.build-candidate.outputs.candidate-artifact }}
           path: candidate/web
 
       - name: Verify source, configuration and package contents
