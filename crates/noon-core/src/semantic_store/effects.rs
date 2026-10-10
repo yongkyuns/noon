@@ -58,6 +58,10 @@ impl SemanticEffectState {
         &self.name
     }
 
+    pub(crate) fn shared_name(&self) -> &Arc<str> {
+        &self.name
+    }
+
     pub const fn definition(&self) -> EffectDefinition {
         self.definition
     }

@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-The default catalog manifest currently lists twenty-one authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
+The default catalog manifest currently lists twenty-two authored lessons, each with a distinct source file. `?catalog=reference` opens the reference catalog; existing reference example deep links and explicit manifest callers retain that catalog. This is a focused introduction, not exhaustive feature coverage. Publication requires the runtime, replay-capability, visual and responsive checks below; no placeholder poster is acceptable.
 
 The original `example-gallery.js` reference implementation moves unchanged to `example-gallery-reference.js`. A small facade routes the default and explicit showcase requests to their own manifest. It does not introduce a new scene model, authoring worker, execution session, renderer, or playback implementation. Legacy example IDs and explicit manifest callers retain their old path.
 
@@ -37,6 +37,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | A field in motion | Dense multi-sequence composition | A hardware-maximum claim |
 | Entrances and exits | Four appearance styles at a shared duration | Timing arrangements already taught separately |
 | Together, sequential, staggered | Controlled timing comparison | Internal Add/Wait scheduler probes |
+| Paint with light | Three independent GPU Gaussian glow parameters, neutral enrollment, removal and re-ignition on filled analytic sources | A separate Python renderer or implied hardware benchmark |
 | Animate part of a group | Indexed slice selection | Identity assertions in source |
 | Bend a vector curve | Cubic anchors, control handles and a smooth path morph | Callback-time path editing and SVG import |
 | Transform an object or its copy | Explicit copy isolation and subsequent Transform input animation | Unsupported ReplacementTransform and TransformFromCopy |
@@ -56,6 +57,25 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | Move a shape | Select and drag a declared target to translate it | General pointer-driven transforms |
 
 The reference `noon-pointer-selection` example remains the legacy session-selection overlay: its manifest declares `pointer-fill-selection`, and the existing playground configures it after authoring completes. The curated `showcase-pointer-selection` lesson instead declares `on_click(..., Indicate(...))` in Python, lowers that typed binding through Rust, and has no manifest interaction policy or host callback. Its poster is captured after a real click, then after the Indicate animation restores the baseline automatically; a background click must leave the image unchanged.
+
+## GPU Glow lesson
+
+**Paint with light** shows three white filled analytic circles above a dark navy
+scene background. The first brightens its glow, the second expands the Gaussian
+radius, and the third changes halo color. The initial glow begins absent and
+is enrolled at zero intensity by the ordinary shared Rust animation path. A
+later beat animates all intensities to zero, removes their generations, and
+re-enrolls fresh attachments for a readable final composition. The source is
+`web/python/examples/showcase_gpu_glow.py`; no updater, duplicated effect
+engine, or private rendering API is involved.
+
+Its poster is the genuine 5.3-second held frame, with the strongest three
+parameter contrasts. Publish the manifest entry only together with its
+actual captured 16:9 PNG and source-bound capture evidence. Visual inspection
+must confirm that the source disks remain solid, halos extend beyond their
+silhouettes, the dark scene stays legible at gallery-card size, and neutral
+removal/re-entry does not leave stale color. This demonstrates feature behavior,
+not GPU throughput or a physical-adapter performance claim.
 
 ## Preview generation and review
 

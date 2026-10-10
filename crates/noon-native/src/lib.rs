@@ -591,12 +591,19 @@ impl NativeApp {
                 .preparer
                 .prepare_transient_presentations_visible(&publication, visibility.object_indices())
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+            // Glow can contribute outside the semantic object's hit bounds.
+            // Query the existing renderer-derived source set, then keep its
+            // ordinary painter slot in the retained GPU preparation.
+            let glow_visible = gpu
+                .renderer
+                .glow_source_visibility(&publication, visibility.object_indices())
+                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
             let prepared = gpu
                 .preparer
                 .prepare_planned_publication_visible(
                     &gpu.device,
                     &publication,
-                    visibility.object_indices(),
+                    glow_visible,
                     metrics,
                 )
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
@@ -629,6 +636,18 @@ impl NativeApp {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Noon native frame"),
                 });
+            // Endpoint drains above retain the same surface and renderer; only
+            // the final bounded pass may create a glow capture/blur workload.
+            gpu.renderer
+                .prepare_retained_analytic_glows(
+                    &gpu.device,
+                    &gpu.queue,
+                    &mut encoder,
+                    &prepared,
+                    &publication,
+                    noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+                )
+                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
             let _draw = gpu
                 .renderer
                 .encode_retained_with_transient_presentations_and_overlay(
@@ -643,7 +662,10 @@ impl NativeApp {
                     CLEAR_COLOR,
                     None,
                 )
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                .map_err(|error| {
+                    gpu.renderer.invalidate_analytic_glows();
+                    NativeHostError::Gpu(error.to_string())
+                })?;
             #[cfg(test)]
             {
                 self.last_geometry_draw_calls = _draw.geometry.draw_calls;

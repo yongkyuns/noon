@@ -29,6 +29,33 @@ on:
       - "scripts/special-camera-qualification.mjs"
       - "web/python/examples/noon_spatial_surface_lighting.py"
       - "crates/noon-render-wgpu/src/gpu/mesh*"
+      - "crates/noon-render-wgpu/src/gpu/glow_filter*"
+      - "crates/noon-render-wgpu/src/gpu/glow_filter/**"
+      - "crates/noon-render-wgpu/src/gpu/analytic_glow*"
+      - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
+      - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
+      - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication*"
+      - "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication/**"
+      - "crates/noon-render-wgpu/src/gpu/mod.rs"
+      - "crates/noon-render-wgpu/src/lib.rs"
+      - "crates/noon-render-wgpu/src/render_order.rs"
+      - "crates/noon-render-wgpu/src/path_residency.rs"
+      - "crates/noon-native/src/lib.rs"
+      - "crates/noon-export/src/gpu.rs"
+      - "crates/noon-web/src/execution_canvas.rs"
+      - "web/ci-workflow-topology.test.mjs"
+      - "tests/visual-effects/**"
+      - "scripts/glow-worker-*.mjs"
+      - "crates/noon-web/src/glow_worker_smoke.rs"
+      - "crates/noon-web/src/retained_execution_canvas.rs"
+      - "crates/noon-web/src/retained_execution_transport.rs"
+      - "crates/noon-web/src/retained_execution_resources.rs"
+      - "crates/noon/tests/glow_scene_raster.rs"
+      - "crates/noon/examples/glow_scene_playback.rs"
+      - "crates/noon/src/effect_authoring*"
+      - "crates/noon/src/effect_authoring/**"
+      - "crates/noon/src/live_session.rs"
+      - "crates/noon/src/effective_capture.rs"
       - "crates/noon/src/example_scenes/spatial_surface.rs"
       - "crates/noon/src/execution_session/**"
       - "crates/noon/src/example_scenes/**"
@@ -86,6 +113,62 @@ jobs:
 
       - name: Test workspace
         run: cargo test --workspace --all-features
+
+  glow-raster:
+    name: Native glow raster correctness
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      NOON_GLOW_BACKEND: vulkan
+      XDG_RUNTIME_DIR: /tmp/noon-glow-xdg
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustc --version --verbose
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Prepare software Vulkan raster adapter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+      - name: Test qualification admission
+        run: python3 -m unittest discover -s tests/visual-effects -p test_gpu_qualification.py -v
+      - name: Test glow resource and kernel contracts
+        run: |
+          cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests
+          cargo test -p noon-render-wgpu --lib gpu::analytic_glow::tests
+          cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests
+      - name: Qualify native glow pixels and real-shader negative control
+        run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
+      - name: Qualify public Rust Scene glow playback pixels and lifecycle
+        run: |
+          cargo run -p noon --example glow_scene_playback
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture
+      - name: Preserve native glow qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: glow-raster-correctness
+          path: glow-raster-artifacts
+          if-no-files-found: warn
+          retention-days: 7
 
   web-build:
     name: Web package
@@ -255,6 +338,14 @@ jobs:
           NOON_BROWSER_SMOKE_BACKEND: ${{ matrix.backend }}
           NOON_CAMERA_DENSITY_ARTIFACTS: browser-smoke-artifacts/${{ matrix.backend }}/camera-density
         run: node scripts/camera-density-smoke.mjs
+      - name: Test retained worker glow report and independent reference
+        if: matrix.backend == 'webgpu'
+        run: node --test scripts/glow-worker-reference.test.mjs scripts/glow-worker-report.test.mjs scripts/glow-worker-transport.test.mjs
+      - name: Qualify retained worker glow images and recovery
+        if: matrix.backend == 'webgpu'
+        env:
+          NOON_GLOW_WORKER_ARTIFACTS: browser-smoke-artifacts/webgpu/glow-worker
+        run: node scripts/glow-worker-qualification.mjs
       - name: Test mixed painter order in WebGPU
         if: matrix.backend == 'webgpu'
         run: node scripts/painter-order-browser-smoke.mjs

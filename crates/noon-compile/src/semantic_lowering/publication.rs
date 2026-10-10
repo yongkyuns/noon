@@ -1,4 +1,5 @@
 //! Local lowering for an exclusively prepared authored transaction.
+mod glow;
 use std::collections::{HashMap, HashSet};
 
 use noon_core::{
@@ -460,21 +461,10 @@ fn validate_mutations(
     prepared: Option<&PreparedSemanticMutationTransaction<'_>>,
 ) -> Result<(), SemanticPublicationLoweringError> {
     for (position, mutation) in mutations.iter().enumerate() {
-        // Do not publish an accepted-but-invisible appearance into a running
-        // scene. This explicit declaration-only gate is removed by #1897 M1.
-        if matches!(
-            mutation,
-            SemanticMutation::UpdateEffect { .. }
-                | SemanticMutation::AddNode {
-                    creation: noon_core::SemanticNodeCreation::Effect { .. },
-                    ..
-                }
-        ) {
-            return Err(SemanticPublicationLoweringError::UnsupportedMutation { index: position });
-        }
         let ordinary = matches!(
             mutation,
             SemanticMutation::SetProperty { .. }
+                | SemanticMutation::UpdateEffect { .. }
                 | SemanticMutation::SetObjectTransform { .. }
                 | SemanticMutation::SetSpatialCompositionDomain { .. }
                 | SemanticMutation::SetCameraProfile { .. }
@@ -592,6 +582,11 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
                     let kind = prepared.store().node(node).expect(
                         "prepared existing removal must retain a valid pre-commit semantic node",
                     );
+                    // Effect removal changes its surviving owner's optional
+                    // column; it must not be mistaken for a scene-object exit.
+                    if matches!(kind.kind(), SemanticNodeKind::Effect(_)) {
+                        continue;
+                    }
                     if !matches!(
                         kind.kind(),
                         SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family(_)
@@ -1158,6 +1153,7 @@ fn lower_prepared_entry(
         lowered.base_transform,
         lowered.base_style,
     );
+    compiled.glow = glow::lower_prepared_attachment(prepared, object)?;
     compiled.text_bounds = text_bounds;
     compiled.spatial = lowered.spatial.map(Box::new);
     compiled.base_z_index = state.z_index();
@@ -1253,7 +1249,7 @@ fn lower_semantic_publication(
                     domains.entry(object).or_default().style = true;
                 }
             }
-            SemanticMutation::SetBarMetadata { .. } => {}
+            SemanticMutation::SetBarMetadata { .. } | SemanticMutation::UpdateEffect { .. } => {}
             SemanticMutation::AddMember { .. }
             | SemanticMutation::RemoveMember { .. }
             | SemanticMutation::ReorderMember { .. }
@@ -1281,12 +1277,15 @@ fn lower_semantic_publication(
     let mut resource_additions = CompiledResources::default();
     let mut numeric_text = Vec::new();
     for (node, state) in prepared.object_updates() {
-        if !reachability.is_reachable(node) {
+        if !reachability.is_reachable(node) || prepared.node_is_removed(node) {
             continue;
         }
         let Some(object) = index.execution_object_id(node) else {
             continue;
         };
+        // A style/content/domain edit must not leave an installed or newly staged
+        // glow outside the same finite profile accepted at initial lowering.
+        glow::lower_prepared_attachment(prepared, node.into())?;
         // Object-owned interaction/metadata declarations have no render-value patch.
         let Some(flags) = domains.get(&node) else {
             continue;
@@ -1369,6 +1368,7 @@ fn lower_semantic_publication(
             });
         }
     }
+    glow::lower_changes(prepared, index, reachability, &mut mutations)?;
     Ok((
         ExecutionMutationTransaction::from_mutations(mutations),
         resource_additions,

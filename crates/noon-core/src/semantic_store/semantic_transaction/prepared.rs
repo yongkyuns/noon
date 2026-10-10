@@ -4,6 +4,7 @@ use std::{
 };
 
 use super::*;
+mod effects;
 use crate::{
     SceneRevision, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticGraphEdgeDependency,
     SemanticTransactionGraphEdgeDependency,
@@ -294,7 +295,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         transaction: &SemanticMutationTransaction,
         store: &SemanticStore,
     ) -> Result<PreparedTransactionParts, SemanticMutationTransactionError> {
-        let preflight = transaction.preflight(store)?;
+        let mut preflight = transaction.preflight(store)?;
         let next_revision = if preflight.changed.iter().any(|changed| *changed) {
             Some(
                 store
@@ -318,7 +319,46 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             }
             _ => None,
         });
-        let planned_nodes = tokens.zip(store.preview_node_allocations()).collect();
+        let planned_nodes: HashMap<_, _> = tokens.zip(store.preview_node_allocations()).collect();
+        for mutation in &transaction.mutations {
+            if let SemanticMutation::AddNode {
+                token,
+                creation: SemanticNodeCreation::Effect { owner, .. },
+            } = mutation
+            {
+                if planned_nodes.contains_key(token) {
+                    preflight
+                        .pending_effect_order
+                        .entry(*owner)
+                        .or_default()
+                        .push(*token);
+                }
+            }
+        }
+        for mutation in &transaction.mutations {
+            let SemanticMutation::AddAnimation { token, animation } = mutation else {
+                continue;
+            };
+            if !planned_nodes.contains_key(token) {
+                continue;
+            }
+            if let crate::SemanticTransactionAnimationIntent::TransformTo {
+                target,
+                target_state,
+                ..
+            } = animation.intent()
+            {
+                let source = effects::effect_snapshot(store, &preflight, &planned_nodes, *target);
+                let target =
+                    effects::effect_snapshot(store, &preflight, &planned_nodes, *target_state);
+                if let Some(snapshot) = crate::SemanticTransformEffectSnapshot::new(source, target)
+                {
+                    preflight
+                        .animation_effect_snapshots
+                        .insert(*token, snapshot);
+                }
+            }
+        }
         Ok(PreparedTransactionParts {
             preflight,
             next_revision,
@@ -608,6 +648,31 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .expect("preflight validated resolved spatial anchor");
                 }
                 Some((*node_id, state))
+            })
+    }
+
+    /// Final changed definitions of existing attachments in this prepared batch.
+    /// Reads only the sparse preflight overlay, never unrelated objects/effects.
+    /// New attachments and retired identities are not value updates.
+    pub fn effect_updates(
+        &self,
+    ) -> impl Iterator<Item = (SemanticNodeId, SemanticNodeId, crate::EffectDefinition)> + '_ {
+        self.preflight
+            .staged_effects
+            .iter()
+            .filter_map(|(&effect, &definition)| {
+                if self.preflight.removed_existing.contains(&effect) {
+                    return None;
+                }
+                let original = self
+                    .store
+                    .semantic_effect_state(effect)
+                    .expect("prepared existing effect update retains its validated source");
+                (definition != original.definition()).then_some((
+                    effect,
+                    original.owner(),
+                    definition,
+                ))
             })
     }
 
@@ -1143,6 +1208,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             transaction
                 .materialize_pending_geometry_paths(&resources, &preflight.staged_pending_paths);
         }
+        let mut animation_effect_snapshots = preflight.animation_effect_snapshots;
         let mut impacts = Vec::with_capacity(transaction.mutations.len());
         let mut written_slots = HashSet::with_capacity(transaction.mutations.len());
         let mut pending_source_assignments = Vec::new();
@@ -1177,8 +1243,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     if !planned_nodes.contains_key(token) {
                         continue;
                     }
-                    let state = animation.resolve(&committed_nodes);
-                    let node = commit_add_animation(store, &state);
+                    let mut state = animation.resolve(&committed_nodes);
+                    state.transform_effects = animation_effect_snapshots.remove(token);
+                    let node = commit_add_animation(store, state);
                     assert_eq!(
                         planned_nodes.get(token),
                         Some(&node),

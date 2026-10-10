@@ -98,6 +98,15 @@ impl PreparedSemanticAnimationActivation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedSemanticAnimationLoweringError {
+    GlowTarget {
+        animation: SemanticTransactionNodeRef,
+        error: super::glow_target::GlowTargetLoweringError,
+    },
+    GlowDriverConflict {
+        first_animation: SemanticTransactionNodeRef,
+        next_animation: SemanticTransactionNodeRef,
+        property: Property,
+    },
     PriorityCompletionTimeMap {
         animation: SemanticTransactionNodeRef,
         error: noon_core::CompositionTimeMapError,
@@ -535,8 +544,95 @@ where
                     leaf.options.path_arc,
                 )
                 .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
+                let glow_error = |error| PreparedSemanticAnimationLoweringError::GlowTarget {
+                    animation: leaf.animation,
+                    error,
+                };
+                let source_effects = prepared
+                    .animation_effect_snapshot(leaf.target)
+                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(glow_error)?;
+                let target_effects = prepared
+                    .animation_effect_snapshot(target_state)
+                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(glow_error)?;
+                let snapshot = prepared
+                    .transform_effect_snapshot(leaf.animation)
+                    .map_err(super::glow_target::GlowTargetLoweringError::Read)
+                    .map_err(glow_error)?;
+                if snapshot.is_some()
+                    || from.glow.is_some()
+                    || !source_effects.is_empty()
+                    || !target_effects.is_empty()
+                {
+                    super::glow_target::validate_sources(
+                        prepared.store(),
+                        prepared
+                            .planned_node_id(leaf.target)
+                            .expect("validated source"),
+                        source,
+                        prepared
+                            .planned_node_id(target_state)
+                            .expect("validated target"),
+                        target,
+                    )
+                    .map_err(glow_error)?;
+                }
+                // A new canonical attachment may be staged by this very
+                // prepared animation. Before the commit the runtime still has
+                // no glow, so its newly reserved generation starts with the
+                // neutral authored definition, not a fake persistent default.
+                // Existing/stale generations may NEVER take this path.
+                let effective_glow = from.glow.or_else(|| {
+                    let [source_effect] = source_effects.as_slice() else {
+                        return None;
+                    };
+                    if prepared.store().node(source_effect.attachment).is_some() {
+                        return None;
+                    }
+                    let noon_core::EffectDefinition::Glow(definition) = source_effect.definition;
+                    (definition.intensity() == 0.0).then_some(crate::CompiledGlow {
+                        attachment: source_effect.attachment,
+                        definition,
+                    })
+                });
+                let glow_channels = super::glow_target::channels(
+                    snapshot,
+                    &source_effects,
+                    &target_effects,
+                    effective_glow,
+                )
+                .map_err(glow_error)?;
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                }
+                for (property, values) in glow_channels {
+                    super::glow_target::reserve(
+                        &mut driven,
+                        leaf.execution_object_id,
+                        property,
+                        leaf.animation,
+                    )
+                    .map_err(|first_animation| {
+                        PreparedSemanticAnimationLoweringError::GlowDriverConflict {
+                            first_animation,
+                            next_animation: leaf.animation,
+                            property,
+                        }
+                    })?;
+                    let mut timing = leaf.timing;
+                    timing.reverse_rate_function = leaf.options.reverse_rate_function;
+                    tracks.push(PreparedSemanticAnimationTrack {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                        property,
+                        completion: super::glow_target::completion(&values, timing)
+                            .map_err(glow_error)?,
+                        values,
+                        timing,
+                        time_map: leaf.time_map.clone(),
+                    });
                 }
                 if complete_priority && from.z_index != target.z_index() {
                     if let Some(first_animation) = driven.insert(
@@ -1147,6 +1243,7 @@ where
         captured
     } else if admitted {
         EffectiveAnimationProperties {
+            glow: None,
             z_index: source.z_index(),
             transform: super::super::projection::lower_semantic_transform_value(source).map_err(
                 |_| PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
@@ -1383,6 +1480,7 @@ mod tests {
 
     fn effective(translation: Vec2) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
+            glow: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation,
@@ -1916,6 +2014,7 @@ mod tests {
         );
         let prepared = transaction.prepare(&mut store).unwrap();
         let effective = EffectiveAnimationProperties {
+            glow: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(3.0, 2.0),

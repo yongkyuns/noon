@@ -82,8 +82,8 @@ mod dimension_fit;
 mod effect_authoring;
 mod effective_capture;
 
-/// Checked effect declarations. M0 supports authored leaf attachments and target
-/// editing only; execution fails explicitly until the rendering profile lands.
+/// Checked leaf effects. Finite glow playback supports filled, unstroked planar
+/// circles/rectangles through ordinary Scene execution and live publication.
 pub mod effects {
     pub use crate::effect_authoring::{EffectHandle, EffectSelector};
     pub use noon_core::{

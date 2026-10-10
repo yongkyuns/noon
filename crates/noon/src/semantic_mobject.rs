@@ -914,7 +914,14 @@ impl Mobject {
         self.require_same_store(other)?;
         let source = self.state()?;
         let target = other.state()?;
-        let prepared = prepare_become(&self.store.borrow(), self.id, &source, target, options)?;
+        let prepared = prepare_become(
+            &self.store.borrow(),
+            self.id,
+            other.id,
+            &source,
+            target,
+            options,
+        )?;
         prepared.publish(&mut self.store.borrow_mut(), |store, transaction| {
             transaction
                 .apply(store)

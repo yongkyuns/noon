@@ -145,3 +145,34 @@ fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
         *authored = f64::from(effective);
     }
 }
+
+/// Stage one independent attachment copy at the same coherent publication as
+/// the target's object state. Detached sources retain authored declarations;
+/// resident sources copy the effective value without borrowing their identity.
+/// This visits only the source owner's attachment list, never the whole scene.
+pub(crate) fn stage_effect_copy(
+    store: &SemanticStore,
+    execution: &ExecutionSession,
+    source: noon_core::SemanticNodeId,
+    target: noon_core::SemanticLocalNodeToken,
+    transaction: &mut noon_core::SemanticMutationTransaction,
+) -> Result<(), AuthoringError> {
+    if !execution.semantic_object_is_reachable(source) {
+        store.copy_effects_into(source, target, transaction)?;
+        return Ok(());
+    }
+    let observed = execution.effective_semantic_object(store, source)?;
+    let node = store
+        .node(source)
+        .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
+    match (node.effect_ids(), observed.object.glow.as_deref()) {
+        ([], None) => Ok(()),
+        ([attachment], Some(glow)) if *attachment == glow.attachment => {
+            let effect = store.semantic_effect_state(*attachment)?;
+            transaction.create_effect(target, effect.name(), glow.definition);
+            Ok(())
+        }
+        // Never rebind a stale generation by name or silently lose an effect.
+        _ => Err(AuthoringError::EffectStateReplacementUnavailable),
+    }
+}

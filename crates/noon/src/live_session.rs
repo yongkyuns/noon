@@ -879,12 +879,19 @@ impl<'a> LiveSession<'a> {
         let state = self.capture_mobject_state(source)?;
 
         let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+        let target = transaction.create_node(noon_core::SemanticNodeCreation::object(state));
+        crate::effective_capture::stage_effect_copy(
+            &self.store.borrow(),
+            self.session,
+            source.node_id(),
+            target,
+            &mut transaction,
+        )?;
         let result = self.apply(transaction)?;
-        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one prepared target copy has one exact semantic impact")
-        };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
+        let node = result
+            .resolve(target)
+            .ok_or(crate::AuthoringError::UnresolvedCreatedNode(target))?;
+        Mobject::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
     }
 
     fn require_target_capture(&self) -> Result<(), LiveSessionError> {
@@ -982,6 +989,7 @@ impl<'a> LiveSession<'a> {
         let prepared = prepare_become(
             &self.store.borrow(),
             target.node_id(),
+            other.node_id(),
             &source,
             candidate,
             options,

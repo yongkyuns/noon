@@ -4,7 +4,14 @@ use bytemuck::{Pod, Zeroable};
 use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};
 
+mod analytic_glow;
 mod derived_display;
+pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats, PublishedAnalyticGlowRequest};
+mod glow_filter;
+pub use glow_filter::{
+    GlowCapture, GlowCaptureTile, GlowFilter, GlowParameters, GlowPixelBounds, GlowPrepareError,
+    GlowRasterStats, GlowScope,
+};
 mod overlay;
 mod path_batching;
 mod presentation;
@@ -339,6 +346,7 @@ pub enum SecondaryViewportError {
     EmptyDestination,
     DestinationOutOfBounds,
     MultisampledContentUnsupported,
+    GlowSecondaryViewUnsupported,
 }
 
 impl std::fmt::Display for SecondaryViewportError {
@@ -347,6 +355,9 @@ impl std::fmt::Display for SecondaryViewportError {
             Self::EmptyDestination => "secondary viewport destination must be non-empty",
             Self::DestinationOutOfBounds => {
                 "secondary viewport destination must fit inside the output viewport"
+            }
+            Self::GlowSecondaryViewUnsupported => {
+                "glow captures for secondary views are not prepared"
             }
             Self::MultisampledContentUnsupported => {
                 "secondary viewport currently supports single-sample analytic content only"
@@ -478,6 +489,8 @@ impl std::error::Error for PathPreloadUploadError {}
 
 #[derive(Debug)]
 pub struct GpuRenderer {
+    analytic_glows: Option<Box<analytic_glow::AnalyticGlowGpu>>,
+    retained_glow: retained_text::glow_publication::RetainedGlowPublication,
     spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
@@ -801,6 +814,8 @@ impl GpuRenderer {
             mega_path_vertex_instance_buffer,
             derived_display,
             images: None,
+            analytic_glows: None,
+            retained_glow: Default::default(),
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
             line_capacity_bytes: 0,
@@ -1276,6 +1291,9 @@ impl GpuRenderer {
             query_set,
         } = composition;
 
+        if !secondary_viewports.is_empty() && self.has_analytic_glows() {
+            return Err(SecondaryViewportError::GlowSecondaryViewUnsupported);
+        }
         for secondary in secondary_viewports {
             SecondaryViewport::new(secondary.camera, secondary.destination, self.viewport_size)?;
         }
@@ -1583,6 +1601,26 @@ impl GpuRenderer {
     }
 
     fn draw_resolved_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+    ) -> DrawStats {
+        if let Some(stats) = self.draw_analytic_glow_batch(
+            pass,
+            prepared,
+            resolved,
+            single_sample_analytics,
+            binding,
+        ) {
+            return stats;
+        }
+        self.draw_plain_ordered_batch(pass, prepared, resolved, single_sample_analytics, binding)
+    }
+
+    fn draw_plain_ordered_batch<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &PreparedFrame<'_>,
@@ -2271,6 +2309,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
@@ -2281,6 +2320,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(3),
@@ -2294,6 +2334,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),
@@ -2325,6 +2366,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::path(path)),
@@ -2342,6 +2384,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),

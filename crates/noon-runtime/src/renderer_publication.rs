@@ -313,6 +313,41 @@ impl<'a> RendererPublication<'a> {
         self.with_transient_presentations(derived_display_objects)
     }
 
+    /// Reconstitute the exact borrowed renderer publication at the genuine
+    /// retained execution-worker transport boundary. The caller must have
+    /// atomically validated and installed the typed transport envelope, resource
+    /// identities, epoch, and painter order using the normal worker mirror.
+    ///
+    /// This borrows the worker's *existing* effective frame and resources. It is
+    /// neither an authoring entry point nor a second execution engine or state.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_validated_transport_frame(
+        context: PublicationContext,
+        frame: &'a FrameState,
+        changes: FrameChanges,
+        text_resources: &'a dyn TextResourceLookup,
+        font_resources: &'a dyn FontResourceLookup,
+        geometry_resources: &'a dyn GeometryResourceLookup,
+        raster_image_resources: &'a dyn noon_core::RasterImageResourceLookup,
+        family_animation_plans: &'a [RetainedFamilyAnimationPlan],
+        active_family_animation_indices: &'a BTreeSet<usize>,
+        painter_order: &'a [u32],
+    ) -> Self {
+        Self::new(
+            context,
+            frame,
+            changes,
+            text_resources,
+            font_resources,
+            geometry_resources,
+            raster_image_resources,
+            family_animation_plans,
+            active_family_animation_indices,
+            painter_order,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         context: PublicationContext,
@@ -460,6 +495,7 @@ mod derived_display_tests {
         FrameState {
             time: 0.0,
             objects: vec![FrameObjectState {
+                glow: None,
                 id: ObjectId::new(1),
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),

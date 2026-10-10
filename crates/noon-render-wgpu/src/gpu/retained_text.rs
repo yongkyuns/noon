@@ -1,3 +1,6 @@
+pub(super) mod glow_publication;
+pub use glow_publication::{RetainedGlowStats, DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET};
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
@@ -2739,6 +2742,7 @@ impl RetainedFramePreparer {
         let scratch_slot = self.scratch.objects.len();
         let scratch_id = ObjectId::new(scratch_slot as u64);
         self.scratch.objects.push(FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: scratch_id,
@@ -3363,6 +3367,7 @@ pub struct RetainedTextGpuState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Inset2DRenderError {
+    GlowCaptureUnsupported,
     InvalidCamera(ObjectId),
     InvalidDisplay(ObjectId),
 }
@@ -3370,6 +3375,9 @@ pub enum Inset2DRenderError {
 impl std::fmt::Display for Inset2DRenderError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::GlowCaptureUnsupported => {
+                formatter.write_str("glow captures for inset views are not prepared")
+            }
             Self::InvalidCamera(object) => write!(
                 formatter,
                 "inset camera {} has an invalid effective viewport",
@@ -3422,6 +3430,9 @@ impl GpuRenderer {
         text_state: &mut RetainedTextGpuState,
         states: &[noon_core::Inset2DViewState],
     ) -> Result<(), Inset2DRenderError> {
+        if !states.is_empty() && self.has_analytic_glows() {
+            return Err(Inset2DRenderError::GlowCaptureUnsupported);
+        }
         let mut views = Vec::with_capacity(states.len());
         let mut cameras = Vec::with_capacity(states.len());
         for state in states.iter().copied() {
@@ -4402,6 +4413,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        glow: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
@@ -4412,6 +4424,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        glow: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
@@ -4452,6 +4465,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        glow: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(1),
@@ -4462,6 +4476,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        glow: None,
                         spatial: None,
                         z_index: 0.0,
                         id: ObjectId::new(2),
@@ -4738,6 +4753,7 @@ mod tests {
                 ..Style::default()
             };
             FrameObjectState {
+                glow: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(id),
@@ -5395,6 +5411,7 @@ mod tests {
             image_resource,
         );
         frame.objects.push(FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(3),

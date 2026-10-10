@@ -26,6 +26,7 @@ use super::transform_payload::{
 /// The activation-time effective domains consumed by the shared animation lowerer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EffectiveAnimationProperties {
+    pub glow: Option<crate::CompiledGlow>,
     pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
@@ -47,6 +48,11 @@ pub struct PathMotionActivationProperties {
 /// Exact authored reconciliation performed when one execution channel is released.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationCompletion {
+    /// Persist only the driven parameter at the actual terminal sample.
+    Glow {
+        attachment: SemanticNodeId,
+        value: noon_core::GlowTrackValue,
+    },
     /// Method completion copies exact priority even for returning interpolation.
     Priority { value: f64 },
     Property {
@@ -168,6 +174,15 @@ impl SemanticAffineAnimationTrackProjection {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAffineAnimationTrackError {
+    GlowTarget {
+        animation: SemanticNodeId,
+        error: super::glow_target::GlowTargetLoweringError,
+    },
+    GlowDriverConflict {
+        first_animation: SemanticNodeId,
+        next_animation: SemanticNodeId,
+        property: Property,
+    },
     PriorityCompletionTimeMap {
         animation: SemanticNodeId,
         error: noon_core::CompositionTimeMapError,
@@ -281,6 +296,9 @@ pub enum SemanticAffineAnimationTrackError {
 impl std::fmt::Display for SemanticAffineAnimationTrackError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::GlowTarget { animation, error } => write!(formatter, "animation {animation:?}: {error}"),
+            Self::GlowDriverConflict { first_animation, next_animation, property } => write!(formatter,
+                "glow channel {property:?} has conflicting drivers {first_animation:?} and {next_animation:?}"),
             Self::Animation(error) => error.fmt(formatter),
             Self::Target {
                 animation,
@@ -875,8 +893,62 @@ where
             leaf.options.path_arc,
         )
         .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
+        let glow_error = |error| SemanticAffineAnimationTrackError::GlowTarget {
+            animation: leaf.animation,
+            error,
+        };
+        let source_effects = store
+            .animation_effect_snapshot(leaf.target)
+            .map_err(super::glow_target::GlowTargetLoweringError::Store)
+            .map_err(glow_error)?;
+        let target_effects = store
+            .animation_effect_snapshot(target_state)
+            .map_err(super::glow_target::GlowTargetLoweringError::Store)
+            .map_err(glow_error)?;
+        let snapshot = store
+            .semantic_animation_state(leaf.animation)
+            .map_err(SemanticAffineAnimationTrackError::Animation)?
+            .transform_effect_snapshot();
+        if snapshot.is_some()
+            || from.glow.is_some()
+            || !source_effects.is_empty()
+            || !target_effects.is_empty()
+        {
+            super::glow_target::validate_sources(store, leaf.target, source, target_state, target)
+                .map_err(glow_error)?;
+        }
+        let glow_channels =
+            super::glow_target::channels(snapshot, &source_effects, &target_effects, from.glow)
+                .map_err(glow_error)?;
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
+        }
+        for (property, values) in glow_channels {
+            super::glow_target::reserve(
+                &mut driven,
+                leaf.execution_object_id,
+                property,
+                leaf.animation,
+            )
+            .map_err(|first_animation| {
+                SemanticAffineAnimationTrackError::GlowDriverConflict {
+                    first_animation,
+                    next_animation: leaf.animation,
+                    property,
+                }
+            })?;
+            let mut timing = leaf.timing;
+            timing.reverse_rate_function = leaf.options.reverse_rate_function;
+            tracks.push(SemanticAffineAnimationTrack {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+                property,
+                completion: super::glow_target::completion(&values, timing).map_err(glow_error)?,
+                values,
+                timing,
+                time_map: leaf.time_map.clone(),
+            });
         }
         let priority_endpoint = if leaf.options.reverse_rate_function {
             from.z_index
@@ -2656,8 +2728,14 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
     let (_, reveal_slot) = driver_key(object, Property::Reveal);
     let (_, morph_slot) = driver_key(object, Property::Morph);
     let (object, transform_slot) = driver_key(object, Property::Transform);
+    let glow_slots = [
+        Property::GlowColor,
+        Property::GlowRadius,
+        Property::GlowIntensity,
+    ]
+    .map(|property| driver_key(ObjectId::new(object), property).1);
     if property == Property::Morph {
-        (0..morph_slot).find_map(|slot| {
+        (0..morph_slot).chain(glow_slots).find_map(|slot| {
             if slot == reveal_slot {
                 return None;
             }
@@ -2667,7 +2745,7 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
                 .filter(|owner| *owner != animation)
         })
     } else if property == Property::Transform {
-        (0..=morph_slot).find_map(|slot| {
+        (0..=morph_slot).chain(glow_slots).find_map(|slot| {
             if slot == reveal_slot {
                 None
             } else {
@@ -2675,10 +2753,31 @@ pub(super) fn transform_driver_conflict<T: Copy + PartialEq>(
             }
         })
     } else if matches!(property, Property::WorldTransform | Property::CameraProfile) {
-        (0..=driver_key(ObjectId::new(object), Property::CameraProfile).1)
+        (0..=driver_key(ObjectId::new(object), Property::GlowIntensity).1)
             .filter(|slot| *slot != reveal_slot)
-            .find_map(|slot| driven.get(&(object, slot)).copied())
-            .filter(|owner| *owner != animation)
+            .find_map(|slot| {
+                driven
+                    .get(&(object, slot))
+                    .copied()
+                    .filter(|owner| *owner != animation)
+            })
+    } else if matches!(
+        property,
+        Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+    ) {
+        [
+            Property::Transform,
+            Property::Morph,
+            Property::WorldTransform,
+            Property::CameraProfile,
+        ]
+        .into_iter()
+        .find_map(|property| {
+            driven
+                .get(&driver_key(ObjectId::new(object), property))
+                .copied()
+                .filter(|owner| *owner != animation)
+        })
     } else if property == Property::Reveal {
         // Reveal is a renderer scalar over the retained geometry selected by the
         // affine/morph channels. It conflicts with another reveal driver through
@@ -2742,6 +2841,9 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::ZIndex => 12,
         Property::Presence => 13,
         Property::CameraProfile => 14,
+        Property::GlowColor => 15,
+        Property::GlowRadius => 16,
+        Property::GlowIntensity => 17,
     };
     (object.get(), slot)
 }
@@ -2781,6 +2883,7 @@ mod tests {
 
     fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
+            glow: None,
             z_index: 0.0,
             transform,
             style: Style {
@@ -3063,6 +3166,7 @@ mod tests {
             end: Vec2::new(1.0, 0.5),
         });
         let from = EffectiveAnimationProperties {
+            glow: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(10.0, -20.0),
@@ -3195,6 +3299,7 @@ mod tests {
         let mut source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
         source.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
         let from = EffectiveAnimationProperties {
+            glow: None,
             z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(-2.0, 1.0),
@@ -3393,6 +3498,7 @@ mod tests {
             &schedule(&store, &index, animation),
             |_| {
                 Some(EffectiveAnimationProperties {
+                    glow: None,
                     z_index: 0.0,
                     transform: Transform2D::default(),
                     style: current,
@@ -3632,6 +3738,7 @@ mod tests {
             .unwrap();
         let index = index(&store);
         let current = EffectiveAnimationProperties {
+            glow: None,
             z_index: 0.0,
             transform: Transform2D::default(),
             style: Style {

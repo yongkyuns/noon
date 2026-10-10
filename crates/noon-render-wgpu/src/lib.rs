@@ -292,6 +292,7 @@ pub struct PreparedFrame<'a> {
     slots: &'a [PreparedSlot],
     slot_presences: &'a [bool],
     complete_submission: bool,
+    submitted_source_slots: Option<&'a std::collections::HashSet<usize>>,
     zero_contribution: &'a [render_order::ZeroContributionRanges; 5],
     mega_path_offsets: &'a [u32],
 }
@@ -324,6 +325,14 @@ pub enum PreparedGeometryObjectOutcome {
 }
 
 impl PreparedFrame<'_> {
+    pub(crate) fn source_is_submitted(&self, index: usize) -> bool {
+        self.slot_presences.get(index).copied().unwrap_or(false)
+            && (self.complete_submission
+                || self
+                    .submitted_source_slots
+                    .is_some_and(|slots| slots.contains(&index)))
+    }
+
     /// Visit the canonical painter-ordered draw metadata.
     ///
     /// Ordinary frames use bounded chunks after a local reorder; projections and
@@ -640,6 +649,7 @@ pub struct FramePreparer {
     visible_mega_path_batches: Vec<MegaPathBatch>,
     visible_projection_ready: bool,
     visible_projection_key: Vec<VisibleProjectionKey>,
+    visible_submission_slots: std::collections::HashSet<usize>,
     visible_projection_stats: VisibleRenderProjectionStats,
     // Stable execution-row indices in the runtime's derived semantic painter order.
     painter_order_indices: Vec<u32>,
@@ -1903,6 +1913,7 @@ impl FramePreparer {
             slots: &self.slots,
             slot_presences: &self.slot_presences,
             complete_submission: true,
+            submitted_source_slots: None,
             zero_contribution: &self.zero_contribution,
             mega_path_offsets: &self.mega_path_offsets,
         }
@@ -2993,6 +3004,7 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
@@ -5060,6 +5072,7 @@ mod structural_execution_delta_tests {
 
     fn circle(id: u64) -> FrameObjectState {
         FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),

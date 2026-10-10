@@ -11,6 +11,7 @@ fn rectangle(id: u64, width: f32, height: f32) -> FrameObjectState {
         ..Style::default()
     };
     FrameObjectState {
+        glow: None,
         spatial: None,
         z_index: 0.0,
         id: ObjectId::new(id),

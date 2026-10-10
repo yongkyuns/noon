@@ -283,3 +283,44 @@ test("foreground qualification requires success from every evidence stage", asyn
     }
   }
 });
+
+
+test("automatic glow qualification selects its retained preparation and real host call sites", async () => {
+  const workflow = await readFile(new URL("ci.yml", workflowDir), "utf8");
+  const selection = workflow.split("  pull_request:\n")[1]?.split("  workflow_dispatch:")[0];
+  assert.ok(selection, "main CI must retain its pull-request selection");
+  for (const path of [
+    "crates/noon-render-wgpu/src/gpu/retained_text.rs",
+    "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication*",
+    "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication/**",
+    "crates/noon-render-wgpu/src/gpu/mod.rs",
+    "crates/noon-render-wgpu/src/lib.rs",
+    "crates/noon-render-wgpu/src/render_order.rs",
+    "crates/noon-render-wgpu/src/path_residency.rs",
+    "crates/noon-native/src/lib.rs",
+    "crates/noon-export/src/gpu.rs",
+    "crates/noon-web/src/execution_canvas.rs",
+    "web/ci-workflow-topology.test.mjs",
+  ]) {
+    assert.ok(selection.includes(`      - "${path}"`), `glow qualification must select ${path}`);
+  }
+  const contracts = workflow.split("      - name: Test glow resource and kernel contracts\n")[1]?.split("      - name:")[0];
+  assert.ok(contracts?.includes("cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests"),
+    "dedicated raster job must run the automatic source/budget/retry contracts");
+});
+
+
+test("real worker glow pixels run in the existing canonical browser job", async () => {
+  const workflow = await readFile(new URL("ci.yml", workflowDir), "utf8");
+  const selection = workflow.split("  pull_request:\n")[1]?.split("  workflow_dispatch:")[0];
+  for (const path of ["scripts/glow-worker-*.mjs", "crates/noon-web/src/glow_worker_smoke.rs",
+    "crates/noon-web/src/retained_execution_canvas.rs", "crates/noon-web/src/retained_execution_transport.rs",
+    "crates/noon-web/src/retained_execution_resources.rs"]) {
+    assert.ok(selection?.includes(`      - "${path}"`), `worker qualification must select ${path}`);
+  }
+  const step = workflow.split("      - name: Qualify retained worker glow images and recovery\n")[1]?.split("      - name:")[0];
+  assert.ok(step, "worker pixel qualification cannot silently disappear");
+  assert.match(step, /if: matrix\.backend == 'webgpu'/);
+  assert.match(step, /run: node scripts\/glow-worker-qualification\.mjs/);
+  assert.doesNotMatch(step, /continue-on-error|\|\| true/);
+});

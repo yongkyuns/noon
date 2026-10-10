@@ -667,3 +667,38 @@ inventory are recorded here. Actual execution tests of those decisions belong to
 the named implementation promotions, not to a mock scene added to satisfy a test.
 M0 merge still requires applicable repository CI; neither this review nor old-head
 performance evidence establishes a current-head merge pass.
+
+
+### M1 ordinary parameter-channel integration (still guarded at Scene orchestration)
+
+`CompiledGlow::parameter_channels` derives only requested color, radius and
+intensity endpoints from a coherent activation-time runtime value. These become
+ordinary `TrackDefinition` values with the existing TrackIds, timing, nested time
+maps and scheduler. Attachment generation travels with each track; the compiler
+and sparse transaction preflight reject missing/stale attachments or incompatible
+radius units before publishing any transaction prefix. Raw timeline overlap keeps
+the ordinary channel order; this does not replace authored driver-lease admission.
+
+Runtime samples radius/intensity in f64 through the existing precise timing and
+M0 glow interpolation contract. Staged publication retains the same atomic row
+boundary, channel removal restores only its own base parameter, and seek/returning
+rates reuse the ordinary timeline. The renderer consumes the resulting effective
+definition through `RendererPublication`; it owns no parameter clock or mirror.
+
+The canonical GPU qualification requires a distinct animated-publication stage
+in addition to the operator, real shader mutation, restored positive, painter,
+and static semantic stages. It compares 30 frames (six cases with forward samples
+and rewind) against independent endpoint arithmetic and an extended-canvas 2D
+Gaussian/painter reference. Intensity-only motion-free samples additionally assert
+no source recapture or blur, 32 uniform bytes uploaded, and no texture/pipeline
+allocation. Zero intensity must produce bit-exact ordinary rendering. Raster
+capture origins preserve the output 2x2 derivative-quad grid; integer pixel
+alignment alone can change SDF antialiasing as capture bounds move.
+
+These are actual ordinary runtime-track and GPU-publication tests, not yet a
+complete public `Scene.play`/Python-worker test. Normal Scene execution remains
+guarded pending semantic target activation/completion, live attachment setters,
+automatic host preparation and worker serialization. The source-alpha oracle still
+uses production primitive rasterization; GPU timing and physical-hardware
+performance are separate acceptance requirements. Pixel tolerances remain 2
+RGBA8 bytes and mask error remains 1e-5.
