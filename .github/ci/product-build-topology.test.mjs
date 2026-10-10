@@ -72,6 +72,20 @@ test("three distinct release builders consume exactly the pinned source and reso
   assert.match(candidate, /NOON_PRODUCT_BASE_SHA: \$\{\{ needs.build.outputs.baseline-sha \}\}/);
 });
 
+test("lock verification does not require sccache before the compiler is installed", () => {
+  for (const [name, section] of [["baseline", baseline], ["anchor", anchor], ["candidate", candidate]]) {
+    const start = section.indexOf("      - name: Validate all pinned Cargo locks and selected dependency graphs");
+    const end = section.indexOf("      - name: Cache Cargo sources", start);
+    assert.ok(start >= 0 && end > start, name + ": missing early lock check");
+    const validation = section.slice(start, end);
+    assert.match(validation, /sha256sum --check product-lock-digests\.txt/);
+    assert.match(validation, /RUSTC_WRAPPER="" cargo metadata --locked --format-version 1/);
+    assert.doesNotMatch(validation, /\(cd "\$noon_checkout" && cargo metadata/,
+      name + ": metadata unexpectedly invokes an unavailable sccache wrapper");
+    assert.match(section.slice(end), /- name: Use pinned sccache/);
+  }
+});
+
 test("each producer publishes exact artifact IDs without reusing prior PR binaries", () => {
   assert.match(baseline, /baseline-artifact: \$\{\{ steps.baseline-artifact.outputs.artifact-id \}\}/);
   assert.match(anchor, /anchor-artifact: \$\{\{ steps.anchor-artifact.outputs.artifact-id \}\}/);
