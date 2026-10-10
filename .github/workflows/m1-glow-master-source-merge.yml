@@ -1,0 +1,166 @@
+name: GPU Glow M1 latest master source reconciliation (temporary)
+on:
+  push:
+    branches: [codex/m1-glow-master-merge-helper-6bca]
+    paths: [.github/workflows/m1-glow-master-source-merge.yml]
+permissions:
+  contents: read
+concurrency:
+  group: m1-glow-master-source-merge
+  cancel-in-progress: true
+jobs:
+  reconcile:
+    name: Preserve newest master and glow tests, source only
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      actions: write
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Checkout exact product head, excluding temporary workflows
+        uses: actions/checkout@v7
+        with:
+          ref: 6bca53332ec975074fea7884309ebfc1ab8df22b
+          fetch-depth: 0
+      - name: Merge exact newer master and require expected conflicts
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 6bca53332ec975074fea7884309ebfc1ab8df22b
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin 849eedb1489227c7efee8865f04461d0b3e6097f
+          test "$(git merge-base HEAD 849eedb1489227c7efee8865f04461d0b3e6097f)" = 7efc1a0fbfb94bfba1cdb28b35b396f047fe98a6
+          mkdir -p merge-evidence
+          set +e
+          git merge --no-commit --no-ff 849eedb1489227c7efee8865f04461d0b3e6097f > merge-evidence/merge.log 2>&1
+          result=$?
+          set -e
+          test "$result" = 1
+          git diff --name-only --diff-filter=U > merge-evidence/unmerged.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          actual = set(Path('merge-evidence/unmerged.txt').read_text().splitlines())
+          expected = {
+              'scripts/shared-authoring-smoke.mjs',
+              'web/thumbnails/showcase/capture-evidence.json',
+              'web/thumbnails/showcase/showcase-dynamic-scene.png',
+              'web/thumbnails/showcase/showcase-pointer-selection.png',
+              'web/thumbnails/showcase/showcase-three-d-axes.png',
+              'web/thumbnails/showcase/showcase-translation-drag.png',
+          }
+          assert actual == expected, (actual, expected)
+          PY
+      - name: Reconcile disjoint Python glow completion and master replay proof
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/shared-authoring-smoke.mjs')
+          s = p.read_text()
+          begin, middle = '<<<<<<< HEAD\n', '=======\n'
+          end = '>>>>>>> 849eedb1489227c7efee8865f04461d0b3e6097f\n'
+          assert s.count(begin) == s.count(middle) == s.count(end) == 2
+          for _ in range(2):
+              a = s.index(begin)
+              b = s.index(middle, a)
+              c = s.index(end, b)
+              ours = s[a+len(begin):b]
+              theirs = s[b+len(middle):c]
+              if 'if (expectedGlowPair)' in ours and 'if (expectedReplayUnavailable !== null)' in theirs:
+                  # Both sides shared closing braces; retain both independent
+                  # checks and explicitly close glow before the replay check.
+                  resolved = ours + '          }\n        }\n' + theirs
+              elif '}, { source, objectCount' in ours and 'expectedReplayUnavailable' in theirs:
+                  resolved = ours.replace(
+                      'expectedDifferentRotations, filename',
+                      'expectedDifferentRotations, expectedReplayUnavailable, filename'
+                  )
+                  assert resolved != ours
+              else:
+                  raise AssertionError('new unexpected shared-authoring conflict')
+              s = s[:a] + resolved + s[c+len(end):]
+          assert not any(marker in s for marker in ('<<<<<<<', '>>>>>>> 849eed'))
+          assert 'if (expectedGlowPair) {' in s
+          assert 'if (expectedReplayUnavailable !== null)' in s
+          p.write_text(s)
+          PY
+          node --check scripts/shared-authoring-smoke.mjs
+          git add scripts/shared-authoring-smoke.mjs
+      - name: Preserve master posters and glow evidence provisionally, pending real recapture
+        run: |
+          set -euo pipefail
+          git checkout --ours -- web/thumbnails/showcase/capture-evidence.json
+          git checkout --theirs -- \
+            web/thumbnails/showcase/showcase-dynamic-scene.png \
+            web/thumbnails/showcase/showcase-pointer-selection.png \
+            web/thumbnails/showcase/showcase-three-d-axes.png \
+            web/thumbnails/showcase/showcase-translation-drag.png
+          git add web/thumbnails/showcase/
+          test -z "$(git ls-files -u)"
+          git diff --cached --check
+          echo "Provisional source only: MUST recapture all 22 gallery posters and source-bound evidence before PR publication" | tee merge-evidence/status.txt
+      - name: Commit exact two-parent source merge, no temporary workflow in product tree
+        run: |
+          set -euo pipefail
+          git commit -m "Merge current master into GPU Glow M1 retaining both browser proofs"
+          test "$(git rev-parse HEAD^1)" = 6bca53332ec975074fea7884309ebfc1ab8df22b
+          test "$(git rev-parse HEAD^2)" = 849eedb1489227c7efee8865f04461d0b3e6097f
+          git rev-parse HEAD > merge-evidence/merge-commit.txt
+          git rev-parse HEAD^{tree} > merge-evidence/merge-tree.txt
+          git diff --name-status HEAD^1 HEAD > merge-evidence/integrated-master-paths.txt
+          git diff --check HEAD^1 HEAD
+          git diff --exit-code
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustc --version --verbose | tee merge-evidence/rustc.txt
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Require formatting, four scoped regressions and gallery storyboard
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check 2>&1 | tee merge-evidence/rustfmt.txt
+          cargo test -p noon --no-default-features --test glow_scoped_become -- --nocapture 2>&1 | tee merge-evidence/glow-scoped-become.log
+          grep -F 'test result: ok. 4 passed; 0 failed;' merge-evidence/glow-scoped-become.log
+          python3 -m unittest discover -s web/python -p 'test_showcase*.py' 2>&1 | tee merge-evidence/gallery-storyboard.log
+          node --check scripts/shared-authoring-smoke.mjs
+          git diff --exit-code
+      - name: Publish isolated source candidate only; never update PR yet
+        run: |
+          set -euo pipefail
+          branch=refs/heads/codex/m1-glow-master-source-6bca
+          actual=$(git ls-remote origin "$branch" | cut -f1)
+          test "$actual" = 6bca53332ec975074fea7884309ebfc1ab8df22b
+          git merge-base --is-ancestor "$actual" HEAD
+          git push origin "HEAD:$branch"
+          echo "Published isolated source; full renderer recapture and final exact-source CI still required" >> merge-evidence/status.txt
+      - name: Dispatch canonical CI against the isolated source branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --request POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data '{"ref":"codex/m1-glow-master-source-6bca"}' \
+            https://api.github.com/repos/yongkyuns/noon/actions/workflows/ci.yml/dispatches
+      - name: Preserve merge provenance and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m1-glow-new-master-source-integration
+          path: merge-evidence/
+          if-no-files-found: warn
+          retention-days: 7
