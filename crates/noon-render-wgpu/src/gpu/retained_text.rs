@@ -3468,6 +3468,8 @@ impl GpuRenderer {
             self.inset_camera_bind_groups.push(bind_group);
         }
         if !views.is_empty() {
+            let limit = device.limits().max_texture_dimension_2d;
+            let limits = self.viewport_size.map(|size| size.min(limit));
             let images = self
                 .images
                 .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format));
@@ -3475,8 +3477,13 @@ impl GpuRenderer {
                 let size = view.capture_size;
                 let uniform =
                     ImageUniform::inset(view.state.display_center, view.state.display_size, size);
+                let capacity = super::inset_capture::capture_texture_capacity(
+                    self.inset_targets.get(index).map(|target| target.capacity),
+                    size,
+                    limits,
+                );
                 if let Some(target) = self.inset_targets.get_mut(index) {
-                    if target.size == size {
+                    if target.capacity == capacity {
                         target.image.update(queue, uniform);
                         continue;
                     }
@@ -3485,7 +3492,7 @@ impl GpuRenderer {
                     device,
                     queue,
                     self.target_format,
-                    size,
+                    capacity,
                     images,
                     uniform,
                 );
