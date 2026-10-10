@@ -529,9 +529,9 @@ test("product gate resolves the installer and verifies the downloaded package la
   assert.match(adjacentJob, /NOON_RENDERER_SMOKE: "0"/);
   assert.match(adjacentJob, /NOON_RENDERER_SMOKE: "1"[\s\S]*?renderer-init-failure-smoke\.mjs/);
   assert.match(adjacentJob, /cp -a \.\.\/candidate-fixture\/\. web\//);
-  assert.ok(compareJob.includes("needs: [build, measure-adjacent, measure-cumulative]"));
+  assert.ok(compareJob.includes("needs: [build, build-baseline, build-anchor, build-candidate, measure-adjacent, measure-cumulative]"));
   const restoration = adjacentJob.slice(adjacentJob.indexOf("      - name: Restore candidate production package for benchmark"));
-  assert.match(restoration, /artifact-ids: \$\{\{ needs\.build\.outputs\.candidate-artifact \}\}[\s\S]*?path: candidate\/web/);
+  assert.match(restoration, /artifact-ids: \$\{\{ needs\.build-candidate\.outputs\.candidate-artifact \}\}[\s\S]*?path: candidate\/web/);
 });
 
 test("product gate pins the tested merge and retries the producer's exact source pair", async () => {
