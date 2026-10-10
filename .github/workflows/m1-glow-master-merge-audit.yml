@@ -25,6 +25,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p glow-merge-audit/conflicts
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           set +e
           git merge --no-commit --no-ff 849eedb1489227c7efee8865f04461d0b3e6097f > glow-merge-audit/merge.log 2>&1
           code=$?
