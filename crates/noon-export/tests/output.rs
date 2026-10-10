@@ -138,8 +138,7 @@ fn cropped_export_mp4_uses_source_end_relative_to_crop_start() {
         |frame| {
             assert_eq!(frame.frame.source_sample.index(), frame.frame.pts + 20);
             let clip_time = frame.frame.source_sample.authored_time() - expected_start;
-            let expected_pts =
-                frame.frame.pts as f64 * 1_001.0 / 30_000.0;
+            let expected_pts = frame.frame.pts as f64 * 1_001.0 / 30_000.0;
             assert!((clip_time - expected_pts).abs() < 1e-12);
             Ok::<_, io::Error>(())
         },
