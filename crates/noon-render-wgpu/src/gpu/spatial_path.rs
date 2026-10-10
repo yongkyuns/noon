@@ -1249,7 +1249,7 @@ fn collect_text_paths<'a>(
                 if needs_fill || needs_stroke {
                     for glyph in run.glyphs.iter() {
                         let (outline_key, outline) = outlines
-                            .outline(fonts, run, glyph.glyph_id)
+                            .outline(fonts, resource, run, glyph.glyph_id)
                             .map_err(|_| SpatialPathError::InvalidText)?;
                         if needs_fill {
                             fill_path = append_transformed_path(

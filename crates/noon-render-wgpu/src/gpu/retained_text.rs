@@ -15,12 +15,13 @@ use noon_core::{
     Color, FontResourceHandle, FontResourceLookup, GeometryRef, GeometryResource,
     GeometryResourceLookup, GlyphRun, ObjectContentRef, ObjectId, PathCommand, PublicationContext,
     RasterImageResourceLookup, StrokeCap, StrokeJoin, StrokeWidthMode, Style, TextAffineTransform,
-    TextGlyphStroke, TextRenderItem, TextResourceLookup, TextVectorItem, Transform2D, Vec2,
-    VectorPath,
+    TextGlyphStroke, TextLayoutBackendKind, TextRenderItem, TextResource, TextResourceLookup,
+    TextVectorItem, Transform2D, Vec2, VectorPath,
 };
 #[cfg(test)]
 use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena, TextVectorStyle};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RendererPublication};
+use noon_text::shaping::canonical_glyph_outline;
 #[cfg(test)]
 use noon_typst::{compile_typst_resource, TypstMode};
 use swash::{
@@ -616,6 +617,7 @@ pub(super) struct OutlineKey {
     glyph_id: GlyphId,
     pub(super) size_bits: u32,
     pub(super) variation_fingerprint: u64,
+    native_text: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -889,6 +891,7 @@ impl GlyphOutlineCache {
     pub(super) fn outline(
         &mut self,
         fonts: &(impl FontResourceLookup + ?Sized),
+        resource: &TextResource,
         run: &GlyphRun,
         glyph_id: u32,
     ) -> Result<(OutlineKey, Arc<VectorPath>), RetainedPrepareError> {
@@ -912,6 +915,10 @@ impl GlyphOutlineCache {
             glyph_id,
             size_bits: run.font_size.to_bits(),
             variation_fingerprint: variation_fingerprint(run),
+            native_text: resource
+                .layout_artifact
+                .as_ref()
+                .is_some_and(|layout| layout.backend.kind == TextLayoutBackendKind::NativeText),
         };
         if let Some(path) = self.cached_outline(key) {
             return Ok((key, path));
@@ -944,17 +951,29 @@ impl GlyphOutlineCache {
             .iter()
             .map(|setting| (setting.tag, setting.value))
             .collect();
-        let mut scaler = self
-            .scale_context
-            .builder(font)
-            .size(run.font_size)
-            .hint(false)
-            .variations(variations.iter())
-            .build();
-        let path = scaler
-            .scale_outline(glyph_id)
-            .map(|outline| zeno_to_noon(outline.path().commands()))
-            .unwrap_or_default();
+        let path = if key.native_text {
+            canonical_glyph_outline(
+                &mut self.scale_context,
+                font,
+                glyph_id,
+                run.font_size,
+                &variations,
+            )
+        } else {
+            // Typst/LaTeX and externally supplied layouts retain their existing
+            // outline coordinates. Native Text's layout grid is not their grid.
+            let mut scaler = self
+                .scale_context
+                .builder(font)
+                .size(run.font_size)
+                .hint(false)
+                .variations(variations.iter())
+                .build();
+            scaler
+                .scale_outline(glyph_id)
+                .map(|outline| zeno_to_noon(outline.path().commands()))
+                .unwrap_or_default()
+        };
         let path = Arc::new(path);
         self.admit_outline(key, path.clone());
         Ok((key, path))
@@ -2681,6 +2700,7 @@ impl RetainedFramePreparer {
                                         object.appearance,
                                         reveal,
                                         morph,
+                                        resource,
                                         run,
                                         fonts,
                                     )?;
@@ -2807,13 +2827,16 @@ impl RetainedFramePreparer {
         appearance: f32,
         reveal: f32,
         morph: f32,
+        resource: &TextResource,
         run: &GlyphRun,
         fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<(), RetainedPrepareError> {
         let mut fill_path = VectorPath::new();
         let mut stroke_path = VectorPath::new();
         for glyph in run.glyphs.iter() {
-            let (key, outline) = self.outlines.outline(fonts, run, glyph.glyph_id)?;
+            let (key, outline) = self
+                .outlines
+                .outline(fonts, resource, run, glyph.glyph_id)?;
             fill_path =
                 append_transformed_path(fill_path, outline.as_ref(), run.transform, glyph.origin);
             if let Some(stroke) = run.stroke.as_ref() {
@@ -3248,6 +3271,8 @@ fn noon_to_zeno(path: &VectorPath) -> Vec<ZenoCommand> {
         .collect()
 }
 
+// Stroke expansion already emits coordinates in the canonical outline's space;
+// preserve its curve commands without applying the glyph grid again.
 fn zeno_to_noon(commands: impl Iterator<Item = ZenoCommand>) -> VectorPath {
     let mut path = VectorPath::new();
     for command in commands {
@@ -4790,6 +4815,7 @@ mod tests {
             glyph_id,
             size_bits: 24.0_f32.to_bits(),
             variation_fingerprint: 0,
+            native_text: false,
         }
     }
 
@@ -4838,6 +4864,7 @@ mod tests {
             glyph_id: GlyphId::try_from(glyph).unwrap(),
             size_bits: 24.0_f32.to_bits(),
             variation_fingerprint: 0,
+            native_text: false,
         };
 
         let shared_font = font(1);
@@ -4874,7 +4901,9 @@ mod tests {
         let glyph = run.glyphs.first().unwrap();
         let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(1, usize::MAX));
 
-        cache.outline(&artifact.fonts, run, glyph.glyph_id).unwrap();
+        cache
+            .outline(&artifact.fonts, &artifact.resource, run, glyph.glyph_id)
+            .unwrap();
         assert_eq!(cache.stats().outline_entries, 1);
         assert_eq!(cache.stats().font_faces, 1);
 
@@ -4890,11 +4919,54 @@ mod tests {
         let glyph = run.glyphs.first().unwrap();
         let mut cache = GlyphOutlineCache::with_limits(GlyphOutlineCacheLimits::new(0, usize::MAX));
 
-        cache.outline(&artifact.fonts, run, glyph.glyph_id).unwrap();
+        cache
+            .outline(&artifact.fonts, &artifact.resource, run, glyph.glyph_id)
+            .unwrap();
 
         assert_eq!(cache.stats().outline_entries, 0);
         assert_eq!(cache.stats().font_faces, 0);
         assert_eq!(cache.stats().rejected_admissions, 1);
+    }
+
+    #[test]
+    fn outline_cache_separates_native_layout_grid_from_typst_coordinates() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        let glyph = run.glyphs.first().unwrap();
+        let mut native = artifact.resource.clone();
+        native.layout_artifact.as_mut().unwrap().backend.kind = TextLayoutBackendKind::NativeText;
+        let mut cache = GlyphOutlineCache::default();
+        let (typst_key, typst_path) = cache
+            .outline(&artifact.fonts, &artifact.resource, run, glyph.glyph_id)
+            .unwrap();
+        let (native_key, native_path) = cache
+            .outline(&artifact.fonts, &native, run, glyph.glyph_id)
+            .unwrap();
+        assert_ne!(typst_key, native_key);
+        assert_eq!(cache.stats().outline_entries, 2);
+        assert!(!Arc::ptr_eq(&typst_path, &native_path));
+        let (_, typst_again) = cache
+            .outline(&artifact.fonts, &artifact.resource, run, glyph.glyph_id)
+            .unwrap();
+        assert!(Arc::ptr_eq(&typst_path, &typst_again));
+
+        let handle = artifact.fonts.handle_for_face(&run.font).unwrap();
+        let font = artifact.fonts.get(handle).unwrap();
+        let face = FontRef::from_index(&font.data, font.key.face_index as usize).unwrap();
+        let mut scale_context = ScaleContext::new();
+        let mut scaler = scale_context
+            .builder(face)
+            .size(run.font_size)
+            .hint(false)
+            .build();
+        let expected = zeno_to_noon(
+            scaler
+                .scale_outline(glyph.glyph_id as GlyphId)
+                .unwrap()
+                .path()
+                .commands(),
+        );
+        assert_eq!(typst_path.as_ref(), &expected);
     }
 
     #[test]

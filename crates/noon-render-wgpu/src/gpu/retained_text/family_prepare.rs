@@ -470,7 +470,9 @@ impl RetainedFramePreparer {
                             glyph,
                         },
                     )?;
-                    let (_, outline) = self.outlines.outline(fonts, run, positioned.glyph_id)?;
+                    let (_, outline) =
+                        self.outlines
+                            .outline(fonts, resource, run, positioned.glyph_id)?;
                     let path = append_transformed_path(
                         VectorPath::new(),
                         outline.as_ref(),

@@ -3,18 +3,24 @@
 //! This module is a deterministic backend. Public markup parsing, font resolution,
 //! fallback, bidi, and semantic scene ownership remain outside this crate.
 
-use std::{fmt, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use noon_core::{
     Color, FontFaceIdentity, FontResourceArena, FontResourceError, FontVariationSetting, GlyphRun,
     PositionedGlyph, Rect, TextAffineTransform, TextClusterIdentity, TextDirection,
     TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem,
-    TextResource, TextResourceValidationError, TextSourceKind, TextSourceSpan, Vec2,
+    TextResource, TextResourceValidationError, TextSourceKind, TextSourceSpan, Vec2, VectorPath,
 };
-use swash::{scale::ScaleContext, shape::ShapeContext, text::Script, FontRef, GlyphId};
+use swash::{
+    scale::ScaleContext,
+    shape::ShapeContext,
+    text::Script,
+    zeno::{Command as ZenoCommand, PathData},
+    FontRef, GlyphId,
+};
 
 pub const NATIVE_TEXT_BACKEND_VERSION: &str = "swash-0.2.10";
-const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v5";
+const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v6";
 const MANIM_DEFAULT_LINE_SPACING: f32 = 0.3;
 // `Text` sends its line step through ManimPango after dividing by 4.8. Pango
 // uses 96 device units per inch for its point-sized font metrics, so the SVG
@@ -24,6 +30,107 @@ const MANIM_PLAIN_LINE_ADVANCE_SCALE: f32 = 0.75;
 // TEXT2SVG_ADJUSTMENT_FACTOR (4.8). Pango/Cairo then converts points at 96 DPI,
 // so one Cairo layout pixel is 3.6 units in Noon's point-sized shaping space.
 const MANIM_PANGO_LAYOUT_PIXEL: f32 = 3.6;
+const NATIVE_GLYPH_GRID: f64 = 3.6 / 256.0;
+
+/// Build a glyph outline once for both native layout bounds and retained drawing.
+///
+/// Swash is asked for unhinted geometry in font units. Scaling and quadratic to
+/// cubic conversion happen before applying the native text coordinate grid, so
+/// compiler bounds are measured from the same control points the renderer draws.
+#[doc(hidden)]
+pub fn canonical_glyph_outline(
+    scale_context: &mut ScaleContext,
+    font: FontRef<'_>,
+    glyph_id: GlyphId,
+    font_size: f32,
+    variations: &[([u8; 4], f32)],
+) -> VectorPath {
+    let units_per_em = font.metrics(&[]).units_per_em;
+    if units_per_em == 0 || !font_size.is_finite() || font_size <= 0.0 {
+        return VectorPath::default();
+    }
+    let mut scaler = scale_context
+        .builder(font)
+        .size(f32::from(units_per_em))
+        .hint(false)
+        .variations(variations.iter())
+        .build();
+    let Some(outline) = scaler.scale_outline(glyph_id) else {
+        return VectorPath::default();
+    };
+    let scale = f64::from(font_size) / f64::from(units_per_em);
+    let scale_point =
+        |point: swash::zeno::Point| (f64::from(point.x) * scale, f64::from(point.y) * scale);
+    let quantize_point = |(x, y): (f64, f64)| {
+        Vec2::new(
+            quantize_glyph_coordinate(x) as f32,
+            quantize_glyph_coordinate(y) as f32,
+        )
+    };
+    let mut path = VectorPath::new();
+    let mut current = (0.0, 0.0);
+    let mut subpath_start = current;
+    for command in outline.path().commands() {
+        path = match command {
+            ZenoCommand::MoveTo(point) => {
+                current = scale_point(point);
+                subpath_start = current;
+                path.move_to(quantize_point(current))
+            }
+            ZenoCommand::LineTo(point) => {
+                current = scale_point(point);
+                path.line_to(quantize_point(current))
+            }
+            ZenoCommand::QuadTo(control, point) => {
+                let start = current;
+                let end = scale_point(point);
+                let control = scale_point(control);
+                let (control1, control2) = quadratic_to_cubic(start, control, end);
+                // Convert from the unquantized scaled Q points, then put all
+                // output points (including generated controls) on the grid.
+                current = end;
+                path.cubic_to(
+                    quantize_point(control1),
+                    quantize_point(control2),
+                    quantize_point(end),
+                )
+            }
+            ZenoCommand::CurveTo(control1, control2, point) => {
+                current = scale_point(point);
+                path.cubic_to(
+                    quantize_point(scale_point(control1)),
+                    quantize_point(scale_point(control2)),
+                    quantize_point(current),
+                )
+            }
+            ZenoCommand::Close => {
+                current = subpath_start;
+                path.close()
+            }
+        };
+    }
+    path
+}
+
+fn quadratic_to_cubic(
+    start: (f64, f64),
+    control: (f64, f64),
+    end: (f64, f64),
+) -> ((f64, f64), (f64, f64)) {
+    let first = (
+        start.0 + (control.0 - start.0) * (2.0 / 3.0),
+        start.1 + (control.1 - start.1) * (2.0 / 3.0),
+    );
+    let second = (
+        end.0 + (control.0 - end.0) * (2.0 / 3.0),
+        end.1 + (control.1 - end.1) * (2.0 / 3.0),
+    );
+    (first, second)
+}
+
+fn quantize_glyph_coordinate(value: f64) -> f64 {
+    (value / NATIVE_GLYPH_GRID).round() * NATIVE_GLYPH_GRID
+}
 
 /// Exact immutable OpenType face input. `face_key` derives from the bytes and
 /// collection index, so a glyph identity never resolves to a different file.
@@ -469,13 +576,7 @@ impl NativeTextCompiler {
         if let Some(error) = boundary_error {
             return Err(error);
         }
-        let mut scaler = self
-            .scale_context
-            .builder(font_ref)
-            .size(options.font_size)
-            .hint(false)
-            .variations(variations)
-            .build();
+        let mut glyph_bounds = HashMap::<GlyphId, Option<Rect>>::new();
         let runs = projected
             .into_iter()
             .map(|mut run| {
@@ -484,13 +585,21 @@ impl NativeTextCompiler {
                     .iter_mut()
                     .filter_map(|glyph| {
                         let glyph_id = GlyphId::try_from(glyph.glyph_id).ok()?;
-                        let outline = scaler.scale_outline(glyph_id)?;
-                        let bounds = outline.bounds();
-                        (!bounds.is_empty()).then(|| {
-                            glyph.bounds = Rect::new(
-                                glyph.origin + Vec2::new(bounds.min.x, bounds.min.y),
-                                glyph.origin + Vec2::new(bounds.max.x, bounds.max.y),
+                        let bounds = *glyph_bounds.entry(glyph_id).or_insert_with(|| {
+                            let path = canonical_glyph_outline(
+                                &mut self.scale_context,
+                                font_ref,
+                                glyph_id,
+                                options.font_size,
+                                variations,
                             );
+                            path.has_drawable_segments()
+                                .then(|| path.conservative_bounds())
+                                .flatten()
+                        });
+                        bounds.map(|bounds| {
+                            glyph.bounds =
+                                Rect::new(glyph.origin + bounds.min, glyph.origin + bounds.max);
                             glyph.bounds
                         })
                     })
@@ -1245,5 +1354,106 @@ mod tests {
             one.resource.layout_artifact.unwrap().artifact_fingerprint,
             two.resource.layout_artifact.unwrap().artifact_fingerprint
         );
+    }
+
+    #[test]
+    fn quadratic_conversion_uses_scaled_points_before_grid_rounding() {
+        let start = (0.0, 0.0);
+        let control = (1.3, 6.0);
+        let end = (4.1, 0.0);
+        let (first, second) = quadratic_to_cubic(start, control, end);
+        assert_eq!(first, (1.3 * (2.0 / 3.0), 4.0));
+        assert_eq!(second, (end.0 + (control.0 - end.0) * (2.0 / 3.0), 4.0));
+        for t in [0.0, 0.125, 0.5, 0.875, 1.0] {
+            let u = 1.0 - t;
+            for axis in 0..2 {
+                let coordinates = |p: (f64, f64)| if axis == 0 { p.0 } else { p.1 };
+                let quadratic = u * u * coordinates(start)
+                    + 2.0 * u * t * coordinates(control)
+                    + t * t * coordinates(end);
+                let cubic = u * u * u * coordinates(start)
+                    + 3.0 * u * u * t * coordinates(first)
+                    + 3.0 * u * t * t * coordinates(second)
+                    + t * t * t * coordinates(end);
+                assert!((quadratic - cubic).abs() < 1.0e-12);
+            }
+        }
+        let rounded_first = quantize_glyph_coordinate(first.0);
+        let prematurely_rounded_first = quantize_glyph_coordinate(
+            quantize_glyph_coordinate(start.0)
+                + (quantize_glyph_coordinate(control.0) - quantize_glyph_coordinate(start.0))
+                    * (2.0 / 3.0),
+        );
+        assert_ne!(rounded_first, prematurely_rounded_first);
+    }
+
+    #[test]
+    fn canonical_glyph_path_grid_and_compiler_bounds_share_one_outline() {
+        let font = bundled_font();
+        let options = NativeTextOptions::new(31.0);
+        let mut compiler = NativeTextCompiler::new();
+        let artifact = compiler.compile_plain("Frame", &font, &options).unwrap();
+        let font_ref = FontRef::from_index(font.data.as_ref(), font.face_index as usize).unwrap();
+        let mut scale_context = ScaleContext::new();
+        let mut drawable = 0;
+
+        for glyph in &artifact.resource.runs[0].glyphs {
+            let path = canonical_glyph_outline(
+                &mut scale_context,
+                font_ref,
+                glyph.glyph_id as GlyphId,
+                options.font_size,
+                &[],
+            );
+            assert!(path.is_finite());
+            for command in path.commands() {
+                let on_grid = |coordinate: f32| {
+                    quantize_glyph_coordinate(f64::from(coordinate)) as f32 == coordinate
+                };
+                let check = |point: Vec2| {
+                    assert!(on_grid(point.x), "x coordinate {point:?} is off grid");
+                    assert!(on_grid(point.y), "y coordinate {point:?} is off grid");
+                };
+                match *command {
+                    noon_core::PathCommand::MoveTo { to }
+                    | noon_core::PathCommand::LineTo { to } => check(to),
+                    noon_core::PathCommand::QuadraticTo { control, to } => {
+                        check(control);
+                        check(to);
+                    }
+                    noon_core::PathCommand::CubicTo {
+                        control1,
+                        control2,
+                        to,
+                    } => {
+                        check(control1);
+                        check(control2);
+                        check(to);
+                    }
+                    noon_core::PathCommand::Close => {}
+                }
+            }
+            if let Some(path_bounds) = path
+                .has_drawable_segments()
+                .then(|| path.conservative_bounds())
+                .flatten()
+            {
+                drawable += 1;
+                assert_eq!(
+                    glyph.bounds,
+                    Rect::new(
+                        glyph.origin + path_bounds.min,
+                        glyph.origin + path_bounds.max
+                    )
+                );
+            }
+        }
+        assert!(drawable > 0);
+
+        let space = font_ref.charmap().map(' ');
+        let empty =
+            canonical_glyph_outline(&mut scale_context, font_ref, space, options.font_size, &[]);
+        assert!(!empty.has_drawable_segments());
+        assert_eq!(empty.conservative_bounds(), None);
     }
 }
