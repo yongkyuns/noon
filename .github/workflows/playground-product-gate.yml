@@ -269,7 +269,7 @@ jobs:
   measure-adjacent:
     name: Adjacent product measurements
     needs: build
-    if: ${{ !cancelled() }}
+    if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     outputs:
@@ -448,7 +448,7 @@ jobs:
   measure-cumulative:
     name: Pinned-anchor product measurements
     needs: build
-    if: ${{ !cancelled() }}
+    if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     outputs:

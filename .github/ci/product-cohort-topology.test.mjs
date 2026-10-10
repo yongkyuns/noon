@@ -24,7 +24,7 @@ const gate = job("compare");
 test("both immutable-source measurement cohorts depend only on the common producer", () => {
   for (const [name, section] of [["adjacent", adjacent], ["cumulative", cumulative]]) {
     assert.match(section, /^    needs: build$/m, name + " must not wait for the other cohort");
-    assert.match(section, /^    if: \$\{\{ !cancelled\(\) \}\}$/m);
+    assert.ok(section.includes("if: ${{ needs.build.result == 'success' }}"), name + " cannot start on an unsuccessful producer");
     assert.match(section, /Require successful production builds/);
     assert.match(section, /ref: \$\{\{ needs\.build\.outputs\.candidate-sha \}\}/);
     assert.match(section, /artifact-ids: \$\{\{ needs\.build\.outputs\.candidate-artifact \}\}/);
