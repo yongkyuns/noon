@@ -105,7 +105,8 @@ fn live_become_ignores_glow_on_unrelated_detached_source() {
     scene.add(&source).unwrap();
 
     let mut session = scene.execution_session().unwrap();
-    scene.live(&mut session)
+    scene
+        .live(&mut session)
         .become_mobject(&source, &donor, ManimBecomeOptions::default())
         .unwrap();
     assert_same_visual(&source.state().unwrap(), &donor.state().unwrap());
