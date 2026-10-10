@@ -1,0 +1,178 @@
+name: GPU glow scoped become qualification (temporary)
+on:
+  push:
+    branches: [codex/m1-glow-scoped-qualification-42d]
+    paths: [.github/workflows/m1-glow-scoped-qualification.yml]
+permissions:
+  contents: read
+concurrency:
+  group: m1-glow-scoped-qualification-42d
+  cancel-in-progress: true
+jobs:
+  qualify:
+    name: Baseline failure, scoped regressions, and full Rust gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      actions: write
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TARGET_DIR: /home/runner/work/noon/scoped-glow-target
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - name: Checkout verified product source without helper workflows
+        uses: actions/checkout@v7
+        with:
+          ref: 42d480e0c27831125d70bbfa0a6e40fbeafc88fb
+          fetch-depth: 0
+      - name: Integrate only the reviewed scoped fix and four regressions
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 42d480e0c27831125d70bbfa0a6e40fbeafc88fb
+          git fetch origin 7affb2660f8bfe7eb79515737e89c972c320ffdc
+          test "$(git merge-base HEAD 7affb2660f8bfe7eb79515737e89c972c320ffdc)" = 68f7b40b877c24c26af2795af776e25deb6a153c
+          python3 - <<'PY'
+          import subprocess
+          actual = set(subprocess.check_output([
+              'git', 'diff', '--name-only',
+              '68f7b40b877c24c26af2795af776e25deb6a153c',
+              '7affb2660f8bfe7eb79515737e89c972c320ffdc',
+          ], text=True).splitlines())
+          expected = {
+              'crates/noon/src/live_session.rs',
+              'crates/noon/src/semantic_mobject.rs',
+              'crates/noon/src/state_replacement.rs',
+              'crates/noon/tests/glow_scoped_become.rs',
+          }
+          assert actual == expected, (actual, expected)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-ff -m 'fix(glow): integrate operand-local become guards and regressions' 7affb2660f8bfe7eb79515737e89c972c320ffdc
+          mkdir -p scoped-glow-evidence
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose | tee scoped-glow-evidence/rustc.txt
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Normalize only scoped Rust files and freeze the candidate tree
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          python3 - <<'PY'
+          import subprocess
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          allowed = {
+              'crates/noon/src/live_session.rs',
+              'crates/noon/src/semantic_mobject.rs',
+              'crates/noon/src/state_replacement.rs',
+              'crates/noon/tests/glow_scoped_become.rs',
+          }
+          assert changed <= allowed, changed - allowed
+          PY
+          if ! git diff --quiet; then
+            git add crates/noon/src/live_session.rs crates/noon/src/semantic_mobject.rs crates/noon/src/state_replacement.rs crates/noon/tests/glow_scoped_become.rs
+            git diff --cached --check
+            git commit -m 'style(glow): apply repository-pinned formatting to scoped become fix'
+          fi
+          git rev-parse HEAD > scoped-glow-evidence/candidate-sha.txt
+          git rev-parse HEAD^{tree} > scoped-glow-evidence/candidate-tree.txt
+          git diff --binary 42d480e0c27831125d70bbfa0a6e40fbeafc88fb HEAD > scoped-glow-evidence/candidate.patch
+          if [ ! -f Cargo.lock ]; then cargo generate-lockfile; fi
+          sha256sum Cargo.lock > scoped-glow-evidence/cargo-lock.sha256
+          cp Cargo.lock scoped-glow-evidence/Cargo.lock
+          git diff --exit-code
+      - name: Prove the unchanged baseline actually fails the same regression tests
+        run: |
+          set -euo pipefail
+          baseline="$RUNNER_TEMP/noon-glow-baseline"
+          evidence="$GITHUB_WORKSPACE/scoped-glow-evidence"
+          git worktree add --detach "$baseline" 42d480e0c27831125d70bbfa0a6e40fbeafc88fb
+          cp crates/noon/tests/glow_scoped_become.rs "$baseline/crates/noon/tests/glow_scoped_become.rs"
+          cp Cargo.lock "$baseline/Cargo.lock"
+          set +e
+          (cd "$baseline" && cargo test --locked -p noon --no-default-features --test glow_scoped_become -- --nocapture) 2>&1 | tee "$evidence/baseline-negative-control.log"
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" = 101
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path('scoped-glow-evidence/baseline-negative-control.log').read_text()
+          expected = {
+              'unrelated_glow_does_not_block_plain_state_replacement',
+              'unrelated_glow_does_not_block_family_replacement_but_local_glow_does',
+              'live_become_ignores_glow_on_unrelated_detached_source',
+          }
+          failed = set(re.findall(r'^test (\w+) \.\.\. FAILED$', text, re.M))
+          assert failed == expected, (failed, expected)
+          assert 'test result: FAILED. 1 passed; 3 failed;' in text
+          assert 'EffectStateReplacementUnavailable' in text
+          assert not re.search(r'^error\[E\d+\]', text, re.M), 'compiler error is not regression evidence'
+          PY
+      - name: Qualify all four regressions on the frozen candidate
+        run: |
+          set -euo pipefail
+          cargo test --locked -p noon --no-default-features --test glow_scoped_become -- --nocapture 2>&1 | tee scoped-glow-evidence/scoped-regressions.log
+          grep -F 'test result: ok. 4 passed; 0 failed;' scoped-glow-evidence/scoped-regressions.log
+      - name: Format workspace
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check 2>&1 | tee scoped-glow-evidence/format.log
+      - name: Clippy workspace
+        run: |
+          set -euo pipefail
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings 2>&1 | tee scoped-glow-evidence/clippy.log
+      - name: Test full workspace
+        run: |
+          set -euo pipefail
+          cargo test --locked --workspace --all-features 2>&1 | tee scoped-glow-evidence/workspace-tests.log
+          test "$(git rev-parse HEAD)" = "$(cat scoped-glow-evidence/candidate-sha.txt)"
+          git diff --exit-code
+          printf 'Baseline red, focused green, format, strict Clippy, workspace tests: PASS\n' > scoped-glow-evidence/result.txt
+      - name: Publish qualified source to PR 1921 without overwriting newer work
+        run: |
+          set -euo pipefail
+          branch=refs/heads/codex/m1-glow-raster-operator
+          actual=$(git ls-remote origin "$branch" | cut -f1)
+          test "$actual" = 42d480e0c27831125d70bbfa0a6e40fbeafc88fb
+          git merge-base --is-ancestor "$actual" HEAD
+          git diff --exit-code
+          git push origin "HEAD:$branch"
+      - name: Dispatch canonical CI for the new exact product source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --request POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data '{"ref":"codex/m1-glow-raster-operator"}' \
+            https://api.github.com/repos/yongkyuns/noon/actions/workflows/ci.yml/dispatches
+      - name: Preserve exact source and honest qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m1-glow-scoped-become-qualification
+          path: scoped-glow-evidence/
+          if-no-files-found: warn
+          retention-days: 7
