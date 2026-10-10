@@ -57,7 +57,10 @@ test('independent contexts share one in-flight fetch and identical resource byte
 test('failed fetches still fail their cases and do not poison later requests', async () => {
   const cache = createPyodideResourceCache(source);
   const handler = await attach(cache);
-  const failed = request(async () => { throw new Error('network failure'); });
+  const failed = request(async (options) => {
+    assert.deepEqual(options, { maxRetries: 2 }, 'only transport-level GET retries are allowed');
+    throw new Error('network failure');
+  });
   await handler(failed);
   assert.equal(failed.result.aborted, 'failed');
   assert.equal(failed.result.response, undefined);
@@ -66,6 +69,9 @@ test('failed fetches still fail their cases and do not poison later requests', a
   assert.equal(later.result.response.body.toString(), 'ok');
   assert.equal(cache.stats().upstreamRequests, 2);
   assert.equal(cache.stats().upstreamFailures, 1);
+  assert.deepEqual(cache.stats().upstreamFailureDetails, [
+    { url, error: 'network failure' },
+  ]);
   assert.equal(cache.stats().fulfillFailures, 0);
 });
 
@@ -128,4 +134,24 @@ test('pinned optional LaTeX assets share unchanged response bytes across context
   }
   assert.equal(fetches, 2);
   assert.equal(cache.stats().hits, 2);
+});
+
+test('offline snapshot copies only already-fetched successful pinned interpreter assets', async () => {
+  const cache = createPyodideResourceCache(source);
+  const handler = await attach(cache);
+  const bytes = Buffer.from('interpreter bytes');
+  await handler(request(async () => response(bytes)));
+  await handler(request(async () => response(Buffer.from('latex')), 'GET', LATEX_ASSETS.bundle));
+  await handler(request(async () => response(Buffer.from('bad'), 503), 'GET', url + '.missing'));
+  const before = cache.stats();
+  const snapshot = await cache.snapshot();
+  assert.equal(snapshot.length, 1);
+  assert.equal(snapshot[0].url, url);
+  assert.deepEqual(snapshot[0].body, bytes);
+  assert.equal(snapshot[0].headers['set-cookie'], undefined);
+  snapshot[0].body[0] = 0; snapshot[0].headers['content-type'] = 'changed';
+  const next = (await cache.snapshot())[0];
+  assert.deepEqual(next.body, bytes);
+  assert.equal(next.headers['content-type'], 'application/wasm');
+  assert.deepEqual(cache.stats(), before, 'archiving must not refetch or change cache accounting');
 });

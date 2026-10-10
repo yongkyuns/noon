@@ -26,6 +26,7 @@ mod forward_sample;
 mod frame_grid;
 mod path_edits;
 mod pixel_readback;
+mod svg_failure;
 
 pub use export_frames::{
     ExportEndReason, ExportFrame, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyError,
@@ -95,7 +96,7 @@ pub use noon_runtime::{
 };
 
 /// Construct one detached family through an explicitly supplied live execution
-/// authority. This is for platform integrations that intentionally own the
+/// authority. This is for platform integrations that intentionally own a
 /// store/root/session pairing outside [`Scene`](crate::Scene); ordinary Rust
 /// authoring uses [`Scene::family_with_z_index`](crate::Scene::family_with_z_index).
 pub fn publish_family_creation(
@@ -267,3 +268,9 @@ pub fn publish_family_align_to(
 ) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
     crate::family_layout::publish_align_family_to(store, root, execution, family, target, axis)
 }
+
+// Optional language adapters share argument/error projections, not another engine.
+pub use crate::binding_error::AuthoringFailure;
+pub use crate::binding_options::{
+    resolve_frontend_animation_options, resolve_frontend_transform_animation_options,
+};

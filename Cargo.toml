@@ -8,6 +8,7 @@ members = [
     "crates/noon-render-wgpu",
     "crates/noon-native",
     "crates/noon-export",
+    "crates/noon-python",
     "crates/noon-web",
     "crates/noon-typst",
     "crates/noon-text",

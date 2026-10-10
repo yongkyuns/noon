@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,36 +7,15 @@ import playwright from "playwright";
 import { PNG } from "pngjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { browserArgs } from "./manim-raster-support.mjs";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const port = 4191;
-const baseUrl = `http://127.0.0.1:${port}`;
-
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/manim-compat-smoke.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`typed text animation smoke server did not start: ${lastError}\n${serverOutput}`);
-}
+const server = await serveRepository(repoRoot, port, { crossOriginIsolated: true });
+const baseUrl = server.baseUrl;
 
 const textAnimateSource = `
 from noon import *
@@ -146,13 +124,12 @@ class TypstAnimation(Scene):
 
 let browser = null;
 try {
-  await waitForServer();
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
-    args: ["--disable-dev-shm-usage"],
+    args: browserArgs("webgpu"),
   });
-  const page = await browser.newPage();
+  const page = await browser.newPage({ viewport: { width: 800, height: 500 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error}`));
   page.on("console", (message) => {
@@ -161,7 +138,8 @@ try {
 
   await page.goto(`${baseUrl}/web/manim-compat-smoke.html`, { waitUntil: "load" });
   await page.waitForFunction(() => window.noonManimCompat, null, { timeout: 30_000 });
-  await page.evaluate(() => window.noonManimCompat.ready());
+  // The source runner owns the test lifecycle. Do not pre-run unrelated
+  // animated readiness probes on the same long-lived Python worker.
 
   const result = await page.evaluate(
     (sources) => window.noonManimCompat.runLiveSources(sources),
@@ -183,7 +161,9 @@ try {
   const cache = createPyodideResourceCache(await readFile(path.join(repoRoot, "web/python-worker.js"), "utf8"));
   const mathContext = await browser.newContext({ viewport: { width: 1000, height: 650 } });
   await cache.install(mathContext);
-  await disableAuthoringJspi(mathContext);
+  // This test server sets COOP/COEP. A synthetic no-JSPI module worker must
+  // carry the same embedding policy or Chromium rejects it before Python starts.
+  await disableAuthoringJspi(mathContext, { crossOriginIsolated: true });
   try {
     for (const kind of ["MathTex", "MathTypst"]) {
       for (const [forward, reverse] of [["Create", "Uncreate"], ["Write", "Unwrite"]]) {
@@ -201,6 +181,8 @@ class MathReveal(Scene):
           const mathErrors = [];
           mathPage.on("pageerror", error => mathErrors.push(String(error)));
           await mathPage.goto(`${baseUrl}/web/manim-raster-host.html`);
+          assert.equal(await mathPage.evaluate(() => crossOriginIsolated), true,
+            "math smoke requires a genuinely cross-origin-isolated host");
           await mathPage.waitForFunction(() => window.noonHostRaster);
           await mathPage.evaluate(source => window.noonHostRaster.load(source, 3.25), source);
           assert.equal(await mathPage.evaluate(() => window.__noonNoJspiWorkerWrapped), true);
@@ -235,5 +217,5 @@ class MathReveal(Scene):
   );
 } finally {
   await browser?.close();
-  server.kill("SIGTERM");
+  await server.close();
 }

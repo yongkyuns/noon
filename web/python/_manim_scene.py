@@ -33,8 +33,8 @@ import _noon_ir as _ir
 import noon as _base
 
 try:
-    from js import noonCreateCanonicalAuthoringSceneContext as _create_context
-except ImportError:  # pragma: no cover - native import smoke only
+    from _noon_host import noonCreateCanonicalAuthoringSceneContext as _create_context
+except ImportError:  # Import-only use without an installed engine remains supported.
     _create_context = None
 
 _ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
@@ -47,9 +47,10 @@ _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE = (
 )
 
 
-def _json(value: object) -> str:
+def _json(value: object) -> object:
     # Encode tokens for the existing host-callback bridge.
-    return json.dumps(value, separators=(",", ":"), allow_nan=False)
+    from _noon_host import encode_callback
+    return encode_callback(value)
 
 
 def _context(scene: _base.Scene):
@@ -58,7 +59,7 @@ def _context(scene: _base.Scene):
         return context
     if _create_context is None:
         raise RuntimeError(
-            "shared semantic authoring requires the Noon browser Rust/WASM context"
+            "shared semantic authoring requires an installed Noon shared Rust engine binding"
         )
     context = _create_context()
     scene._canonical_authoring_context = context
@@ -777,7 +778,15 @@ def _associate_tracker(scene: _base.Scene, tracker: _reactive.ValueTracker) -> N
 
 
 def _canonical_scene_time(scene: _base.Scene) -> float:
-    """Observe the shared Rust cursor, including an empty scene at time zero."""
+    """Read Rust's phase time inside a callback, otherwise the authoring cursor.
+
+    A browser player can be leased out while native execution remains local.
+    Neither ownership arrangement may change the callback's clock observation.
+    """
+    from _manim_updaters import active_callback_membership_context
+    phase = active_callback_membership_context(scene)
+    if phase is not None:
+        return phase.time
     return float(_context(scene).authoredDuration())
 
 
@@ -838,7 +847,7 @@ def _start_default_synchronous_continuation(scene: _base.Scene) -> None:
         return
     if _async_continuation_active(scene):
         raise RuntimeError("canonical async and synchronous constructs cannot overlap")
-    from pyodide.ffi import can_run_sync
+    from _noon_host import can_wait_sync as can_run_sync
 
     if not can_run_sync():
         raise RuntimeError(
@@ -1056,7 +1065,7 @@ def _continuation_awaitable(
 def _require_semantic_continuation_active(scene: _base.Scene) -> None:
     if not _semantic_continuation_active(scene):
         return
-    from js import noonRequireSemanticContinuationActive
+    from _noon_host import noonRequireSemanticContinuationActive
 
     noonRequireSemanticContinuationActive(_context(scene))
 
@@ -1079,14 +1088,15 @@ def _prepare_semantic_continuation_callbacks(
         session_id = _manim_updaters.canonical_callback_session_id(scene)
     if session_id is None:
         return
-    from js import noonSetSemanticContinuationCallbackSession
+    from _noon_host import noonSetSemanticContinuationCallbackSession
 
     noonSetSemanticContinuationCallbackSession(context, int(session_id))
 
 
 def _continuation_event(event_json: object) -> dict[str, object]:
     try:
-        event = json.loads(str(event_json))
+        from _noon_host import decode_callback
+        event = decode_callback(event_json)
     except (TypeError, ValueError) as error:
         raise RuntimeError("semantic continuation returned invalid event JSON") from error
     if not isinstance(event, dict) or not isinstance(event.get("kind"), str):
@@ -1104,7 +1114,7 @@ class _ContinuationCallbackPlayer:
     def stageCallbackMembership(self, token_json: str, batch: object) -> None:
         if token_json != self._token_json:
             raise RuntimeError("continuation callback membership token is stale")
-        from js import noonStageSemanticContinuationMembership
+        from _noon_host import noonStageSemanticContinuationMembership
         engine_call(
             noonStageSemanticContinuationMembership,
             self._context,
@@ -1116,7 +1126,7 @@ class _ContinuationCallbackPlayer:
     def callbackMembershipRootKeys(self, token_json: str):
         if token_json != self._token_json:
             raise RuntimeError("continuation callback membership token is stale")
-        from js import noonContinuationMembershipRootKeys
+        from _noon_host import noonContinuationMembershipRootKeys
         return engine_call(
             noonContinuationMembershipRootKeys,
             self._context,
@@ -1127,7 +1137,7 @@ class _ContinuationCallbackPlayer:
     def stageCallbackProvisionalGeometry(self, token_json: str, options: object) -> object:
         if token_json != self._token_json:
             raise RuntimeError("continuation callback provisional geometry token is stale")
-        from js import noonStageSemanticContinuationProvisionalGeometry
+        from _noon_host import noonStageSemanticContinuationProvisionalGeometry
         return engine_call(
             noonStageSemanticContinuationProvisionalGeometry,
             self._context,
@@ -1141,7 +1151,7 @@ class _ContinuationCallbackPlayer:
     ) -> None:
         if token_json != self._token_json:
             raise RuntimeError("continuation callback provisional geometry token is stale")
-        from js import noonStageSemanticContinuationProvisionalShift
+        from _noon_host import noonStageSemanticContinuationProvisionalShift
         engine_call(
             noonStageSemanticContinuationProvisionalShift,
             self._context,
@@ -1158,7 +1168,7 @@ class _ContinuationCallbackPlayer:
     ) -> None:
         if token_json != self._token_json:
             raise RuntimeError("continuation callback provisional geometry token is stale")
-        from js import noonStageSemanticContinuationProvisionalFill
+        from _noon_host import noonStageSemanticContinuationProvisionalFill
         engine_call(
             noonStageSemanticContinuationProvisionalFill,
             self._context,
@@ -1175,7 +1185,7 @@ class _ContinuationCallbackPlayer:
     def callbackProvisionalCenter(self, token_json: str, object: object) -> object:
         if token_json != self._token_json:
             raise RuntimeError("continuation callback provisional geometry token is stale")
-        from js import noonSemanticContinuationProvisionalCenter
+        from _noon_host import noonSemanticContinuationProvisionalCenter
         return engine_call(
             noonSemanticContinuationProvisionalCenter,
             self._context,
@@ -1187,7 +1197,7 @@ class _ContinuationCallbackPlayer:
     def resolveCallbackProvisionalMobject(self, token_json: str, object: object) -> object:
         if token_json != self._token_json:
             raise RuntimeError("continuation callback provisional geometry token is stale")
-        from js import noonResolveSemanticContinuationProvisionalMobject
+        from _noon_host import noonResolveSemanticContinuationProvisionalMobject
         return engine_call(
             noonResolveSemanticContinuationProvisionalMobject,
             self._context,
@@ -1199,7 +1209,7 @@ class _ContinuationCallbackPlayer:
     def associatePublishedCallbackMobjects(self, context: object, batch: object) -> None:
         if context is not self._context:
             raise RuntimeError("continuation callback bindings belong to another context")
-        from js import noonAssociateSemanticContinuationCallbackMobjects
+        from _noon_host import noonAssociateSemanticContinuationCallbackMobjects
         engine_call(
             noonAssociateSemanticContinuationCallbackMobjects,
             context,
@@ -1207,6 +1217,12 @@ class _ContinuationCallbackPlayer:
             batch,
             operation="callback.membership_binding",
         )
+
+
+@dataclass(frozen=True)
+class _FailedCallbackContinuation:
+    pending: object
+    cause: Exception
 
 
 def _service_semantic_continuation_event(
@@ -1225,7 +1241,7 @@ def _service_semantic_continuation_event(
         return None
     if kind == "callback_committed":
         import _manim_updaters
-        from js import noonAcknowledgeSemanticContinuationCallback
+        from _noon_host import noonAcknowledgeSemanticContinuationCallback
 
         phase = event["phase"]
         failure = None
@@ -1245,7 +1261,7 @@ def _service_semantic_continuation_event(
         raise RuntimeError("semantic continuation callback event is missing its phase token")
 
     import _manim_updaters
-    from js import (
+    from _noon_host import (
         noonCompleteSemanticContinuationCallback,
         noonFailSemanticContinuationCallback,
     )
@@ -1265,12 +1281,14 @@ def _service_semantic_continuation_event(
     except Exception as error:
         # Failing the exact pending phase latches terminal Rust state. Its
         # returned promise rejects this suspended construct; no retry occurs.
-        return noonFailSemanticContinuationCallback(context, token_json, str(error))
+        return _FailedCallbackContinuation(
+            noonFailSemanticContinuationCallback(context, token_json, str(error)), error
+        )
     return noonCompleteSemanticContinuationCallback(context, token_json, batch_json)
 
 
 async def _await_semantic_continuation(scene: _base.Scene) -> None:
-    from js import noonAwaitSemanticContinuation
+    from _noon_host import noonAwaitSemanticContinuation
 
     event_json = await engine_await(noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
     while True:
@@ -1279,7 +1297,7 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
         completed_phase = None
         if event["kind"] == "callback":
             import _manim_updaters
-            from js import noonFailSemanticContinuationCallback
+            from _noon_host import noonFailSemanticContinuationCallback
 
             try:
                 prepared = await _manim_updaters.prepare_canonical_callback_phase(
@@ -1296,13 +1314,20 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
         )
         if next_event is None:
             return
+        failure = next_event if isinstance(next_event, _FailedCallbackContinuation) else None
         try:
-            event_json = await engine_await(next_event, operation="Scene.continuation")
-        except Exception:
+            event_json = await engine_await(
+                failure.pending if failure is not None else next_event,
+                operation="Scene.continuation",
+            )
+        except Exception as error:
             if completed_phase is not None:
                 _manim_updaters.discard_canonical_callback_phase(
                     _manim_updaters.canonical_callback_session_id(scene), completed_phase
                 )
+            if failure is not None:
+                from _noon_errors import callback_failure
+                raise callback_failure(failure.cause) from error
             raise
 
 
@@ -1310,8 +1335,8 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
     """Suspend the current JSPI-enabled Python stack on the worker lease."""
     if not _synchronous_continuation_active(scene):
         raise RuntimeError("synchronous semantic continuation is not active")
-    from js import noonAwaitSemanticContinuation
-    from pyodide.ffi import run_sync
+    from _noon_host import noonAwaitSemanticContinuation
+    from _noon_host import wait_sync as run_sync
 
     event_json = engine_call(run_sync, noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
     while True:
@@ -1319,14 +1344,20 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
         next_event = _service_semantic_continuation_event(scene, event_json)
         if next_event is None:
             break
+        failure = next_event if isinstance(next_event, _FailedCallbackContinuation) else None
         try:
-            event_json = engine_call(run_sync, next_event, operation="Scene.continuation")
-        except Exception:
+            event_json = engine_call(run_sync,
+                failure.pending if failure is not None else next_event,
+                operation="Scene.continuation")
+        except Exception as error:
             if event["kind"] == "callback":
                 import _manim_updaters
                 _manim_updaters.discard_canonical_callback_phase(
                     _manim_updaters.canonical_callback_session_id(scene), event["phase"]
                 )
+            if failure is not None:
+                from _noon_errors import callback_failure
+                raise callback_failure(failure.cause) from error
             raise
     return scene
 
