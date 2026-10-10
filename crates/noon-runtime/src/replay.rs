@@ -125,6 +125,12 @@ impl SceneInstance {
         self.replay_history.as_ref().and_then(|history| history.end)
     }
 
+    pub(crate) fn has_replay_interval(&self) -> bool {
+        self.replay_history
+            .as_ref()
+            .is_some_and(|history| history.end.is_some_and(|end| end > history.start))
+    }
+
     /// Account for immutable scalar plan extensions in the same finite history budget.
     /// Their original schedule remains resident and time-qualified; there is no copy to exchange.
     pub fn retain_scalar_timeline_change(

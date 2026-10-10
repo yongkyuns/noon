@@ -655,6 +655,9 @@ Playback admission is an engine decision. The host must enable seek/restart/loop
 controls only after the Rust execution owner validates the advertised capability.
 A non-replayable completed execution may retain its final presentation and explain
 the limitation, but may not fall back to seeking a destructively updated plan.
+An unfinished live segment, including a pure wait with no animation tracks, cannot
+be sealed as completed history. A sealed snapshot with no elapsed interval has no
+loop cadence; paused playback observations remain at the committed runtime time.
 
 Replay capability and forward execution admission are distinct. Denying backward
 replay must not reject a paused, explicit forward authored-time observation through

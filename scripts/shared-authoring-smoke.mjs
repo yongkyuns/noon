@@ -680,6 +680,7 @@ try {
     expectedComposition = false,
     expectedCamera = false,
     expectedDifferentRotations = false,
+    expectedReplayUnavailable = null,
   } of [
     {
       filename: "live_semantic_scene.py",
@@ -833,7 +834,7 @@ try {
       endpointTime: null,
     },
     { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
-    { filename: "ordinary_family_membership_order.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_membership_order.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null, expectedReplayUnavailable: "Incomplete" },
     { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
     { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_replacement.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
@@ -915,6 +916,7 @@ try {
       expectedComposition,
       expectedCamera,
       expectedDifferentRotations,
+      expectedReplayUnavailable,
       filename,
     }) => {
       const harness = window.sharedAuthoringSmoke;
@@ -978,6 +980,19 @@ try {
         }
 
         const initial = await waitForFrame();
+        if (expectedReplayUnavailable !== null) {
+          // This explicit live example starts a wait without driving/completing
+          // it. Its final coherent frame remains usable, but it has not authored
+          // the history required for replay or elapsed playback observation.
+          const paused = await execution.pause();
+          if (paused.replaySupported || paused.replayUnavailable !== expectedReplayUnavailable ||
+              paused.playing || paused.time !== 0) {
+            throw new Error(`${filename}: unfinished source did not retain its paused frontier`);
+          }
+          if ((await execution.state()).time !== 0) {
+            throw new Error(`${filename}: paused source projected unauthored elapsed time`);
+          }
+        }
         let endpoint = null;
         if (endpointTime !== null) {
           const paused = await execution.pause();
@@ -992,7 +1007,7 @@ try {
       } finally {
         if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, expectedDifferentRotations, filename });
+    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, expectedDifferentRotations, expectedReplayUnavailable, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
     if (objectCount === 0) {
       assert.equal(result.metrics.drawCalls, 0, `${filename}: removed object still draws`);
