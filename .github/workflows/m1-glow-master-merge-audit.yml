@@ -1,0 +1,58 @@
+name: M1 glow master merge conflict audit (temporary)
+on:
+  push:
+    branches: [codex/m1-glow-master-merge-audit-6bca]
+    paths: [.github/workflows/m1-glow-master-merge-audit.yml]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 6bca53332ec975074fea7884309ebfc1ab8df22b
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Identify exact merged baseline and independent changes
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 6bca53332ec975074fea7884309ebfc1ab8df22b
+          git fetch origin 849eedb1489227c7efee8865f04461d0b3e6097f
+          test "$(git merge-base HEAD 849eedb1489227c7efee8865f04461d0b3e6097f)" = 7efc1a0fbfb94bfba1cdb28b35b396f047fe98a6
+      - name: Attempt semantic merge without discarding conflict hunks
+        run: |
+          set -euo pipefail
+          mkdir -p glow-merge-audit/conflicts
+          set +e
+          git merge --no-commit --no-ff 849eedb1489227c7efee8865f04461d0b3e6097f > glow-merge-audit/merge.log 2>&1
+          code=$?
+          set -e
+          echo "merge_exit_code=$code" | tee glow-merge-audit/status.txt
+          git status --short > glow-merge-audit/status-short.txt
+          git diff --name-only --diff-filter=U > glow-merge-audit/unmerged.txt
+          git diff --cc > glow-merge-audit/combined.diff || :
+          git ls-files -u > glow-merge-audit/index-stages.txt
+          git diff --cached --stat > glow-merge-audit/merged-stat.txt || :
+          git log --oneline --max-count=20 849eedb1489227c7efee8865f04461d0b3e6097f > glow-merge-audit/new-master-history.txt
+          if [ "$code" = 0 ]; then echo CLEAN_MERGE >> glow-merge-audit/status.txt; fi
+          while IFS= read -r file; do
+            test -n "$file" || continue
+            id=$(printf '%s' "$file" | sha256sum | cut -c1-16)
+            printf '%s\t%s\n' "$id" "$file" >> glow-merge-audit/conflict-paths.tsv
+            git show ":1:$file" > "glow-merge-audit/conflicts/$id.base" || :
+            git show ":2:$file" > "glow-merge-audit/conflicts/$id.ours" || :
+            git show ":3:$file" > "glow-merge-audit/conflicts/$id.theirs" || :
+            cp "$file" "glow-merge-audit/conflicts/$id.worktree" || :
+          done < glow-merge-audit/unmerged.txt
+          echo "UNMERGED PATHS:"
+          cat glow-merge-audit/unmerged.txt
+          echo "MERGE AUDIT COMPLETE - no product refs were modified"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m1-glow-master-merge-audit
+          path: glow-merge-audit/
+          retention-days: 7
+          if-no-files-found: warn
