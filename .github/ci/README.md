@@ -215,14 +215,16 @@ and a measured tool-image decision remain separate #1265 acceptance work.
 baseline, and cumulative anchor in a common preparation job. That job resolves
 all three Cargo dependency locks under one source identity, validates them with
 `cargo metadata --locked`, hashes their bytes, and uploads one immutable
-same-run lock artifact. Three independent Linux runners then build the baseline,
-anchor, and candidate release packages in parallel. Candidate renderer-smoke
-and production variants are still built sequentially on the same runner, sharing
-its job-local compiler-object cache but never restoring an executable from a
-previous PR. Each builder verifies the pinned lock hashes and selected full
-Cargo dependency graph before compiling.
+same-run lock artifact. Two independent Linux runners then produce the
+four release package variants. One builds baseline and cumulative anchor
+sequentially at the same stable source/target paths, clearing Cargo target
+artifacts but reusing the job-local compiler-object cache. The other builds
+candidate renderer-smoke and production variants sequentially, reusing only
+its own job-local compiler-object cache. Neither runner restores executable
+packages from prior PR runs. Both verify the pinned lock hashes and selected
+full Cargo dependency graphs before compiling.
 The measurement jobs download the builders' immutable artifact IDs and
-verifies each checkout SHA, release feature set, compiler pin, resolved lockfile,
+verify each checkout SHA, release feature set, compiler pin, resolved lockfile,
 and runtime-file hashes using the shared WASM artifact contract. The candidate is
 GitHub's exact tested PR merge commit; the baseline is that merge's actual first
 parent. The producer checks its second parent against the requested PR head and
@@ -271,7 +273,7 @@ retain their 55-minute execution allowance; the aggregation/comparison job
 has a 20-minute allowance. No latency/FPS/visual acceptance threshold changes.
 Compiler cache remains job-local; release executables are not reused from
 untrusted prior PR runs. The final required comparison fails closed if any of
-the three parallel build jobs, the lock producer, or either measurement cohort
+either source-bound build job, the lock producer, or either measurement cohort
 fails, is skipped or is cancelled. Additional builder jobs may increase runner
 consumption; measure both actual wall-clock latency and total runner time.
 The preview stays visible during measurement. The sampler sends read-only queries
