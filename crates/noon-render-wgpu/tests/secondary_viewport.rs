@@ -133,15 +133,6 @@ fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples(
             mapped_at_creation: false,
         });
         let format = wgpu::TextureFormat::Rgba8Unorm;
-        let mut reused = GpuRenderer::new(&device, &queue, format);
-        reused.set_viewport(&device, &queue, WIDTH, HEIGHT);
-        reused.set_camera(
-            &queue,
-            Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 4.0)).unwrap(),
-        );
-        let mut reused_text = reused.create_retained_text_state(&device, &queue);
-        let mut reused_preparer = RetainedFramePreparer::new();
-        reused_preparer.set_inset_views_active(true);
         let texts = TextResourceArena::new();
         let fonts = FontResourceArena::new();
         let geometries = GeometryResourceArena::new();
@@ -169,8 +160,17 @@ fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples(
             (pixels, draws)
         };
 
-        for scale in [2.0, 1.5, 2.9, 1.2, 0.3] {
-            for with_path in [false, true] {
+        for with_path in [false, true] {
+            let mut reused = GpuRenderer::new(&device, &queue, format);
+            reused.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            reused.set_camera(
+                &queue,
+                Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 4.0)).unwrap(),
+            );
+            let mut reused_text = reused.create_retained_text_state(&device, &queue);
+            let mut reused_preparer = RetainedFramePreparer::new();
+            reused_preparer.set_inset_views_active(true);
+            for scale in [2.0, 1.5, 2.9, 1.2, 0.3, 0.3] {
                 let mut objects = vec![
                     CompiledObject::new(
                         ObjectId::new(0),
@@ -272,8 +272,20 @@ fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples(
                     Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 4.0)).unwrap(),
                 );
                 let mut fresh_text = fresh.create_retained_text_state(&device, &queue);
+                let mut fresh_preparer = RetainedFramePreparer::new();
+                fresh_preparer.set_inset_views_active(true);
+                let fresh_prepared = fresh_preparer
+                    .prepare(
+                        &device,
+                        scene.frame(),
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        noon_render_wgpu::text::TextDeviceMetrics::uniform(64.0).unwrap(),
+                    )
+                    .unwrap();
                 let (fresh_pixels, fresh_draws) =
-                    render(&mut fresh, &mut fresh_text, &prepared, inset);
+                    render(&mut fresh, &mut fresh_text, &fresh_prepared, inset);
                 assert_eq!(fresh_draws.images, 1, "the fresh inset capture must draw");
                 assert_eq!(
                     reused_pixels, fresh_pixels,

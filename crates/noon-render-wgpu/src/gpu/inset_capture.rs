@@ -91,7 +91,7 @@ pub(super) fn capture_texture_capacity(
     std::array::from_fn(|axis| {
         let previous = previous.map_or(0, |size| size[axis]).min(limits[axis]);
         if previous > requested[axis].saturating_mul(4) {
-            requested[axis].saturating_mul(2).min(limits[axis])
+            requested[axis]
         } else if previous >= requested[axis] {
             previous
         } else if previous == 0 {
@@ -298,10 +298,12 @@ mod tests {
             ([96, 80], 2.0, [24, 20], true),
             ([96, 80], 1.5, [24, 20], false),
             ([96, 80], 2.9, [48, 40], true),
-            ([96, 80], 1.2, [48, 40], false),
+            ([96, 80], 2.9, [34, 29], true),
+            ([96, 80], 2.9, [34, 29], false),
+            ([96, 80], 1.2, [34, 29], false),
             ([32, 24], 2.9, [32, 24], true),
-            ([32, 24], 0.3, [2, 2], true),
-            ([32, 24], 0.4, [2, 2], false),
+            ([32, 24], 0.3, [1, 1], true),
+            ([32, 24], 0.4, [1, 1], false),
         ] {
             renderer.set_viewport(&device, &queue, viewport[0], viewport[1]);
             renderer.set_camera(

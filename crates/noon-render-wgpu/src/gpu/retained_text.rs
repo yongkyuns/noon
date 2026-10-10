@@ -3477,8 +3477,16 @@ impl GpuRenderer {
                 let size = view.capture_size;
                 let uniform =
                     ImageUniform::inset(view.state.display_center, view.state.display_size, size);
+                // Spare capacity avoids churn during scaling, but must not add
+                // clear/resolve bandwidth after the display raster settles.
+                let previous_capacity = self.inset_targets.get(index).filter(|_| {
+                    self.inset_views.get(index).is_none_or(|previous| {
+                        previous.capture_size != size
+                            || previous.state.display_size != view.state.display_size
+                    })
+                });
                 let capacity = super::inset_capture::capture_texture_capacity(
-                    self.inset_targets.get(index).map(|target| target.capacity),
+                    previous_capacity.map(|target| target.capacity),
                     size,
                     limits,
                 );
