@@ -108,8 +108,11 @@ jobs:
           git worktree add --detach "$baseline" 42d480e0c27831125d70bbfa0a6e40fbeafc88fb
           cp crates/noon/tests/glow_scoped_become.rs "$baseline/crates/noon/tests/glow_scoped_become.rs"
           cp Cargo.lock "$baseline/Cargo.lock"
+          # A shared target dir lets Cargo reuse a baseline test binary when the
+          # candidate source was checked out earlier. Isolate fingerprints and
+          # executables so red/green genuinely compile different source trees.
           set +e
-          (cd "$baseline" && cargo test --locked -p noon --no-default-features --test glow_scoped_become -- --nocapture) 2>&1 | tee "$evidence/baseline-negative-control.log"
+          (cd "$baseline" && CARGO_TARGET_DIR="$RUNNER_TEMP/noon-glow-baseline-target" cargo test --locked -p noon --no-default-features --test glow_scoped_become -- --nocapture) 2>&1 | tee "$evidence/baseline-negative-control.log"
           code=${PIPESTATUS[0]}
           set -e
           test "$code" = 101
