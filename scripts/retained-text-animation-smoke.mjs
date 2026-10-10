@@ -161,7 +161,9 @@ try {
   const cache = createPyodideResourceCache(await readFile(path.join(repoRoot, "web/python-worker.js"), "utf8"));
   const mathContext = await browser.newContext({ viewport: { width: 1000, height: 650 } });
   await cache.install(mathContext);
-  await disableAuthoringJspi(mathContext);
+  // This test server sets COOP/COEP. A synthetic no-JSPI module worker must
+  // carry the same embedding policy or Chromium rejects it before Python starts.
+  await disableAuthoringJspi(mathContext, { crossOriginIsolated: true });
   try {
     for (const kind of ["MathTex", "MathTypst"]) {
       for (const [forward, reverse] of [["Create", "Uncreate"], ["Write", "Unwrite"]]) {
@@ -179,6 +181,8 @@ class MathReveal(Scene):
           const mathErrors = [];
           mathPage.on("pageerror", error => mathErrors.push(String(error)));
           await mathPage.goto(`${baseUrl}/web/manim-raster-host.html`);
+          assert.equal(await mathPage.evaluate(() => crossOriginIsolated), true,
+            "math smoke requires a genuinely cross-origin-isolated host");
           await mathPage.waitForFunction(() => window.noonHostRaster);
           await mathPage.evaluate(source => window.noonHostRaster.load(source, 3.25), source);
           assert.equal(await mathPage.evaluate(() => window.__noonNoJspiWorkerWrapped), true);
