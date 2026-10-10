@@ -114,7 +114,7 @@ fn cropped_export_mp4_uses_source_end_relative_to_crop_start() {
             "v:0",
             "-show_packets",
             "-show_entries",
-            "stream=duration_ts,nb_frames:packet=pts,duration",
+            "stream=duration_ts,nb_frames:format=duration:packet=pts,duration",
             "-of",
             "default=noprint_wrappers=1",
         ])
@@ -124,6 +124,7 @@ fn cropped_export_mp4_uses_source_end_relative_to_crop_start() {
     assert!(output.status.success());
     let probe = String::from_utf8(output.stdout).unwrap();
     assert!(probe.contains("duration_ts=69980"), "{probe}");
+    assert!(probe.contains("duration=2.332667"), "{probe}");
     assert!(probe.contains("nb_frames=70"), "{probe}");
     assert!(probe.contains("pts=69069"), "{probe}");
     assert!(probe.contains("duration=911"), "{probe}");

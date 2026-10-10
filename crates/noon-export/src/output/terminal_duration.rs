@@ -5,6 +5,8 @@
 //! between them. For multiple samples, replace that padding with a second
 //! STTS run for the last sample. For a one-frame clip, update its only STTS
 //! duration in place. The MDAT offset and every PTS remain unchanged.
+//! An off-grid crop may also need a finer movie-level timescale: its one
+//! track's MVHD/TKHD/ELST duration fields then use the media tick scale.
 //! Reject unfamiliar layouts instead of publishing a video with unverified timing.
 
 use std::fs::{File, OpenOptions};
@@ -229,13 +231,22 @@ pub(super) fn finish_mp4_source_end(
     for atom in [mvhd, tkhd, elst, mdhd, stts] {
         version_zero(&moov, atom)?;
     }
-    let movie_scale = u32_at(&moov, mvhd.payload() + 12)?;
-    if movie_scale == 0 || u32_at(&moov, mdhd.payload() + 12)? != rate.numerator() {
+    let original_movie_scale = u32_at(&moov, mvhd.payload() + 12)?;
+    if original_movie_scale == 0 || u32_at(&moov, mdhd.payload() + 12)? != rate.numerator() {
         return Err(invalid("MP4 track and authored time bases differ"));
     }
-    let Some(movie_ticks) = integer_ticks(authored_end, movie_scale) else {
-        return Ok(false);
-    };
+    // FFmpeg normally uses a 1/1000 movie timescale even when the sole video
+    // track is 1/p. A cropped fractional-FPS endpoint can land between those
+    // 1 ms movie ticks, despite being exactly representable on the media grid.
+    // This single-track file has only MVHD, TKHD and ELST movie-time durations.
+    // Switch their time base to the already verified media scale, rather than
+    // round the end or silently retain a full final frame.
+    let (movie_scale, movie_ticks) =
+        if let Some(ticks) = integer_ticks(authored_end, original_movie_scale) {
+            (original_movie_scale, ticks)
+        } else {
+            (rate.numerator(), media_ticks)
+        };
     if u32_at(&moov, elst.payload() + 4)? != 1
         || u32_at(&moov, elst.payload() + 12)? != 0
         || u32_at(&moov, stts.payload() + 4)? != 1
@@ -250,6 +261,7 @@ pub(super) fn finish_mp4_source_end(
     }
     // All preflight errors above leave the on-disk file unchanged. From here,
     // modify only the atom metadata, then consume the eight-byte padding.
+    set_u32(&mut moov, mvhd.payload() + 12, movie_scale)?;
     set_u32(&mut moov, mvhd.payload() + 16, movie_ticks)?;
     set_u32(&mut moov, tkhd.payload() + 20, movie_ticks)?;
     set_u32(&mut moov, elst.payload() + 8, movie_ticks)?;
@@ -290,6 +302,13 @@ mod tests {
         assert_eq!(integer_ticks(2.0, 60_000), Some(120_000));
         assert_eq!(integer_ticks(0.3, 24), None);
         assert_eq!(integer_ticks(f64::NAN, 30_000), None);
+    }
+
+    #[test]
+    fn cropped_frame_grid_requires_finer_movie_scale_than_ffmpeg_default() {
+        let duration = f64::from(69_980) / 30_000.0;
+        assert_eq!(integer_ticks(duration, 1_000), None);
+        assert_eq!(integer_ticks(duration, 30_000), Some(69_980));
     }
 
     #[test]
