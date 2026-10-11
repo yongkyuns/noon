@@ -5393,85 +5393,91 @@ mod recursive_composition_tests {
         use crate::effects::{EffectDefinition, GlowUpdate};
         for mode in 0..3 {
             for reverse in [false, true] {
-                let mut scene = Scene::new();
-                let mut source = if mode == 0 {
-                    scene.circle(1.0).unwrap()
-                } else {
-                    scene.text(crate::Text::new("Write")).unwrap()
-                };
-                source
-                    .set_glow(GlowUpdate::default().intensity(0.5))
-                    .unwrap();
-                let mut target = source.target_editor().unwrap();
-                target
-                    .set_glow(GlowUpdate::default().intensity(1.5))
-                    .unwrap();
-                let mut session = scene.execution_session().unwrap();
-                let reveal = match mode {
-                    0 => AnimationCompositionRequest::Create {
-                        target: &source,
-                        options: linear(1.0),
-                    },
-                    1 => AnimationCompositionRequest::TextReveal {
-                        target: &source,
-                        reverse: false,
-                        options: linear(1.0),
-                    },
-                    _ => AnimationCompositionRequest::TextWrite {
-                        target: &source,
-                        reverse_member_order: false,
-                        options: linear(1.0),
-                    },
-                };
-                let edit = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
-                    &source,
-                    &target,
-                    linear(1.0),
-                ));
-                let mut children = vec![reveal, edit];
-                if reverse {
-                    children.reverse();
+                for attached in [false, true] {
+                    let initial = if attached { 0.5 } else { 0.0 };
+                    let midpoint = (initial + 1.5) * 0.5;
+                    let mut scene = Scene::new();
+                    let mut source = if mode == 0 {
+                        scene.circle(1.0).unwrap()
+                    } else {
+                        scene.text(crate::Text::new("Write")).unwrap()
+                    };
+                    if attached {
+                        source
+                            .set_glow(GlowUpdate::default().intensity(initial))
+                            .unwrap();
+                    }
+                    let mut target = source.target_editor().unwrap();
+                    target
+                        .set_glow(GlowUpdate::default().intensity(1.5))
+                        .unwrap();
+                    let mut session = scene.execution_session().unwrap();
+                    let reveal = match mode {
+                        0 => AnimationCompositionRequest::Create {
+                            target: &source,
+                            options: linear(1.0),
+                        },
+                        1 => AnimationCompositionRequest::TextReveal {
+                            target: &source,
+                            reverse: false,
+                            options: linear(1.0),
+                        },
+                        _ => AnimationCompositionRequest::TextWrite {
+                            target: &source,
+                            reverse_member_order: false,
+                            options: linear(1.0),
+                        },
+                    };
+                    let edit = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                        &source,
+                        &target,
+                        linear(1.0),
+                    ));
+                    let mut children = vec![reveal, edit];
+                    if reverse {
+                        children.reverse();
+                    }
+                    let request = AnimationCompositionRequest::Composition {
+                        kind: SemanticAnimationCompositionKind::Parallel,
+                        options: AnimationOptions::new(),
+                        children,
+                    };
+                    let mut live = scene.live(&mut session);
+                    let segment = live
+                        .declare_and_activate_composition(&request, AnimationOptions::new())
+                        .unwrap();
+                    assert!(live.contains(&source).unwrap());
+                    live.advance_segment_to(segment, 0.5).unwrap();
+                    assert_eq!(live.session.frame().objects.len(), 1);
+                    assert_eq!(
+                        live.session.frame().objects[0]
+                            .glow
+                            .as_ref()
+                            .unwrap()
+                            .definition
+                            .intensity(),
+                        midpoint
+                    );
+                    live.advance_segment_to(segment, 1.0).unwrap();
+                    live.complete_segment(segment).unwrap();
+                    let EffectDefinition::Glow(glow) = source
+                        .get_effect("glow")
+                        .unwrap()
+                        .authored_definition()
+                        .unwrap();
+                    assert_eq!(glow.intensity(), 1.5);
+                    let rewind = live.session.seek(0.5).unwrap();
+                    assert_eq!(rewind.objects.len(), 1);
+                    assert_eq!(
+                        rewind.objects[0]
+                            .glow
+                            .as_ref()
+                            .unwrap()
+                            .definition
+                            .intensity(),
+                        midpoint
+                    );
                 }
-                let request = AnimationCompositionRequest::Composition {
-                    kind: SemanticAnimationCompositionKind::Parallel,
-                    options: AnimationOptions::new(),
-                    children,
-                };
-                let mut live = scene.live(&mut session);
-                let segment = live
-                    .declare_and_activate_composition(&request, AnimationOptions::new())
-                    .unwrap();
-                assert!(live.contains(&source).unwrap());
-                live.advance_segment_to(segment, 0.5).unwrap();
-                assert_eq!(live.session.frame().objects.len(), 1);
-                assert_eq!(
-                    live.session.frame().objects[0]
-                        .glow
-                        .as_ref()
-                        .unwrap()
-                        .definition
-                        .intensity(),
-                    1.0
-                );
-                live.advance_segment_to(segment, 1.0).unwrap();
-                live.complete_segment(segment).unwrap();
-                let EffectDefinition::Glow(glow) = source
-                    .get_effect("glow")
-                    .unwrap()
-                    .authored_definition()
-                    .unwrap();
-                assert_eq!(glow.intensity(), 1.5);
-                let rewind = live.session.seek(0.5).unwrap();
-                assert_eq!(rewind.objects.len(), 1);
-                assert_eq!(
-                    rewind.objects[0]
-                        .glow
-                        .as_ref()
-                        .unwrap()
-                        .definition
-                        .intensity(),
-                    1.0
-                );
             }
         }
     }
