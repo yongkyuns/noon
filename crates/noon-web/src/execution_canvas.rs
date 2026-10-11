@@ -1760,12 +1760,16 @@ mod wasm {
                         visibility.object_indices(),
                     )
                     .map_err(js_error)?;
+                let glow_visible = self
+                    .renderer
+                    .glow_source_visibility(&publication, visibility.object_indices())
+                    .map_err(js_error)?;
                 let prepared = self
                     .direct_preparer
                     .prepare_planned_publication_visible(
                         &self.device,
                         &publication,
-                        visibility.object_indices(),
+                        glow_visible,
                         metrics,
                     )
                     .map_err(js_error)?;
@@ -1795,6 +1799,20 @@ mod wasm {
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                             label: Some("Noon direct execution render frame"),
                         });
+                let glow_work = self
+                    .renderer
+                    .prepare_retained_analytic_glows(
+                        &self.device,
+                        &self.queue,
+                        &mut encoder,
+                        &prepared,
+                        &publication,
+                        noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+                    )
+                    .map_err(js_error)?;
+                self.last_bytes_uploaded = self
+                    .last_bytes_uploaded
+                    .saturating_add(glow_work.bytes_uploaded);
                 let timestamp_slot = self
                     .timestamp_profiler
                     .as_mut()
@@ -1820,6 +1838,7 @@ mod wasm {
                 let draw = match draw {
                     Ok(draw) => draw,
                     Err(error) => {
+                        self.renderer.invalidate_analytic_glows();
                         if let Some(slot) = timestamp_slot {
                             profiler.expect("reserved profiler").cancel_slot(slot);
                         }

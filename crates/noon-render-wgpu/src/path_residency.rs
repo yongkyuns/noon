@@ -304,6 +304,7 @@ impl FramePreparer {
             slots: &[],
             slot_presences: &[],
             complete_submission: false,
+            submitted_source_slots: None,
             zero_contribution: &self.zero_contribution,
             mega_path_offsets: &self.mega_path_offsets,
         }

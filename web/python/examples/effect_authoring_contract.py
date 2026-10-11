@@ -1,7 +1,7 @@
-"""M0 declaration contract, paired with the native Rust example of the same name.
+"""Declaration ownership and unsupported-stack contract, paired with the native Rust example of the same name.
 
-This checks shared authoring, not glow rendering. Until M1, effect-bearing
-execution must reject; cleanup then demonstrates ordinary source continuation.
+This checks declaration ownership and unsupported-profile rejection, not glow
+rendering. Cleanup demonstrates ordinary source continuation.
 """
 from noon import Circle, Glow, Pixels, RIGHT, Scene, NoonForeignHandleError, NoonUnsupportedError
 
@@ -46,9 +46,9 @@ class EffectAuthoringContract(Scene):
         try:
             self.live_execution()
         except Exception as error:
-            assert "effect declarations cannot execute" in str(error), str(error)
+            assert "requires one attachment" in str(error), str(error)
         else:
-            raise AssertionError("effect-bearing execution was silently accepted")
+            raise AssertionError("unsupported stack was silently accepted")
 
         assert dot.remove_effect(original) is dot
         try:
@@ -69,7 +69,7 @@ class EffectAuthoringContract(Scene):
         movement.target.remove_glow().remove_effect("accent")
         self.wait(0.1)
         # After a real completion barrier, setters must use live publication.
-        # Rejecting unavailable appearance must leave normal continuation usable.
+        # Rejecting an unsupported source profile must leave normal continuation usable.
         rejects(NoonUnsupportedError, lambda: dot.set_glow(intensity=0.5))
         rejects(ValueError, lambda: dot.get_effect("glow"))
         assert dot.get_center() == (0.0, 0.0)

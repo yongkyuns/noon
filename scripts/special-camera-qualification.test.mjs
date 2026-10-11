@@ -111,6 +111,7 @@ function semanticObservationFrame(fixture, hostTime = fixture.sampleTime) {
       bounds: { width: 1, height: 1 }, spatial: structuredClone(cellSpatial), fill: paint(0, 1, 0) });
   }
   return { time: hostTime, camera: { center: [0, 0], height: 8 },
+    ...(profile === "moving-zoomed-scene" ? { inset_2d_views: [] } : {}),
     present_object_count: objects.length, objects };
 }
 
@@ -151,6 +152,16 @@ test("pinned 3D camera samples cover motion handoffs and exact endpoints", () =>
     `${scene}: samples must advance within authored time`);
   }
   const [, , rotationTimes] = PINNED_CAMERA_CASES.find(([scene]) => scene === "ThreeDCameraRotation");
+  const [, , zoomTimes] = PINNED_CAMERA_CASES.find(([scene]) => scene === "MovingZoomedSceneAround");
+  for (const barrier of [1, 11]) {
+    for (const offset of [-1 / 30, 0, 1 / 30]) {
+      assert.ok(zoomTimes.some(time => Math.abs(time - barrier - offset) < 1e-9),
+        `inset lifecycle ${barrier}: missing observation at offset ${offset}`);
+    }
+  }
+  for (const time of [1.5, 3.5, 5.5, 7.5, 9.5, 10.5]) {
+    assert.ok(zoomTimes.includes(time), `inset animation needs an interior observation at ${time}`);
+  }
   for (const barrier of [1, 2]) {
     for (const offset of [-1 / 30, 0, 1 / 30]) {
       assert.ok(rotationTimes.some(time => Math.abs(time - barrier - offset) < 1e-9),
@@ -204,6 +215,32 @@ test("paired camera observer rejects semantic drift while ignoring engine identi
   python.objects.reverse();
   python.objects[0].fill.alpha = 0.5;
   assert.throws(() => assertPairedCameraObservation(rust, python, fixture), /differs from/);
+});
+
+test("paired inset observations compare effective views and corresponding endpoints across engine IDs", () => {
+  const fixture = cameraFixture("moving-zoomed-scene", 1.5);
+  const rust = semanticObservationFrame(fixture);
+  rust.objects.push({ id: 2, present: true }, { id: 3, present: true });
+  rust.present_object_count = 3;
+  rust.inset_2d_views.push({ camera_frame: 2, display: 3,
+    camera: { center: { x: -2, y: 2 }, height: 0.3 },
+    display_center: { x: 1, y: 2 }, display_size: { x: 6, y: 1 }, capture_own_display: false });
+  const python = structuredClone(rust);
+  python.objects[1].id = 22;
+  python.objects[2].id = 33;
+  python.inset_2d_views[0].camera_frame = 22;
+  python.inset_2d_views[0].display = 33;
+  assert.equal(assertPairedCameraObservation(rust, python, fixture).semanticState, "paired-equal");
+  for (const mutate of [
+    f => { f.inset_2d_views[0].camera.height += 0.01; },
+    f => { f.inset_2d_views[0].display_center.x += 0.01; },
+    f => { f.inset_2d_views[0].camera_frame = f.objects[0].id; },
+    f => { delete f.inset_2d_views; },
+  ]) {
+    const bad = structuredClone(python);
+    mutate(bad);
+    assert.throws(() => assertPairedCameraObservation(rust, bad, fixture));
+  }
 });
 
 test("paired camera observer uses the inclusive raw 1e-6 semantic tolerance", () => {

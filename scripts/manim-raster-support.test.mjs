@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   compareEffectiveFrames,
   compareEffective3DCamera,
+  compareEffectiveInsetCameras,
   classifyBrowserGpuDiagnostics,
   classifyRendererGpuIdentity,
   dominantImageRgba,
@@ -212,4 +213,55 @@ test("effective 3D camera permits an absent light row only at Manim's pinned def
     { ...expected, light_source: [0, 0] },
   ]) assert.throws(() => compareEffective3DCamera(debug, invalid));
   assert.throws(() => compareEffective3DCamera({ objects: [] }, expected), /expected one present/);
+});
+
+const insetView = () => ({ camera_frame: 4, display: 5,
+  camera: { center: { x: 0.5, y: -0.25 }, height: 0.45 },
+  display_center: { x: 3, y: 2 }, display_size: { x: 3, y: 1.5 },
+  capture_own_display: false });
+const insetObservation = () => ({ camera: { center: [0, 0], height: 8 },
+  inset_2d_views: [insetView()], objects: [{ id: 4, present: false }, { id: 5, present: true }] });
+
+test("inset comparison requires active camera/display state and preserves the fixed numeric limit", () => {
+  const actual = insetObservation();
+  const expected = structuredClone(actual);
+  delete expected.objects;
+  delete expected.inset_2d_views[0].camera_frame;
+  delete expected.inset_2d_views[0].display;
+  assert.deepEqual(compareEffectiveInsetCameras(actual, expected), {
+    maximumAbsoluteError: 0, insetCount: 1, mainCameraObserved: true,
+  });
+  actual.inset_2d_views[0].camera.center.x += 5e-7;
+  assert.ok(compareEffectiveInsetCameras(actual, expected).maximumAbsoluteError <= 1e-6);
+  actual.inset_2d_views[0].camera.center.x += 1e-5;
+  assert.throws(() => compareEffectiveInsetCameras(actual, expected), /effective value differs/);
+  const empty = { camera: expected.camera, inset_2d_views: [], objects: [] };
+  assert.equal(compareEffectiveInsetCameras(empty, empty).insetCount, 0);
+  assert.throws(() => compareEffectiveInsetCameras(empty, expected));
+});
+
+test("inset comparison fails closed on missing views, bad links, invalid geometry and wrong lifecycle", () => {
+  const expected = insetObservation();
+  for (const mutate of [
+    f => { delete f.inset_2d_views; },
+    f => { f.inset_2d_views = { error: "invalid display" }; },
+    f => { f.inset_2d_views.push(insetView()); },
+    f => { f.inset_2d_views[0].camera_frame = 6; },
+    f => { f.inset_2d_views[0].camera_frame = 5; },
+    f => { f.objects[1].present = false; },
+    f => { f.inset_2d_views[0].camera.center.y = NaN; },
+    f => { f.inset_2d_views[0].camera.height = Infinity; },
+    f => { f.inset_2d_views[0].display_size.x = 0; },
+    f => { f.inset_2d_views[0].display_center.y += 0.01; },
+    f => { f.inset_2d_views[0].capture_own_display = true; },
+    f => { f.camera.height = 0; },
+    f => { f.camera.center = [0, 0, 0]; },
+  ]) {
+    const bad = structuredClone(expected);
+    mutate(bad);
+    assert.throws(() => compareEffectiveInsetCameras(bad, expected));
+  }
+  const invalidReference = insetObservation();
+  invalidReference.inset_2d_views[0].camera.height = NaN;
+  assert.throws(() => compareEffectiveInsetCameras(insetObservation(), invalidReference));
 });

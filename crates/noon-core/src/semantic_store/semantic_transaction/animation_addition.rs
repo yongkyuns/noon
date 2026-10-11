@@ -970,7 +970,7 @@ pub(super) fn preflight_animation_options(
 
 pub(super) fn commit_add_animation(
     store: &mut SemanticStore,
-    state: &SemanticAnimationState,
+    state: SemanticAnimationState,
 ) -> SemanticNodeId {
     let options = state.options();
     match state.intent() {
@@ -992,20 +992,11 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::MoveAlongPath { target, path } => store
             .insert_semantic_move_along_path_animation(*target, *path, options)
             .expect("preflighted MoveAlongPath insertion must remain valid while transaction owns the store"),
-        SemanticAnimationIntent::TransformTo {
-            target,
-            target_state,
-            interpolation,
-            complete_priority,
-        } => store
-            .insert_semantic_transform_animation_with_interpolation(
-                *target,
-                *target_state,
-                *interpolation,
-                *complete_priority,
-                options,
-            )
-            .expect("preflighted semantic animation insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::TransformTo { .. } => {
+            // Final candidate correspondence was captured before publication.
+            // All object/options references are covered by transaction preflight.
+            store.insert_semantic_animation_state(state)
+        }
         SemanticAnimationIntent::WorldTransformTo { target, transform } => store
             .insert_semantic_world_transform_animation(*target, *transform, options)
             .expect("preflighted world-pose animation insertion must remain valid while transaction owns the store"),
