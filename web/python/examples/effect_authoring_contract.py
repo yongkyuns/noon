@@ -70,6 +70,11 @@ class EffectAuthoringContract(Scene):
         self.wait(0.1)
         # After a real completion barrier, setters must use live publication.
         # Rejecting an unsupported source profile must leave normal continuation usable.
+        live = self.live_execution()
+        live.set_scale(dot, 0.0, 1.0)
         rejects(NoonUnsupportedError, lambda: dot.set_glow(intensity=0.5))
         rejects(ValueError, lambda: dot.get_effect("glow"))
+        live.set_scale(dot, 1.0, 1.0)
+        # An ordinary outline now belongs to the planar capture profile.
+        dot.set_glow(intensity=0.5).remove_glow()
         assert dot.get_center() == (0.0, 0.0)

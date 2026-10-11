@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(base.intensity(), 0.25);
     assert_ne!(original.node_id(), target.get_effect("glow")?.node_id());
 
-    // Multiple attachments and this unfilled source are outside the finite profile.
+    // Multiple attachments are outside the finite profile.
     // Reject the reachable source instead of silently dropping its appearance.
     assert!(scene.execution_session().is_err());
     scene.remove_effect(&dot, &original)?;

@@ -65,12 +65,15 @@ scene background. The first brightens its glow, the second expands the Gaussian
 radius, and the third changes halo color. The initial glow begins absent and
 is enrolled at zero intensity by the ordinary shared Rust animation path. A
 later beat animates all intensities to zero, removes their generations, and
-re-enrolls fresh attachments for a readable final composition. The source is
+re-enrolls fresh attachments. A cubic path and MathTypst equation then reveal
+through Create and Write while their glow parameters animate concurrently.
+Their source coverage comes from the same retained geometry and glyph draws
+used for ordinary rendering. The source is
 `web/python/examples/showcase_gpu_glow.py`; no updater, duplicated effect
 engine, or private rendering API is involved.
 
-Its poster is the genuine 5.3-second held frame, with the strongest three
-parameter contrasts. Publish the manifest entry only together with its
+Its poster is the genuine 11.4-second held frame, showing the three parameter
+contrasts alongside the completed path and equation. Publish the manifest entry only together with its
 actual captured 16:9 PNG and source-bound capture evidence. Visual inspection
 must confirm that the source disks remain solid, halos extend beyond their
 silhouettes, the dark scene stays legible at gallery-card size, and neutral
