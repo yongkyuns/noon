@@ -445,13 +445,8 @@ mod tests {
             true,
             |_| false,
         );
-        assert_eq!(
-            groups
-                .batches()
-                .map(|batch| batch.instance_range.clone())
-                .collect::<Vec<_>>(),
-            [0..4]
-        );
+        assert_eq!(groups.batches().count(), 1);
+        assert_eq!(groups.batches().next().unwrap().instance_range, 0..4);
         assert!(rest.peek().is_none());
 
         for (middle, expected_consumed) in [
