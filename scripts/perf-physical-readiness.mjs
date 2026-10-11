@@ -13,6 +13,23 @@ export const EXPECTED = Object.freeze({
 });
 
 const software = /swiftshader|llvmpipe|softpipe|software (?:renderer|rasterizer|adapter)|microsoft basic render/i;
+const buildTool = /^(?:cargo|rustc|rust-lld|wasm-opt|g?make|ninja|cmake|clang(?:\+\+)?(?:-\d+)?|cc|c\+\+|cc1(?:plus)?|tar|(?:.+-)?(?:gcc|g\+\+|ld))$/;
+
+// Consume executable names, never command arguments. Missing or malformed ps
+// output is unknown; an empty list only rules out these known build tools.
+export function parseBuildProcesses(output) {
+  if (typeof output !== "string" || !output.trim()) return null;
+  const builds = [];
+  for (const line of output.trim().split("\n")) {
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
+    if (!match) return null;
+    const pid = Number(match[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+    const executable = path.posix.basename(match[2]);
+    if (buildTool.test(executable)) builds.push({ pid, executable });
+  }
+  return builds;
+}
 
 export function powerSource(pmsetOutput) {
   if (/Now drawing from ['\"]AC Power['\"]/.test(pmsetOutput)) return "ac";
@@ -38,6 +55,8 @@ export function assessReadiness(observed, expected = EXPECTED) {
     reasons.push("insufficient identified logical cores");
   }
   if (observed.power !== "ac") reasons.push("AC power not independently established");
+  if (!Array.isArray(observed.buildProcesses)) reasons.push("host build activity unknown");
+  else if (observed.buildProcesses.length) reasons.push("compiler/build/archive tooling is active");
   const classification = classifyWebgl(observed.webgl);
   if (classification !== "hardware-like-unverified") reasons.push("actual WebGL2 hardware backing unverified");
   if (observed.webgl?.readbackValid !== true) reasons.push("WebGL2 clear/readback proof failed");
@@ -98,6 +117,7 @@ function snapshot() {
     model: safeCommand("sysctl", ["-n", "hw.model"]) || null,
     power: powerSource(safeCommand("pmset", ["-g", "batt"])),
     loadAverage: os.loadavg(), memoryBytes: os.totalmem(),
+    buildProcesses: parseBuildProcesses(safeCommand("ps", ["-axo", "pid=,comm="])),
   };
 }
 
