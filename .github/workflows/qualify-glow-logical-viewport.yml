@@ -63,8 +63,10 @@ jobs:
           PY
           git add -N scripts/showcase-glow-viewport.mjs
           mkdir -p projection-fix-evidence
-          git diff --binary > projection-fix-evidence/reviewed.patch
-          echo 'c32323ddc46fd479d202ba17cdf96ad592ef9242590af3bf2c83eb645c37b8c3  projection-fix-evidence/reviewed.patch' | sha256sum -c -
+          # Full object identities prevent repository-size-dependent abbreviations
+          # from changing the hash of an otherwise byte-identical source patch.
+          git diff --binary --full-index > projection-fix-evidence/reviewed.patch
+          echo 'eb7d21587cfa56f5560def5748d88e874a8e014b01fe3d53bb5f31d319ce8ebb  projection-fix-evidence/reviewed.patch' | sha256sum -c -
           git diff --check
           node --check scripts/showcase-glow-viewport.mjs
           node --test scripts/showcase-live-review.test.mjs
@@ -81,7 +83,7 @@ jobs:
           git commit -m 'fix(glow): separate logical camera projection from physical backing pixels'
           git rev-parse HEAD > projection-fix-evidence/candidate-sha.txt
           git rev-parse HEAD^{tree} > projection-fix-evidence/candidate-tree.txt
-          git diff --binary HEAD^ HEAD > projection-fix-evidence/qualified-source.patch
+          git diff --binary --full-index HEAD^ HEAD > projection-fix-evidence/qualified-source.patch
           git diff --exit-code
       - uses: actions/cache@v6
         with:
