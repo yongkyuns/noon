@@ -73,7 +73,7 @@ jobs:
           assert old not in resolved
           for marker in (
               'Native glow raster correctness', 'Browser reactive and editor',
-              'Browser rendering (webgpu)', 'Browser rendering (webgl)',
+              'Browser rendering (${{ matrix.backend }})', 'backend: [webgpu, webgl]',
               'Browser rendering parity', 'gpu/glow_filter',
               'scripts/glow-worker-', 'tests/visual-effects/**',
           ):
