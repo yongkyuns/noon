@@ -14,6 +14,7 @@ on:
       - "scripts/mixed-family-retained-text-smoke.mjs"
       - "scripts/mixed-family-retained-group-fade-smoke.mjs"
       - "web/**"
+      - "!web/**/*.test.mjs"
   pull_request:
     paths:
       - ".github/workflows/playground-authoring-recovery.yml"
@@ -25,6 +26,7 @@ on:
       - "scripts/mixed-family-retained-text-smoke.mjs"
       - "scripts/mixed-family-retained-group-fade-smoke.mjs"
       - "web/**"
+      - "!web/**/*.test.mjs"
   workflow_dispatch:
 
 permissions:

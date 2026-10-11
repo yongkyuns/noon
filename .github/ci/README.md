@@ -19,6 +19,12 @@ select browser CI, while web `*.test.mjs` edits use preflight. Runtime, artifact
 product protocol and mixed production changes keep their existing qualification.
 Unknown CI helpers still select the heavyweight suites; exclusions are explicit.
 
+Master CI reads the complete before/after Git diff and skips its compiled/browser
+jobs only for documentation, named preflight-only policies or web unit tests.
+Unknown inputs, mixed changes, missing history and classification failures retain
+full qualification. PR and manual runs remain full when selected. Recovery and
+playback workflows keep isolated web unit-test edits in preflight as well.
+
 ## Local architecture and iteration gate
 
 The #1272 R3/R4 guardrails are owned by #961. The ordinary local command remains
