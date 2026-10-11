@@ -22,6 +22,7 @@ const source = "a".repeat(40), binaryHash = "b".repeat(64);
 function modelFixture() {
   const plan = {
     schema:1,studyId:"fixture-aa-v1",kind:"diagnostic-only",qualification:false,
+    sourcePair:{baseline:source,candidate:"c".repeat(40),head:source,eventBase:source},
     retries:0,stopOnTrialError:true,cohorts:[{name:"seven-pair",pairs:7},{name:"three-pair",pairs:3}],
     workloads,builds:[{name:"baseline",source,artifactId:1,zipSha256:binaryHash},
       {name:"candidate",source:"c".repeat(40),artifactId:2,zipSha256:binaryHash}],
@@ -112,6 +113,14 @@ for(const [label,corrupt,expected] of [
   ["partial journal",f=>f.productJournal.pop(),/100 started/],
   ["reordered participant journal",f=>{f.productJournal[0].ordinal=2},/journal started order/],
   ["changed renderer",f=>{f.productJournal[1].rendererProof.unmaskedRenderer="SwiftShader"},/software renderer/],
+  ["false GL clear color",f=>{f.productJournal[1].rendererProof.clearPixel=[0,0,0,0]},/GL clearPixel does not match/],
+  ["false GLSL triangle color",f=>{f.productJournal[1].rendererProof.trianglePixel=[0,0,0,0]},/GL trianglePixel does not match/],
+  ["mismatched pinned source",f=>{
+    f.productPlan.builds[0].source="d".repeat(40);
+    f.productSummary.planSha256=createHash("sha256")
+      .update(Buffer.from(JSON.stringify(f.productPlan)+"\n")).digest("hex");
+    f.rawProductPlan=Buffer.from(JSON.stringify(f.productPlan)+"\n");
+  },/archive source differs from registered producer source/],
   ["modified original product observation",f=>{f.productSummary.cohorts[0].metrics.fps.after[0]=45},/does not match original/],
   ["faked product score status",f=>{f.productSummary.cohorts[0].metrics.fps.status="inconclusive"},/status was changed/],
   ["moved plan hash",f=>{f.productSummary.planSha256="0".repeat(64)},/plan digest changed/],

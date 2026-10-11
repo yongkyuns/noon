@@ -103,6 +103,18 @@ function validatePlan(plan, rawPlan, product) {
   assert.deepEqual(plan.builds?.map(b=>b.name), ["baseline","candidate"]);
   assert.equal(plan.plannedPairCommands, 100, "full A/A product pairs required");
   assert.equal(plan.plannedObservations, 200, "full A/A product observations required");
+  // Product A/A compares each source against itself. Both named archive inputs
+  // must be the declared producer sources, not arbitrary replacement packages.
+  for (const role of ["baseline", "candidate"]) {
+    assert.match(plan.sourcePair?.[role] ?? "", /^[a-f0-9]{40}$/,
+      `missing immutable ${role} source identity`);
+    const build = plan.builds.find(b => b.name === role);
+    assert.equal(build.source, plan.sourcePair[role],
+      `${role}: archive source differs from registered producer source`);
+  }
+  for (const role of ["head", "eventBase"])
+    assert.match(plan.sourcePair?.[role] ?? "", /^[a-f0-9]{40}$/,
+      `missing original ${role} source identity`);
   for (const b of plan.builds) {
     assert.match(b.source, /^[a-f0-9]{40}$/, "unidentified producer source");
     assert.ok(Number.isSafeInteger(b.artifactId) && b.artifactId > 0,
@@ -301,10 +313,18 @@ export function analyzeProductJournal(plan, journal, productSummary) {
       assert.ok(proof.unmaskedRenderer.includes(plan.environment.expectedUnmaskedRenderer),
         `${idx + 1}: changed preregistered device identity`);
     }
-    for (const key of ["clearPixel", "trianglePixel"]) {
+    // The frozen 2026-10-09 Apple diagnostic shaders require these exact RGBA
+    // readbacks, allowing three LSBs of backend rounding. Valid *byte ranges*
+    // alone are not evidence that a real shader and framebuffer were exercised.
+    for (const [key, expectedPixel] of [
+      ["clearPixel", [51, 102, 153, 255]],
+      ["trianglePixel", [153, 51, 102, 255]],
+    ]) {
       assert.equal(proof[key]?.length, 4, `${idx + 1}: missing actual GL ${key}`);
-      assert.ok(proof[key].every(x=>Number.isInteger(x) && x>=0 && x<=255),
+      assert.ok(proof[key].every(x => Number.isInteger(x) && x >= 0 && x <= 255),
         `${idx + 1}: invalid GL ${key}`);
+      assert.ok(proof[key].every((v, k) => Math.abs(v - expectedPixel[k]) <= 3),
+        `${idx + 1}: original GL ${key} does not match actual shader/readback`);
     }
     gpu.add(proof.unmaskedRenderer);
     const { before } = recorded;
