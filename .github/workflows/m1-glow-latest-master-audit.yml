@@ -1,0 +1,55 @@
+name: GPU Glow latest master integration audit (temporary)
+on:
+  push:
+    branches: [codex/m1-glow-latest-master-audit-c53f]
+    paths: [.github/workflows/m1-glow-latest-master-audit.yml]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: c53f8575fc5f2f7eb7d3c2f2a356a0335ef19464
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Audit source integration without publishing
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = c53f8575fc5f2f7eb7d3c2f2a356a0335ef19464
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin 7e2b63b3eca0fbf6032b80eaa5aa8ac743ff9e9f
+          test "$(git merge-base HEAD 7e2b63b3eca0fbf6032b80eaa5aa8ac743ff9e9f)" = 849eedb1489227c7efee8865f04461d0b3e6097f
+          mkdir -p audit/conflicts
+          set +e
+          git merge --no-ff --no-commit 7e2b63b3eca0fbf6032b80eaa5aa8ac743ff9e9f > audit/merge.log 2>&1
+          code=$?
+          set -e
+          echo "merge_exit=$code"
+          test "$code" = 0 -o "$code" = 1
+          git diff --name-only --diff-filter=U > audit/conflicts.txt
+          echo "CONFLICTS_BEGIN"
+          cat audit/conflicts.txt
+          echo "CONFLICTS_END"
+          git status --short > audit/status.txt
+          git diff --cc > audit/conflict.diff || true
+          while IFS= read -r file; do
+            test -n "$file" || continue
+            id=$(printf '%s' "$file" | sha256sum | cut -c1-16)
+            echo "$id $file" >> audit/conflict-paths.txt
+            git show ":1:$file" > "audit/conflicts/$id.base" || true
+            git show ":2:$file" > "audit/conflicts/$id.ours" || true
+            git show ":3:$file" > "audit/conflicts/$id.theirs" || true
+            cp "$file" "audit/conflicts/$id.worktree" || true
+          done < audit/conflicts.txt
+          echo "Audit finished; no code published"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m1-glow-latest-merge-audit
+          path: audit/
+          if-no-files-found: warn
+          retention-days: 7
