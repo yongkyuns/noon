@@ -644,6 +644,7 @@ impl NativeApp {
                     &gpu.queue,
                     &mut encoder,
                     &prepared,
+                    &gpu.text_state,
                     &publication,
                     noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
                 )

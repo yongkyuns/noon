@@ -186,6 +186,7 @@ jobs:
         run: |
           cargo run -p noon --example glow_scene_playback
           cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once --nocapture
       - name: Preserve native glow qualification evidence
         if: always()
         uses: actions/upload-artifact@v7

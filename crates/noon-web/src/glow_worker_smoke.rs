@@ -7,8 +7,8 @@ use noon_compile::{CompiledGlow, CompiledObject, CompiledScene, ExecutionPatch};
 use noon_core::{
     Camera2DState, Color, FontResourceArena, FrameEpoch, GeometryRef, GeometryResourceArena, Glow,
     GlowSource, GlowUpdate, ObjectId, Pixels, Property, PublicationContext, RateFunction,
-    SemanticNodeId, Style, TextResourceArena, TrackDefinition, TrackId, TrackTiming, TrackValues,
-    Transform2D, Vec2,
+    SemanticNodeId, StrokeWidthMode, Style, TextResourceArena, TrackDefinition, TrackId,
+    TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
 };
 use noon_runtime::{FrameState, SceneInstance};
 use serde::Serialize;
@@ -21,6 +21,14 @@ const WIDTH: u32 = 160;
 const HEIGHT: u32 = 120;
 const PAD: u32 = 24; // even: preserve the analytic derivative-quad grid
 const VIEW_HEIGHT: f32 = 6.0;
+
+#[derive(Clone, Copy)]
+enum SourceGeometry {
+    Analytic,
+    OutlinedCircle,
+    StrokedPath,
+    TransparentSilhouettePath,
+}
 
 #[derive(Serialize)]
 struct Fixture {
@@ -66,6 +74,7 @@ fn runtime(
     offscreen: bool,
     silhouette: bool,
     intensity_only: bool,
+    source_geometry: SourceGeometry,
 ) -> SceneInstance {
     let style = |color, opacity| Style {
         fill: Some(color),
@@ -73,13 +82,58 @@ fn runtime(
         opacity,
         ..Style::default()
     };
+    let (geometry, source_style) = match source_geometry {
+        SourceGeometry::Analytic => (
+            if rectangle {
+                GeometryRef::rectangle(1.1, 0.6)
+            } else {
+                GeometryRef::circle(0.65)
+            },
+            style(
+                Color::rgba(0.7, 0.3, 0.1, if silhouette { 0.0 } else { 0.43 }),
+                0.47,
+            ),
+        ),
+        SourceGeometry::OutlinedCircle => (
+            GeometryRef::circle(0.65),
+            Style {
+                fill: Some(Color::rgba(0.7, 0.3, 0.1, 0.24)),
+                stroke: Some(Color::rgba(0.9, 0.6, 0.2, 0.82)),
+                stroke_width: 0.06,
+                stroke_width_mode: StrokeWidthMode::ScreenSpace,
+                opacity: 1.0,
+                ..Style::default()
+            },
+        ),
+        SourceGeometry::StrokedPath | SourceGeometry::TransparentSilhouettePath => {
+            let transparent = matches!(source_geometry, SourceGeometry::TransparentSilhouettePath);
+            (
+                GeometryRef::VectorPath(
+                    VectorPath::new().move_to(Vec2::new(-0.7, -0.35)).cubic_to(
+                        Vec2::new(-0.5, 0.7),
+                        Vec2::new(0.45, -0.65),
+                        Vec2::new(0.7, 0.35),
+                    ),
+                ),
+                Style {
+                    fill: None,
+                    stroke: Some(Color::rgba(
+                        0.9,
+                        0.55,
+                        0.2,
+                        if transparent { 0.0 } else { 0.76 },
+                    )),
+                    stroke_width: 0.07,
+                    stroke_width_mode: StrokeWidthMode::ScreenSpace,
+                    opacity: 1.0,
+                    ..Style::default()
+                },
+            )
+        }
+    };
     let mut source = CompiledObject::new(
         ObjectId::new(2),
-        if rectangle {
-            GeometryRef::rectangle(1.1, 0.6)
-        } else {
-            GeometryRef::circle(0.65)
-        },
+        geometry,
         Transform2D {
             translation: Vec2::new(if offscreen { -4.75 } else { 0.173 }, -0.217),
             rotation: if offscreen { 0.0 } else { 0.37 },
@@ -89,10 +143,7 @@ fn runtime(
                 Vec2::new(-1.2, 0.8)
             },
         },
-        style(
-            Color::rgba(0.7, 0.3, 0.1, if silhouette { 0.0 } else { 0.43 }),
-            0.47,
-        ),
+        source_style,
     );
     let glow = CompiledGlow {
         attachment: SemanticNodeId::new(900, u32::MAX),
@@ -173,6 +224,26 @@ fn runtime(
             }))
             .unwrap();
     }
+    if matches!(
+        source_geometry,
+        SourceGeometry::OutlinedCircle
+            | SourceGeometry::StrokedPath
+            | SourceGeometry::TransparentSilhouettePath
+    ) {
+        result
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(5),
+                object: ObjectId::new(2),
+                property: Property::Reveal,
+                values: TrackValues::Scalar {
+                    from: 0.15,
+                    to: 1.0,
+                },
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: Default::default(),
+            }))
+            .unwrap();
+    }
     result
 }
 
@@ -192,13 +263,16 @@ fn reference(frame: &FrameState, stage: usize) -> FrameState {
         value.objects[1].style.opacity = 1.0;
     }
     if matches!(stage, 2 | 3 | 5) {
-        let mut alpha = value.objects[index].style.fill.unwrap().alpha;
-        if stage == 3
-            && frame.objects[1].glow.as_ref().unwrap().definition.source() == GlowSource::Silhouette
-        {
-            alpha = 1.0;
-        }
-        value.objects[index].style.fill = Some(Color::rgba(1.0, 1.0, 1.0, alpha));
+        let silhouette = stage == 3
+            && frame.objects[1].glow.as_ref().unwrap().definition.source()
+                == GlowSource::Silhouette;
+        let white_with_alpha = |paint: Option<Color>| {
+            paint
+                .map(|color| Color::rgba(1.0, 1.0, 1.0, if silhouette { 1.0 } else { color.alpha }))
+        };
+        let style = &mut value.objects[index].style;
+        style.fill = white_with_alpha(style.fill);
+        style.stroke = white_with_alpha(style.stroke);
     }
     value
 }
@@ -216,17 +290,82 @@ fn fixture() -> Fixture {
     let mut reference_encoder = RetainedExecutionDeltaEncoder::new(700);
     let mut reference_epoch = 0;
     let mut cases = Vec::new();
-    for (i, (name, rectangle, offscreen, silhouette, intensity_only)) in [
-        ("circle-motion", false, false, false, false),
-        ("rectangle-motion", true, false, false, false),
-        ("offscreen-circle", false, true, false, false),
-        ("offscreen-silhouette", true, true, true, false),
-        ("intensity-to-zero", false, false, false, true),
+    for (i, (name, rectangle, offscreen, silhouette, intensity_only, source_geometry)) in [
+        (
+            "circle-motion",
+            false,
+            false,
+            false,
+            false,
+            SourceGeometry::Analytic,
+        ),
+        (
+            "rectangle-motion",
+            true,
+            false,
+            false,
+            false,
+            SourceGeometry::Analytic,
+        ),
+        (
+            "offscreen-circle",
+            false,
+            true,
+            false,
+            false,
+            SourceGeometry::Analytic,
+        ),
+        (
+            "offscreen-silhouette",
+            true,
+            true,
+            true,
+            false,
+            SourceGeometry::Analytic,
+        ),
+        (
+            "intensity-to-zero",
+            false,
+            false,
+            false,
+            true,
+            SourceGeometry::Analytic,
+        ),
+        (
+            "outlined-circle-reveal",
+            false,
+            false,
+            false,
+            false,
+            SourceGeometry::OutlinedCircle,
+        ),
+        (
+            "cubic-path-reveal",
+            false,
+            false,
+            false,
+            false,
+            SourceGeometry::StrokedPath,
+        ),
+        (
+            "cubic-path-silhouette-reveal",
+            false,
+            false,
+            true,
+            false,
+            SourceGeometry::TransparentSilhouettePath,
+        ),
     ]
     .into_iter()
     .enumerate()
     {
-        let mut runtime = runtime(rectangle, offscreen, silhouette, intensity_only);
+        let mut runtime = runtime(
+            rectangle,
+            offscreen,
+            silhouette,
+            intensity_only,
+            source_geometry,
+        );
         let mut encoder = RetainedExecutionDeltaEncoder::new(10 + i as u32);
         let mut frames = Vec::new();
         for (index, time) in [0.0, 0.37, 0.8, 1.0, 0.0].into_iter().enumerate() {
@@ -276,8 +415,10 @@ fn fixture() -> Fixture {
         }
         for id in if intensity_only {
             vec![2]
-        } else {
+        } else if matches!(source_geometry, SourceGeometry::Analytic) {
             vec![1, 2, 3, 4]
+        } else {
+            vec![1, 2, 3, 4, 5]
         } {
             runtime
                 .apply_execution_patch(&ExecutionPatch::RemoveTrack(TrackId::new(id)))
@@ -355,7 +496,18 @@ mod tests {
     #[test]
     fn fixture_uses_real_runtime_epochs_and_transport_admission() {
         let fixture = fixture();
-        assert_eq!(fixture.cases.len(), 5);
+        assert_eq!(fixture.cases.len(), 8);
+        assert_eq!(
+            fixture.cases[5..]
+                .iter()
+                .map(|case| case.name)
+                .collect::<Vec<_>>(),
+            [
+                "outlined-circle-reveal",
+                "cubic-path-reveal",
+                "cubic-path-silhouette-reveal"
+            ]
+        );
         for case in fixture.cases {
             let mut installed =
                 crate::InstalledRetainedExecutionMirror::from_bundle_bytes(&fixture.resources)
@@ -363,7 +515,7 @@ mod tests {
             assert_eq!(case.frames.len(), 5);
             let first = &case.frames[0].delta;
             assert!(first.snapshot);
-            for sample in &case.frames {
+            for (sample_index, sample) in case.frames.iter().enumerate() {
                 assert_eq!(
                     sample.delta.protocol_version,
                     crate::RETAINED_EXECUTION_TRANSPORT_VERSION
@@ -371,12 +523,53 @@ mod tests {
                 let envelope =
                     serde_json::from_value(serde_json::to_value(&sample.delta).unwrap()).unwrap();
                 installed.apply(envelope).unwrap();
-                let row = &installed.frame().unwrap().objects[1];
-                assert_eq!(row.glow.as_ref().unwrap().attachment.generation(), u32::MAX);
-                assert_eq!(
-                    row.glow.as_ref().unwrap().definition.intensity(),
-                    sample.intensity
-                );
+                let frame = installed.frame().unwrap();
+                let row = &frame.objects[1];
+                let wire_row = sample
+                    .delta
+                    .objects
+                    .iter()
+                    .find(|row| row.order == 1)
+                    .expect("animated source row is transported");
+                assert_eq!(wire_row.glow.unwrap().attachment.generation(), u32::MAX);
+                assert_eq!(wire_row.glow.unwrap().intensity, sample.intensity);
+                if case.name.ends_with("-reveal") {
+                    let expected_reveal =
+                        0.15 + 0.85 * [0.0, 0.37, 0.8, 1.0, 0.0][sample_index] as f32;
+                    assert!((frame.reveal(1) - expected_reveal).abs() < 1e-6);
+                    assert!(frame.render_geometries[1].is_none());
+                }
+                if case.name.starts_with("cubic-path-") {
+                    assert!(matches!(
+                        &row.content,
+                        noon_core::ObjectContentRef::Geometry(GeometryRef::VectorPath(path))
+                            if path.has_drawable_segments()
+                    ));
+                }
+                if case.name == "cubic-path-reveal" && sample_index == 1 {
+                    assert!((row.transform.translation.x - 0.173 - 0.037).abs() < 1e-6);
+                    assert!((frame.reveal(1) - (0.15 + 0.85 * 0.37)).abs() < 1e-6);
+                    assert!((wire_row.glow.unwrap().intensity - 1.771).abs() < 1e-6);
+                }
+            }
+            if case.name == "outlined-circle-reveal" {
+                let style = &case.frames[0].references[2].objects[1].style;
+                assert_eq!(style.fill.unwrap().alpha, 0.24);
+                assert_eq!(style.stroke.unwrap().alpha, 0.82);
+                assert_eq!(style.stroke.unwrap().red, 1.0);
+            }
+            if case.name == "cubic-path-reveal" {
+                let source_alpha = &case.frames[0].references[2].objects[1].style;
+                let mask = &case.frames[0].references[3].objects[1].style;
+                assert_eq!(source_alpha.stroke.unwrap().alpha, 0.76);
+                assert_eq!(mask.stroke.unwrap().alpha, 0.76);
+                assert_eq!(mask.stroke.unwrap().green, 1.0);
+            }
+            if case.name == "cubic-path-silhouette-reveal" {
+                let source_alpha = &case.frames[0].references[2].objects[1].style;
+                let mask = &case.frames[0].references[3].objects[1].style;
+                assert_eq!(source_alpha.stroke.unwrap().alpha, 0.0);
+                assert_eq!(mask.stroke.unwrap().alpha, 1.0);
             }
             assert_eq!(case.frames[0].intensity, case.frames[4].intensity);
             let neutral =

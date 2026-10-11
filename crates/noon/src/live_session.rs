@@ -5389,6 +5389,146 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn reveal_and_effect_edit_share_one_admission_in_either_order() {
+        use crate::effects::{EffectDefinition, GlowUpdate};
+        for mode in 0..3 {
+            for reverse in [false, true] {
+                let mut scene = Scene::new();
+                let mut source = if mode == 0 {
+                    scene.circle(1.0).unwrap()
+                } else {
+                    scene.text(crate::Text::new("Write")).unwrap()
+                };
+                source
+                    .set_glow(GlowUpdate::default().intensity(0.5))
+                    .unwrap();
+                let mut target = source.target_editor().unwrap();
+                target
+                    .set_glow(GlowUpdate::default().intensity(1.5))
+                    .unwrap();
+                let mut session = scene.execution_session().unwrap();
+                let reveal = match mode {
+                    0 => AnimationCompositionRequest::Create {
+                        target: &source,
+                        options: linear(1.0),
+                    },
+                    1 => AnimationCompositionRequest::TextReveal {
+                        target: &source,
+                        reverse: false,
+                        options: linear(1.0),
+                    },
+                    _ => AnimationCompositionRequest::TextWrite {
+                        target: &source,
+                        reverse_member_order: false,
+                        options: linear(1.0),
+                    },
+                };
+                let edit = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                    &source,
+                    &target,
+                    linear(1.0),
+                ));
+                let mut children = vec![reveal, edit];
+                if reverse {
+                    children.reverse();
+                }
+                let request = AnimationCompositionRequest::Composition {
+                    kind: SemanticAnimationCompositionKind::Parallel,
+                    options: AnimationOptions::new(),
+                    children,
+                };
+                let mut live = scene.live(&mut session);
+                let segment = live
+                    .declare_and_activate_composition(&request, AnimationOptions::new())
+                    .unwrap();
+                assert!(live.contains(&source).unwrap());
+                live.advance_segment_to(segment, 0.5).unwrap();
+                assert_eq!(live.session.frame().objects.len(), 1);
+                assert_eq!(
+                    live.session.frame().objects[0]
+                        .glow
+                        .as_ref()
+                        .unwrap()
+                        .definition
+                        .intensity(),
+                    1.0
+                );
+                live.advance_segment_to(segment, 1.0).unwrap();
+                live.complete_segment(segment).unwrap();
+                let EffectDefinition::Glow(glow) = source
+                    .get_effect("glow")
+                    .unwrap()
+                    .authored_definition()
+                    .unwrap();
+                assert_eq!(glow.intensity(), 1.5);
+                let rewind = live.session.seek(0.5).unwrap();
+                assert_eq!(rewind.objects.len(), 1);
+                assert_eq!(
+                    rewind.objects[0]
+                        .glow
+                        .as_ref()
+                        .unwrap()
+                        .definition
+                        .intensity(),
+                    1.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reveal_with_competing_introductions_or_combined_pose_edit_is_atomic() {
+        use crate::effects::GlowUpdate;
+        for duplicate in [false, true] {
+            let mut scene = Scene::new();
+            let mut source = scene.text(crate::Text::new("Write")).unwrap();
+            source
+                .set_glow(GlowUpdate::default().intensity(0.5))
+                .unwrap();
+            let mut target = source.target_editor().unwrap();
+            target
+                .set_glow(GlowUpdate::default().intensity(1.5))
+                .unwrap();
+            if !duplicate {
+                target.shift(1.0, 0.0).unwrap();
+            }
+            let mut session = scene.execution_session().unwrap();
+            session.take_frame_changes();
+            let before = session.publication_context();
+            let nodes = source.integration_store().borrow().len();
+            let write = || AnimationCompositionRequest::TextWrite {
+                target: &source,
+                reverse_member_order: false,
+                options: linear(1.0),
+            };
+            let mut children = vec![
+                write(),
+                AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                    &source,
+                    &target,
+                    linear(1.0),
+                )),
+            ];
+            if duplicate {
+                children.push(write());
+            }
+            let request = AnimationCompositionRequest::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                options: AnimationOptions::new(),
+                children,
+            };
+            assert!(scene
+                .live(&mut session)
+                .declare_and_activate_composition(&request, AnimationOptions::new())
+                .is_err());
+            assert_eq!(session.publication_context(), before);
+            assert_eq!(source.integration_store().borrow().len(), nodes);
+            assert!(session.frame().objects.is_empty());
+            assert!(session.take_frame_changes().is_empty());
+        }
+    }
+
+    #[test]
     fn composed_fade_out_completion_detaches_and_reenters_the_same_handle() {
         let mut scene = Scene::new();
         let fading = scene.circle(1.0).unwrap();

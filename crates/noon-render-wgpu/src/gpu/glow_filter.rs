@@ -67,40 +67,9 @@ impl GlowPixelBounds {
         viewport: [u32; 2],
         logical_viewport: noon_core::Vec2,
     ) -> Result<Self, GlowPrepareError> {
-        if viewport.contains(&0)
-            || ![
-                camera.center.x,
-                camera.center.y,
-                camera.world_size.x,
-                camera.world_size.y,
-                logical_viewport.x,
-                logical_viewport.y,
-                transform.translation.x,
-                transform.translation.y,
-                transform.scale.x,
-                transform.scale.y,
-                transform.rotation,
-            ]
-            .into_iter()
-            .all(f32::is_finite)
-            || camera.world_size.x <= 0.0
-            || camera.world_size.y <= 0.0
-            || logical_viewport.x <= 0.0
-            || logical_viewport.y <= 0.0
-            || transform.scale.x == 0.0
-            || transform.scale.y == 0.0
-        {
-            return Err(GlowPrepareError::InvalidProjection);
-        }
+        Self::validate_planar_view(transform, camera, viewport, logical_viewport)?;
         let x_pixels_per_world = f64::from(viewport[0]) / f64::from(camera.world_size.x);
         let y_pixels_per_world = f64::from(viewport[1]) / f64::from(camera.world_size.y);
-        let logical_x_per_world = f64::from(logical_viewport.x) / f64::from(camera.world_size.x);
-        let logical_y_per_world = f64::from(logical_viewport.y) / f64::from(camera.world_size.y);
-        let disparity = (logical_x_per_world - logical_y_per_world).abs()
-            / logical_x_per_world.max(logical_y_per_world);
-        if disparity > 1e-5 {
-            return Err(GlowPrepareError::InvalidProjection);
-        }
         let (sin, cos) = f64::from(transform.rotation).sin_cos();
         let sx = f64::from(transform.scale.x);
         let sy = f64::from(transform.scale.y);
@@ -143,6 +112,46 @@ impl GlowPixelBounds {
             return Err(GlowPrepareError::CaptureCoordinatesOutOfRange);
         }
         Ok(bounds)
+    }
+    pub(super) fn validate_planar_view(
+        transform: noon_core::Transform2D,
+        camera: super::Camera2D,
+        viewport: [u32; 2],
+        logical_viewport: noon_core::Vec2,
+    ) -> Result<(), GlowPrepareError> {
+        if viewport.contains(&0)
+            || ![
+                camera.center.x,
+                camera.center.y,
+                camera.world_size.x,
+                camera.world_size.y,
+                logical_viewport.x,
+                logical_viewport.y,
+                transform.translation.x,
+                transform.translation.y,
+                transform.scale.x,
+                transform.scale.y,
+                transform.rotation,
+            ]
+            .into_iter()
+            .all(f32::is_finite)
+            || camera.world_size.x <= 0.0
+            || camera.world_size.y <= 0.0
+            || logical_viewport.x <= 0.0
+            || logical_viewport.y <= 0.0
+            || transform.scale.x == 0.0
+            || transform.scale.y == 0.0
+        {
+            return Err(GlowPrepareError::InvalidProjection);
+        }
+        let logical_x_per_world = f64::from(logical_viewport.x) / f64::from(camera.world_size.x);
+        let logical_y_per_world = f64::from(logical_viewport.y) / f64::from(camera.world_size.y);
+        let disparity = (logical_x_per_world - logical_y_per_world).abs()
+            / logical_x_per_world.max(logical_y_per_world);
+        if disparity > 1e-5 {
+            return Err(GlowPrepareError::InvalidProjection);
+        }
+        Ok(())
     }
 }
 

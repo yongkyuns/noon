@@ -153,8 +153,7 @@ impl GpuRenderer {
         if self.retained_glow.sources.is_empty() {
             return Ok(visible);
         }
-        if !publication.active_family_animation_indices().is_empty() || !self.inset_views.is_empty()
-        {
+        if !self.inset_views.is_empty() {
             return Err(GlowPrepareError::UnsupportedCapture);
         }
         // The execution-owned candidate slice is already in painter order.
@@ -208,6 +207,7 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &PreparedRetainedGpuFrame<'_>,
+        text_state: &RetainedTextGpuState,
         publication: &RendererPublication<'_>,
         texture_budget_bytes: u64,
     ) -> Result<RetainedGlowStats, GlowPrepareError> {
@@ -216,6 +216,7 @@ impl GpuRenderer {
             queue,
             encoder,
             prepared,
+            text_state,
             publication,
             texture_budget_bytes,
         );
@@ -232,6 +233,7 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         prepared: &PreparedRetainedGpuFrame<'_>,
+        text_state: &RetainedTextGpuState,
         publication: &RendererPublication<'_>,
         texture_budget_bytes: u64,
     ) -> Result<RetainedGlowStats, GlowPrepareError> {
@@ -251,10 +253,7 @@ impl GpuRenderer {
                 .dirty
                 .extend(self.retained_glow.sources.keys().copied());
         }
-        if !self.retained_glow.sources.is_empty()
-            && (!publication.active_family_animation_indices().is_empty()
-                || !self.inset_views.is_empty())
-        {
+        if !self.retained_glow.sources.is_empty() && !self.inset_views.is_empty() {
             return Err(GlowPrepareError::UnsupportedCapture);
         }
         let frame = publication.frame();
@@ -274,6 +273,23 @@ impl GpuRenderer {
                     .glow
                     .as_ref()
                     .ok_or(GlowPrepareError::PublicationMismatch)?;
+                let analytic = matches!(
+                    row.geometry(),
+                    Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
+                ) && row.style.fill.is_some()
+                    && row.style.stroke.is_none()
+                    && frame.reveal(index) == 1.0
+                    && publication.active_family_animation_indices().is_empty();
+                if !analytic {
+                    if prepared.object_indices.get(&object) != Some(&index)
+                        || prepared.capture_items(object).is_none()
+                        || !prepared.source_is_visible(object)
+                    {
+                        return Err(GlowPrepareError::PublicationMismatch);
+                    }
+                    sources.push((index, Some((object, index, glow.definition, None))));
+                    continue;
+                }
                 let scratch = if prepared.geometry_only {
                     index
                 } else {
@@ -333,7 +349,7 @@ impl GpuRenderer {
                 // Partial visibility has no O(1) public observation, but the
                 // source index plus existing item/slot mapping above proves it.
                 observation.submission_membership = Some(true);
-                Some((object, scratch, glow.definition, observation))
+                Some((object, scratch, glow.definition, Some(observation)))
             } else {
                 None
             };
@@ -342,9 +358,14 @@ impl GpuRenderer {
         // Retire old mappings before installing new ones, so packed-slot swaps
         // cannot remove the other source's newly prepared scope.
         for (index, mapped) in &sources {
-            let next = mapped
-                .as_ref()
-                .map(|(object, _, _, observation)| (*object, observation.object));
+            let next = mapped.as_ref().map(|(object, _, _, observation)| {
+                (
+                    *object,
+                    observation
+                        .as_ref()
+                        .map_or(*object, |observation| observation.object),
+                )
+            });
             if let Some(old) = self
                 .retained_glow
                 .packed
@@ -357,21 +378,48 @@ impl GpuRenderer {
             }
         }
         let mut stats = RetainedGlowStats::default();
+        if sources.iter().any(|(_, mapped)| {
+            mapped
+                .as_ref()
+                .is_some_and(|(_, _, _, observation)| observation.is_none())
+        }) {
+            // Newly rasterized glyphs must be resident before an isolated draw,
+            // not only before the later main pass. Leave acknowledgement to the
+            // successful ordinary encode so abandoned encoders remain retryable.
+            prepared.text.atlas.encode_pending_uploads(encoder);
+        }
         for (index, mapped) in sources {
             if let Some((object, scratch, definition, observation)) = mapped {
-                let packed = observation.object;
-                stats.accumulate(self.prepare_observed_analytic_glow(
-                    device,
-                    queue,
-                    encoder,
-                    &prepared.geometry,
-                    AnalyticGlowRequest {
-                        object_index: scratch,
-                        definition,
-                        texture_budget_bytes,
-                    },
-                    observation,
-                )?);
+                let packed = observation
+                    .as_ref()
+                    .map_or(object, |observation| observation.object);
+                let request = AnalyticGlowRequest {
+                    object_index: scratch,
+                    definition,
+                    texture_budget_bytes,
+                };
+                let value = if let Some(observation) = observation {
+                    self.prepare_observed_analytic_glow(
+                        device,
+                        queue,
+                        encoder,
+                        &prepared.geometry,
+                        request,
+                        observation,
+                    )?
+                } else {
+                    self.prepare_draw_source_glow(
+                        device,
+                        queue,
+                        encoder,
+                        prepared,
+                        text_state,
+                        request,
+                        object,
+                        crate::pack_style(&frame.objects[index]).opacity,
+                    )?
+                };
+                stats.accumulate(value);
                 self.retained_glow.packed.insert(index, (object, packed));
             }
         }

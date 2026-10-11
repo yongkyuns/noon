@@ -20,6 +20,7 @@ impl DisjointPathBatches {
         prepared: &PreparedFrame<'_>,
         pixel: Vec2,
         enabled: bool,
+        stop_at: impl Fn(noon_core::ObjectId) -> bool,
     ) -> Self {
         let mut result = Self {
             batches: std::array::from_fn(|_| None),
@@ -43,9 +44,12 @@ impl DisjointPathBatches {
         result.bounds[0] = Some(bounds);
         result.count = 1;
         while result.count < WINDOW {
-            let Some(RetainedRenderItem::Geometry { batch, .. }) = rest.peek() else {
+            let Some(RetainedRenderItem::Geometry { object_id, batch }) = rest.peek() else {
                 break;
             };
+            if stop_at(*object_id) {
+                break;
+            }
             let Some(bounds) = path_bounds(prepared, batch, pixel) else {
                 break;
             };
@@ -316,9 +320,16 @@ mod tests {
         let items = [glyph];
         let mut rest = items.iter().peekable();
         assert_eq!(
-            DisjointPathBatches::collect(&first, &mut rest, &prepared, Vec2::new(0.01, 0.02), true)
-                .batches()
-                .count(),
+            DisjointPathBatches::collect(
+                &first,
+                &mut rest,
+                &prepared,
+                Vec2::new(0.01, 0.02),
+                true,
+                |_| false
+            )
+            .batches()
+            .count(),
             1
         );
         assert!(

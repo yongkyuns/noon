@@ -127,10 +127,18 @@ impl Surface {
                 queue,
                 &mut encoder,
                 &prepared,
+                &self.text,
                 &publication,
                 1_000_000,
             )
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!(
+                    "glow prepare {error:?}: time={} content={:?} reveal={}",
+                    publication.frame().time,
+                    publication.frame().objects[0].content,
+                    publication.frame().reveal(0)
+                )
+            });
         self.renderer
             .encode_retained(
                 &mut encoder,
@@ -404,4 +412,167 @@ fn public_scene_glow_pixels_and_lifecycle() {
         assert_eq!(surface.render(&device, &queue, &mut session), last_plain);
         eprintln!("LOGICAL_VIEWPORT_GLOW_PASS logical={logical:?} max_error<=2 neutral_exact=true removal_exact=true");
     }
+}
+
+fn drawable_scene(kind: &str, glowing: bool, opacity: f64) -> (Scene, Mobject) {
+    let mut scene = Scene::new();
+    let mut source = match kind {
+        "circle" => scene.circle(0.8).unwrap(),
+        "rectangle" => scene.rectangle(2.0, 1.3).unwrap(),
+        "line" => scene.line((-1.0, -0.6), (1.0, 0.6)).unwrap(),
+        "path" => scene
+            .path(
+                noon_core::VectorPath::new()
+                    .move_to(Vec2::new(-1.0, -0.5))
+                    .cubic_to(
+                        Vec2::new(-0.5, 1.2),
+                        Vec2::new(0.6, -1.1),
+                        Vec2::new(1.0, 0.5),
+                    ),
+                noon_core::SemanticStyle::default(),
+            )
+            .unwrap(),
+        "text" => scene
+            .text(noon::Text::new("Noon").with_font_size(36.0))
+            .unwrap(),
+        "math" => scene
+            .math_typst(noon::MathTypst::new("x^2 + y^2").with_font_size(36.0))
+            .unwrap(),
+        other => panic!("unknown source {other}"),
+    };
+    if matches!(kind, "circle" | "rectangle" | "line" | "path") {
+        source.disable_fill().unwrap();
+        source.set_stroke_color(1.0, 1.0, 1.0, 1.0).unwrap();
+        source.set_stroke_width(0.18).unwrap();
+    }
+    source.set_opacity(opacity).unwrap();
+    if glowing {
+        source
+            .set_glow(
+                GlowUpdate::default()
+                    .color(Color::RED)
+                    .radius(Pixels(3.25))
+                    .intensity(START),
+            )
+            .unwrap();
+    }
+    (scene, source)
+}
+
+#[test]
+#[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
+fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let options = AnimationOptions::new()
+        .run_time(1.0)
+        .rate_func(RateFunction::Linear);
+    let mut max_error = 0;
+    for kind in ["circle", "rectangle", "line", "path", "text", "math"] {
+        for write in [false, true] {
+            if write && !matches!(kind, "text" | "math") {
+                continue;
+            }
+            let (scene, source) = drawable_scene(kind, true, 1.0);
+            let (plain_scene, plain_source) = drawable_scene(kind, false, 1.0);
+            let mut session = scene.execution_session().unwrap();
+            let mut plain = plain_scene.execution_session().unwrap();
+            let segment = if write {
+                scene
+                    .live(&mut session)
+                    .declare_and_activate_text_write(&source, false, options)
+            } else {
+                scene
+                    .live(&mut session)
+                    .declare_and_activate_create(&source, options)
+            }
+            .unwrap();
+            let plain_segment = if write {
+                plain_scene
+                    .live(&mut plain)
+                    .declare_and_activate_text_write(&plain_source, false, options)
+            } else {
+                plain_scene
+                    .live(&mut plain)
+                    .declare_and_activate_create(&plain_source, options)
+            }
+            .unwrap();
+            let mut surface = Surface::new(&device, &queue);
+            let mut reference = Surface::new(&device, &queue);
+            let mut last_plain = Vec::new();
+            for time in [0.0, 0.125, 0.5, 0.875, 1.0] {
+                scene
+                    .live(&mut session)
+                    .advance_segment_to(segment, time)
+                    .unwrap();
+                plain_scene
+                    .live(&mut plain)
+                    .advance_segment_to(plain_segment, time)
+                    .unwrap();
+                let actual = surface.render(&device, &queue, &mut session);
+                last_plain = reference.render(&device, &queue, &mut plain);
+                let expected = expected(&last_plain, 0.0);
+                let difference = error(&actual, &expected);
+                max_error = max_error.max(difference);
+                assert!(
+                    difference <= 2,
+                    "{kind} write={write} reveal={time}: full-image Gaussian error {difference}"
+                );
+                let repeated = surface.render(&device, &queue, &mut session);
+                assert!(
+                    repeated == actual,
+                    "{kind} write={write} reveal={time}: clean pixel error {} ({} channels)",
+                    error(&repeated, &actual),
+                    repeated.iter().zip(&actual).filter(|(a, b)| a != b).count()
+                );
+            }
+            scene.live(&mut session).complete_segment(segment).unwrap();
+            plain_scene
+                .live(&mut plain)
+                .complete_segment(plain_segment)
+                .unwrap();
+            scene
+                .live(&mut session)
+                .set_object_opacity(&source, 0.35)
+                .unwrap();
+            let actual = surface.render(&device, &queue, &mut session);
+            let opaque = expected(&last_plain, 0.0);
+            let mut faded = opaque.clone();
+            for pixel in faded.as_chunks_mut::<4>().0 {
+                for channel in &mut pixel[..3] {
+                    *channel = (f64::from(*channel) * 0.35).round() as u8;
+                }
+            }
+            assert!(
+                error(&actual, &faded) <= 2,
+                "{kind} opacity applied more than once: {}",
+                error(&actual, &faded)
+            );
+            scene
+                .live(&mut session)
+                .set_object_opacity(&source, 1.0)
+                .unwrap();
+            scene
+                .live(&mut session)
+                .set_glow(&source, GlowUpdate::default().intensity(0.0))
+                .unwrap();
+            assert_eq!(
+                surface.render(&device, &queue, &mut session),
+                last_plain,
+                "{kind} neutral changed source pixels"
+            );
+            scene.live(&mut session).remove_glow(&source).unwrap();
+            assert_eq!(
+                surface.render(&device, &queue, &mut session),
+                last_plain,
+                "{kind} removal changed source pixels"
+            );
+            assert_eq!(surface.renderer.analytic_glow_texture_bytes(), 0);
+        }
+    }
+    eprintln!("GENERIC_SOURCE_GLOW_PASS cases=8 reveal_frames=40 max_error={max_error} opacity_once=true neutral_exact=true retirement=true");
 }

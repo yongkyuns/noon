@@ -147,6 +147,7 @@ impl Host {
                 queue,
                 &mut encoder,
                 &prepared,
+                &self.text,
                 &publication,
                 1_000_000,
             )

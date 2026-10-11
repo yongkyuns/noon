@@ -61,12 +61,12 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
       });
       assert.equal(result.state.patchState, "applied", JSON.stringify(result.state));
       assert.equal(result.state.backend, expectedBackend);
-      assert.ok(Math.abs(result.state.elapsed - 10) < 1e-7, "glow source must finish its actual 10-second timeline");
+      assert.ok(Math.abs(result.state.elapsed - 12) < 1e-7, "glow source must finish its actual 12-second timeline");
       // Deliberately retain the shipped border and layout mismatch that the
       // normalized screenshot oracles cannot exercise.
       assert.ok(parseFloat(result.state.border) > 0, "fixture must keep production canvas decoration");
       const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-      assert.equal(metrics.metrics.objectCount, 9);
+      assert.equal(metrics.metrics.objectCount, 11);
       assert.ok(metrics.metrics.presentedFrames > 0);
       assert.deepEqual(result.pageErrors, []);
       result.outcome = "pass";

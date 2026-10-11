@@ -552,6 +552,32 @@ impl TextGlyphGpuRenderer {
         sample_count: u32,
         camera: &'a wgpu::BindGroup,
     ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
+        self.draw_captured_item(pass, item, sample_count, camera, None)
+    }
+
+    pub(crate) fn capture_camera_binding(
+        &self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Noon isolated text camera"),
+            layout: &self.camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        })
+    }
+
+    pub(crate) fn draw_captured_item<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        item: &PreparedTextItem,
+        sample_count: u32,
+        camera: &'a wgpu::BindGroup,
+        isolated: Option<wgpu::BufferSlice<'a>>,
+    ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
         let PreparedTextItem::GlyphBatch {
             plane,
             page,
@@ -597,7 +623,7 @@ impl TextGlyphGpuRenderer {
                 }
             }
         })?;
-        if instance_range.end > available {
+        if isolated.is_none() && instance_range.end > available {
             return Err(TextGpuDrawError::InstanceRangeOutOfBounds {
                 plane: *plane,
                 end: instance_range.end,
@@ -608,7 +634,7 @@ impl TextGlyphGpuRenderer {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, camera, &[]);
         pass.set_bind_group(1, bind_group, &[]);
-        pass.set_vertex_buffer(0, buffer.slice(..));
+        pass.set_vertex_buffer(0, isolated.unwrap_or_else(|| buffer.slice(..)));
         pass.draw(0..6, instance_range.clone());
         Ok(TextGpuDrawStats {
             draw_calls: 1,

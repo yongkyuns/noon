@@ -104,7 +104,7 @@ try {
           cases: fixture.cases.map(c => ({ name: c.name, count: c.frames.length })), isolated: crossOriginIsolated };
       }, mode);
       assert.equal(description.isolated, true);
-      assert.equal(description.cases.length, 5);
+      assert.equal(description.cases.length, 8);
       const image = async (id, filename) => {
         const bytes = await page.locator(`#${id}`).screenshot({ timeout: 15000 });
         if (filename) await writeFile(path.join(out, filename), bytes);
@@ -205,7 +205,7 @@ try {
       report.modes.push(modeReport);
     } finally { await page.close(); }
   }
-  assert.equal(report.frames, 50);
+  assert.equal(report.frames, 80);
   assert.equal(report.modes.length, 2);
   report.status = "passed";
 } catch (error) {

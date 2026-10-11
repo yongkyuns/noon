@@ -274,6 +274,7 @@ impl NativeCapture {
                 &self.queue,
                 &mut encoder,
                 &prepared,
+                &self.text,
                 publication,
                 noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
             )
