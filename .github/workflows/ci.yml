@@ -9,6 +9,12 @@ on:
     paths:
       - ".github/actions/dev-wasm-build/**"
       - ".github/ci/**"
+      # Unrelated CI policies are covered by the always-on PR Fast Gate.
+      - "!.github/ci/README.md"
+      - "!.github/ci/manim-raster-workflow-cadence.test.mjs"
+      - "!.github/ci/run-report.mjs"
+      - "!.github/ci/run-report.test.mjs"
+      - "!.github/ci/physical-gpu-mode.test.mjs"
       - ".github/workflows/ci.yml"
       - ".github/workflows/compiler-cache-seed.yml"
       - ".github/workflows/pr-fast.yml"
