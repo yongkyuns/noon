@@ -649,7 +649,7 @@ impl GpuRenderer {
                 queue.write_buffer(&scope.source_buffer, 0, source_instance.bytes());
                 queue.write_buffer(&scope.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
                 stats.source_bytes_uploaded =
-                    size_of::<CircleInstance>() + size_of::<CameraUniform>();
+                    source_instance.bytes().len() + size_of::<CameraUniform>();
                 match &source_instance {
                     SourceInstance::Draws { source, silhouette } => {
                         let text = text.expect("isolated text capture state");
@@ -690,7 +690,6 @@ impl GpuRenderer {
                                     buffer,
                                 )
                                 .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
-                            stats.source_bytes_uploaded += source.bytes.len();
                             stats.source_passes += 1;
                         }
                         stats.source_bytes_uploaded = source.bytes.len()
