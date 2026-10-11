@@ -19,6 +19,10 @@ pub enum BorrowedPathEdit<'a> {
         object: &'a Mobject,
         points: &'a [Vec2],
     },
+    AnchorMode {
+        object: &'a Mobject,
+        smooth: bool,
+    },
     Corners {
         object: &'a Mobject,
         points: &'a [Vec2],
@@ -58,8 +62,9 @@ pub enum BorrowedPathEdit<'a> {
         a: f64,
         b: f64,
     },
-    FamilyJagged {
+    FamilyAnchorMode {
         family: &'a MobjectFamily,
+        smooth: bool,
     },
 }
 
@@ -79,6 +84,9 @@ pub fn publish_borrowed_path_edit(
     let (object, operation) = match edit {
         BorrowedPathEdit::SmoothCorners { object, points } => {
             (object, PathEdit::SmoothCorners(points))
+        }
+        BorrowedPathEdit::AnchorMode { object, smooth } => {
+            (object, PathEdit::AnchorMode(smooth))
         }
         BorrowedPathEdit::Corners { object, points } => (object, PathEdit::Corners(points)),
         BorrowedPathEdit::Line { object, point } => (object, PathEdit::Line(point)),
@@ -109,9 +117,9 @@ pub fn publish_borrowed_path_edit(
                 store, root, execution, object, source, a, b,
             );
         }
-        BorrowedPathEdit::FamilyJagged { family } => {
+        BorrowedPathEdit::FamilyAnchorMode { family, smooth } => {
             return path_editing::publish_running_family_anchor_mode(
-                store, root, execution, family, false,
+                store, root, execution, family, smooth,
             );
         }
     };
@@ -162,6 +170,35 @@ mod tests {
             ),
             Err(AuthoringError::ForeignStore)
         ));
+        assert!(matches!(
+            publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                BorrowedPathEdit::AnchorMode {
+                    object: &foreign,
+                    smooth: true,
+                },
+            ),
+            Err(AuthoringError::ForeignStore)
+        ));
+        let mut other_scene = Scene::new();
+        let other = other_scene.square(1.0).unwrap();
+        let foreign_family = other_scene
+            .family(&[MobjectTarget::Object(&other)])
+            .unwrap();
+        assert!(matches!(
+            publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                BorrowedPathEdit::FamilyAnchorMode {
+                    family: &foreign_family,
+                    smooth: true,
+                },
+            ),
+            Err(AuthoringError::ForeignStore)
+        ));
         assert_eq!(scene.revision(), revision);
         assert_eq!(object.state().unwrap(), before);
         assert_eq!(store.borrow().geometry_resources().len(), resources);
@@ -193,13 +230,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(object.path_query().unwrap().curve_count(), 2);
-        publish_borrowed_path_edit(
-            &store,
-            root,
-            &mut execution,
-            BorrowedPathEdit::FamilyJagged { family: &family },
-        )
-        .unwrap();
+        for smooth in [true, false] {
+            publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                BorrowedPathEdit::AnchorMode {
+                    object: &object,
+                    smooth,
+                },
+            )
+            .unwrap();
+            publish_borrowed_path_edit(
+                &store,
+                root,
+                &mut execution,
+                BorrowedPathEdit::FamilyAnchorMode {
+                    family: &family,
+                    smooth,
+                },
+            )
+            .unwrap();
+        }
         publish_borrowed_path_edit(
             &store,
             root,

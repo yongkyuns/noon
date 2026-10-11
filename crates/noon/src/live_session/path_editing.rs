@@ -1,5 +1,5 @@
 use super::*;
-use crate::path_editing::{publish_running_path_edits, PathEdit};
+use crate::path_editing::publish_running_path_edits;
 
 impl LiveSession<'_> {
     /// Apply a pointwise matrix through the same coherent path-edit publication
@@ -81,26 +81,6 @@ impl LiveSession<'_> {
         .map_err(LiveSessionError::from)
     }
 
-    pub fn make_smooth(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::AnchorMode(true),
-        )
-        .map_err(LiveSessionError::from)
-    }
-    pub fn make_jagged(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
-        crate::path_editing::publish_running_object_edit(
-            self.store,
-            self.root,
-            self.session,
-            object,
-            PathEdit::AnchorMode(false),
-        )
-        .map_err(LiveSessionError::from)
-    }
 }
 
 impl From<noon_core::GeometryResourceError> for LiveSessionError {
@@ -109,18 +89,3 @@ impl From<noon_core::GeometryResourceError> for LiveSessionError {
     }
 }
 
-impl crate::LiveSession<'_> {
-    pub fn make_family_smooth(
-        &mut self,
-        family: &MobjectFamily,
-    ) -> Result<(), crate::LiveSessionError> {
-        crate::path_editing::publish_running_family_anchor_mode(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            true,
-        )
-        .map_err(crate::LiveSessionError::from)
-    }
-}
