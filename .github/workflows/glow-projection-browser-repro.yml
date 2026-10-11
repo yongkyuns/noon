@@ -1,0 +1,82 @@
+name: Glow production projection reproduction (temporary)
+on:
+  push:
+    branches: [codex/glow-projection-browser-repro-e042]
+    paths: [.github/workflows/glow-projection-browser-repro.yml]
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: e042b56060274a1bcf18045ac610a8586509c636
+          persist-credentials: false
+      - name: Install pinned real browser
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Compare actual deployed gallery with borderless and fractional layouts
+        run: |
+          node --input-type=module <<'JS'
+          import { chromium } from 'playwright';
+          import { mkdir, writeFile } from 'node:fs/promises';
+          import { browserArgs } from './scripts/manim-raster-support.mjs';
+          const out='glow-projection-browser';
+          await mkdir(out,{recursive:true});
+          const browser=await chromium.launch({headless:true,args:browserArgs('webgpu',{gpuMode:'software'})});
+          const report=[];
+          try {
+            for (const fixture of [
+              {name:'production',width:1600,height:1000,dpr:1},
+              {name:'borderless',width:1600,height:1000,dpr:1,borderless:true},
+              {name:'borderless-narrow',width:1100,height:800,dpr:1,borderless:true},
+              {name:'borderless-fractional-density',width:1100,height:800,dpr:1.25,borderless:true},
+            ]) {
+              const context=await browser.newContext({viewport:{width:fixture.width,height:fixture.height},deviceScaleFactor:fixture.dpr});
+              const page=await context.newPage();
+              const errors=[];
+              page.on('pageerror',e=>errors.push(String(e)));
+              page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+              if(fixture.borderless) {
+                await page.addInitScript(()=>{
+                  const install=()=>{
+                    const style=document.createElement('style');
+                    style.textContent='#scene { border: 0 !important; outline: 1px solid #202a3e; }';
+                    (document.head||document.documentElement).append(style);
+                  };
+                  if(document.documentElement)install();else document.addEventListener('DOMContentLoaded',install,{once:true});
+                });
+              }
+              let failure=null;
+              try {
+                await page.goto('https://yongkyuns.github.io/noon/?example=showcase-gpu-glow',{waitUntil:'domcontentloaded',timeout:60000});
+                await page.waitForFunction(()=>{
+                  const status=document.querySelector('#patch-status');
+                  return status?.dataset.state==='error' || (status?.dataset.state==='applied' && window.__noonExampleGallery?.selectedExampleId==='showcase-gpu-glow' && !window.__noonExampleGallery?.runInFlight);
+                },null,{timeout:90000});
+              } catch(e) {failure=String(e);}
+              const state=await page.evaluate(()=>{
+                const c=document.querySelector('#scene'),r=c?.getBoundingClientRect(),s=c?getComputedStyle(c):null;
+                return {patch:document.querySelector('#patch-status')?.value,patchState:document.querySelector('#patch-status')?.dataset.state,status:document.querySelector('#status-text')?.textContent,
+                  selected:window.__noonExampleGallery?.selectedExampleId,running:window.__noonExampleGallery?.runInFlight,
+                  rect:r?{width:r.width,height:r.height}:null,client:c?[c.clientWidth,c.clientHeight]:null,bitmap:c?[c.width,c.height]:null,
+                  border:s?[s.borderLeftWidth,s.borderTopWidth,s.borderRightWidth,s.borderBottomWidth]:null,dpr:devicePixelRatio};
+              });
+              await page.screenshot({path:out+'/'+fixture.name+'.png'});
+              const row={fixture,state,errors,failure};
+              report.push(row);console.log(JSON.stringify(row));
+              await writeFile(out+'/report.json',JSON.stringify(report,null,2)+'\n');
+              await context.close();
+            }
+          } finally {await browser.close();}
+          JS
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: glow-production-projection-reproduction
+          path: glow-projection-browser/
+          retention-days: 7
+          if-no-files-found: error
