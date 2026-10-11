@@ -11,6 +11,7 @@ fn frame() -> FrameState {
         .into_iter()
         .enumerate()
         .map(|(index, z_index)| FrameObjectState {
+            glow: None,
             spatial: None,
             id: ObjectId::new(40 + index as u64),
             z_index,

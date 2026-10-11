@@ -203,6 +203,7 @@ mod tests {
             source: SemanticNodeId::new(1, 0),
             target_state: SemanticNodeId::new(2, 0),
             effective_source: super::super::EffectiveAnimationProperties {
+                glow: None,
                 z_index: 0.0,
                 transform: noon_core::Transform2D::IDENTITY,
                 style: noon_core::Style::default(),

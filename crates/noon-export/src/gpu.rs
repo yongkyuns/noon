@@ -245,12 +245,16 @@ impl NativeCapture {
             .preparer
             .prepare_transient_presentations_visible(publication, visible)
             .map_err(CaptureError::gpu)?;
+        let glow_visible = self
+            .renderer
+            .glow_source_visibility(publication, visible)
+            .map_err(CaptureError::gpu)?;
         let prepared = self
             .preparer
-            .prepare_planned_publication_visible(&self.device, publication, visible, metrics)
+            .prepare_planned_publication_visible(&self.device, publication, glow_visible, metrics)
             .map_err(CaptureError::gpu)?;
         let geometry_instances_repacked = prepared.geometry_stats().instances_repacked;
-        let retained_upload_bytes = self
+        let mut retained_upload_bytes = self
             .renderer
             .upload_retained(&self.device, &self.queue, &prepared, &mut self.text)
             .bytes_uploaded();
@@ -263,6 +267,18 @@ impl NativeCapture {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Noon capture frame"),
             });
+        let glow_work = self
+            .renderer
+            .prepare_retained_analytic_glows(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &prepared,
+                publication,
+                noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
+            )
+            .map_err(CaptureError::gpu)?;
+        retained_upload_bytes += glow_work.bytes_uploaded;
         self.renderer
             .encode_retained_with_transient_presentations_and_overlay(
                 &mut encoder,
@@ -276,7 +292,10 @@ impl NativeCapture {
                 self.clear,
                 None,
             )
-            .map_err(CaptureError::gpu)?;
+            .map_err(|error| {
+                self.renderer.invalidate_analytic_glows();
+                CaptureError::gpu(error)
+            })?;
         if read_pixels {
             encoder.copy_texture_to_buffer(
                 self.target.as_image_copy(),
@@ -295,7 +314,10 @@ impl NativeCapture {
                 },
             );
         }
-        self.fault.check()?;
+        if let Err(error) = self.fault.check() {
+            self.renderer.invalidate_analytic_glows();
+            return Err(error);
+        }
         let submission = self.queue.submit([encoder.finish()]);
         if read_pixels {
             self.read_pixels(submission)?;
