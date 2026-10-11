@@ -133,6 +133,12 @@ jobs:
           NOON_WASM_SKIP_OPT: '1'
         run: |
           set -euo pipefail
+          # Runtime provenance requires a completely clean git worktree.
+          # Evidence is an untracked local-only directory, which would otherwise
+          # force sourceRevision=null even for a genuine committed candidate.
+          # Excluding only this scratch evidence is safe: it is not product source.
+          printf '\n/projection-fix-evidence/\n' >> .git/info/exclude
+          test -z "$(git status --porcelain --untracked-files=all)"
           env -u GITHUB_SHA bash scripts/build-web-demo.sh 2>&1 | tee projection-fix-evidence/wasm-build.log
           git diff --exit-code
           python3 - <<'PY'
