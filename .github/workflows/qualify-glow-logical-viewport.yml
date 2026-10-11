@@ -22,12 +22,11 @@ jobs:
       NOON_GLOW_BACKEND: vulkan
       XDG_RUNTIME_DIR: /tmp/noon-glow-xdg
     steps:
-      - name: Load reviewed source edit script and regression fixture
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           ref: 4e1b07e524379cd13b2d6838f7870bc3c6c61c6e
           fetch-depth: 0
-      - name: Apply only exact reviewed source patch on clean product baseline
+      - name: Apply exact reviewed source edits to clean product baseline
         run: |
           set -euo pipefail
           cp .github/glow-logical-viewport.py "$RUNNER_TEMP/glow-logical-viewport.py"
@@ -44,19 +43,17 @@ jobs:
           assert s.count(anchor)==1
           s=s.replace(anchor,anchor+'\nimport { qualifyGlowViewport } from "./showcase-glow-viewport.mjs";')
           anchor='    report.servedBuildIdentity = await identity.json();\n'
-          addition='''    if (manifest.entries.some(entry => entry.id === "showcase-gpu-glow")) {
-                try {
-                  report.glowViewportQualification = { outcome: "pass", ...await qualifyGlowViewport(
-                    browser, base, path.join(output, "production-viewport"), backend, cache,
-                  ) };
-                } catch (error) {
-                  report.glowViewportQualification = { outcome: "fail", error: String(error.stack ?? error) };
-                }
-              }
-
-          '''
-          # Keep indentation byte-identical to the reviewed local patch.
-          addition='\n'.join(line[10:] if line.startswith('          ') else line for line in addition.split('\n'))
+          addition=(
+              '    if (manifest.entries.some(entry => entry.id === "showcase-gpu-glow")) {\n'
+              '      try {\n'
+              '        report.glowViewportQualification = { outcome: "pass", ...await qualifyGlowViewport(\n'
+              '          browser, base, path.join(output, "production-viewport"), backend, cache,\n'
+              '        ) };\n'
+              '      } catch (error) {\n'
+              '        report.glowViewportQualification = { outcome: "fail", error: String(error.stack ?? error) };\n'
+              '      }\n'
+              '    }\n\n'
+          )
           assert s.count(anchor)==1
           s=s.replace(anchor,anchor+addition)
           anchor='    report.runtimeResources = cache.stats();'
@@ -67,31 +64,11 @@ jobs:
           git add -N scripts/showcase-glow-viewport.mjs
           mkdir -p projection-fix-evidence
           git diff --binary > projection-fix-evidence/reviewed.patch
-          sha256sum projection-fix-evidence/reviewed.patch
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib, subprocess
-          expected={
-            'crates/noon-render-wgpu/src/gpu/analytic_glow.rs',
-            'crates/noon-render-wgpu/src/gpu/analytic_glow/tests.rs',
-            'crates/noon-render-wgpu/src/gpu/glow_filter.rs',
-            'crates/noon-render-wgpu/src/gpu/glow_filter/tests.rs',
-            'crates/noon-render-wgpu/src/gpu/mod.rs',
-            'crates/noon-web/src/execution_canvas.rs',
-            'crates/noon-web/src/retained_execution_canvas.rs',
-            'crates/noon/tests/glow_scene_raster.rs',
-            'scripts/showcase-glow-viewport.mjs',
-            'scripts/showcase-live-review.mjs',
-          }
-          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
-          assert changed==expected,(changed,expected)
-          digest=hashlib.sha256(Path('projection-fix-evidence/reviewed.patch').read_bytes()).hexdigest()
-          assert digest=='c32323ddc46fd479d202ba17cdf96ad592ef9242590af3bf2c83eb645c37b8c3',digest
-          PY
+          echo 'c32323ddc46fd479d202ba17cdf96ad592ef9242590af3bf2c83eb645c37b8c3  projection-fix-evidence/reviewed.patch' | sha256sum -c -
           git diff --check
           node --check scripts/showcase-glow-viewport.mjs
           node --test scripts/showcase-live-review.test.mjs
-      - name: Use repository-pinned Rust and freeze formatted product source
+      - name: Pin Rust and freeze formatted product source
         run: |
           set -euo pipefail
           rustup install
@@ -105,7 +82,6 @@ jobs:
           git rev-parse HEAD > projection-fix-evidence/candidate-sha.txt
           git rev-parse HEAD^{tree} > projection-fix-evidence/candidate-tree.txt
           git diff --binary HEAD^ HEAD > projection-fix-evidence/qualified-source.patch
-          test -z "$(git diff --name-only HEAD^)" || git diff --stat HEAD^ HEAD
           git diff --exit-code
       - uses: actions/cache@v6
         with:
@@ -121,13 +97,13 @@ jobs:
           cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests 2>&1 | tee projection-fix-evidence/filter-tests.log
           cargo test -p noon-render-wgpu --lib gpu::analytic_glow::tests 2>&1 | tee projection-fix-evidence/analytic-tests.log
           cargo clippy -p noon-render-wgpu -p noon-web --all-features --all-targets -- -D warnings 2>&1 | tee projection-fix-evidence/clippy.log
-      - name: Prepare actual software Vulkan raster adapter
+      - name: Prepare real software Vulkan raster adapter
         run: |
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_RUNTIME_DIR"
-      - name: Require real Gaussian pixels and exact neutral/removal under logical mismatch
+      - name: Require Gaussian pixels and exact neutral/removal at mismatched viewport sizes
         run: |
           set -euo pipefail
           cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture 2>&1 | tee projection-fix-evidence/public-raster.log
@@ -138,7 +114,7 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Build existing browser runtime from the exact frozen product source
+      - name: Build existing browser runtime from frozen product source
         env:
           NOON_SKIP_WEB_PREFLIGHT: '1'
           NOON_WASM_PROFILE: dev
@@ -154,11 +130,11 @@ jobs:
           assert identity['sourceRevision']==Path('projection-fix-evidence/candidate-sha.txt').read_text().strip()
           Path('projection-fix-evidence/runtime-build-identity.json').write_text(json.dumps(identity,indent=2)+'\n')
           PY
-      - name: Install pinned browser fixtures
+      - name: Install pinned browser tooling
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Require production DOM glow completion in WebGPU and WebGL
+      - name: Require production DOM completion in WebGPU and WebGL
         run: |
           set -euo pipefail
           NOON_SHOWCASE_BACKEND=webgpu node scripts/showcase-glow-viewport.mjs 2>&1 | tee projection-fix-evidence/webgpu.log
@@ -166,7 +142,7 @@ jobs:
           test "$(grep -c '^PASS glow viewport' projection-fix-evidence/webgpu.log)" = 3
           test "$(grep -c '^PASS glow viewport' projection-fix-evidence/webgl.log)" = 3
           git diff --exit-code
-      - name: Publish qualified repair source without helper files or overwriting concurrent work
+      - name: Publish only qualified repair source without overwriting concurrent work
         run: |
           set -euo pipefail
           branch=refs/heads/codex/fix-glow-logical-viewport-e042
@@ -175,8 +151,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(cat projection-fix-evidence/candidate-sha.txt)"
           git merge-base --is-ancestor "$actual" HEAD
           git push origin "HEAD:$branch"
-          echo 'Focused Rust, strict Clippy, native pixels and six production DOM browser cases passed; full PR CI still required' > projection-fix-evidence/result.txt
-      - name: Dispatch normal exact-source CI
+          echo 'Focused Rust, strict Clippy, native pixels and six production DOM cases passed; full PR CI still required' > projection-fix-evidence/result.txt
+      - name: Dispatch ordinary exact-source CI
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -186,7 +162,7 @@ jobs:
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             --data '{"ref":"codex/fix-glow-logical-viewport-e042"}' \
             https://api.github.com/repos/yongkyuns/noon/actions/workflows/ci.yml/dispatches
-      - name: Preserve evidence including failed attempts
+      - name: Preserve all evidence, including failures
         if: always()
         uses: actions/upload-artifact@v7
         with:
