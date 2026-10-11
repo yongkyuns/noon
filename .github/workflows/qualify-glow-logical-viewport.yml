@@ -60,13 +60,23 @@ jobs:
           assert s.count(anchor)==1
           s=s.replace(anchor,'    assert.notEqual(report.glowViewportQualification?.outcome, "fail", "production-layout glow projection failed");\n'+anchor)
           p.write_text(s)
+          # Exact binary ratio, not a changed geometry or relaxed tolerance.
+          for name, count in (
+              ('crates/noon-render-wgpu/src/gpu/glow_filter/tests.rs', 2),
+              ('crates/noon/tests/glow_scene_raster.rs', 1),
+          ):
+              p=Path(name); s=p.read_text()
+              assert s.count('288.703125')==count
+              p.write_text(s.replace('288.703125','18477.0 / 64.0'))
+          p=Path('crates/noon-render-wgpu/src/gpu/mod.rs'); s=p.read_text()
+          old='restores the default one-logical-unit-per-backing-pixel mapping.'
+          assert s.count(old)==1
+          p.write_text(s.replace(old,'restores the default mapping of one logical unit per backing pixel.'))
           PY
           git add -N scripts/showcase-glow-viewport.mjs
           mkdir -p projection-fix-evidence
-          # Full object identities prevent repository-size-dependent abbreviations
-          # from changing the hash of an otherwise byte-identical source patch.
           git diff --binary --full-index > projection-fix-evidence/reviewed.patch
-          echo 'eb7d21587cfa56f5560def5748d88e874a8e014b01fe3d53bb5f31d319ce8ebb  projection-fix-evidence/reviewed.patch' | sha256sum -c -
+          echo '0b1a1a42b8dc6c7ad331a0fcc6b1a8678cb1fd9eccdaff1087b39ec12de08459  projection-fix-evidence/reviewed.patch' | sha256sum -c -
           git diff --check
           node --check scripts/showcase-glow-viewport.mjs
           node --test scripts/showcase-live-review.test.mjs
