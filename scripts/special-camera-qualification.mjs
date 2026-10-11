@@ -7,7 +7,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { evaluateRasterTolerance, resolveRasterTolerance } from "./manim-raster-policy.mjs";
-import { compareEffectiveInsetCameras } from "./manim-raster-support.mjs";
+import { compareEffectiveInsetCameras, effective3DCameraProfile } from "./manim-raster-support.mjs";
 
 export const FOLLOWING_SOURCE = "parity/manim-v0.21/following_graph_camera.py";
 export const FOLLOWING_UPSTREAM = "861cd4849b17db1db3515b531ffe80b297848f93";
@@ -93,7 +93,8 @@ export function assertSpecialCameraObservation(frame, fixture, host) {
       break;
     case "ambient":
     case "illusion":
-      assert.ok(present.some(row => row.spatial?.composition_domain === "world"),
+      assert.ok(present.some(row => row.spatial?.composition_domain === "world"
+        && row.spatial.camera_profile == null),
         `${label}: missing world-authored camera-motion content`);
       capability = cameraCase === "ambient" ? "ambient-camera-timing" : "illusion-camera-timing";
       break;
@@ -131,9 +132,10 @@ export function assertSpecialCameraObservation(frame, fixture, host) {
     default:
       throw new Error(`${label}: no semantic observation contract for ${cameraCase}`);
   }
+  const planar = cameraCase === "moving-zoomed-scene" || cameraCase === "following-graph-camera";
+  if (!planar) effective3DCameraProfile(frame);
   return { authoredTime: frame.time, presentObjectCount: present.length, capability,
-    cameraPoseObserved: cameraCase === "moving-zoomed-scene" || cameraCase === "following-graph-camera"
-      ? "effective-2d-camera" : "not-exposed-by-frame-diagnostic",
+    cameraPoseObserved: planar ? "effective-2d-camera" : "effective-3d-camera",
     pinnedAppearance: "not-qualified-by-this-noon-profile" };
 }
 

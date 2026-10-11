@@ -110,6 +110,13 @@ function semanticObservationFrame(fixture, hostTime = fixture.sampleTime) {
     if (profile === "surface") objects.push({ id: 3, present: true, center: [2, 1],
       bounds: { width: 1, height: 1 }, spatial: structuredClone(cellSpatial), fill: paint(0, 1, 0) });
   }
+  if (fixture.factoryArgs) objects.push({ id: 10, present: true,
+    center: [0, 0], bounds: { width: 0, height: 0 }, fill: null, spatial: {
+    composition_domain: "world", camera_profile: {
+      phi: 0.8, theta: -0.1, gamma: 0.2, focal_distance: 20, zoom: 1,
+      frame_height: 8, frame_center: [0, 0, 0], near: 0.1, far: 100,
+    },
+  } });
   return { time: hostTime, camera: { center: [0, 0], height: 8 },
     ...(profile === "moving-zoomed-scene" ? { inset_2d_views: [] } : {}),
     present_object_count: objects.length, objects };
@@ -182,10 +189,51 @@ for (const profile of ["fixed-frame", "ambient", "illusion", "light", "surface",
     const observation = assertSpecialCameraObservation(frame, fixture, "python");
     assert.equal(observation.authoredTime, 0.5);
     assert.equal(observation.pinnedAppearance, "not-qualified-by-this-noon-profile");
+    assert.equal(observation.cameraPoseObserved,
+      fixture.factoryArgs ? "effective-3d-camera" : "effective-2d-camera");
     assert.equal(assertPairedCameraObservation(frame, structuredClone(frame), fixture).semanticState,
       "paired-equal");
   });
 }
+
+for (const profile of ["fixed-frame", "ambient", "illusion", "light", "surface"]) {
+  test(`${profile} rejects paired observations when both omit the effective 3D camera`, () => {
+    const fixture = cameraFixture(profile, 0.5);
+    const frame = semanticObservationFrame(fixture);
+    delete frame.objects.at(-1).spatial.camera_profile;
+    assert.throws(() => assertPairedCameraObservation(frame, structuredClone(frame), fixture),
+      /expected one present profiled camera/);
+  });
+}
+
+for (const [name, mutate] of [
+  ["inactive", row => { row.present = false; }],
+  ["non-finite angle", row => { row.spatial.camera_profile.theta = NaN; }],
+  ["invalid center", row => { row.spatial.camera_profile.frame_center.pop(); }],
+  ["zero zoom", row => { row.spatial.camera_profile.zoom = 0; }],
+  ["negative focal distance", row => { row.spatial.camera_profile.focal_distance = -1; }],
+  ["zero frame height", row => { row.spatial.camera_profile.frame_height = 0; }],
+  ["nonpositive near plane", row => { row.spatial.camera_profile.near = 0; }],
+  ["reversed clips", row => { row.spatial.camera_profile.far = 0.05; }],
+]) test(`3D camera observations reject ${name}`, () => {
+  const fixture = cameraFixture("ambient", 0.5);
+  const frame = semanticObservationFrame(fixture);
+  mutate(frame.objects.at(-1));
+  assert.throws(() => assertPairedCameraObservation(frame, structuredClone(frame), fixture));
+});
+
+test("3D camera observations reject duplicate cameras and paired pose drift", () => {
+  const fixture = cameraFixture("illusion", 0.5);
+  const rust = semanticObservationFrame(fixture);
+  const python = structuredClone(rust);
+  python.objects.at(-1).spatial.camera_profile.theta += 0.01;
+  assert.throws(() => assertPairedCameraObservation(rust, python, fixture), /differs from/);
+  rust.objects.push(structuredClone(rust.objects.at(-1)));
+  rust.objects.at(-1).id = 11;
+  rust.present_object_count++;
+  assert.throws(() => assertSpecialCameraObservation(rust, fixture, "rust-wasm"),
+    /expected one present profiled camera/);
+});
 
 for (const [name, profile, mutate] of [
   ["fixed-frame domain", "fixed-frame", frame => { frame.objects[0].spatial.composition_domain = "world"; }],
