@@ -132,12 +132,15 @@ fn detach_readd_and_wrapper_drop_preserve_authored_attachment() {
 #[test]
 fn unsupported_source_profile_fails_without_blocking_detached_copies() {
     let mut scene = Scene::new();
-    let dot = scene.circle(0.08).unwrap();
+    let mut dot = scene.circle(0.08).unwrap();
+    // Ordinary stroked or unfilled geometry is supported; a singular source
+    // transform remains outside the retained glow profile.
+    dot.set_scale(0.0, 1.0).unwrap();
     scene.add(&dot).unwrap();
     let plain = scene.execution_session().unwrap();
     drop(plain);
     // Neutral attachments still require a supported source profile. This
-    // default unfilled/stroked circle must not silently lose its declaration.
+    // singularly transformed circle must not silently lose its declaration.
     scene
         .set_glow(&dot, GlowUpdate::default().intensity(0.0))
         .unwrap();
@@ -155,7 +158,8 @@ fn unsupported_source_profile_fails_without_blocking_detached_copies() {
 #[test]
 fn rejected_live_attachment_preserves_both_scene_and_runtime() {
     let mut scene = Scene::new();
-    let dot = scene.circle(0.08).unwrap();
+    let mut dot = scene.circle(0.08).unwrap();
+    dot.set_scale(0.0, 1.0).unwrap();
     scene.add(&dot).unwrap();
     let mut session = scene.execution_session().unwrap();
     let before = scene.revision();
