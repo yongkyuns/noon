@@ -13,7 +13,9 @@ struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: v
     output.uv = vec2(point.x+1.0, 1.0-point.y)*0.5; return output;
 }
 fn pixel(point: vec2<i32>) -> vec4<f32> {
-    let limits = vec2<i32>(textureDimensions(image, 0))-vec2<i32>(1);
+    // Captured insets retain spare texture capacity. Clamp to the active raster
+    // rather than sampling its cleared padding at a filtered image boundary.
+    let limits = vec2<i32>(object.dimensions)-vec2<i32>(1);
     let rgba = textureLoad(image, clamp(point, vec2<i32>(0), limits), 0);
     let alpha = rgba.a*object.opacity; return vec4(rgba.rgb*alpha, alpha);
 }

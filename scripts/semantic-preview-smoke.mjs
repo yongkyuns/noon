@@ -9,6 +9,7 @@ import { once } from "node:events";
 import { chromium } from "playwright";
 import pngjs from "pngjs";
 import { verifySample, verifySquareToCircle, verifyFreshRun, verifyLateFamilyConstruction } from "./semantic-preview-observations.mjs";
+import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 const { PNG } = pngjs;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,15 +25,38 @@ server.stderr.on("data", (chunk) => { serverError = (serverError + chunk).slice(
 server.on("error", (error) => { serverError = String(error); });
 let browser;
 let activeBackend;
+let runtimeCache;
 const observations = [];
 
 async function pageReady() {
   const page = await browser.newPage({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 1 });
-  page.setDefaultTimeout(30_000);
-  await page.goto(url);
-  await page.waitForFunction(() => window.noonHostRaster !== undefined);
-  await page.evaluate(() => window.noonHostRaster.ready());
-  return page;
+  const diagnostics = [];
+  const record = (event) => {
+    diagnostics.push(event);
+    if (diagnostics.length > 32) diagnostics.shift();
+  };
+  page.on("pageerror", (error) => record({ type: "pageerror", error: String(error).slice(0, 1000) }));
+  page.on("console", (message) => {
+    if (message.type() === "error") record({ type: "console", error: message.text().slice(0, 1000) });
+  });
+  page.on("requestfailed", (request) => record({ type: "requestfailed", url: request.url().slice(0, 500),
+    error: request.failure()?.errorText?.slice(0, 1000) ?? null }));
+  page.on("close", () => {
+    if (diagnostics.length) observations.push({ backend: activeBackend, diagnostics });
+  });
+  try {
+    // Reuse only pinned dependency bytes across fresh pages/backends, as other
+    // browser gates do. Every scene, worker and preview deadline stays fresh.
+    await runtimeCache.install(page.context());
+    page.setDefaultTimeout(30_000);
+    await page.goto(url);
+    await page.waitForFunction(() => window.noonHostRaster !== undefined);
+    await page.evaluate(() => window.noonHostRaster.ready());
+    return page;
+  } catch (error) {
+    await page.close();
+    throw error;
+  }
 }
 
 function foreground(bytes) {
@@ -218,6 +242,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.ok(ready, `preview test server did not start: ${serverError}`);
+  runtimeCache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8"));
   const failures = [];
   for (const backend of ["webgl", "webgpu"]) {
     activeBackend = backend;
@@ -247,7 +272,8 @@ try {
     let revision = null;
     try { revision = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); }
     catch { /* A source archive has no Git revision. */ }
-    await writeFile(path.join(artifacts, "observations.json"), JSON.stringify({ revision, observations }, null, 2));
+    await writeFile(path.join(artifacts, "observations.json"), JSON.stringify({ revision, observations,
+      dependencyCache: runtimeCache?.stats() ?? null }, null, 2));
   } finally {
     try { await browser?.close(); }
     finally {

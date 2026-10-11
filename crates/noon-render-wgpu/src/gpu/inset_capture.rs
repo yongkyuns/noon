@@ -72,12 +72,37 @@ pub(super) fn capture_raster_size(
 
 #[derive(Debug)]
 pub(super) struct InsetCaptureTarget {
-    pub size: [u32; 2],
+    pub capacity: [u32; 2],
     _texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     _msaa: wgpu::Texture,
     pub msaa_view: wgpu::TextureView,
     pub image: ExternalImageBinding,
+}
+
+/// Retain a bounded backing raster across display scaling. The active viewport
+/// and image dimensions remain exact. Growth is amortized, while a large display
+/// collapse releases peak storage with hysteresis instead of resizing each frame.
+pub(super) fn capture_texture_capacity(
+    previous: Option<[u32; 2]>,
+    requested: [u32; 2],
+    limits: [u32; 2],
+) -> [u32; 2] {
+    std::array::from_fn(|axis| {
+        let previous = previous.map_or(0, |size| size[axis]).min(limits[axis]);
+        if previous > requested[axis].saturating_mul(4) {
+            requested[axis]
+        } else if previous >= requested[axis] {
+            previous
+        } else if previous == 0 {
+            requested[axis]
+        } else {
+            previous
+                .saturating_mul(2)
+                .max(requested[axis])
+                .min(limits[axis])
+        }
+    })
 }
 
 impl InsetCaptureTarget {
@@ -114,7 +139,7 @@ impl InsetCaptureTarget {
         let msaa_view = msaa.create_view(&Default::default());
         let image = images.bind_external(device, queue, &view, uniform);
         Self {
-            size,
+            capacity: size,
             _texture: color,
             view,
             _msaa: msaa,
@@ -160,6 +185,19 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            // A retained target may be larger than this frame's capture. Keep
+            // projection, pixel phase and sampling at the exact requested size.
+            if target.capacity != inset.capture_size {
+                pass.set_viewport(
+                    0.0,
+                    0.0,
+                    inset.capture_size[0] as f32,
+                    inset.capture_size[1] as f32,
+                    0.0,
+                    1.0,
+                );
+                pass.set_scissor_rect(0, 0, inset.capture_size[0], inset.capture_size[1]);
+            }
             let mut excluded = HashSet::new();
             if !inset.state.capture_own_display {
                 excluded.insert(inset.state.display);
@@ -183,8 +221,8 @@ impl GpuRenderer {
 #[cfg(test)]
 mod tests {
     use super::{capture_raster_size, InsetCaptureProjectionError};
-    use crate::Camera2D;
-    use noon_core::Vec2;
+    use crate::{Camera2D, GpuRenderer};
+    use noon_core::{Camera2DState, Inset2DViewState, ObjectId, Vec2};
 
     fn camera() -> Camera2D {
         Camera2D::new(Vec2::ZERO, Vec2::new(10.0, 10.0)).unwrap()
@@ -249,5 +287,60 @@ mod tests {
             ),
             Err(InsetCaptureProjectionError::InvalidDisplay),
         );
+    }
+
+    #[test]
+    fn inset_capture_reuses_backing_storage_and_retires_it_with_limits_and_views() {
+        let (device, queue) = wgpu::Device::noop(&Default::default());
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut text = renderer.create_retained_text_state(&device, &queue);
+        let mut previous = None;
+        // Initial, shrink, grow, shrink, and viewport-limit retirement.
+        for (viewport, size, capacity, replace) in [
+            ([96, 80], 2.0, [24, 20], true),
+            ([96, 80], 1.5, [24, 20], false),
+            ([96, 80], 2.9, [48, 40], true),
+            ([96, 80], 2.9, [34, 29], true),
+            ([96, 80], 2.9, [34, 29], false),
+            ([96, 80], 1.2, [34, 29], false),
+            ([32, 24], 2.9, [32, 24], true),
+            ([32, 24], 0.3, [1, 1], true),
+            ([32, 24], 0.4, [1, 1], false),
+        ] {
+            renderer.set_viewport(&device, &queue, viewport[0], viewport[1]);
+            renderer.set_camera(
+                &queue,
+                Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 8.0)).unwrap(),
+            );
+            let state = Inset2DViewState {
+                camera_frame: ObjectId::new(1),
+                display: ObjectId::new(2),
+                camera: Camera2DState {
+                    center: Vec2::ZERO,
+                    height: 4.0,
+                },
+                display_center: Vec2::new(2.6, 2.4),
+                display_size: Vec2::new(size, size),
+                display_stroke_width: 0.0,
+                capture_own_display: false,
+            };
+            renderer
+                .set_inset_2d_views(&device, &queue, &mut text, &[state])
+                .unwrap();
+            let target = &renderer.inset_targets[0];
+            assert_eq!(target.capacity, capacity);
+            assert!(target.capacity[0] <= viewport[0] && target.capacity[1] <= viewport[1]);
+            if let Some((color, msaa)) = &previous {
+                assert_eq!(target._texture != *color, replace);
+                assert_eq!(target._msaa != *msaa, replace);
+            }
+            previous = Some((target._texture.clone(), target._msaa.clone()));
+        }
+        renderer
+            .set_inset_2d_views(&device, &queue, &mut text, &[])
+            .unwrap();
+        assert!(renderer.inset_targets.is_empty());
+        assert!(renderer.inset_camera_buffers.is_empty());
+        assert!(renderer.inset_camera_bind_groups.is_empty());
     }
 }

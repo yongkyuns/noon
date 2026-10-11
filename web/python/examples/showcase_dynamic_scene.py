@@ -49,6 +49,20 @@ class DynamicScene(Scene):
             label.move_to((6.1 * side, 2.3 - 0.42 * slot, 0))
             labels.append(label)
 
+        # Build independent morph endpoints before playback to avoid pausing
+        # the presentation while allocating hundreds of detached targets.
+        # Their geometry and transforms still come from the shared Rust handles.
+        targets = []
+        for index in range(count):
+            color = PALETTE[(index + 3) % len(PALETTE)]
+            target = Circle(radius=0.085, color=color) if index % 2 else Square(side_length=0.16, color=color).rotate(PI / 4)
+            targets.append(target.set_fill(color, opacity=0.9).set_stroke(width=1).move_to(grid_point(index)))
+        finale = []
+        for index in range(count):
+            color = PALETTE[(index // COLS + index % COLS) % len(PALETTE)]
+            target = Square(side_length=0.16, color=color).set_fill(color, opacity=0.9).set_stroke(width=1).move_to(grid_point(index))
+            finale.append(target)
+
         self.play(FadeIn(title), FadeIn(subtitle), FadeIn(caption), run_time=0.6)
         self.play(*[Create(shape) for shape in shapes], *[FadeIn(label) for label in labels], run_time=2.0, rate_func=smooth)
         self.wait(0.3)
@@ -56,11 +70,6 @@ class DynamicScene(Scene):
         self.play(FadeOut(caption), run_time=0.2)
         caption = phase_label("02 / Morph every object")
         self.play(FadeIn(caption), run_time=0.3)
-        targets = []
-        for index in range(count):
-            color = PALETTE[(index + 3) % len(PALETTE)]
-            target = Circle(radius=0.085, color=color) if index % 2 else Square(side_length=0.16, color=color).rotate(PI / 4)
-            targets.append(target.set_fill(color, opacity=0.9).set_stroke(width=1).move_to(grid_point(index)))
         self.play(*[Transform(shape, target) for shape, target in zip(shapes, targets)], run_time=2.0, rate_func=smooth)
 
         self.play(FadeOut(caption), run_time=0.2)
@@ -91,10 +100,5 @@ class DynamicScene(Scene):
         self.play(FadeOut(caption), run_time=0.2)
         caption = phase_label("06 / Resolve into a new composition")
         self.play(FadeIn(caption), run_time=0.3)
-        finale = []
-        for index in range(count):
-            color = PALETTE[(index // COLS + index % COLS) % len(PALETTE)]
-            target = Square(side_length=0.16, color=color).set_fill(color, opacity=0.9).set_stroke(width=1).move_to(grid_point(index))
-            finale.append(target)
         self.play(*[Transform(shape, target) for shape, target in zip(shapes, finale)], *[label.animate.set_opacity(1.0) for label in labels], run_time=2.2, rate_func=smooth)
         self.wait(1.3)

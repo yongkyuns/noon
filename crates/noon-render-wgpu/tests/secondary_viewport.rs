@@ -1,8 +1,12 @@
 use noon_compile::{CompiledObject, CompiledScene};
-use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2, VectorPath};
+use noon_core::{
+    Camera2DState, Color, FontResourceArena, GeometryRef, GeometryResourceArena, Inset2DViewState,
+    ObjectId, Style, TextResourceArena, Transform2D, Vec2, VectorPath,
+};
 use noon_render_wgpu::{
     AnalyticOverlay, Camera2D, FrameComposition, FramePreparer, GpuRenderer, OverlayGpuState,
-    SecondaryViewport, SecondaryViewportError,
+    PreparedRetainedGpuFrame, RetainedFramePreparer, RetainedTextGpuState, SecondaryViewport,
+    SecondaryViewportError,
 };
 use noon_runtime::SceneInstance;
 
@@ -89,6 +93,230 @@ fn submit_and_read(
     let pixels = readback.slice(..).get_mapped_range().unwrap().to_vec();
     readback.unmap();
     pixels
+}
+
+#[test]
+fn inset_capture_reuse_matches_fresh_rasters_at_filtered_edges_and_path_samples() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping inset capture pixel comparison: no GPU adapter is available");
+            return;
+        };
+        eprintln!(
+            "inset capture pixel comparison adapter: {:?}",
+            adapter.get_info()
+        );
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("inset capture pixel comparison target"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("inset capture pixel comparison readback"),
+            size: u64::from(WIDTH * HEIGHT * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+
+        let render = |renderer: &mut GpuRenderer,
+                      text: &mut RetainedTextGpuState,
+                      prepared: &PreparedRetainedGpuFrame<'_>,
+                      inset: Inset2DViewState| {
+            renderer
+                .set_inset_2d_views(&device, &queue, text, &[inset])
+                .unwrap();
+            renderer.upload_retained(&device, &queue, prepared, text);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let draws = renderer
+                .encode_retained(
+                    &mut encoder,
+                    &view,
+                    prepared,
+                    text,
+                    wgpu::Color::BLACK,
+                    None,
+                )
+                .unwrap();
+            let pixels = submit_and_read(&device, &queue, encoder, &target, &readback);
+            (pixels, draws)
+        };
+
+        for with_path in [false, true] {
+            let mut reused = GpuRenderer::new(&device, &queue, format);
+            reused.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            reused.set_camera(
+                &queue,
+                Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 4.0)).unwrap(),
+            );
+            let mut reused_text = reused.create_retained_text_state(&device, &queue);
+            let mut reused_preparer = RetainedFramePreparer::new();
+            reused_preparer.set_inset_views_active(true);
+            for scale in [2.0, 1.5, 2.9, 2.9, 2.9, 1.2, 0.3, 0.3] {
+                let mut objects = vec![
+                    CompiledObject::new(
+                        ObjectId::new(0),
+                        GeometryRef::rectangle(3.0, 3.0),
+                        Transform2D::IDENTITY,
+                        Style {
+                            fill: Some(Color::rgba(0.05, 0.8, 0.1, 1.0)),
+                            stroke: None,
+                            ..Style::default()
+                        },
+                    ),
+                    CompiledObject::new(
+                        ObjectId::new(1),
+                        GeometryRef::circle(0.7),
+                        Transform2D::IDENTITY,
+                        Style {
+                            fill: Some(Color::WHITE),
+                            stroke: None,
+                            ..Style::default()
+                        },
+                    ),
+                ];
+                let mut panel_backing = Transform2D::IDENTITY;
+                panel_backing.translation = Vec2::new(2.1, 0.2);
+                objects.push(CompiledObject::new(
+                    ObjectId::new(2),
+                    GeometryRef::rectangle(4.0, 4.0),
+                    panel_backing,
+                    Style {
+                        fill: Some(Color::rgba(0.1, 0.1, 0.8, 1.0)),
+                        stroke: None,
+                        ..Style::default()
+                    },
+                ));
+                if with_path {
+                    objects.push(CompiledObject::new(
+                        ObjectId::new(3),
+                        GeometryRef::path(
+                            VectorPath::new()
+                                .move_to(Vec2::new(-0.9, -0.7))
+                                .line_to(Vec2::new(0.9, 0.65)),
+                        ),
+                        Transform2D::IDENTITY,
+                        Style {
+                            fill: None,
+                            stroke: Some(Color::WHITE),
+                            stroke_width: 0.11,
+                            ..Style::default()
+                        },
+                    ));
+                }
+                let display_id = ObjectId::new(4);
+                let mut display_transform = Transform2D::IDENTITY;
+                display_transform.translation = Vec2::new(2.1, 0.2);
+                display_transform.scale = Vec2::new(scale, scale);
+                objects.push(CompiledObject::new(
+                    display_id,
+                    GeometryRef::rectangle(1.0, 1.0),
+                    display_transform,
+                    Style {
+                        fill: None,
+                        stroke: Some(Color::WHITE),
+                        stroke_width: 0.002,
+                        ..Style::default()
+                    },
+                ));
+                let scene =
+                    SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
+                let inset = Inset2DViewState {
+                    camera_frame: ObjectId::new(5),
+                    display: display_id,
+                    camera: Camera2DState {
+                        center: Vec2::ZERO,
+                        height: 2.0,
+                    },
+                    display_center: Vec2::new(2.1, 0.2),
+                    display_size: Vec2::new(scale, scale),
+                    display_stroke_width: 0.002,
+                    capture_own_display: false,
+                };
+                let prepared = reused_preparer
+                    .prepare(
+                        &device,
+                        scene.frame(),
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        noon_render_wgpu::text::TextDeviceMetrics::uniform(64.0).unwrap(),
+                    )
+                    .unwrap();
+                let (reused_pixels, reused_draws) =
+                    render(&mut reused, &mut reused_text, &prepared, inset);
+                assert_eq!(reused_draws.images, 1, "the inset capture must draw");
+
+                let mut fresh = GpuRenderer::new(&device, &queue, format);
+                fresh.set_viewport(&device, &queue, WIDTH, HEIGHT);
+                fresh.set_camera(
+                    &queue,
+                    Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 4.0)).unwrap(),
+                );
+                let mut fresh_text = fresh.create_retained_text_state(&device, &queue);
+                // Incremental upload ranges belong to their renderer lifetime.
+                // A fresh renderer needs a fresh preparation publication too.
+                let mut fresh_preparer = RetainedFramePreparer::new();
+                fresh_preparer.set_inset_views_active(true);
+                let fresh_prepared = fresh_preparer
+                    .prepare(
+                        &device,
+                        scene.frame(),
+                        &texts,
+                        &fonts,
+                        &geometries,
+                        noon_render_wgpu::text::TextDeviceMetrics::uniform(64.0).unwrap(),
+                    )
+                    .unwrap();
+                let (fresh_pixels, fresh_draws) =
+                    render(&mut fresh, &mut fresh_text, &fresh_prepared, inset);
+                assert_eq!(fresh_draws.images, 1, "the fresh inset capture must draw");
+                assert_eq!(
+                    reused_pixels, fresh_pixels,
+                    "reused capture at scale {scale}, path={with_path} differs from fresh exact capture"
+                );
+
+                if scale < 1.0 {
+                    continue; // Tiny captures still require exact pixels, without a resolved interior.
+                }
+
+                let left = (0.5 + (2.1 - scale * 0.5) / 8.0) * WIDTH as f32;
+                let top = (0.5 - (0.2 + scale * 0.5) / 4.0) * HEIGHT as f32;
+                let edge = rgba(&reused_pixels, left.ceil() as u32, top.ceil() as u32);
+                assert!(
+                    edge[1] > edge[0].saturating_mul(2) && edge[1] > 150,
+                    "filtered edge should clamp to the colored source background: scale={scale}, path={with_path}, {edge:?}"
+                );
+                let center = rgba(
+                    &reused_pixels,
+                    ((0.5 + 2.1 / 8.0) * WIDTH as f32) as u32,
+                    ((0.5 - 0.2 / 4.0) * HEIGHT as f32) as u32,
+                );
+                assert!(
+                    center[0] > 200 && center[1] > 200 && center[2] > 200,
+                    "captured source circle should remain visible in the inset: {center:?}"
+                );
+            }
+        }
+    });
 }
 
 #[test]
