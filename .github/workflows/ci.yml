@@ -18,6 +18,7 @@ on:
       - ".github/workflows/ci.yml"
       - ".github/workflows/compiler-cache-seed.yml"
       - ".github/workflows/pr-fast.yml"
+      - "scripts/ci-qualification-scope.mjs"
       - "scripts/python-editor-*.mjs"
       - "scripts/composition-authoring-smoke.mjs"
       - "scripts/shared-authoring-smoke.mjs"
@@ -76,8 +77,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  qualification:
+    name: Classify full CI qualification
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Read complete push changes
+        id: scope
+        env:
+          BEFORE_REVISION: ${{ github.event.before }}
+        run: node scripts/ci-qualification-scope.mjs
+
   rust:
     name: Rust
+    needs: qualification
+    if: ${{ !cancelled() && (needs.qualification.result != 'success' || needs.qualification.outputs.full != 'false') }}
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
@@ -121,6 +138,8 @@ jobs:
         run: cargo test --workspace --all-features
 
   glow-raster:
+    needs: qualification
+    if: ${{ !cancelled() && (needs.qualification.result != 'success' || needs.qualification.outputs.full != 'false') }}
     name: Native glow raster correctness
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -177,6 +196,8 @@ jobs:
           retention-days: 7
 
   web-build:
+    needs: qualification
+    if: ${{ !cancelled() && (needs.qualification.result != 'success' || needs.qualification.outputs.full != 'false') }}
     name: Web package
     runs-on: ubuntu-latest
     env:

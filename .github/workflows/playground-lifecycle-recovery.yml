@@ -12,6 +12,7 @@ on:
       - "scripts/playground-lifecycle-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
       - "web/**"
+      - "!web/**/*.test.mjs"
   workflow_dispatch:
 
 permissions:

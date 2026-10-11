@@ -11,6 +11,7 @@ on:
       - "scripts/build-web-demo.sh"
       - "scripts/playground-zero-size-smoke.mjs"
       - "web/**"
+      - "!web/**/*.test.mjs"
   pull_request:
     paths:
       - ".github/workflows/playground-resize-recovery.yml"
@@ -19,6 +20,7 @@ on:
       - "scripts/build-web-demo.sh"
       - "scripts/playground-zero-size-smoke.mjs"
       - "web/**"
+      - "!web/**/*.test.mjs"
   workflow_dispatch:
 
 permissions:

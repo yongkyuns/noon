@@ -28,6 +28,7 @@ on:
       - "scripts/worker-inspection-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
+      - "!web/**/*.test.mjs"
   pull_request:
     paths:
       - "crates/noon/**"
@@ -57,6 +58,7 @@ on:
       - ".github/workflows/playground-playback-controls.yml"
       - "scripts/playground-playback-*.mjs"
       - "scripts/playground-wait-clock-regression.mjs"
+      - "!web/**/*.test.mjs"
   workflow_dispatch:
 
 permissions:
