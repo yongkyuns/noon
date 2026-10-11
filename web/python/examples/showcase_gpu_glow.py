@@ -17,7 +17,7 @@ class GpuGlowShowcase(Scene):
             fill_opacity=1.0, stroke=None,
         )
         heading = Text("GPU GLOW", font_size=39, color=WHITE).shift(3.0 * UP)
-        subtitle = Text("One shape. Three ways to change the light.", font_size=20, color=muted).shift(2.44 * UP)
+        subtitle = Text("Shapes, paths and math. One shared glow.", font_size=20, color=muted).shift(2.44 * UP)
         positions = (-3.5, 0.0, 3.5)
         names = ("INTENSITY", "RADIUS", "COLOR")
         label_colors = (BLUE, GREEN, PINK)
@@ -47,7 +47,7 @@ class GpuGlowShowcase(Scene):
         self.wait(0.5)
 
         # Only the named glow parameter changes; the underlying geometry and
-        # painter order stay put. The hold is the gallery's genuine poster frame.
+        # painter order stay put. The hold exposes each parameter's result.
         self.play(
             orbs[0].animate.set_glow(intensity=2.3),
             orbs[1].animate.set_glow(radius=Pixels(16)),
