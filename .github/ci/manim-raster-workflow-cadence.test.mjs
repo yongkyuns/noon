@@ -25,7 +25,8 @@ test("relevant PRs still validate Manim policy, manifests and negative controls"
   assert.match(preflight, /if: \$\{\{ github\.event_name == 'pull_request' \}\}/);
   assert.match(preflight, /node scripts\/manim-raster-policy\.test\.mjs/);
   assert.match(preflight, /node --test scripts\/manim-raster-samples\.test\.mjs/);
-  assert.match(preflight, /python3 scripts\/test_manim_raster_manifest\.py/);
+  assert.match(preflight, /python3 -m json\.tool parity\/manim-v0\.21\/manifest\.json/);
+  assert.match(preflight, /python3 -m py_compile scripts\/test_manim_raster_manifest\.py/);
   assert.match(preflight, /scripts\/special-camera-qualification\.test\.mjs/);
   assert.doesNotMatch(preflight, /build-web-demo|apt-get|pip install|playwright install/);
 });
