@@ -1,0 +1,80 @@
+name: GPU Glow physical-runner prerequisite (temporary)
+on:
+  push:
+    branches: [codex/m1-glow-physical-readiness-watch-dc1]
+    paths: [.github/workflows/m1-glow-physical-readiness-watch.yml]
+permissions:
+  contents: read
+concurrency:
+  group: m1-glow-physical-runner-prerequisite-dc1
+  cancel-in-progress: true
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch physical Mac prerequisite with bounded wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p physical-prerequisite-evidence
+          api=https://api.github.com/repos/yongkyuns/noon
+          start=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          curl --fail --silent --show-error --request POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data '{"ref":"master"}' \
+            "$api/actions/workflows/perf-physical-readiness.yml/dispatches"
+          selected=""
+          for attempt in $(seq 1 25); do
+            found=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "$api/actions/workflows/perf-physical-readiness.yml/runs?event=workflow_dispatch&per_page=30" |
+              jq -r --arg start "$start" '[.workflow_runs[] | select(.head_branch == "master" and .created_at >= $start)] | .[].id')
+            count=$(printf '%s\n' "$found" | grep -Ec '^[0-9]+$' || true)
+            if [ "$count" = 1 ]; then selected="$found"; break; fi
+            if [ "$count" -gt 1 ]; then echo "::error::Ambiguous dispatch selection"; exit 1; fi
+            sleep 4
+          done
+          test -n "$selected"
+          echo "Readiness: https://github.com/yongkyuns/noon/actions/runs/$selected" >> "$GITHUB_STEP_SUMMARY"
+          outcome=not-started
+          for attempt in $(seq 1 24); do
+            jobs=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" "$api/actions/runs/$selected/jobs?per_page=100")
+            run=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" "$api/actions/runs/$selected")
+            status=$(jq -r .status <<< "$run")
+            conclusion=$(jq -r '.conclusion // "pending"' <<< "$run")
+            physical=$(jq -r '[.jobs[] | select(.name == "Physical Mac GPU prerequisite, not product performance") | .status] | first // "not-yet-created"' <<< "$jobs")
+            echo "poll $attempt/24: $status/$conclusion physical=$physical"
+            if [ "$status" = completed ]; then outcome="completed-$conclusion"; break; fi
+            if [ "$physical" = in_progress ]; then outcome=physical-runner-started; break; fi
+            sleep 8
+          done
+          if [ "$outcome" = not-started ]; then
+            echo "::warning::No physical runner started within 192 seconds"
+            curl --silent --show-error --request POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "$api/actions/runs/$selected/cancel" || true
+          fi
+          printf '%s' "$run" | jq --arg outcome "$outcome" --argjson id "$selected" \
+            '{schema:1,scope:"physical runner prerequisite only, not performance qualification",runId:$id,
+              outcome:$outcome,status,conclusion,head_sha,head_branch,created_at,updated_at}' \
+            > physical-prerequisite-evidence/report.json
+          printf '%s' "$jobs" | jq '{jobs:[.jobs[] | {id,name,status,conclusion,runner_name,started_at,completed_at}]}' \
+            > physical-prerequisite-evidence/jobs.json
+          echo "Physical GPU prerequisite status: $outcome" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain prerequisite evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gpu-glow-physical-runner-prerequisite
+          path: physical-prerequisite-evidence/
+          if-no-files-found: warn
+          retention-days: 7
