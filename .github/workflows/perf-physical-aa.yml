@@ -49,10 +49,10 @@ jobs:
           node --test scripts/perf-physical-aa-protocol.test.mjs
 
   physical:
-    name: Dedicated physical Apple Silicon A/A; NOT code qualification
+    name: Dedicated physical macOS A/A; NOT code qualification
     needs: protocol
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && github.event.inputs.consent == 'RUN_PHYSICAL_AA_ONCE' && github.run_attempt == 1 }}
-    runs-on: [self-hosted, macOS, ARM64, noon-physical]
+    runs-on: [self-hosted, macOS, noon-physical]
     timeout-minutes: 240
     env:
       NOON_PRODUCT_BASE_SHA: 0473399d1cba9fc1f217c8b88b93c73c69991597
@@ -77,7 +77,7 @@ jobs:
           test "$GITHUB_RUN_ATTEMPT" = 1
           test "$GITHUB_REF" = refs/heads/master
           test "$RUNNER_OS" = macOS
-          test "$RUNNER_ARCH" = ARM64
+          case "$RUNNER_ARCH" in ARM64|X64) ;; *) exit 1 ;; esac
       - name: Checkout source-pinned original measurement harness
         uses: actions/checkout@v7
         with:
@@ -127,8 +127,8 @@ jobs:
           assert.equal(r.decision.status,"eligible-for-separate-aa-diagnostic");
           assert.equal(r.decision.qualification,false);
           const gpu=r.observed.webgl?.unmaskedRenderer??"";
-          assert.match(gpu,/Apple.*Metal Renderer/i);
-          assert.doesNotMatch(gpu,/paravirtual|virtual device|swiftshader|llvmpipe|software|[\r\n]/i);
+          assert.ok(gpu.trim().length > 0,"physical renderer identity missing");
+          assert.doesNotMatch(gpu,/paravirtual|virtual device|swiftshader|llvmpipe|softpipe|software|microsoft basic render|[\r\n]/i);
           appendFileSync(process.env.GITHUB_ENV,"NOON_PHYSICAL_AA_EXPECTED_RENDERER="+gpu+"\n");
           '
       - name: Download and authenticate original immutable production releases

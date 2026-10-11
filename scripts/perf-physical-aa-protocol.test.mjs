@@ -81,15 +81,23 @@ test("original square/circle source modification is frozen and not inferred from
   assert.throws(()=>authoredSourceFingerprint("parity-square-and-circle",window,"self.wait(1)"));
 });
 
-test("physical proof demands actual matching Apple Metal hardware and correct GLSL/readback",()=>{
+test("physical proof demands a stable nonvirtual GPU and correct GLSL/readback",()=>{
   const old=process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER;
   process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER=gpu;
   try {
     const run={pair:1,workload:plan.workloads[0]},ok=readyProof();
     assert.deepEqual(validatePhysicalProof(plan,run,ok),ok);
+    // Physical runner labels admit either actual Intel x64 or Apple Silicon.
+    const intel=clone(ok);
+    intel.arch="x64";
+    intel.unmaskedRenderer="ANGLE (Intel, Intel Iris Plus Graphics 655, OpenGL 4.1)";
+    intel.unmaskedVendor="Intel Inc.";
+    process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER=intel.unmaskedRenderer;
+    assert.deepEqual(validatePhysicalProof(plan,run,intel),intel);
+    process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER=gpu;
     for(const change of [
       x=>x.unmaskedRenderer="ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device)",
-      x=>x.unmaskedRenderer="SwiftShader",x=>x.unmaskedVendor="software",
+      x=>x.unmaskedRenderer="SwiftShader",x=>x.unmaskedVendor="",
       x=>x.trianglePixel=[0,0,0,0],x=>x.clearPixel=[0,0,0,0],
       x=>x.glError=1280,x=>x.contextLost=true,x=>x.shaderLinked=false,
       x=>x.exampleId=plan.workloads[1],x=>x.pairIndex=2,
@@ -149,7 +157,7 @@ test("manual physical workflow cannot schedule an A/A from a pull request or hos
   assert.match(s,/github.ref == 'refs\/heads\/master'/);
   assert.match(s,/github.run_attempt == 1/);
   assert.match(s,/RUN_PHYSICAL_AA_ONCE/);
-  assert.match(s,/runs-on: \[self-hosted, macOS, ARM64, noon-physical\]/);
+  assert.match(s,/runs-on: \[self-hosted, macOS, noon-physical\]/);
   assert.match(s,/if: always\(\)/);
   assert.match(s,/node control\/scripts\/perf-aa-precision-audit.mjs/);
   assert.match(s,/node control\/scripts\/perf-physical-aa-product.mjs/);

@@ -11,7 +11,7 @@ export const PHYSICAL_HARNESS = Object.freeze({
   checkout: "439c4c4d33096665afa68bb070baaba52bd20f43",
   tree: "3cc0f65789861939992bf5e42b0095a4f71b74a1",
   originalPairBlob: "8322d5e626070b027d56d1bfb7580fc57eda4714",
-  physicalPairBlob: "3af9df9684b5bf6b5b7b659f0606b0b3b9df594e",
+  physicalPairBlob: "6b580ee791418598581388a8cc3fd383a14101a3",
   path: "scripts/playground-product-pair.mjs",
 });
 
@@ -26,10 +26,14 @@ export function physicalPairSource(original) {
     "only exact archived Apple diagnostic product pair harness is eligible");
   const from = `      assert.match(proof.unmaskedRenderer, /Apple.*Metal Renderer.*Apple Paravirtual/i,
         "actual Apple Paravirtual Metal renderer not observed");`;
-  const to = `      assert.match(proof.unmaskedRenderer, /Apple.*Metal Renderer/i,
-        "actual physical Apple Metal renderer not observed");
+  const to = `      assert.ok(typeof proof.unmaskedRenderer === "string" &&
+        proof.unmaskedRenderer.trim().length > 0,
+        "actual physical GPU identity was not published");
+      assert.ok(typeof proof.unmaskedVendor === "string" &&
+        proof.unmaskedVendor.trim().length > 0,
+        "actual physical GPU vendor was not published");
       assert.doesNotMatch(proof.unmaskedRenderer,
-        /paravirtual|virtual device|swiftshader|llvmpipe|software/i,
+        /paravirtual|virtual device|swiftshader|llvmpipe|softpipe|software|microsoft basic render/i,
         "virtualized or software GPU is not eligible for physical A/A");
       assert.ok(process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER,
         "physical readiness must pin the actual unmasked renderer before collection");
@@ -39,7 +43,7 @@ export function physicalPairSource(original) {
   const oldArch = '      assert.equal(proof.arch, "arm64", "not standard hosted Apple Silicon arm64");';
   assert.equal(original.split(oldArch).length, 2, "expected one Apple Silicon guard");
   const transformed = original.replace(from, to).replace(oldArch,
-    '      assert.equal(proof.arch, "arm64", "not physical Apple Silicon arm64");');
+    '      assert.ok(["arm64","x64"].includes(proof.arch), "physical macOS x64 or arm64 required");');
   assert.equal(gitBlobSha(transformed), PHYSICAL_HARNESS.physicalPairBlob,
     "unregistered harness overlay changed: no benchmark/renderer substitutions allowed");
   return transformed;

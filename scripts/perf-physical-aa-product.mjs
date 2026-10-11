@@ -179,15 +179,15 @@ export function validatePhysicalProof(plan, run, proof) {
   assert.equal(proof?.pairIndex,run.pair,"wrong GPU proof pair");
   assert.equal(proof?.exampleId,run.workload,"wrong GPU proof workload");
   assert.equal(proof?.backend,"WebGL2","physical WebGL2 missing");
-  assert.match(proof?.unmaskedVendor??"",/Apple/i);
-  assert.match(proof?.unmaskedRenderer??"",/Apple.*Metal Renderer/i);
+  assert.ok(typeof proof?.unmaskedVendor === "string" && proof.unmaskedVendor.trim().length > 0,"missing physical renderer vendor");
+  assert.ok(typeof proof?.unmaskedRenderer === "string" && proof.unmaskedRenderer.trim().length > 0,"missing physical renderer identity");
   assert.doesNotMatch(proof.unmaskedRenderer,
-    /paravirtual|virtual device|swiftshader|llvmpipe|software/i,
+    /paravirtual|virtual device|swiftshader|llvmpipe|softpipe|software|microsoft basic render/i,
     "virtual GPU invalid for physical A/A");
   assert.equal(proof.unmaskedRenderer,process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER,
     "GPU changed from readiness admission");
   assert.equal(proof.platform,"darwin");
-  assert.equal(proof.arch,"arm64");
+  assert.ok(["arm64","x64"].includes(proof.arch),"physical macOS x64 or arm64 required");
   assert.equal(proof.browserVersion,plan.environment.browserVersion);
   for(const [key,rgba] of [["clearPixel",[51,102,153,255]],
     ["trianglePixel",[153,51,102,255]]])
@@ -277,14 +277,14 @@ export async function runStudy(planFile, harness, baseline, candidate, output) {
   assert.equal(process.env.GITHUB_REF,"refs/heads/master","registered default master only");
   assert.ok(process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER,
     "GPU identity must be attested by readiness before any scored pair");
-  assert.match(process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER,/Apple.*Metal Renderer/i);
+  assert.ok(process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER.trim().length > 0,"missing readiness renderer identity");
   assert.doesNotMatch(process.env.NOON_PHYSICAL_AA_EXPECTED_RENDERER,
-    /paravirtual|virtual device|software|swiftshader|llvmpipe/i);
+    /paravirtual|virtual device|software|swiftshader|llvmpipe|softpipe|microsoft basic render/i);
   assert.equal(process.version, `v${plan.environment.node}`, "Node revision changed");
   assert.equal(process.platform,"darwin","physical macOS required");
-  assert.equal(process.arch,"arm64","physical Apple Silicon required");
+  assert.ok(["arm64","x64"].includes(process.arch),"physical macOS x64 or arm64 required");
   assert.equal(process.env.RUNNER_OS, "macOS", "GitHub macOS runner identity changed");
-  assert.equal(process.env.RUNNER_ARCH,"ARM64","physical Apple Silicon runner required");
+  assert.ok(["ARM64","X64"].includes(process.env.RUNNER_ARCH),"physical macOS runner architecture required");
   assert.ok(process.env.RUNNER_NAME,"named physical runner required");
   assert.equal(git(harness, "rev-parse", "HEAD"), plan.harnessSha);
   assert.equal(git(harness, "rev-parse", "HEAD^{tree}"), plan.harnessTree);

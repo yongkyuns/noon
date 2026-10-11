@@ -6,7 +6,7 @@
   "qualification": false,
   "performanceAcceptance": false,
   "mergeApproval": false,
-  "intent": "Manual one-shot physical Apple Silicon WebGL2 same-source A/A precision control, not an approval or candidate-versus-baseline run.",
+  "intent": "Manual one-shot physical macOS hardware WebGL2 same-source A/A precision control (Intel x64 or Apple Silicon arm64), not a release approval or candidate-versus-baseline run.",
   "sourcePair": {
     "schema": 1,
     "baseline": "0473399d1cba9fc1f217c8b88b93c73c69991597",
@@ -35,7 +35,7 @@
   "harnessTree": "3cc0f65789861939992bf5e42b0095a4f71b74a1",
   "harnessOverlay": {
     "originalPairBlob": "8322d5e626070b027d56d1bfb7580fc57eda4714",
-    "physicalPairBlob": "3af9df9684b5bf6b5b7b659f0606b0b3b9df594e"
+    "physicalPairBlob": "6b580ee791418598581388a8cc3fd383a14101a3"
   },
   "authoredSourceHashes": {
     "parity-square-and-circle": "554ac4dbf786c030896747bf3f21021ad850cffa1090098bae000bee8f7547bc",
