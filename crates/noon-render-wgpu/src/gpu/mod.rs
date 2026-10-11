@@ -514,6 +514,9 @@ pub struct GpuRenderer {
     inset_camera_by_display: std::collections::HashMap<noon_core::ObjectId, usize>,
     camera: Camera2D,
     viewport_size: [u32; 2],
+    // Logical presentation dimensions may differ from integer backing pixels.
+    // This is view metadata, not an effect or semantic scene authority.
+    logical_viewport_size: Vec2,
     target_format: wgpu::TextureFormat,
     presentation: PresentationBridge,
     path_msaa_texture: wgpu::Texture,
@@ -798,6 +801,7 @@ impl GpuRenderer {
             inset_camera_by_display: std::collections::HashMap::new(),
             camera,
             viewport_size,
+            logical_viewport_size: Vec2::new(viewport_size[0] as f32, viewport_size[1] as f32),
             target_format,
             presentation,
             path_msaa_texture,
@@ -899,6 +903,7 @@ impl GpuRenderer {
         height: u32,
     ) {
         let viewport_size = [width.max(1), height.max(1)];
+        self.logical_viewport_size = Vec2::new(viewport_size[0] as f32, viewport_size[1] as f32);
         if self.viewport_size != viewport_size {
             self.viewport_size = viewport_size;
             (self.path_msaa_texture, self.path_msaa_view) =
@@ -906,6 +911,25 @@ impl GpuRenderer {
             self.presentation.resize(device, self.viewport_size);
         }
         self.write_camera_uniform(queue);
+    }
+
+    /// Set physical backing pixels together with the logical view used by the
+    /// camera and pointer projection. Browser CSS bounds need not have exactly
+    /// the backing aspect after borders, fractional layout and DPR rounding.
+    /// Validation precedes any GPU or renderer mutation. Ordinary set_viewport
+    /// restores the default mapping of one logical unit per backing pixel.
+    pub fn set_viewport_with_logical_size(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        logical_size: Vec2,
+    ) -> Result<(), CameraError> {
+        Camera2D::new(Vec2::ZERO, logical_size)?;
+        self.set_viewport(device, queue, width, height);
+        self.logical_viewport_size = logical_size;
+        Ok(())
     }
 
     fn write_camera_uniform(&self, queue: &wgpu::Queue) {

@@ -504,3 +504,24 @@ fn publication_bridge_rejects_mismatched_packed_rows_before_resource_mutation() 
         );
     }
 }
+
+#[cfg(feature = "ci-noop")]
+#[test]
+fn logical_viewport_validation_is_atomic_and_physical_viewport_restores_default() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer
+        .set_viewport_with_logical_size(&device, &queue, 702, 394, Vec2::new(704.0, 396.0))
+        .unwrap();
+    assert_eq!(renderer.logical_viewport_size, Vec2::new(704.0, 396.0));
+    for invalid in [Vec2::ZERO, Vec2::new(f32::NAN, 10.0), Vec2::new(10.0, -1.0)] {
+        assert!(renderer
+            .set_viewport_with_logical_size(&device, &queue, 20, 20, invalid)
+            .is_err());
+        assert_eq!(renderer.viewport_size(), [702, 394]);
+        assert_eq!(renderer.logical_viewport_size, Vec2::new(704.0, 396.0));
+    }
+    renderer.set_viewport(&device, &queue, 702, 394);
+    assert_eq!(renderer.logical_viewport_size, Vec2::new(702.0, 394.0));
+    assert!(renderer.analytic_glows.is_none());
+}

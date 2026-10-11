@@ -1288,21 +1288,25 @@ mod wasm {
             {
                 return Ok(());
             }
-            let aspect = self.pointer_view.map_or(
-                self.config.width as f32 / self.config.height as f32,
-                |view| view.width / view.height,
+            let logical = self.pointer_view.map_or(
+                Vec2::new(self.config.width as f32, self.config.height as f32),
+                |view| Vec2::new(view.width, view.height),
             );
+            let aspect = logical.x / logical.y;
             let camera = Camera2D::new(
                 self.camera_center,
                 Vec2::new(self.camera_height * aspect, self.camera_height),
             )
             .map_err(js_error)?;
-            self.renderer.set_viewport(
-                &self.device,
-                &self.queue,
-                self.config.width,
-                self.config.height,
-            );
+            self.renderer
+                .set_viewport_with_logical_size(
+                    &self.device,
+                    &self.queue,
+                    self.config.width,
+                    self.config.height,
+                    logical,
+                )
+                .map_err(js_error)?;
             self.renderer.set_camera(&self.queue, camera);
             Ok(())
         }

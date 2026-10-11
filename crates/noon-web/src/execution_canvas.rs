@@ -1915,12 +1915,15 @@ mod wasm {
                 Vec2::new(self.camera_height * aspect, self.camera_height),
             )
             .map_err(js_error)?;
-            self.renderer.set_viewport(
-                &self.device,
-                &self.queue,
-                self.config.width,
-                self.config.height,
-            );
+            self.renderer
+                .set_viewport_with_logical_size(
+                    &self.device,
+                    &self.queue,
+                    self.config.width,
+                    self.config.height,
+                    logical,
+                )
+                .map_err(js_error)?;
             self.renderer.set_camera(&self.queue, camera);
             // Surface/camera invalidation is platform state, not a semantic revision.
             self.surface_frame_pending = true;
