@@ -522,13 +522,15 @@ test("product package role rejects build flags that would change its artifact id
 test("product gate resolves the installer and verifies the downloaded package layouts", async () => {
   const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
   assert.match(workflow, /uses: \.\/candidate\/\.github\/actions\/install-wasm-opt/);
+  const adjacentJob = workflow.slice(workflow.indexOf("  measure-adjacent:"), workflow.indexOf("  measure-cumulative:"));
   const compareJob = workflow.slice(workflow.indexOf("  compare:"));
-  assert.match(compareJob, /NOON_WASM_PROFILE: "release"/);
-  assert.match(compareJob, /NOON_WASM_SKIP_OPT: "0"/);
-  assert.match(compareJob, /NOON_RENDERER_SMOKE: "0"/);
-  assert.match(compareJob, /NOON_RENDERER_SMOKE: "1"[\s\S]*?renderer-init-failure-smoke\.mjs/);
-  assert.match(compareJob, /cp -a \.\.\/candidate-fixture\/\. web\//);
-  const restoration = compareJob.slice(compareJob.indexOf("      - name: Restore candidate production package for benchmark"));
+  assert.match(adjacentJob, /NOON_WASM_PROFILE: "release"/);
+  assert.match(adjacentJob, /NOON_WASM_SKIP_OPT: "0"/);
+  assert.match(adjacentJob, /NOON_RENDERER_SMOKE: "0"/);
+  assert.match(adjacentJob, /NOON_RENDERER_SMOKE: "1"[\s\S]*?renderer-init-failure-smoke\.mjs/);
+  assert.match(adjacentJob, /cp -a \.\.\/candidate-fixture\/\. web\//);
+  assert.ok(compareJob.includes("needs: [build, measure-adjacent, measure-cumulative]"));
+  const restoration = adjacentJob.slice(adjacentJob.indexOf("      - name: Restore candidate production package for benchmark"));
   assert.match(restoration, /artifact-ids: \$\{\{ needs\.build\.outputs\.candidate-artifact \}\}[\s\S]*?path: candidate\/web/);
 });
 
@@ -565,10 +567,10 @@ test("product gate resolves one matching dependency lock before its first packag
 
 test("product gate requires PNG comparison controls after dependency setup", async () => {
   const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
-  const compareJob = workflow.slice(workflow.indexOf("  compare:"));
-  const controls = compareJob.indexOf("      - name: Test product comparison with PNG controls");
-  assert.ok(controls > compareJob.indexOf("npm install --no-save --ignore-scripts"));
-  const controlStep = compareJob.slice(controls, compareJob.indexOf("      - name:", controls + 10));
+  const adjacentJob = workflow.slice(workflow.indexOf("  measure-adjacent:"), workflow.indexOf("  measure-cumulative:"));
+  const controls = adjacentJob.indexOf("      - name: Test product comparison with PNG controls");
+  assert.ok(controls > adjacentJob.indexOf("npm install --no-save --ignore-scripts"));
+  const controlStep = adjacentJob.slice(controls, adjacentJob.indexOf("      - name:", controls + 10));
   assert.match(controlStep, /NOON_PRODUCT_IMAGE_TESTS: "1"/);
   assert.match(controlStep, /node --test web\/playground-product-compare-validation\.test\.mjs/);
 });

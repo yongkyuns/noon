@@ -216,6 +216,24 @@ def _scene_state(
         # Use Manim's own current trackers and camera-owned points; keep the 2D
         # camera observation above unchanged for MovingCameraScene fixtures.
         state["camera_3d"] = _three_d_camera_state(scene.camera)
+    if isinstance(scene, ZoomedScene):
+        # MultiCamera's registrations identify the real capture relation; a
+        # display removed from the scene no longer contributes rendered pixels.
+        family = scene.get_mobject_family_members()
+        state["inset_2d_views"] = []
+        for display in scene.camera.image_mobjects_from_cameras:
+            if display not in family:
+                continue
+            camera = display.camera
+            center = np.asarray(camera.frame.get_center(), dtype=float)
+            display_center = np.asarray(display.get_center(), dtype=float)
+            state["inset_2d_views"].append({
+                "camera": {"center": {"x": float(center[0]), "y": float(center[1])},
+                           "height": float(camera.frame.height)},
+                "display_center": {"x": float(display_center[0]), "y": float(display_center[1])},
+                "display_size": {"x": float(display.width), "y": float(display.height)},
+                "capture_own_display": bool(scene.camera.allow_cameras_to_capture_their_own_display),
+            })
     oracle_state = getattr(scene, "noon_oracle_state", None)
     if callable(oracle_state):
         state["oracle"] = oracle_state()

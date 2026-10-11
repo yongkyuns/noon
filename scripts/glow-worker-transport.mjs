@@ -6,6 +6,28 @@ import {
   createSharedExecutionMailbox,
 } from "../web/execution-transport.js";
 
+// One injected rejection can arrive asynchronously on both worker channels.
+// Keep it separate from unexpected failures instead of clearing the first
+// delivery and misclassifying a later delivery of the same rejection.
+export function createGlowWorkerErrorCollector() {
+  const errors = [], rejections = [];
+  let expected = null;
+  return {
+    errors, rejections,
+    expectRejection(message) {
+      if (expected !== null || errors.length || typeof message !== "string" || !message) {
+        throw new Error("glow negative control requires one explicit rejection and no prior failures");
+      }
+      expected = message;
+    },
+    collect(message) {
+      // ErrorEvent adds "Uncaught "; port diagnostics carry the raw Rust error.
+      (expected !== null && (message === expected || message === `Uncaught ${expected}`)
+        ? rejections : errors).push(message);
+    },
+  };
+}
+
 // Fixture producer only: the production semantic endpoint owns its own bootstrap.
 // Keep the real mailbox/sender implementations and their backpressure semantics.
 export function createGlowWorkerTransport(port, mode, resourceBytes) {

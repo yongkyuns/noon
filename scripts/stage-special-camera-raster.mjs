@@ -25,7 +25,9 @@ export const CAMERA_SOURCE_HASHES = Object.freeze({
 // the ambient/finite-motion barriers. Matching settled images alone cannot
 // qualify the transition or its exact authored endpoint.
 export const PINNED_CAMERA_CASES = Object.freeze([
-  ["MovingZoomedSceneAround", 12, [0.5, 1.5, 3.5, 9.5, 12], false],
+  ["MovingZoomedSceneAround", 12,
+    [0, 0.5, 29 / 30, 1, 31 / 30, 1.5, 59 / 30, 2, 3.5, 4, 5.5, 6,
+      7.5, 8, 9.5, 10, 10.5, 329 / 30, 11, 331 / 30, 12], false],
   ["FixedInFrameMObjectTest", 1, [0, 0.5, 1], true],
   ["ThreeDLightSourcePosition", 0, [0], true],
   ["ThreeDCameraRotation", 3,
@@ -100,6 +102,7 @@ export async function stageSpecialCameraRasterManifest({ rst, repositoryRoot, ou
       expected_duration: duration,
       sample_times: sampleTimes,
       camera_profile_observation: cameraProfileObservation,
+      ...(scene === "MovingZoomedSceneAround" ? { inset_camera_observation: true } : {}),
       notes: "Exact pinned Manim source staged for observation. Unsupported Noon capabilities remain failures; no source compensation or parity claim.",
     });
   }

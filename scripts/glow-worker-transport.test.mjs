@@ -7,7 +7,30 @@ import {
   createSharedExecutionMailbox,
   decodeTransferableExecutionDelta,
 } from "../web/execution-transport.js";
-import { createGlowWorkerTransport } from "./glow-worker-transport.mjs";
+import { createGlowWorkerTransport, createGlowWorkerErrorCollector } from "./glow-worker-transport.mjs";
+
+test("negative-control rejection remains scoped across delayed duplicate channel reports", async () => {
+  const collector = createGlowWorkerErrorCollector();
+  const expected = "retained worker slot 1:0 contains invalid or unsupported glow";
+  collector.expectRejection(expected);
+  collector.collect(expected);
+  await new Promise(resolve => queueMicrotask(() => { collector.collect(`Uncaught ${expected}`); resolve(); }));
+  assert.deepEqual(collector.rejections, [expected, `Uncaught ${expected}`]);
+  assert.deepEqual(collector.errors, []);
+  for (const message of [expected.replace("1:0", "2:0"), "unexpected glow failure", "Uncaught unrelated failure"]) {
+    collector.collect(message);
+  }
+  assert.equal(collector.errors.length, 3, "other slots and failures must remain blocking");
+  assert.throws(() => collector.expectRejection(expected), /one explicit rejection/);
+});
+
+test("negative-control setup cannot erase earlier worker failures", () => {
+  const collector = createGlowWorkerErrorCollector();
+  collector.collect("earlier render failure");
+  assert.throws(() => collector.expectRejection("expected rejection"), /no prior failures/);
+  assert.deepEqual(collector.errors, ["earlier render failure"]);
+  assert.throws(() => createGlowWorkerErrorCollector().expectRejection(""), /explicit rejection/);
+});
 
 const resources = () => new Uint8Array([7, 11, 13]);
 const snapshot = JSON.stringify({
