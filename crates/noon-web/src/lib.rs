@@ -225,3 +225,12 @@ pub use semantic_execution_player::*;
 pub use text_colors::*;
 #[cfg(target_arch = "wasm32")]
 pub use text_parts::*;
+
+#[cfg(any(
+    test,
+    all(
+        target_arch = "wasm32",
+        any(debug_assertions, feature = "renderer-smoke")
+    )
+))]
+mod glow_worker_smoke;

@@ -32,6 +32,7 @@ fn index(store: &SemanticStore) -> SemanticExecutionIndex {
 
 fn effective(object: ObjectId) -> EffectiveAnimationProperties {
     EffectiveAnimationProperties {
+        glow: None,
         world_transform: None,
         camera_profile: None,
         z_index: 0.0,

@@ -1,8 +1,8 @@
 """Noon-native effect syntax over the shared Rust authoring handles.
 
 Definitions are immutable Rust values; attachments and targets live in Rust.
-This M0 surface supports leaf declarations, not effect playback. The shared
-execution/publication gates remain authoritative. No Python interpolation,
+The finite glow profile executes through the shared Rust scene and renderer.
+Shared execution/publication admission remains authoritative. No Python interpolation,
 attachment table, family traversal, or callback-local shadow state is provided.
 """
 from __future__ import annotations

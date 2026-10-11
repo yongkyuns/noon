@@ -436,6 +436,7 @@ impl ExecutionSession {
                 .then_some((entry.semantic_object, index))
             })
             .collect::<HashMap<_, _>>();
+        stage_glow_completions(entries, &mut semantic);
         for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
                 SemanticAnimationCompletion::Priority { value } => {
@@ -471,7 +472,8 @@ impl ExecutionSession {
                         semantic.set_camera_profile(entry.semantic_object, *profile, *near, *far);
                     }
                 }
-                SemanticAnimationCompletion::Fill { .. }
+                SemanticAnimationCompletion::Glow { .. }
+                | SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::Fade { .. }
                 | SemanticAnimationCompletion::RevealLifecycle { .. }
@@ -775,6 +777,30 @@ fn has_ancestor_in(
         }
     }
     false
+}
+
+fn stage_glow_completions(
+    entries: &[crate::execution_segment::SegmentCompletionEntry],
+    semantic: &mut SemanticMutationTransaction,
+) {
+    let final_entries = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            if let SemanticAnimationCompletion::Glow { attachment, value } = &entry.completion {
+                Some(((*attachment, value.property()), index))
+            } else {
+                None
+            }
+        })
+        .collect::<HashMap<_, _>>();
+    for (index, entry) in entries.iter().enumerate() {
+        if let SemanticAnimationCompletion::Glow { attachment, value } = &entry.completion {
+            if final_entries.get(&(*attachment, value.property())) == Some(&index) {
+                semantic.update_effect(*attachment, value.update());
+            }
+        }
+    }
 }
 
 fn should_reconcile_execution_track(
@@ -1844,5 +1870,101 @@ mod tests {
             store.semantic_family_members_checked(root).unwrap(),
             &[target_family]
         );
+    }
+}
+
+#[cfg(test)]
+mod glow_completion_tests {
+    use super::*;
+    use crate::execution_segment::SegmentCompletionEntry;
+    use crate::{Mobject, Scene};
+    use noon_core::{Color, Glow, GlowTrackValue, GlowUpdate, ObjectId, TrackId};
+
+    fn fixture() -> (Scene, Mobject, SemanticNodeId) {
+        let mut scene = Scene::new();
+        let source = scene.circle(0.4).unwrap();
+        scene
+            .set_glow(
+                &source,
+                GlowUpdate::default().intensity(0.4).color(Color::RED),
+            )
+            .unwrap();
+        let id = source.get_effect("glow").unwrap().node_id();
+        (scene, source, id)
+    }
+    fn entry(
+        source: &Mobject,
+        attachment: SemanticNodeId,
+        value: GlowTrackValue,
+        sequence: u64,
+    ) -> SegmentCompletionEntry {
+        SegmentCompletionEntry {
+            semantic_object: source.node_id(),
+            completion: SemanticAnimationCompletion::Glow { attachment, value },
+            execution_object: ObjectId::new(1),
+            property: value.property(),
+            track: TrackId::new(sequence),
+            end_time: sequence as f64,
+            retain_effective: false,
+        }
+    }
+    fn definition(store: &SemanticStore, attachment: SemanticNodeId) -> Glow {
+        let noon_core::EffectDefinition::Glow(glow) = store
+            .semantic_effect_state(attachment)
+            .unwrap()
+            .definition();
+        glow
+    }
+    #[test]
+    fn final_glow_completion_owns_only_its_parameter_and_coalesces_sequential_endpoints() {
+        let (mut scene, source, attachment) = fixture();
+        // Later persistent color edit must survive intensity completion.
+        scene
+            .set_glow(&source, GlowUpdate::default().color(Color::BLUE))
+            .unwrap();
+        let entries = [
+            entry(&source, attachment, GlowTrackValue::Intensity(1.4), 1),
+            entry(&source, attachment, GlowTrackValue::Intensity(0.7), 2),
+        ];
+        let mut tx = SemanticMutationTransaction::new();
+        stage_glow_completions(&entries, &mut tx);
+        assert_eq!(tx.mutations().len(), 1);
+        let mut store = scene.integration_store().borrow_mut();
+        let revision = store.scene_revision();
+        let prepared = tx.prepare(&mut store).unwrap();
+        assert_eq!(definition(prepared.store(), attachment).intensity(), 0.4);
+        assert_eq!(prepared.store().scene_revision(), revision);
+        prepared.commit();
+        assert_eq!(definition(&store, attachment).intensity(), 0.7);
+        assert_eq!(definition(&store, attachment).color(), Color::BLUE);
+        for entry in &entries {
+            assert!(should_reconcile_execution_track(
+                entry.property,
+                &entry.completion,
+                false
+            ));
+        }
+    }
+    #[test]
+    fn stale_completion_does_not_mutate_new_generation_or_other_pending_channels() {
+        let (mut scene, source, old) = fixture();
+        scene.remove_glow(&source).unwrap();
+        scene
+            .set_glow(&source, GlowUpdate::default().intensity(0.6))
+            .unwrap();
+        let new = source.get_effect("glow").unwrap().node_id();
+        assert_ne!(old, new);
+        let entries = [
+            entry(&source, new, GlowTrackValue::Color(Color::BLUE), 1),
+            entry(&source, old, GlowTrackValue::Intensity(7.0), 2),
+        ];
+        let mut tx = SemanticMutationTransaction::new();
+        stage_glow_completions(&entries, &mut tx);
+        let mut store = scene.integration_store().borrow_mut();
+        let revision = store.scene_revision();
+        let before = definition(&store, new);
+        assert!(tx.prepare(&mut store).is_err());
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(definition(&store, new), before);
     }
 }
