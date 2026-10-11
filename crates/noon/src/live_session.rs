@@ -5485,6 +5485,49 @@ mod recursive_composition_tests {
 
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
+    fn concurrent_write_unwrite_keeps_the_glyph_conflict_and_publication_atomic() {
+        for reverse in [false, true] {
+            let mut scene = Scene::new();
+            let source = scene.text(crate::Text::new("AB")).unwrap();
+            scene.add(&source).unwrap();
+            let mut session = scene.execution_session().unwrap();
+            session.take_frame_changes();
+            let before = session.publication_context();
+            let nodes = source.integration_store().borrow().len();
+            let mut children = [false, true]
+                .map(
+                    |reverse_member_order| AnimationCompositionRequest::TextWrite {
+                        target: &source,
+                        reverse_member_order,
+                        options: linear(1.0),
+                    },
+                )
+                .to_vec();
+            if reverse {
+                children.reverse();
+            }
+            let request = AnimationCompositionRequest::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                options: AnimationOptions::new(),
+                children,
+            };
+            let error = scene
+                .live(&mut session)
+                .declare_and_activate_composition(&request, AnimationOptions::new())
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("ConflictingObjectDrivers"),
+                "{error}"
+            );
+            assert_eq!(session.publication_context(), before);
+            assert_eq!(source.integration_store().borrow().len(), nodes);
+            assert_eq!(session.frame().objects.len(), 1);
+            assert!(session.take_frame_changes().is_empty());
+        }
+    }
+
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+    #[test]
     fn reveal_with_competing_introductions_or_combined_pose_edit_is_atomic() {
         use crate::effects::GlowUpdate;
         for duplicate in [false, true] {

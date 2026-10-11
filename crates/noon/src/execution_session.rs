@@ -3088,7 +3088,9 @@ impl ExecutionSession {
                         && occurrences.get(&target) == Some(&2);
                     if valid {
                         compatible.insert(target);
-                    } else if occurrences.get(&target).copied().unwrap_or_default() > 1 {
+                    } else if creates.contains(&target)
+                        && occurrences.get(&target).copied().unwrap_or_default() > 1
+                    {
                         return Err(ExecutionSessionAnimationError::CreateTarget {
                             target,
                             error: ExecutionSessionCreateError::DuplicateTarget,
