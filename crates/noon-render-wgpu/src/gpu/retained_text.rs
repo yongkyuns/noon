@@ -4042,7 +4042,7 @@ impl GpuRenderer {
                 }
                 RetainedRenderItem::Geometry { batch, .. } => {
                     pass.set_bind_group(0, camera, &[]);
-                    let groups = super::path_batching::DisjointPathBatches::collect(
+                    let groups = super::path_batching::RetainedGeometryBatches::collect(
                         batch,
                         &mut items,
                         &prepared.geometry,

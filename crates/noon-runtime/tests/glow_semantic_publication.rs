@@ -327,7 +327,10 @@ fn source_profile_is_validated_against_final_staged_style_and_content() {
                 }
             }
             let prepared = tx.prepare(&mut f.store).unwrap();
-            assert!(prepare_semantic_publication(&prepared, &f.index, &f.reachability).is_err());
+            let publication = prepare_semantic_publication(&prepared, &f.index, &f.reachability);
+            // Outlines and lines are ordinary planar capture sources. Singular
+            // transforms must still reject the complete staged publication.
+            assert_eq!(publication.is_err(), edit == 3);
             drop(prepared);
             assert_eq!(f.store.scene_revision(), revision);
             assert_eq!(f.runtime.frame(), &before);
@@ -340,13 +343,15 @@ fn removing_glow_can_legally_leave_the_source_outside_the_glow_profile() {
     let mut f = Fixture::new(0);
     let old = f.attach(0.4);
     let mut tx = SemanticMutationTransaction::new();
-    let mut style = circle().style;
-    style.fill = None;
-    tx.replace_style(f.source, style);
+    tx.set_property(
+        f.source,
+        SemanticObjectProperty::Scale,
+        SemanticVec3::new(0.0, 1.0, 1.0),
+    );
     tx.remove_node(old);
     f.publish(tx);
     assert!(f.runtime.frame().objects[0].glow.is_none());
-    assert!(f.runtime.frame().objects[0].style.fill.is_none());
+    assert_eq!(f.runtime.frame().objects[0].transform.scale.x, 0.0);
 }
 
 #[test]
