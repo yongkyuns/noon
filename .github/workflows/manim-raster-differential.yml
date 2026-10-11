@@ -85,23 +85,45 @@ on:
       - "scripts/browser-test-server.mjs"
       - "scripts/shared-playback-raster*.mjs"
       - ".github/workflows/manim-raster-differential.yml"
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - "crates/**/tests/**"
+  # Keep PR correctness contracts, but move source-equivalent rendering and
+  # full pinned ManimCE comparisons to one off-peak master run per day.
+  # workflow_dispatch is the explicit pre-merge/release escape hatch.
+  schedule:
+    - cron: "17 6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: manim-raster-differential-${{ github.ref }}
-  cancel-in-progress: true
+  group: manim-raster-differential-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Fast PR validation retains Manim policy, camera/capture contracts, and
+  # manifest regressions without compiling WASM or installing Manim/LaTeX.
+  preflight:
+    name: Manim raster policy and manifest checks
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Validate raster ratchets, manifests, and shared replay contracts
+        run: |
+          node scripts/manim-raster-policy.test.mjs
+          node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-semantic-state.test.mjs scripts/manim-raster-server.test.mjs scripts/manim-raster-support.test.mjs scripts/shared-playback-raster-config.test.mjs
+          python3 scripts/test_manim_raster_manifest.py
+      - name: Validate preview capture and camera negative controls
+        run: |
+          node --test web/semantic-preview-session.test.mjs web/semantic-preview-context.test.mjs scripts/agent-preview-capture.test.mjs scripts/semantic-preview-observations.test.mjs scripts/special-camera-qualification.test.mjs
+
+  # The unchanged full source-pinned suite remains a strict blocking verdict
+  # on its scheduled/manual run. It never occupies a PR or post-merge runner.
   raster:
     name: ManimCE 0.21.0 raster oracle
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
