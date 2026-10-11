@@ -45,6 +45,7 @@ jobs:
           node --check scripts/perf-physical-aa-overlay.mjs
           node --check scripts/perf-physical-aa-host-derive.mjs
           python3 -m py_compile scripts/perf-physical-aa-archive.py
+          python3 scripts/perf-physical-aa-archive.test.py
           node --test scripts/perf-physical-aa-protocol.test.mjs
 
   physical:
