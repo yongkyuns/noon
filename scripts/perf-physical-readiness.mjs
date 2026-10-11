@@ -103,7 +103,7 @@ export function browserProbeSource() {
 
 function safeCommand(cmd, args = []) {
   try {
-    return execFileSync(cmd, args, { encoding: "utf8", timeout: 6000, maxBuffer: 64 * 1024,
+    return execFileSync(cmd, args, { encoding: "utf8", timeout: 6000, maxBuffer: 256 * 1024,
       stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
     return "";
