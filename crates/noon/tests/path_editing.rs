@@ -27,10 +27,16 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
         let corners = [Vec2::new(-2., -1.), Vec2::new(0., 1.), Vec2::new(2., -1.)];
         let mut session = scene.execution_session().unwrap();
         if live_mode {
-            scene
-                .live(&mut session)
-                .set_points_as_corners(&source, &corners)
-                .unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::Corners {
+                    object: &source,
+                    points: &corners,
+                },
+            )
+            .unwrap();
         } else {
             source.set_points_as_corners(&corners).unwrap();
         }
@@ -65,10 +71,16 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
                 .unwrap(),
                 (2., -1.)
             );
-            scene
-                .live(&mut session)
-                .set_points_as_corners(&source, &corners)
-                .unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::Corners {
+                    object: &source,
+                    points: &corners,
+                },
+            )
+            .unwrap();
         } else {
             source.set_points_as_corners(&corners).unwrap();
         }
@@ -144,10 +156,16 @@ fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() 
         .geometry_resources()
         .stats();
     let corners = [Vec2::ZERO, Vec2::new(1., 1.)];
-    assert!(scene
-        .live(&mut session)
-        .set_points_as_corners(&object, &corners)
-        .is_err());
+    assert!(noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Corners {
+            object: &object,
+            points: &corners,
+        },
+    )
+    .is_err());
     assert_eq!(object.state().unwrap(), before);
     assert_eq!(
         object.integration_store().borrow().scene_revision(),
@@ -166,10 +184,16 @@ fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() 
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
     scene.live(&mut session).complete_segment(segment).unwrap();
-    scene
-        .live(&mut session)
-        .set_points_as_corners(&object, &corners)
-        .unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Corners {
+            object: &object,
+            points: &corners,
+        },
+    )
+    .unwrap();
     assert_eq!(
         noon::integration::effective_path_query(scene.integration_store(), &session, &object)
             .unwrap()

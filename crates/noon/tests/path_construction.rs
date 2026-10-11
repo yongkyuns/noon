@@ -42,10 +42,16 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     scene.add(&object).unwrap();
     let before = object.path_query().unwrap();
     let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
-        .add_line_to(&object, Vec2::new(4., 3.))
-        .unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Line {
+            object: &object,
+            point: Vec2::new(4., 3.),
+        },
+    )
+    .unwrap();
     noon::integration::publish_borrowed_path_edit(
         scene.integration_store(),
         scene.root(),
@@ -69,7 +75,13 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
         },
     )
     .unwrap();
-    scene.live(&mut session).close_path(&object).unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Close { object: &object },
+    )
+    .unwrap();
     let query =
         noon::integration::effective_path_query(scene.integration_store(), &session, &object)
             .unwrap();
@@ -83,10 +95,16 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
         .borrow()
         .geometry_resources()
         .stats();
-    assert!(scene
-        .live(&mut session)
-        .add_line_to(&object, Vec2::new(f32::INFINITY, 0.))
-        .is_err());
+    assert!(noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Line {
+            object: &object,
+            point: Vec2::new(f32::INFINITY, 0.),
+        },
+    )
+    .is_err());
     assert_eq!(object.state().unwrap(), before);
     assert_eq!(
         object
@@ -106,10 +124,16 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
         },
     )
     .unwrap();
-    scene
-        .live(&mut session)
-        .add_line_to(&object, Vec2::new(-1., 0.))
-        .unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Line {
+            object: &object,
+            point: Vec2::new(-1., 0.),
+        },
+    )
+    .unwrap();
     assert_eq!(
         noon::integration::effective_path_query(scene.integration_store(), &session, &object)
             .unwrap()

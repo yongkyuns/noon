@@ -370,18 +370,24 @@ export function classifyRendererGpuIdentity(info, expectedBackend) {
   }
   const expected = expectedBackend === "webgpu" ? "BrowserWebGpu" : "Gl";
   if (info.backend !== expected) return "unknown";
+  const browser = expectedBackend === "webgpu" ? info.browserDeviceInfo : null;
+  const browserText = (field) => {
+    const value = typeof browser?.[field] === "string" ? browser[field].trim() : "";
+    return ["unknown", "other", "n/a"].includes(value.toLowerCase()) ? "" : value;
+  };
   const descriptor = {
-    vendor: Number(info.vendor) > 0 ? String(info.vendor) : "",
-    device: Number(info.device) > 0 ? String(info.device) : "",
-    description: [info.name, info.driver, info.driverInfo]
+    vendor: browserText("vendor") || (Number(info.vendor) > 0 ? String(info.vendor) : ""),
+    device: browserText("device") || (Number(info.device) > 0 ? String(info.device) : ""),
+    description: [info.name, info.driver, info.driverInfo, browserText("description")]
       .filter((value) => typeof value === "string").join(" "),
-    architecture: String(info.deviceType ?? ""),
+    architecture: browserText("architecture") || String(info.deviceType ?? ""),
     driver: String(info.driver ?? ""),
     driverInfo: String(info.driverInfo ?? ""),
   };
   const hasIdentity = [descriptor.vendor, descriptor.device, descriptor.description]
     .some((value) => value.trim() !== "");
-  if (String(info.deviceType ?? "").toLowerCase() === "cpu") return "software";
+  if (String(info.deviceType ?? "").toLowerCase() === "cpu"
+      || browser?.isFallbackAdapter === true) return "software";
   if (!hasIdentity) return "unknown";
   if (isSoftwareGpuAdapter(descriptor)) {
     return "software";

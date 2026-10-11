@@ -58,10 +58,15 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
         );
         assert_eq!(source.state().unwrap(), source_before);
         if live_mode {
-            scene
-                .live(&mut session)
-                .reverse_direction(&destination)
-                .unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::Reverse {
+                    object: &destination,
+                },
+            )
+            .unwrap();
             assert_eq!(
                 noon::integration::effective_path_query(
                     scene.integration_store(),
