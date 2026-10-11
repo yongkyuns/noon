@@ -75,6 +75,40 @@ test("block failure and missing evidence independently", () => {
   }
 });
 
+test("readiness retains large process tables and rejects output beyond its bound", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "noon-readiness-processes-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const ps = path.join(dir, "ps");
+  const fixture = path.join(dir, "processes.txt");
+  await writeFile(ps, `#!${process.execPath}\nprocess.stdout.write(require('node:fs').readFileSync(process.env.NOON_TEST_PS));\n`);
+  await chmod(ps, 0o755);
+  const rows = Array.from({ length: 1000 }, (_, i) =>
+    `${i + 1} /opt/long application name/Contents/Frameworks/Helper.app/Contents/MacOS/non-build-helper\n`).join("");
+  assert.ok(Buffer.byteLength(rows) > 64 * 1024 && Buffer.byteLength(rows) < 256 * 1024);
+  for (const [name, output, expected] of [
+    ["large-clean", rows, []],
+    ["large-build", rows + "1001 /tmp/another project/swift-frontend\n",
+      [{ pid: 1001, executable: "swift-frontend" }]],
+    ["over-limit", rows.repeat(4), null],
+  ]) {
+    await writeFile(fixture, output);
+    const outfile = path.join(dir, `${name}.json`);
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+      import { runReadiness } from ${JSON.stringify(new URL("./perf-physical-readiness.mjs", import.meta.url).href)};
+      await runReadiness({ outfile: process.argv[1], flags: ${JSON.stringify(flags)},
+        launch: async () => { throw new Error("process-only fixture; no GPU launch"); } });
+    `, outfile], { encoding: "utf8", env: { ...process.env,
+      PATH: `${dir}:${process.env.PATH}`, NOON_TEST_PS: fixture } });
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(await readFile(outfile, "utf8"));
+    assert.deepEqual(report.observed.buildProcesses, expected, name);
+    assert.equal(report.decision.blockers.includes("host build activity unknown"), expected === null, name);
+    assert.equal(report.decision.blockers.includes("compiler/build/archive tooling is active"),
+      expected !== null && expected.length > 0, name);
+    assert.equal(report.decision.performanceAcceptance, false);
+  }
+});
+
 for (const compiler of ["rustc", "swift-driver", "swift-frontend", "xcodebuild"]) test(`device capture refuses ${compiler} and preserves reports if it starts during a suite`, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "noon-device-builds-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
