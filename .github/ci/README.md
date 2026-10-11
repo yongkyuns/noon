@@ -3,6 +3,22 @@
 Development qualification and CI evidence tooling, not another architecture or
 roadmap. The engine contract remains `docs/architecture.md`.
 
+## Qualification cadence
+
+The exhaustive pinned Manim raster oracle runs nightly at 06:17 UTC and on
+explicit dispatch. Relevant PRs run its policy/manifest/capture preflight; the
+full oracle is no longer a PR merge gate. Dispatch it against the exact candidate
+for Manim parity, renderer rasterization or camera semantics changes, and triage
+nightly failures as regressions. Its sources, thresholds and full stages remain
+unchanged.
+
+Every PR still runs the CI contracts and web unit tests in PR Fast Gate. Edits to
+the cadence policy, timing reporter, physical-adapter tests or CI README do not
+also select the heavyweight browser/Product Gate suites. Gallery topology checks
+select browser CI, while web `*.test.mjs` edits use preflight. Runtime, artifact,
+product protocol and mixed production changes keep their existing qualification.
+Unknown CI helpers still select the heavyweight suites; exclusions are explicit.
+
 ## Local architecture and iteration gate
 
 The #1272 R3/R4 guardrails are owned by #961. The ordinary local command remains

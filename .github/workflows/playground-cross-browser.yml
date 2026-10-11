@@ -26,6 +26,7 @@ on:
       - "scripts/paired-authoring-qualification.mjs"
       - "scripts/special-camera-qualification.mjs"
       - "web/**"
+      - "!web/**/*.test.mjs"
   pull_request:
     paths:
       - ".github/workflows/playground-cross-browser.yml"
@@ -49,6 +50,7 @@ on:
       - "scripts/paired-authoring-qualification.mjs"
       - "scripts/special-camera-qualification.mjs"
       - "web/**"
+      - "!web/**/*.test.mjs"
   workflow_dispatch:
 
 permissions:

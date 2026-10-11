@@ -9,6 +9,12 @@ on:
     paths:
       - ".github/actions/dev-wasm-build/**"
       - ".github/ci/**"
+      # Unrelated CI policies are covered by the always-on PR Fast Gate.
+      - "!.github/ci/README.md"
+      - "!.github/ci/manim-raster-workflow-cadence.test.mjs"
+      - "!.github/ci/run-report.mjs"
+      - "!.github/ci/run-report.test.mjs"
+      - "!.github/ci/physical-gpu-mode.test.mjs"
       - ".github/workflows/ci.yml"
       - ".github/workflows/compiler-cache-seed.yml"
       - ".github/workflows/pr-fast.yml"
@@ -353,10 +359,8 @@ jobs:
           NOON_CAMERA_DENSITY_ARTIFACTS: browser-smoke-artifacts/webgpu/camera-density
         run: node scripts/camera-density-smoke.mjs
       - name: Test retained worker glow report and independent reference
-        if: matrix.backend == 'webgpu'
         run: node --test scripts/glow-worker-reference.test.mjs scripts/glow-worker-report.test.mjs scripts/glow-worker-transport.test.mjs
       - name: Qualify retained worker glow images and recovery
-        if: matrix.backend == 'webgpu'
         env:
           NOON_GLOW_WORKER_ARTIFACTS: browser-smoke-artifacts/webgpu/glow-worker
         run: node scripts/glow-worker-qualification.mjs

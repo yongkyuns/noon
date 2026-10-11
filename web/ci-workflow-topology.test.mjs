@@ -318,9 +318,12 @@ test("real worker glow pixels run in the existing canonical browser job", async 
     "crates/noon-web/src/retained_execution_resources.rs"]) {
     assert.ok(selection?.includes(`      - "${path}"`), `worker qualification must select ${path}`);
   }
-  const step = workflow.split("      - name: Qualify retained worker glow images and recovery\n")[1]?.split("      - name:")[0];
+  const job = workflow.split("\n  browser-rendering-parity:\n")[1]?.split(/^  [a-z][a-z-]*:/m)[0];
+  assert.ok(job, "worker pixel qualification must run in the consolidated backend job");
+  assert.doesNotMatch(job, /matrix\.backend/, "the consolidated job has no backend matrix");
+  const step = job.split("      - name: Qualify retained worker glow images and recovery\n")[1]?.split("      - name:")[0];
   assert.ok(step, "worker pixel qualification cannot silently disappear");
-  assert.match(step, /if: matrix\.backend == 'webgpu'/);
+  assert.doesNotMatch(step, /^\s+if:/m, "worker qualification must run unconditionally after WebGPU checks");
   assert.match(step, /run: node scripts\/glow-worker-qualification\.mjs/);
   assert.doesNotMatch(step, /continue-on-error|\|\| true/);
 });

@@ -34,7 +34,7 @@ try {
         const { default: init, glowWorkerSmokeFixture } = await import("./pkg/noon_web.js");
         await init();
         const fixture = JSON.parse(glowWorkerSmokeFixture());
-        const { createGlowWorkerTransport } = await import("../scripts/glow-worker-transport.mjs");
+        const { createGlowWorkerTransport, createGlowWorkerErrorCollector } = await import("../scripts/glow-worker-transport.mjs");
         const endpoints = new Map();
         async function create(id, width, height) {
           document.getElementById(id)?.remove();
@@ -45,10 +45,11 @@ try {
           const offscreen = canvas.transferControlToOffscreen();
           const worker = new Worker("./authoring-render-worker.js", { type: "module" });
           const ports = new MessageChannel();
-          const state = { worker, port: ports.port1, errors: [], pending: new Map(), requests: new Map(), id: 1, ready: null };
+          const failures = createGlowWorkerErrorCollector();
+          const state = { worker, port: ports.port1, errors: failures.errors, failures, pending: new Map(), requests: new Map(), id: 1, ready: null };
           const fail = error => {
             const message = String(error.message ?? error);
-            state.errors.push(message);
+            failures.collect(message);
             for (const pending of state.pending.values()) pending.reject(new Error(message));
             state.pending.clear();
           };
@@ -165,24 +166,27 @@ try {
       const first = PNG.sync.read(await readFile(path.join(out, `${mode}-circle-motion-0.png`)));
       assert.deepEqual(recovered.data, first.data, "worker recreation must reproduce initial pixels");
       modeReport.recreationExact = true;
+      assert.deepEqual(await page.evaluate(() => [...glowTest.endpoints.values()].flatMap(x => x.errors)), []);
+      assert.deepEqual(errors, []);
       const beforeInvalid = await page.evaluate(() => glowTest.metrics("scene"));
-      const rejected = await page.evaluate(async mode => {
+      const rejection = await page.evaluate(async mode => {
         const state = glowTest.endpoints.get("scene");
         const invalid = structuredClone(glowTest.fixture.cases[0].frames[1].delta);
         const row = invalid.objects.find(row => row.glow);
         if (!row) throw new Error("negative control lacks a glow row");
         row.glow.intensity = 99;
-        const count = state.errors.length;
+        const expected = `retained worker slot ${row.slot.slot}:${row.slot.generation} contains invalid or unsupported glow`;
+        state.failures.expectRejection(expected);
         if (!state.sender.send(JSON.stringify(invalid))) throw new Error("negative control unexpectedly backpressured");
         if (mode === "shared") state.port.postMessage({ type: "shared_delta" });
         const deadline = performance.now() + 10000;
-        while (state.errors.length === count) {
+        while (state.failures.rejections.length === 0) {
+          if (state.errors.length) throw new Error(state.errors.join("\n"));
           if (performance.now() > deadline) throw new Error("invalid glow was not rejected");
           await new Promise(resolve => setTimeout(resolve, 10));
         }
-        return state.errors.splice(count);
+        return expected;
       }, mode);
-      assert.ok(rejected.length > 0 && rejected.every(message => /glow/i.test(message)), JSON.stringify(rejected));
       const afterInvalid = await page.evaluate(() => glowTest.metrics("scene"));
       assert.ok(Number.isSafeInteger(beforeInvalid.metrics.presentedFrames) && beforeInvalid.metrics.presentedFrames > 0);
       assert.ok(Number.isFinite(beforeInvalid.metrics.time));
@@ -190,6 +194,9 @@ try {
       assert.equal(afterInvalid.metrics.time, beforeInvalid.metrics.time);
       assert.deepEqual((await image("scene", `${mode}-invalid-preserved.png`)).data, recovered.data,
         "invalid glow payload must leave the displayed frame intact");
+      const rejected = await page.evaluate(() => glowTest.endpoints.get("scene").failures.rejections);
+      assert.ok(rejected.length > 0 && rejected.every(message =>
+        message === rejection || message === `Uncaught ${rejection}`), JSON.stringify(rejected));
       modeReport.invalidPreserved = { errors: rejected, unchangedPresentations: true, pixelsExact: true };
       modeReport.metrics = afterInvalid;
       assert.ok(modeReport.metrics.metrics.presentedFrames > 0);

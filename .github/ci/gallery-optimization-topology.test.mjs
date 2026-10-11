@@ -33,4 +33,7 @@ test("renderer parity runs both real backends and comparison on one runner", asy
   assert.ok(yaml.includes("node scripts/browser-backend-visual-parity.mjs"));
   assert.ok(yaml.includes("name: browser-backend-visual-parity"));
   assert.doesNotMatch(yaml, /needs: browser-rendering/);
+  const job = yaml.split("\n  browser-rendering-parity:\n")[1]?.split(/^  [a-z][a-z-]*:/m)[0];
+  assert.ok(job, "missing consolidated rendering job");
+  assert.doesNotMatch(job, /matrix\.backend/, "new backend checks must not retain a removed matrix guard");
 });

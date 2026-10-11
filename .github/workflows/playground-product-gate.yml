@@ -5,6 +5,13 @@ on:
     paths:
       - ".github/workflows/playground-product-gate.yml"
       - ".github/ci/**"
+      # Unrelated CI policies are covered by the always-on PR Fast Gate.
+      - "!.github/ci/README.md"
+      - "!.github/ci/manim-raster-workflow-cadence.test.mjs"
+      - "!.github/ci/run-report.mjs"
+      - "!.github/ci/run-report.test.mjs"
+      - "!.github/ci/physical-gpu-mode.test.mjs"
+      - "!.github/ci/gallery-optimization-topology.test.mjs"
       - ".github/actions/install-wasm-opt/action.yml"
       - "skills/noon-authoring/**"
       - "scripts/noon-capabilities.py"
@@ -31,6 +38,7 @@ on:
       - "scripts/retained-text-animation-smoke.mjs"
       - "scripts/square-to-circle-start-regression.mjs"
       - "web/**"
+      - "!web/**/*.test.mjs"
 
 permissions:
   contents: read
