@@ -72,10 +72,19 @@ impl InstalledRetainedExecutionMirror {
             .wire
             .frame()
             .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
+        let planned_family_frame = if self.family.plans().is_empty() {
+            noon_runtime::RetainedPlannedFamilyFrame {
+                retained: frame,
+                family_animations: &frame.family_animations,
+                family_plan_indices: &frame.family_animation_plan_indices,
+            }
+        } else {
+            self.family.planned_frame(frame)?
+        };
         Ok(
             noon_runtime::RendererPublication::from_validated_transport_frame(
                 self.wire.publication_context(),
-                frame,
+                planned_family_frame,
                 changes.clone(),
                 self.resources.texts(),
                 self.resources.fonts(),
@@ -685,6 +694,115 @@ mod tests {
         assert_eq!(publication.changes(), &changes);
         assert!(publication.active_family_animation_indices().is_empty());
         assert_eq!(publication.family_animation_plans().len(), 0);
+    }
+
+    #[test]
+    fn stroked_vector_path_glow_round_trips_with_its_versioned_source_resource() {
+        let mut source_geometries = noon_core::GeometryResourceArena::new();
+        let source = source_geometries.insert_path(
+            VectorPath::new().move_to(Vec2::new(-1.0, 0.0)).cubic_to(
+                Vec2::new(-0.5, 1.0),
+                Vec2::new(0.5, -1.0),
+                Vec2::new(1.0, 0.0),
+            ),
+        );
+        let source_handle = crate::TransportGeometryResourceHandle::from(source);
+        let bundle = RetainedResourceBundle::capture_additions_with_geometries(
+            [],
+            [source],
+            &noon_core::TextResourceArena::new(),
+            &source_geometries,
+            &noon_core::FontResourceArena::new(),
+            &crate::RetainedResourceInventory::default(),
+        )
+        .unwrap();
+        let mut mirror =
+            InstalledRetainedExecutionMirror::from_bundle_bytes(&bundle.encode_binary().unwrap())
+                .unwrap();
+        let local_handle = mirror.resources().geometry_handle_remap()[&source_handle];
+        let compiled_glow = noon_compile::CompiledGlow {
+            attachment: noon_core::SemanticNodeId::new(90, 1),
+            definition: noon_core::Glow::new(
+                noon::effects::GlowUpdate::default()
+                    .color(noon::Color::BLUE)
+                    .radius(noon::effects::Pixels(8.0))
+                    .intensity(1.25),
+            )
+            .unwrap(),
+        };
+        let context = noon_core::PublicationContext::default();
+        let retained = RetainedExecutionDeltaEnvelope {
+            channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
+            protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
+            session: 82,
+            sequence: 0,
+            publication_context: context,
+            snapshot: true,
+            time: 0.0,
+            camera: Camera2DState::default(),
+            inset_2d_views: Vec::new(),
+            objects: vec![crate::RetainedTransportObjectState {
+                slot: crate::TransportSlotId {
+                    slot: 0,
+                    generation: 0,
+                },
+                order: 0,
+                object: ObjectId::new(90),
+                glow: Some(crate::TransportGlowState::from(&compiled_glow)),
+                z_index: 0.0,
+                content: TransportObjectContent::Geometry {
+                    geometry: GeometryRef::External(source.id),
+                    resource: Some(source_handle),
+                },
+                transform: Transform2D::IDENTITY,
+                spatial: None,
+                style: noon_core::Style {
+                    fill: None,
+                    stroke: Some(noon_core::Color::WHITE),
+                    stroke_width: 3.0,
+                    ..noon_core::Style::default()
+                },
+                appearance: 1.0,
+                text_bounds: None,
+                presence: true,
+                reveal: 0.35,
+                morph: 0.0,
+                render_geometry: None,
+                render_transform: None,
+                render_geometry_resource: None,
+            }],
+            object_patches: Vec::new(),
+            removed_slots: Vec::new(),
+            painter_order: None,
+        };
+        mirror
+            .apply_family(RetainedFamilyExecutionDeltaEnvelope {
+                retained,
+                family_states: Vec::new(),
+                family_plans: Vec::new(),
+                resource_additions: None,
+                resource_retirements: crate::RetainedResourceRetirements::default(),
+                transient_presentations: Vec::new(),
+                selection_overlay: None,
+                pointer_view: None,
+            })
+            .unwrap();
+        let Some(noon_core::GeometryResource::VectorPath(_)) =
+            mirror.resources().geometries().get(local_handle)
+        else {
+            panic!("versioned source must resolve to an immutable VectorPath");
+        };
+        let resolved_frame = mirror.frame().unwrap();
+        let resolved = &resolved_frame.objects[0];
+        assert_eq!(
+            resolved.content.geometry(),
+            Some(&GeometryRef::External(local_handle.id))
+        );
+        assert_eq!(resolved_frame.reveals[0], 0.35);
+        assert_eq!(
+            resolved.glow.as_deref().unwrap().definition.intensity(),
+            1.25
+        );
     }
 
     #[test]
@@ -1441,6 +1559,10 @@ mod tests {
                 .family_plan_index(0),
             Some(0)
         );
+        let publication = mirror.renderer_publication(&FrameChanges::all()).unwrap();
+        let planned = publication.planned_family_frame();
+        assert_eq!(planned.family_animation(0), Some(family_state(0.5)));
+        assert_eq!(planned.family_plan_index(0), Some(0));
     }
 
     #[test]

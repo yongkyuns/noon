@@ -499,8 +499,11 @@ pub enum RetainedExecutionTransportError {
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidGlowState(slot) => write!(formatter,
-                "retained worker slot {}:{} contains invalid or unsupported glow", slot.slot, slot.generation),
+            Self::InvalidGlowState(slot) => write!(
+                formatter,
+                "retained worker slot {}:{} contains invalid or unsupported glow",
+                slot.slot, slot.generation
+            ),
             Self::InvalidSpatialState(slot) => write!(
                 formatter,
                 "retained slot {}:{} has invalid spatial state",
@@ -1857,16 +1860,10 @@ fn validate_object_fields(
 ) -> Result<(), RetainedExecutionTransportError> {
     if object.glow.is_some_and(|glow| glow.to_compiled().is_none())
         || (object.glow.is_some()
-            && (!matches!(
-                &object.content,
-                TransportObjectContent::Geometry {
-                    geometry: GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. },
-                    resource: None,
-                }
-            ) || object.spatial.is_some()
-                || object.style.fill.is_none()
-                || object.style.stroke.is_some()
-                || object.reveal != 1.0
+            && (!glow_content_is_supported(&object.content)
+                || object.spatial.is_some()
+                || !object.reveal.is_finite()
+                || !(0.0..=1.0).contains(&object.reveal)
                 || object.morph != 0.0))
     {
         return Err(RetainedExecutionTransportError::InvalidGlowState(
@@ -1915,6 +1912,40 @@ fn validate_object_fields(
         ));
     }
     Ok(())
+}
+
+fn glow_content_is_supported(content: &TransportObjectContent) -> bool {
+    match content {
+        TransportObjectContent::Geometry { geometry, resource } => match geometry {
+            GeometryRef::Circle { radius } => {
+                resource.is_none() && radius.is_finite() && *radius > 0.0
+            }
+            GeometryRef::Rectangle { size } => {
+                resource.is_none()
+                    && size.x.is_finite()
+                    && size.y.is_finite()
+                    && size.x > 0.0
+                    && size.y > 0.0
+            }
+            GeometryRef::Line { start, end } => {
+                resource.is_none()
+                    && start.x.is_finite()
+                    && start.y.is_finite()
+                    && end.x.is_finite()
+                    && end.y.is_finite()
+                    && (start.x != end.x || start.y != end.y)
+            }
+            GeometryRef::VectorPath(path) => {
+                resource.is_none() && path.is_finite() && path.has_drawable_segments()
+            }
+            // A typed row is validated before the versioned source-resource
+            // table binds this handle. Full id/version validation follows in
+            // validate_object_state at the receiver boundary.
+            GeometryRef::External(_) => true,
+        },
+        TransportObjectContent::Text { .. } => true,
+        TransportObjectContent::Image { .. } => false,
+    }
 }
 
 fn validate_single_camera(
@@ -2232,24 +2263,26 @@ mod tests {
             },
             {
                 let mut corrupt = snapshot.clone();
-                corrupt.objects[1].glow = corrupt.objects[0].glow;
+                corrupt.objects[0].reveal = 1.5;
                 corrupt
             },
             {
                 let mut corrupt = snapshot.clone();
-                corrupt.objects[0].reveal = 0.5;
+                corrupt.objects[0].content = TransportObjectContent::Image {
+                    image: crate::TransportImageResourceHandle {
+                        arena: 1,
+                        id: 1,
+                        version: 0,
+                    },
+                    sampling: crate::TransportImageSampling::Linear,
+                };
                 corrupt
             },
         ] {
             let bad_slot = corrupt
                 .objects
                 .iter()
-                .find(|row| {
-                    row.glow.is_some_and(|glow| glow.to_compiled().is_none())
-                        || (row.glow.is_some()
-                            && (!matches!(&row.content, TransportObjectContent::Geometry { .. })
-                                || row.reveal != 1.0))
-                })
+                .find(|row| row.glow.is_some() && validate_object_fields(row).is_err())
                 .unwrap()
                 .slot;
             assert_eq!(
@@ -2291,7 +2324,51 @@ mod tests {
             Some(valid.as_ref())
         );
 
-        frame.objects[1].glow = Some(valid);
+        frame.objects[1].glow = Some(valid.clone());
+        frame.reveals[1] = 0.5;
+        frame.objects[1].style = Style {
+            stroke: Some(Color::WHITE),
+            ..Style::default()
+        };
+        // The source text handle is resolved by the separately installed text
+        // resource table; row validation admits its content and partial reveal.
+        assert!(encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![1]),
+                camera,
+                context,
+            )
+            .unwrap()
+            .is_some());
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::VectorPath(
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::ZERO)
+                .line_to(noon_core::Vec2::new(1.0, 1.0)),
+        ));
+        frame.objects[0].style = Style {
+            stroke: Some(Color::WHITE),
+            ..Style::default()
+        };
+        frame.reveals[0] = 0.25;
+        assert!(encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                camera,
+                context,
+            )
+            .unwrap()
+            .is_some());
+        frame.objects[1].content =
+            ObjectContentRef::Image(noon_core::RasterImageContentRef::from_resource(
+                noon_core::SemanticImageContent::new(noon_core::RasterImageResourceHandle {
+                    arena: 1,
+                    id: noon_core::RasterImageResourceId::new(1),
+                    version: 0,
+                }),
+                &noon_core::RasterImageResource::from_rgba8(1, 1, [255_u8; 4]).unwrap(),
+            ));
         let before_sequence = encoder.next_sequence;
         assert_eq!(
             encoder.encode_incremental_with_context(

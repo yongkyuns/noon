@@ -1,11 +1,11 @@
-//! Finite analytic-source integration of the shared glow operator.
+//! Source capture, filtering and painter placement for the shared glow operator.
 //!
-//! Sources use the renderer's existing analytic pipelines. The final tile replaces
-//! exactly one stable primitive draw; it is not a foreground overlay. These caches
+//! Analytic sources retain their fast capture; other 2D sources share isolated
+//! prepared draw capture. The final tile replaces one stable object range; it is not a foreground overlay. These caches
 //! are indexed by existing packed-instance slots and retain no semantic authority.
-//! #1897 owns feeding these effective requests from shared lowering/publication.
+//! Effective requests come from shared lowering/publication (#1897).
 
-use std::{collections::BTreeMap, mem::size_of};
+use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use noon_core::{GeometryRef, Glow, GlowSource, ObjectId, Transform2D, Vec2};
@@ -40,10 +40,14 @@ pub struct AnalyticGlowStats {
     pub retained_texture_bytes: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum SourceInstance {
     Circle(CircleInstance),
     Rectangle(RectangleInstance),
+    Draws {
+        source: Arc<super::source_capture::PreparedSource>,
+        silhouette: Option<Arc<super::source_capture::PreparedSource>>,
+    },
 }
 impl SourceInstance {
     fn prepared(prepared: &PreparedFrame<'_>, key: (u8, usize)) -> Option<Self> {
@@ -57,25 +61,29 @@ impl SourceInstance {
         match self {
             Self::Circle(value) => bytemuck::bytes_of(value),
             Self::Rectangle(value) => bytemuck::bytes_of(value),
+            Self::Draws { source, .. } => &source.bytes,
         }
     }
     fn style_mut(&mut self) -> &mut PackedStyle {
         match self {
             Self::Circle(value) => &mut value.style,
             Self::Rectangle(value) => &mut value.style,
+            Self::Draws { .. } => unreachable!("prepared draws already have scope opacity removed"),
         }
     }
-    fn geometry(self) -> GeometryRef {
+    fn geometry(&self) -> GeometryRef {
         match self {
             Self::Circle(value) => GeometryRef::circle(value.radius),
             Self::Rectangle(value) => GeometryRef::rectangle(value.size[0], value.size[1]),
+            Self::Draws { .. } => unreachable!("prepared draw bounds are already projected"),
         }
     }
-    fn silhouette(mut self) -> Self {
-        let style = self.style_mut();
+    fn silhouette(&self) -> Self {
+        let mut value = self.clone();
+        let style = value.style_mut();
         style.fill = [1.0; 4];
         style.fill_enabled = 1;
-        self
+        value
     }
 }
 
@@ -96,7 +104,7 @@ struct CaptureImage {
 impl CaptureImage {
     fn new(device: &wgpu::Device, format: wgpu::TextureFormat, size: [u32; 2]) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Noon analytic glow source capture"),
+            label: Some("Noon isolated effect source"),
             size: wgpu::Extent3d {
                 width: size[0],
                 height: size[1],
@@ -130,6 +138,8 @@ struct ResidentGlow {
     silhouette_buffer: Option<wgpu::Buffer>,
     camera_buffer: wgpu::Buffer,
     camera_binding: wgpu::BindGroup,
+    text_camera_binding: Option<wgpu::BindGroup>,
+    multisampled: Option<wgpu::TextureView>,
     placement: Placement,
     placement_buffer: wgpu::Buffer,
     placement_binding: Option<wgpu::BindGroup>,
@@ -148,8 +158,8 @@ struct PlacementPrograms {
 
 #[derive(Debug, Default)]
 pub(super) struct AnalyticGlowGpu {
-    // RenderPrimitive is already a derived identity. Restrict keys to the two
-    // admitted analytic kinds rather than allocating another object-ID domain.
+    // Existing analytic packed slots and mixed source indices are disposable
+    // cache keys; owners retain their normal published object identities.
     scopes: BTreeMap<(u8, usize), ResidentGlow>,
     owners: BTreeMap<ObjectId, (u8, usize)>,
     filter: GlowFilter,
@@ -286,7 +296,7 @@ impl GpuRenderer {
             SourceInstance::prepared(prepared, key).ok_or(GlowPrepareError::UnsupportedCapture)?;
         if observation.style.stroke_enabled & 1 != 0
             || observation.style.fill_enabled == 0
-            || matches!(effective, SourceInstance::Circle(value) if value.padding[0] != 1.0)
+            || matches!(&effective, SourceInstance::Circle(value) if value.padding[0] != 1.0)
         {
             return Err(GlowPrepareError::UnsupportedCapture);
         }
@@ -309,13 +319,6 @@ impl GpuRenderer {
             ),
             rotation: observation.transform.rotation,
         };
-        let parameters = GlowParameters {
-            definition: request.definition,
-            output_height: self.viewport_size[1],
-            world_view_height: f64::from(self.camera.world_size.y),
-            scope_opacity: observation.style.opacity,
-            scratch_budget_bytes: request.texture_budget_bytes,
-        };
         let bounds = GlowPixelBounds::projected_analytic_in_view(
             &effective.geometry(),
             transform,
@@ -323,6 +326,135 @@ impl GpuRenderer {
             self.viewport_size,
             self.logical_viewport_size,
         )?;
+        self.prepare_source_glow(
+            device,
+            queue,
+            encoder,
+            prepared,
+            request,
+            key,
+            observation.object,
+            effective,
+            bounds,
+            observation.style.opacity,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_draw_source_glow(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        prepared: &super::retained_text::PreparedRetainedGpuFrame<'_>,
+        text: &super::retained_text::RetainedTextGpuState,
+        request: AnalyticGlowRequest,
+        object: ObjectId,
+        opacity: f32,
+    ) -> Result<AnalyticGlowStats, GlowPrepareError> {
+        if !matches!(
+            self.target_format,
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+        ) {
+            return Err(GlowPrepareError::UnsupportedCapture);
+        }
+        let source = super::source_capture::PreparedSource::prepare(
+            prepared,
+            object,
+            opacity.max(f32::MIN_POSITIVE),
+            false,
+        )
+        .ok_or(GlowPrepareError::UnsupportedCapture)?;
+        let silhouette = if request.definition.source() == GlowSource::Silhouette {
+            Some(
+                super::source_capture::PreparedSource::prepare(
+                    prepared,
+                    object,
+                    opacity.max(f32::MIN_POSITIVE),
+                    true,
+                )
+                .ok_or(GlowPrepareError::UnsupportedCapture)?,
+            )
+        } else {
+            None
+        };
+        // Share the logical-view qualification with analytic capture. Physical
+        // sampling remains independent of CSS/DPR rounding.
+        GlowPixelBounds::validate_planar_view(
+            Transform2D::IDENTITY,
+            self.camera,
+            self.viewport_size,
+            self.logical_viewport_size,
+        )?;
+        let Some(b) = source.bounds else {
+            if let Some(scope) = self
+                .analytic_glows
+                .as_deref_mut()
+                .and_then(|glows| glows.scopes.get_mut(&(2, request.object_index)))
+                .filter(|scope| scope.object == object)
+            {
+                scope.enabled = false;
+            }
+            return Ok(AnalyticGlowStats {
+                retained_texture_bytes: self.analytic_glow_texture_bytes(),
+                ..Default::default()
+            });
+        };
+        let px = f64::from(self.viewport_size[0]) / f64::from(self.camera.world_size.x);
+        let py = f64::from(self.viewport_size[1]) / f64::from(self.camera.world_size.y);
+        let x = |world: f32| {
+            (f64::from(world) - f64::from(self.camera.center.x)) * px
+                + f64::from(self.viewport_size[0]) * 0.5
+        };
+        let y = |world: f32| {
+            f64::from(self.viewport_size[1]) * 0.5
+                - (f64::from(world) - f64::from(self.camera.center.y)) * py
+        };
+        let bounds = GlowPixelBounds {
+            min: [x(b.min.x), y(b.max.y)],
+            max: [x(b.max.x), y(b.min.y)],
+        };
+        self.prepare_source_glow(
+            device,
+            queue,
+            encoder,
+            &prepared.geometry,
+            request,
+            (2, request.object_index),
+            object,
+            SourceInstance::Draws {
+                source: Arc::new(source),
+                silhouette: silhouette.map(Arc::new),
+            },
+            bounds,
+            opacity,
+            Some(text),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_source_glow(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        prepared: &PreparedFrame<'_>,
+        request: AnalyticGlowRequest,
+        key: (u8, usize),
+        object: ObjectId,
+        effective: SourceInstance,
+        bounds: GlowPixelBounds,
+        opacity: f32,
+        text: Option<&super::retained_text::RetainedTextGpuState>,
+    ) -> Result<AnalyticGlowStats, GlowPrepareError> {
+        let parameters = GlowParameters {
+            definition: request.definition,
+            output_height: self.viewport_size[1],
+            world_view_height: f64::from(self.camera.world_size.y),
+            scope_opacity: opacity,
+            scratch_budget_bytes: request.texture_budget_bytes,
+        };
         let tile = GlowCaptureTile::prepare(
             bounds,
             self.viewport_size,
@@ -334,11 +466,7 @@ impl GpuRenderer {
             // Retain warmed storage for neutral fades; exact ordinary submission
             // is restored. Absent neutral requests allocate no glow cache.
             if let Some(glows) = self.analytic_glows.as_deref_mut() {
-                if let Some(scope) = glows
-                    .scopes
-                    .get_mut(&key)
-                    .filter(|s| s.object == observation.object)
-                {
+                if let Some(scope) = glows.scopes.get_mut(&key).filter(|s| s.object == object) {
                     scope.enabled = false;
                 }
             }
@@ -355,7 +483,7 @@ impl GpuRenderer {
         // fractionally translated footprint alternates between adjacent sizes.
         // Extra padding is transparent; resolution/kernel quality is unchanged.
         let previous_size = old
-            .filter(|scope| scope.object == observation.object)
+            .filter(|scope| scope.object == object)
             .map_or([0; 2], |scope| scope.tile.size);
         for (axis, previous) in previous_size.into_iter().enumerate() {
             let reserved = tile.size[axis]
@@ -369,11 +497,17 @@ impl GpuRenderer {
         tile.capture_and_scratch_bytes = u64::from(tile.size[0])
             .checked_mul(u64::from(tile.size[1]))
             .and_then(|pixels| {
-                pixels.checked_mul(if request.definition.source() == GlowSource::Silhouette {
-                    20
-                } else {
-                    16
-                })
+                pixels.checked_mul(
+                    if request.definition.source() == GlowSource::Silhouette {
+                        20
+                    } else {
+                        16
+                    } + if key.0 == 2 {
+                        4 * u64::from(PATH_SAMPLE_COUNT)
+                    } else {
+                        0
+                    },
+                )
             })
             .ok_or(GlowPrepareError::ScratchBudgetExceeded)?;
         let old_bytes = old.map_or(0, |s| s.tile.capture_and_scratch_bytes);
@@ -382,7 +516,7 @@ impl GpuRenderer {
             .as_deref()
             .and_then(|g| {
                 g.owners
-                    .get(&observation.object)
+                    .get(&object)
                     .filter(|previous| **previous != key)
                     .and_then(|previous| g.scopes.get(previous))
             })
@@ -396,8 +530,10 @@ impl GpuRenderer {
         if total > request.texture_budget_bytes {
             return Err(GlowPrepareError::ScratchBudgetExceeded);
         }
-        let mut source_instance = effective;
-        source_instance.style_mut().opacity = 1.0; // apply final scope opacity once
+        let mut source_instance = effective.clone();
+        if key.0 != 2 {
+            source_instance.style_mut().opacity = 1.0;
+        } // apply final scope opacity once
         let needs_silhouette = request.definition.source() == GlowSource::Silhouette;
         let capture_camera = tile_camera(self.camera, self.viewport_size, tile)?;
         let camera_uniform = capture_camera.uniform(tile.size);
@@ -408,169 +544,249 @@ impl GpuRenderer {
             padding: [0; 2],
         };
         // Everything that can reject input is checked before installing caches.
-        let glows = self.analytic_glows.get_or_insert_with(Default::default);
-        let programs = glows
-            .placement
-            .get_or_insert_with(|| PlacementPrograms::new(device, self.target_format));
-        let replace = glows.scopes.get(&key).is_none_or(|s| {
-            s.object != observation.object
-                || s.tile.size != tile.size
-                || s.silhouette.is_some() != needs_silhouette
-        });
-        let mut stats = AnalyticGlowStats::default();
-        if replace {
-            let source = CaptureImage::new(device, self.target_format, tile.size);
-            let silhouette =
-                needs_silhouette.then(|| CaptureImage::new(device, self.target_format, tile.size));
-            let source_buffer = instance_buffer(device);
-            let silhouette_buffer = needs_silhouette.then(|| instance_buffer(device));
-            let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Noon local glow camera"),
-                size: size_of::<CameraUniform>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
+        let mut glows = self.analytic_glows.take().unwrap_or_default();
+        let result = (|| {
+            let programs = glows
+                .placement
+                .get_or_insert_with(|| PlacementPrograms::new(device, self.target_format));
+            let replace = glows.scopes.get(&key).is_none_or(|s| {
+                s.object != object
+                    || s.tile.size != tile.size
+                    || s.silhouette.is_some() != needs_silhouette
+                    || s.source_buffer.size() < source_instance.bytes().len() as u64
             });
-            let camera_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Noon local glow camera binding"),
-                layout: &self.camera_bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                }],
-            });
-            let placement_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Noon glow painter placement"),
-                size: size_of::<Placement>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            if let Some(previous) = glows.scopes.insert(
-                key,
-                ResidentGlow {
-                    object: observation.object,
-                    tile,
-                    camera: self.camera,
-                    viewport: self.viewport_size,
-                    effective,
-                    source_instance,
-                    source,
-                    silhouette,
-                    source_buffer,
-                    silhouette_buffer,
-                    camera_buffer,
-                    camera_binding,
-                    placement,
-                    placement_buffer,
-                    placement_binding: None,
-                    filter: GlowScope::default(),
-                    revision: 0,
-                    invalidated: true,
-                    enabled: true,
-                },
-            ) {
-                glows.owners.remove(&previous.object);
-            }
-            stats.source_texture_allocations = 1 + usize::from(needs_silhouette);
-        }
-        if let Some(previous_key) = glows
-            .owners
-            .insert(observation.object, key)
-            .filter(|previous| *previous != key)
-        {
-            glows.scopes.remove(&previous_key);
-        }
-        let scope = glows.scopes.get_mut(&key).expect("admitted glow scope");
-        let source_changed = scope.invalidated
-            || scope.source_instance != source_instance
-            || scope.tile.origin != tile.origin
-            || scope.camera != self.camera
-            || scope.viewport != self.viewport_size;
-        if source_changed {
-            queue.write_buffer(&scope.source_buffer, 0, source_instance.bytes());
-            queue.write_buffer(&scope.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
-            stats.source_bytes_uploaded = size_of::<CircleInstance>() + size_of::<CameraUniform>();
-            let pipeline = if kind == 0 {
-                &self.circle_pipeline_single_sample
-            } else {
-                &self.rectangle_pipeline_single_sample
-            };
-            capture_source(
-                encoder,
-                &scope.source.view,
-                pipeline,
-                &scope.camera_binding,
-                &self.quad_buffer,
-                &scope.source_buffer,
-            );
-            stats.source_passes = 1;
-            if let (Some(image), Some(buffer)) = (&scope.silhouette, &scope.silhouette_buffer) {
-                queue.write_buffer(buffer, 0, source_instance.silhouette().bytes());
-                capture_source(
-                    encoder,
-                    &image.view,
-                    pipeline,
-                    &scope.camera_binding,
-                    &self.quad_buffer,
-                    buffer,
-                );
-                stats.source_bytes_uploaded += size_of::<CircleInstance>();
-                stats.source_passes += 1;
-            }
-            scope.revision = scope
-                .revision
-                .checked_add(1)
-                .expect("glow capture revision exhausted");
-            scope.invalidated = false;
-        }
-        if replace || scope.placement != placement {
-            queue.write_buffer(&scope.placement_buffer, 0, bytemuck::bytes_of(&placement));
-            stats.placement_bytes_uploaded = size_of::<Placement>();
-        }
-        let upload = glows.filter.prepare(
-            device,
-            queue,
-            &mut scope.filter,
-            GlowCapture {
-                source: &scope.source.texture,
-                silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
-                revision: scope.revision,
-            },
-            parameters,
-        )?;
-        let encoded = glows.filter.encode(encoder, &mut scope.filter);
-        stats.filter = GlowRasterStats {
-            blur_passes: encoded.blur_passes,
-            composite_passes: encoded.composite_passes,
-            ..upload
-        };
-        if replace || upload.texture_allocations != 0 || scope.placement_binding.is_none() {
-            scope.placement_binding = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Noon composed glow tile binding"),
-                layout: &programs.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
+            let mut stats = AnalyticGlowStats::default();
+            if replace {
+                let source = CaptureImage::new(device, self.target_format, tile.size);
+                let silhouette = needs_silhouette
+                    .then(|| CaptureImage::new(device, self.target_format, tile.size));
+                let source_buffer = instance_buffer(device, source_instance.bytes().len());
+                let silhouette_buffer = needs_silhouette
+                    .then(|| instance_buffer(device, source_instance.bytes().len()));
+                let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Noon local glow camera"),
+                    size: size_of::<CameraUniform>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let camera_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Noon local glow camera binding"),
+                    layout: &self.camera_bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: scope.placement_buffer.as_entire_binding(),
+                        resource: camera_buffer.as_entire_binding(),
+                    }],
+                });
+                let placement_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Noon glow painter placement"),
+                    size: size_of::<Placement>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                if let Some(previous) = glows.scopes.insert(
+                    key,
+                    ResidentGlow {
+                        object,
+                        tile,
+                        camera: self.camera,
+                        viewport: self.viewport_size,
+                        effective: effective.clone(),
+                        source_instance: source_instance.clone(),
+                        source,
+                        silhouette,
+                        source_buffer,
+                        silhouette_buffer,
+                        text_camera_binding: text
+                            .map(|text| text.glyphs.capture_camera_binding(device, &camera_buffer)),
+                        multisampled: (key.0 == 2).then(|| {
+                            device
+                                .create_texture(&wgpu::TextureDescriptor {
+                                    label: Some("Noon isolated source MSAA"),
+                                    size: wgpu::Extent3d {
+                                        width: tile.size[0],
+                                        height: tile.size[1],
+                                        depth_or_array_layers: 1,
+                                    },
+                                    mip_level_count: 1,
+                                    sample_count: PATH_SAMPLE_COUNT,
+                                    dimension: wgpu::TextureDimension::D2,
+                                    format: self.target_format,
+                                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                                    view_formats: &[],
+                                })
+                                .create_view(&Default::default())
+                        }),
+                        camera_buffer,
+                        camera_binding,
+                        placement,
+                        placement_buffer,
+                        placement_binding: None,
+                        filter: GlowScope::default(),
+                        revision: 0,
+                        invalidated: true,
+                        enabled: true,
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(
-                            scope.filter.output_view().expect("active glow output"),
-                        ),
-                    },
-                ],
-            }));
-        }
-        glows.bytes = total;
-        scope.effective = effective;
-        scope.source_instance = source_instance;
-        scope.tile = tile;
-        scope.camera = self.camera;
-        scope.viewport = self.viewport_size;
-        scope.placement = placement;
-        scope.enabled = true;
-        stats.retained_texture_bytes = glows.bytes;
-        Ok(stats)
+                ) {
+                    glows.owners.remove(&previous.object);
+                }
+                stats.source_texture_allocations =
+                    1 + usize::from(needs_silhouette) + usize::from(key.0 == 2);
+            }
+            if let Some(previous_key) = glows
+                .owners
+                .insert(object, key)
+                .filter(|previous| *previous != key)
+            {
+                glows.scopes.remove(&previous_key);
+            }
+            let scope = glows.scopes.get_mut(&key).expect("admitted glow scope");
+            let source_changed = scope.invalidated
+                || scope.source_instance != source_instance
+                || scope.tile.origin != tile.origin
+                || scope.camera != self.camera
+                || scope.viewport != self.viewport_size;
+            if source_changed {
+                queue.write_buffer(&scope.source_buffer, 0, source_instance.bytes());
+                queue.write_buffer(&scope.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
+                stats.source_bytes_uploaded =
+                    source_instance.bytes().len() + size_of::<CameraUniform>();
+                match &source_instance {
+                    SourceInstance::Draws { source, silhouette } => {
+                        let text = text.expect("isolated text capture state");
+                        source
+                            .encode(
+                                self,
+                                text,
+                                prepared,
+                                encoder,
+                                &scope.source.view,
+                                scope.multisampled.as_ref().expect("isolated capture MSAA"),
+                                &scope.camera_binding,
+                                scope
+                                    .text_camera_binding
+                                    .as_ref()
+                                    .expect("isolated text camera"),
+                                &scope.source_buffer,
+                            )
+                            .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+                        stats.source_passes = 1;
+                        if let (Some(source), Some(image), Some(buffer)) =
+                            (silhouette, &scope.silhouette, &scope.silhouette_buffer)
+                        {
+                            queue.write_buffer(buffer, 0, &source.bytes);
+                            source
+                                .encode(
+                                    self,
+                                    text,
+                                    prepared,
+                                    encoder,
+                                    &image.view,
+                                    scope.multisampled.as_ref().expect("isolated capture MSAA"),
+                                    &scope.camera_binding,
+                                    scope
+                                        .text_camera_binding
+                                        .as_ref()
+                                        .expect("isolated text camera"),
+                                    buffer,
+                                )
+                                .map_err(|_| GlowPrepareError::UnsupportedCapture)?;
+                            stats.source_passes += 1;
+                        }
+                        stats.source_bytes_uploaded = source.bytes.len()
+                            + size_of::<CameraUniform>()
+                            + silhouette.as_ref().map_or(0, |s| s.bytes.len());
+                    }
+                    _ => {
+                        let pipeline = if key.0 == 0 {
+                            &self.circle_pipeline_single_sample
+                        } else {
+                            &self.rectangle_pipeline_single_sample
+                        };
+                        capture_source(
+                            encoder,
+                            &scope.source.view,
+                            pipeline,
+                            &scope.camera_binding,
+                            &self.quad_buffer,
+                            &scope.source_buffer,
+                        );
+                        stats.source_passes = 1;
+                        if let (Some(image), Some(buffer)) =
+                            (&scope.silhouette, &scope.silhouette_buffer)
+                        {
+                            queue.write_buffer(buffer, 0, source_instance.silhouette().bytes());
+                            capture_source(
+                                encoder,
+                                &image.view,
+                                pipeline,
+                                &scope.camera_binding,
+                                &self.quad_buffer,
+                                buffer,
+                            );
+                            stats.source_bytes_uploaded += source_instance.bytes().len();
+                            stats.source_passes += 1;
+                        }
+                    }
+                }
+                scope.revision = scope
+                    .revision
+                    .checked_add(1)
+                    .expect("glow capture revision exhausted");
+                scope.invalidated = false;
+            }
+            if replace || scope.placement != placement {
+                queue.write_buffer(&scope.placement_buffer, 0, bytemuck::bytes_of(&placement));
+                stats.placement_bytes_uploaded = size_of::<Placement>();
+            }
+            let upload = glows.filter.prepare(
+                device,
+                queue,
+                &mut scope.filter,
+                GlowCapture {
+                    source: &scope.source.texture,
+                    silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
+                    revision: scope.revision,
+                },
+                parameters,
+            )?;
+            let encoded = glows.filter.encode(encoder, &mut scope.filter);
+            stats.filter = GlowRasterStats {
+                blur_passes: encoded.blur_passes,
+                composite_passes: encoded.composite_passes,
+                ..upload
+            };
+            if replace || upload.texture_allocations != 0 || scope.placement_binding.is_none() {
+                scope.placement_binding =
+                    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Noon composed glow tile binding"),
+                        layout: &programs.layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: scope.placement_buffer.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(
+                                    scope.filter.output_view().expect("active glow output"),
+                                ),
+                            },
+                        ],
+                    }));
+            }
+            glows.bytes = total;
+            scope.effective = effective;
+            scope.source_instance = source_instance;
+            scope.tile = tile;
+            scope.camera = self.camera;
+            scope.viewport = self.viewport_size;
+            scope.placement = placement;
+            scope.enabled = true;
+            stats.retained_texture_bytes = glows.bytes;
+            Ok(stats)
+        })();
+        self.analytic_glows = result.is_ok().then_some(glows);
+        result
     }
 
     /// Retire an exact derived object binding and release its local textures.
@@ -605,6 +821,60 @@ impl GpuRenderer {
         self.analytic_glows
             .as_deref()
             .is_some_and(|g| g.scopes.values().any(|s| s.enabled))
+    }
+
+    pub(super) fn has_draw_source_glow(&self, object: ObjectId) -> bool {
+        self.analytic_glows.as_deref().is_some_and(|g| {
+            g.owners
+                .get(&object)
+                .filter(|key| key.0 == 2)
+                .and_then(|key| g.scopes.get(key))
+                .is_some_and(|scope| scope.enabled)
+        })
+    }
+
+    pub(super) fn draw_source_glow<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        object: ObjectId,
+        single_sample: bool,
+    ) -> bool {
+        let Some(glows) = self.analytic_glows.as_deref() else {
+            return false;
+        };
+        let Some(scope) = glows
+            .owners
+            .get(&object)
+            .filter(|key| key.0 == 2)
+            .and_then(|key| glows.scopes.get(key))
+            .filter(|scope| scope.enabled)
+        else {
+            return false;
+        };
+        assert_eq!(
+            scope.camera, self.camera,
+            "source capture must follow camera changes"
+        );
+        assert_eq!(
+            scope.viewport, self.viewport_size,
+            "source capture must follow resize"
+        );
+        let programs = glows.placement.as_ref().expect("prepared placement");
+        pass.set_pipeline(if single_sample {
+            &programs.single
+        } else {
+            &programs.multisampled
+        });
+        pass.set_bind_group(
+            0,
+            scope
+                .placement_binding
+                .as_ref()
+                .expect("prepared source output"),
+            &[],
+        );
+        pass.draw(0..6, 0..1);
+        true
     }
 
     /// Split only batches intersecting existing effect slots. Normal spans keep
@@ -651,7 +921,7 @@ impl GpuRenderer {
                 "glow must be reprepared after resize"
             );
             assert_eq!(
-                Some(scope.effective),
+                Some(scope.effective.clone()),
                 SourceInstance::prepared(prepared, (kind, *index)),
                 "glow must be reprepared after an effective source change"
             );
@@ -724,10 +994,10 @@ fn tile_camera(
     .map_err(|_| GlowPrepareError::InvalidProjection)
 }
 
-fn instance_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+fn instance_buffer(device: &wgpu::Device, bytes: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Noon isolated analytic glow source"),
-        size: size_of::<CircleInstance>() as u64,
+        size: bytes.max(size_of::<CircleInstance>()).next_power_of_two() as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })

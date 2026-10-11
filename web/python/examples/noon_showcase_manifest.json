@@ -52,15 +52,15 @@
     },
     {
       "id": "showcase-gpu-glow", "title": "Paint with light",
-      "lesson": "Create a glow from nothing, independently animate its intensity, radius, and hue, then fade and re-ignite the same sources.",
+      "lesson": "Create a glow from nothing, independently animate its intensity, radius, and hue, then draw a glowing path and write a glowing equation.",
       "primary_feature": "gpu-glow-parameter-animation", "category": "Animation",
       "path": "python/examples/showcase_gpu_glow.py",
-      "features": ["Gaussian GPU glow", "animate.set_glow", "Pixels", "intensity", "radius", "color", "remove_glow"],
-      "duration": 10.0, "thumbnail_time": 5.3,
+      "features": ["Gaussian GPU glow", "animate.set_glow", "Pixels", "intensity", "radius", "color", "remove_glow", "Create", "Write", "MathTypst"],
+      "duration": 12.0, "thumbnail_time": 11.4,
       "thumbnail": "thumbnails/showcase/showcase-gpu-glow.png",
-      "thumbnail_alt": "Three white orbs on a dark navy field, with a bright blue intensity halo, wide green radius halo, and pink color halo",
-      "still_intervals": [[2.9, 3.4], [4.8, 5.8], [7.1, 7.45], [8.7, 10.0]],
-      "beats": [{"time": 1.5, "label": "Introduce the sources"}, {"time": 2.9, "label": "Ignite the glow"}, {"time": 4.8, "label": "Tune intensity, radius and color"}, {"time": 7.1, "label": "Fade to neutral"}, {"time": 8.7, "label": "Re-ignite a new attachment"}]
+      "thumbnail_alt": "Three white orbs on a dark navy field, above a glowing curved path and typeset equation",
+      "still_intervals": [[2.9, 3.4], [4.8, 5.8], [7.1, 7.45], [8.7, 9.5], [11.0, 12.0]],
+      "beats": [{"time": 1.5, "label": "Introduce the sources"}, {"time": 2.9, "label": "Ignite the glow"}, {"time": 4.8, "label": "Tune intensity, radius and color"}, {"time": 7.1, "label": "Fade to neutral"}, {"time": 8.7, "label": "Re-ignite a new attachment"}, {"time": 10.2, "label": "Draw and write with light"}]
     },
     {
       "id": "showcase-group-slicing", "title": "Animate part of a group",

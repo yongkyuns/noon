@@ -678,6 +678,7 @@ try {
     expectedFinalCenter = null,
     expectedGlowPair = false,
     expectedFinalColor = null,
+    finalPixelPredicate = (red, green, blue) => Math.max(red, green, blue) > 80,
     expectedComposition = false,
     expectedCamera = false,
     expectedDifferentRotations = false,
@@ -845,9 +846,15 @@ try {
     // Runs actual Python -> WASM/Rust declarations, then verifies explicit rejection
     // and cleanup. Its final plain frame is not an enabled-glow visual oracle.
     { filename: "effect_authoring_contract.py", objectCount: 1, expectedDuration: 0.1, endpointTime: null },
-    // Real Python .animate/play and live removal. The final ordinary frame is
-    // semantic/completion evidence, not an independent glow-pixel reference.
-    { filename: "glow_scene_playback.py", objectCount: 1, expectedDuration: 1.75, endpointTime: null, expectedFinalCenter: [2, 0] },
+    // Real Python .animate/play, path/text reveals, and live removal. The final
+    // ordinary frame is semantic/completion evidence, not a glow-pixel oracle.
+    {
+      filename: "glow_scene_playback.py", objectCount: 3, expectedDuration: 3.25,
+      endpointTime: null, expectedFinalCenter: [2, 0],
+      // Isolate the completed white disk from the blue path and central equation.
+      finalPixelPredicate: (red, green, blue, x) =>
+        x > 370 && Math.min(red, green, blue) > 230,
+    },
     // Actual Python -> shared Rust -> retained worker; the matching ordinary
     // circle is an in-frame no-effect negative control for off-source pixels.
     { filename: "glow_scene_worker_pixels.py", objectCount: 2, expectedDuration: 0.25, endpointTime: null, expectedGlowPair: true },
@@ -1074,7 +1081,7 @@ try {
     if (expectedFinalCenter !== null) {
       const finalPixels = visiblePixelStats(
         await page.locator(`#${result.canvasId}`).screenshot(),
-        (red, green, blue) => Math.max(red, green, blue) > 80,
+        finalPixelPredicate,
       );
       const expectedX = 320 + expectedFinalCenter[0] * 45;
       const expectedY = 180 - expectedFinalCenter[1] * 45;

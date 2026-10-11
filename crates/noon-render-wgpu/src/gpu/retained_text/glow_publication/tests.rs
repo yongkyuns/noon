@@ -115,6 +115,7 @@ impl Fixture {
                 &self.queue,
                 &mut encoder,
                 &prepared,
+                &self.text,
                 &publication,
                 1_000_000,
             )
@@ -239,6 +240,7 @@ fn omitted_source_is_rejected_and_abandoned_encoder_reprepares() {
             &fixture.queue,
             &mut encoder,
             &prepared,
+            &fixture.text,
             &publication,
             1_000_000
         ),
@@ -303,6 +305,7 @@ fn bad_visibility_and_reduced_clean_budget_fail_without_hiding_work() {
             &fixture.queue,
             &mut encoder,
             &prepared,
+            &fixture.text,
             &publication,
             first.retained_texture_bytes - 1
         ),
@@ -398,4 +401,112 @@ fn already_visible_glow_borrows_candidates_and_keeps_ordinary_validation() {
             TextDeviceMetrics::uniform(10.0).unwrap()
         )
         .is_err());
+}
+
+#[test]
+fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally() {
+    for geometry in [
+        GeometryRef::circle(0.4),
+        GeometryRef::rectangle(0.8, 0.6),
+        GeometryRef::line(Vec2::new(-0.7, -0.5), Vec2::new(0.7, 0.5)),
+        GeometryRef::VectorPath(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::new(-0.7, -0.5))
+                .cubic_to(
+                    Vec2::new(-0.4, 0.8),
+                    Vec2::new(0.4, -0.8),
+                    Vec2::new(0.7, 0.5),
+                ),
+        ),
+    ] {
+        let mut fixture = Fixture::new();
+        let mut runtime = runtime(4096, true, false);
+        let object = runtime.frame().objects[1].id;
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetContent {
+                object,
+                content: ObjectContentRef::Geometry(geometry),
+                text_bounds: None,
+            })
+            .unwrap();
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object,
+                style: Style {
+                    fill: None,
+                    stroke: Some(Color::WHITE),
+                    stroke_width: 0.2,
+                    ..Style::default()
+                },
+            })
+            .unwrap();
+        let first = fixture.prepare(&mut runtime, true);
+        assert_eq!(
+            (
+                first.sources_prepared,
+                first.source_passes,
+                first.blur_passes
+            ),
+            (1, 1, 2)
+        );
+        assert_eq!(
+            first.texture_allocations, 5,
+            "source, MSAA, and three filter images"
+        );
+        assert!(fixture.renderer.has_draw_source_glow(object));
+        let clean = fixture.prepare(&mut runtime, true);
+        assert_eq!(
+            clean.bytes_uploaded + clean.source_passes + clean.blur_passes + clean.composite_passes,
+            0
+        );
+        let mut glow = **runtime.frame().objects[1].glow.as_ref().unwrap();
+        glow.definition = GlowUpdate::default()
+            .intensity(0.4)
+            .apply_to(glow.definition)
+            .unwrap();
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetGlow {
+                object,
+                glow: Arc::new(glow),
+            })
+            .unwrap();
+        let edited = fixture.prepare(&mut runtime, true);
+        assert_eq!(
+            (
+                edited.rows_examined,
+                edited.sources_prepared,
+                edited.source_passes,
+                edited.blur_passes,
+                edited.composite_passes,
+                edited.bytes_uploaded,
+                edited.texture_allocations
+            ),
+            (1, 1, 0, 0, 1, 32, 0)
+        );
+        let mut style = runtime.frame().objects[1].style;
+        style.opacity = 0.35;
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle { object, style })
+            .unwrap();
+        let faded = fixture.prepare(&mut runtime, true);
+        assert_eq!(
+            (
+                faded.rows_examined,
+                faded.source_passes,
+                faded.blur_passes,
+                faded.composite_passes,
+                faded.texture_allocations
+            ),
+            (1, 0, 0, 1, 0)
+        );
+        assert_eq!(faded.retained_texture_bytes, first.retained_texture_bytes);
+        runtime
+            .apply_execution_patch(&ExecutionPatch::RemoveObject(object))
+            .unwrap();
+        assert_eq!(
+            fixture.prepare(&mut runtime, true).retained_texture_bytes,
+            0
+        );
+        assert!(!fixture.renderer.has_draw_source_glow(object));
+    }
 }

@@ -217,6 +217,7 @@ pub struct RendererPublication<'a> {
     raster_image_resources: &'a dyn noon_core::RasterImageResourceLookup,
     family_animation_plans: &'a [RetainedFamilyAnimationPlan],
     active_family_animation_indices: &'a BTreeSet<usize>,
+    planned_family_frame: RetainedPlannedFamilyFrame<'a>,
     painter_order: &'a [u32],
     derived_display_objects: &'a [DerivedDisplayObject],
 }
@@ -251,11 +252,7 @@ impl RendererPublication<'_> {
     }
 
     pub fn planned_family_frame(&self) -> RetainedPlannedFamilyFrame<'_> {
-        RetainedPlannedFamilyFrame {
-            retained: self.frame,
-            family_animations: &self.frame.family_animations,
-            family_plan_indices: &self.frame.family_animation_plan_indices,
-        }
+        self.planned_family_frame
     }
 
     pub fn family_animation_plans(&self) -> &[RetainedFamilyAnimationPlan] {
@@ -324,7 +321,7 @@ impl<'a> RendererPublication<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn from_validated_transport_frame(
         context: PublicationContext,
-        frame: &'a FrameState,
+        planned_family_frame: RetainedPlannedFamilyFrame<'a>,
         changes: FrameChanges,
         text_resources: &'a dyn TextResourceLookup,
         font_resources: &'a dyn FontResourceLookup,
@@ -334,9 +331,9 @@ impl<'a> RendererPublication<'a> {
         active_family_animation_indices: &'a BTreeSet<usize>,
         painter_order: &'a [u32],
     ) -> Self {
-        Self::new(
+        let mut publication = Self::new(
             context,
-            frame,
+            planned_family_frame.retained,
             changes,
             text_resources,
             font_resources,
@@ -345,7 +342,9 @@ impl<'a> RendererPublication<'a> {
             family_animation_plans,
             active_family_animation_indices,
             painter_order,
-        )
+        );
+        publication.planned_family_frame = planned_family_frame;
+        publication
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -371,6 +370,11 @@ impl<'a> RendererPublication<'a> {
             raster_image_resources,
             family_animation_plans,
             active_family_animation_indices,
+            planned_family_frame: RetainedPlannedFamilyFrame {
+                retained: frame,
+                family_animations: &frame.family_animations,
+                family_plan_indices: &frame.family_animation_plan_indices,
+            },
             painter_order,
             derived_display_objects: &[],
         }

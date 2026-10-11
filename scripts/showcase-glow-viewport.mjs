@@ -4,12 +4,13 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 
 export async function qualifyGlowViewport(browser, base, output, backend, cache) {
   const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
   const fixtures = [
     { name: "decorated-desktop", width: 1600, height: 1000, dpr: 1 },
-    { name: "fractional-layout-and-density", width: 1100, height: 800, dpr: 1.25 },
+    { name: "fractional-layout-and-density", width: 1100, height: 800, dpr: 1.25, noJspi: true },
     { name: "resize-with-active-glow", width: 1600, height: 1000, dpr: 2,
       resize: { width: 1103, height: 803 } },
   ];
@@ -20,6 +21,7 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
       viewport: { width: fixture.width, height: fixture.height }, deviceScaleFactor: fixture.dpr,
     });
     if (cache) await cache.install(context);
+    if (fixture.noJspi) await disableAuthoringJspi(context);
     const page = await context.newPage();
     const result = { fixture, outcome: "fail", pageErrors: [] };
     report.results.push(result);
@@ -61,12 +63,12 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
       });
       assert.equal(result.state.patchState, "applied", JSON.stringify(result.state));
       assert.equal(result.state.backend, expectedBackend);
-      assert.ok(Math.abs(result.state.elapsed - 10) < 1e-7, "glow source must finish its actual 10-second timeline");
+      assert.ok(Math.abs(result.state.elapsed - 12) < 1e-7, "glow source must finish its actual 12-second timeline");
       // Deliberately retain the shipped border and layout mismatch that the
       // normalized screenshot oracles cannot exercise.
       assert.ok(parseFloat(result.state.border) > 0, "fixture must keep production canvas decoration");
       const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-      assert.equal(metrics.metrics.objectCount, 9);
+      assert.equal(metrics.metrics.objectCount, 11);
       assert.ok(metrics.metrics.presentedFrames > 0);
       assert.deepEqual(result.pageErrors, []);
       result.outcome = "pass";

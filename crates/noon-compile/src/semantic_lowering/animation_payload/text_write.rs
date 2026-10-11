@@ -194,6 +194,20 @@ pub fn lower_semantic_text_glyph_animations(
     store: &SemanticStore,
     schedule: &SemanticAnimationScheduleProjection,
 ) -> Result<Vec<CompiledFamilyAnimation>, TextGlyphLoweringError> {
+    lower_semantic_text_glyph_animations_with_tracks(store, schedule, &[])
+}
+
+/// Permit concurrent effect-only tracks without relaxing glyph/pose driver conflicts.
+pub fn lower_semantic_text_glyph_animations_with_tracks(
+    store: &SemanticStore,
+    schedule: &SemanticAnimationScheduleProjection,
+    tracks: &[super::SemanticAffineAnimationTrack],
+) -> Result<Vec<CompiledFamilyAnimation>, TextGlyphLoweringError> {
+    let independent = independent_effect_drivers(
+        tracks
+            .iter()
+            .map(|track| (track.animation.into(), track.property)),
+    );
     let family_spans = resolve_family_spans(
         store,
         schedule
@@ -211,6 +225,7 @@ pub fn lower_semantic_text_glyph_animations(
     let drivers = schedule
         .leaves()
         .iter()
+        .filter(|leaf| !independent.contains(&leaf.animation.into()))
         .map(|leaf| {
             let interval = noon_core::continuous_time_map_interval(leaf.timing, &leaf.time_map)
                 .map_err(TextGlyphLoweringError::InvalidTimeMap)?;
@@ -269,6 +284,16 @@ pub fn lower_prepared_text_glyph_animations(
     store: &SemanticStore,
     schedule: &PreparedSemanticAnimationScheduleProjection,
 ) -> Result<Vec<CompiledFamilyAnimation>, TextGlyphLoweringError> {
+    lower_prepared_text_glyph_animations_with_tracks(store, schedule, &[])
+}
+
+pub(super) fn lower_prepared_text_glyph_animations_with_tracks(
+    store: &SemanticStore,
+    schedule: &PreparedSemanticAnimationScheduleProjection,
+    tracks: &[super::PreparedSemanticAnimationTrack],
+) -> Result<Vec<CompiledFamilyAnimation>, TextGlyphLoweringError> {
+    let independent =
+        independent_effect_drivers(tracks.iter().map(|track| (track.animation, track.property)));
     let family_spans = resolve_family_spans(
         store,
         schedule
@@ -286,6 +311,7 @@ pub fn lower_prepared_text_glyph_animations(
     let drivers = schedule
         .leaves()
         .iter()
+        .filter(|leaf| !independent.contains(&leaf.animation))
         .map(|leaf| {
             let interval = noon_core::continuous_time_map_interval(leaf.timing, &leaf.time_map)
                 .map_err(TextGlyphLoweringError::InvalidTimeMap)?;
@@ -342,6 +368,25 @@ pub fn lower_prepared_text_glyph_animations(
                 }),
             )
         })
+        .collect()
+}
+
+fn independent_effect_drivers(
+    tracks: impl Iterator<Item = (SemanticTransactionNodeRef, noon_core::Property)>,
+) -> std::collections::HashSet<SemanticTransactionNodeRef> {
+    let mut independent = std::collections::HashMap::new();
+    for (animation, property) in tracks {
+        let effect_only = matches!(
+            property,
+            noon_core::Property::GlowColor
+                | noon_core::Property::GlowRadius
+                | noon_core::Property::GlowIntensity
+        );
+        *independent.entry(animation).or_insert(true) &= effect_only;
+    }
+    independent
+        .into_iter()
+        .filter_map(|(animation, only_effects)| only_effects.then_some(animation))
         .collect()
 }
 

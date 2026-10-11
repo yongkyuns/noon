@@ -536,9 +536,12 @@ impl From<noon_core::SemanticSceneOperationError> for SemanticLoweringError {
 impl std::fmt::Display for SemanticLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedGlowProfile { owner } => write!(formatter,
-                "glow on {}:{} requires one attachment on a filled, unstroked, planar circle or rectangle",
-                owner.slot(), owner.generation()),
+            Self::UnsupportedGlowProfile { owner } => write!(
+                formatter,
+                "glow on {}:{} requires one attachment on ordinary planar 2D content",
+                owner.slot(),
+                owner.generation()
+            ),
             Self::Store(error) => error.fmt(formatter),
             Self::SceneOperation(error) => error.fmt(formatter),
             Self::MissingSemanticObjectState(id) => write!(
@@ -897,14 +900,38 @@ pub(super) fn validate_glow_source_profile(
         SemanticObjectContent::Geometry(noon_core::StoredGeometry::Rectangle { size }) => {
             size.x.is_finite() && size.y.is_finite() && size.x > 0.0 && size.y > 0.0
         }
+        SemanticObjectContent::Geometry(noon_core::StoredGeometry::Line { start, end }) => {
+            start.x.is_finite()
+                && start.y.is_finite()
+                && end.x.is_finite()
+                && end.y.is_finite()
+                && (start.x != end.x || start.y != end.y)
+        }
+        SemanticObjectContent::Geometry(noon_core::StoredGeometry::Resource(handle)) => {
+            matches!(
+                store.geometry_resources().get(handle),
+                Some(noon_core::GeometryResource::VectorPath(path))
+                    if path.is_finite() && path.has_drawable_segments()
+            )
+        }
+        SemanticObjectContent::Text(handle) => {
+            store.text_resources().get(handle).is_some_and(|resource| {
+                resource.bounds.min.x.is_finite()
+                    && resource.bounds.min.y.is_finite()
+                    && resource.bounds.max.x.is_finite()
+                    && resource.bounds.max.y.is_finite()
+                    && resource.bounds.max.x > resource.bounds.min.x
+                    && resource.bounds.max.y > resource.bounds.min.y
+            })
+        }
         _ => false,
     };
-    let style = lower_semantic_style(owner, state)?;
+    lower_semantic_style(owner, state)?;
     if !geometry_supported
         || object_requires_spatial_lowering(state, store)
         || state.role() != SemanticObjectRole::Ordinary
-        || style.fill.is_none()
-        || style.stroke.is_some()
+        || !state.transform.is_valid()
+        || state.transform.planar_rotation().is_none()
         || state.transform.scale.x == 0.0
         || state.transform.scale.y == 0.0
     {
@@ -1341,6 +1368,52 @@ mod tests {
         assert_eq!(object_state.base_style.opacity, 0.6);
         assert_eq!(object_state.presentation.z_index, 9.0);
         assert_eq!(object_state.presentation.insertion_order, 0);
+    }
+
+    #[test]
+    fn glow_profile_admits_path_and_text_with_strokes_and_unfilled_paint() {
+        use noon_core::{
+            FontResourceArena, GeometryResourceArena, Rect, TextResource, TextSourceKind,
+            VectorPath,
+        };
+        use std::sync::Arc;
+
+        let mut store = SemanticStore::new();
+        let path = store
+            .insert_geometry_path(
+                VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(1.0, 1.0)),
+            )
+            .unwrap();
+        let mut path_state = SemanticObjectState::new(StoredGeometry::Resource(path));
+        path_state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        path_state.style.fill = None;
+        let path_id = store.insert_semantic_object(path_state.clone());
+        validate_glow_source_profile(path_id, &path_state, &store).unwrap();
+
+        let text = store
+            .import_text_resource(
+                TextResource {
+                    source: Arc::from("text"),
+                    kind: TextSourceKind::MathTypst,
+                    runs: Arc::from([]),
+                    vector_items: Arc::from([]),
+                    render_items: Arc::from([]),
+                    parts: Arc::from([]),
+                    bounds: Rect::new(Vec2::ZERO, Vec2::new(2.0, 1.0)),
+                    baseline: 0.0,
+                    layout_artifact: None,
+                },
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+        let mut text_state = SemanticObjectState::new(text);
+        text_state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        text_state.style.fill = None;
+        let text_id = store.insert_semantic_object(text_state.clone());
+        validate_glow_source_profile(text_id, &text_state, &store).unwrap();
     }
 
     #[test]

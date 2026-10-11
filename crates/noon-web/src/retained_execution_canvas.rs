@@ -852,11 +852,6 @@ mod wasm {
                 self.renderer
                     .glow_source_visibility(publication, &[])
                     .map_err(js_error)?;
-                if !self.mirror.active_family_animation_indices().is_empty() {
-                    return Err(js_message(
-                        "retained worker glow does not yet support simultaneous family animation",
-                    ));
-                }
             }
             if self.pending_changes.is_all() {
                 self.preparer.set_painter_order(self.mirror.painter_order());
@@ -875,29 +870,27 @@ mod wasm {
                 )
                 .map_err(js_error)?;
             let family_active = !self.mirror.active_family_animation_indices().is_empty();
-            let prepared = if !family_active {
+            let prepared = if let Some(publication) = glow_publication.as_ref() {
+                self.preparer
+                    .prepare_planned_publication(&self.device, publication, metrics)
+                    .map_err(js_error)?
+            } else if !family_active {
                 self.preparer.release_planned_family_realization();
                 let frame = self.mirror.frame().ok_or_else(|| {
                     js_message("retained execution renderer has no frame snapshot")
                 })?;
-                if let Some(publication) = glow_publication.as_ref() {
-                    self.preparer
-                        .prepare_publication(&self.device, publication, metrics)
-                        .map_err(js_error)?
-                } else {
-                    self.preparer
-                        .prepare_with_image_resources(
-                            &self.device,
-                            frame,
-                            &self.pending_changes,
-                            resources.texts(),
-                            resources.fonts(),
-                            resources.geometries(),
-                            resources.images(),
-                            metrics,
-                        )
-                        .map_err(js_error)?
-                }
+                self.preparer
+                    .prepare_with_image_resources(
+                        &self.device,
+                        frame,
+                        &self.pending_changes,
+                        resources.texts(),
+                        resources.fonts(),
+                        resources.geometries(),
+                        resources.images(),
+                        metrics,
+                    )
+                    .map_err(js_error)?
             } else {
                 let family_frame = family_frame.ok_or_else(|| {
                     js_message(
@@ -984,6 +977,7 @@ mod wasm {
                         &self.queue,
                         &mut encoder,
                         &prepared,
+                        &self.text_gpu,
                         publication,
                         noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
                     )

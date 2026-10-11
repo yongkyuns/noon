@@ -274,9 +274,6 @@ where
     let schedule =
         lower_prepared_semantic_animation_schedule(prepared, index, root, start_time, play_options)
             .map_err(PreparedSemanticAnimationLoweringError::Schedule)?;
-    let family_animations =
-        super::lower_prepared_text_glyph_animations(prepared.store(), &schedule)
-            .map_err(PreparedSemanticAnimationLoweringError::TextGlyph)?;
     let mut captures = super::scheduled_captures::ScheduledCaptures::default();
     let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
     let mut tracks = Vec::new();
@@ -582,19 +579,25 @@ where
                 // prepared animation. Before the commit the runtime still has
                 // no glow, so its newly reserved generation starts with the
                 // neutral authored definition, not a fake persistent default.
-                // Existing/stale generations may NEVER take this path.
+                // Newly admitted detached sources likewise start from their
+                // canonical authored attachment. Existing runtime rows must use
+                // their effective generation/value; no stale-generation fallback.
                 let effective_glow = from.glow.or_else(|| {
                     let [source_effect] = source_effects.as_slice() else {
                         return None;
                     };
-                    if prepared.store().node(source_effect.attachment).is_some() {
+                    let newly_admitted = admitted.contains(&leaf.target);
+                    if prepared.store().node(source_effect.attachment).is_some() && !newly_admitted
+                    {
                         return None;
                     }
                     let noon_core::EffectDefinition::Glow(definition) = source_effect.definition;
-                    (definition.intensity() == 0.0).then_some(crate::CompiledGlow {
-                        attachment: source_effect.attachment,
-                        definition,
-                    })
+                    (newly_admitted || definition.intensity() == 0.0).then_some(
+                        crate::CompiledGlow {
+                            attachment: source_effect.attachment,
+                            definition,
+                        },
+                    )
                 });
                 let glow_channels = super::glow_target::channels(
                     snapshot,
@@ -1101,6 +1104,13 @@ where
         };
         push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
     }
+
+    let family_animations = super::text_write::lower_prepared_text_glyph_animations_with_tracks(
+        prepared.store(),
+        &schedule,
+        &tracks,
+    )
+    .map_err(PreparedSemanticAnimationLoweringError::TextGlyph)?;
 
     Ok(PreparedSemanticAnimationActivation {
         root,

@@ -6,6 +6,7 @@ use noon_runtime::{FrameChanges, FrameState};
 
 mod analytic_glow;
 mod derived_display;
+mod source_capture;
 pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats, PublishedAnalyticGlowRequest};
 mod glow_filter;
 pub use glow_filter::{
@@ -1680,6 +1681,25 @@ impl GpuRenderer {
         single_sample_analytics: bool,
         binding: &mut Option<GeometryBinding>,
     ) -> DrawStats {
+        self.draw_isolated_ordered_batch(
+            pass,
+            prepared,
+            resolved,
+            single_sample_analytics,
+            binding,
+            None,
+        )
+    }
+
+    fn draw_isolated_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+        isolated: Option<wgpu::BufferSlice<'a>>,
+    ) -> DrawStats {
         let batch = &resolved.batch;
         let (next, pipeline, vertices, instances, indices) = match batch.primitive {
             RenderPrimitive::Circle => (
@@ -1757,10 +1777,10 @@ impl GpuRenderer {
                 )
             }
         };
-        if *binding != Some(next) {
+        if isolated.is_some() || *binding != Some(next) {
             pass.set_pipeline(pipeline);
             pass.set_vertex_buffer(0, vertices.slice(..));
-            pass.set_vertex_buffer(1, instances.slice(..));
+            pass.set_vertex_buffer(1, isolated.unwrap_or_else(|| instances.slice(..)));
             if let Some(indices) = indices {
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             }

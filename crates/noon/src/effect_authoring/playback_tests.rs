@@ -210,7 +210,10 @@ fn public_glow_profile_rejects_invalid_live_edits_without_partial_commit() {
     let mut session = scene.execution_session().unwrap();
     let before = session.publication_context();
     let original = row(&session, &source).clone();
-    assert!(scene.live(&mut session).disable_fill(&source).is_err());
+    assert!(scene
+        .live(&mut session)
+        .set_scale(&source, 0.0, 1.0)
+        .is_err());
     assert!(scene
         .live(&mut session)
         .add_effect(&source, noon_core::Glow::default(), "other")

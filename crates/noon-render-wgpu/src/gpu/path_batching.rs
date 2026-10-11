@@ -1,4 +1,4 @@
-//! Bounded submission-only compaction of mutually disjoint compact paths.
+//! Submission-only coalescing of consecutive primitives and bounded disjoint paths.
 //! No instance relocation, mesh duplication, or persistent draw-order cache.
 use noon_core::{Rect, Vec2};
 
@@ -7,19 +7,20 @@ use crate::{OrderedRenderBatch, PreparedFrame, RenderPrimitive};
 
 const WINDOW: usize = 32;
 
-pub(super) struct DisjointPathBatches {
+pub(super) struct RetainedGeometryBatches {
     batches: [Option<(OrderedRenderBatch, std::ops::Range<u32>)>; WINDOW],
     bounds: [Option<Rect>; WINDOW],
     count: usize,
 }
 
-impl DisjointPathBatches {
+impl RetainedGeometryBatches {
     pub(super) fn collect<'a>(
         first: &OrderedRenderBatch,
         rest: &mut std::iter::Peekable<std::slice::Iter<'a, RetainedRenderItem>>,
         prepared: &PreparedFrame<'_>,
         pixel: Vec2,
         enabled: bool,
+        stop_at: impl Fn(noon_core::ObjectId) -> bool,
     ) -> Self {
         let mut result = Self {
             batches: std::array::from_fn(|_| None),
@@ -27,6 +28,39 @@ impl DisjointPathBatches {
             count: 0,
         };
         result.batches[0] = Some((first.clone(), 0..0));
+        if !matches!(first.primitive, RenderPrimitive::Path { .. }) {
+            let mut instance_range = first.instance_range.clone();
+            if !enabled
+                || !matches!(
+                    first.primitive,
+                    RenderPrimitive::Circle | RenderPrimitive::Rectangle | RenderPrimitive::Line
+                )
+            {
+                result.batches[0] = Some((first.clone(), instance_range));
+                return result;
+            }
+            // Consecutive instances preserve painter order without a bounds
+            // comparison. Stream the whole run; only disjoint path regrouping
+            // needs the bounded comparison window below.
+            while let Some(RetainedRenderItem::Geometry { object_id, batch }) = rest.peek() {
+                if stop_at(*object_id)
+                    || batch.primitive != first.primitive
+                    || instance_range.end != batch.instance_range.start
+                {
+                    break;
+                }
+                instance_range.end = batch.instance_range.end;
+                rest.next();
+            }
+            result.batches[0] = Some((
+                OrderedRenderBatch {
+                    primitive: first.primitive,
+                    instance_range,
+                },
+                0..0,
+            ));
+            return result;
+        }
         let Some(bounds) = enabled
             .then(|| path_bounds(prepared, first, pixel))
             .flatten()
@@ -43,9 +77,12 @@ impl DisjointPathBatches {
         result.bounds[0] = Some(bounds);
         result.count = 1;
         while result.count < WINDOW {
-            let Some(RetainedRenderItem::Geometry { batch, .. }) = rest.peek() else {
+            let Some(RetainedRenderItem::Geometry { object_id, batch }) = rest.peek() else {
                 break;
             };
+            if stop_at(*object_id) {
+                break;
+            }
             let Some(bounds) = path_bounds(prepared, batch, pixel) else {
                 break;
             };
@@ -192,8 +229,8 @@ mod tests {
     fn bounds(x: f32) -> Rect {
         Rect::new(Vec2::new(x, 0.0), Vec2::new(x + 0.5, 0.5))
     }
-    fn empty() -> DisjointPathBatches {
-        DisjointPathBatches {
+    fn empty() -> RetainedGeometryBatches {
+        RetainedGeometryBatches {
             batches: std::array::from_fn(|_| None),
             bounds: [None; WINDOW],
             count: 0,
@@ -316,14 +353,162 @@ mod tests {
         let items = [glyph];
         let mut rest = items.iter().peekable();
         assert_eq!(
-            DisjointPathBatches::collect(&first, &mut rest, &prepared, Vec2::new(0.01, 0.02), true)
-                .batches()
-                .count(),
+            RetainedGeometryBatches::collect(
+                &first,
+                &mut rest,
+                &prepared,
+                Vec2::new(0.01, 0.02),
+                true,
+                |_| false
+            )
+            .batches()
+            .count(),
             1
         );
         assert!(
             rest.peek().is_some(),
             "text remains an untouched painter-order barrier"
         );
+    }
+
+    fn geometry_item(
+        id: u64,
+        primitive: RenderPrimitive,
+        range: std::ops::Range<u32>,
+    ) -> RetainedRenderItem {
+        RetainedRenderItem::Geometry {
+            object_id: noon_core::ObjectId::new(id),
+            batch: OrderedRenderBatch {
+                primitive,
+                instance_range: range,
+            },
+        }
+    }
+
+    #[test]
+    fn consecutive_primitives_coalesce_only_across_contiguous_enabled_ranges() {
+        use noon_runtime::FrameState;
+        let frame = FrameState {
+            time: 0.0,
+            objects: vec![],
+            presences: vec![],
+            reveals: vec![],
+            morphs: vec![],
+            render_geometries: vec![],
+            render_transforms: vec![],
+            family_animations: vec![],
+            family_animation_plan_indices: vec![],
+        };
+        let mut preparer = crate::FramePreparer::new();
+        let prepared = preparer.prepare(&frame);
+        let first = OrderedRenderBatch {
+            primitive: RenderPrimitive::Circle,
+            instance_range: 0..1,
+        };
+        for primitive in [
+            RenderPrimitive::Circle,
+            RenderPrimitive::Rectangle,
+            RenderPrimitive::Line,
+        ] {
+            let items: Vec<_> = (0..600)
+                .map(|index| geometry_item(index as u64, primitive, index..index + 1))
+                .collect();
+            let first = OrderedRenderBatch {
+                primitive,
+                instance_range: 0..1,
+            };
+            let mut rest = items[1..].iter().peekable();
+            let groups = RetainedGeometryBatches::collect(
+                &first,
+                &mut rest,
+                &prepared,
+                Vec2::ZERO,
+                true,
+                |_| false,
+            );
+            assert_eq!(groups.batches().count(), 1);
+            assert_eq!(groups.batches().next().unwrap().instance_range, 0..600);
+            assert!(rest.peek().is_none());
+        }
+
+        let items = [
+            geometry_item(1, RenderPrimitive::Circle, 0..1),
+            geometry_item(2, RenderPrimitive::Circle, 1..3),
+            geometry_item(3, RenderPrimitive::Circle, 3..4),
+        ];
+        let mut rest = items[1..].iter().peekable();
+        let groups = RetainedGeometryBatches::collect(
+            &first,
+            &mut rest,
+            &prepared,
+            Vec2::ZERO,
+            true,
+            |_| false,
+        );
+        assert_eq!(groups.batches().count(), 1);
+        assert_eq!(groups.batches().next().unwrap().instance_range, 0..4);
+        assert!(rest.peek().is_none());
+
+        for (middle, expected_consumed) in [
+            (geometry_item(2, RenderPrimitive::Rectangle, 1..2), false),
+            (geometry_item(2, RenderPrimitive::Circle, 2..3), false),
+        ] {
+            let items = [geometry_item(1, RenderPrimitive::Circle, 0..1), middle];
+            let first = match &items[0] {
+                RetainedRenderItem::Geometry { batch, .. } => batch,
+                _ => unreachable!(),
+            };
+            let mut rest = items[1..].iter().peekable();
+            let groups = RetainedGeometryBatches::collect(
+                first,
+                &mut rest,
+                &prepared,
+                Vec2::ZERO,
+                true,
+                |_| false,
+            );
+            assert_eq!(groups.batches().count(), 1);
+            assert_eq!(rest.peek().is_none(), expected_consumed);
+        }
+
+        let items = [
+            geometry_item(1, RenderPrimitive::Circle, 0..1),
+            geometry_item(2, RenderPrimitive::Circle, 1..2),
+        ];
+        let first = match &items[0] {
+            RetainedRenderItem::Geometry { batch, .. } => batch,
+            _ => unreachable!(),
+        };
+        let mut rest = items[1..].iter().peekable();
+        let groups = RetainedGeometryBatches::collect(
+            first,
+            &mut rest,
+            &prepared,
+            Vec2::ZERO,
+            false,
+            |_| false,
+        );
+        assert_eq!(
+            groups.batches().count(),
+            1,
+            "disabled coalescing draws only the first batch"
+        );
+        assert!(rest.peek().is_some());
+
+        let mut rest = items[1..].iter().peekable();
+        let groups = RetainedGeometryBatches::collect(
+            first,
+            &mut rest,
+            &prepared,
+            Vec2::ZERO,
+            true,
+            |object| object == noon_core::ObjectId::new(2),
+        );
+        assert_eq!(
+            groups.batches().count(),
+            1,
+            "glow anchor remains a draw boundary"
+        );
+        assert!(rest.peek().is_some());
     }
 }

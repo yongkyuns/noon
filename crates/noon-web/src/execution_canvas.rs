@@ -1806,6 +1806,7 @@ mod wasm {
                         &self.queue,
                         &mut encoder,
                         &prepared,
+                        &self.direct_text_gpu,
                         &publication,
                         noon_render_wgpu::DEFAULT_ANALYTIC_GLOW_TEXTURE_BUDGET,
                     )

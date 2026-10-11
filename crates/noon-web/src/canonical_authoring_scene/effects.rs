@@ -108,7 +108,8 @@ mod tests {
     #[test]
     fn adapter_rejects_unsupported_glow_profile_without_poisoning_publication() {
         let mut context = CanonicalAuthoringScene::default();
-        let dot = context.scene.circle(0.08).unwrap();
+        let mut dot = context.scene.circle(0.08).unwrap();
+        dot.set_scale(0.0, 1.0).unwrap();
         context.bind_mobject(ObjectId::new(0), &dot).unwrap();
         context.live_player(1.0).unwrap();
         let revision = context.scene.revision();

@@ -141,7 +141,7 @@ pub struct PreparedRetainedTextSnapshot<'a> {
 }
 
 impl PreparedRetainedTextSnapshot<'_> {
-    fn glyph_batches(
+    pub(super) fn glyph_batches(
         &self,
         object_index: u32,
         run_index: u32,
@@ -165,10 +165,15 @@ impl PreparedRetainedTextSnapshot<'_> {
 
 /// Prepared mixed geometry/text frame. The geometry frame is intentionally kept
 /// private so its renderer-internal scratch IDs cannot be mistaken for semantic IDs.
+struct PreparedSourceItems<'a> {
+    items: &'a [RetainedRenderItem],
+    ranges: &'a HashMap<ObjectId, std::ops::Range<usize>>,
+}
+
 pub struct PreparedRetainedGpuFrame<'a> {
     images: &'a mut RasterImageFramePreparer,
     applied_publication: &'a mut Option<PublicationContext>,
-    geometry: PreparedFrame<'a>,
+    pub(super) geometry: PreparedFrame<'a>,
     geometry_only: bool,
     text_generation: u64,
     pub text: PreparedRetainedTextSnapshot<'a>,
@@ -179,6 +184,9 @@ pub struct PreparedRetainedGpuFrame<'a> {
     pub stats: RetainedPrepareStats,
     source_geometry_slots: Option<&'a [Option<usize>]>,
     render_item_ranges: Option<&'a HashMap<ObjectId, std::ops::Range<usize>>>,
+    // Canonical source ranges survive viewport projection and family realization.
+    // They are disposable draw metadata, shared by offscreen source consumers.
+    capture_items: Option<PreparedSourceItems<'a>>,
 }
 
 /// Disjoint mutable borrows let image draw eligibility commit only after all
@@ -271,6 +279,30 @@ pub enum RetainedPreparedObjectOutcome {
 }
 
 impl PreparedRetainedGpuFrame<'_> {
+    pub(super) fn capture_items(&self, object: ObjectId) -> Option<&[RetainedRenderItem]> {
+        let source = self.capture_items.as_ref()?;
+        source.items.get(source.ranges.get(&object)?.clone())
+    }
+
+    pub(super) fn source_is_visible(&self, object: ObjectId) -> bool {
+        let Some(&index) = self.object_indices.get(&object) else {
+            return false;
+        };
+        let Some(&rank) = self.painter_ranks.get(index) else {
+            return false;
+        };
+        self.render_items
+            .binary_search_by_key(&rank, |item| {
+                self.object_indices
+                    .get(&item.object_id())
+                    .and_then(|index| self.painter_ranks.get(*index))
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            })
+            .ok()
+            .and_then(|at| self.render_items.get(at))
+            .is_some_and(|item| item.object_id() == object)
+    }
     fn commit_images(
         &mut self,
         publication: PreparedImagePublication,
@@ -1836,6 +1868,10 @@ impl RetainedFramePreparer {
                 painter_ranks: &self.painter_ranks,
                 stats: self.snapshot_prepare_stats,
                 source_geometry_slots: Some(&self.scratch_slots),
+                capture_items: Some(PreparedSourceItems {
+                    items: &self.render_items,
+                    ranges: &self.render_item_ranges,
+                }),
                 render_item_ranges: visible_object_indices
                     .is_none()
                     .then_some(&self.render_item_ranges),
@@ -1927,6 +1963,10 @@ impl RetainedFramePreparer {
             painter_ranks: &self.painter_ranks,
             stats,
             source_geometry_slots: Some(&self.scratch_slots),
+            capture_items: Some(PreparedSourceItems {
+                items: &self.render_items,
+                ranges: &self.render_item_ranges,
+            }),
             render_item_ranges: visible_object_indices
                 .is_none()
                 .then_some(&self.render_item_ranges),
@@ -2042,7 +2082,8 @@ impl RetainedFramePreparer {
 
     fn frame_is_geometry_only(&self, frame: &FrameState) -> bool {
         frame.objects.iter().enumerate().all(|(index, object)| {
-            !matches!(object.geometry(), Some(GeometryRef::External(_)))
+            !requires_general_capture(object, frame.reveal(index))
+                && !matches!(object.geometry(), Some(GeometryRef::External(_)))
                 && object.geometry().is_some()
                 && !matches!(frame.render_geometry(index), Some(GeometryRef::External(_)))
         })
@@ -2057,7 +2098,8 @@ impl RetainedFramePreparer {
         }
         changes.object_indices().iter().all(|&index| {
             frame.objects.get(index).is_some_and(|object| {
-                object.geometry().is_some()
+                !requires_general_capture(object, frame.reveal(index))
+                    && object.geometry().is_some()
                     && !matches!(object.geometry(), Some(GeometryRef::External(_)))
                     && !matches!(frame.render_geometry(index), Some(GeometryRef::External(_)))
             })
@@ -2135,6 +2177,7 @@ impl RetainedFramePreparer {
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,
+            capture_items: None,
         })
     }
 
@@ -2387,6 +2430,10 @@ impl RetainedFramePreparer {
             painter_ranks: &self.painter_ranks,
             stats: self.snapshot_prepare_stats,
             source_geometry_slots: Some(&self.scratch_slots),
+            capture_items: Some(PreparedSourceItems {
+                items: &self.render_items,
+                ranges: &self.render_item_ranges,
+            }),
             render_item_ranges: visible_object_indices
                 .is_none()
                 .then_some(&self.render_item_ranges),
@@ -2586,6 +2633,16 @@ fn validate_visible_object_indices(
     Ok(())
 }
 
+fn requires_general_capture(object: &FrameObjectState, reveal: f32) -> bool {
+    object.glow.is_some()
+        && !(matches!(
+            object.geometry(),
+            Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
+        ) && object.style.fill.is_some()
+            && object.style.stroke.is_none()
+            && reveal == 1.0)
+}
+
 impl RetainedFramePreparer {
     fn build_scratch_frame(
         &mut self,
@@ -2617,6 +2674,9 @@ impl RetainedFramePreparer {
         let mut geometry_only = true;
 
         for (object_index, object) in frame.objects.iter().enumerate() {
+            if requires_general_capture(object, frame.reveal(object_index)) {
+                geometry_only = false;
+            }
             if matches!(object.content, ObjectContentRef::Image(_)) {
                 // Image painter eligibility is maintained in a separate ordered
                 // index, so presence changes never rebuild this base stream.
@@ -3361,7 +3421,7 @@ impl std::fmt::Display for RetainedDerivedDisplayError {
 impl std::error::Error for RetainedDerivedDisplayError {}
 
 pub struct RetainedTextGpuState {
-    glyphs: TextGlyphGpuRenderer,
+    pub(super) glyphs: TextGlyphGpuRenderer,
     last_uploaded_generation: Option<u64>,
 }
 
@@ -3948,6 +4008,18 @@ impl GpuRenderer {
             if excluded.contains(&item.object_id()) {
                 continue;
             }
+            if self.draw_source_glow(pass, item.object_id(), sample_count == 1) {
+                binding = None;
+                stats.geometry.draw_calls += 1;
+                stats.geometry.instances_drawn += 1;
+                while items
+                    .peek()
+                    .is_some_and(|next| next.object_id() == item.object_id())
+                {
+                    items.next();
+                }
+                continue;
+            }
             if render_insets {
                 if self.inset_camera_by_display.contains_key(&item.object_id()) {
                     binding = None;
@@ -3970,12 +4042,13 @@ impl GpuRenderer {
                 }
                 RetainedRenderItem::Geometry { batch, .. } => {
                     pass.set_bind_group(0, camera, &[]);
-                    let groups = super::path_batching::DisjointPathBatches::collect(
+                    let groups = super::path_batching::RetainedGeometryBatches::collect(
                         batch,
                         &mut items,
                         &prepared.geometry,
                         pixel,
                         batch_paths,
+                        |object| self.has_draw_source_glow(object),
                     );
                     for batch in groups.batches() {
                         let mega = match batch.primitive {
@@ -5663,6 +5736,7 @@ mod tests {
             stats: RetainedPrepareStats::default(),
             source_geometry_slots: None,
             render_item_ranges: None,
+            capture_items: None,
         };
 
         assert!(prepared.geometry_only);

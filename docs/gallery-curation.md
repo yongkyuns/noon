@@ -37,7 +37,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | A field in motion | Dense multi-sequence composition | A hardware-maximum claim |
 | Entrances and exits | Four appearance styles at a shared duration | Timing arrangements already taught separately |
 | Together, sequential, staggered | Controlled timing comparison | Internal Add/Wait scheduler probes |
-| Paint with light | Three independent GPU Gaussian glow parameters, neutral enrollment, removal and re-ignition on filled analytic sources | A separate Python renderer or implied hardware benchmark |
+| Paint with light | Three independent GPU Gaussian glow parameters, neutral enrollment, removal/re-ignition, and simultaneous path/math reveal with glow edits | A separate Python renderer or implied hardware benchmark |
 | Animate part of a group | Indexed slice selection | Identity assertions in source |
 | Bend a vector curve | Cubic anchors, control handles and a smooth path morph | Callback-time path editing and SVG import |
 | Transform an object or its copy | Explicit copy isolation and subsequent Transform input animation | Unsupported ReplacementTransform and TransformFromCopy |
@@ -65,12 +65,15 @@ scene background. The first brightens its glow, the second expands the Gaussian
 radius, and the third changes halo color. The initial glow begins absent and
 is enrolled at zero intensity by the ordinary shared Rust animation path. A
 later beat animates all intensities to zero, removes their generations, and
-re-enrolls fresh attachments for a readable final composition. The source is
+re-enrolls fresh attachments. A cubic path and MathTypst equation then reveal
+through Create and Write while their glow parameters animate concurrently.
+Their source coverage comes from the same retained geometry and glyph draws
+used for ordinary rendering. The source is
 `web/python/examples/showcase_gpu_glow.py`; no updater, duplicated effect
 engine, or private rendering API is involved.
 
-Its poster is the genuine 5.3-second held frame, with the strongest three
-parameter contrasts. Publish the manifest entry only together with its
+Its poster is the genuine 11.4-second held frame, showing the three parameter
+contrasts alongside the completed path and equation. Publish the manifest entry only together with its
 actual captured 16:9 PNG and source-bound capture evidence. Visual inspection
 must confirm that the source disks remain solid, halos extend beyond their
 silhouettes, the dark scene stays legible at gallery-card size, and neutral
