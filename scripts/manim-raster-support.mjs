@@ -454,9 +454,56 @@ export function compareEffectiveFrames(actual, expected) {
   return maximumAbsoluteError;
 }
 
+/** Observe active retained inset relations, independently of image similarity. */
+export function compareEffectiveInsetCameras(debugFrame, expected) {
+  if (!Array.isArray(debugFrame?.inset_2d_views) || !Array.isArray(expected?.inset_2d_views)
+      || !Array.isArray(debugFrame.objects)) {
+    throw new Error("inset camera: missing or invalid active-view observation");
+  }
+  const point = (value, label) => {
+    const components = [value?.x, value?.y];
+    requireFiniteVector(components, 2, label);
+    return components;
+  };
+  const camera = (value, label, main = false) => {
+    if (typeof value?.height !== "number" || !Number.isFinite(value.height) || value.height <= 0) {
+      throw new Error(`${label}: expected a positive finite camera height`);
+    }
+    if (main) requireFiniteVector(value.center, 2, label);
+    return { center: main ? value.center : point(value.center, label), height: value.height };
+  };
+  const views = rows => rows.map(row => {
+    const size = point(row.display_size, "inset display size");
+    if (size.some(value => value <= 0) || typeof row.capture_own_display !== "boolean") {
+      throw new Error("inset camera: invalid display size or capture policy");
+    }
+    return { camera: camera(row.camera, "inset camera"),
+      display_center: point(row.display_center, "inset display center"),
+      display_size: size, capture_own_display: row.capture_own_display };
+  });
+  const objects = new Map(debugFrame.objects.map(row => [row.id, row]));
+  const displays = new Set();
+  for (const view of debugFrame.inset_2d_views) {
+    const frame = objects.get(view.camera_frame);
+    const display = objects.get(view.display);
+    if (!frame || display?.present !== true || frame === display || displays.has(view.display)) {
+      throw new Error("inset camera: missing, aliased or duplicate effective object relation");
+    }
+    displays.add(view.display);
+  }
+  const maximumAbsoluteError = compareEffectiveFrames({
+    camera: camera(debugFrame.camera, "Noon main camera", true),
+    views: views(debugFrame.inset_2d_views),
+  }, {
+    camera: camera(expected.camera, "Manim main camera", true),
+    views: views(expected.inset_2d_views),
+  });
+  return { maximumAbsoluteError, insetCount: displays.size, mainCameraObserved: true };
+}
 const EFFECTIVE_CAMERA_3D_FIELDS = [
   "phi", "theta", "gamma", "focal_distance", "zoom", "frame_height", "frame_center",
 ];
+
 const DEFAULT_MANIM_POINT_LIGHT = [-7, -9, 10];
 
 function requireFiniteVector(value, length, label) {

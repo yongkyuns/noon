@@ -7,6 +7,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { evaluateRasterTolerance, resolveRasterTolerance } from "./manim-raster-policy.mjs";
+import { compareEffectiveInsetCameras } from "./manim-raster-support.mjs";
 
 export const FOLLOWING_SOURCE = "parity/manim-v0.21/following_graph_camera.py";
 export const FOLLOWING_UPSTREAM = "861cd4849b17db1db3515b531ffe80b297848f93";
@@ -122,6 +123,9 @@ export function assertSpecialCameraObservation(frame, fixture, host) {
         && frame.camera.center.length === 2 && frame.camera.center.every(Number.isFinite)
         && Number.isFinite(frame.camera.height) && frame.camera.height > 0,
       `${label}: missing finite effective 2D camera observation`);
+      if (cameraCase === "moving-zoomed-scene") {
+        compareEffectiveInsetCameras(frame, frame);
+      }
       capability = cameraCase;
       break;
     default:
@@ -142,6 +146,15 @@ export function assertPairedCameraObservation(rustFrame, pythonFrame, fixture) {
     // Diagnostics preserve painter order. Compare each corresponding row and
     // omit only engine-local IDs; sorting could mask an ordering regression.
     objects: frame.objects.map(({ id: _identity, ...semantic }) => semantic),
+    ...(cameraCaseName(fixture) === "moving-zoomed-scene" ? {
+      // Compare relation endpoints by corresponding observed rows, preserving
+      // their meaning across independent engine ID allocations.
+      inset_2d_views: frame.inset_2d_views.map(({ camera_frame, display, ...view }) => ({
+        camera_frame: frame.objects.findIndex(row => row.id === camera_frame),
+        display: frame.objects.findIndex(row => row.id === display),
+        ...view,
+      })),
+    } : {}),
   });
   const errors = { maximumAbsoluteError: 0 };
   compareSemanticValue(observation(rustFrame), observation(pythonFrame), fixture.id, errors);
