@@ -6,7 +6,7 @@ on:
       - ".github/workflows/perf-physical-aa.yml"
       - "benchmarks/perf-physical-aa-study.json"
       - "scripts/perf-physical-aa-*.mjs"
-      - "scripts/perf-physical-aa-archive.py"
+      - "scripts/perf-physical-aa-*.py"
       - "docs/perf-physical-aa.md"
   workflow_dispatch:
     inputs:

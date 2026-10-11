@@ -179,10 +179,15 @@ pub enum Property {
     Appearance,
     Reveal,
     Morph,
+    /// Independent appearance-only channels of one existing leaf attachment.
+    GlowColor,
+    GlowRadius,
+    GlowIntensity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {
+    Glow,
     Bool,
     ZIndex,
     Scalar,
@@ -196,6 +201,7 @@ pub enum ValueKind {
 impl Property {
     pub const fn value_kind(self) -> ValueKind {
         match self {
+            Self::GlowColor | Self::GlowRadius | Self::GlowIntensity => ValueKind::Glow,
             Self::Presence => ValueKind::Bool,
             Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
@@ -214,6 +220,59 @@ impl Property {
 
     pub const fn is_instant(self) -> bool {
         matches!(self, Self::Presence | Self::ZIndex)
+    }
+}
+
+/// A typed endpoint for a single glow channel. Radius and intensity retain f64
+/// precision; no renderer units, timing or attachment identity are inferred here.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum GlowTrackValue {
+    Color(crate::Color),
+    Radius(crate::GlowRadius),
+    Intensity(f64),
+}
+
+impl GlowTrackValue {
+    pub fn from_definition(property: Property, glow: crate::Glow) -> Option<Self> {
+        match property {
+            Property::GlowColor => Some(Self::Color(glow.color())),
+            Property::GlowRadius => Some(Self::Radius(glow.radius())),
+            Property::GlowIntensity => Some(Self::Intensity(glow.intensity())),
+            _ => None,
+        }
+    }
+
+    pub const fn property(self) -> Property {
+        match self {
+            Self::Color(_) => Property::GlowColor,
+            Self::Radius(_) => Property::GlowRadius,
+            Self::Intensity(_) => Property::GlowIntensity,
+        }
+    }
+
+    pub fn update(self) -> crate::GlowUpdate {
+        match self {
+            Self::Color(value) => crate::GlowUpdate::default().color(value),
+            Self::Radius(value) => crate::GlowUpdate::default().radius(value),
+            Self::Intensity(value) => crate::GlowUpdate::default().intensity(value),
+        }
+    }
+
+    /// Use the same checked interpolation contract as semantic glow targets.
+    /// The returned patch owns only this channel, not the whole definition.
+    pub fn sample(self, to: Self, alpha: f64) -> Result<crate::GlowUpdate, TimelineError> {
+        if self.property() != to.property() {
+            return Err(TimelineError::InvalidGlowValues(self.property()));
+        }
+        let invalid = |_| TimelineError::InvalidGlowValues(self.property());
+        let source = self
+            .update()
+            .apply_to(crate::Glow::default())
+            .map_err(invalid)?;
+        to.update()
+            .prepare(source)
+            .and_then(|prepared| prepared.sample(alpha))
+            .map_err(invalid)
     }
 }
 
@@ -288,6 +347,13 @@ impl std::fmt::Display for TrackValueEndpoint {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackValues {
+    /// Generation is captured at activation; a reused object slot or attachment
+    /// name never redirects an already prepared effect track.
+    Glow {
+        attachment: crate::SemanticNodeId,
+        from: GlowTrackValue,
+        to: GlowTrackValue,
+    },
     /// Exact finite f64 priorities; never lowered to shader precision or interpolated.
     ZIndex {
         from: f64,
@@ -356,6 +422,7 @@ pub enum TrackValues {
 impl TrackValues {
     pub const fn value_kind(&self) -> ValueKind {
         match self {
+            Self::Glow { .. } => ValueKind::Glow,
             Self::Bool { .. } => ValueKind::Bool,
             Self::ZIndex { .. } => ValueKind::ZIndex,
             Self::Scalar { .. } => ValueKind::Scalar,
@@ -374,6 +441,15 @@ impl TrackValues {
         property: Property,
     ) -> Result<(), TimelineError> {
         match self {
+            Self::Glow { from, to, .. } => {
+                if from.property() != property
+                    || to.property() != property
+                    || from.sample(*to, 0.0).is_err()
+                {
+                    return Err(TimelineError::InvalidGlowValues(property));
+                }
+                Ok(())
+            }
             Self::ZIndex { from, to } if !from.is_finite() || !to.is_finite() => {
                 Err(TimelineError::InvalidZIndexValues {
                     from: *from,
@@ -618,6 +694,11 @@ pub struct TrackDefinition {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TimelineError {
+    InvalidGlowValues(Property),
+    InvalidGlowAttachment {
+        object: ObjectId,
+        attachment: crate::SemanticNodeId,
+    },
     InvalidZIndexValues {
         from: f64,
         to: f64,
@@ -672,6 +753,8 @@ pub enum TimelineError {
 impl std::fmt::Display for TimelineError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidGlowValues(property) => write!(formatter, "invalid or incompatible glow endpoints for {property:?}"),
+            Self::InvalidGlowAttachment { object, attachment } => write!(formatter, "glow track for {object:?} does not match attachment {attachment:?}"),
             Self::InvalidStartTime(value) => write!(formatter, "invalid start time {value}"),
             Self::InvalidDuration(value) => write!(formatter, "invalid duration {value}"),
             Self::InvalidInstantDuration { property, duration } => write!(

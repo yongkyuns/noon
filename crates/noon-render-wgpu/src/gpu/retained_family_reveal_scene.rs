@@ -174,6 +174,7 @@ mod tests {
         store.add_member(family, leaf).unwrap();
 
         let object = noon_runtime::FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: object,

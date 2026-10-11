@@ -37,6 +37,26 @@ def fixture(source=SOURCE, extra=None, omit=None):
 
 
 class ArchiveIntegrity(unittest.TestCase):
+    def test_only_one_manual_dispatch_is_registered_for_this_study(self):
+        initial = {"total_count": 1, "workflow_runs": [
+            {"id": 123, "run_attempt": 1, "event": "workflow_dispatch",
+             "head_branch": "master"}]}
+        record = ARCHIVE.require_unique_manual_dispatch(initial, "123")
+        self.assertEqual(record["runId"], 123)
+        self.assertFalse(record["qualification"])
+        for wrong in (
+            {**initial, "total_count": 2},
+            {**initial, "workflow_runs": []},
+            {**initial, "workflow_runs": [dict(initial["workflow_runs"][0], id=124)]},
+            {**initial, "workflow_runs": [dict(initial["workflow_runs"][0], run_attempt=2)]},
+            {**initial, "workflow_runs": [dict(initial["workflow_runs"][0], event="pull_request")]},
+            {**initial, "workflow_runs": [dict(initial["workflow_runs"][0], head_branch="feature")]},
+        ):
+            with self.subTest(registry=wrong), self.assertRaises(ValueError):
+                ARCHIVE.require_unique_manual_dispatch(wrong, "123")
+        with self.assertRaises(ValueError):
+            ARCHIVE.require_unique_manual_dispatch(initial, "not-a-run")
+
     def test_valid_original_zip_and_source(self):
         z, identity = ARCHIVE.verified_archive(fixture(), SOURCE)
         self.assertIn("pkg/noon_web_bg.wasm", z.namelist())

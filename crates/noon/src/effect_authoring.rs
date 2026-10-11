@@ -1,5 +1,5 @@
 //! Thin Rust appearance authoring over the canonical semantic transaction path.
-//! This is the M0 declaration surface, not enabled effect playback/rendering.
+//! Finite glow playback uses the same Scene/LiveSession publication owners.
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
@@ -202,8 +202,8 @@ impl Mobject {
 }
 
 impl Scene {
-    /// Declare a glow through the normal scene transaction. Execution remains
-    /// explicitly unavailable for effect-bearing stores in this M0 slice.
+    /// Declare a glow through the normal scene transaction. Execution validates
+    /// the finite filled, unstroked planar circle/rectangle profile.
     pub fn set_glow(&mut self, object: &Mobject, update: GlowUpdate) -> Result<(), AuthoringError> {
         self.require_object(object)?;
         self.apply_semantic_transaction(glow_transaction(object, update)?)?;
@@ -255,8 +255,8 @@ impl Scene {
 }
 
 impl LiveSession<'_> {
-    /// The signature shares the ordinary live publication owner. Until M1 adds
-    /// effect execution, a nonempty request is rejected before either state commits.
+    /// Publish through the ordinary live transaction, including attachment
+    /// enrollment/removal. Unsupported profiles fail before either state commits.
     pub fn set_glow(
         &mut self,
         object: &Mobject,
@@ -306,5 +306,11 @@ impl LiveSession<'_> {
     }
 }
 
+#[cfg(test)]
+mod activation_tests;
+#[cfg(test)]
+mod bridge_tests;
+#[cfg(test)]
+mod playback_tests;
 #[cfg(test)]
 mod tests;

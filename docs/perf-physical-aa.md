@@ -32,7 +32,7 @@ The workflow archives the original ZIP bytes, independent manifest checks, origi
 
 ### To run when an eligible physical runner is actually available
 
-Open **GitHub → Actions → Physical A/A original precision acquisition → Run workflow**, select `master`, type exactly `RUN_PHYSICAL_AA_ONCE`, and submit **only one** attempt. No automatic retry, score selection, or repeated dispatch to obtain a favorable result. When it finishes, retain the entire `physical-aa-1933-<run>-1` artifact and independently verify the registered ZIP hashes, environment, journal and scorer integrity. A failed or inconclusive physical A/A means **do not run** a candidate-versus-baseline acceptance test.
+Open **GitHub → Actions → Physical A/A original precision acquisition → Run workflow**, select `master`, type exactly `RUN_PHYSICAL_AA_ONCE`, and submit **only one** attempt. No automatic retry, score selection, or repeated dispatch to obtain a favorable result. The source-pinned archive intake checks the GitHub workflow-run registry and fails closed unless exactly **one** manual dispatch exists, and its run ID, branch and attempt match the current run. A second manual dispatch is rejected even if its separate run attempt is numbered one. When it finishes, retain the entire `physical-aa-1933-<run>-1` artifact and independently verify the registered ZIP hashes, environment, journal and scorer integrity. A failed or inconclusive physical A/A means **do not run** a candidate-versus-baseline acceptance test.
 
 ## Limits and follow-up
 

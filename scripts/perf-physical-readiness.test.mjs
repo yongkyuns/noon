@@ -21,6 +21,12 @@ test("build activity distinguishes executable names and rejects missing/malforme
   assert.deepEqual(parseBuildProcesses("1 /usr/bin/node\n2 /opt/app/Codex"), []);
   assert.deepEqual(parseBuildProcesses("1 arm-none-eabi-gcc\n2 clang-18\n3 gmake"),
     [{ pid: 1, executable: "arm-none-eabi-gcc" }, { pid: 2, executable: "clang-18" }, { pid: 3, executable: "gmake" }]);
+  for (const executable of ["swift", "swiftc", "swift-build", "swift-driver", "swift-frontend", "xcodebuild"]) {
+    const processes = parseBuildProcesses(`1 /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/${executable}\n2 node`);
+    assert.deepEqual(processes, [{ pid: 1, executable }]);
+    assert.equal(assessReadiness({ ...ok, buildProcesses: processes }).status, "blocked");
+  }
+  assert.deepEqual(parseBuildProcesses("1 swift-driver-helper\n2 my-xcodebuild\n3 /opt/Swift.app/app"), []);
   for (const value of [null, "", "PID COMMAND", "0 rustc", "9007199254740992 rustc", "1 node\nbroken"]) {
     assert.equal(parseBuildProcesses(value), null);
   }
@@ -69,7 +75,41 @@ test("block failure and missing evidence independently", () => {
   }
 });
 
-test("device capture refuses active builds and preserves reports if a build starts during a suite", async t => {
+test("readiness retains large process tables and rejects output beyond its bound", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "noon-readiness-processes-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const ps = path.join(dir, "ps");
+  const fixture = path.join(dir, "processes.txt");
+  await writeFile(ps, `#!${process.execPath}\nprocess.stdout.write(require('node:fs').readFileSync(process.env.NOON_TEST_PS));\n`);
+  await chmod(ps, 0o755);
+  const rows = Array.from({ length: 1000 }, (_, i) =>
+    `${i + 1} /opt/long application name/Contents/Frameworks/Helper.app/Contents/MacOS/non-build-helper\n`).join("");
+  assert.ok(Buffer.byteLength(rows) > 64 * 1024 && Buffer.byteLength(rows) < 256 * 1024);
+  for (const [name, output, expected] of [
+    ["large-clean", rows, []],
+    ["large-build", rows + "1001 /tmp/another project/swift-frontend\n",
+      [{ pid: 1001, executable: "swift-frontend" }]],
+    ["over-limit", rows.repeat(4), null],
+  ]) {
+    await writeFile(fixture, output);
+    const outfile = path.join(dir, `${name}.json`);
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+      import { runReadiness } from ${JSON.stringify(new URL("./perf-physical-readiness.mjs", import.meta.url).href)};
+      await runReadiness({ outfile: process.argv[1], flags: ${JSON.stringify(flags)},
+        launch: async () => { throw new Error("process-only fixture; no GPU launch"); } });
+    `, outfile], { encoding: "utf8", env: { ...process.env,
+      PATH: `${dir}:${process.env.PATH}`, NOON_TEST_PS: fixture } });
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(await readFile(outfile, "utf8"));
+    assert.deepEqual(report.observed.buildProcesses, expected, name);
+    assert.equal(report.decision.blockers.includes("host build activity unknown"), expected === null, name);
+    assert.equal(report.decision.blockers.includes("compiler/build/archive tooling is active"),
+      expected !== null && expected.length > 0, name);
+    assert.equal(report.decision.performanceAcceptance, false);
+  }
+});
+
+for (const compiler of ["rustc", "swift-driver", "swift-frontend", "xcodebuild"]) test(`device capture refuses ${compiler} and preserves reports if it starts during a suite`, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "noon-device-builds-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await mkdir(path.join(dir, "scripts")); await mkdir(path.join(dir, "bin"));
@@ -78,7 +118,7 @@ test("device capture refuses active builds and preserves reports if a build star
   }
   const marker = path.join(dir, "building");
   const ps = path.join(dir, "bin", "ps");
-  await writeFile(ps, `#!${process.execPath}\nconst fs=require('node:fs');process.stdout.write(fs.existsSync(${JSON.stringify(marker)})?'123 /tmp/other project/bin/rustc\\n':'123 node\\n');\n`);
+  await writeFile(ps, `#!${process.execPath}\nconst fs=require('node:fs');process.stdout.write(fs.existsSync(${JSON.stringify(marker)})?'123 /tmp/other project/bin/${compiler}\\n':'123 node\\n');\n`);
   await chmod(ps, 0o755);
   await writeFile(path.join(dir, "scripts", "perf-corpus.mjs"), `
     import fs from 'node:fs';
@@ -96,12 +136,12 @@ test("device capture refuses active builds and preserves reports if a build star
   assert.notEqual(result.status, 0); assert.match(result.stderr, /compiler\/build\/archive tooling is active/);
   assert.deepEqual(await readdir(before), ["perf-corpus-webgpu-builds-before.json"]);
   const read = (out, phase) => readFile(path.join(out, `perf-corpus-webgpu-builds-${phase}.json`), "utf8").then(JSON.parse);
-  assert.deepEqual((await read(before, "before")).processes, [{ pid: 123, executable: "rustc" }]);
+  assert.deepEqual((await read(before, "before")).processes, [{ pid: 123, executable: compiler }]);
   await rm(marker);
   const after = path.join(dir, "after"); result = capture(after);
   assert.notEqual(result.status, 0); assert.match(result.stderr, /compiler\/build\/archive tooling is active/);
   assert.deepEqual((await read(after, "before")).processes, []);
-  assert.deepEqual((await read(after, "after")).processes, [{ pid: 123, executable: "rustc" }]);
+  assert.deepEqual((await read(after, "after")).processes, [{ pid: 123, executable: compiler }]);
   assert.equal(await readFile(path.join(after, "corpus-webgpu.json"), "utf8"), "raw evidence");
   const original = await readFile(path.join(after, "perf-corpus-webgpu-builds-before.json"), "utf8");
   result = capture(after);

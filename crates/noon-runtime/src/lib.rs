@@ -9,6 +9,7 @@ mod effective_content;
 mod effective_write;
 mod execution_slots;
 mod frame;
+mod glow_attachment;
 mod graph_endpoints;
 mod numeric_text;
 pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
@@ -327,6 +328,18 @@ impl SceneInstance {
         tracks: &[TrackDefinition],
     ) -> Result<(), CompilePatchError> {
         self.compiled.preflight_reconcilable_track_additions(tracks)
+    }
+
+    /// A staged, allocator-owned new attachment may be the source of a track
+    /// in this one atomic semantic/runtime commit. The final transaction still
+    /// proves that the attachment precedes the track before publication.
+    pub fn preflight_reconcilable_track_additions_with_staged_glow(
+        &self,
+        tracks: &[TrackDefinition],
+        staged_glow: &std::collections::BTreeMap<noon_core::ObjectId, noon_compile::CompiledGlow>,
+    ) -> Result<(), CompilePatchError> {
+        self.compiled
+            .preflight_reconcilable_track_additions_with_staged_glow(tracks, staged_glow)
     }
 
     pub fn new(compiled: CompiledScene) -> Self {
@@ -798,8 +811,13 @@ impl SceneInstance {
                 | ExecutionPatch::SetSemanticTransform { .. }
                 | ExecutionPatch::SetSpatialState { .. }
                 | ExecutionPatch::SetStyle { .. }
+                | ExecutionPatch::SetGlow { .. }
         ) {
             self.apply_value_patch(patch)?;
+            return Ok(&self.frame);
+        }
+        if let ExecutionPatch::SetGlowAttachment { object, glow, .. } = patch {
+            self.apply_glow_attachment_patch(patch, *object, glow.clone())?;
             return Ok(&self.frame);
         }
         if matches!(patch, ExecutionPatch::SetGraphDependencies { .. }) {
@@ -1042,7 +1060,14 @@ impl SceneInstance {
                 groups_evaluated: evaluation.groups_evaluated,
                 ..RuntimePatchStats::default()
             };
-            self.mark_changed(channel.object_index as usize);
+            if matches!(
+                channel.property,
+                Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+            ) {
+                self.changes.insert(channel.object_index as usize);
+            } else {
+                self.mark_changed(channel.object_index as usize);
+            }
             return Ok(());
         }
         let old_channel = match patch {
@@ -1139,7 +1164,8 @@ impl SceneInstance {
             | ExecutionPatch::SetTransform { object, .. }
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
-            | ExecutionPatch::SetStyle { object, .. } => *object,
+            | ExecutionPatch::SetStyle { object, .. }
+            | ExecutionPatch::SetGlow { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
         let index = self
@@ -1209,6 +1235,17 @@ impl SceneInstance {
                 self.last_patch_stats.scheduler_events_removed += motion_stats.events_removed;
                 self.last_patch_stats.scheduler_events_inserted += motion_stats.events_inserted;
             }
+            ExecutionPatch::SetGlow { glow, .. } => {
+                self.frame.objects[index].glow = Some(std::sync::Arc::clone(glow));
+                self.reapply_properties(
+                    index,
+                    &[
+                        Property::GlowColor,
+                        Property::GlowRadius,
+                        Property::GlowIntensity,
+                    ],
+                );
+            }
             ExecutionPatch::SetStyle { style, .. } => {
                 self.frame.objects[index].style = *style;
                 self.reapply_properties(
@@ -1224,10 +1261,16 @@ impl SceneInstance {
             }
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         }
-        self.reapply_reactive_for_object(index);
-        self.reapply_numeric_text_for_object(index);
-        if self.frame.objects[index] != before {
-            self.mark_changed(index);
+        if matches!(patch, ExecutionPatch::SetGlow { .. }) {
+            if self.frame.objects[index].glow != before.glow {
+                self.changes.insert(index);
+            }
+        } else {
+            self.reapply_reactive_for_object(index);
+            self.reapply_numeric_text_for_object(index);
+            if self.frame.objects[index] != before {
+                self.mark_changed(index);
+            }
         }
         Ok(())
     }
@@ -1291,6 +1334,25 @@ impl SceneInstance {
         for channel in relevant() {
             let object = &self.compiled.objects()[object_index];
             match channel.property {
+                Property::GlowColor | Property::GlowRadius | Property::GlowIntensity => {
+                    // Reset only the edited channel; independent glow/motion lanes
+                    // retain their effective values when tracks are added/removed.
+                    if let (Some(base), Some(current)) =
+                        (&object.glow, &mut self.frame.objects[object_index].glow)
+                    {
+                        let next = noon_core::GlowTrackValue::from_definition(
+                            channel.property,
+                            base.definition,
+                        )
+                        .expect("glow channel")
+                        .update()
+                        .apply_to(current.definition)
+                        .expect("validated base glow");
+                        if current.definition != next {
+                            Arc::make_mut(current).definition = next;
+                        }
+                    }
+                }
                 Property::Position => {
                     self.frame.objects[object_index].transform.translation = affine_base_at_time(
                         &self.compiled,
@@ -1693,6 +1755,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .iter()
         .enumerate()
         .map(|(index, object)| FrameObjectState {
+            glow: object.glow.clone(),
             z_index: initial_z_index(compiled, index),
             id: object.id,
             content: object.content.clone(),
@@ -1774,7 +1837,7 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 15] = [
+const PROPERTY_ORDER: [Property; 18] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
@@ -1790,6 +1853,9 @@ const PROPERTY_ORDER: [Property; 15] = [
     Property::Appearance,
     Property::Reveal,
     Property::Morph,
+    Property::GlowColor,
+    Property::GlowRadius,
+    Property::GlowIntensity,
 ];
 
 fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackGroup> {
@@ -1858,6 +1924,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     let object = &compiled.objects()[object_index];
     debug_assert!(object.live);
     frame.objects.push(FrameObjectState {
+        glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
@@ -1899,6 +1966,7 @@ fn reset_object_frame(
 ) {
     let object = &compiled.objects()[object_index];
     frame.objects[object_index] = FrameObjectState {
+        glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
@@ -2196,6 +2264,20 @@ fn apply_group_to_row(
 ) -> bool {
     if matches!(
         group.channel.property,
+        Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+    ) {
+        return apply_glow_channel(
+            compiled.objects()[group.channel.object_index as usize]
+                .glow
+                .as_deref(),
+            row.glow,
+            tracks,
+            group,
+            time,
+        );
+    }
+    if matches!(
+        group.channel.property,
         Property::WorldTransform | Property::CameraProfile
     ) {
         let row_spatial = row.spatial.as_ref();
@@ -2415,7 +2497,12 @@ fn apply_group_to_row(
                     camera: profile.camera(near, far)?,
                 })
             }),
-            Property::Presence | Property::ZIndex | Property::Transform => None,
+            Property::GlowColor
+            | Property::GlowRadius
+            | Property::GlowIntensity
+            | Property::Presence
+            | Property::ZIndex
+            | Property::Transform => None,
         };
         return base.is_some_and(|value| {
             apply_evaluated_value(
@@ -2652,6 +2739,66 @@ fn apply_prepared_morph_values(
     *row.render_transform = render_transform;
     changed |= set_optional_geometry_if_changed(row.render_geometry, Some(geometry), true);
     Some(changed)
+}
+
+fn apply_glow_channel(
+    base: Option<&noon_compile::CompiledGlow>,
+    glow: &mut Option<Arc<noon_compile::CompiledGlow>>,
+    tracks: &[CompiledTrack],
+    group: &TrackGroup,
+    time: f64,
+) -> bool {
+    let selected = if group.cursor == 0 {
+        tracks.first().map(|track| (track, 0.0))
+    } else {
+        tracks[..group.cursor]
+            .iter()
+            .rev()
+            .find_map(|track| world_track_progress(track, time).map(|alpha| (track, alpha)))
+    };
+    let Some((track, alpha)) = selected else {
+        return false;
+    };
+    let TrackValues::Glow {
+        attachment,
+        from,
+        to,
+    } = track.values
+    else {
+        unreachable!("validated glow channel");
+    };
+    let Some(current) = glow.as_ref().filter(|glow| glow.attachment == attachment) else {
+        return false; // an old generation can never control a replacement
+    };
+    let patch = if tracks.last().is_some_and(|last| last.id == track.id)
+        && track.reconciled
+        && time >= track.timing.start_time + track.timing.duration
+    {
+        let Some(base) = base else {
+            return false;
+        };
+        match track.property {
+            Property::GlowColor => noon_core::GlowUpdate::default().color(base.definition.color()),
+            Property::GlowRadius => {
+                noon_core::GlowUpdate::default().radius(base.definition.radius())
+            }
+            Property::GlowIntensity => {
+                noon_core::GlowUpdate::default().intensity(base.definition.intensity())
+            }
+            _ => unreachable!(),
+        }
+    } else {
+        from.sample(to, alpha)
+            .expect("validated glow endpoints and normalized timing")
+    };
+    let next = patch
+        .apply_to(current.definition)
+        .expect("validated single-channel glow update");
+    if current.definition == next {
+        return false;
+    }
+    Arc::make_mut(glow.as_mut().expect("checked attachment")).definition = next;
+    true
 }
 
 fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progress: f32) -> bool {
@@ -3149,7 +3296,8 @@ fn interpolate_track_values_with_path_plan(
                 sample_camera_profile(*from, *to, *near, *far, f64::from(progress))?;
             Some(EvaluatedValue::CameraProfile { profile, camera })
         }
-        TrackValues::Bool { .. }
+        TrackValues::Glow { .. }
+        | TrackValues::Bool { .. }
         | TrackValues::ZIndex { .. }
         | TrackValues::Object { .. }
         | TrackValues::PreparedMorph { .. } => None,

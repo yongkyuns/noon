@@ -109,5 +109,10 @@ fn parsed_target_updates_share_copy_isolation_and_ordinary_declaration() {
         .declare_transform_to(&dot, &target, noon::AnimationOptions::new().run_time(1.5))
         .unwrap();
     assert_eq!(animation.options().unwrap().run_time, Some(1.5));
-    assert!(scene.execution_session().is_err());
+    assert!(scene
+        .execution_session()
+        .unwrap()
+        .frame()
+        .objects
+        .is_empty());
 }

@@ -13,6 +13,7 @@ LESSONS = {
     "showcase-reactive-relationships",
     "showcase-always-redraw",
     "showcase-camera-follows-path",
+    "showcase-gpu-glow",
 }
 
 
@@ -81,6 +82,38 @@ class FeatureLessonStoryboards(unittest.TestCase):
                                 or any(Decimal(str(entry["thumbnail_time"])) == start for start, _ in holds))
                 for beat in entry["beats"]:
                     self.assertTrue(Decimal(0) < Decimal(str(beat["time"])) <= duration)
+
+    def test_gpu_glow_has_real_absent_to_neutral_and_replacement_beats(self):
+        manifest = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
+        entry = next(item for item in manifest["entries"] if item["id"] == "showcase-gpu-glow")
+        self.assertEqual(entry["primary_feature"], "gpu-glow-parameter-animation")
+        self.assertEqual(entry["duration"], 10.0)
+        self.assertEqual(entry["thumbnail_time"], 5.3)
+        self.assertEqual(entry["still_intervals"], [
+            [2.9, 3.4], [4.8, 5.8], [7.1, 7.45], [8.7, 10.0],
+        ])
+        source = (WEB / entry["path"]).read_text()
+        tree = ast.parse(source)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        effects = [node for node in calls if isinstance(node.func, ast.Attribute)
+                   and node.func.attr == "set_glow"]
+        self.assertEqual(len(effects), 10, "three initial, three tuned, one shared fade, three re-enrolled")
+        self.assertTrue(all(isinstance(node.func.value, ast.Attribute)
+                            and node.func.value.attr == "animate" for node in effects),
+                        "use the shared semantic animation lane, not a Python-side updater")
+        updates = {kw.arg for node in effects for kw in node.keywords}
+        self.assertTrue({"intensity", "radius", "color"}.issubset(updates))
+        self.assertTrue(any(isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Attribute)
+                            and node.func.attr == "remove_glow" for node in calls))
+        self.assertFalse(any(isinstance(node.func, ast.Attribute)
+                             and node.func.attr in {"add_updater", "remove_updater"}
+                             for node in calls))
+        duration, holds, transitions = literal_timeline(source)
+        self.assertEqual(duration, Decimal("10.0"))
+        self.assertEqual(len(transitions), 6)
+        self.assertEqual(len(holds), 4)
+        self.assertTrue(any(start < Decimal("5.3") <= end for start, end in holds))
 
     def test_spatial_showcase_models_camera_moves_as_timed_animation(self):
         manifest = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())

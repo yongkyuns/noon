@@ -23,7 +23,8 @@ def github_json(endpoint, token):
         f"https://api.github.com/repos/{REPOSITORY}/{endpoint}",
         headers={"Authorization": f"Bearer {token}",
                  "Accept": "application/vnd.github+json",
-                 "X-GitHub-Api-Version": "2022-11-28"},
+                 "X-GitHub-Api-Version": "2022-11-28",
+                 "User-Agent": "noon-physical-aa"},
     )
     with urllib.request.urlopen(req, timeout=30) as response:
         return json.loads(response.read())
@@ -34,13 +35,33 @@ def github_zip(endpoint, token, limit=100 * 1024 * 1024):
         f"https://api.github.com/repos/{REPOSITORY}/{endpoint}",
         headers={"Authorization": f"Bearer {token}",
                  "Accept": "application/vnd.github+json",
-                 "X-GitHub-Api-Version": "2022-11-28"},
+                 "X-GitHub-Api-Version": "2022-11-28",
+                 "User-Agent": "noon-physical-aa"},
     )
     with urllib.request.urlopen(req, timeout=180) as response:
         body = response.read(limit + 1)
     if not body or len(body) > limit:
         raise ValueError("invalid or oversized archived release ZIP")
     return body
+
+
+def require_unique_manual_dispatch(runs, current_id):
+    """No second workflow-dispatch run may consume this one-shot A/A study."""
+    if not isinstance(current_id, str) or not current_id.isdecimal():
+        raise ValueError("missing GitHub Actions run identity")
+    if runs.get("total_count") != 1:
+        raise ValueError("physical A/A study already dispatched or run listing unavailable")
+    observed = runs.get("workflow_runs")
+    if not isinstance(observed, list) or len(observed) != 1:
+        raise ValueError("single registered physical A/A run not established")
+    entry = observed[0]
+    if (entry.get("id") != int(current_id)
+            or entry.get("run_attempt") != 1
+            or entry.get("event") != "workflow_dispatch"
+            or entry.get("head_branch") != "master"):
+        raise ValueError("physical A/A run identity or first-attempt provenance differs")
+    return {"runId": int(current_id), "attempt": 1,
+            "diagnosticOnly": True, "qualification": False}
 
 
 def verified_archive(raw, expected_source):
@@ -98,7 +119,14 @@ def main(plan_file, workspace, evidence):
     token = os.environ.get("GH_TOKEN")
     if not token:
         raise ValueError("missing read-only GitHub Actions artifact token")
+    # A new distinct dispatch is not a rerun of the original registration.
+    registry = github_json(
+        "actions/workflows/perf-physical-aa.yml/runs"
+        "?event=workflow_dispatch&per_page=2", token)
+    admission = require_unique_manual_dispatch(registry, os.environ.get("GITHUB_RUN_ID"))
     exclusive_write(record / "registered-plan.json", plan_bytes)
+    exclusive_write(record / "single-manual-dispatch.json",
+                    (json.dumps(admission, indent=2) + "\n").encode())
     completed = []
     for build in plan["builds"]:
         artifact = build["artifactId"]

@@ -13,7 +13,7 @@ export const EXPECTED = Object.freeze({
 });
 
 const software = /swiftshader|llvmpipe|softpipe|software (?:renderer|rasterizer|adapter)|microsoft basic render/i;
-const buildTool = /^(?:cargo|rustc|rust-lld|wasm-opt|g?make|ninja|cmake|clang(?:\+\+)?(?:-\d+)?|cc|c\+\+|cc1(?:plus)?|tar|(?:.+-)?(?:gcc|g\+\+|ld))$/;
+const buildTool = /^(?:cargo|rustc|rust-lld|wasm-opt|g?make|ninja|cmake|clang(?:\+\+)?(?:-\d+)?|cc|c\+\+|cc1(?:plus)?|swift(?:c|-build|-driver|-frontend)?|xcodebuild|tar|(?:.+-)?(?:gcc|g\+\+|ld))$/;
 
 // Consume executable names, never command arguments. Missing or malformed ps
 // output is unknown; an empty list only rules out these known build tools.
@@ -103,7 +103,7 @@ export function browserProbeSource() {
 
 function safeCommand(cmd, args = []) {
   try {
-    return execFileSync(cmd, args, { encoding: "utf8", timeout: 6000, maxBuffer: 64 * 1024,
+    return execFileSync(cmd, args, { encoding: "utf8", timeout: 6000, maxBuffer: 256 * 1024,
       stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
     return "";

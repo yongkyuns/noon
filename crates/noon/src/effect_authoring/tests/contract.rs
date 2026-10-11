@@ -94,7 +94,12 @@ fn motion_and_effect_targets_remain_ordinary_nested_animation_declarations() {
         1.2
     );
     // Creating a composition must not secretly start an effect-only executor.
-    assert!(scene.execution_session().is_err());
+    assert!(scene
+        .execution_session()
+        .unwrap()
+        .frame()
+        .objects
+        .is_empty());
 }
 
 #[test]
