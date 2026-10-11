@@ -24,12 +24,12 @@ jobs:
       - name: Checkout exact already qualified product commit, not helper workflow
         uses: actions/checkout@v7
         with:
-          ref: c53f8575fc5f2f7eb7d3c2f2a356a0335ef19464
+          ref: 06075db5431aca94421978161fe836b8e9cc51a5
           fetch-depth: 0
       - name: Three-way merge exact master and require only audited conflicts
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = c53f8575fc5f2f7eb7d3c2f2a356a0335ef19464
+          test "$(git rev-parse HEAD)" = 06075db5431aca94421978161fe836b8e9cc51a5
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch origin 7e2b63b3eca0fbf6032b80eaa5aa8ac743ff9e9f
@@ -45,43 +45,35 @@ jobs:
           from pathlib import Path
           actual = set(Path('glow-integrated-evidence/conflicts.txt').read_text().splitlines())
           expected = {
-              '.github/workflows/ci.yml',
               'web/thumbnails/showcase/capture-evidence.json',
               'web/thumbnails/showcase/showcase-pointer-selection.png',
               'web/thumbnails/showcase/showcase-translation-drag.png',
           }
           assert actual == expected, (actual, expected)
           PY
-      - name: Retain M1 effects jobs and master broader GPU path qualification
+      - name: Verify independently preinstalled merged CI preserves M1 and master contracts
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import subprocess
           from pathlib import Path
-          path = '.github/workflows/ci.yml'
-          ours = subprocess.check_output(['git','show',f':2:{path}'], text=True)
-          theirs = subprocess.check_output(['git','show',f':3:{path}'], text=True)
-          old = '      - "crates/noon-render-wgpu/src/gpu/mesh*"'
-          new = '      - "crates/noon-render-wgpu/src/gpu/**"'
-          assert ours.count(old) == 1
-          assert theirs.count(new) == 1
-          assert ours.count('Native glow raster correctness') == 1
-          assert 'gpu::' not in ours or 'glow_filter' in ours
-          # Unmodified older CI jobs and M1-specific checks must survive intact.
-          resolved = ours.replace(old, new)
-          assert resolved.count(new) == 1
-          assert old not in resolved
+          s = Path('.github/workflows/ci.yml').read_text()
+          assert s.count('      - "crates/noon-render-wgpu/src/gpu/**"') == 1
+          assert '      - "crates/noon-render-wgpu/src/gpu/mesh*"' not in s
           for marker in (
-              'Native glow raster correctness', 'Browser reactive and editor',
-              'name: Browser rendering (', 'backend:\n          - webgpu\n          - webgl',
-              'Browser rendering parity', 'gpu/glow_filter',
-              'scripts/glow-worker-', 'tests/visual-effects/**',
+              'Native glow raster correctness',
+              'Browser reactive and editor',
+              'name: Browser rendering (',
+              '        backend:\\n          - webgpu\\n          - webgl',
+              'Browser rendering parity',
+              'gpu/glow_filter',
+              'scripts/glow-worker-',
+              'tests/visual-effects/**',
           ):
-              assert marker in resolved, marker
-          Path(path).write_text(resolved)
+              marker = marker.replace('\\n', '\n')
+              assert marker in s, marker
           PY
-          git add .github/workflows/ci.yml
           node --test web/ci-workflow-topology.test.mjs
+          git diff --name-only --diff-filter=U | grep -q . && exit 1 || true
       - name: Retain prior real posters temporarily pending exact merged-source recapture
         run: |
           set -euo pipefail
@@ -97,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           git commit -m "Merge current master into M1 Glow preserving GPU qualification and gallery"
-          test "$(git rev-parse HEAD^1)" = c53f8575fc5f2f7eb7d3c2f2a356a0335ef19464
+          test "$(git rev-parse HEAD^1)" = 06075db5431aca94421978161fe836b8e9cc51a5
           test "$(git rev-parse HEAD^2)" = 7e2b63b3eca0fbf6032b80eaa5aa8ac743ff9e9f
           git rev-parse HEAD > glow-integrated-evidence/integrated-source-sha.txt
           git rev-parse HEAD^{tree} > glow-integrated-evidence/integrated-source-tree.txt
@@ -122,7 +114,7 @@ jobs:
           set -euo pipefail
           branch=refs/heads/codex/m1-glow-final-source-c53f
           actual=$(git ls-remote origin "$branch" | cut -f1)
-          test "$actual" = c53f8575fc5f2f7eb7d3c2f2a356a0335ef19464
+          test "$actual" = 06075db5431aca94421978161fe836b8e9cc51a5
           git merge-base --is-ancestor "$actual" HEAD
           git push origin "HEAD:$branch"
           echo "Isolated source published; exact gallery recapture and full CI still required" >> glow-integrated-evidence/status.txt
