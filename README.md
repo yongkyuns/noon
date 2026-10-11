@@ -127,6 +127,32 @@ The retained raster image example admits immutable PNG/JPEG or uint8 array resou
 
 Current Phase A acceptance status is intentionally not duplicated here; use the [Phase A umbrella](https://github.com/yongkyuns/noon/issues/953) and the architecture guide for current ownership and invariants.
 
+## Native Python authoring
+
+Build the optional CPython extension and the same Python facade used by Pyodide:
+
+```bash
+python3 scripts/build-native-python.py --profile release
+PYTHONPATH=build/python python3 -m noon_native parity/python-host/sequential.py --sample-hz 4
+```
+
+This initial host executes a **finite sampled scene without a window or renderer**.
+It is suitable for deterministic authoring and state-conformance tests; it is not
+native realtime playback. Async `construct` and ordinary synchronous helpers
+use the shared Rust operation/completion contract. The binding supports the
+analytic 2D geometry, transform/create/fade/composition, membership, effective
+query, and property-callback slice exercised in `parity/python-host`. Native
+text/LaTeX, spatial/family construction and callback content/membership producers
+are not yet qualified. No JavaScript shim or second Python scene is used.
+
+The real-host gate runs `scripts/python_host_conformance.py` and then
+`scripts/python-host-browser.mjs` against WebGPU and WebGL2. It compares the same
+Python files rather than treating native Rust examples as native Python proof.
+`scripts/python_host_performance.py` separately records native CPU timings,
+interpreter call counts versus runtime samples, idle evaluations, and Python
+retention. The paired browser Product Gate remains the regression/performance
+oracle for actual rendering; native sampled timings are not GPU or window FPS.
+
 ## Browser playground
 
 The browser demo combines:

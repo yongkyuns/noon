@@ -20,7 +20,7 @@ from _manim_semantic_handles import (
 )
 
 try:
-    from js import noonCreateAuthoringSvgHandle as _create_svg_handle
+    from _noon_host import noonCreateAuthoringSvgHandle as _create_svg_handle
 except ImportError:  # Native CPython tests do not have the browser bridge.
     _create_svg_handle = None
 

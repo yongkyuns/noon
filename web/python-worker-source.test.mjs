@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+const sharedSource = await readFile(new URL("./python/_noon_source.py", import.meta.url), "utf8");
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
 test("numeric label members reuse the DecimalNumber getter and live-query facade", () => {
@@ -208,7 +209,7 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.deepEqual(calls, ["cancel_semantic_continuation", "run"]);
   assert.match(
     source,
-    /await\s+execute_construct\(\s*__noon_result,\s*portable_constructs=__noon_portable_constructs,\s*\)/,
+    /await\s+execute_source\(\s*__noon_source,\s*json.loads\(__noon_context_json\)\s*\)/,
   );
   assert.match(source, /continuation\.endpoint\.startContinuation\(continuation\.generation\)/);
   assert.match(source, /continuation\.runRequestId\s*!==\s*request\.continuationRunRequestId/);
@@ -476,7 +477,7 @@ test("worker delegates every Scene construct lifecycle to the canonical adapter"
   );
   assert.match(
     authoring,
-    /await\s+execute_construct\(\s*__noon_result,\s*portable_constructs=__noon_portable_constructs,\s*\)/,
+    /await\s+execute_source\(\s*__noon_source,\s*json.loads\(__noon_context_json\)\s*\)/,
   );
   assert.doesNotMatch(authoring, /__noon_result\.(?:setup|construct|tear_down)\(/);
   assert.doesNotMatch(authoring, /exportDocument|to_document|to_scene_spec|materialize_legacy_geometry/);
@@ -576,12 +577,14 @@ test("a trapped host never publishes late success or request errors", () => {
   ]);
 });
 
-test("source compilation never replays module effects or changes fixtures", () => {
-  assert.match(source, /compile_authoring_source\(\s*__noon_source\s*\)/);
-  assert.match(source, /await execute_authoring_module\(__noon_code, __noon_namespace\)/);
-  assert.match(source, /__noon_namespace\[MODULE_BARRIER_GLOBAL\] = await_module_source_barrier/);
+test("source compilation is shared and never replays module effects", () => {
+  assert.match(source, /from _noon_source import execute_source/);
+  assert.match(sharedSource, /compile_authoring_source\(source, filename, portable=portable\)/);
+  assert.match(sharedSource, /await execute_authoring_module\(code, namespace\)/);
+  assert.match(sharedSource, /namespace\[MODULE_BARRIER_GLOBAL\] = await_module_source_barrier/);
+  assert.match(sharedSource, /namespace\[BARRIER_GLOBAL\] = await_source_barrier/);
+  assert.match(sharedSource, /await execute_construct\(result, portable_constructs=portable_constructs\)/);
   assert.doesNotMatch(source, /exec\(__noon_source,|source\.replace/);
-  assert.match(source, /__noon_namespace\[BARRIER_GLOBAL\] = await_source_barrier/);
 });
 
 test("explicit endpoint reconnect returns the existing runtime lease before reattaching", async () => {

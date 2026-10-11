@@ -15,7 +15,7 @@ from _manim_semantic_handles import (
 )
 
 try:
-    from js import (
+    from _noon_host import (
         noonAuthoringImageOptions as _image_options,
         noonCreateAuthoringImageHandle as _create_image,
         noonLoadImageUrl as _load_url,

@@ -1,0 +1,120 @@
+name: Python host conformance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/python-host-conformance.yml"
+      - "web/python/**"
+      - "web/python-compat-modules.js"
+      - "web/python-worker.source.js"
+      - "crates/noon-python/**"
+      - "crates/noon/**"
+      - "crates/noon-core/**"
+      - "crates/noon-runtime/**"
+      - "crates/noon-compile/**"
+      - "crates/noon-web/**"
+      - "scripts/python-host-*.mjs"
+      - "scripts/python_host_*.py"
+      - "scripts/build-native-python.py"
+      - "parity/python-host/**"
+      - "Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-host-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Real CPython conformance and performance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      PYO3_PYTHON: python3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Preserve exact-source reproduction inputs
+        run: |
+          mkdir -p artifacts/python-host-source
+          git rev-parse HEAD > artifacts/python-host-source/source-sha.txt
+          git archive --format=tar.gz --output=artifacts/python-host-source/source.tar.gz HEAD
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-host-source-${{ github.sha }}
+          path: artifacts/python-host-source/
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install repository-pinned Rust
+        run: rustup install
+      - name: Test conformance evidence diagnostics
+        run: node --test scripts/python-host-*.test.mjs
+      - name: Direct Rust semantic counterpart
+        run: cargo test -p noon --no-default-features --test python_host_contract
+      - name: Build real native CPython extension
+        run: python3 scripts/build-native-python.py --profile release
+      - name: Same-source native conformance and retirement
+        run: python3 scripts/python_host_conformance.py
+      - name: Native binding performance and interpreter locality
+        run: python3 scripts/python_host_performance.py
+      - name: Record exact tested source
+        if: always()
+        run: |
+          mkdir -p artifacts/python-host
+          git rev-parse HEAD > artifacts/python-host/source-sha.txt
+          rustc -Vv > artifacts/python-host/rust-version.txt
+      - name: Upload native conformance and measured performance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-host-native-${{ github.sha }}
+          path: artifacts/python-host/
+          retention-days: 14
+          if-no-files-found: error
+
+  browser:
+    name: Same-source Pyodide renderer conformance
+    runs-on: ubuntu-latest
+    needs: native
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-host-native-${{ github.sha }}
+          path: artifacts/python-host/
+      - name: Verify native evidence source
+        run: test "$(cat artifacts/python-host/source-sha.txt)" = "$(git rev-parse HEAD)"
+      - name: Build exact-source browser runtime
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: "false"
+          cache-ref: ${{ github.event.pull_request.base.sha }}
+      - name: Install browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Same-source Pyodide conformance on actual renderers
+        run: node scripts/python-host-browser.mjs
+      - name: Upload cross-host conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-host-browser-${{ github.sha }}
+          path: artifacts/python-host/
+          retention-days: 14
+          if-no-files-found: error

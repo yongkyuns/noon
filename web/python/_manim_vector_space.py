@@ -205,7 +205,7 @@ class LinearTransformationScene(VectorScene):
         run_time = float(kwargs.get("run_time", 3.0))
         rows, columns, values = _matrix_arguments(matrix)
         if requested_path_arc is None:
-            from js import noonLinearTransformationPathArc
+            from _noon_host import noonLinearTransformationPathArc
 
             path_arc = float(
                 engine_call(

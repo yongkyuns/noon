@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from js import noonResolveAnimationOptions as _resolve_shared_animation_options
+from _noon_host import noonResolveAnimationOptions as _resolve_shared_animation_options
 
 try:
-    from js import noonResolveTransformAnimationOptions as _resolve_transform_animation_options
+    from _noon_host import noonResolveTransformAnimationOptions as _resolve_transform_animation_options
 except ImportError:  # Test doubles predating the Transform-only bridge.
     _resolve_transform_animation_options = None
 

@@ -28,6 +28,9 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
                 def snapshotJson(self):
                     raise AssertionError("placement must not materialize snapshot JSON")
 
+                def centerCoordinates(self):
+                    return (self.centerX, self.centerY)
+
                 @property
                 def centerX(self): return float(self.snapshot["transform"]["translation"]["x"])
                 @property

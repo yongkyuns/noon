@@ -7,6 +7,7 @@ owns authoring syntax, argument conversion, and wrapper identity.
 from __future__ import annotations
 
 import math
+from functools import cache as _cache
 from typing import Any, Callable
 from enum import Enum
 
@@ -237,11 +238,16 @@ GRAY_E = GREY_E = _hex_color(0x222222)
 GRAY = GREY = GRAY_C
 
 
+# Retain only defining modules, like normal Python imports. Operation lookup
+# still occurs on every call: callback phase, ownership and Rust state are never
+# cached. Deferred imports keep optional resources off basic geometry startup.
+@_cache
 def _semantic_operations():
     import _manim_semantic_handles
     return _manim_semantic_handles
 
 
+@_cache
 def _callback_operations():
     # The adapter selects a staged callback view or the normal semantic handle.
     import _manim_updaters
@@ -600,6 +606,7 @@ class Mobject:
         return deepcopy_semantic_wrapper(self, memo)
 
 
+@_cache
 def _scene_operations():
     """Load the shared host adapter lazily, after public wrapper classes exist."""
     try:
@@ -1023,7 +1030,11 @@ def __getattr__(name: str):
     module = _PUBLIC_EXPORTS.get(name)
     if module is not None:
         from importlib import import_module
-        return getattr(import_module(module), name)
+        value = getattr(import_module(module), name)
+        # Publish the lazily imported definition once, like a normal import.
+        # Cache facade definitions only, never Scene instances or runtime state.
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

@@ -8,17 +8,23 @@ return one effective batch to their existing session.
 from __future__ import annotations
 
 import inspect
+from _noon_host import encode_callback, decode_callback
 import json
 import math
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
+from weakref import WeakValueDictionary
 
 import noon as _base
 from _noon_errors import engine_await, engine_call, raise_engine_error
 
 _NEXT_SESSION_ID = 0
-_TRACKED_MOBJECTS: list[_base.Mobject] = []
+# Discovery is not ownership. Detached wrappers can hold self-referential
+# registration history before any Scene/session can release them. Use identity
+# keys (not Mobject equality/hash) and retain wrappers only through their actual
+# callers, scenes, and active callback sessions. Dict order preserves admission.
+_TRACKED_MOBJECTS: WeakValueDictionary[int, _base.Mobject] = WeakValueDictionary()
 _CANONICAL_SESSIONS: dict[int, "_CanonicalCallbackSession"] = {}
 _ACTIVE_CONTEXTS: dict[int, Any] = {}
 _ACTIVE_CANONICAL_CONTEXT: ContextVar["_CanonicalCallbackContext | None"] = ContextVar(
@@ -33,8 +39,9 @@ def _coordinate_operations():
 
 
 def _track(mobject: _base.Mobject) -> None:
-    if not any(existing is mobject for existing in _TRACKED_MOBJECTS):
-        _TRACKED_MOBJECTS.append(mobject)
+    key = id(mobject)
+    if key not in _TRACKED_MOBJECTS:
+        _TRACKED_MOBJECTS[key] = mobject
 
 
 @dataclass(slots=True)
@@ -230,7 +237,7 @@ def prepare_canonical_callbacks(scene: _base.Scene, context: object) -> int | No
     """
 
     history: list[_UpdaterRegistration] = []
-    for mobject in _TRACKED_MOBJECTS:
+    for mobject in _TRACKED_MOBJECTS.values():
         if mobject._scene is scene:
             history.extend(_registration_history(mobject))
     if not history:
@@ -594,7 +601,7 @@ class _CanonicalCallbackContext:
             )
         engine_call(
             self._callback_player.stageCallbackMembership,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             batch,
             operation="callback.membership",
         )
@@ -608,7 +615,7 @@ class _CanonicalCallbackContext:
             )
         return engine_call(
             self._callback_player.stageCallbackProvisionalGeometry,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             options,
             operation="callback.provisional_geometry",
         )
@@ -621,7 +628,7 @@ class _CanonicalCallbackContext:
             )
         engine_call(
             self._callback_player.stageCallbackProvisionalShift,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             provisional,
             float(offset.x),
             float(offset.y),
@@ -641,7 +648,7 @@ class _CanonicalCallbackContext:
             )
         engine_call(
             self._callback_player.stageCallbackProvisionalFill,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             provisional,
             float(color.red),
             float(color.green),
@@ -659,7 +666,7 @@ class _CanonicalCallbackContext:
             )
         point = engine_call(
             self._callback_player.callbackProvisionalCenter,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             provisional,
             operation="callback.provisional_geometry",
         )
@@ -693,7 +700,7 @@ class _CanonicalCallbackContext:
             raise RuntimeError("callback provisional construction has no pinned player")
         return engine_call(
             self._callback_player.resolveCallbackProvisionalMobject,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             provisional,
             operation="callback.provisional_geometry",
         )
@@ -711,7 +718,7 @@ class _CanonicalCallbackContext:
             return None
         return [str(key) for key in engine_call(
             self._callback_player.callbackMembershipRootKeys,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             operation="callback.membership_read",
         )]
 
@@ -729,14 +736,14 @@ class _CanonicalCallbackContext:
     def _read(self, kind: str, key: tuple[int, int]) -> dict[str, Any]:
         """Suspend this exact callback invocation for one Rust-pinned read miss."""
         try:
-            from js import (
+            from _noon_host import (
                 noonReadSemanticContinuationCallback,
                 noonSemanticContinuationGeneration,
             )
-            from pyodide.ffi import can_run_sync, run_sync
+            from _noon_host import can_wait_sync as can_run_sync, wait_sync as run_sync
         except ImportError as error:
             raise NotImplementedError(
-                "canonical callback sparse reads require a suspended Pyodide continuation"
+                "canonical callback sparse reads require a running host continuation"
             ) from error
         if noonSemanticContinuationGeneration(self._authoring_context) is None:
             raise NotImplementedError(
@@ -744,7 +751,7 @@ class _CanonicalCallbackContext:
             )
         if not can_run_sync():
             raise NotImplementedError(
-                "canonical callback sparse reads require Pyodide JS Promise Integration"
+                "canonical callback sparse reads require synchronous host read support"
             )
         request_id = self._next_read_request_id
         self._next_read_request_id += 1
@@ -757,11 +764,11 @@ class _CanonicalCallbackContext:
             result_json = run_sync(
                 noonReadSemanticContinuationCallback(
                     self._authoring_context,
-                    json.dumps(self.token, separators=(",", ":")),
-                    json.dumps(request, separators=(",", ":")),
+                    encode_callback(self.token),
+                    encode_callback(request),
                 )
             )
-            result = json.loads(str(result_json))
+            result = decode_callback(result_json)
         except Exception as error:
             raise_engine_error(error, operation="callback.read")
         expected_kind = "scalar" if kind == "scalar_signal" else kind
@@ -771,17 +778,17 @@ class _CanonicalCallbackContext:
 
     async def _read_async(self, kind: str, key: tuple[int, int]) -> dict[str, Any]:
         """Read one typed sparse value from the same Rust-pinned callback phase."""
-        from js import noonReadSemanticContinuationCallback
+        from _noon_host import noonReadSemanticContinuationCallback
 
         request_id = self._next_read_request_id
         self._next_read_request_id += 1
         request = {"request_id": request_id, "kind": kind, "node": _phase_node_json(key)}
         raw = await engine_await(noonReadSemanticContinuationCallback(
             self._authoring_context,
-            json.dumps(self.token, separators=(",", ":")),
-            json.dumps(request, separators=(",", ":")),
+            encode_callback(self.token),
+            encode_callback(request),
         ), operation="callback.read")
-        result = json.loads(str(raw))
+        result = decode_callback(raw)
         expected_kind = "scalar" if kind == "scalar_signal" else kind
         if not isinstance(result, dict) or result.get("kind") != expected_kind:
             raise RuntimeError("canonical callback prefetch returned the wrong typed value")
@@ -1438,6 +1445,11 @@ def _phase_node_json(key: tuple[int, int]) -> dict[str, int]:
 
 
 def _canonical_phase_context(mobject: _base.Mobject) -> _CanonicalCallbackContext | None:
+    # The empty callable-invocation table proves that no overlay can apply. Do
+    # not inspect wrapper ownership on the ordinary deterministic authoring path.
+    # This is checked per invocation, never cached across a callback boundary.
+    if not _ACTIVE_CONTEXTS:
+        return None
     scene = getattr(mobject, "_scene", None)
     if scene is None or mobject._object is None:
         return None
@@ -1456,11 +1468,12 @@ def _canonical_provisional_context(
     the owning callback phase is active, so ordinary callback rows retain
     their batched effective-write path.
     """
+    active = _ACTIVE_CANONICAL_CONTEXT.get()
+    if not isinstance(active, _CanonicalCallbackContext):
+        return None
     context = getattr(mobject, "_callback_provisional_context", None)
     provisional = getattr(mobject, "_callback_provisional_handle", None)
-    active = _ACTIVE_CANONICAL_CONTEXT.get()
     if (not isinstance(context, _CanonicalCallbackContext)
-            or not isinstance(active, _CanonicalCallbackContext)
             or provisional is None
             or active._scene is not context._scene
             or active._authoring_context is not context._authoring_context
@@ -1901,14 +1914,22 @@ async def _finish_canonical_callback_phase_json(session_id, identity_json, commi
     finish(int(session_id), json.loads(identity_json))
 
 
-def _json_phase(value: object) -> str:
-    # This is the explicit Pyodide callback boundary. It is never an in-process
-    # Rust engine boundary: the semantic store, compiler plan, session and
-    # renderer delta encoder remain in the same WASM runtime.
-    import json
-
-    return json.dumps(value, separators=(",", ":"), allow_nan=False)
+def _json_phase(value: object) -> object:
+    # Only the existing browser bridge uses a codec; native values stay typed.
+    return encode_callback(value)
 
 
 def release_session(session_id: int) -> None:
-    _CANONICAL_SESSIONS.pop(int(session_id), None)
+    session = _CANONICAL_SESSIONS.pop(int(session_id), None)
+    if session is None:
+        return
+    for region in session.pending_region_contexts:
+        region.discard_membership()
+    session.pending_region_contexts.clear()
+    session.pending_callback_context = None
+    for key, item in list(_TRACKED_MOBJECTS.items()):
+        if getattr(item, "_scene", None) is session.scene:
+            _TRACKED_MOBJECTS.pop(key, None)
+    session.callbacks.clear()
+    session.callback_ids.clear()
+    session.targets.clear()

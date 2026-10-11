@@ -63,6 +63,8 @@ mod arrow_endpoints;
 mod arrow_queries;
 mod arrow_scale;
 mod authoring_error;
+mod binding_error;
+mod binding_options;
 mod boolean_authoring;
 mod brace_authoring;
 mod camera_authoring;

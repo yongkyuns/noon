@@ -55,7 +55,7 @@ export async function waitForBrowserObservation(page, predicate, argument, { tim
 
 // Import the unchanged, attested worker only after removing JSPI in its realm.
 // A mobile viewport alone does not model an iPhone's interpreter capabilities.
-export async function disableAuthoringJspi(context, { beforeImport } = {}) {
+export async function disableAuthoringJspi(context, { beforeImport, crossOriginIsolated = false } = {}) {
   await context.addInitScript(() => {
     window.Worker = new Proxy(window.Worker, {
       construct(target, args, newTarget) {
@@ -74,6 +74,12 @@ export async function disableAuthoringJspi(context, { beforeImport } = {}) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript",
+      // An intercepted bootstrap must retain the embedding page's isolation
+      // policy, otherwise the browser rejects the worker before Python starts.
+      headers: crossOriginIsolated ? {
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "Cross-Origin-Resource-Policy": "same-origin",
+      } : {},
       body: [
         "delete WebAssembly.promising;",
         "delete WebAssembly.Suspending;",
