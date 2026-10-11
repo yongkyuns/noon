@@ -1,0 +1,59 @@
+name: Glow projection diagnostic (temporary)
+on:
+  push:
+    branches: [codex/glow-projection-diagnostic-e042]
+    paths: [.github/workflows/glow-projection-diagnostic.yml]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: e042b56060274a1bcf18045ac610a8586509c636
+          persist-credentials: false
+      - name: Preserve exact source and projection call sites
+        run: |
+          set -euo pipefail
+          mkdir -p projection-evidence
+          git rev-parse HEAD > projection-evidence/source-sha.txt
+          rg -n -C 6 'InvalidProjection|fn uniform\(|camera_for|pixels_per_world|world_size.*viewport|viewport.*world_size' crates/noon-render-wgpu/src/gpu crates/noon-web/src > projection-evidence/projection-sites.txt || true
+          python3 - <<'PY'
+          import subprocess, zipfile
+          from pathlib import Path
+          suffixes = {'.rs','.toml','.lock','.mjs','.js','.json','.py','.html','.css','.wgsl','.yml','.yaml','.sh','.md'}
+          files = subprocess.check_output(['git','ls-files'], text=True).splitlines()
+          with zipfile.ZipFile('projection-evidence/source-code.zip','w',zipfile.ZIP_DEFLATED) as z:
+              for name in files:
+                  p=Path(name)
+                  if p.is_file() and p.suffix in suffixes:
+                      z.write(p,name)
+          PY
+      - name: Inspect live Pages build without assuming cache freshness
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request, time
+          from pathlib import Path
+          out=Path('projection-evidence')
+          observations=[]
+          for path in ('runtime-build-identity.json','pkg/noon_web.js','python/examples/showcase_gpu_glow.py'):
+              url='https://yongkyuns.github.io/noon/'+path+'?glow_projection_diagnostic='+str(time.time_ns())
+              try:
+                  with urllib.request.urlopen(url,timeout=20) as r:
+                      b=r.read()
+                      (out/('deployed-'+path.replace('/','_'))).write_bytes(b)
+                      observations.append({'path':path,'status':r.status,'bytes':len(b),'headers':dict(r.headers)})
+              except Exception as e:
+                  observations.append({'path':path,'error':str(e)})
+          (out/'deployment.json').write_text(json.dumps(observations,indent=2)+'\n')
+          print(json.dumps(observations,indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: glow-invalid-projection-diagnostic
+          path: projection-evidence/
+          retention-days: 7
+          if-no-files-found: error
