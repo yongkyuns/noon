@@ -141,6 +141,38 @@ class RasterManifestTests(unittest.TestCase):
             {"center": [0.5, -0.25], "height": 4.0},
         )
 
+    def test_zoomed_semantics_observe_activation_motion_and_display_removal(self):
+        from manim import RIGHT, tempconfig
+        from manim.scene.zoomed_scene import ZoomedScene
+
+        spec = importlib.util.spec_from_file_location("manim_inset_reference_test", ORACLE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempconfig({"pixel_width": 960, "pixel_height": 540}):
+            scene = ZoomedScene()
+            scene.setup()
+            self.assertEqual(module._scene_state(scene, 0, 0.0, 0.0)["inset_2d_views"], [])
+            scene.activate_zooming()
+            scene.zoomed_camera.frame.shift(RIGHT * 0.5)
+            scene.zoomed_display.scale(0.5)
+            expected_center = scene.zoomed_display.get_center()
+            before = scene.zoomed_camera.frame.copy()
+            observed = module._scene_state(scene, 1, 0.5, 0.5)
+            self.assertAlmostEqual(observed["inset_2d_views"][0]["camera"]["height"], 0.45)
+            expected_height = observed["inset_2d_views"][0]["camera"]["height"]
+            self.assertEqual(observed["inset_2d_views"], [{
+                "camera": {"center": {"x": 0.5, "y": 0.0}, "height": expected_height},
+                "display_center": {"x": expected_center[0], "y": expected_center[1]},
+                "display_size": {"x": 1.5, "y": 1.5},
+                "capture_own_display": False,
+            }])
+            self.assertTrue((scene.zoomed_camera.frame.points == before.points).all())
+            # Border membership is independent of the registered captured image.
+            scene.remove(scene.zoomed_display.display_frame)
+            self.assertEqual(len(module._scene_state(scene, 2, 0.75, 0.75)["inset_2d_views"]), 1)
+            scene.remove(scene.zoomed_display)
+            self.assertEqual(module._scene_state(scene, 3, 1.0, 1.0)["inset_2d_views"], [])
+
     def test_manifest_location_and_cwd_do_not_change_fixture_sources(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         matching = [

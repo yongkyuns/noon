@@ -100,6 +100,7 @@ export async function stageSpecialCameraRasterManifest({ rst, repositoryRoot, ou
       expected_duration: duration,
       sample_times: sampleTimes,
       camera_profile_observation: cameraProfileObservation,
+      ...(scene === "MovingZoomedSceneAround" ? { inset_camera_observation: true } : {}),
       notes: "Exact pinned Manim source staged for observation. Unsupported Noon capabilities remain failures; no source compensation or parity claim.",
     });
   }
