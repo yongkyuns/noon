@@ -151,6 +151,16 @@ test("pinned 3D camera samples cover motion handoffs and exact endpoints", () =>
     `${scene}: samples must advance within authored time`);
   }
   const [, , rotationTimes] = PINNED_CAMERA_CASES.find(([scene]) => scene === "ThreeDCameraRotation");
+  const [, , zoomTimes] = PINNED_CAMERA_CASES.find(([scene]) => scene === "MovingZoomedSceneAround");
+  for (const barrier of [1, 11]) {
+    for (const offset of [-1 / 30, 0, 1 / 30]) {
+      assert.ok(zoomTimes.some(time => Math.abs(time - barrier - offset) < 1e-9),
+        `inset lifecycle ${barrier}: missing observation at offset ${offset}`);
+    }
+  }
+  for (const time of [1.5, 3.5, 5.5, 7.5, 9.5, 10.5]) {
+    assert.ok(zoomTimes.includes(time), `inset animation needs an interior observation at ${time}`);
+  }
   for (const barrier of [1, 2]) {
     for (const offset of [-1 / 30, 0, 1 / 30]) {
       assert.ok(rotationTimes.some(time => Math.abs(time - barrier - offset) < 1e-9),
