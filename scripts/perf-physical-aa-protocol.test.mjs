@@ -157,6 +157,11 @@ test("manual physical workflow cannot schedule an A/A from a pull request or hos
   assert.match(s,/github.ref == 'refs\/heads\/master'/);
   assert.match(s,/github.run_attempt == 1/);
   assert.match(s,/RUN_PHYSICAL_AA_ONCE/);
+  const candidateCheckout = s.slice(s.indexOf("Checkout original tested candidate merge source"),
+    s.indexOf("Checkout original tested candidate merge source") + 300);
+  assert.match(candidateCheckout,/ref: e11ed3046f9b282331214aca8ffdda765cf7b172/);
+  assert.match(candidateCheckout,/fetch-depth: 2/,
+    "original candidate merge's two parents must be fetched before source verification");
   assert.match(s,/runs-on: \[self-hosted, macOS, noon-physical\]/);
   assert.match(s,/if: always\(\)/);
   assert.match(s,/node control\/scripts\/perf-aa-precision-audit.mjs/);

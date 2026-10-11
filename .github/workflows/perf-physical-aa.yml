@@ -100,6 +100,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: e11ed3046f9b282331214aca8ffdda765cf7b172
+          # The frozen verifier reads both parents of this synthetic merge.
+          fetch-depth: 2
           path: candidate
           persist-credentials: false
       - uses: actions/setup-node@v7

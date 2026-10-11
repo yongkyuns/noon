@@ -16,6 +16,7 @@ Before requesting this manual run, independently verify that the self-hosted run
 
 The committed `benchmarks/perf-physical-aa-study.json` fixes one original source pair:
 
+- The tested candidate source is a two-parent synthetic Git merge; its checkout fetches both parents (depth two), as required by the original source-provenance verifier. A default depth-one checkout is not sufficient.
 - Original [strict #1956 run](https://github.com/yongkyuns/noon/actions/runs/38078042785), fixed base `0473399d`, tested candidate merge `e11ed304` (tree identical to #1956 head `0be750b7`).
 - Frozen release ZIP artifact **11680476116** (baseline SHA256 `01148252e04015e801ee7ae404239fc534e0ea9080ca1a35590d3766db34428c`) and **11680486084** (candidate SHA256 `88dc597497c1cf39d45bf3d4539e3429c51caac6c897825d7de6d044eac05004`). Source checkout, build ID, manifest, artifact provider-run identity and ZIP digest must all match.
 - Frozen published original measurement harness commit `439c4c4d` and its original Manim samples, pair protocol, renderer metrics, PNG comparison, shell/cold/warm/edit timings and shared scorer. The **only** registered harness edit converts the historical *Apple Paravirtual* GPU identity admission to a *real physical macOS hardware WebGL2* identity admission, pinned as a distinct Git blob. The two source builds, sample windows, telemetry, rendering and confidence estimator are not modified.
