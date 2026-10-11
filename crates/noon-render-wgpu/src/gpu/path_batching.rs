@@ -42,10 +42,7 @@ impl RetainedGeometryBatches {
             // Consecutive instances preserve painter order without a bounds
             // comparison. Stream the whole run; only disjoint path regrouping
             // needs the bounded comparison window below.
-            loop {
-                let Some(RetainedRenderItem::Geometry { object_id, batch }) = rest.peek() else {
-                    break;
-                };
+            while let Some(RetainedRenderItem::Geometry { object_id, batch }) = rest.peek() {
                 if stop_at(*object_id)
                     || batch.primitive != first.primitive
                     || instance_range.end != batch.instance_range.start
