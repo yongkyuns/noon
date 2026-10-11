@@ -414,6 +414,7 @@ fn public_scene_glow_pixels_and_lifecycle() {
     }
 }
 
+#[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 fn drawable_scene(kind: &str, glowing: bool, opacity: f64) -> (Scene, Mobject) {
     let mut scene = Scene::new();
     let mut source = match kind {
@@ -459,6 +460,7 @@ fn drawable_scene(kind: &str, glowing: bool, opacity: f64) -> (Scene, Mobject) {
     (scene, source)
 }
 
+#[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 #[test]
 #[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
 fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {

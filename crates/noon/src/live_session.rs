@@ -5388,6 +5388,7 @@ mod recursive_composition_tests {
         assert!(session.take_frame_changes().is_empty());
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn reveal_and_effect_edit_share_one_admission_in_either_order() {
         use crate::effects::{EffectDefinition, GlowUpdate};
@@ -5482,6 +5483,7 @@ mod recursive_composition_tests {
         }
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn reveal_with_competing_introductions_or_combined_pose_edit_is_atomic() {
         use crate::effects::GlowUpdate;

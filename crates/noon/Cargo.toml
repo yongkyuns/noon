@@ -28,6 +28,10 @@ required-features = ["diagnostics"]
 name = "manim_dot_ellipse_oracle"
 required-features = ["diagnostics"]
 
+[[example]]
+name = "glow_scene_playback"
+required-features = ["typst", "bundled-fonts"]
+
 [dependencies]
 serde_json = { version = "1", optional = true }
 noon-compile = { path = "../noon-compile" }
