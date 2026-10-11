@@ -72,10 +72,19 @@ impl InstalledRetainedExecutionMirror {
             .wire
             .frame()
             .ok_or(InstalledExecutionError::MissingResolvedFrame)?;
+        let planned_family_frame = if self.family.plans().is_empty() {
+            noon_runtime::RetainedPlannedFamilyFrame {
+                retained: frame,
+                family_animations: &frame.family_animations,
+                family_plan_indices: &frame.family_animation_plan_indices,
+            }
+        } else {
+            self.family.planned_frame(frame)?
+        };
         Ok(
             noon_runtime::RendererPublication::from_validated_transport_frame(
                 self.wire.publication_context(),
-                frame,
+                planned_family_frame,
                 changes.clone(),
                 self.resources.texts(),
                 self.resources.fonts(),
@@ -1550,6 +1559,10 @@ mod tests {
                 .family_plan_index(0),
             Some(0)
         );
+        let publication = mirror.renderer_publication(&FrameChanges::all()).unwrap();
+        let planned = publication.planned_family_frame();
+        assert_eq!(planned.family_animation(0), Some(family_state(0.5)));
+        assert_eq!(planned.family_plan_index(0), Some(0));
     }
 
     #[test]
