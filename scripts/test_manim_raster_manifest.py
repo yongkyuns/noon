@@ -167,11 +167,15 @@ class RasterManifestTests(unittest.TestCase):
                 "capture_own_display": False,
             }])
             self.assertTrue((scene.zoomed_camera.frame.points == before.points).all())
-            # Border membership is independent of the registered captured image.
+            # Pinned Scene.remove restructures the image family when its border
+            # is removed. The camera registration alone is not visible membership.
             scene.remove(scene.zoomed_display.display_frame)
-            self.assertEqual(len(module._scene_state(scene, 2, 0.75, 0.75)["inset_2d_views"]), 1)
+            self.assertEqual(len(scene.camera.image_mobjects_from_cameras), 1)
+            self.assertEqual(module._scene_state(scene, 2, 0.75, 0.75)["inset_2d_views"], [])
+            scene.add(scene.zoomed_display)
+            self.assertEqual(len(module._scene_state(scene, 3, 0.8, 0.8)["inset_2d_views"]), 1)
             scene.remove(scene.zoomed_display)
-            self.assertEqual(module._scene_state(scene, 3, 1.0, 1.0)["inset_2d_views"], [])
+            self.assertEqual(module._scene_state(scene, 4, 1.0, 1.0)["inset_2d_views"], [])
 
     def test_manifest_location_and_cwd_do_not_change_fixture_sources(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
