@@ -543,3 +543,80 @@ fn capture_origins_preserve_derivative_quads_across_fractional_motion_and_radius
 
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 mod retained_host;
+
+#[test]
+fn logical_projection_preserves_fractional_and_decorated_backing_pixels() {
+    use noon_core::{GeometryRef, Transform2D, Vec2};
+    // Same inputs used by the browser: CSS/pointer view and independently
+    // rounded backing dimensions, including the shipped one-pixel border.
+    for (logical, viewport) in [
+        (Vec2::new(704.0, 396.0), [702, 394]),
+        (Vec2::new(704.0, 396.0), [1404, 788]),
+        (Vec2::new(513.25, 18477.0 / 64.0), [511, 287]),
+        (Vec2::new(513.25, 18477.0 / 64.0), [639, 359]),
+    ] {
+        let camera =
+            super::super::Camera2D::new(Vec2::ZERO, Vec2::new(8.0 * logical.x / logical.y, 8.0))
+                .unwrap();
+        let bounds = GlowPixelBounds::projected_analytic_in_view(
+            &GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            camera,
+            viewport,
+            logical,
+        )
+        .unwrap();
+        let half = [
+            f64::from(viewport[0]) / f64::from(camera.world_size.x),
+            f64::from(viewport[1]) / f64::from(camera.world_size.y),
+        ];
+        assert_eq!(
+            bounds.min,
+            [
+                f64::from(viewport[0]) * 0.5 - half[0],
+                f64::from(viewport[1]) * 0.5 - half[1]
+            ]
+        );
+        assert_eq!(
+            bounds.max,
+            [
+                f64::from(viewport[0]) * 0.5 + half[0],
+                f64::from(viewport[1]) * 0.5 + half[1]
+            ]
+        );
+        // The old public physical-only contract remains strict: no arbitrary
+        // nonuniform logical camera has been admitted by loosening a tolerance.
+        assert_eq!(
+            GlowPixelBounds::projected_analytic(
+                &GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                camera,
+                viewport,
+            ),
+            Err(GlowPrepareError::InvalidProjection)
+        );
+    }
+}
+
+#[test]
+fn logical_projection_rejects_invalid_or_nonuniform_logical_views() {
+    use noon_core::{GeometryRef, Transform2D, Vec2};
+    let camera = super::super::Camera2D::new(Vec2::ZERO, Vec2::new(20.0, 10.0)).unwrap();
+    for logical in [
+        Vec2::new(100.0, 100.0),
+        Vec2::ZERO,
+        Vec2::new(f32::NAN, 100.0),
+        Vec2::new(200.0, f32::INFINITY),
+    ] {
+        assert_eq!(
+            GlowPixelBounds::projected_analytic_in_view(
+                &GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                camera,
+                [200, 100],
+                logical,
+            ),
+            Err(GlowPrepareError::InvalidProjection)
+        );
+    }
+}

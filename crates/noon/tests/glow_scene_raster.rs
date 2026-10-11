@@ -61,11 +61,16 @@ struct Surface {
 }
 impl Surface {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self::with_logical_viewport(device, queue, Vec2::new(80.0, 60.0))
+    }
+    fn with_logical_viewport(device: &wgpu::Device, queue: &wgpu::Queue, logical: Vec2) -> Self {
         let mut renderer = GpuRenderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
-        renderer.set_viewport(device, queue, SIZE[0], SIZE[1]);
+        renderer
+            .set_viewport_with_logical_size(device, queue, SIZE[0], SIZE[1], logical)
+            .unwrap();
         renderer.set_camera(
             queue,
-            Camera2D::new(Vec2::ZERO, Vec2::new(8.0, 6.0)).unwrap(),
+            Camera2D::new(Vec2::ZERO, Vec2::new(6.0 * logical.x / logical.y, 6.0)).unwrap(),
         );
         let text = renderer.create_retained_text_state(device, queue);
         let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -354,4 +359,49 @@ fn public_scene_glow_pixels_and_lifecycle() {
         "new attachment generation reproduces the same image"
     );
     eprintln!("PUBLIC_SCENE_GLOW_PASS frames=14 references=5 max_error={max_error} neutral_exact=true removal_exact=true reattach_exact=true");
+    for logical in [Vec2::new(704.0, 396.0), Vec2::new(513.25, 18477.0 / 64.0)] {
+        let (scene, source, animation) = self::scene(true);
+        let (plain_scene, _, plain_animation) = self::scene(false);
+        let mut session = scene.execution_session().unwrap();
+        let mut plain = plain_scene.execution_session().unwrap();
+        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+        let plain_segment = plain_scene
+            .live(&mut plain)
+            .play_animation(&plain_animation)
+            .unwrap();
+        let mut surface = Surface::with_logical_viewport(&device, &queue, logical);
+        let mut reference = Surface::with_logical_viewport(&device, &queue, logical);
+        let mut last_plain = Vec::new();
+        for time in [0.0, 0.5, 1.0] {
+            scene
+                .live(&mut session)
+                .advance_segment_to(segment, time)
+                .unwrap();
+            plain_scene
+                .live(&mut plain)
+                .advance_segment_to(plain_segment, time)
+                .unwrap();
+            let actual = surface.render(&device, &queue, &mut session);
+            last_plain = reference.render(&device, &queue, &mut plain);
+            let oracle = expected(&last_plain, time);
+            assert!(
+                error(&actual, &oracle) <= 2,
+                "logical viewport {logical:?}: pixel error {}",
+                error(&actual, &oracle)
+            );
+            assert!(
+                error(&oracle, &last_plain) > 2,
+                "missing-halo negative control"
+            );
+        }
+        scene.live(&mut session).complete_segment(segment).unwrap();
+        scene
+            .live(&mut session)
+            .set_glow(&source, GlowUpdate::default().intensity(0.0))
+            .unwrap();
+        assert_eq!(surface.render(&device, &queue, &mut session), last_plain);
+        scene.live(&mut session).remove_glow(&source).unwrap();
+        assert_eq!(surface.render(&device, &queue, &mut session), last_plain);
+        eprintln!("LOGICAL_VIEWPORT_GLOW_PASS logical={logical:?} max_error<=2 neutral_exact=true removal_exact=true");
+    }
 }

@@ -316,11 +316,12 @@ impl GpuRenderer {
             scope_opacity: observation.style.opacity,
             scratch_budget_bytes: request.texture_budget_bytes,
         };
-        let bounds = GlowPixelBounds::projected_analytic(
+        let bounds = GlowPixelBounds::projected_analytic_in_view(
             &effective.geometry(),
             transform,
             self.camera,
             self.viewport_size,
+            self.logical_viewport_size,
         )?;
         let tile = GlowCaptureTile::prepare(
             bounds,

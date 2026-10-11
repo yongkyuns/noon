@@ -49,12 +49,32 @@ impl GlowPixelBounds {
         camera: super::Camera2D,
         viewport: [u32; 2],
     ) -> Result<Self, GlowPrepareError> {
+        Self::projected_analytic_in_view(
+            geometry,
+            transform,
+            camera,
+            viewport,
+            noon_core::Vec2::new(viewport[0] as f32, viewport[1] as f32),
+        )
+    }
+
+    /// Validate the uniform *logical* view separately from its raster sampling.
+    /// Bounds and Gaussian support still use the exact physical output pixels.
+    pub(super) fn projected_analytic_in_view(
+        geometry: &noon_core::GeometryRef,
+        transform: noon_core::Transform2D,
+        camera: super::Camera2D,
+        viewport: [u32; 2],
+        logical_viewport: noon_core::Vec2,
+    ) -> Result<Self, GlowPrepareError> {
         if viewport.contains(&0)
             || ![
                 camera.center.x,
                 camera.center.y,
                 camera.world_size.x,
                 camera.world_size.y,
+                logical_viewport.x,
+                logical_viewport.y,
                 transform.translation.x,
                 transform.translation.y,
                 transform.scale.x,
@@ -65,6 +85,8 @@ impl GlowPixelBounds {
             .all(f32::is_finite)
             || camera.world_size.x <= 0.0
             || camera.world_size.y <= 0.0
+            || logical_viewport.x <= 0.0
+            || logical_viewport.y <= 0.0
             || transform.scale.x == 0.0
             || transform.scale.y == 0.0
         {
@@ -72,8 +94,10 @@ impl GlowPixelBounds {
         }
         let x_pixels_per_world = f64::from(viewport[0]) / f64::from(camera.world_size.x);
         let y_pixels_per_world = f64::from(viewport[1]) / f64::from(camera.world_size.y);
-        let disparity = (x_pixels_per_world - y_pixels_per_world).abs()
-            / x_pixels_per_world.max(y_pixels_per_world);
+        let logical_x_per_world = f64::from(logical_viewport.x) / f64::from(camera.world_size.x);
+        let logical_y_per_world = f64::from(logical_viewport.y) / f64::from(camera.world_size.y);
+        let disparity = (logical_x_per_world - logical_y_per_world).abs()
+            / logical_x_per_world.max(logical_y_per_world);
         if disparity > 1e-5 {
             return Err(GlowPrepareError::InvalidProjection);
         }
