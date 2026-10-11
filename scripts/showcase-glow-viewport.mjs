@@ -4,12 +4,13 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { disableAuthoringJspi } from "./playground-browser-support.mjs";
 
 export async function qualifyGlowViewport(browser, base, output, backend, cache) {
   const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
   const fixtures = [
     { name: "decorated-desktop", width: 1600, height: 1000, dpr: 1 },
-    { name: "fractional-layout-and-density", width: 1100, height: 800, dpr: 1.25 },
+    { name: "fractional-layout-and-density", width: 1100, height: 800, dpr: 1.25, noJspi: true },
     { name: "resize-with-active-glow", width: 1600, height: 1000, dpr: 2,
       resize: { width: 1103, height: 803 } },
   ];
@@ -20,6 +21,7 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
       viewport: { width: fixture.width, height: fixture.height }, deviceScaleFactor: fixture.dpr,
     });
     if (cache) await cache.install(context);
+    if (fixture.noJspi) await disableAuthoringJspi(context);
     const page = await context.newPage();
     const result = { fixture, outcome: "fail", pageErrors: [] };
     report.results.push(result);
