@@ -37,7 +37,7 @@ The existing playground's measured object/draw/upload/time counters are made vis
 | A field in motion | Dense multi-sequence composition | A hardware-maximum claim |
 | Entrances and exits | Four appearance styles at a shared duration | Timing arrangements already taught separately |
 | Together, sequential, staggered | Controlled timing comparison | Internal Add/Wait scheduler probes |
-| Paint with light | Three independent GPU Gaussian glow parameters, neutral enrollment, removal and re-ignition on filled analytic sources | A separate Python renderer or implied hardware benchmark |
+| Paint with light | Three independent GPU Gaussian glow parameters, neutral enrollment, removal/re-ignition, and simultaneous path/math reveal with glow edits | A separate Python renderer or implied hardware benchmark |
 | Animate part of a group | Indexed slice selection | Identity assertions in source |
 | Bend a vector curve | Cubic anchors, control handles and a smooth path morph | Callback-time path editing and SVG import |
 | Transform an object or its copy | Explicit copy isolation and subsequent Transform input animation | Unsupported ReplacementTransform and TransformFromCopy |
