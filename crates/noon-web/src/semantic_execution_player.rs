@@ -848,12 +848,9 @@ impl SemanticExecutionPlayer {
         object: &noon::Mobject,
         smooth: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            if smooth {
-                live.make_smooth(object)
-            } else {
-                live.make_jagged(object)
-            }
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AnchorMode {
+            object,
+            smooth,
         })
     }
     #[cfg(target_arch = "wasm32")]
@@ -862,13 +859,10 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         smooth: bool,
     ) -> Result<(), AuthoringFailure> {
-        if smooth {
-            self.with_live_session(|live| live.make_family_smooth(family))
-        } else {
-            self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyJagged {
-                family,
-            })
-        }
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyAnchorMode {
+            family,
+            smooth,
+        })
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_insert_n_curves(

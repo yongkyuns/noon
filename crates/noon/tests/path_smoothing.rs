@@ -21,7 +21,16 @@ fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
         let copy_before = copy.state().unwrap();
         let mut session = scene.execution_session().unwrap();
         if live_mode {
-            scene.live(&mut session).make_smooth(&source).unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::AnchorMode {
+                    object: &source,
+                    smooth: true,
+                },
+            )
+            .unwrap();
         } else {
             source.make_smooth().unwrap();
         }
@@ -31,7 +40,16 @@ fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
         assert_eq!(copy.state().unwrap(), copy_before);
         assert_ne!(source.state().unwrap().content, before.content);
         if live_mode {
-            scene.live(&mut session).make_jagged(&source).unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::AnchorMode {
+                    object: &source,
+                    smooth: false,
+                },
+            )
+            .unwrap();
         } else {
             source.make_jagged().unwrap();
         }
@@ -41,7 +59,16 @@ fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
         );
         let revision = scene.revision();
         if live_mode {
-            scene.live(&mut session).make_jagged(&source).unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::AnchorMode {
+                    object: &source,
+                    smooth: false,
+                },
+            )
+            .unwrap();
         } else {
             source.make_jagged().unwrap();
         }
@@ -78,10 +105,16 @@ fn family_smoothing_deduplicates_aliases_and_publishes_once() {
             .len();
         let mut session = scene.execution_session().unwrap();
         if live_mode {
-            scene
-                .live(&mut session)
-                .make_family_smooth(&family)
-                .unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::FamilyAnchorMode {
+                    family: &family,
+                    smooth: true,
+                },
+            )
+            .unwrap();
         } else {
             family.make_smooth().unwrap();
         }
@@ -115,10 +148,16 @@ fn family_smoothing_deduplicates_aliases_and_publishes_once() {
         assert_eq!(unrelated.state().unwrap(), before_unrelated);
         let revision = scene.revision();
         if live_mode {
-            scene
-                .live(&mut session)
-                .make_family_smooth(&family)
-                .unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::FamilyAnchorMode {
+                    family: &family,
+                    smooth: true,
+                },
+            )
+            .unwrap();
         } else {
             family.make_smooth().unwrap();
         }
