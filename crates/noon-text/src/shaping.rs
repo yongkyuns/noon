@@ -3,15 +3,20 @@
 //! This module is a deterministic backend. Public markup parsing, font resolution,
 //! fallback, bidi, and semantic scene ownership remain outside this crate.
 
-use std::{fmt, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use noon_core::{
     Color, FontFaceIdentity, FontResourceArena, FontResourceError, FontVariationSetting, GlyphRun,
     PositionedGlyph, Rect, TextAffineTransform, TextClusterIdentity, TextDirection,
     TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem,
-    TextResource, TextResourceValidationError, TextSourceKind, TextSourceSpan, Vec2,
+    TextResource, TextResourceValidationError, TextSourceKind, TextSourceSpan, Vec2, VectorPath,
 };
-use swash::{scale::ScaleContext, shape::ShapeContext, text::Script, FontRef, GlyphId};
+#[cfg(test)]
+use swash::zeno::PathData;
+use swash::{
+    scale::ScaleContext, shape::ShapeContext, text::Script, zeno::Command as ZenoCommand, FontRef,
+    GlyphId,
+};
 
 pub const NATIVE_TEXT_BACKEND_VERSION: &str = "swash-0.2.10";
 const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v5";
@@ -24,6 +29,49 @@ const MANIM_PLAIN_LINE_ADVANCE_SCALE: f32 = 0.75;
 // TEXT2SVG_ADJUSTMENT_FACTOR (4.8). Pango/Cairo then converts points at 96 DPI,
 // so one Cairo layout pixel is 3.6 units in Noon's point-sized shaping space.
 const MANIM_PANGO_LAYOUT_PIXEL: f32 = 3.6;
+
+/// Shared unhinted glyph geometry in the requested layout coordinate space.
+/// Bounds construction and retained drawing use the same extraction. This
+/// preserves Swash's existing size/variation behavior and Q/C control points;
+/// it performs no Cairo-grid or platform-dependent coordinate substitution.
+#[doc(hidden)]
+pub fn unhinted_glyph_outline(
+    context: &mut ScaleContext,
+    font: FontRef<'_>,
+    glyph_id: GlyphId,
+    size: f32,
+    variations: &[([u8; 4], f32)],
+) -> Option<swash::scale::outline::Outline> {
+    context
+        .builder(font)
+        .size(size)
+        .hint(false)
+        .variations(variations.iter())
+        .build()
+        .scale_outline(glyph_id)
+}
+
+/// Convert Swash/Zeno geometry without changing curve degree or coordinates.
+#[doc(hidden)]
+pub fn outline_commands_to_path(commands: impl Iterator<Item = ZenoCommand>) -> VectorPath {
+    let mut path = VectorPath::new();
+    for command in commands {
+        path = match command {
+            ZenoCommand::MoveTo(p) => path.move_to(Vec2::new(p.x, p.y)),
+            ZenoCommand::LineTo(p) => path.line_to(Vec2::new(p.x, p.y)),
+            ZenoCommand::QuadTo(c, p) => {
+                path.quadratic_to(Vec2::new(c.x, c.y), Vec2::new(p.x, p.y))
+            }
+            ZenoCommand::CurveTo(a, b, p) => path.cubic_to(
+                Vec2::new(a.x, a.y),
+                Vec2::new(b.x, b.y),
+                Vec2::new(p.x, p.y),
+            ),
+            ZenoCommand::Close => path.close(),
+        };
+    }
+    path
+}
 
 /// Exact immutable OpenType face input. `face_key` derives from the bytes and
 /// collection index, so a glyph identity never resolves to a different file.
@@ -469,13 +517,7 @@ impl NativeTextCompiler {
         if let Some(error) = boundary_error {
             return Err(error);
         }
-        let mut scaler = self
-            .scale_context
-            .builder(font_ref)
-            .size(options.font_size)
-            .hint(false)
-            .variations(variations)
-            .build();
+        let mut glyph_bounds = HashMap::<GlyphId, Option<Rect>>::new();
         let runs = projected
             .into_iter()
             .map(|mut run| {
@@ -484,13 +526,27 @@ impl NativeTextCompiler {
                     .iter_mut()
                     .filter_map(|glyph| {
                         let glyph_id = GlyphId::try_from(glyph.glyph_id).ok()?;
-                        let outline = scaler.scale_outline(glyph_id)?;
-                        let bounds = outline.bounds();
-                        (!bounds.is_empty()).then(|| {
-                            glyph.bounds = Rect::new(
-                                glyph.origin + Vec2::new(bounds.min.x, bounds.min.y),
-                                glyph.origin + Vec2::new(bounds.max.x, bounds.max.y),
-                            );
+                        let bounds = *glyph_bounds.entry(glyph_id).or_insert_with(|| {
+                            unhinted_glyph_outline(
+                                &mut self.scale_context,
+                                font_ref,
+                                glyph_id,
+                                options.font_size,
+                                variations,
+                            )
+                            .and_then(|outline| {
+                                let b = outline.bounds();
+                                (!b.is_empty()).then(|| {
+                                    Rect::new(
+                                        Vec2::new(b.min.x, b.min.y),
+                                        Vec2::new(b.max.x, b.max.y),
+                                    )
+                                })
+                            })
+                        });
+                        bounds.map(|bounds| {
+                            glyph.bounds =
+                                Rect::new(glyph.origin + bounds.min, glyph.origin + bounds.max);
                             glyph.bounds
                         })
                     })
@@ -1245,5 +1301,74 @@ mod tests {
             one.resource.layout_artifact.unwrap().artifact_fingerprint,
             two.resource.layout_artifact.unwrap().artifact_fingerprint
         );
+    }
+
+    #[test]
+    fn shared_outline_preserves_existing_points_at_small_and_normal_sizes() {
+        let mut original = ScaleContext::new();
+        let mut shared = ScaleContext::new();
+        for bytes in typst_assets::fonts() {
+            let font = FontRef::from_index(bytes, 0).unwrap();
+            for size in [0.1, 1.0, 3.6, 17.3, 42.0] {
+                for ch in "Agj o0123".chars() {
+                    let id = font.charmap().map(ch);
+                    let mut scaler = original.builder(font).size(size).hint(false).build();
+                    let outline = scaler.scale_outline(id).unwrap();
+                    let expected: Vec<_> = outline
+                        .points()
+                        .iter()
+                        .map(|p| Vec2::new(p.x, p.y))
+                        .collect();
+                    let outline = unhinted_glyph_outline(&mut shared, font, id, size, &[]).unwrap();
+                    let path = outline_commands_to_path(outline.path().commands());
+                    let actual: Vec<_> = path
+                        .commands()
+                        .iter()
+                        .flat_map(|command| match *command {
+                            noon_core::PathCommand::MoveTo { to }
+                            | noon_core::PathCommand::LineTo { to } => vec![to],
+                            noon_core::PathCommand::QuadraticTo { control, to } => {
+                                vec![control, to]
+                            }
+                            noon_core::PathCommand::CubicTo {
+                                control1,
+                                control2,
+                                to,
+                            } => {
+                                vec![control1, control2, to]
+                            }
+                            noon_core::PathCommand::Close => vec![],
+                        })
+                        .collect();
+                    assert_eq!(actual, expected, "size={size}, glyph={id}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_glyph_layout_bounds_match_the_drawn_outline() {
+        let font = bundled_font();
+        let face = FontRef::from_index(&font.data, font.face_index as usize).unwrap();
+        let mut compiler = NativeTextCompiler::new();
+        let mut context = ScaleContext::new();
+        let artifact = compiler
+            .compile_plain("oooo oooo", &font, &NativeTextOptions::new(42.0))
+            .unwrap();
+        for glyph in artifact.resource.runs[0].glyphs.iter() {
+            let outline =
+                unhinted_glyph_outline(&mut context, face, glyph.glyph_id as GlyphId, 42.0, &[])
+                    .unwrap();
+            let path = outline_commands_to_path(outline.path().commands());
+            if let Some(bounds) = path
+                .conservative_bounds()
+                .filter(|b| b.min.x < b.max.x && b.min.y < b.max.y)
+            {
+                assert_eq!(
+                    glyph.bounds,
+                    Rect::new(glyph.origin + bounds.min, glyph.origin + bounds.max)
+                );
+            }
+        }
     }
 }
