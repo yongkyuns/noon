@@ -112,6 +112,10 @@ function assertShell(snapshot, label) {
   assert.ok(snapshot.canvasRect?.width > 0, `${label}: canvas must have positive width`);
   assert.ok(snapshot.canvasRect?.height > 0, `${label}: canvas must have positive height`);
   assert.ok(
+    Math.abs(snapshot.canvasRect.width - snapshot.canvasRect.height * 16 / 9) <= 1,
+    `${label}: preview must preserve the authored 16:9 frame (${snapshot.canvasRect.width}×${snapshot.canvasRect.height})`,
+  );
+  assert.ok(
     snapshot.documentWidth <= snapshot.viewportWidth + 1,
     `${label}: page overflowed horizontally (${snapshot.documentWidth}px > ${snapshot.viewportWidth}px)`,
   );

@@ -320,7 +320,7 @@ try {
 
   await page.setViewportSize({ width: 390, height: 844 });
   const mobile = await layout(page);
-  assertAspect(mobile.canvas, 4 / 3, "mobile");
+  assertAspect(mobile.canvas, 16 / 9, "mobile");
   assertCentered(mobile.canvas, mobile.wrap, "mobile");
   assertNoOverflow(mobile, "mobile");
 
