@@ -451,6 +451,18 @@ fn render(
     scene: &mut SceneInstance,
     target: &Target,
 ) -> Result<(noon_render_wgpu::SpatialUploadStats, Vec<u8>), SpatialPrepareError> {
+    render_with_query(device, queue, renderer, frame_preparer, scene, target, None)
+}
+
+fn render_with_query(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    renderer: &mut GpuRenderer,
+    frame_preparer: &mut FramePreparer,
+    scene: &mut SceneInstance,
+    target: &Target,
+    query: Option<&wgpu::QuerySet>,
+) -> Result<(noon_render_wgpu::SpatialUploadStats, Vec<u8>), SpatialPrepareError> {
     let publication = scene.take_renderer_publication();
     let stats = renderer.prepare_spatial(device, queue, &publication)?;
     let retry = renderer.prepare_spatial(device, queue, &publication)?;
@@ -463,8 +475,54 @@ fn render(
     let prepared = frame_preparer.prepare_incremental(publication.frame(), publication.changes());
     renderer.upload(device, queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
-    renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);
-    Ok((stats, target.read(device, queue, encoder)))
+    let timestamp_readback = if let Some(query) = query {
+        renderer.encode_profiled(
+            &mut encoder,
+            &target.view,
+            &prepared,
+            wgpu::Color::BLACK,
+            query,
+        );
+        let resolved = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spatial timestamp validation"),
+            size: 16,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        encoder.resolve_query_set(query, 0..2, &resolved, 0);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spatial timestamp readback"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&resolved, 0, &readback, 0, 16);
+        Some(readback)
+    } else {
+        renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);
+        None
+    };
+    let pixels = target.read(device, queue, encoder);
+    if let Some(readback) = timestamp_readback {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).unwrap()
+            });
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        receiver.recv().unwrap().unwrap();
+        let bytes = readback.slice(..).get_mapped_range().unwrap();
+        let begin = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let end = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        assert!(
+            end > begin,
+            "both spatial/mixed GPU timestamps must be written: {begin}..{end}"
+        );
+        drop(bytes);
+        readback.unmap();
+    }
+    Ok((stats, pixels))
 }
 
 fn pixel(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -1561,6 +1619,67 @@ fn spatial_renderer_rejects_an_older_publication_after_advancing() {
             renderer.prepare_spatial(&device, &queue, &older_publication),
             Err(SpatialPrepareError::StalePublication)
         );
+    });
+}
+
+#[test]
+fn spatial_and_mixed_composition_write_gpu_timestamps_when_seeking() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping spatial pass GPU qualification: no adapter is available");
+            return;
+        };
+        eprintln!("spatial pass adapter: {:?}", adapter.get_info());
+        let timestamps = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: if timestamps {
+                    wgpu::Features::TIMESTAMP_QUERY
+                } else {
+                    wgpu::Features::empty()
+                },
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let query = timestamps.then(|| {
+            device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("spatial and mixed pass timestamps"),
+                ty: wgpu::QueryType::Timestamp,
+                count: 2,
+            })
+        });
+        let target = Target::new(&device);
+        for mut scene in [
+            build_scene(false, false, false).0,
+            build_scene(true, false, false).0,
+            build_scene(false, true, false).0,
+            build_scene(true, true, false).0,
+            cairo_path_scene(),
+        ] {
+            let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+            renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            let mut preparer = FramePreparer::new();
+            for time in [0.0, 0.5, 1.5, 0.0] {
+                scene.seek(time).unwrap();
+                let (_, pixels) = render_with_query(
+                    &device,
+                    &queue,
+                    &mut renderer,
+                    &mut preparer,
+                    &mut scene,
+                    &target,
+                    query.as_ref(),
+                )
+                .unwrap();
+                assert!(pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[..3].iter().any(|channel| *channel > 0)));
+            }
+        }
     });
 }
 

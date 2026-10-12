@@ -1079,6 +1079,7 @@ impl SpatialGpuState {
         resolve: Option<&wgpu::TextureView>,
         clear: wgpu::Color,
         sample_count: u32,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) -> DrawStats {
         let Some(gpu) = self.gpu.as_ref().filter(|_| self.is_active()) else {
             return DrawStats::default();
@@ -1108,7 +1109,7 @@ impl SpatialGpuState {
                 }),
                 stencil_ops: None,
             }),
-            timestamp_writes: None,
+            timestamp_writes,
             occlusion_query_set: None,
             multiview_mask: None,
         });
