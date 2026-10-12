@@ -1103,12 +1103,13 @@ The renderer is usable directly from the native Rust runtime and through web int
 Renderer-specific mirrors and caches are derived and disposable. Compact-path submission may combine a bounded window of mutually disjoint raster bounds while retaining shared meshes and contiguous instance ranges. Bounds derive from cached source/target tessellation and current transforms, with a pixel/rounding guard; overlapping, unknown, sampled-morph, and exact-polygon cases retain ordinary painter order. Text, images, and inset composition remain ordering barriers. This is disposable draw compaction, not a semantic reorder or a new scene representation.
 
 Fully revealed, small retained strokes with straight centerlines and polygonal
-caps/joins use the shared convex pixel-area coverage kernel. Renderer preparation
+caps/joins use the shared perimeter pixel-area integral. Renderer preparation
 recovers convex pieces from the existing tessellation; GPU projection supplies
 the pixel guard, preserving retained geometry across view/pose changes. Partial
 reveals recover the original triangles and progress interpolation. Packed unique
-paths retain painter order and coalesced instance updates, including batches
-containing both covered and ordinary paths. Curved, rounded, large and sampled
+paths retain painter order and coalesced instance updates. Draw batches keep
+ordinary, convex-fill and covered-stroke shader profiles separate so an ordinary
+curve does not inherit the polygon clipping shader's cost. Curved, rounded, large and sampled
 morph strokes retain their existing tessellation profile. This is a bounded
 renderer specialization; each Manim API/reference still needs its own qualification.
 

@@ -89,6 +89,10 @@ jobs:
         env:
           NOON_POLYGON_ARTIFACTS: plotting-artifacts/polygons
         run: node scripts/polygon-qualification.mjs
+      - name: Qualify Python constructor defaults against direct Rust construction
+        env:
+          NOON_CONSTRUCTOR_DEFAULTS_ARTIFACTS: plotting-artifacts/constructor-defaults
+        run: node scripts/constructor-defaults-qualification.mjs
       - name: Qualify leaf and recursive family paint fades
         env:
           NOON_PAINT_FADE_ARTIFACTS: plotting-artifacts/paint-fade

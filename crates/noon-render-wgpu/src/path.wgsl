@@ -281,14 +281,35 @@ fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
         // Coverage is applied once from the exact pixel-box intersection rather
         // than multiplied by the hardware triangle sample mask.
         let pixel_minimum = floor(input.position.xy);
-        let coverage = polygon_pixel_coverage(
+        let a = input.polygon_a - pixel_minimum;
+        let b = input.polygon_b - pixel_minimum;
+        let c = input.polygon_c - pixel_minimum;
+        let d = input.polygon_d - pixel_minimum;
+        let coverage = polygon_pixel_coverage(a, b, c, d, input.polygon_count);
+        return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge) * coverage;
+    }
+    return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge);
+}
+
+// Keep the bounded stroke integral in its own fragment entry. Ordinary curves
+// and partially revealed tessellations do not inherit the clipping kernel's
+// register footprint through a mixed covered-path batch.
+@fragment
+fn fs_path_stroke(input: PathVertexOutput) -> @location(0) vec4<f32> {
+    let edge = max(fwidth(input.path_progress), 0.00001);
+    if input.reveal <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    var coverage = 1.0;
+    if input.polygon_count != 0u {
+        let pixel_minimum = floor(input.position.xy);
+        coverage = polygon_perimeter_pixel_coverage(
             input.polygon_a - pixel_minimum,
             input.polygon_b - pixel_minimum,
             input.polygon_c - pixel_minimum,
             input.polygon_d - pixel_minimum,
             input.polygon_count,
         );
-        return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge) * coverage;
     }
-    return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge);
+    return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge) * coverage;
 }
