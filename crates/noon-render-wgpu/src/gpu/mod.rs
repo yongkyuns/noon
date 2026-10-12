@@ -1465,7 +1465,17 @@ impl GpuRenderer {
         } = options;
         let scene_view = self.presentation.scene_view(view);
         let sample_count = self.scene_render_sample_count(prepared, derived);
-        let spatial_stats = self.encode_spatial(encoder, scene_view, clear_color, sample_count);
+        let spatial_stats = self.encode_spatial(
+            encoder,
+            scene_view,
+            clear_color,
+            sample_count,
+            query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: None,
+            }),
+        );
         let load = if self.spatial.is_active() {
             wgpu::LoadOp::Load
         } else {
@@ -1486,7 +1496,7 @@ impl GpuRenderer {
             })];
             let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
                 query_set,
-                beginning_of_pass_write_index: Some(0),
+                beginning_of_pass_write_index: (!self.spatial.is_active()).then_some(0),
                 end_of_pass_write_index: Some(1),
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1516,7 +1526,7 @@ impl GpuRenderer {
             })];
             let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
                 query_set,
-                beginning_of_pass_write_index: Some(0),
+                beginning_of_pass_write_index: (!self.spatial.is_active()).then_some(0),
                 end_of_pass_write_index: Some(1),
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1546,12 +1556,20 @@ impl GpuRenderer {
         scene: &wgpu::TextureView,
         clear: wgpu::Color,
         samples: u32,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) -> DrawStats {
         if samples == 1 {
-            self.spatial.encode(encoder, scene, None, clear, samples)
-        } else {
             self.spatial
-                .encode(encoder, &self.path_msaa_view, Some(scene), clear, samples)
+                .encode(encoder, scene, None, clear, samples, timestamp_writes)
+        } else {
+            self.spatial.encode(
+                encoder,
+                &self.path_msaa_view,
+                Some(scene),
+                clear,
+                samples,
+                timestamp_writes,
+            )
         }
     }
 

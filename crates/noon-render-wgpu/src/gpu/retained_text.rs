@@ -3830,8 +3830,8 @@ impl GpuRenderer {
         }
     }
 
-    /// Encode the normal retained painter-order pass, optionally recording its
-    /// beginning/end into a host-owned two-entry timestamp query set.
+    /// Encode retained spatial and painter-order scene work, optionally recording
+    /// its beginning/end into a host-owned two-entry timestamp query set.
     ///
     /// The host must submit a successfully encoded frame, including its staged glyph
     /// transfers. On error, discard the encoder; pending atlas transfers remain retryable.
@@ -3886,7 +3886,17 @@ impl GpuRenderer {
             retained_sample_count(prepared.render_items, self.spatial.has_active_paths());
         let inset_stats =
             self.encode_inset_captures(encoder, prepared, text_state, sample_count)?;
-        let spatial_stats = self.encode_spatial(encoder, scene_view, clear_color, sample_count);
+        let spatial_stats = self.encode_spatial(
+            encoder,
+            scene_view,
+            clear_color,
+            sample_count,
+            query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: None,
+            }),
+        );
         let load = if self.spatial.is_active() {
             wgpu::LoadOp::Load
         } else {
@@ -3919,7 +3929,7 @@ impl GpuRenderer {
             depth_stencil_attachment: None,
             timestamp_writes: query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
                 query_set,
-                beginning_of_pass_write_index: Some(0),
+                beginning_of_pass_write_index: (!self.spatial.is_active()).then_some(0),
                 end_of_pass_write_index: Some(1),
             }),
             occlusion_query_set: None,
