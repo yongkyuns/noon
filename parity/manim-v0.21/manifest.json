@@ -1370,6 +1370,12 @@
       "scene": "PolygonConstructors",
       "source": "parity/manim-v0.21/core-examples/polygon_constructors.py",
       "expected_duration": 0.2
+    },
+    {
+      "id": "number-line-defaults",
+      "scene": "NumberLineDefaults",
+      "source": "parity/manim-v0.21/core-examples/number_line_defaults.py",
+      "expected_duration": 0.2
     }
   ],
   "sample_fractions": [

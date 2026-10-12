@@ -697,8 +697,8 @@
     },
     {
       "id": "reference-a21001425e228550",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks ITALIC. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#83",
         "#89",
@@ -711,11 +711,7 @@
         "directive_line": 101,
         "name": "SlantsExample",
         "source_sha256": "6c627a82a0e6a3d5c4b8466ee9a9ba0a554bd0ddc23774f646e9805afe12fb97"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "ITALIC"
-      ]
+      }
     },
     {
       "id": "reference-bae795355cfa59e6",
@@ -2039,8 +2035,8 @@
     },
     {
       "id": "reference-d79e8ec7109b2e42",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks DARK_GRAY, RegularPolygon. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "All previously missing namespace names are now exported. Constructor/options, effective state, timing and exact-source raster behavior still require qualification; presence is not parity.",
       "owners": [
         "#77",
         "#81",
@@ -2058,10 +2054,7 @@
         "name": "TimeWidthValues",
         "source_sha256": "865cb04e40610cdfdc6e50c7c2f9fa9bc49d3fc8e2dfcceacd1e7729454b2e25"
       },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "DARK_GRAY"
-      ]
+      "blocker_kind": "implementation-qualification"
     },
     {
       "id": "reference-489a8ca91b29215d",
@@ -3448,7 +3441,6 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "MAROON_A",
         "config"
       ]
     },
@@ -4730,8 +4722,8 @@
     },
     {
       "id": "reference-e5100d2f57cd41bc",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks DARK_BLUE, MAROON_A. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#85",
         "#89",
@@ -4743,17 +4735,12 @@
         "directive_line": 1242,
         "name": "GetRiemannRectanglesExample",
         "source_sha256": "933fa5e2428d3a057297cd60f1d1f5fdaebcd9ddf97abf6db43d4045514deb8e"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "DARK_BLUE",
-        "MAROON_A"
-      ]
+      }
     },
     {
       "id": "reference-d5c72aeeaf81fd96",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks DARK_BLUE. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#85",
         "#89",
@@ -4765,11 +4752,7 @@
         "directive_line": 1390,
         "name": "GetAreaExample",
         "source_sha256": "04bc96414aad1a8bf38ce12ad2fc13892e9b90aeb1d86f02fe145caa45359721"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "DARK_BLUE"
-      ]
+      }
     },
     {
       "id": "reference-ec9fc232a5eb94c6",
@@ -4962,8 +4945,8 @@
     },
     {
       "id": "reference-31aec2331bad2629",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks GOLD_E. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#85",
         "#89",
@@ -4975,11 +4958,7 @@
         "directive_line": 2347,
         "name": "LineGraphExample",
         "source_sha256": "c842f08cb7fcf9d219765d5ccddf2d98be800e335ce76f2382e8857b50b6069e"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "GOLD_E"
-      ]
+      }
     },
     {
       "id": "reference-0ceba92c79d0843d",
@@ -6025,8 +6004,8 @@
     },
     {
       "id": "reference-8f78122fb1bfedbd",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks DARK_GREY. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#89",
         "#185",
@@ -6038,11 +6017,7 @@
         "directive_line": 3143,
         "name": "InterpolateExample",
         "source_sha256": "9bd049b1d0029d8dc7af5a98eb45b0d72952d7a62966f87e26c65688df5aab53"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "DARK_GREY"
-      ]
+      }
     },
     {
       "id": "reference-2615675416946de1",
@@ -6440,8 +6415,8 @@
     },
     {
       "id": "reference-074812e0b1c4ab20",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks DARK_GREY. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#89",
         "#185",
@@ -6453,11 +6428,7 @@
         "directive_line": 2679,
         "name": "DotInterpolation",
         "source_sha256": "83c873c73539d91b286a534bb1e52c3b99894179d52c6a2b77c5111c43d77e7b"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "DARK_GREY"
-      ]
+      }
     },
     {
       "id": "reference-14b915c9365be979",
@@ -6538,8 +6509,8 @@
     },
     {
       "id": "reference-30e4622d2e1d6b85",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks DARK_BROWN. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#89",
         "#185",
@@ -6551,11 +6522,7 @@
         "directive_line": 1679,
         "name": "ArcShapeIris",
         "source_sha256": "c443f13506a7c4ecd69bea47bb2019d349b603248849ea4b0ef09d368a5b237b"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "DARK_BROWN"
-      ]
+      }
     },
     {
       "id": "reference-f3bf2b8259b7e09c",
@@ -7351,8 +7318,6 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "BOLD",
-        "ITALIC",
         "config"
       ]
     },
@@ -7375,8 +7340,8 @@
     },
     {
       "id": "reference-3b0572d59f3cd749",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks BOLD. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#83",
         "#89",
@@ -7388,11 +7353,7 @@
         "directive_line": 402,
         "name": "MultipleFonts",
         "source_sha256": "a1db47eae8f64e2e905b25b22430d7ae0fe8f72ea5b98ce5c3e00b4881a0e848"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "BOLD"
-      ]
+      }
     },
     {
       "id": "reference-0bb282507c35bfdf",
@@ -7557,8 +7518,8 @@
     },
     {
       "id": "reference-0bba8f62dad11c46",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks BOLD. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#83",
         "#89",
@@ -7571,11 +7532,7 @@
         "directive_line": 1122,
         "name": "MultiLanguage",
         "source_sha256": "1e6652c08e6982b732c1a4c1d778a7a83e589007c04bd4cffbcef74eace024da"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "BOLD"
-      ]
+      }
     },
     {
       "id": "reference-56fbc3748d0a8e07",
@@ -7996,8 +7953,8 @@
     },
     {
       "id": "reference-d19d997c4fc96f63",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks X_AXIS, Y_AXIS, Z_AXIS. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#85",
         "#185",
@@ -8009,13 +7966,7 @@
         "directive_line": 663,
         "name": "ExampleCone",
         "source_sha256": "0ba4307fe13de636d58fb3dc0f0a898c70ec89b97bbe5ddf24f1b25d43def828"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "X_AXIS",
-        "Y_AXIS",
-        "Z_AXIS"
-      ]
+      }
     },
     {
       "id": "reference-f960c5cb79ad5369",
@@ -8397,8 +8348,8 @@
     },
     {
       "id": "reference-e533256547036528",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks DARK_BROWN. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#89",
         "#185",
@@ -8410,11 +8361,7 @@
         "directive_line": 2223,
         "name": "ArcShapeIris",
         "source_sha256": "f8d543a035be4f23412a9c6e7eec9176a56bcadd56ed155d0270c9f4b6d7077b"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "DARK_BROWN"
-      ]
+      }
     },
     {
       "id": "reference-93931c7ccc9c655b",
@@ -8655,8 +8602,8 @@
     },
     {
       "id": "reference-c675cf63ae1d703c",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks DARK_GRAY. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned namespace colors/constants/axis aliases are now exported with value checks. The surrounding scene, font, color-object and vector behavior still needs exact-source qualification; value presence is not behavioral parity.",
       "owners": [
         "#88",
         "#89",
@@ -8668,11 +8615,7 @@
         "directive_line": 537,
         "name": "Coloring",
         "source_sha256": "191acbbe028291ecf95e0a8ee0cee68e882b1fcd11a8e7402cc028a702d643fa"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "DARK_GRAY"
-      ]
+      }
     },
     {
       "id": "reference-74da26461320b13b",
@@ -8958,7 +8901,6 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "DARK_BLUE",
         "index_labels"
       ]
     },
@@ -9178,7 +9120,6 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "BOLD",
         "config",
         "rate_functions"
       ]
