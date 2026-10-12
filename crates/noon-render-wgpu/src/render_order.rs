@@ -486,6 +486,7 @@ fn project_mega_render_batches(
         if let Some(mega_index) = active_mega {
             let mega = &mut mega_path_batches[mega_index];
             if mega.index_range.end == segment.start {
+                mega.polygon_coverage |= preparer.path_batches[path_batch_index].polygon_coverage;
                 mega.index_range.end = segment.end;
                 mega.path_count += 1;
                 let ordered = render_batches
@@ -500,6 +501,7 @@ fn project_mega_render_batches(
         mega_path_batches.push(MegaPathBatch {
             index_range: segment,
             path_count: 1,
+            polygon_coverage: preparer.path_batches[path_batch_index].polygon_coverage,
         });
         render_batches.push(OrderedRenderBatch {
             primitive: RenderPrimitive::MegaPath { batch: mega_index },
@@ -1680,10 +1682,9 @@ fn pack_derived_display_object(
                     .map(|resident| resident.indices.clone());
                 if let Some(indices) = resident_indices {
                     prepared.stats.resident_path_reuses += 1;
-                    let polygon_coverage = crate::single_filled_convex_polygon(
+                    let polygon_coverage = crate::path_uses_exact_coverage(
                         &path_preparer.path_mesh_cache[cache_index].mesh,
-                    )
-                    .is_some();
+                    );
                     pack_derived_path_instance(
                         prepared,
                         indices,
@@ -1755,7 +1756,7 @@ fn pack_derived_path_mesh(
         render_transform,
         style,
         DerivedPathGeometrySource::Transient,
-        crate::single_filled_convex_polygon(mesh).is_some(),
+        crate::path_uses_exact_coverage(mesh),
     )
 }
 
