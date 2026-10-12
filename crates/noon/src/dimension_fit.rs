@@ -80,7 +80,9 @@ impl LayoutAnchor {
             LayoutDimension::Width => (factor, 1.0),
             LayoutDimension::Height => (1.0, factor),
         };
-        self.scale(x, y, pivot)
+        self.apply_affine_without_table_layout(crate::family_affine::FamilyAffine::Scale(
+            x, y, pivot,
+        ))
     }
 
     /// Fit the selected object or family through its ordinary affine semantics.
@@ -111,12 +113,18 @@ impl LayoutAnchor {
         let Some((x, y)) = dimension.scale(layout.bounds(), length, stretch)? else {
             return Ok(());
         };
+        // Manim's non-stretch fit delegates to `scale`; preserve the direct
+        // Table scale override when this anchor names the table root.  A true
+        // stretch changes only one world dimension and leaves table buffers
+        // authored as-is.
+        let table_layout_scope = (!stretch).then(|| self.resolve()).transpose()?;
         let prepared = {
             let store = self.integration_store().borrow();
-            crate::family_affine::FamilyAffine::Scale(x, y, pivot).prepare(
+            crate::family_affine::FamilyAffine::Scale(x, y, pivot).prepare_for_scope(
                 &store,
                 layout.leaves(),
                 layout.boundary_bounds(),
+                table_layout_scope,
             )?
         };
         prepared.publish(
@@ -234,8 +242,11 @@ pub(crate) fn replacement_transaction(
         let previous = store
             .semantic_object_state_checked(leaf)
             .map_err(AuthoringError::from)?;
-        let Ok((local_x, local_y)) = world_scale_factors(previous.transform.rotation_z, x, y)
-        else {
+        let planar = previous
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?;
+        let Ok((local_x, local_y)) = world_scale_factors(planar.rotation_z, x, y) else {
             let path = crate::family_affine::world_scaled_path(
                 store,
                 previous,

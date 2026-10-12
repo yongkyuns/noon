@@ -1,5 +1,14 @@
 #![forbid(unsafe_code)]
 
+// Preserve the Rust cause in browser diagnostics before a WASM trap obscures it.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+fn install_browser_panic_diagnostics() {
+    std::panic::set_hook(Box::new(|info| {
+        web_sys::console::error_1(js_sys::Error::new(&info.to_string()).as_ref());
+    }));
+}
+
 #[cfg(target_arch = "wasm32")]
 mod authoring_arc;
 #[cfg(target_arch = "wasm32")]
@@ -7,21 +16,73 @@ mod authoring_arrow;
 #[cfg(target_arch = "wasm32")]
 mod authoring_arrow_endpoints;
 #[cfg(target_arch = "wasm32")]
+mod authoring_bar_chart;
+#[cfg(target_arch = "wasm32")]
 mod authoring_brace;
+#[cfg(target_arch = "wasm32")]
+mod authoring_composite;
+#[cfg(target_arch = "wasm32")]
+mod authoring_coordinates;
+#[cfg(target_arch = "wasm32")]
+mod authoring_vector_field_defaults;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_composite::WasmCompositeRows;
+#[cfg(any(target_arch = "wasm32", test))]
+mod authoring_effects;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_effects::*;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
+#[cfg(any(target_arch = "wasm32", test))]
+mod authoring_graph;
+#[cfg(target_arch = "wasm32")]
+mod authoring_image;
+#[cfg(target_arch = "wasm32")]
+mod authoring_implicit_plotting;
+#[cfg(target_arch = "wasm32")]
+mod authoring_latex;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_latex::*;
+#[cfg(target_arch = "wasm32")]
+mod authoring_matrix;
 mod authoring_mobject;
+#[cfg(target_arch = "wasm32")]
+mod authoring_number_labels;
+#[cfg(target_arch = "wasm32")]
+mod authoring_number_plane;
 mod authoring_options;
+#[cfg(target_arch = "wasm32")]
+mod authoring_plot_presentation;
+#[cfg(target_arch = "wasm32")]
+mod authoring_plotting;
+#[cfg(target_arch = "wasm32")]
+mod authoring_polar_plane;
+#[cfg(target_arch = "wasm32")]
+mod authoring_sample_space;
+#[cfg(target_arch = "wasm32")]
+mod authoring_spatial;
 #[cfg(target_arch = "wasm32")]
 mod authoring_svg;
 #[cfg(target_arch = "wasm32")]
+mod authoring_synchronized_plotting;
+#[cfg(target_arch = "wasm32")]
+mod authoring_table;
+#[cfg(target_arch = "wasm32")]
 mod authoring_tangent_line;
+#[cfg(any(target_arch = "wasm32", test))]
+mod browser_pointer_input;
 mod canonical_authoring_scene;
 mod clock;
 mod determinism;
-#[cfg(all(feature = "renderer", target_arch = "wasm32", debug_assertions))]
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
 mod direct_execution_smoke;
+#[cfg(any(all(feature = "renderer", target_arch = "wasm32"), test))]
+mod direct_pointer_presentation;
 #[cfg(feature = "renderer")]
 mod execution_canvas;
 mod execution_transport;
@@ -35,6 +96,28 @@ mod gpu_timestamps;
 mod manim_scale_bridge;
 #[cfg(target_arch = "wasm32")]
 mod manim_shape_matcher_handle_bridge;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod matching_shapes_smoke;
+#[cfg(test)]
+mod morph_preload_cases;
+#[cfg(any(target_arch = "wasm32", test))]
+mod plot_error;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod pointer_selection_smoke;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod raster_image_smoke;
 mod renderer_observation;
 #[cfg(all(
     feature = "renderer",
@@ -49,31 +132,75 @@ mod retained_execution_transport;
 mod retained_family_execution_encoder;
 mod retained_family_execution_transport;
 mod retained_family_transport;
+mod retained_image_transport;
 mod retained_resource_mutation_encoder;
 mod retained_resource_mutation_transport;
 mod retained_resource_transport;
-#[cfg(feature = "renderer")]
-mod retained_typst_canvas;
+mod selection_overlay_transport;
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
+mod webgl_context_lifecycle;
+mod worker_pointer_presentation;
+pub use worker_pointer_presentation::PointerPresentationView;
 mod semantic_execution_player;
+#[cfg(target_arch = "wasm32")]
+mod text_colors;
 #[cfg(target_arch = "wasm32")]
 mod text_parts;
 
 #[cfg(target_arch = "wasm32")]
 pub use authoring_arrow::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_coordinates::*;
 pub use authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_geometry::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_image::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_matrix::*;
 pub use authoring_mobject::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_number_labels::*;
 pub use authoring_options::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_plot_presentation::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_plotting::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_polar_plane::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_sample_space::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_spatial::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_synchronized_plotting::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_table::*;
 pub use canonical_authoring_scene::*;
 pub use clock::{ClockError, PlaybackClock};
 pub use determinism::*;
-#[cfg(all(feature = "renderer", target_arch = "wasm32", debug_assertions))]
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
 pub use direct_execution_smoke::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use execution_canvas::*;
 pub use execution_transport::*;
 pub use execution_wake::*;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+pub use matching_shapes_smoke::*;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+pub use raster_image_smoke::*;
 pub use renderer_observation::*;
 #[cfg(all(
     feature = "renderer",
@@ -88,11 +215,22 @@ pub use retained_execution_transport::*;
 pub use retained_family_execution_encoder::*;
 pub use retained_family_execution_transport::*;
 pub use retained_family_transport::*;
+pub use retained_image_transport::{TransportImageResourceHandle, TransportImageSampling};
 pub use retained_resource_mutation_encoder::*;
 pub use retained_resource_mutation_transport::*;
 pub use retained_resource_transport::*;
-#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
-pub use retained_typst_canvas::*;
+pub use selection_overlay_transport::{SelectionOverlayGeometry, SelectionOverlayPresentation};
 pub use semantic_execution_player::*;
 #[cfg(target_arch = "wasm32")]
+pub use text_colors::*;
+#[cfg(target_arch = "wasm32")]
 pub use text_parts::*;
+
+#[cfg(any(
+    test,
+    all(
+        target_arch = "wasm32",
+        any(debug_assertions, feature = "renderer-smoke")
+    )
+))]
+mod glow_worker_smoke;

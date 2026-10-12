@@ -5,6 +5,14 @@ const rustHarness = await readFile(
   new URL("../crates/noon-web/src/direct_execution_smoke.rs", import.meta.url),
   "utf8",
 );
+const webLibrary = await readFile(
+  new URL("../crates/noon-web/src/lib.rs", import.meta.url),
+  "utf8",
+);
+const manimRasterWorkflow = await readFile(
+  new URL("../.github/workflows/manim-raster-differential.yml", import.meta.url),
+  "utf8",
+);
 const directCanvasHost = await readFile(
   new URL("../crates/noon-web/src/execution_canvas.rs", import.meta.url),
   "utf8",
@@ -36,6 +44,11 @@ for (const required of [
   "session.camera()",
   "ExecutionSession::from_semantic_store",
   "create_from_execution_session",
+  "createDirectTypstCanvasRenderer",
+  "createDirectSingleTypstCanvasRenderer",
+  "noon::example_scenes::spatial_mesh::session()",
+  "noon::example_scenes::vector_space::session()",
+  "createDirectVectorSpaceSmokeRenderer",
   "activate_animation",
   "Mobject::from_text",
   "Text::new(\"Noon\")",
@@ -82,8 +95,25 @@ for (const forbidden of [
   );
 }
 
+const qualifiedDirectFixtureGuard = /#\[cfg\(all\(\s*feature = "renderer",\s*target_arch = "wasm32",\s*any\(debug_assertions, feature = "renderer-smoke"\)\s*\)\)\]\s*/;
+assert.match(
+  webLibrary,
+  new RegExp(qualifiedDirectFixtureGuard.source + "mod direct_execution_smoke;"),
+  "direct Rust/WASM fixtures must be available to explicit optimized qualifications",
+);
+assert.match(
+  webLibrary,
+  new RegExp(qualifiedDirectFixtureGuard.source + "pub use direct_execution_smoke::\\*;"),
+  "optimized direct fixtures must retain their package export",
+);
+assert.match(
+  manimRasterWorkflow,
+  /NOON_RENDERER_SMOKE: "1"/,
+  "the Typst raster qualification must opt into its direct Rust/WASM fixture",
+);
+
 for (const required of [
-  "let camera = session.camera().map_err(js_error)?;",
+  "let camera = session.inspection_camera().map_err(js_error)?;",
   "self.sync_camera(camera)?;",
   "BrowserExecutionWakePlan::from_runtime(self.program.wake_state())",
   "LiveProgram",
@@ -236,6 +266,10 @@ for (const required of [
   "window.noonDirectExecutionSmoke?.ready === true",
   "direct Rust/WASM execution proof failed",
   "direct.metrics.backend",
+  "createDirectSpatialMeshSmokeRenderer",
+  'name: "Spatial mesh"',
+  "nearer animated mesh should occlude the rear mesh",
+  "rear mesh should become visible after the front mesh moves behind it",
   "direct.metrics.affineCompletion?.authoredTime",
   "direct.metrics.affineCompletion?.endpointLuma",
   "direct.metrics.ordinaryAffinePlay?.authoredTime",

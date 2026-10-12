@@ -203,6 +203,67 @@ try {
     path: path.join(artifactDir, "recovered.png"),
   });
 
+  await page.evaluate(() => window.noonSmoke.retainedContextLossControl());
+  const retainedBaseline = await page.evaluate(async () =>
+    (await window.noonSmoke.retainedContextLossControl()).metrics(),
+  );
+  assert.equal(retainedBaseline.backend, "WebGL2", "retained fixture must use WebGL2");
+  assert.equal(retainedBaseline.objectCount, 1, "retained fixture must contain its circle");
+  const retainedBaselineScreenshot = await page.locator("#retained-scene").screenshot({
+    path: path.join(artifactDir, "retained-baseline.png"),
+  });
+  await page.evaluate(async () => (await window.noonSmoke.retainedContextLossControl()).lose());
+  await page.waitForFunction(
+    async () => (await window.noonSmoke.retainedContextLossControl()).state.lost === 1,
+    null,
+    { timeout: 10_000 },
+  );
+  const pendingDeltaApplied = await page.evaluate(async () =>
+    (await window.noonSmoke.retainedContextLossControl()).applyPendingDelta(0.75),
+  );
+  assert.equal(pendingDeltaApplied, true, "retained renderer did not admit the pending delta while lost");
+  const presentedWhileLost = await page.evaluate(async () =>
+    (await window.noonSmoke.retainedContextLossControl()).render().presented,
+  );
+  assert.equal(presentedWhileLost, false, "retained renderer presented a frame while its context was lost");
+  const lostCanvasCreation = await page.evaluate(async () =>
+    (await window.noonSmoke.retainedContextLossControl()).rejectCreationWhileLost(),
+  );
+  assert.equal(lostCanvasCreation.timedOut, undefined, "lost-canvas creation did not settle within five seconds");
+  assert.equal(lostCanvasCreation.rejected, true, "creating a retained renderer on the lost canvas must reject");
+  assert.equal(lostCanvasCreation.wasmTrap, false,
+    `lost-canvas creation trapped in WASM: ${lostCanvasCreation.error}`);
+  await page.evaluate(async () => (await window.noonSmoke.retainedContextLossControl()).restore());
+  await page.waitForFunction(
+    async () => {
+      const state = (await window.noonSmoke.retainedContextLossControl()).state;
+      return state.restored === 1 && state.recovery !== "pending";
+    },
+    null,
+    { timeout: 10_000 },
+  );
+  const retainedRecoveryState = await page.evaluate(async () => {
+    const control = await window.noonSmoke.retainedContextLossControl();
+    return { state: control.state, frame: control.render() };
+  });
+  assert.equal(retainedRecoveryState.state.recovery, "ready",
+    `retained WebGL recovery failed: ${retainedRecoveryState.state.error}`);
+  assert.equal(retainedRecoveryState.frame.presented, true, "retained recovery did not present the pending frame");
+  assert.equal(retainedRecoveryState.frame.backend, retainedBaseline.backend, "retained recovery changed backend");
+  assert.equal(retainedRecoveryState.frame.generation, retainedBaseline.generation + 1,
+    "retained recovery must replace its GPU generation exactly once");
+  assert.equal(retainedRecoveryState.frame.objectCount, retainedBaseline.objectCount,
+    "retained recovery changed the scene object count");
+  assert.ok(Math.abs(retainedRecoveryState.frame.time - 0.75) < 1e-6,
+    "retained recovery lost the pending delta time");
+  assert.ok(retainedRecoveryState.frame.drawCalls > 0, "retained recovery emitted no draw calls");
+  const retainedRecoveredScreenshot = await page.locator("#retained-scene").screenshot({
+    path: path.join(artifactDir, "retained-recovered.png"),
+  });
+  const retainedChangedPixels = changedPixelCount(retainedBaselineScreenshot, retainedRecoveredScreenshot);
+  assert.equal(retainedChangedPixels, 0,
+    `retained recovery changed the static scene at ${retainedChangedPixels} pixels`);
+
   const freshPage = await browser.newPage({ viewport: { width: 1000, height: 600 } });
   const freshErrors = collectBrowserErrors(freshPage);
   await waitForHarness(freshPage);
@@ -239,6 +300,11 @@ try {
     baseline: baseline.metrics,
     duringLoss,
     recovered,
+    retainedBaseline,
+    retainedRecoveryState,
+    retainedChangedPixels,
+    presentedWhileLost,
+    lostCanvasCreation,
     fresh: fresh.metrics,
     contextState,
     changedPixels,
@@ -247,7 +313,7 @@ try {
   });
   await freshPage.close();
   await page.close();
-  console.log("✓ WebGL context loss/restoration preserves scene, time, backend, and exact rendered frame");
+  console.log("✓ direct and retained WebGL context recovery preserve scene state and render the recovered frame");
 } catch (error) {
   await writeDiagnostics("failure", {
     browserVersion: browser?.version() ?? null,

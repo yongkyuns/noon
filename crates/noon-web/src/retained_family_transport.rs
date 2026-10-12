@@ -338,6 +338,8 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: text_id,
                     content: ObjectContentRef::Text(text),
@@ -347,6 +349,8 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: circle_id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -438,6 +442,8 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text = texts.insert(text_resource()).unwrap();
         let object = FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(12),
             content: ObjectContentRef::Text(text),

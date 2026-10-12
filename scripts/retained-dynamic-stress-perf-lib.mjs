@@ -20,6 +20,48 @@ export const STRESS_PHASES = Object.freeze([
   { id: "final-wave", start: 4.46, end: STRESS_DURATION_SECONDS },
 ]);
 
+// Performance cases deliberately describe user-visible workload slices rather
+// than implementation stages. They remain valid if transport, residency, or GPU
+// representation changes. The activation cases isolate the first measured frames
+// after a morph phase becomes active; steady cases exclude those frames so cold
+// preparation cannot hide a steady-state regression (or vice versa).
+export const STRESS_PERFORMANCE_CASES = Object.freeze([
+  {
+    id: "morph-a-activation",
+    phase: "morph-a",
+    takeFirstSamples: 2,
+    intent: "first activation of the first 600-object morph phase",
+  },
+  {
+    id: "morph-a-steady",
+    phase: "morph-a",
+    skipFirstSamples: 2,
+    intent: "steady retained playback after the first morph phase is active",
+  },
+  {
+    id: "morph-b-activation",
+    phase: "morph-b",
+    takeFirstSamples: 2,
+    intent: "first activation of the second 600-object morph phase",
+  },
+  {
+    id: "morph-b-steady",
+    phase: "morph-b",
+    skipFirstSamples: 2,
+    intent: "steady retained playback after the second morph phase is active",
+  },
+  {
+    id: "turbulence",
+    phase: "turbulence",
+    intent: "high-frequency multi-object transform/style activity",
+  },
+  {
+    id: "lifecycle-churn",
+    phase: "lifecycle-churn",
+    intent: "structural presence/lifecycle churn after the morph phases",
+  },
+]);
+
 export function fixedStressSampleTimes(
   duration = STRESS_DURATION_SECONDS,
   sampleHz = STRESS_SAMPLE_HZ,
@@ -38,16 +80,45 @@ export function classifyStressPhase(time) {
   )?.id ?? null;
 }
 
+function timingSummary(values) {
+  assert.ok(values.length > 0, "performance case must contain at least one sample");
+  const sorted = [...values].sort((a, b) => a - b);
+  return {
+    min: sorted[0],
+    max: sorted.at(-1),
+    mean: sorted.reduce((sum, value) => sum + value, 0) / sorted.length,
+    p95: sorted[Math.ceil(sorted.length * 0.95) - 1],
+  };
+}
+
 export function summarizeStressPhases(samples) {
   return STRESS_PHASES.map((phase) => {
     const values = samples.filter((sample) => classifyStressPhase(sample.sceneTime) === phase.id)
-      .map((sample) => sample.advanceRoundTripMs).sort((a, b) => a - b);
+      .map((sample) => sample.advanceRoundTripMs);
     assert.ok(values.length > 0, `${phase.id} must be sampled`);
-    return { ...phase, samples: values.length, advanceRoundTripMs: {
-      min: values[0], max: values.at(-1),
-      mean: values.reduce((sum, value) => sum + value, 0) / values.length,
-      p95: values[Math.ceil(values.length * 0.95) - 1],
-    } };
+    return { ...phase, samples: values.length, advanceRoundTripMs: timingSummary(values) };
+  });
+}
+
+export function summarizeStressCases(samples) {
+  return STRESS_PERFORMANCE_CASES.map((performanceCase) => {
+    let selected = samples.filter(
+      (sample) => classifyStressPhase(sample.sceneTime) === performanceCase.phase,
+    );
+    if (performanceCase.takeFirstSamples !== undefined) {
+      selected = selected.slice(0, performanceCase.takeFirstSamples);
+    }
+    if (performanceCase.skipFirstSamples !== undefined) {
+      selected = selected.slice(performanceCase.skipFirstSamples);
+    }
+    assert.ok(selected.length > 0, `${performanceCase.id} must contain measured samples`);
+    return {
+      ...performanceCase,
+      samples: selected.length,
+      firstSceneTime: selected[0].sceneTime,
+      lastSceneTime: selected.at(-1).sceneTime,
+      advanceRoundTripMs: timingSummary(selected.map((sample) => sample.advanceRoundTripMs)),
+    };
   });
 }
 

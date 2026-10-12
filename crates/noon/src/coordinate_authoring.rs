@@ -1,0 +1,1135 @@
+//! Linear coordinate families over the existing Semantic Scene and path queries.
+//!
+//! Ranges live on semantic shafts; wrappers retain family identity, never
+//! endpoints or a second scene. Two-dimensional constructors stay tipless and
+//! label-free unless requested. Axes profiles can opt into retained filled tips;
+//! the bounded ThreeDAxes request uses retained tips by default.
+
+mod number_plane;
+mod three_d_axes;
+pub(crate) use number_plane::prepare_number_plane;
+pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
+pub use three_d_axes::{
+    ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions, ManimThreeDAxisOverrides,
+};
+
+use std::{cell::RefCell, rc::Rc};
+
+use crate::{
+    AuthoringError, ExecutionSession, ManimGeometryOptions, Mobject, MobjectFamily, PathQuery,
+    PlotAuthoringError, PlotPreparationError, PlotSamplingOptions, Scene,
+};
+use noon_core::{
+    SemanticFunctionPlotRole, SemanticLocalNodeToken, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
+    SemanticNumberLineRole, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore,
+    SemanticStyle, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath, WHITE,
+};
+use noon_geometry::{number_line_tick_values, AxesFrame, CoordinateError, NumberLineFrame};
+
+/// Where each Riemann rectangle obtains its graph height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RiemannSample {
+    Left,
+    Right,
+    Center,
+}
+
+/// Shared preparation inputs for ordinary retained rectangle leaves. Geometry
+/// sampling, gradient paint and signed-area classification are authored once.
+#[derive(Clone, Debug)]
+pub struct RiemannRectangleOptions {
+    pub colors: Vec<noon_core::Color>,
+    pub stroke_color: noon_core::Color,
+    pub stroke_width: f64,
+    pub fill_opacity: f64,
+    pub show_signed_area: bool,
+    pub blend: bool,
+    pub x_range: Option<[f64; 2]>,
+    pub dx: f64,
+    pub sample: RiemannSample,
+    pub width_scale_factor: f64,
+    pub bounded_graph: Option<SemanticNodeId>,
+}
+
+impl Default for RiemannRectangleOptions {
+    fn default() -> Self {
+        Self {
+            colors: vec![noon_core::BLUE, noon_core::GREEN],
+            stroke_color: noon_core::BLACK,
+            stroke_width: 1.0,
+            fill_opacity: 1.0,
+            show_signed_area: true,
+            blend: false,
+            x_range: None,
+            dx: 0.1,
+            sample: RiemannSample::Left,
+            width_scale_factor: 1.001,
+            bounded_graph: None,
+        }
+    }
+}
+
+pub(crate) mod area;
+mod polar_plane;
+pub use area::RiemannRectanglePlan;
+pub(crate) mod bar_chart;
+#[cfg(all(feature = "native-text", feature = "latex"))]
+pub use bar_chart::labels::BarLabelOptions;
+pub use bar_chart::{ManimBarChart, ManimBarChartOptions};
+pub(crate) use polar_plane::prepare_polar_plane;
+pub use polar_plane::{ManimPolarPlane, ManimPolarPlaneOptions, PolarAzimuthDirection};
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Debug)]
+pub enum CoordinateAuthoringError {
+    Coordinate(CoordinateError),
+    Authoring(AuthoringError),
+    Plot(PlotAuthoringError),
+    Live(crate::LiveSessionError),
+    InvalidOptions(&'static str),
+    InvalidTopology,
+}
+
+impl std::fmt::Display for CoordinateAuthoringError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Coordinate(error) => std::fmt::Display::fmt(error, formatter),
+            Self::Authoring(error) => std::fmt::Display::fmt(error, formatter),
+            Self::Plot(error) => std::fmt::Display::fmt(error, formatter),
+            Self::Live(error) => std::fmt::Display::fmt(error, formatter),
+            Self::InvalidOptions(reason) => formatter.write_str(reason),
+            Self::InvalidTopology => formatter.write_str("coordinate family topology is invalid"),
+        }
+    }
+}
+
+impl std::error::Error for CoordinateAuthoringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Coordinate(error) => Some(error),
+            Self::Authoring(error) => Some(error),
+            Self::Plot(error) => Some(error),
+            Self::Live(error) => Some(error),
+            Self::InvalidOptions(_) | Self::InvalidTopology => None,
+        }
+    }
+}
+
+impl From<CoordinateError> for CoordinateAuthoringError {
+    fn from(error: CoordinateError) -> Self {
+        Self::Coordinate(error)
+    }
+}
+impl From<AuthoringError> for CoordinateAuthoringError {
+    fn from(error: AuthoringError) -> Self {
+        Self::Authoring(error)
+    }
+}
+impl From<PlotAuthoringError> for CoordinateAuthoringError {
+    fn from(error: PlotAuthoringError) -> Self {
+        Self::Plot(error)
+    }
+}
+
+impl From<crate::LiveSessionError> for CoordinateAuthoringError {
+    fn from(error: crate::LiveSessionError) -> Self {
+        Self::Live(error)
+    }
+}
+
+/// Tick admission and geometry. `half_length` matches Manim's `tick_size`:
+/// a vertical tick extends from -tick_size to +tick_size, not half that length.
+#[derive(Clone, Copy, Debug)]
+pub struct CoordinateTicks {
+    pub enabled: bool,
+    pub half_length: f64,
+    pub exclude_origin: bool,
+    pub limit: usize,
+}
+
+impl Default for CoordinateTicks {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            half_length: 0.1,
+            exclude_origin: false,
+            limit: 10_000,
+        }
+    }
+}
+
+fn default_axis_style() -> SemanticStyle {
+    SemanticStyle {
+        fill: None,
+        stroke: Some(SemanticPaint::Solid(WHITE)),
+        stroke_width: 0.02,
+        stroke_width_mode: StrokeWidthMode::ScreenSpace,
+        ..SemanticStyle::default()
+    }
+}
+
+/// Inert tipless, linear NumberLine constructor request.
+#[derive(Clone, Debug)]
+pub struct ManimNumberLineOptions {
+    pub range: [f64; 3],
+    pub length: Option<f64>,
+    pub unit_size: f64,
+    pub rotation: f64,
+    pub numbers_with_elongated_ticks: Vec<f64>,
+    pub longer_tick_multiple: f64,
+    pub ticks: CoordinateTicks,
+    pub style: SemanticStyle,
+}
+
+impl ManimNumberLineOptions {
+    pub fn new(range: [f64; 3]) -> Self {
+        Self {
+            range,
+            length: None,
+            unit_size: 1.0,
+            rotation: 0.0,
+            numbers_with_elongated_ticks: Vec::new(),
+            longer_tick_multiple: 2.0,
+            ticks: CoordinateTicks::default(),
+            style: default_axis_style(),
+        }
+    }
+
+    /// Manim UnitInterval defaults, including the elongated endpoint ticks.
+    pub fn unit_interval() -> Self {
+        Self {
+            unit_size: 10.0,
+            numbers_with_elongated_ticks: vec![0.0, 1.0],
+            ..Self::new([0.0, 1.0, 0.1])
+        }
+    }
+
+    fn frame(&self) -> Result<NumberLineFrame, CoordinateAuthoringError> {
+        noon_geometry::validate_coordinate_range(self.range)?;
+        if !self.unit_size.is_finite() || self.unit_size <= 0.0 {
+            return Err(CoordinateError::InvalidLength.into());
+        }
+        let length = self
+            .length
+            .unwrap_or_else(|| (self.range[1] - self.range[0]) * self.unit_size);
+        Ok(NumberLineFrame::centered(
+            self.range,
+            length,
+            self.rotation,
+        )?)
+    }
+}
+
+/// Linear Axes request. Coordinate ranges, not tick or label bounds, determine
+/// placement. [`Self::new`] is explicitly sized and tipless; [`Default`] selects
+/// the pinned Manim profile with optional retained tips.
+#[derive(Clone, Debug)]
+pub struct ManimAxesOptions {
+    pub x_range: [f64; 3],
+    pub y_range: [f64; 3],
+    pub x_length: f64,
+    pub y_length: f64,
+    pub ticks: CoordinateTicks,
+    /// Match Manim Axes' default filled triangular arrowheads.
+    pub tips: bool,
+    pub tip_length: f64,
+    pub style: SemanticStyle,
+}
+
+impl ManimAxesOptions {
+    pub fn new(x_range: [f64; 3], y_range: [f64; 3], x_length: f64, y_length: f64) -> Self {
+        Self {
+            x_range,
+            y_range,
+            x_length,
+            y_length,
+            ticks: CoordinateTicks {
+                exclude_origin: true,
+                ..CoordinateTicks::default()
+            },
+            tips: false,
+            tip_length: 0.35,
+            style: default_axis_style(),
+        }
+    }
+
+    /// Manim v0.21 Axes defaults for the fixed 16:9, height-8 camera profile.
+    /// Explicit [`Self::new`] requests remain tipless for stable authored output.
+    pub fn manim_default() -> Self {
+        Self {
+            tips: true,
+            ..Self::new(
+                [-7.0, 7.0, 1.0],
+                [-4.0, 4.0, 1.0],
+                f64::from(noon_core::DEFAULT_FRAME_WIDTH).round() - 2.0,
+                f64::from(noon_core::DEFAULT_FRAME_HEIGHT).round() - 2.0,
+            )
+        }
+    }
+
+    /// Normalize Manim-style two- or three-value ranges and fill omitted
+    /// values from the pinned v0.21 default profile.
+    pub fn from_ranges(
+        x_range: Option<&[f64]>,
+        y_range: Option<&[f64]>,
+        x_length: Option<f64>,
+        y_length: Option<f64>,
+    ) -> Result<Self, CoordinateAuthoringError> {
+        let defaults = Self::manim_default();
+        let mut options = defaults.clone();
+        options.x_range = normalize_axes_range(x_range, defaults.x_range)?;
+        options.y_range = normalize_axes_range(y_range, defaults.y_range)?;
+        options.x_length = x_length.unwrap_or(defaults.x_length);
+        options.y_length = y_length.unwrap_or(defaults.y_length);
+        // A partially specified request follows Python Manim's constructor
+        // defaults, including tips. `new` remains the explicit tipless API.
+        Ok(options)
+    }
+}
+
+pub(crate) fn normalize_axes_range(
+    values: Option<&[f64]>,
+    default: [f64; 3],
+) -> Result<[f64; 3], CoordinateAuthoringError> {
+    let range = match values {
+        None | Some([]) => default,
+        Some([start, end]) => [*start, *end, 1.0],
+        Some([start, end, step]) => [*start, *end, *step],
+        Some(_) => {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "coordinate range requires two or three values",
+            ));
+        }
+    };
+    noon_geometry::validate_coordinate_range(range)?;
+    Ok(range)
+}
+
+impl Default for ManimAxesOptions {
+    fn default() -> Self {
+        Self::manim_default()
+    }
+}
+
+/// One ordinary semantic family: shaft first, tick family second.
+/// Clone aliases this identity. Shared family-copy operations allocate new nodes.
+#[derive(Clone, Debug)]
+pub struct ManimNumberLine {
+    family: MobjectFamily,
+}
+
+impl ManimNumberLine {
+    /// Cold integration entry point. Scene-owned construction also supports the
+    /// existing coherent transaction path after Scene execution has started.
+    pub fn create(
+        store: Rc<RefCell<SemanticStore>>,
+        options: &ManimNumberLineOptions,
+    ) -> Result<Self, CoordinateAuthoringError> {
+        let (transaction, root) = prepare_number_line(options)?;
+        let result = transaction
+            .apply(&mut store.borrow_mut())
+            .map_err(AuthoringError::from)?;
+        Self::from_family(resolve_family(store, &result, root)?)
+    }
+
+    /// Reconstruct from semantic identity, including a shared family copy.
+    pub fn from_family(family: MobjectFamily) -> Result<Self, CoordinateAuthoringError> {
+        let line = Self { family };
+        line.range()?;
+        line.ticks()?;
+        Ok(line)
+    }
+
+    pub fn family(&self) -> &MobjectFamily {
+        &self.family
+    }
+
+    pub fn shaft(&self) -> Result<Mobject, CoordinateAuthoringError> {
+        let [shaft, _] = coordinate_members(&self.family)?;
+        Ok(Mobject::from_node(
+            Rc::clone(self.family.integration_store()),
+            shaft,
+        )?)
+    }
+
+    pub fn ticks(&self) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        let [_, ticks] = coordinate_members(&self.family)?;
+        Ok(MobjectFamily::from_node(
+            Rc::clone(self.family.integration_store()),
+            ticks,
+        )?)
+    }
+
+    pub fn range(&self) -> Result<[f64; 3], CoordinateAuthoringError> {
+        match self.shaft()?.state()?.role() {
+            SemanticObjectRole::NumberLine(role) if role.is_valid() => Ok(role.range()),
+            _ => Err(CoordinateAuthoringError::InvalidTopology),
+        }
+    }
+
+    pub fn authored_frame(&self) -> Result<NumberLineFrame, CoordinateAuthoringError> {
+        self.snapshot_with(&mut Mobject::path_query)
+    }
+
+    /// Read current path endpoints and transforms from one immutable execution
+    /// borrow. A stale/foreign execution or unsupported path override is an error;
+    /// this method never falls back to authored state.
+    pub fn effective_frame(
+        &self,
+        execution: &ExecutionSession,
+    ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
+        self.snapshot_with(&mut |shaft| {
+            crate::path_queries::effective_path_query(
+                self.family.integration_store(),
+                execution,
+                shaft,
+            )
+        })
+    }
+
+    pub(crate) fn snapshot_with(
+        &self,
+        query: &mut impl FnMut(&Mobject) -> Result<PathQuery, AuthoringError>,
+    ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
+        let shaft = self.shaft()?;
+        let range = match shaft.state()?.role() {
+            SemanticObjectRole::NumberLine(role) if role.is_valid() => role.range(),
+            _ => return Err(CoordinateAuthoringError::InvalidTopology),
+        };
+        let path = query(&shaft)?;
+        let (sx, sy) = path.start()?;
+        let (ex, ey) = path.end()?;
+        Ok(NumberLineFrame::new(range, [sx, sy], [ex, ey])?)
+    }
+}
+
+/// Ordinary family containing X then Y NumberLine families. Only family identity
+/// is retained here; every query resolves members and ranges from semantic state.
+#[derive(Clone, Debug)]
+pub struct ManimAxes {
+    family: MobjectFamily,
+}
+
+impl ManimAxes {
+    pub fn create(
+        store: Rc<RefCell<SemanticStore>>,
+        options: &ManimAxesOptions,
+    ) -> Result<Self, CoordinateAuthoringError> {
+        let prepared = prepare_axes(options)?;
+        let root = publish_prepared_axes(
+            options,
+            prepared.axes,
+            prepared.tip_paths,
+            &mut store.borrow_mut(),
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )?;
+        Self::from_family(MobjectFamily::from_node(store, root)?)
+    }
+
+    pub fn from_family(family: MobjectFamily) -> Result<Self, CoordinateAuthoringError> {
+        let axes = Self { family };
+        axes.x_axis()?;
+        axes.y_axis()?;
+        Ok(axes)
+    }
+
+    pub fn family(&self) -> &MobjectFamily {
+        &self.family
+    }
+
+    pub fn x_axis(&self) -> Result<ManimNumberLine, CoordinateAuthoringError> {
+        self.axis(0)
+    }
+    pub fn y_axis(&self) -> Result<ManimNumberLine, CoordinateAuthoringError> {
+        self.axis(1)
+    }
+
+    fn axis(&self, index: usize) -> Result<ManimNumberLine, CoordinateAuthoringError> {
+        let members = coordinate_members(&self.family)?;
+        ManimNumberLine::from_family(MobjectFamily::from_node(
+            Rc::clone(self.family.integration_store()),
+            members[index],
+        )?)
+    }
+
+    pub fn authored_frame(&self) -> Result<AxesFrame, CoordinateAuthoringError> {
+        self.snapshot_with(&mut Mobject::path_query)
+    }
+
+    /// Both axes use the same immutable execution borrow. No host callback or
+    /// publication occurs between their observations, and no ranges are cached.
+    pub fn effective_frame(
+        &self,
+        execution: &ExecutionSession,
+    ) -> Result<AxesFrame, CoordinateAuthoringError> {
+        self.snapshot_with(&mut |shaft| {
+            crate::path_queries::effective_path_query(
+                self.family.integration_store(),
+                execution,
+                shaft,
+            )
+        })
+    }
+
+    pub fn plot_sampling(
+        &self,
+        range: Option<&[f64]>,
+    ) -> Result<PlotSamplingOptions, CoordinateAuthoringError> {
+        PlotSamplingOptions::axes(self.x_axis()?.range()?, range)
+            .map_err(PlotAuthoringError::from)
+            .map_err(CoordinateAuthoringError::from)
+    }
+
+    /// Evaluate an explicit scalar callable and map its result through this
+    /// axes' current authored frame. Like Manim's callable-backed graph query,
+    /// this reevaluates the function rather than interpolating retained vertices.
+    /// The callable belongs to the author; it is never retained by the runtime.
+    pub fn input_to_graph_point(
+        &self,
+        input: f64,
+        function: impl FnOnce(f64) -> f64,
+    ) -> Result<[f64; 2], CoordinateAuthoringError> {
+        let ordinate = function(input);
+        Ok(self.authored_frame()?.coords_to_point(input, ordinate)?)
+    }
+
+    /// The live counterpart of [`Self::input_to_graph_point`], observing both
+    /// shafts from the same effective publication after evaluating the callable.
+    pub fn effective_input_to_graph_point(
+        &self,
+        execution: &ExecutionSession,
+        input: f64,
+        function: impl FnOnce(f64) -> f64,
+    ) -> Result<[f64; 2], CoordinateAuthoringError> {
+        let ordinate = function(input);
+        Ok(self
+            .effective_frame(execution)?
+            .coords_to_point(input, ordinate)?)
+    }
+
+    /// Construct a detached static y=f(x) path in this axes' semantic store.
+    ///
+    /// The authored coordinate frame is captured once before the callback runs,
+    /// and the callback is evaluated only while preparing the ordinary retained
+    /// path. Add the returned [`Mobject`] to any family explicitly. Runtime
+    /// effective coordinates remain an explicit `effective_frame` capture rather
+    /// than an implicit live graph model.
+    pub fn plot(
+        &self,
+        function: impl FnMut(f64) -> f64,
+        range: Option<&[f64]>,
+        use_smoothing: bool,
+    ) -> Result<Mobject, CoordinateAuthoringError> {
+        let frame = self.authored_frame()?;
+        let sampling = PlotSamplingOptions::axes(frame.x().range(), range)
+            .map_err(PlotAuthoringError::from)?;
+        let mut options =
+            ManimGeometryOptions::axes_function_plot(frame, &sampling, function, use_smoothing)?;
+        options.set_semantic_role(SemanticObjectRole::FunctionPlot(
+            SemanticFunctionPlotRole::new([sampling.range[0], sampling.range[1]]),
+        ));
+        let graph =
+            Mobject::from_manim_geometry(Rc::clone(self.family.integration_store()), options)?;
+        Ok(graph)
+    }
+
+    /// Construct a detached static data polyline in this axes' semantic store.
+    ///
+    /// Supplied order and repeated x values are preserved. Mapping uses one
+    /// authored coordinate-frame snapshot and creates no graph-side semantics.
+    pub fn plot_samples(&self, points: &[[f64; 2]]) -> Result<Mobject, CoordinateAuthoringError> {
+        if points.len() < 2 || points.iter().any(|[x, y]| !x.is_finite() || !y.is_finite()) {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "graph samples require two finite points",
+            ));
+        }
+        let mut options = ManimGeometryOptions::axes_sampled_plot(self.authored_frame()?, points)?;
+        if points[0][0] < points[points.len() - 1][0] {
+            options.set_semantic_role(SemanticObjectRole::FunctionPlot(
+                SemanticFunctionPlotRole::new([points[0][0], points[points.len() - 1][0]]),
+            ));
+        }
+        Ok(Mobject::from_manim_geometry(
+            Rc::clone(self.family.integration_store()),
+            options,
+        )?)
+    }
+
+    /// Create a closed ordinary path between graph and baseline (or another graph).
+    pub fn get_area(
+        &self,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<Mobject, CoordinateAuthoringError> {
+        self.require_graph_store(graph)?;
+        if let Some(bound) = bounded_graph {
+            self.require_graph_store(bound)?;
+        }
+        let frame = self.authored_frame()?;
+        let graph_path = graph.path_query()?;
+        let bounded_path = bounded_graph.map(Mobject::path_query).transpose()?;
+        let options = ManimGeometryOptions::axes_area(
+            frame,
+            graph,
+            &graph_path,
+            x_range,
+            bounded_graph.zip(bounded_path.as_ref()),
+        )?;
+        Ok(Mobject::from_manim_geometry(
+            Rc::clone(self.family.integration_store()),
+            options,
+        )?)
+    }
+
+    /// Create a family of ordinary closed rectangle paths.  Partitioning is
+    /// half-open, matching NumPy/Manim `arange(start, end, dx)`.
+    pub fn get_riemann_rectangles(
+        &self,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        self.riemann_plan(graph, options)?.publish(None, None)
+    }
+
+    /// Capture one cold authored snapshot before evaluating arbitrary functions.
+    /// Rust owns the partition; evaluate `samples()` and optionally `starts()`,
+    /// then publish the returned values through this plan.
+    pub fn riemann_plan(
+        &self,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<RiemannRectanglePlan, CoordinateAuthoringError> {
+        self.require_graph_store(graph)?;
+        let bounded = options
+            .bounded_graph
+            .map(|id| Mobject::from_node(Rc::clone(self.family.integration_store()), id))
+            .transpose()?;
+        if let Some(ref bound) = bounded {
+            self.require_graph_store(bound)?;
+        }
+        let frame = self.authored_frame()?;
+        let graph_path = graph.path_query()?;
+        let bounded_path = bounded.as_ref().map(Mobject::path_query).transpose()?;
+        RiemannRectanglePlan::from_snapshot(
+            frame,
+            graph,
+            &graph_path,
+            bounded.as_ref().zip(bounded_path.as_ref()),
+            options,
+        )
+    }
+
+    fn require_graph_store(&self, graph: &Mobject) -> Result<(), CoordinateAuthoringError> {
+        if !Rc::ptr_eq(self.family.integration_store(), graph.integration_store()) {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        graph.axes_plot_range()?;
+        Ok(())
+    }
+
+    pub(crate) fn snapshot_with(
+        &self,
+        query: &mut impl FnMut(&Mobject) -> Result<PathQuery, AuthoringError>,
+    ) -> Result<AxesFrame, CoordinateAuthoringError> {
+        Ok(AxesFrame::new(
+            self.x_axis()?.snapshot_with(query)?,
+            self.y_axis()?.snapshot_with(query)?,
+        ))
+    }
+}
+
+impl Scene {
+    /// Atomically construct shaft, ticks and family using this Scene's ordinary
+    /// transaction routing. Invalid preparation publishes no partial identity.
+    pub fn number_line(
+        &mut self,
+        options: &ManimNumberLineOptions,
+    ) -> Result<ManimNumberLine, CoordinateAuthoringError> {
+        let (transaction, root) = prepare_number_line(options)?;
+        let result = self.apply_semantic_transaction(transaction)?;
+        ManimNumberLine::from_family(resolve_family(
+            Rc::clone(self.integration_store()),
+            &result,
+            root,
+        )?)
+    }
+
+    pub fn axes(
+        &mut self,
+        options: &ManimAxesOptions,
+    ) -> Result<ManimAxes, CoordinateAuthoringError> {
+        let prepared = prepare_axes(options)?;
+        let root = self.with_semantic_publication(|store, publish| {
+            publish_prepared_axes(options, prepared.axes, prepared.tip_paths, store, publish)
+        })?;
+        ManimAxes::from_family(MobjectFamily::from_node(
+            Rc::clone(self.integration_store()),
+            root,
+        )?)
+    }
+
+    /// Current coordinate snapshot from this Scene's owned execution. Cold
+    /// Scenes fail explicitly, just like Scene::effective_path_query.
+    pub fn effective_number_line_frame(
+        &self,
+        line: &ManimNumberLine,
+    ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
+        line.snapshot_with(&mut |shaft| self.effective_path_query(shaft))
+    }
+
+    pub fn effective_axes_frame(
+        &self,
+        axes: &ManimAxes,
+    ) -> Result<AxesFrame, CoordinateAuthoringError> {
+        axes.snapshot_with(&mut |shaft| self.effective_path_query(shaft))
+    }
+
+    /// Materialize an area from one currently published effective observation.
+    /// The result is ordinary authored geometry; it does not subscribe to later
+    /// source animation frames.
+    pub fn effective_axes_area(
+        &mut self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<Mobject, CoordinateAuthoringError> {
+        if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store())
+            || !Rc::ptr_eq(self.integration_store(), graph.integration_store())
+            || bounded_graph.is_some_and(|bound| {
+                !Rc::ptr_eq(self.integration_store(), bound.integration_store())
+            })
+        {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        let frame = self.effective_axes_frame(axes)?;
+        let graph_path = self.effective_path_query(graph)?;
+        let bounded_path = bounded_graph
+            .map(|bound| self.effective_path_query(bound))
+            .transpose()?;
+        let options = ManimGeometryOptions::axes_area(
+            frame,
+            graph,
+            &graph_path,
+            x_range,
+            bounded_graph.zip(bounded_path.as_ref()),
+        )?;
+        Ok(self.geometry(options)?)
+    }
+
+    /// Capture the axes and graph paths from one Runtime publication, prepare
+    /// every rectangle without rereading authored state, then publish the whole
+    /// family through one Scene-owned resource/semantic transaction.
+    pub fn effective_riemann_rectangles(
+        &mut self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        let paths = self
+            .effective_riemann_plan(axes, graph, options)?
+            .paths(None, None)?;
+        crate::scene::publish_path_family(self, paths).map_err(Into::into)
+    }
+
+    /// Immutable effective source snapshot for exact scalar callback evaluation.
+    pub fn effective_riemann_plan(
+        &self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<RiemannRectanglePlan, CoordinateAuthoringError> {
+        if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store())
+            || !Rc::ptr_eq(self.integration_store(), graph.integration_store())
+        {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        let bounded = options
+            .bounded_graph
+            .map(|id| Mobject::from_node(Rc::clone(self.integration_store()), id))
+            .transpose()?;
+        if bounded
+            .as_ref()
+            .is_some_and(|bound| !Rc::ptr_eq(self.integration_store(), bound.integration_store()))
+        {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        let frame = self.effective_axes_frame(axes)?;
+        let graph_path = self.effective_path_query(graph)?;
+        let bounded_path = bounded
+            .as_ref()
+            .map(|bound| self.effective_path_query(bound))
+            .transpose()?;
+        RiemannRectanglePlan::from_snapshot(
+            frame,
+            graph,
+            &graph_path,
+            bounded.as_ref().zip(bounded_path.as_ref()),
+            options,
+        )
+    }
+}
+
+impl ManimGeometryOptions {
+    /// Prepare an ordinary closed graph-area path from one captured coordinate
+    /// frame. This retains no callback and owns no scene identity.
+    pub fn axes_area(
+        frame: AxesFrame,
+        graph: &Mobject,
+        graph_path: &PathQuery,
+        x_range: Option<[f64; 2]>,
+        bounded: Option<(&Mobject, &PathQuery)>,
+    ) -> Result<Self, CoordinateAuthoringError> {
+        area::axes_area(frame, graph, graph_path, x_range, bounded)
+    }
+
+    /// Prepare y=f(x) in a captured coordinate frame. Capture once before calling
+    /// this method; evaluation cannot mix axis publications between samples.
+    pub fn axes_function_plot(
+        frame: AxesFrame,
+        sampling: &PlotSamplingOptions,
+        mut function: impl FnMut(f64) -> f64,
+        use_smoothing: bool,
+    ) -> Result<Self, CoordinateAuthoringError> {
+        let plan = sampling.plan().map_err(PlotAuthoringError::from)?;
+        let mut points = Vec::new();
+        points
+            .try_reserve_exact(plan.parameters().len())
+            .map_err(|_| PlotAuthoringError::from(PlotPreparationError::AllocationFailed))?;
+        for &x in plan.parameters() {
+            points.push(frame.coords_to_point(x, function(x))?);
+        }
+        Ok(Self::plot_samples(&plan, &points, use_smoothing)?)
+    }
+
+    /// Map data without sorting, smoothing, or connecting across invented samples.
+    pub fn axes_sampled_plot(
+        frame: AxesFrame,
+        points: &[[f64; 2]],
+    ) -> Result<Self, CoordinateAuthoringError> {
+        let mut mapped = Vec::new();
+        mapped
+            .try_reserve_exact(points.len())
+            .map_err(|_| PlotAuthoringError::from(PlotPreparationError::AllocationFailed))?;
+        for &[x, y] in points {
+            mapped.push(frame.coords_to_point(x, y)?);
+        }
+        Ok(Self::sampled_plot(&mapped)?)
+    }
+}
+
+impl ManimAxes {
+    /// Prepare rectangle paths from already captured axes and graph snapshots.
+    /// Publication remains owned by `Scene` or `LiveSession`.
+    pub fn riemann_rectangle_paths(
+        frame: AxesFrame,
+        graph: &Mobject,
+        graph_path: &PathQuery,
+        bounded: Option<(&Mobject, &PathQuery)>,
+        options: RiemannRectangleOptions,
+    ) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
+        area::prepare_riemann_paths(frame, graph, graph_path, bounded, options)
+    }
+}
+
+fn coordinate_members(
+    family: &MobjectFamily,
+) -> Result<[SemanticNodeId; 2], CoordinateAuthoringError> {
+    family.validate()?;
+    let store = family.integration_store().borrow();
+    let node = store.node(family.node_id()).expect("validated family");
+    let first = node
+        .first_member()
+        .ok_or(CoordinateAuthoringError::InvalidTopology)?;
+    let second = node
+        .next_member(first)
+        .ok_or(CoordinateAuthoringError::InvalidTopology)?;
+    Ok([first, second])
+}
+
+pub(crate) fn resolve_family(
+    store: Rc<RefCell<SemanticStore>>,
+    result: &SemanticMutationTransactionResult,
+    root: SemanticLocalNodeToken,
+) -> Result<MobjectFamily, CoordinateAuthoringError> {
+    let id = result
+        .resolve(root)
+        .ok_or(AuthoringError::UnresolvedCreatedNode(root))?;
+    Ok(MobjectFamily::from_node(store, id)?)
+}
+
+pub(crate) fn prepare_number_line(
+    options: &ManimNumberLineOptions,
+) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError> {
+    let states = prepare_line_with_elongated_ticks(
+        options.frame()?,
+        options.ticks,
+        &options.style,
+        &options.numbers_with_elongated_ticks,
+        options.longer_tick_multiple,
+        false,
+    )?;
+    let mut transaction = SemanticMutationTransaction::new();
+    let root = stage_line(&mut transaction, states);
+    Ok((transaction, root))
+}
+
+pub(crate) fn prepare_axes(
+    options: &ManimAxesOptions,
+) -> Result<PreparedAxes, CoordinateAuthoringError> {
+    let frame = AxesFrame::centered(
+        options.x_range,
+        options.y_range,
+        options.x_length,
+        options.y_length,
+    )?;
+    if options.tips
+        && (!options.tip_length.is_finite()
+            || options.tip_length <= 0.0
+            || !matches!(options.style.stroke.as_ref(), Some(SemanticPaint::Solid(_))))
+    {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid Axes tip dimensions or tip color",
+        ));
+    }
+    let prepare_axis = |axis: NumberLineFrame| {
+        if options.tips {
+            prepare_line_with_elongated_ticks(axis, options.ticks, &options.style, &[], 2.0, true)
+        } else {
+            prepare_line(axis, options.ticks, &options.style)
+        }
+    };
+    let axes = [prepare_axis(frame.x())?, prepare_axis(frame.y())?];
+    let tip_paths = if options.tips {
+        let direction = |axis: NumberLineFrame| {
+            let start = axis.start();
+            let end = axis.end();
+            let dx = end[0] - start[0];
+            let dy = end[1] - start[1];
+            let length = dx.hypot(dy);
+            (dx / length, dy / length)
+        };
+        vec![
+            filled_tip_path(frame.x().end(), direction(frame.x()), options.tip_length)?,
+            filled_tip_path(frame.y().end(), direction(frame.y()), options.tip_length)?,
+        ]
+    } else {
+        Vec::new()
+    };
+    Ok(PreparedAxes { axes, tip_paths })
+}
+
+pub(crate) struct PreparedAxes {
+    pub(crate) axes: [Vec<SemanticObjectState>; 2],
+    pub(crate) tip_paths: Vec<VectorPath>,
+}
+
+pub(crate) fn publish_prepared_axes(
+    options: &ManimAxesOptions,
+    axes: [Vec<SemanticObjectState>; 2],
+    tip_paths: Vec<VectorPath>,
+    store: &mut SemanticStore,
+    mut publish: impl FnMut(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticNodeId, AuthoringError> {
+    store.with_geometry_paths(tip_paths, |store, tip_handles| {
+        let mut transaction = SemanticMutationTransaction::new();
+        let root = transaction.create_node(SemanticNodeCreation::family());
+        let mut tip_index = 0;
+        for mut states in axes {
+            let group = transaction.create_node(SemanticNodeCreation::family());
+            let shaft = transaction.create_node(SemanticNodeCreation::object(states.remove(0)));
+            let ticks = transaction.create_node(SemanticNodeCreation::family());
+            transaction.add_member(group, shaft);
+            transaction.add_member(group, ticks);
+            for state in states {
+                let tick = transaction.create_node(SemanticNodeCreation::object(state));
+                transaction.add_member(ticks, tick);
+            }
+            if options.tips {
+                let handle = tip_handles
+                    .get(tip_index)
+                    .copied()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?;
+                let mut tip = SemanticObjectState::new(StoredGeometry::Resource(handle));
+                tip.style = filled_tip_style(&options.style)
+                    .map_err(|_| AuthoringError::NonFiniteObjectState)?;
+                let token = transaction.create_node(SemanticNodeCreation::object(tip));
+                transaction.add_member(group, token);
+                tip_index += 1;
+            }
+            transaction.add_member(root, group);
+        }
+        let result = publish(store, transaction)?;
+        result
+            .resolve(root)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(root))
+    })
+}
+
+/// Shared retained filled-tip geometry used by 2D and 3D coordinate families.
+pub(crate) fn filled_tip_path(
+    apex: [f64; 2],
+    direction: (f64, f64),
+    length: f64,
+) -> Result<VectorPath, AuthoringError> {
+    let vertices = noon_geometry::arrow_tip_vertices((apex[0], apex[1]), direction, length);
+    let point = |xy: (f64, f64)| -> Result<Vec2, AuthoringError> {
+        Ok(Vec2::new(
+            crate::integration::authoring_render_f64("coordinate tip x", xy.0)? as f32,
+            crate::integration::authoring_render_f64("coordinate tip y", xy.1)? as f32,
+        ))
+    };
+    Ok(VectorPath::new()
+        .move_to(point(vertices[0])?)
+        .line_to(point(vertices[1])?)
+        .line_to(point(vertices[2])?)
+        .close())
+}
+
+pub(crate) fn filled_tip_style(
+    style: &SemanticStyle,
+) -> Result<SemanticStyle, CoordinateAuthoringError> {
+    let Some(SemanticPaint::Solid(color)) = style.stroke.as_ref() else {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "coordinate tips require a solid stroke color",
+        ));
+    };
+    let mut tip = style.clone();
+    tip.fill = Some(SemanticPaint::Solid(*color));
+    tip.fill_opacity = 1.0;
+    tip.stroke = Some(SemanticPaint::Solid(*color));
+    // Manim's default ArrowTriangleFilledTip has no outline. Shaft width
+    // controls the axis stroke, not the filled tip's boundary.
+    tip.stroke_width = 0.0;
+    Ok(tip)
+}
+
+fn prepare_line(
+    frame: NumberLineFrame,
+    ticks: CoordinateTicks,
+    style: &SemanticStyle,
+) -> Result<Vec<SemanticObjectState>, CoordinateAuthoringError> {
+    prepare_line_with_elongated_ticks(frame, ticks, style, &[], 2.0, false)
+}
+
+fn prepare_line_with_elongated_ticks(
+    frame: NumberLineFrame,
+    ticks: CoordinateTicks,
+    style: &SemanticStyle,
+    elongated: &[f64],
+    multiple: f64,
+    include_tip: bool,
+) -> Result<Vec<SemanticObjectState>, CoordinateAuthoringError> {
+    if elongated.len() > ticks.limit {
+        return Err(CoordinateError::TickLimitExceeded.into());
+    }
+    if !multiple.is_finite() || multiple < 0.0 || elongated.iter().any(|n| !n.is_finite()) {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid elongated ticks",
+        ));
+    }
+    let mut offsets = elongated
+        .iter()
+        .map(|n| n - frame.range()[0])
+        .collect::<Vec<_>>();
+    if offsets.iter().any(|n| !n.is_finite()) {
+        return Err(CoordinateError::InvalidPoint.into());
+    }
+    offsets.sort_unstable_by(f64::total_cmp);
+    if !ticks.half_length.is_finite() || ticks.half_length < 0.0 {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid tick size",
+        ));
+    }
+    if !style.is_finite() || style.stroke_width < 0.0 {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid axis style",
+        ));
+    }
+    let values = if ticks.enabled {
+        number_line_tick_values(
+            frame.range(),
+            include_tip,
+            ticks.exclude_origin,
+            ticks.limit,
+        )?
+    } else {
+        Vec::new()
+    };
+    let mut states = Vec::new();
+    states
+        .try_reserve_exact(values.len() + 1)
+        .map_err(|_| CoordinateError::AllocationFailed)?;
+    let mut shaft = line_state(frame.start(), frame.end(), style)?;
+    shaft.set_role(SemanticObjectRole::NumberLine(SemanticNumberLineRole::new(
+        frame.range(),
+    )));
+    states.push(shaft);
+    let start = frame.start();
+    let end = frame.end();
+    let length = (end[0] - start[0]).hypot(end[1] - start[1]);
+    let nx = -(end[1] - start[1]) / length * ticks.half_length;
+    let ny = (end[0] - start[0]) / length * ticks.half_length;
+    for value in values {
+        let [x, y] = frame.number_to_point(value)?;
+        // Match pinned np.isclose(x - x_min, elongated - x_min), without
+        // scanning the complete special-tick list for every ordinary tick.
+        let offset = value - frame.range()[0];
+        let index = offsets.partition_point(|candidate| *candidate < offset);
+        let is_long = offsets[index.saturating_sub(1)..(index + 1).min(offsets.len())]
+            .iter()
+            .any(|candidate| (offset - candidate).abs() <= 1e-8 + 1e-5 * candidate.abs());
+        let factor = if is_long { multiple } else { 1.0 };
+        states.push(line_state(
+            [x - nx * factor, y - ny * factor],
+            [x + nx * factor, y + ny * factor],
+            style,
+        )?);
+    }
+    Ok(states)
+}
+
+fn line_state(
+    start: [f64; 2],
+    end: [f64; 2],
+    style: &SemanticStyle,
+) -> Result<SemanticObjectState, CoordinateAuthoringError> {
+    let lower = |[x, y]: [f64; 2]| -> Result<Vec2, AuthoringError> {
+        Ok(Vec2::new(
+            crate::integration::authoring_render_f64("axis x", x)? as f32,
+            crate::integration::authoring_render_f64("axis y", y)? as f32,
+        ))
+    };
+    let mut state = SemanticObjectState::new(StoredGeometry::Line {
+        start: lower(start)?,
+        end: lower(end)?,
+    });
+    state.style = style.clone();
+    Ok(state)
+}
+
+fn stage_line(
+    transaction: &mut SemanticMutationTransaction,
+    states: Vec<SemanticObjectState>,
+) -> SemanticLocalNodeToken {
+    let mut states = states.into_iter();
+    let root = transaction.create_node(SemanticNodeCreation::family());
+    let shaft = transaction.create_node(SemanticNodeCreation::object(
+        states.next().expect("prepared coordinate shaft"),
+    ));
+    let ticks = transaction.create_node(SemanticNodeCreation::family());
+    transaction.add_member(root, shaft);
+    transaction.add_member(root, ticks);
+    for state in states {
+        let tick = transaction.create_node(SemanticNodeCreation::object(state));
+        transaction.add_member(ticks, tick);
+    }
+    root
+}

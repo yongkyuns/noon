@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveRasterReferenceSamples } from "./manim-raster-support.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactRoot = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts");
 const reportPath = path.join(artifactRoot, "report.json");
 const semanticRoot = path.join(artifactRoot, "semantic");
-const manifest = JSON.parse(await readFile(path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8"));
+const manifestPath = path.resolve(
+  repoRoot,
+  process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json",
+);
+const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const reference = manifest.reference;
 const report = JSON.parse(await readFile(reportPath, "utf8"));
 // The raster pass already generated this oracle and captured the shared runtime
@@ -112,6 +117,64 @@ function compareSemanticStates(referenceState, noonState) {
   };
 }
 
+function referenceStateForSample(fixtureId, fixture, manimFixture, sample) {
+  assert.ok(sample && typeof sample === "object", `${fixtureId}: malformed raster sample`);
+  assert.ok(typeof sample.time === "number" && Number.isFinite(sample.time),
+    `${fixtureId}: sample time must be finite`);
+  if (sample.referenceKind === "terminal") {
+    assert.equal(sample.frameIndex, null, `${fixtureId}: terminal sample must not have a frame index`);
+    assert.equal(sample.terminalState, true, `${fixtureId}: terminal sample is missing terminal-state marker`);
+    const state = manimFixture.terminal_state;
+    assert.ok(state, `${fixtureId}: missing terminal Manim state`);
+    assert.ok(typeof state.time === "number" && Number.isFinite(state.time),
+      `${fixtureId}: terminal Manim state has invalid time`);
+    assert.ok(Math.abs(state.time - sample.time) < 1e-9,
+      `${fixtureId}: terminal Manim state time does not match sample`);
+    return state;
+  }
+  assert.ok(sample.referenceKind === "sequence" || sample.referenceKind === "frozen-hold",
+    `${fixtureId}: unsupported reference kind ${String(sample.referenceKind)}`);
+  assert.ok(typeof sample.materializedTime === "number" && Number.isFinite(sample.materializedTime),
+    `${fixtureId}: ${sample.referenceKind} sample is missing a finite materialized time`);
+  if (sample.referenceKind === "frozen-hold") {
+    const resolved = resolveRasterReferenceSamples(
+      (manimFixture.frames ?? []).map(frame => frame.time),
+      [sample.time],
+      {
+        logicalDuration: Number(fixture.expected_duration),
+        terminalState: manimFixture.terminal_state,
+        terminalPng: manimFixture.terminal_png,
+        frozenIntervals: manimFixture.frozen_intervals ?? [],
+        pngFrameCount: manimFixture.frame_count,
+        semanticFrames: manimFixture.frames,
+      },
+    )[0];
+    assert.equal(resolved.referenceKind, "frozen-hold",
+      `${fixtureId}: logical time ${sample.time} is not covered by a recorded frozen hold`);
+    assert.equal(resolved.frameIndex, sample.frameIndex,
+      `${fixtureId}: frozen-hold frame index does not match recorded interval`);
+    assert.ok(Math.abs(resolved.materializedTime - sample.materializedTime) < 1e-9,
+      `${fixtureId}: frozen-hold materialized time does not match recorded interval`);
+  }
+  assert.ok(Number.isSafeInteger(sample.frameIndex) && sample.frameIndex >= 0,
+    `${fixtureId}: invalid ${sample.referenceKind} frame index ${String(sample.frameIndex)}`);
+  assert.ok(Array.isArray(manimFixture.frames) && sample.frameIndex < manimFixture.frames.length,
+    `${fixtureId}: missing reference frame ${sample.frameIndex}`);
+  const state = manimFixture.frames[sample.frameIndex];
+  assert.ok(state, `${fixtureId}: missing reference frame ${sample.frameIndex}`);
+  return state;
+}
+
+function semanticArtifactLabel(sample) {
+  if (sample.referenceKind === "terminal") return "terminal";
+  const frame = `frame-${String(sample.frameIndex).padStart(4, "0")}`;
+  if (sample.terminalState) return `${frame}-terminal`;
+  if (sample.referenceKind === "frozen-hold") {
+    return `${frame}-hold-${String(sample.time).replace(/[^0-9a-z]/gi, "_")}`;
+  }
+  return frame;
+}
+
 const index = [];
 for (const fixtureReport of report.fixtures) {
   const fixture = manifest.fixtures.find(entry => entry.id === fixtureReport.id);
@@ -122,25 +185,31 @@ for (const fixtureReport of report.fixtures) {
   const entries = [];
   for (const [backend, backendReport] of Object.entries(fixtureReport.backends)) {
     assert.ok(!backendReport.error, `${fixture.id}/${backend}: raster execution failed`);
+    assert.ok(Array.isArray(backendReport.samples), `${fixture.id}/${backend}: missing raster samples`);
     for (const sample of backendReport.samples) {
-      const referenceState = manimFixture.frames[sample.frameIndex];
+      const referenceState = referenceStateForSample(fixture.id, fixture, manimFixture, sample);
       const noonState = sample.debugFrame;
-      assert.ok(referenceState, `${fixture.id}: missing reference frame ${sample.frameIndex}`);
       assert.ok(noonState?.publication, `${fixture.id}/${backend}: missing shared runtime capture`);
-      assert.ok(Math.abs(Number(referenceState.time) - Number(sample.time)) < 1e-9);
-      assert.ok(Math.abs(Number(noonState.time) - Number(sample.time)) < 1e-9);
+      const referenceTime = sample.referenceKind === "terminal" ? sample.time : sample.materializedTime;
+      assert.ok(Math.abs(referenceState.time - referenceTime) < 1e-9,
+        `${fixture.id}/${backend}: Manim state time does not match its materialized time`);
+      assert.ok(typeof noonState.time === "number" && Number.isFinite(noonState.time),
+        `${fixture.id}/${backend}: captured shared runtime time is invalid`);
+      assert.ok(Math.abs(noonState.time - sample.time) < 1e-9);
       const comparison = compareSemanticStates(referenceState, noonState);
-      const label = `frame-${String(sample.frameIndex).padStart(4, "0")}`;
+      const label = semanticArtifactLabel(sample);
       const relativePath = path.join("semantic", backend, fixture.id, `${label}.json`);
       const outputPath = path.join(artifactRoot, relativePath);
       await mkdir(path.dirname(outputPath), { recursive: true });
       await writeFile(outputPath, `${JSON.stringify({
-        fixture: fixture.id, scene: fixture.scene, backend,
-        frameIndex: sample.frameIndex, time: sample.time,
-        manim: referenceState, noon: noonState, comparison,
+          fixture: fixture.id, scene: fixture.scene, backend,
+          frameIndex: sample.frameIndex, referenceKind: sample.referenceKind, time: sample.time,
+          manim: referenceState, noon: noonState, comparison,
       }, null, 2)}\n`);
       const summary = {
-        path: relativePath.split(path.sep).join("/"), pairing: comparison.pairing,
+        path: relativePath.split(path.sep).join("/"),
+        referenceKind: sample.referenceKind,
+        pairing: comparison.pairing,
         objectCountDelta: comparison.objectCountDelta,
         maxCenterDelta: comparison.maxCenterDelta, maxBoundsDelta: comparison.maxBoundsDelta,
         maxFillRgbaDelta: comparison.maxFillRgbaDelta, maxStrokeRgbaDelta: comparison.maxStrokeRgbaDelta,
@@ -148,7 +217,8 @@ for (const fixtureReport of report.fixtures) {
         paintPresenceMismatches: comparison.paintPresenceMismatches,
       };
       sample.semantic = summary;
-      entries.push({ backend, frameIndex: sample.frameIndex, time: sample.time, ...summary });
+      entries.push({ backend, frameIndex: sample.frameIndex, referenceKind: sample.referenceKind,
+        time: sample.time, ...summary });
     }
   }
   index.push({ id: fixture.id, scene: fixture.scene, samples: entries });

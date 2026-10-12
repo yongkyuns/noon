@@ -17,7 +17,10 @@ fn path(options: Options) -> (Mobject, VectorPath) {
             let resources = session.geometry_resources();
             let GeometryResource::VectorPath(path) = resources
                 .get(resources.current_handle(*id).unwrap())
-                .unwrap();
+                .unwrap()
+            else {
+                panic!("expected retained vector path resource")
+            };
             (**path).clone()
         }
         other => panic!("expected lowered path geometry, got {other:?}"),
@@ -65,10 +68,18 @@ fn elbow_preserves_signed_width_and_constructor_vs_later_rotation() {
     let (mut rotated, _) = path(Options::elbow(2.0, 5.0 * std::f64::consts::PI / 4.0).unwrap());
     close(rotated.width().unwrap(), 2.0 * 2.0_f64.sqrt());
     close(rotated.height().unwrap(), 2.0_f64.sqrt());
-    assert_eq!(rotated.state().unwrap().transform.rotation_z, 0.0);
+    assert_eq!(
+        rotated.state().unwrap().transform.planar_rotation(),
+        Some(0.0)
+    );
     rotated.rotate(std::f64::consts::FRAC_PI_2).unwrap();
     close(
-        rotated.state().unwrap().transform.rotation_z,
+        rotated
+            .state()
+            .unwrap()
+            .transform
+            .planar_rotation()
+            .unwrap(),
         std::f64::consts::FRAC_PI_2,
     );
 }

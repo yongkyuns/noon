@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SHARED_SLOT_CAPACITY,
   EXECUTION_TRANSPORT_SHARED,
   EXECUTION_TRANSPORT_TRANSFERABLE,
   selectExecutionTransportMode,
@@ -20,9 +21,19 @@ const RENDER_MODE_RETAINED = "retained";
 const EXECUTION_MODE_SEMANTIC = "semantic";
 const SEMANTIC_PACING_REALTIME = "realtime";
 const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
-const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
+// Producer reservations bound promises and messages even before ready() settles.
+// The engine retains its own bounded control queue; this is not another queue.
+export const MAX_IN_FLIGHT_NATIVE_INPUTS = 64;
 const LIFECYCLE_CANCELLED_MESSAGE =
   "execution worker client was terminated during an asynchronous operation";
+
+// Local lifecycle cancellation, never a remote callback/runtime error. Input
+// callers still receive rejection; DOM collectors can retire without an alert.
+export class ExecutionTransitionCancelled extends Error {
+  constructor() {
+    super("execution engine transitioning to semantic");
+  }
+}
 
 function workerCrashError(event, fallback) {
   const location =
@@ -43,6 +54,10 @@ export class ExecutionWorkerClient {
   #preparedStartReservation = null;
   #nextRequestIds = { engine: 0, render: 0 };
   #pending = new Map();
+  #nativeInputsInFlight = 0;
+  #pointerView = null;
+  #pointerViewRegistration = null;
+  #pointerReceipt = null;
   #session = 0;
   #loopDurationSeconds = 4;
   #transportMode = null;
@@ -410,11 +425,16 @@ export class ExecutionWorkerClient {
       throw error;
     }
 
-    const reconnectError = new Error("execution engine transitioning to semantic");
+    const reconnectError = new ExecutionTransitionCancelled();
     this.#candidateEngineWorker = null;
     this.#engineWorker = candidate;
     this.#attachCurrentWorkerEvents(candidate, ENGINE_CHANNEL, "engine");
     this.#session = nextSession;
+    // Equal platform dimensions still require registration in the new owner.
+    // Neither a view nor a receipt is replayed across transport sessions.
+    this.#pointerView = null;
+    this.#pointerViewRegistration = null;
+    this.#pointerReceipt = null;
     this.#rejectOwner("engine", reconnectError);
 
     try {
@@ -500,10 +520,15 @@ export class ExecutionWorkerClient {
   // Advance one canonical session barrier to an exact authored time. The
   // semantic endpoint owns forward progression and callback ordering; callers
   // receive only after the matching renderer publication has presented.
-  async advanceTo(timeSeconds) {
+  async advanceTo(timeSeconds, { collectTimings = false } = {}) {
     this.#requireStarted();
     const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
-    const result = await this.#requestEngine("advance_to", { time });
+    if (typeof collectTimings !== "boolean") {
+      throw new TypeError("collectTimings must be a boolean");
+    }
+    const result = await this.#requestEngine("advance_to", {
+      time, ...(collectTimings ? { collectTimings: true } : {}),
+    });
     this.#rememberPlaying(result);
     return result;
   }
@@ -514,7 +539,7 @@ export class ExecutionWorkerClient {
     return result.debugFrame;
   }
 
-  async sampleToAuthoredTime(timeSeconds, { stopAtSourceCompletion = false } = {}) {
+  async sampleToAuthoredTime(timeSeconds, { stopAtSourceCompletion = false, collectTimings = false } = {}) {
     this.#requireStarted();
     if (this.#semanticPacing !== SEMANTIC_PACING_EXTERNAL_SAMPLES) {
       throw new Error("external authored-time sampling requires external sample pacing");
@@ -523,7 +548,12 @@ export class ExecutionWorkerClient {
     if (typeof stopAtSourceCompletion !== "boolean") {
       throw new TypeError("stopAtSourceCompletion must be a boolean");
     }
-    const result = await this.#requestEngine("sample_to_authored_time", { time, stopAtSourceCompletion });
+    if (typeof collectTimings !== "boolean") {
+      throw new TypeError("collectTimings must be a boolean");
+    }
+    const result = await this.#requestEngine("sample_to_authored_time", {
+      time, stopAtSourceCompletion, ...(collectTimings ? { collectTimings: true } : {}),
+    });
     this.#rememberPlaying(result);
     return result;
   }
@@ -548,25 +578,119 @@ export class ExecutionWorkerClient {
     return result;
   }
 
+  async undoTranslationDrag() {
+    this.#requireStarted();
+    return this.#requestEngine("undo_translation_drag", {});
+  }
+
   // Forward one normalized semantic native-state sample to the canonical session.
   async setNativeStateInput(source, value) {
     this.#requireStarted();
-    return this.#requestEngine("native_state_input", { source, value });
+    return this.#requestNativeInput("native_state_input", { source, value });
+  }
+
+  // Session/editor policy, ordered with pointer input and never auto-replayed.
+  async setPointerFillSelection(maxMovement) {
+    this.#requireStarted();
+    if (maxMovement !== null &&
+        (typeof maxMovement !== "number" || !Number.isFinite(maxMovement) || maxMovement < 0)) {
+      throw new TypeError("selection tolerance must be a finite nonnegative number or null");
+    }
+    return this.#requestNativeInput("pointer_fill_selection", { maxMovement });
+  }
+
+  // Platform view registration is not proof of presentation. Retire the locally
+  // observed receipt synchronously, before registration or input can yield.
+  setBrowserPointerView(revision, width, height) {
+    this.#requireStarted();
+    if (!Number.isSafeInteger(revision) || revision < 0 || !Number.isFinite(width) ||
+        !Number.isFinite(height) || width < 0 || height < 0 ||
+        (this.#pointerView !== null && revision < this.#pointerView.revision)) {
+      throw new TypeError("invalid or retired browser pointer view");
+    }
+    if (this.#pointerView?.revision === revision) {
+      if (this.#pointerView.width !== width || this.#pointerView.height !== height) {
+        throw new TypeError("browser pointer view revision reused with different geometry");
+      }
+      if (this.#pointerViewRegistration?.view === this.#pointerView) {
+        return this.#pointerViewRegistration.delivery;
+      }
+      return Promise.resolve({ type: "browser_pointer_view" });
+    }
+    const view = Object.freeze({ revision, width, height });
+    this.#pointerView = view;
+    this.#pointerReceipt = null;
+    const requested = this.#requestNativeInput("browser_pointer_view", { view });
+    let delivery;
+    delivery = requested.then(
+      result => {
+        if (this.#pointerViewRegistration?.delivery === delivery) {
+          this.#pointerViewRegistration = null;
+        }
+        return result;
+      },
+      error => {
+        if (this.#pointerViewRegistration?.delivery === delivery) {
+          this.#pointerViewRegistration = null;
+          if (this.#pointerView === view) {
+            // The DOM mapping changed, so never restore the old receipt. Leave
+            // registration absent so the exact same revision can be retried.
+            this.#pointerView = null;
+            this.#pointerReceipt = null;
+          }
+        }
+        throw error;
+      },
+    );
+    this.#pointerViewRegistration = { view, delivery };
+    return delivery;
+  }
+
+  get pointerPresentation() {
+    return this.#pointerReceipt?.session === this.#session &&
+      this.#pointerReceipt.view_revision === this.#pointerView?.revision &&
+      this.#candidateEngineWorker === null && this.#fatalOwner === null
+      ? this.#pointerReceipt : null;
+  }
+
+  // Pin the last observed successful presentation at collection, before readiness
+  // or delivery yields. A later acknowledgement never relabels this occurrence.
+  async submitBrowserPointerInput(input) {
+    this.#requireStarted();
+    return this.#requestNativeInput("browser_pointer_input", {
+      input, presentation: this.pointerPresentation,
+    });
+  }
+
+  // View navigation is occurrence-bound input too. The receipt and normalized
+  // cursor are copied by the existing bounded ingress before any readiness yield.
+  async scrollInspectionView(input) {
+    this.#requireStarted();
+    return this.#requestNativeInput("inspection_scroll", {
+      input, presentation: this.pointerPresentation,
+    });
   }
 
   // Forward one normalized semantic native-event source to the canonical session.
   async emitNativeEvent(source) {
     this.#requireStarted();
-    return this.#requestEngine("native_event", { source });
+    return this.#requestNativeInput("native_event", { source });
   }
 
   async state() {
     return this.#requestEngine("state", {});
   }
 
-  async metrics() {
+  async metrics({ profilePublicationStages = false, profileRenderSubstages = false,
+    profileGpuCompletion = false, includeGpuIdentity = false } = {}) {
+    if (typeof profilePublicationStages !== "boolean" ||
+        typeof profileRenderSubstages !== "boolean" || typeof profileGpuCompletion !== "boolean" ||
+        typeof includeGpuIdentity !== "boolean") {
+      throw new TypeError("renderer profiling options must be booleans");
+    }
     const [render, engine] = await Promise.all([
-      this.#requestRender("metrics", {}),
+      this.#requestRender("metrics", { profilePublicationStages, profileRenderSubstages,
+        profileGpuCompletion, includeGpuIdentity }),
       this.#requestEngine("metrics", {}),
     ]);
     return { ...render, engineMetrics: engine.metrics, renderHost: this.#renderHost };
@@ -656,6 +780,9 @@ export class ExecutionWorkerClient {
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
+    this.#pointerReceipt = null;
+    this.#pointerView = null;
+    this.#pointerViewRegistration = null;
     this.#renderPrepared = null;
     this.#preparedStartReservation = null;
     this.#ready = null;
@@ -676,6 +803,38 @@ export class ExecutionWorkerClient {
       this.#semanticPacing = SEMANTIC_PACING_REALTIME;
     }
     this.#fatalOwner = null;
+  }
+
+  // Input is occurrence-bound: reserve before yielding, snapshot at admission,
+  // and never migrate a delayed delivery to a replacement endpoint. A rejected
+  // acknowledgement is not permission to repeat an externally observed edge.
+  async #requestNativeInput(type, payload) {
+    this.#requireStarted();
+    if (this.#candidateEngineWorker !== null || this.#fatalOwner !== null) {
+      throw new Error("native input requires a stable, non-transitioning execution endpoint");
+    }
+    if (this.#nativeInputsInFlight >= MAX_IN_FLIGHT_NATIVE_INPUTS) {
+      throw new Error("native input in-flight capacity is full; wait for acknowledgement before retrying");
+    }
+    const worker = this.#engineWorker;
+    const ready = this.#ready;
+    const generation = this.#lifecycleGeneration;
+    this.#nativeInputsInFlight += 1;
+    try {
+      // This copy belongs to the genuine worker boundary, not the Rust engine.
+      const snapshot = structuredClone(payload);
+      await ready;
+      if (worker !== this.#engineWorker || ready !== this.#ready ||
+          generation !== this.#lifecycleGeneration ||
+          this.#candidateEngineWorker !== null || this.#fatalOwner !== null) {
+        throw new Error("native input belongs to a retired or transitioning execution endpoint");
+      }
+      return await this.#request(worker, "engine", engineEnvelope, type, snapshot);
+    } finally {
+      // Do not reset this counter on restart: old reservations still own their
+      // releases, and cannot decrement a new generation's independent counter.
+      this.#nativeInputsInFlight -= 1;
+    }
   }
 
   async #requestEngine(type, payload, transfer = []) {
@@ -709,11 +868,16 @@ export class ExecutionWorkerClient {
     }
     const requestId = this.#nextRequestIds[owner];
     this.#nextRequestIds[owner] = checkedNextRequestId(requestId);
-    const result = new Promise((resolve, reject) => {
-      this.#pending.set(`${owner}:${requestId}`, { resolve, reject });
+    return new Promise((resolve, reject) => {
+      const key = `${owner}:${requestId}`;
+      this.#pending.set(key, { resolve, reject });
+      try {
+        worker.postMessage(envelopeFactory(type, { ...payload, requestId }), transfer);
+      } catch (error) {
+        this.#pending.delete(key);
+        reject(error);
+      }
     });
-    worker.postMessage(envelopeFactory(type, { requestId, ...payload }), transfer);
-    return result;
   }
 
   #workerReady(worker, channel, owner) {
@@ -742,6 +906,26 @@ export class ExecutionWorkerClient {
       const message = event.data;
       try {
         validateWorkerEnvelope(message, channel);
+        if (owner === "engine" && message.type === "pointer_presented") {
+          const receipt = message.receipt;
+          if (!receipt || ![receipt.session, receipt.sequence, receipt.presentation, receipt.view_revision]
+              .every(value => Number.isSafeInteger(value) && value >= 0) || receipt.presentation === 0) {
+            throw new Error("invalid worker pointer presentation receipt");
+          }
+          if (receipt.session === this.#session && receipt.view_revision === this.#pointerView?.revision &&
+              (this.#pointerReceipt === null || receipt.presentation >= this.#pointerReceipt.presentation)) {
+            this.#pointerReceipt = Object.freeze({ session: receipt.session, sequence: receipt.sequence,
+              presentation: receipt.presentation, view_revision: receipt.view_revision });
+          }
+          return;
+        }
+        if (owner === "engine" && message.type === "pointer_presentation_invalidated") {
+          const current = this.#pointerReceipt, receipt = message.receipt;
+          if (current !== null && receipt && current.session === receipt.session &&
+              current.sequence === receipt.sequence && current.presentation === receipt.presentation &&
+              current.view_revision === receipt.view_revision) this.#pointerReceipt = null;
+          return;
+        }
         if (message.type === "ready") {
           resolveReady?.(message);
           return;
@@ -885,6 +1069,9 @@ export class ExecutionWorkerClient {
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
+    this.#pointerReceipt = null;
+    this.#pointerView = null;
+    this.#pointerViewRegistration = null;
     this.#renderPrepared = null;
     this.#ready = null;
     for (const pending of this.#pending.values()) {
@@ -1001,19 +1188,19 @@ export class ExecutionWorkerClient {
 
 function engineEnvelope(type, payload = {}) {
   return {
+    ...payload,
     channel: ENGINE_CHANNEL,
     protocolVersion: ENGINE_PROTOCOL_VERSION,
     type,
-    ...payload,
   };
 }
 
 function renderEnvelope(type, payload = {}) {
   return {
+    ...payload,
     channel: RENDER_CHANNEL,
     protocolVersion: RENDER_PROTOCOL_VERSION,
     type,
-    ...payload,
   };
 }
 

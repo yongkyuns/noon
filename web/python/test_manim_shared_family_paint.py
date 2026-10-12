@@ -21,6 +21,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                     self.assertIs(family.set_fill(compat._base.BLUE, 0.4), family)
                     self.assertIs(family.set_stroke(compat._base.RED, 2, 0.25), family)
                     self.assertIs(family.set_opacity(0.5), family)
+                    self.assertIs(family.fade(0.25), family)
                 owner = context if live else family._semantic_family_handle
                 prefix = (family._semantic_family_handle,) if live else ()
                 def method(name):
@@ -32,6 +33,13 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 color = compat._base.RED
                 method("Stroke").assert_called_once_with(*prefix, True, color.red, color.green, color.blue, color.alpha, compat._manim_stroke_width(2), 0.25)
                 method("Opacity").assert_called_once_with(*prefix, 0.5)
+                if live:
+                    context.liveSetFamilyFade.assert_called_once_with(
+                        family._semantic_family_handle, 0.25
+                    )
+                    family._semantic_family_handle.fade.assert_not_called()
+                else:
+                    family._semantic_family_handle.fade.assert_called_once_with(0.25)
 
     def test_callback_paint_keeps_using_effective_overlay(self):
         member = identity_only_wrapper(compat.Square)

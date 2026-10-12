@@ -1,5 +1,8 @@
 //! Typed handle for authoritative semantic family membership.
 
+mod path_admission;
+pub(crate) use path_admission::publish_path_family_with;
+
 use crate::semantic_mobject::authoring_xy_f64 as semantic_xy_f64;
 use crate::AuthoringError;
 use noon_core::{
@@ -67,6 +70,36 @@ impl FamilyTranslation {
                 .map(|state| state.transform.translation)
                 .map_err(AuthoringError::from)
         })
+    }
+
+    /// Stage this translation into an aggregate semantic transaction.
+    ///
+    /// Composite authoring uses this instead of publishing an intermediate
+    /// placement transaction. Repeated leaves are accumulated before one
+    /// property write per semantic identity.
+    pub(crate) fn stage(
+        self,
+        transaction: &mut SemanticMutationTransaction,
+        store: &SemanticStore,
+    ) -> Result<(), AuthoringError> {
+        let mut translations = BTreeMap::new();
+        for (leaf, x, y) in self.into_shifts() {
+            if let std::collections::btree_map::Entry::Vacant(entry) = translations.entry(leaf) {
+                let translation = store
+                    .semantic_object_state_checked(leaf)
+                    .map_err(AuthoringError::from)?
+                    .transform
+                    .translation;
+                entry.insert(translation);
+            }
+            let translation = translations.get_mut(&leaf).expect("inserted above");
+            translation.x += x;
+            translation.y += y;
+        }
+        for (leaf, translation) in translations {
+            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
+        }
+        Ok(())
     }
 
     pub fn into_shifts(self) -> Vec<(SemanticNodeId, f64, f64)> {
@@ -329,6 +362,11 @@ impl MobjectFamily {
             .map_err(Into::into)
     }
 
+    /// Authored aggregate world-space bounds center for this family's leaves.
+    pub fn world_center(&self) -> Result<noon_core::SemanticVec3, AuthoringError> {
+        crate::world_affine::target_world_center(&self.store, MobjectTarget::Family(self))
+    }
+
     /// Aggregate the current layout bounds of this family's authoritative leaves.
     pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         Ok(self.layout()?.bounds())
@@ -378,7 +416,7 @@ mod tests {
 
     #[test]
     fn ordinary_family_arrange_uses_shared_bounds_and_one_transaction() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -398,7 +436,7 @@ mod tests {
 
     #[test]
     fn family_arrange_moves_shared_leaves_once_and_rejects_invalid_input() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.circle(0.2).unwrap();
         let mut second = scene.circle(0.2).unwrap();
         second.shift(2.0, 0.0).unwrap();
@@ -430,7 +468,7 @@ mod tests {
 
     #[test]
     fn family_layout_bounds_follow_nested_and_aliased_semantic_leaves() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.rectangle(2.0, 1.0).unwrap();
         first.shift(-2.0, 0.0).unwrap();
         let mut second = scene.circle(0.5).unwrap();

@@ -25,6 +25,9 @@ pub(crate) fn mobject_fields(
             .ok_or("unknown or stale geometry resource")?
         {
             GeometryResource::VectorPath(path) => GeometryRef::path((**path).clone()),
+            GeometryResource::Mesh(_) => {
+                return Err("2D geometry export does not support mesh resources".into());
+            }
         },
     };
     // These synchronous observations use the existing shared scalar projections.
@@ -86,7 +89,7 @@ mod tests {
     use super::*;
     #[test]
     fn stale_handle_export_is_rejected() {
-        let scene = noon::Scene::new();
+        let mut scene = noon::Scene::new();
         let object = scene.circle(1.0).unwrap();
         scene
             .integration_store()
@@ -99,7 +102,7 @@ mod tests {
 
     #[test]
     fn export_preserves_paint_layers_and_authored_state() {
-        let scene = noon::Scene::new();
+        let mut scene = noon::Scene::new();
         let mut object = scene.circle(0.4).unwrap();
         object.set_translation(0.7, -0.3).unwrap();
         object.set_fill(0.2, 0.3, 0.4, 0.25).unwrap();

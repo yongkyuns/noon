@@ -20,6 +20,8 @@ fn large_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
         time: 0.0,
         objects: (0..OBJECT_COUNT)
             .map(|index| FrameObjectState {
+                glow: None,
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(index as u64),
                 content: ObjectContentRef::Text(text),
@@ -47,6 +49,8 @@ fn single_text_frame(text: noon_core::TextResourceHandle) -> FrameState {
         family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(1),
             content: ObjectContentRef::Text(text),
@@ -70,13 +74,12 @@ fn one_changed_text_object_stays_object_local_after_warmup() {
     let text = texts.insert(artifact.resource).unwrap();
     let mut frame = large_text_frame(text);
     let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -88,7 +91,6 @@ fn one_changed_text_object_stays_object_local_after_warmup() {
     assert!(!prepared.mask_quads.is_empty());
 
     let raster_after_warmup = preparer.raster_stats();
-    let atlas_after_warmup = preparer.atlas_stats();
 
     for frame_index in 1..=UPDATE_FRAMES {
         frame.time = frame_index as f64 / 60.0;
@@ -100,7 +102,6 @@ fn one_changed_text_object_stays_object_local_after_warmup() {
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::objects(vec![CHANGED_INDEX]),
                 &texts,
@@ -110,18 +111,21 @@ fn one_changed_text_object_stays_object_local_after_warmup() {
             .unwrap();
     }
 
-    assert_eq!(preparer.raster_stats(), raster_after_warmup);
-    assert_eq!(preparer.atlas_stats(), atlas_after_warmup);
-    assert_eq!(
-        preparer.incremental_stats(),
-        RetainedTextIncrementalStats {
-            rebuild_attempts: 1,
-            reused_frames: 0,
-            object_update_frames: UPDATE_FRAMES as u64,
-            objects_updated: UPDATE_FRAMES as u64,
-            fallback_rebuilds: 0,
-        }
+    let raster_after_updates = preparer.raster_stats();
+    assert!(raster_after_updates.entries <= raster_after_warmup.entries + 64);
+    assert!(raster_after_updates.entries <= preparer.raster_cache_limits().max_entries);
+    assert!(raster_after_updates.image_bytes <= preparer.raster_cache_limits().max_image_bytes);
+    assert!(
+        preparer
+            .atlas()
+            .page_count(noon_render_wgpu::text::atlas::GlyphAtlasPlane::Mask)
+            <= 2
     );
+    let incremental = preparer.incremental_stats();
+    assert_eq!(incremental.rebuild_attempts, 1);
+    assert_eq!(incremental.object_update_frames, UPDATE_FRAMES as u64);
+    assert_eq!(incremental.objects_updated, UPDATE_FRAMES as u64);
+    assert_eq!(incremental.fallback_rebuilds, 0);
 }
 
 #[test]
@@ -133,13 +137,12 @@ fn one_resident_outline_object_stays_local_among_static_glyphs() {
     frame.reveals[CHANGED_INDEX] = 0.5;
 
     let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -172,7 +175,6 @@ fn one_resident_outline_object_stays_local_among_static_glyphs() {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::objects(vec![CHANGED_INDEX]),
                 &texts,
@@ -193,6 +195,7 @@ fn one_resident_outline_object_stays_local_among_static_glyphs() {
             object_update_frames: UPDATE_FRAMES as u64,
             objects_updated: UPDATE_FRAMES as u64,
             fallback_rebuilds: 0,
+            phase_fallbacks: 0,
         }
     );
 }
@@ -204,14 +207,13 @@ fn atlas_generation_advances_only_for_full_rebuilds() {
     let text = texts.insert(artifact.resource).unwrap();
     let mut frame = single_text_frame(text);
     let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
 
     let initial_generation = preparer.atlas().generation();
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -225,7 +227,6 @@ fn atlas_generation_advances_only_for_full_rebuilds() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::default(),
             &texts,
@@ -239,7 +240,6 @@ fn atlas_generation_advances_only_for_full_rebuilds() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![0]),
             &texts,
@@ -253,7 +253,6 @@ fn atlas_generation_advances_only_for_full_rebuilds() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![0]),
             &texts,

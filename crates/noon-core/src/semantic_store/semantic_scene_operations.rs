@@ -15,12 +15,17 @@ pub enum SemanticSceneOperationError {
     NotSemanticFamily(SemanticNodeId),
     NotSemanticAuthoringNode(SemanticNodeId),
     DuplicateMembershipTarget(SemanticNodeId),
+    /// A pending admission must name one fresh, unparented object in this transaction.
+    InvalidPendingAdmission(crate::SemanticLocalNodeToken),
     MissingMembershipTarget(SemanticNodeId),
     AmbiguousMembershipTarget(SemanticNodeId),
     /// One local scene restructure would promote the same aliased node from
     /// multiple attached roots. Until the scene store exposes a local root-order
     /// comparison primitive, fail before commit rather than scan unrelated roots.
     AmbiguousCrossRootAlias(SemanticNodeId),
+    /// A graph-owned family requires the shared transaction vocabulary so the
+    /// declaration and ordinary membership cannot diverge.
+    GraphMutationRequiresTransaction(SemanticNodeId),
     Store(SemanticStoreError),
 }
 
@@ -57,6 +62,10 @@ impl std::fmt::Display for SemanticSceneOperationError {
                 id.slot(),
                 id.generation()
             ),
+            Self::InvalidPendingAdmission(token) => write!(
+                formatter,
+                "pending admission {token:?} must name one fresh unparented object in this transaction"
+            ),
             Self::MissingMembershipTarget(id) => write!(
                 formatter,
                 "semantic membership target {}:{} is absent from the scene projection",
@@ -72,6 +81,12 @@ impl std::fmt::Display for SemanticSceneOperationError {
             Self::AmbiguousCrossRootAlias(id) => write!(
                 formatter,
                 "semantic node {}:{} would be promoted from multiple scene roots",
+                id.slot(),
+                id.generation()
+            ),
+            Self::GraphMutationRequiresTransaction(id) => write!(
+                formatter,
+                "semantic family {}:{} participates in authored graph topology; mutate it through a semantic transaction",
                 id.slot(),
                 id.generation()
             ),
@@ -135,7 +150,9 @@ impl SemanticStore {
         let is_target = match node.kind() {
             SemanticNodeKind::Family(_) => true,
             SemanticNodeKind::AuthoringObject => node.semantic_object_state().is_some(),
-            SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => false,
+            SemanticNodeKind::Signal(_)
+            | SemanticNodeKind::Animation(_)
+            | SemanticNodeKind::Effect(_) => false,
         };
         if !is_target {
             return Err(SemanticSceneOperationError::NotSemanticAuthoringNode(id));
@@ -182,7 +199,25 @@ impl SemanticStore {
             .expect("semantic object identity validated above")
             .host_updaters()
             .to_vec();
+        let effects = self
+            .node(id)
+            .expect("validated source")
+            .effect_ids()
+            .iter()
+            .map(|&effect| {
+                let effect = self
+                    .semantic_effect_state(effect)
+                    .expect("source attachment is live");
+                (
+                    std::sync::Arc::<str>::from(effect.name()),
+                    effect.definition(),
+                )
+            })
+            .collect::<Vec<_>>();
         let copy = self.insert_semantic_object(state);
+        for (name, definition) in effects {
+            self.insert_semantic_effect(copy, name, definition);
+        }
         self.node_mut(copy)
             .expect("newly inserted semantic copy exists")
             .host_updaters_mut()
@@ -200,6 +235,16 @@ impl SemanticStore {
     ) -> Result<Vec<SemanticNodeId>, SemanticSceneOperationError> {
         Ok(self.semantic_family_checked(family)?.members())
     }
+    pub fn semantic_family_member_at_checked(
+        &self,
+        family: SemanticNodeId,
+        index: usize,
+    ) -> Result<Option<SemanticNodeId>, SemanticSceneOperationError> {
+        Ok(self
+            .semantic_family_checked(family)?
+            .members
+            .member_at_rank(index))
+    }
 
     /// Append one target semantic object or family to a target family.
     ///
@@ -211,8 +256,18 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<(), SemanticSceneOperationError> {
-        self.semantic_family_checked(family)?;
+        let family_node = self.semantic_family_checked(family)?;
         self.semantic_authoring_node_checked(member)?;
+        if family_node.contains_member(member) {
+            self.set_last_mutation_writes(0);
+            return Ok(());
+        }
+        if !self
+            .semantic_graph_owners_for_invariant_target(family)
+            .is_empty()
+        {
+            return Err(SemanticSceneOperationError::GraphMutationRequiresTransaction(family));
+        }
         self.add_member(family, member).map_err(Into::into)
     }
 
@@ -225,8 +280,18 @@ impl SemanticStore {
         family: SemanticNodeId,
         member: SemanticNodeId,
     ) -> Result<bool, SemanticSceneOperationError> {
-        self.semantic_family_checked(family)?;
+        let family_node = self.semantic_family_checked(family)?;
         self.semantic_authoring_node_checked(member)?;
+        if !family_node.contains_member(member) {
+            self.set_last_mutation_writes(0);
+            return Ok(false);
+        }
+        if !self
+            .semantic_graph_owners_for_invariant_target(family)
+            .is_empty()
+        {
+            return Err(SemanticSceneOperationError::GraphMutationRequiresTransaction(family));
+        }
         self.remove_member(family, member).map_err(Into::into)
     }
 }

@@ -9,6 +9,7 @@ import { once } from "node:events";
 import { chromium } from "playwright";
 import pngjs from "pngjs";
 import { verifySample, verifySquareToCircle, verifyFreshRun, verifyLateFamilyConstruction } from "./semantic-preview-observations.mjs";
+import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 const { PNG } = pngjs;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,15 +25,38 @@ server.stderr.on("data", (chunk) => { serverError = (serverError + chunk).slice(
 server.on("error", (error) => { serverError = String(error); });
 let browser;
 let activeBackend;
+let runtimeCache;
 const observations = [];
 
 async function pageReady() {
   const page = await browser.newPage({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 1 });
-  page.setDefaultTimeout(30_000);
-  await page.goto(url);
-  await page.waitForFunction(() => window.noonHostRaster !== undefined);
-  await page.evaluate(() => window.noonHostRaster.ready());
-  return page;
+  const diagnostics = [];
+  const record = (event) => {
+    diagnostics.push(event);
+    if (diagnostics.length > 32) diagnostics.shift();
+  };
+  page.on("pageerror", (error) => record({ type: "pageerror", error: String(error).slice(0, 1000) }));
+  page.on("console", (message) => {
+    if (message.type() === "error") record({ type: "console", error: message.text().slice(0, 1000) });
+  });
+  page.on("requestfailed", (request) => record({ type: "requestfailed", url: request.url().slice(0, 500),
+    error: request.failure()?.errorText?.slice(0, 1000) ?? null }));
+  page.on("close", () => {
+    if (diagnostics.length) observations.push({ backend: activeBackend, diagnostics });
+  });
+  try {
+    // Reuse only pinned dependency bytes across fresh pages/backends, as other
+    // browser gates do. Every scene, worker and preview deadline stays fresh.
+    await runtimeCache.install(page.context());
+    page.setDefaultTimeout(30_000);
+    await page.goto(url);
+    await page.waitForFunction(() => window.noonHostRaster !== undefined);
+    await page.evaluate(() => window.noonHostRaster.ready());
+    return page;
+  } catch (error) {
+    await page.close();
+    throw error;
+  }
 }
 
 function foreground(bytes) {
@@ -51,6 +75,54 @@ function foreground(bytes) {
   }
   const center = (Math.floor(png.height / 2) * png.width + Math.floor(png.width / 2)) * 4;
   return { count, width: maxX < minX ? 0 : maxX - minX + 1, centerDistance: distance(center) };
+}
+
+function brightPixelsIn(png, { left, top, right, bottom }) {
+  let count = 0;
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      const offset = (y * png.width + x) * 4;
+      if (png.data[offset + 3] > 200 &&
+          png.data[offset] > 80 && png.data[offset + 1] > 80 && png.data[offset + 2] > 80) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+async function verifyStaticTextDuringCreate() {
+  const source = await readFile(path.join(root, "web/python/examples/showcase_first_scene.py"), "utf8");
+  const expectedBackend = activeBackend === "webgpu" ? "WebGPU" : "WebGL2";
+  const page = await pageReady();
+  const frameTimes = [0.75, 1.5, 2.5, 4];
+  let baseline;
+  try {
+    const loaded = await page.evaluate((code) => window.noonHostRaster.load(code, 8), source);
+    assert.equal(loaded.rendererBackend, expectedBackend);
+    for (let frameIndex = 0; frameIndex < frameTimes.length; frameIndex += 1) {
+      const sample = await page.evaluate(({ frameIndex, frameTimes }) =>
+        window.noonHostRaster.renderThrough(frameIndex, frameTimes), { frameIndex, frameTimes });
+      assert.equal(sample.frameIndex, frameIndex);
+      assert.equal(sample.publishedTime, frameTimes[frameIndex]);
+      assert.equal(sample.rendererBackend, expectedBackend);
+      const png = PNG.sync.read(await page.locator("#scene").screenshot());
+      const title = brightPixelsIn(png, { left: 250, top: 55, right: 710, bottom: 125 });
+      const caption = brightPixelsIn(png, { left: 110, top: 405, right: 850, bottom: 465 });
+      if (baseline === undefined) {
+        assert.ok(title > 200 && caption > 300, "showcase text must appear before Create");
+        baseline = { title, caption };
+      } else {
+        assert.ok(title >= baseline.title * 0.9, `title disappeared at ${frameTimes[frameIndex]}s`);
+        assert.ok(caption >= baseline.caption * 0.9, `caption disappeared at ${frameTimes[frameIndex]}s`);
+      }
+      observations.push({ backend: activeBackend, fixture: "showcase_first_scene", time: frameTimes[frameIndex],
+        titlePixels: title, captionPixels: caption });
+    }
+    await page.evaluate(() => window.noonHostRaster.close());
+  } finally {
+    await page.close();
+  }
 }
 
 async function captureSquareToCircle(label) {
@@ -170,6 +242,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.ok(ready, `preview test server did not start: ${serverError}`);
+  runtimeCache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8"));
   const failures = [];
   for (const backend of ["webgl", "webgpu"]) {
     activeBackend = backend;
@@ -181,7 +254,8 @@ try {
       // Equality is required only within one backend/environment, never across GPUs.
       verifyFreshRun(before, after);
       await captureLateFamilyConstruction();
-      console.log(`Semantic preview ${backend}: endpoints, intermediate morph, exact sample times, cancellation, identical fresh-run frames and late-family composition passed`);
+      await verifyStaticTextDuringCreate();
+      console.log(`Semantic preview ${backend}: endpoints, intermediate morph, exact sample times, cancellation, identical fresh-run frames, late-family composition and stable showcase text passed`);
     } catch (error) {
       // Collect independent evidence from both backends, but keep either failure fatal.
       failures.push(new Error(`Semantic preview ${backend} failed`, { cause: error }));
@@ -198,7 +272,8 @@ try {
     let revision = null;
     try { revision = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); }
     catch { /* A source archive has no Git revision. */ }
-    await writeFile(path.join(artifacts, "observations.json"), JSON.stringify({ revision, observations }, null, 2));
+    await writeFile(path.join(artifacts, "observations.json"), JSON.stringify({ revision, observations,
+      dependencyCache: runtimeCache?.stats() ?? null }, null, 2));
   } finally {
     try { await browser?.close(); }
     finally {

@@ -63,6 +63,8 @@ pub(crate) trait PaintStyleEdit {
     fn disable_fill(&mut self);
     fn disable_stroke(&mut self);
     fn set_stroke_opacity(&mut self, opacity: f64);
+    fn scale_fill_opacity(&mut self, factor: f64);
+    fn scale_stroke_opacity(&mut self, factor: f64);
     fn set_stroke_width(&mut self, width: f64);
 }
 
@@ -129,6 +131,12 @@ impl PaintStyleEdit for SemanticStyle {
     fn set_stroke_opacity(&mut self, opacity: f64) {
         set_paint_opacity(&mut self.stroke, &mut self.stroke_opacity, opacity);
     }
+    fn scale_fill_opacity(&mut self, factor: f64) {
+        self.fill_opacity *= factor;
+    }
+    fn scale_stroke_opacity(&mut self, factor: f64) {
+        self.stroke_opacity *= factor;
+    }
     fn set_stroke_width(&mut self, width: f64) {
         self.stroke_width = width;
     }
@@ -174,6 +182,16 @@ impl PaintStyleEdit for Style {
             alpha: opacity as f32,
             ..self.stroke.unwrap_or(Color::WHITE)
         });
+    }
+    fn scale_fill_opacity(&mut self, factor: f64) {
+        if let Some(fill) = &mut self.fill {
+            fill.alpha *= factor as f32;
+        }
+    }
+    fn scale_stroke_opacity(&mut self, factor: f64) {
+        if let Some(stroke) = &mut self.stroke {
+            stroke.alpha *= factor as f32;
+        }
     }
     fn set_stroke_width(&mut self, width: f64) {
         self.stroke_width = width as f32;
@@ -261,6 +279,20 @@ pub(crate) fn edit_manim_opacity<S: PaintStyleEdit>(
     }
     if style.has_stroke() {
         style.set_stroke_opacity(opacity);
+    }
+    Ok(())
+}
+
+pub(crate) fn edit_fade<S: PaintStyleEdit>(
+    style: &mut S,
+    darkness: f64,
+) -> Result<(), AuthoringError> {
+    let factor = 1.0 - unit_opacity("darkness", darkness)?;
+    if style.has_fill() {
+        style.scale_fill_opacity(factor);
+    }
+    if style.has_stroke() {
+        style.scale_stroke_opacity(factor);
     }
     Ok(())
 }

@@ -142,9 +142,10 @@ fn source_with_svg_default(
     let Some(open_end) = opening_tag_end(source, root_range.start, root_range.end) else {
         return Ok(source.to_owned());
     };
-    let Some(close_start) = source[root_range.start..root_range.end].rfind("</").map(|offset| {
-        root_range.start + offset
-    }) else {
+    let Some(close_start) = source[root_range.start..root_range.end]
+        .rfind("</")
+        .map(|offset| root_range.start + offset)
+    else {
         // A self-closing root contains no drawable descendants. Validation above
         // is still observable, but no fallback style needs to be materialized.
         return Ok(source.to_owned());
@@ -280,7 +281,13 @@ mod tests {
             .semantic_family_members_checked(family.node_id())
             .unwrap()
             .iter()
-            .map(|member| store.semantic_object_state_checked(*member).unwrap().style)
+            .map(|member| {
+                store
+                    .semantic_object_state_checked(*member)
+                    .unwrap()
+                    .style
+                    .clone()
+            })
             .collect()
     }
 

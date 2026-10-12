@@ -13,6 +13,131 @@ const uncreateSource = await readFile(
   path.join(repoRoot, "web/python/examples/ordinary_uncreate_options.py"),
   "utf8",
 );
+const matchingShapesSource = await readFile(
+  path.join(repoRoot, "web/python/examples/ordinary_transform_matching_shapes.py"),
+  "utf8",
+);
+const latexCreateSource = await readFile(
+  path.join(repoRoot, "web/python/examples/showcase_latex_create.py"),
+  "utf8",
+);
+const spatialMeshAdaptersSource = `
+from noon import *
+
+class SpatialMeshAdapterSmoke(ThreeDScene):
+    async def construct(self):
+        meshes = [
+            Sphere(center=(-2.4, 0, 0), radius=0.35, resolution=(8, 6),
+                   fill_opacity=1, checkerboard_colors=False, stroke_width=0,
+                   shade_in_3d=False),
+            Cube(side_length=0.55, fill_opacity=1, stroke_width=0, shade_in_3d=False),
+            Prism(dimensions=(0.6, 0.45, 0.7), fill_opacity=1, stroke_width=0,
+                  shade_in_3d=False),
+            Cylinder(radius=0.25, height=0.7, direction=(0, 0, 1),
+                     show_ends=True, resolution=8, fill_opacity=1,
+                     checkerboard_colors=False, stroke_width=0, shade_in_3d=False),
+            Cone(base_radius=0.3, height=0.7, direction=(0, 0, 1), show_base=True,
+                 v_range=(0, 2 * PI), u_min=0, checkerboard_colors=False,
+                 resolution=8, fill_opacity=1, stroke_width=0, shade_in_3d=False),
+            Torus(major_radius=0.3, minor_radius=0.1, resolution=(8, 6),
+                  fill_opacity=1, checkerboard_colors=False, stroke_width=0,
+                  shade_in_3d=False),
+            Dot3D(point=(2.4, 0, 0), radius=0.08, resolution=(8, 8),
+                  stroke_width=0, shade_in_3d=False),
+        ]
+        meshes[0].rotate(PI / 2, axis=(0, 0, 1), about_point=(0, 0, 0))
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(meshes[0].get_center(), (0, -2.4, 0)))
+        meshes[0].rotate(-PI / 2, axis=(0, 0, 1), about_point=(0, 0, 0))
+        meshes[0].scale(1.2).scale(1 / 1.2)
+        # The wrapper Cylinder/Cone are retained families because their Circle
+        # caps publish beside the UV side cells. Keep the single-mesh endpoint
+        # contract exercised through the low-level mesh factory below.
+        pose_mesh = Mesh3D.cylinder(radius=0.25, height=0.7, segments=8,
+                                    color=BLUE, show_ends=True)
+        for index, mesh in enumerate(meshes[1:-1], start=1):
+            mesh.move_to((index * 0.8 - 2.4, 0, 0))
+        for index, mesh in enumerate(meshes):
+            assert all(abs(actual - expected) < 1e-7 for actual, expected in
+                       zip(mesh.get_center(), (index * 0.8 - 2.4, 0, 0))), (index, mesh.get_center())
+        # Cube and Prism retain six ordered faces. Cylinder and capped Cone
+        # retain one UV side cell per grid cell plus ordinary Circle cap leaves.
+        handles = []
+        for index, mesh in enumerate(meshes):
+            family = getattr(mesh, "_semantic_family_handle", None)
+            if index in (1, 2):
+                assert family is not None and int(family.memberCount) == 6
+                assert len(mesh.submobjects) == 6
+                handles.extend(member._semantic_handle for member in mesh.submobjects)
+            elif index == 3:
+                assert family is not None and int(family.memberCount) == 66
+                assert len(mesh.submobjects) == 66  # 8x8 side cells + two caps
+                handles.extend(member._semantic_handle for member in mesh.submobjects)
+            elif index == 4:
+                assert family is not None and int(family.memberCount) == 65
+                assert len(mesh.submobjects) == 65  # 8x8 side cells + one base cap
+                handles.extend(member._semantic_handle for member in mesh.submobjects)
+            else:
+                assert family is None and mesh._semantic_handle is not None
+                handles.append(mesh._semantic_handle)
+        handles.append(pose_mesh._semantic_handle)
+        assert len(handles) == 147 and all(handle is not None for handle in handles)
+        identities = [(int(handle.semanticSlot), int(handle.semanticGeneration))
+                      for handle in handles]
+        assert len(set(identities)) == len(handles)
+        # Capped Surface families use shared affine edits and aggregate bounds
+        # centers, but intentionally do not expose one world_transform endpoint.
+        for index in (3, 4):
+            mesh = meshes[index]
+            center = tuple(mesh.get_center())
+            mesh.shift((0.1, -0.2, 0.3))
+            assert all(abs(actual - expected) < 1e-7 for actual, expected in
+                       zip(mesh.get_center(), (center[0] + 0.1, center[1] - 0.2, center[2] + 0.3)))
+            mesh.move_to(center)
+            assert all(abs(actual - expected) < 1e-7 for actual, expected in
+                       zip(mesh.get_center(), center))
+            mesh.rotate(PI / 2, axis=(0, 0, 1), about_point=center)
+            assert all(abs(actual - expected) < 1e-7 for actual, expected in
+                       zip(mesh.get_center(), center))
+        self.add_world_mobjects(*meshes, pose_mesh)
+
+        start_camera = self._camera_endpoint()
+        self.begin_ambient_camera_rotation(rate=0.4, about="theta")
+        await self.wait(0.5)
+        self.stop_ambient_camera_rotation()
+        stopped_camera = self._camera_endpoint()
+        assert abs(stopped_camera[1] - (start_camera[1] + 0.2)) < 1e-8
+        self.set_camera_orientation(theta=stopped_camera[1] + 0.15)
+        edited_camera = self._camera_endpoint()
+        assert abs(edited_camera[1] - (stopped_camera[1] + 0.15)) < 1e-12
+
+        # Detached construction after a wait must query its authored mesh bounds;
+        # it has no effective runtime row until it joins the live scene.
+        line = Line3D(start=(3, 3, 2), end=(3, 3, 4), thickness=0.04,
+                      resolution=8, checkerboard_colors=False,
+                      stroke_width=0, shade_in_3d=False)
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(line.get_center(), (3, 3, 3)))
+        line.move_to((1, 2, 0))
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(line.get_center(), (1, 2, 0)))
+
+        await self.play(
+            WorldTransformTo(meshes[0], translation=(-1.8, 0.2, 0.1)),
+            WorldTransformTo(pose_mesh, translation=(0.2, 0.1, 0.3)),
+            run_time=0.25, rate_func=linear,
+        )
+        assert all(abs(actual - expected) < 1e-8
+                   for actual, expected in zip(meshes[0].world_transform[:3], (-1.8, 0.2, 0.1)))
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(pose_mesh.get_center(), (0.2, 0.1, 0.65)))
+        pose_mesh.rotate(PI / 2, axis=(0, 1, 0)).scale(1.2)
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(pose_mesh.get_center(), (0.2, 0.1, 0.65)))
+        pose_mesh.move_to((0.2, 0.1, 0))
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(pose_mesh.get_center(), (0.2, 0.1, 0)))
+`;
 const port = 4175;
 const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -77,6 +202,32 @@ class Demo(Scene):
         self.play(circle.animate.set_y(1.5), run_time=0.4, rate_func=linear)
         self.play(FadeIn(Circle(radius=0.2, color=GREEN)), run_time=0.25)
 
+`;
+
+// Public Cross must be a real two-Line family over Rust-owned matcher geometry.
+const crossAdapterSource = `
+from noon import *
+
+class CrossAdapterSmoke(Scene):
+    def construct(self):
+        target = Rectangle(width=2.0, height=1.0)
+        cross = Cross(target, scale_factor=1.5, stroke_width=6.0)
+        assert isinstance(cross, VGroup) and len(cross) == 2
+        assert all(isinstance(member, Line) for member in cross)
+        assert cross[0] is not cross[1]
+        assert abs(cross[0].get_start().x + 1.5) < 1e-6
+        assert abs(cross[0].get_start().y - 0.75) < 1e-6
+        assert abs(cross[0].get_end().x - 1.5) < 1e-6
+        assert abs(cross[0].get_end().y + 0.75) < 1e-6
+        assert abs(cross[1].get_start().x - 1.5) < 1e-6
+        assert abs(cross[1].get_end().x + 1.5) < 1e-6
+        assert all(abs(member.style["stroke_width"] - 0.06) < 1e-6 for member in cross)
+        copied = cross.copy()
+        assert isinstance(copied, VGroup) and len(copied) == 2
+        assert copied[0]._semantic_handle.semanticSlot != cross[0]._semantic_handle.semanticSlot
+        assert len(Cross()) == 2
+        self.add(cross)
+        self.wait(0.3)
 `;
 
 // Ordinary groups use the same shared family lifecycle as Text families.
@@ -384,15 +535,40 @@ try {
       } catch (error) {
         patchError = String(error);
       }
+      const coldNamespace = await client.run(`
+from noon import *
+import sys
+assert "numpy" not in sys.modules
+assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
+assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
+result = Scene()
+`);
+      const numpyNamespace = await client.run(`
+from noon import *
+import sys
+assert np.__name__ == "numpy"
+assert "numpy" in sys.modules
+value = float(np.log(np.e))
+assert abs(value - 1.0) < 1e-12
+result = Scene()
+`);
       const result = await client.run(
         "import noon\nassert not hasattr(noon, 'PatchBatch')\nresult = noon.Scene()",
       );
-      return { patchError, sharedScene: Boolean(result.semanticExecution), terminated: client.terminated };
+      return {
+        patchError,
+        coldNamespace: Boolean(coldNamespace.semanticExecution),
+        numpyNamespace: Boolean(numpyNamespace.semanticExecution),
+        sharedScene: Boolean(result.semanticExecution),
+        terminated: client.terminated,
+      };
     } finally {
       client.terminate();
     }
   });
   assert.match(sceneOnlyAuthoring.patchError, /Python authoring result must be a noon.Scene/);
+  assert.equal(sceneOnlyAuthoring.coldNamespace, true, "cold star-import authoring must not load NumPy");
+  assert.equal(sceneOnlyAuthoring.numpyNamespace, true, "implicit np must resolve to real NumPy before execution");
   assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
   assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");
 
@@ -538,6 +714,14 @@ try {
   assert.ok(groupFades.metrics.presentedFrames > 0);
   assert.equal(groupFades.duration, 0.5);
 
+  const crossAdapter = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    crossAdapterSource,
+  );
+  assert.equal(crossAdapter.duration, 0.3, "Cross must preserve normal authored timing");
+  assert.equal(crossAdapter.metrics.objectCount, 2, "Cross must retain two Line leaves");
+  assert.ok(crossAdapter.metrics.presentedFrames > 0, "Cross must render through the shared runtime");
+
   const uncreate = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
     uncreateSource,
@@ -545,6 +729,19 @@ try {
   assert.equal(uncreate.duration, 4, "Uncreate options must preserve sequential authored timing");
   assert.equal(uncreate.metrics.objectCount, 1, "only remover=False target should remain live");
   assert.ok(uncreate.metrics.presentedFrames > 0, "shared Uncreate options must present");
+
+  const matchingShapes = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    matchingShapesSource,
+  );
+  assert.ok(
+    Math.abs(matchingShapes.duration - 2.1) < 1e-9,
+    "public matching-shapes lifecycle must preserve TransformMatchingShapes, Indicate, and hold timing",
+  );
+  assert.ok(
+    matchingShapes.metrics.presentedFrames > 0,
+    "public matching-shapes lifecycle must present through Pyodide/WASM",
+  );
 
   const phaseB = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
@@ -650,6 +847,36 @@ try {
     assert.ok(result.metrics.presentedFrames > 0, "shared Text composition must present");
   }
 
+  const latexCreate = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    latexCreateSource,
+  );
+  assert.equal(latexCreate.duration, 3.5, "MathTex Create must preserve authored timing");
+  assert.equal(latexCreate.metrics.objectCount, 4, "MathTex Create/Write must retain both equations and labels");
+  assert.ok(latexCreate.metrics.presentedFrames > 0, "MathTex Create must present");
+
+  const spatialMeshAdapters = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    spatialMeshAdaptersSource,
+  );
+  assert.equal(spatialMeshAdapters.metrics.objectCount, 148,
+    "solid adapters must retain UV side cells, three Circle caps, and one camera");
+  assert.ok(spatialMeshAdapters.metrics.presentedFrames > 0);
+  assert.ok(spatialMeshAdapters.metrics.drawCalls > 0,
+    "mesh adapters must reach the real retained renderer");
+  const meshRows = spatialMeshAdapters.frame.objects.filter(object => object.spatial?.draw_kind === "mesh");
+  assert.equal(meshRows.length, 144);
+  const capRows = spatialMeshAdapters.frame.objects.filter(object =>
+    object.spatial?.draw_kind === "planar" && !object.spatial.camera_projection);
+  assert.equal(capRows.length, 3, "capped primitives must retain ordinary Circle leaves");
+  assert.ok(capRows.every(object => object.spatial.composition_domain === "world"));
+  assert.equal(spatialMeshAdapters.frame.objects.filter(object => object.spatial?.camera_projection).length, 1);
+  assert.ok(meshRows.every(object => object.spatial?.composition_domain === "world"),
+    "the worker frame must retain mesh draw kinds rather than flattening adapters to planar paths");
+  assert.ok(spatialMeshAdapters.frame.objects.some(object =>
+    object.spatial.translation[0] === -1.8 && object.spatial.translation[1] === 0.2),
+  "the worker must publish the WorldTransformTo endpoint from the shared timeline");
+
   let zError = null;
   try {
     await page.evaluate(
@@ -663,7 +890,7 @@ try {
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, mixed Text/ordinary composition, shared detached query/dimension transforms, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, typed spatial mesh adapters and camera motion, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();

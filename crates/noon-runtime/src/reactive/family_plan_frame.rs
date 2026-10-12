@@ -176,19 +176,23 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = crate::FrameObjectState {
+            glow: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Text(text_handle),
             transform: noon_core::Transform2D::IDENTITY,
+            spatial: None,
             style: noon_core::Style::default(),
             appearance: 1.0,
             text_bounds: None,
         };
         let circle = crate::FrameObjectState {
+            glow: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             transform: noon_core::Transform2D::IDENTITY,
+            spatial: None,
             style: noon_core::Style::default(),
             appearance: 1.0,
             text_bounds: None,
@@ -206,20 +210,24 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
                     z_index: 0.0,
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Text(text_handle),
                     text_bounds: Some(Rect::new(Vec2::ZERO, Vec2::ONE)),
                     transform: Transform2D::IDENTITY,
+                    spatial: None,
                     style: Style::default(),
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                     text_bounds: None,
                     transform: Transform2D::IDENTITY,
+                    spatial: None,
                     style: Style::default(),
                     appearance: 1.0,
                 },
@@ -255,11 +263,13 @@ mod tests {
         let (plan, mut frame, mut states) = mixed_fixture();
         states[0] = None;
         frame.objects.push(FrameObjectState {
+            glow: None,
             z_index: 0.0,
             id: ObjectId::new(99),
             content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
             text_bounds: None,
             transform: Transform2D::IDENTITY,
+            spatial: None,
             style: Style::default(),
             appearance: 1.0,
         });

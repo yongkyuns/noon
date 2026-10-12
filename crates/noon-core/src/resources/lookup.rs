@@ -52,3 +52,14 @@ impl GeometryResourceLookup for GeometryResourceArena {
         GeometryResourceArena::get(self, handle)
     }
 }
+
+/// Immutable raster resolution borrowed by compiler/runtime/renderer publications.
+pub trait RasterImageResourceLookup {
+    fn get(&self, handle: crate::RasterImageResourceHandle) -> Option<&crate::RasterImageResource>;
+}
+
+impl RasterImageResourceLookup for crate::RasterImageResourceArena {
+    fn get(&self, handle: crate::RasterImageResourceHandle) -> Option<&crate::RasterImageResource> {
+        crate::RasterImageResourceArena::get(self, handle)
+    }
+}

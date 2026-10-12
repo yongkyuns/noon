@@ -6,13 +6,19 @@
 //! callback ordering, semantic publication, and renderer-facing invalidation
 //! remain in their existing owners.
 
-use std::error::Error;
+use std::{error::Error, rc::Rc};
+
+mod inspection;
 
 use noon_core::{
-    NativeEventOccurrence, NativeInputValue, NativeStateSource, PublicationContext, Rect,
+    NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,
+    NativeStateSource, PublicationContext, Rect,
 };
 
-use crate::execution_session::ExecutionViewportQuery;
+use crate::execution_session::{
+    ExecutionViewportQuery, NativePointerInputPublication, NativePointerInputToken,
+    TranslationDragError, TranslationDragReceipt,
+};
 use crate::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
     ExecutionSessionInputError, LiveSession, RustHostCallbackError, RustHostCallbackTable, Scene,
@@ -77,6 +83,8 @@ pub enum LiveProgramError<E> {
     CompletedSegment(ExecutionSegment),
     Callback(RustHostCallbackError),
     Input(ExecutionSessionInputError),
+    TranslationDrag(TranslationDragError),
+    Inspection(crate::InspectionNavigationError),
     Segment(ExecutionSegmentAdvanceError),
     Completion(crate::LiveSessionError),
     Continuation(E),
@@ -106,6 +114,8 @@ impl<E: std::fmt::Display> std::fmt::Display for LiveProgramError<E> {
             ),
             Self::Callback(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
+            Self::TranslationDrag(error) => error.fmt(formatter),
+            Self::Inspection(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
             Self::Completion(error) => error.fmt(formatter),
             Self::Continuation(error) => error.fmt(formatter),
@@ -118,6 +128,8 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
         match self {
             Self::Callback(error) => Some(error),
             Self::Input(error) => Some(error),
+            Self::TranslationDrag(error) => Some(error),
+            Self::Inspection(error) => Some(error),
             Self::Segment(error) => Some(error),
             Self::Completion(error) => Some(error),
             Self::Continuation(error) => Some(error),
@@ -190,6 +202,138 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// Query candidate frame rows through the session-owned derived spatial index.
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
         self.scene.owned_execution_mut().query_viewport(bounds)
+    }
+
+    /// Feed a platform monotonic tick to input-driven animations, including after source completion.
+    pub fn advance_interactions(
+        &mut self,
+        wall_time_seconds: f64,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        if !self.session().interactions_active() {
+            return Ok(());
+        }
+        self.ensure_host_input_available("advance interaction")?;
+        self.scene
+            .owned_execution_mut()
+            .advance_interactions(wall_time_seconds)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(())
+    }
+
+    /// Observe a successfully presented frame without advancing the continuation
+    /// or opening its input/publication barriers.
+    pub fn refresh_pointer_hover(
+        &mut self,
+        frame: &crate::integration::PointerFrameSnapshot,
+    ) -> Result<Option<crate::PointerHoverTransition>, crate::integration::PointerFrameError> {
+        self.scene
+            .owned_execution_mut()
+            .refresh_pointer_hover(frame, frame.view())
+    }
+
+    /// Configure transient selection without exposing a mutable execution session.
+    pub fn set_pointer_fill_selection(
+        &mut self,
+        max_movement: Option<f32>,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure pointer selection")?;
+        let session = self.scene.owned_execution_mut();
+        match max_movement {
+            Some(value) => session.enable_pointer_fill_selection(value),
+            None => session.disable_pointer_fill_selection(),
+        }
+        .map_err(LiveProgramError::Input)
+    }
+
+    /// Configure the semantic objects eligible for session-owned native
+    /// translation dragging. Native callers still route every occurrence to
+    /// [`Self::submit_translation_drag_input`]; they do not select an object
+    /// identity for a press or move.
+    pub fn set_translation_drag_targets<'target>(
+        &mut self,
+        targets: impl IntoIterator<Item = &'target crate::Mobject>,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure translation drag targets")?;
+        let mut nodes = Vec::new();
+        for target in targets {
+            if !Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+                return Err(LiveProgramError::TranslationDrag(
+                    TranslationDragError::ForeignStore,
+                ));
+            }
+            target.validate().map_err(|error| {
+                LiveProgramError::TranslationDrag(TranslationDragError::Semantic(error.to_string()))
+            })?;
+            nodes.push(target.node_id());
+        }
+        self.scene
+            .owned_execution_mut()
+            .set_translation_drag_targets(nodes)
+            .map_err(LiveProgramError::TranslationDrag)?;
+        self.refresh_pending_publication();
+        Ok(())
+    }
+
+    /// Configure the platform pointer projected into the existing unkeyed native signals.
+    pub fn configure_native_pointer_input(
+        &mut self,
+        pointer: NativePointerId,
+        view_revision: u64,
+    ) -> Result<NativePointerInputToken, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure contextual pointer input")?;
+        let token = self
+            .scene
+            .owned_execution_mut()
+            .configure_native_pointer_input(pointer, view_revision)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(token)
+    }
+
+    /// Capture the current session context without exposing mutable execution authority.
+    pub fn native_pointer_input_token(
+        &self,
+    ) -> Result<NativePointerInputToken, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("capture contextual pointer input")?;
+        self.session()
+            .native_pointer_input_token()
+            .map_err(LiveProgramError::Input)
+    }
+
+    /// Publish one occurrence and refresh an outstanding endpoint receipt after success.
+    pub fn submit_native_pointer_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<NativePointerInputPublication, LiveProgramError<C::Error>> {
+        self.submit_translation_drag_input(token, input)
+            .map(|receipt| receipt.input)
+    }
+
+    /// Deliver one typed pointer occurrence through the configured translation
+    /// drag policy and the existing native pointer publication lane.
+    ///
+    /// Misses and non-captured occurrences retain ordinary pointer, hover, and
+    /// click behavior. A captured primary drag alone publishes its scoped
+    /// effective translation and reconciles the authored value on release.
+    pub fn submit_translation_drag_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<TranslationDragReceipt, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("deliver translation drag input")?;
+        let store = Rc::clone(self.scene.integration_store());
+        let publication = self
+            .scene
+            .owned_execution_mut()
+            .submit_translation_drag_input(&mut store.borrow_mut(), token, input)
+            .map_err(|error| match error {
+                TranslationDragError::Input(error) => LiveProgramError::Input(error),
+                error => LiveProgramError::TranslationDrag(error),
+            })?;
+        self.refresh_pending_publication();
+        Ok(publication)
     }
 
     /// Deliver one normalized sampled native value without exposing mutable session authority.
@@ -819,3 +963,6 @@ mod tests {
         assert_eq!(program.session().frame().time, 1.0);
     }
 }
+
+#[cfg(test)]
+mod pointer_input_tests;

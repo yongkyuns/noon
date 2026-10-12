@@ -43,6 +43,10 @@ export function createDirectExecutionWakeDriver(renderer, options = {}) {
   }
 
   function scheduleAnimationFrame() {
+    // Preserve a refresh opportunity that is still needed; replacing its handle
+    // can move delivery to the next refresh when the browser has captured it.
+    if (animationFrameHandle !== null) return;
+    cancelScheduledWake();
     idle = false;
     scheduledAnimationFrames += 1;
     animationFrameHandle = requestAnimationFrameFn(onAnimationFrame);
@@ -58,8 +62,6 @@ export function createDirectExecutionWakeDriver(renderer, options = {}) {
     if (!running) {
       return;
     }
-    cancelScheduledWake();
-
     const wallTimeMs = now();
     let directive = readDirective(wallTimeMs);
     if (directive.presentNow) {
@@ -77,9 +79,11 @@ export function createDirectExecutionWakeDriver(renderer, options = {}) {
         scheduleAnimationFrame();
         return;
       case "timer":
+        cancelScheduledWake();
         scheduleTimer(directive.delayMs);
         return;
       case "idle":
+        cancelScheduledWake();
         idle = true;
         return;
       default:

@@ -2,8 +2,8 @@
 use crate::AuthoringError;
 use crate::{
     semantic_mobject::{
-        edit_color, edit_fill_color, edit_fill_opacity, edit_manim_opacity, edit_stroke_color,
-        edit_stroke_opacity, edit_stroke_width, PaintStyleEdit,
+        edit_color, edit_fade, edit_fill_color, edit_fill_opacity, edit_manim_opacity,
+        edit_stroke_color, edit_stroke_opacity, edit_stroke_width, PaintStyleEdit,
     },
     Color, Mobject, MobjectFamily,
 };
@@ -103,6 +103,39 @@ pub(crate) fn stroke<S: PaintStyleEdit>(
 }
 
 impl MobjectFamily {
+    /// Atomically recolor selected leaves by current authoritative family order.
+    /// `None` preserves a leaf. The exact length is validated before staging.
+    pub fn set_member_colors(&self, colors: &[Option<Color>]) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let expected = self
+            .integration_store()
+            .borrow()
+            .ordered_leaf_nodes(self.node_id())
+            .map_err(AuthoringError::from)?
+            .len();
+        if colors.len() != expected {
+            return Err(AuthoringError::FamilyMemberValueCount {
+                expected,
+                actual: colors.len(),
+            });
+        }
+        self.style_transaction_indexed(|index, _, style| {
+            if let Some(Some(color)) = colors.get(index) {
+                edit_color(
+                    style,
+                    color.red.into(),
+                    color.green.into(),
+                    color.blue.into(),
+                    color.alpha.into(),
+                )?;
+            }
+            Ok(())
+        })?
+        .apply(&mut self.integration_store().borrow_mut())
+        .map(|_| ())
+        .map_err(AuthoringError::from)
+    }
+
     /// Atomically update supplied paint fields on each unique leaf.
     pub fn set_style(&self, update: StyleUpdate) -> Result<(), AuthoringError> {
         self.edit_style(|style| update.apply(style))
@@ -135,7 +168,7 @@ impl MobjectFamily {
         {
             Ok(pairs) => pairs,
             Err(noon_core::SemanticFamilyPairingError::Empty) => {
-                return Ok(SemanticMutationTransaction::new())
+                return Ok(SemanticMutationTransaction::new());
             }
             Err(error) => return Err(AuthoringError::from(error).into()),
         };
@@ -205,6 +238,23 @@ impl MobjectFamily {
         self.edit_style(|style| edit_manim_opacity(style, opacity))
     }
 
+    /// Multiply enabled fill and stroke alpha, matching Manim's `fade`.
+    pub fn fade(&self, darkness: f64) -> Result<(), AuthoringError> {
+        self.fade_transaction(darkness)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    /// Prepare one validated paint transaction so authored and live owners
+    /// publish the same family fade semantics.
+    pub(crate) fn fade_transaction(
+        &self,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.style_transaction(|style| edit_fade(style, darkness))
+    }
+
     fn edit_style(
         &self,
         edit: impl Fn(&mut SemanticStyle) -> Result<(), AuthoringError>,
@@ -247,5 +297,42 @@ impl MobjectFamily {
             }
         }
         Ok(transaction)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Scene;
+
+    #[test]
+    fn member_colors_validate_count_before_atomic_publication() {
+        let mut scene = Scene::new();
+        let first = scene.rectangle(1.0, 1.0).unwrap();
+        let second = scene.circle(0.5).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let before = (first.state().unwrap(), second.state().unwrap());
+
+        assert!(matches!(
+            family.set_member_colors(&[Some(crate::RED)]),
+            Err(AuthoringError::FamilyMemberValueCount {
+                expected: 2,
+                actual: 1
+            })
+        ));
+        assert_eq!(first.state().unwrap(), before.0);
+        assert_eq!(second.state().unwrap(), before.1);
+
+        family
+            .set_member_colors(&[Some(crate::RED), Some(crate::BLUE)])
+            .unwrap();
+        assert_eq!(
+            first.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(crate::RED))
+        );
+        assert_eq!(
+            second.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(crate::BLUE))
+        );
     }
 }

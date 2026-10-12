@@ -2,7 +2,7 @@ use noon_core::{
     FontResourceArena, GeometryRef, GeometryResourceArena, ObjectContentRef, ObjectId, Style,
     TextResourceArena, Transform2D, Vec2,
 };
-use noon_render_wgpu::text::TextDeviceMetrics;
+use noon_render_wgpu::text::{GlyphQuadInstance, TextDeviceMetrics};
 use noon_render_wgpu::{GpuRenderer, RetainedFrameIncrementalStats, RetainedFramePreparer};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use noon_typst::{compile_typst_resource, TypstMode};
@@ -13,6 +13,8 @@ const STATIC_FRAMES: u64 = 128;
 fn static_geometry_frame() -> FrameState {
     let objects = (0..STATIC_OBJECTS)
         .map(|index| FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(index as u64),
             content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
@@ -42,7 +44,7 @@ fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     let mut frame = static_geometry_frame();
 
@@ -50,7 +52,6 @@ fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -68,7 +69,6 @@ fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &no_changes,
                 &texts,
@@ -87,6 +87,8 @@ fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
             scratch_reuses: 0,
             text_snapshot_copies: 0,
             mixed_order_rebuilds: 0,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 }
@@ -102,6 +104,8 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
         time: 0.0,
         objects: (0..STATIC_OBJECTS)
             .map(|index| FrameObjectState {
+                glow: None,
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(index as u64),
                 content: ObjectContentRef::Text(text),
@@ -123,13 +127,12 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
 
-    let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text_gpu = renderer.create_retained_text_state(&device, &queue);
     let first_upload = {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::all(),
                 &texts,
@@ -149,7 +152,6 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
             &texts,
@@ -165,7 +167,6 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
         let prepared = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &FrameChanges::objects(vec![STATIC_OBJECTS / 2 + 1]),
                 &texts,
@@ -190,7 +191,6 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &frame,
                     &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
                     &texts,
@@ -212,6 +212,8 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
             scratch_reuses: STATIC_FRAMES + 2,
             text_snapshot_copies: 1,
             mixed_order_rebuilds: 1,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 }
@@ -222,14 +224,13 @@ fn one_geometry_update_uses_incremental_preparation_without_mixed_scratch_rebuil
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     let mut frame = static_geometry_frame();
 
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -242,7 +243,6 @@ fn one_geometry_update_uses_incremental_preparation_without_mixed_scratch_rebuil
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
             &texts,
@@ -261,6 +261,8 @@ fn one_geometry_update_uses_incremental_preparation_without_mixed_scratch_rebuil
             scratch_reuses: 0,
             text_snapshot_copies: 0,
             mixed_order_rebuilds: 0,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 }
@@ -273,10 +275,12 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     let fonts = artifact.fonts;
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     let mut frame = static_geometry_frame();
     frame.objects.push(FrameObjectState {
+        glow: None,
+        spatial: None,
         z_index: 0.0,
         id: ObjectId::new(STATIC_OBJECTS as u64),
         content: ObjectContentRef::Text(text),
@@ -294,7 +298,6 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -307,7 +310,6 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
             &texts,
@@ -326,6 +328,8 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
             scratch_reuses: 1,
             text_snapshot_copies: 1,
             mixed_order_rebuilds: 1,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 
@@ -336,7 +340,6 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::objects(vec![STATIC_OBJECTS / 2]),
             &texts,
@@ -352,6 +355,100 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
             scratch_reuses: 1,
             text_snapshot_copies: 2,
             mixed_order_rebuilds: 2,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
+}
+
+#[test]
+fn one_text_update_stays_local_in_ten_thousand_glyph_mixed_scene() {
+    const TEXT_OBJECTS: usize = 5_001;
+    const EXPECTED_GLYPHS: usize = TEXT_OBJECTS * 2;
+
+    let artifact = compile_typst_resource("AB", TypstMode::Markup).unwrap();
+    let mut texts = TextResourceArena::new();
+    let text = texts.insert(artifact.resource).unwrap();
+    let fonts = artifact.fonts;
+    let geometries = GeometryResourceArena::new();
+    let metrics = TextDeviceMetrics::uniform(67.5).unwrap();
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut frame = static_geometry_frame();
+    for index in 0..TEXT_OBJECTS {
+        frame.objects.push(FrameObjectState {
+            glow: None,
+            spatial: None,
+            z_index: 0.0,
+            id: ObjectId::new((STATIC_OBJECTS + index) as u64),
+            content: ObjectContentRef::Text(text),
+            text_bounds: None,
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+        });
+        frame.presences.push(true);
+        frame.reveals.push(1.0);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
+    }
+
+    let mut preparer = RetainedFramePreparer::new();
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let mut text_gpu = renderer.create_retained_text_state(&device, &queue);
+    let cold_upload = {
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(prepared.text.mask_quads.len(), EXPECTED_GLYPHS);
+        assert_eq!(
+            prepared.stats.semantic_objects,
+            STATIC_OBJECTS + TEXT_OBJECTS
+        );
+        renderer.upload_retained(&device, &queue, &prepared, &mut text_gpu)
+    };
+    assert!(cold_upload.text.bytes_uploaded > 0);
+    let cold_incremental = preparer.incremental_stats();
+
+    let changed_index = STATIC_OBJECTS + TEXT_OBJECTS / 2;
+    frame.objects[changed_index].transform.translation = Vec2::new(0.02, -0.01);
+    frame.objects[changed_index].style.opacity = 0.75;
+    let local_upload = {
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &frame,
+                &FrameChanges::objects(vec![changed_index]),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
+        assert_eq!(prepared.text.mask_quads.len(), EXPECTED_GLYPHS);
+        assert_eq!(prepared.text.dirty_mask_ranges.len(), 1);
+        assert_eq!(prepared.text.dirty_mask_ranges[0].len(), 2);
+        assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+        renderer.upload_retained(&device, &queue, &prepared, &mut text_gpu)
+    };
+
+    assert_eq!(local_upload.geometry.bytes_uploaded, 0);
+    assert_eq!(local_upload.images.pixel_bytes_uploaded, 0);
+    assert_eq!(local_upload.images.instance_bytes_uploaded, 0);
+    assert_eq!(
+        local_upload.bytes_uploaded(),
+        2 * std::mem::size_of::<GlyphQuadInstance>()
+    );
+    assert!(local_upload.text.bytes_uploaded < cold_upload.text.bytes_uploaded);
+    let mut expected_incremental = cold_incremental;
+    expected_incremental.scratch_reuses += 1;
+    assert_eq!(preparer.incremental_stats(), expected_incremental);
 }

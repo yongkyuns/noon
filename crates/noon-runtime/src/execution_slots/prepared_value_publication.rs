@@ -6,11 +6,24 @@ use noon_core::{
 use super::runtime_transaction::{final_value_writes, AuthoredPublicationError};
 use crate::{FrameRowState, FrameState, RuntimeIdentity, SceneInstance};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum PreparedAuthoredValueWrite {
     Transform {
         object_index: usize,
         transform: Transform2D,
+        changes_execution: bool,
+    },
+    SemanticTransform {
+        object_index: usize,
+        base_transform: Transform2D,
+        spatial: Option<Box<noon_compile::CompiledSpatialState>>,
+        compiled_spatial: Option<Box<noon_compile::CompiledSpatialState>>,
+        changes_execution: bool,
+    },
+    Glow {
+        object_index: usize,
+        glow: std::sync::Arc<noon_compile::CompiledGlow>,
+        effective: std::sync::Arc<noon_compile::CompiledGlow>,
         changes_execution: bool,
     },
     Style {
@@ -21,26 +34,35 @@ enum PreparedAuthoredValueWrite {
 }
 
 impl PreparedAuthoredValueWrite {
-    const fn object_index(self) -> usize {
+    const fn object_index(&self) -> usize {
         match self {
-            Self::Transform { object_index, .. } | Self::Style { object_index, .. } => object_index,
+            Self::Transform { object_index, .. }
+            | Self::SemanticTransform { object_index, .. }
+            | Self::Style { object_index, .. }
+            | Self::Glow { object_index, .. } => *object_index,
         }
     }
 
-    const fn changes_execution(self) -> bool {
+    const fn changes_execution(&self) -> bool {
         match self {
             Self::Transform {
                 changes_execution, ..
             }
             | Self::Style {
                 changes_execution, ..
-            } => changes_execution,
+            }
+            | Self::SemanticTransform {
+                changes_execution, ..
+            }
+            | Self::Glow {
+                changes_execution, ..
+            } => *changes_execution,
         }
     }
 }
 
-/// Runtime proof for one already-semantic-prepared batch containing only ordinary
-/// local transform/style writes.
+/// Runtime proof for one already-semantic-prepared batch containing only local
+/// transform, spatial-routing, style, or existing glow parameter writes.
 ///
 /// Construction validates the exact Runtime identity/context, complete compiled
 /// transaction, object slots, and revision capacity. The execution-session owner
@@ -57,20 +79,28 @@ pub struct PreparedAuthoredValuePublication {
 }
 
 impl SceneInstance {
-    /// Prepare the narrow P1 authored-value publication contract.
+    /// Prepare the narrow authored-value publication contract for local rows.
     ///
-    /// `Ok(None)` means the transaction contains something other than transform/style
-    /// base writes and must stay on the existing general publication path.
+    /// `Ok(None)` means the transaction contains more than supported local base
+    /// writes and must stay on the existing general publication path.
     pub fn prepare_authored_value_publication(
         &self,
         transaction: &ExecutionMutationTransaction,
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<Option<PreparedAuthoredValuePublication>, AuthoredPublicationError> {
+        self.require_replay_writable()?;
+        if self.replay_scope_active() {
+            return Ok(None);
+        }
         if transaction.mutations().iter().any(|patch| {
             !matches!(
                 patch,
-                ExecutionPatch::SetTransform { .. } | ExecutionPatch::SetStyle { .. }
+                ExecutionPatch::SetTransform { .. }
+                    | ExecutionPatch::SetSemanticTransform { .. }
+                    | ExecutionPatch::SetSpatialState { .. }
+                    | ExecutionPatch::SetStyle { .. }
+                    | ExecutionPatch::SetGlow { .. }
             )
         }) {
             return Ok(None);
@@ -99,7 +129,10 @@ impl SceneInstance {
         for patch in final_value_writes(transaction) {
             let (object, prepared) = match patch {
                 ExecutionPatch::SetTransform { object, .. } => (*object, 0_u8),
+                ExecutionPatch::SetSemanticTransform { object, .. } => (*object, 2_u8),
+                ExecutionPatch::SetSpatialState { object, .. } => (*object, 2_u8),
                 ExecutionPatch::SetStyle { object, .. } => (*object, 1_u8),
+                ExecutionPatch::SetGlow { object, .. } => (*object, 3_u8),
                 _ => return Ok(None),
             };
             let object_index = self
@@ -120,6 +153,43 @@ impl SceneInstance {
                 (1, ExecutionPatch::SetStyle { style, .. }) => PreparedAuthoredValueWrite::Style {
                     object_index,
                     style: *style,
+                    changes_execution,
+                },
+                (2, ExecutionPatch::SetSemanticTransform { transform, .. }) => {
+                    let (base_transform, spatial) = self
+                        .compiled
+                        .prepare_semantic_transform_value(object_index as u32, *transform)
+                        .ok_or(noon_compile::CompilePatchError::InvalidObjectState {
+                            object,
+                            field: noon_core::ObjectStateField::Transform,
+                        })?;
+                    let spatial = spatial.map(Box::new);
+                    PreparedAuthoredValueWrite::SemanticTransform {
+                        compiled_spatial: spatial.clone(),
+                        object_index,
+                        base_transform,
+                        spatial,
+                        changes_execution,
+                    }
+                }
+                (
+                    2,
+                    ExecutionPatch::SetSpatialState {
+                        base_transform,
+                        spatial,
+                        ..
+                    },
+                ) => PreparedAuthoredValueWrite::SemanticTransform {
+                    object_index,
+                    base_transform: *base_transform,
+                    compiled_spatial: spatial.clone().map(Box::new),
+                    spatial: spatial.clone().map(Box::new),
+                    changes_execution,
+                },
+                (3, ExecutionPatch::SetGlow { glow, .. }) => PreparedAuthoredValueWrite::Glow {
+                    object_index,
+                    glow: std::sync::Arc::clone(glow),
+                    effective: self.prepare_effective_glow_value(object_index, glow),
                     changes_execution,
                 },
                 _ => unreachable!("ordinary value publication classified above"),
@@ -170,8 +240,34 @@ impl SceneInstance {
                 continue;
             }
             let object_index = write.object_index();
+            // Glow has no geometry/layout dependencies. Its active channel values
+            // and any Arc copy-on-write were already prepared before semantic commit.
+            if let PreparedAuthoredValueWrite::Glow {
+                glow, effective, ..
+            } = write
+            {
+                self.compiled
+                    .commit_prepared_glow_value(object_index as u32, glow);
+                if self.frame.objects[object_index].glow.as_deref() != Some(effective.as_ref()) {
+                    self.frame.objects[object_index].glow = Some(effective);
+                    self.changes.insert(object_index);
+                }
+                continue;
+            }
             let before = FrameRowState::from_frame(&self.frame, object_index);
+            if let Some(anchor_family) = self.frame.objects[object_index]
+                .spatial
+                .as_deref()
+                .and_then(|spatial| spatial.spatial_anchor_family)
+            {
+                if let Some(group) = self.compiled.spatial_anchor_group_for_anchor(anchor_family) {
+                    self.pending_spatial_anchor_groups.insert(group);
+                }
+            }
             match write {
+                PreparedAuthoredValueWrite::Glow { .. } => {
+                    unreachable!("glow values were committed without spatial invalidation above")
+                }
                 PreparedAuthoredValueWrite::Transform {
                     transform,
                     object_index,
@@ -188,6 +284,44 @@ impl SceneInstance {
                             Property::Position,
                             Property::Rotation,
                             Property::Scale,
+                        ],
+                    );
+                }
+                PreparedAuthoredValueWrite::SemanticTransform {
+                    base_transform,
+                    spatial,
+                    compiled_spatial,
+                    object_index,
+                    ..
+                } => {
+                    self.compiled.commit_prepared_semantic_transform_value(
+                        object_index as u32,
+                        base_transform,
+                        compiled_spatial,
+                    );
+                    self.frame.release_render_transform(object_index);
+                    self.frame.objects[object_index].transform = base_transform;
+                    match spatial {
+                        Some(next) => {
+                            if let Some(current) =
+                                self.frame.objects[object_index].spatial.as_deref_mut()
+                            {
+                                *current = *next;
+                            } else {
+                                self.frame.objects[object_index].spatial = Some(next);
+                            }
+                        }
+                        None => self.frame.objects[object_index].spatial = None,
+                    }
+                    self.reapply_properties(
+                        object_index,
+                        &[
+                            Property::Transform,
+                            Property::Position,
+                            Property::Rotation,
+                            Property::Scale,
+                            Property::WorldTransform,
+                            Property::CameraProfile,
                         ],
                     );
                 }
@@ -212,10 +346,13 @@ impl SceneInstance {
                 }
             }
             self.reapply_reactive_for_object(object_index);
+            self.reapply_numeric_text_for_object(object_index);
             if before.differs_from_frame(&self.frame, object_index) {
                 self.mark_changed(object_index);
             }
         }
+
+        self.flush_spatial_anchor_changes();
 
         self.publication = PublicationContext::new(
             prepared.scene_revision,
@@ -223,5 +360,35 @@ impl SceneInstance {
             prepared.frame_epoch,
         );
         &self.frame
+    }
+}
+
+impl SceneInstance {
+    fn prepare_effective_glow_value(
+        &self,
+        object_index: usize,
+        base: &std::sync::Arc<noon_compile::CompiledGlow>,
+    ) -> std::sync::Arc<noon_compile::CompiledGlow> {
+        let mut effective = Some(std::sync::Arc::clone(base));
+        for property in [
+            Property::GlowColor,
+            Property::GlowRadius,
+            Property::GlowIntensity,
+        ] {
+            let channel = noon_compile::CompiledChannelKey::new(object_index as u32, property);
+            let Some(mut group) = self.groups.get(&channel).cloned() else {
+                continue;
+            };
+            let tracks = self.compiled.channel_tracks(channel);
+            group.cursor = crate::upper_bound_start(tracks, self.frame.time, &mut 0);
+            crate::apply_glow_channel(
+                Some(base.as_ref()),
+                &mut effective,
+                tracks,
+                &group,
+                self.frame.time,
+            );
+        }
+        effective.expect("existing generation validated before preparation")
     }
 }

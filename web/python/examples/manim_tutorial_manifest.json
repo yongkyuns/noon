@@ -719,6 +719,126 @@
       "category": "tutorial/3d",
       "features": ["ThreeDScene", "ThreeDAxes", "Surface", "3D intermediate-frame projection"],
       "dependency": "#90"
+    },
+    {
+      "id": "gallery-animation-point-moving-on-shapes",
+      "title": "PointMovingOnShapes",
+      "summary": "ManimCE v0.21 Animations gallery case; blocked until MoveAlongPath/path-progress and path query semantics are fully qualified.",
+      "status": "blocked",
+      "category": "gallery/animations",
+      "features": ["MoveAlongPath", "path-progress", "rotation"],
+      "upstream": "examples.html#animations",
+      "dependency": "#80/#78"
+    },
+    {
+      "id": "gallery-animation-moving-angle",
+      "title": "MovingAngle",
+      "summary": "ManimCE v0.21 Animations gallery case; blocked until Angle/MathTex breadth and staged host-updater behavior are qualified.",
+      "status": "blocked",
+      "category": "gallery/animations",
+      "features": ["Angle", "MathTex", "ValueTracker", "updater"],
+      "upstream": "examples.html#animations",
+      "dependency": "#83/#70"
+    },
+    {
+      "id": "gallery-animation-moving-group-to-destination",
+      "title": "MovingGroupToDestination",
+      "summary": "ManimCE v0.21 Animations gallery case; blocked on the remaining general family-animation breadth and exact-output qualification.",
+      "status": "blocked",
+      "category": "gallery/animations",
+      "features": ["VGroup", "generate_target", "MoveToTarget", "family-animation"],
+      "upstream": "examples.html#animations",
+      "dependency": "#80/#185"
+    },
+    {
+      "id": "gallery-animation-moving-frame-box",
+      "title": "MovingFrameBox",
+      "summary": "ManimCE v0.21 Animations gallery case; blocked until real MathTex, matcher rectangles, and replacement-transform breadth are qualified together.",
+      "status": "blocked",
+      "category": "gallery/animations",
+      "features": ["MathTex", "SurroundingRectangle", "ReplacementTransform"],
+      "upstream": "examples.html#animations",
+      "dependency": "#83/#82/#400"
+    },
+    {
+      "id": "gallery-animation-point-with-trace",
+      "title": "PointWithTrace",
+      "summary": "ManimCE v0.21 Animations gallery case; blocked until staged callback/always-redraw and versioned dynamic path-content behavior are complete.",
+      "status": "blocked",
+      "category": "gallery/animations",
+      "features": ["TracedPath", "updater", "dynamic-path-content"],
+      "upstream": "examples.html#animations",
+      "dependency": "#70/#78"
+    },
+    {
+      "id": "gallery-plotting-sin-and-cos-function-plot",
+      "title": "SinAndCosFunctionPlot",
+      "summary": "ManimCE v0.21 Plotting gallery case; blocked until the remaining plotting-label and real MathTex surface is qualified.",
+      "status": "blocked",
+      "category": "gallery/plotting",
+      "features": ["Axes", "plot", "MathTex", "graph-labels"],
+      "upstream": "examples.html#plotting",
+      "dependency": "#85/#83"
+    },
+    {
+      "id": "gallery-plotting-arg-min-example",
+      "title": "ArgMinExample",
+      "summary": "ManimCE v0.21 Plotting gallery case; blocked on dynamic tracker/plot update behavior and its explicit replay classification.",
+      "status": "blocked",
+      "category": "gallery/plotting",
+      "features": ["Axes", "plot", "ValueTracker", "dynamic-plot"],
+      "upstream": "examples.html#plotting",
+      "dependency": "#85/#70"
+    },
+    {
+      "id": "gallery-plotting-graph-area-plot",
+      "title": "GraphAreaPlot",
+      "summary": "ManimCE v0.21 Plotting gallery case; blocked until exact authored-function area/Riemann geometry and labels are complete.",
+      "status": "blocked",
+      "category": "gallery/plotting",
+      "features": ["Axes", "get_area", "RiemannRectangles", "labels"],
+      "upstream": "examples.html#plotting",
+      "dependency": "#778/#83"
+    },
+    {
+      "id": "gallery-plotting-polygon-on-axes",
+      "title": "PolygonOnAxes",
+      "summary": "ManimCE v0.21 Plotting gallery case; blocked until always_redraw can publish complete transient geometry through the shared callback/content lanes.",
+      "status": "blocked",
+      "category": "gallery/plotting",
+      "features": ["Axes", "Polygon", "always_redraw", "ValueTracker"],
+      "upstream": "examples.html#plotting",
+      "dependency": "#70/#85/#400"
+    },
+    {
+      "id": "gallery-plotting-heat-diagram-plot",
+      "title": "HeatDiagramPlot",
+      "summary": "ManimCE v0.21 Plotting gallery case; blocked until line-graph/axis-label and real text/math qualification is complete.",
+      "status": "blocked",
+      "category": "gallery/plotting",
+      "features": ["Axes", "plot_line_graph", "labels"],
+      "upstream": "examples.html#plotting",
+      "dependency": "#85/#83"
+    },
+    {
+      "id": "gallery-advanced-opening-manim",
+      "title": "OpeningManim",
+      "summary": "ManimCE v0.21 Advanced Projects case; blocked on the remaining real text/math, animation, NumberPlane, and path-transform breadth.",
+      "status": "blocked",
+      "category": "gallery/advanced-projects",
+      "features": ["Text", "MathTex", "Write", "NumberPlane", "Transform"],
+      "upstream": "examples.html#advanced-projects",
+      "dependency": "#83/#80/#85/#82"
+    },
+    {
+      "id": "gallery-advanced-sine-curve-unit-circle",
+      "title": "SineCurveUnitCircle",
+      "summary": "ManimCE v0.21 Advanced Projects case; blocked until MathTex, path proportion queries, and staged dynamic callback/content publication are complete.",
+      "status": "blocked",
+      "category": "gallery/advanced-projects",
+      "features": ["MathTex", "path-proportion", "updater", "always_redraw"],
+      "upstream": "examples.html#advanced-projects",
+      "dependency": "#83/#70/#78"
     }
   ]
 }

@@ -3,7 +3,7 @@ use noon_core::{
     GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition, TrackId, TrackTiming,
     TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
-use noon_render_wgpu::FramePreparer;
+use noon_render_wgpu::{FramePreparer, RenderPrimitive};
 use noon_runtime::SceneInstance;
 
 fn copy_scene() -> SceneInstance {
@@ -83,7 +83,12 @@ fn prepared_ids(instance: &mut SceneInstance, preparer: &mut FramePreparer, time
     instance.advance_to(time).expect("valid time");
     let changes = instance.take_frame_changes();
     let prepared = preparer.prepare_incremental(instance.frame(), &changes);
-    prepared.circle_ids.iter().map(|id| id.get()).collect()
+    prepared
+        .ordered_render_batches()
+        .filter(|ordered| ordered.batch.primitive == RenderPrimitive::Circle)
+        .flat_map(|ordered| ordered.batch.instance_range.clone())
+        .map(|index| prepared.circle_ids[index as usize].get())
+        .collect()
 }
 
 #[test]

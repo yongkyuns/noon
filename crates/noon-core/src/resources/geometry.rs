@@ -6,6 +6,7 @@ use std::{
     },
 };
 
+use crate::MeshResource;
 use crate::{GeometryId, GeometryRef, Vec2, VectorPath};
 
 static NEXT_GEOMETRY_ARENA: AtomicU64 = AtomicU64::new(1);
@@ -34,12 +35,14 @@ pub struct GeometryResourceHandle {
 #[derive(Clone, Debug, PartialEq)]
 pub enum GeometryResource {
     VectorPath(Arc<VectorPath>),
+    Mesh(Arc<MeshResource>),
 }
 
 impl GeometryResource {
     pub fn retained_bytes(&self) -> usize {
         match self {
             Self::VectorPath(path) => vector_path_retained_bytes(path),
+            Self::Mesh(mesh) => mesh.retained_bytes(),
         }
     }
 }
@@ -128,6 +131,10 @@ impl GeometryResourceArena {
 
     pub fn insert_path(&mut self, path: VectorPath) -> GeometryResourceHandle {
         self.insert(GeometryResource::VectorPath(Arc::new(path)))
+    }
+
+    pub fn insert_mesh(&mut self, mesh: MeshResource) -> GeometryResourceHandle {
+        self.insert(GeometryResource::Mesh(Arc::new(mesh)))
     }
 
     pub fn insert(&mut self, resource: GeometryResource) -> GeometryResourceHandle {
@@ -298,6 +305,7 @@ impl GeometryResourceArena {
                 .filter_map(|entry| entry.value.as_ref())
                 .map(|resource| match resource {
                     GeometryResource::VectorPath(path) => size_of_val(path.commands()),
+                    GeometryResource::Mesh(_) => 0,
                 })
                 .sum(),
         }
@@ -384,7 +392,9 @@ mod tests {
         let references = vec![StoredGeometry::Resource(handle); 100_000];
         assert_eq!(references.len(), 100_000);
         assert_eq!(arena.len(), 1);
-        let GeometryResource::VectorPath(path) = arena.get(handle).unwrap();
+        let GeometryResource::VectorPath(path) = arena.get(handle).unwrap() else {
+            panic!("expected path")
+        };
         assert_eq!(path.commands().len(), 10_001);
         assert!(arena.stats().retained_bytes > 0);
     }
@@ -397,6 +407,52 @@ mod tests {
             StoredGeometry::Circle { radius: 2.0 }
         );
         assert!(arena.is_empty());
+    }
+
+    #[test]
+    fn mesh_resources_share_arc_payload_and_follow_arena_replacement_and_reuse() {
+        let mesh = MeshResource::new(
+            vec![
+                crate::SemanticVec3::ZERO,
+                crate::SemanticVec3::new(1.0, 0.0, 0.0),
+                crate::SemanticVec3::new(0.0, 1.0, 2.0),
+            ],
+            None,
+            vec![0, 1, 2],
+        )
+        .unwrap();
+        let retained = mesh.retained_bytes();
+        let mut arena = GeometryResourceArena::new();
+        let first = arena.insert_mesh(mesh.clone());
+        let GeometryResource::Mesh(first_arc) = arena.get(first).unwrap() else {
+            panic!("expected mesh")
+        };
+        let shared = first_arc.clone();
+        assert!(Arc::ptr_eq(first_arc, &shared));
+        assert_eq!(arena.stats().retained_bytes, retained);
+        assert_eq!(arena.stats().path_command_bytes, 0);
+
+        let second = arena
+            .replace(first.id, GeometryResource::Mesh(Arc::new(mesh)))
+            .unwrap();
+        assert!(arena.get(first).is_none());
+        assert!(matches!(arena.get(second), Some(GeometryResource::Mesh(_))));
+        arena.remove(second.id).unwrap();
+        let recycled = arena.insert_mesh(
+            MeshResource::new(
+                vec![
+                    crate::SemanticVec3::ZERO,
+                    crate::SemanticVec3::new(1.0, 0.0, 0.0),
+                    crate::SemanticVec3::new(0.0, 1.0, 0.0),
+                ],
+                None,
+                vec![0, 1, 2],
+            )
+            .unwrap(),
+        );
+        assert_eq!(arena.slot_capacity(), 1);
+        assert_ne!(second.id, recycled.id);
+        assert!(arena.get(second).is_none());
     }
 
     #[test]
@@ -509,7 +565,9 @@ mod tests {
             version: u64::MAX,
         };
         let before = arena.stats();
-        let GeometryResource::VectorPath(before_path) = arena.get(exhausted).unwrap();
+        let GeometryResource::VectorPath(before_path) = arena.get(exhausted).unwrap() else {
+            panic!("expected path")
+        };
         let before_commands = before_path.commands().len();
 
         assert_eq!(
@@ -522,7 +580,9 @@ mod tests {
 
         assert_eq!(arena.stats(), before);
         assert_eq!(arena.current_handle(first.id), Some(exhausted));
-        let GeometryResource::VectorPath(after_path) = arena.get(exhausted).unwrap();
+        let GeometryResource::VectorPath(after_path) = arena.get(exhausted).unwrap() else {
+            panic!("expected path")
+        };
         assert_eq!(after_path.commands().len(), before_commands);
     }
 

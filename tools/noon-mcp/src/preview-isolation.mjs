@@ -234,12 +234,25 @@ async function removeContainer(config, selector) {
   if (!ownedContainerSelector(selector)) {
     return Object.freeze({ outcome: "invalid_selector", removed: false });
   }
-  try {
-    await captureProcess(config.dockerExecutable, ["rm", "--force", selector], { timeoutMs: 10_000 });
-    return Object.freeze({ outcome: "removed", removed: true });
-  } catch (error) {
-    if (missingContainer(error)) return Object.freeze({ outcome: "already_absent", removed: true });
-    return Object.freeze({ outcome: "failed", removed: false, error: String(error.message ?? error).slice(0, 1200) });
+  const deadline = performance.now() + 10_000;
+  for (;;) {
+    try {
+      await captureProcess(config.dockerExecutable, ["rm", "--force", selector], {
+        timeoutMs: Math.max(1, Math.ceil(deadline - performance.now())),
+      });
+      return Object.freeze({ outcome: "removed", removed: true });
+    } catch (error) {
+      if (missingContainer(error)) return Object.freeze({ outcome: "already_absent", removed: true });
+      const message = String(error.message ?? error).slice(0, 1200);
+      const remaining = deadline - performance.now();
+      // --rm can already own removal after stdin closes. A removal in progress
+      // is not proof of absence: retry only that race within the original bound.
+      if (/removal of container .* is already in progress/i.test(message) && remaining > 0) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));
+        continue;
+      }
+      return Object.freeze({ outcome: "failed", removed: false, error: message });
+    }
   }
 }
 

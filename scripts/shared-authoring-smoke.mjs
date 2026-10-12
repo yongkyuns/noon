@@ -95,6 +95,13 @@ class SharedAuthoringSmoke(Scene):
         assert circle.style["stroke_join"] == "miter"
         assert circle.style["stroke_cap"] == "butt"
 
+        # Replay is bounded by completed authored history. Record the interval
+        # exercised by the transport pause/seek/resume checks below; a host loop
+        # duration alone does not extend a time-zero live mutation history.
+        endpoint = live.wait(2.0)
+        assert live.advance_to(endpoint)
+        live.complete()
+
         # These compatibility views are deliberately corrupt after the typed scene
         # is complete. Semantic finalization must neither inspect nor export them.
         assert not hasattr(self, "_objects")
@@ -424,6 +431,49 @@ async function stopSampledSource(page) {
   });
 }
 
+async function runCallbackMembershipContinuation(page, source, canvasId) {
+  return page.evaluate(async ({ source, canvasId }) => {
+    const harness = window.sharedAuthoringSmoke;
+    const canvas = document.createElement("canvas");
+    canvas.id = canvasId;
+    canvas.width = 640;
+    canvas.height = 360;
+    document.body.append(canvas);
+    let execution = null;
+    let registration = null;
+    try {
+      const authored = await harness.authoring.run(source, {}, {
+        async onSemanticContinuation(next) {
+          if (registration !== null) {
+            throw new Error(`${canvasId} registered more than one semantic context`);
+          }
+          registration = next;
+          execution = new harness.AuthoringExecutionClient(canvas);
+          await execution.startSemanticExecution(next.semanticExecution, {
+            authoringClient: harness.authoring,
+            loopDurationSeconds: Math.max(1, next.duration),
+            transportMode: "transferable",
+          });
+        },
+      });
+      if (execution === null || registration === null) {
+        throw new Error(`${canvasId} did not register its semantic continuation`);
+      }
+      if (authored.semanticExecution.contextId !== registration.semanticExecution.contextId ||
+          authored.semanticExecution.continuationGeneration !== registration.generation) {
+        throw new Error(`${canvasId} did not retain its canonical continuation`);
+      }
+      return {
+        duration: authored.duration,
+        metrics: (await execution.metrics()).metrics,
+      };
+    } finally {
+      execution?.terminate();
+      canvas.remove();
+    }
+  }, { source, canvasId });
+}
+
 await new Promise((resolve, reject) => {
   server.once("error", reject);
   server.listen(port, "127.0.0.1", resolve);
@@ -463,6 +513,18 @@ try {
       authoring,
       execution: null,
       workerUrls,
+      createExecutionAttachment(label) {
+        let resolve;
+        let reject;
+        const attached = new Promise((onReady, onError) => {
+          resolve = onReady;
+          reject = onError;
+        });
+        const timeout = setTimeout(() => {
+          reject(new Error(`${label} execution did not start within 30 seconds`));
+        }, 30_000);
+        return { ready: attached.finally(() => clearTimeout(timeout)), resolve, reject };
+      },
     };
   });
 
@@ -614,10 +676,13 @@ try {
     expectText = false,
     staticTextColor = null,
     expectedFinalCenter = null,
+    expectedGlowPair = false,
     expectedFinalColor = null,
+    finalPixelPredicate = (red, green, blue) => Math.max(red, green, blue) > 80,
     expectedComposition = false,
     expectedCamera = false,
     expectedDifferentRotations = false,
+    expectedReplayUnavailable = null,
   } of [
     {
       filename: "live_semantic_scene.py",
@@ -771,13 +836,28 @@ try {
       endpointTime: null,
     },
     { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
-    { filename: "ordinary_family_membership_order.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_membership_order.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null, expectedReplayUnavailable: "Incomplete" },
     { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
     { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_replacement.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_affine.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_paint_queries_gradients.py", objectCount: 5, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_style_operations.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
+    // Runs actual Python -> WASM/Rust declarations, then verifies explicit rejection
+    // and cleanup. Its final plain frame is not an enabled-glow visual oracle.
+    { filename: "effect_authoring_contract.py", objectCount: 1, expectedDuration: 0.1, endpointTime: null },
+    // Real Python .animate/play, path/text reveals, and live removal. The final
+    // ordinary frame is semantic/completion evidence, not a glow-pixel oracle.
+    {
+      filename: "glow_scene_playback.py", objectCount: 3, expectedDuration: 3.25,
+      endpointTime: null, expectedFinalCenter: [2, 0],
+      // Isolate the completed white disk from the blue path and central equation.
+      finalPixelPredicate: (red, green, blue, x) =>
+        x > 370 && Math.min(red, green, blue) > 230,
+    },
+    // Actual Python -> shared Rust -> retained worker; the matching ordinary
+    // circle is an in-frame no-effect negative control for off-source pixels.
+    { filename: "glow_scene_worker_pixels.py", objectCount: 2, expectedDuration: 0.25, endpointTime: null, expectedGlowPair: true },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
@@ -831,6 +911,14 @@ try {
       endpointTime: null,
       expectText: true,
     },
+    {
+      filename: "text_range_colors.py",
+      objectCount: 1,
+      expectedDuration: 0.2,
+      endpointTime: null,
+      expectText: true,
+      staticTextColor: "range",
+    },
   ]) {
     const source = await readFile(path.join(repoRoot, "web/python/examples", filename), "utf8");
     const result = await page.evaluate(async ({
@@ -839,9 +927,11 @@ try {
       endpointTime,
       expectText,
       expectedFinalCenter,
+      expectedGlowPair,
       expectedComposition,
       expectedCamera,
       expectedDifferentRotations,
+      expectedReplayUnavailable,
       filename,
     }) => {
       const harness = window.sharedAuthoringSmoke;
@@ -905,6 +995,41 @@ try {
         }
 
         const initial = await waitForFrame();
+        if (expectedGlowPair) {
+          // A source-owned Python continuation never admits external pause/seek.
+          // harness.authoring.run resolves only after its final Rust execution
+          // lease has returned and the final retained publication was presented.
+          // Observe that exact endpoint without taking ownership from Python.
+          const completed = await execution.state();
+          if (completed.playing || Math.abs(completed.time - authored.duration) > 1e-6) {
+            throw new Error(
+              `${filename}: Python continuation did not complete at the exact endpoint: ` +
+              JSON.stringify({ time: completed.time, playing: completed.playing, duration: authored.duration }),
+            );
+          }
+          const finalMetrics = (await execution.metrics()).metrics;
+          if (finalMetrics.objectCount !== objectCount ||
+              finalMetrics.drawCalls === 0 || finalMetrics.presentedFrames === 0) {
+            throw new Error(
+              `${filename}: endpoint publication was not retained: ` +
+              JSON.stringify({ objectCount: finalMetrics.objectCount,
+                drawCalls: finalMetrics.drawCalls, presentedFrames: finalMetrics.presentedFrames }),
+            );
+          }
+        }
+        if (expectedReplayUnavailable !== null) {
+          // This explicit live example starts a wait without driving/completing
+          // it. Its final coherent frame remains usable, but it has not authored
+          // the history required for replay or elapsed playback observation.
+          const paused = await execution.pause();
+          if (paused.replaySupported || paused.replayUnavailable !== expectedReplayUnavailable ||
+              paused.playing || paused.time !== 0) {
+            throw new Error(`${filename}: unfinished source did not retain its paused frontier`);
+          }
+          if ((await execution.state()).time !== 0) {
+            throw new Error(`${filename}: paused source projected unauthored elapsed time`);
+          }
+        }
         let endpoint = null;
         if (endpointTime !== null) {
           const paused = await execution.pause();
@@ -913,13 +1038,13 @@ try {
           const rendered = await waitForFrame(initial.presentedFrames);
           endpoint = { time: sought.time, drawCalls: rendered.drawCalls };
         }
-        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera || expectedDifferentRotations;
+        retainForInspection = objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedGlowPair || expectedComposition || expectedCamera || expectedDifferentRotations;
         if (retainForInspection) harness.liveExampleExecution = execution;
         return { canvasId: canvas.id, duration: authored.duration, metrics: initial, endpoint };
       } finally {
         if (!retainForInspection) execution.terminate();
       }
-    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedComposition, expectedCamera, expectedDifferentRotations, filename });
+    }, { source, objectCount, endpointTime, expectText, expectedFinalCenter, expectedGlowPair, expectedComposition, expectedCamera, expectedDifferentRotations, expectedReplayUnavailable, filename });
     assert.equal(result.metrics.objectCount, objectCount, filename);
     if (objectCount === 0) {
       assert.equal(result.metrics.drawCalls, 0, `${filename}: removed object still draws`);
@@ -956,7 +1081,7 @@ try {
     if (expectedFinalCenter !== null) {
       const finalPixels = visiblePixelStats(
         await page.locator(`#${result.canvasId}`).screenshot(),
-        (red, green, blue) => Math.max(red, green, blue) > 80,
+        finalPixelPredicate,
       );
       const expectedX = 320 + expectedFinalCenter[0] * 45;
       const expectedY = 180 - expectedFinalCenter[1] * 45;
@@ -976,6 +1101,54 @@ try {
             finalPixels.meanGreen > finalPixels.meanBlue + 30,
           `${filename}: post-completion yellow paint edit was not rendered: ${JSON.stringify(finalPixels)}`,
         );
+      }
+    }
+    if (expectedGlowPair) {
+      // Source radii are 0.4 world units (~18px). Samples are outside the
+      // ordinary silhouette and inside the 3*sigma halo support.
+      const png = PNG.sync.read(await page.locator(`#${result.canvasId}`).screenshot());
+      assert.equal(png.width, 640); assert.equal(png.height, 360);
+      const pixel = (x, y) => {
+        const offset = (y * png.width + x) * 4;
+        return [png.data[offset], png.data[offset + 1], png.data[offset + 2]];
+      };
+      for (const c of [pixel(230, 180), pixel(410, 180)]) {
+        assert.ok(c.every(v => v > 230), `${filename}: source coverage missing ${c}`);
+      }
+      let ordinaryBlue = 0, glowBlue = 0, glowGreen = 0, glowRed = 0;
+      for (const dx of [26, 29, 32]) for (const dy of [-3, 0, 3]) {
+        ordinaryBlue += pixel(230 + dx, 180 + dy)[2];
+        const [r, g, b] = pixel(410 + dx, 180 + dy);
+        glowRed += r; glowGreen += g; glowBlue += b;
+      }
+      assert.ok(glowBlue > ordinaryBlue + 9 * 8,
+        `${filename}: off-source halo missing: ${glowBlue} versus ${ordinaryBlue}`);
+      assert.ok(glowBlue > glowRed + 9 * 4 && glowGreen > glowRed + 9 * 4,
+        `${filename}: wrong BLUE halo: ${JSON.stringify({glowRed, glowGreen, glowBlue})}`);
+      // Independent truncated full-2D Gaussian at nine measured pixels, using
+      // only the ordinary no-glow source as mask/coverage (not production
+      // intermediate textures, shader coefficients, or glow output).
+      const sigma = 6.5, radius = Math.ceil(3 * sigma);
+      const kernel = [];
+      let normalizer = 0;
+      for (let y = -radius; y <= radius; y++) for (let x = -radius; x <= radius; x++) {
+        const weight = Math.exp(-(x*x + y*y) / (2*sigma*sigma));
+        normalizer += weight;
+        kernel.push([x, y, weight]);
+      }
+      const tint = [88, 196, 221]; // Noon BLUE_C, an authored endpoint.
+      for (const dx of [26, 29, 32]) for (const dy of [-3, 0, 3]) {
+        const base = pixel(230 + dx, 180 + dy)[0] / 255;
+        const blurred = kernel.reduce((sum, [x, y, weight]) =>
+          sum + pixel(230 + dx - x, 180 + dy - y)[0] / 255 * weight, 0) / normalizer;
+        const halo = Math.min(1, 1.4 * blurred);
+        const expected = tint.map(channel => Math.round(255 *
+          (base + (1-base) * channel/255 * halo)));
+        const actual = pixel(410 + dx, 180 + dy);
+        const difference = Math.max(...actual.map((v, i) => Math.abs(v - expected[i])));
+        assert.ok(difference <= 2,
+          `${filename}: independent Python worker halo at ${dx},${dy} differs by ${difference}: ` +
+          `${JSON.stringify({actual, expected})}`);
       }
     }
     if (expectedComposition) {
@@ -1024,17 +1197,32 @@ try {
     }
     if (expectText) {
       const screenshot = await page.locator(`#${result.canvasId}`).screenshot();
-      const pixels = staticTextColor === "yellow"
-        ? visiblePixelStats(screenshot, (red, green, blue) =>
-            red > 180 && green > 140 && red > blue + 40 && green > blue + 30)
-        : textPixelStats(screenshot);
+      const pixels = staticTextColor === "range"
+        ? visiblePixelStats(screenshot, (red, green, blue) => Math.max(red, green, blue) > 160)
+        : staticTextColor === "yellow"
+          ? visiblePixelStats(screenshot, (red, green, blue) =>
+              red > 180 && green > 140 && red > blue + 40 && green > blue + 30)
+          : textPixelStats(screenshot);
       assert.ok(pixels.count > 100, `${filename}: glyphs were not rendered: ${JSON.stringify(pixels)}`);
       assert.ok(pixels.width > 50, `${filename}: text has no glyph extent`);
+      if (staticTextColor === "range") {
+        // This example intentionally colors most glyphs. A white-only bounding
+        // box measures the remaining "on", not the whole multiline label.
+        for (const [color, predicate] of [
+          ["red", (r, g, b) => r > 160 && r > g + 60 && r > b + 60],
+          ["blue", (r, g, b) => b > 160 && b > r + 60 && b > g + 40],
+          ["green", (r, g, b) => g > 140 && g > r + 60 && g > b + 40],
+        ]) {
+          const colored = visiblePixelStats(screenshot, predicate);
+          assert.ok(colored.count > 10, `${filename}: missing ${color} source-range glyphs`);
+        }
+        assert.ok(textPixelStats(screenshot).count > 100, `${filename}: default-colored glyphs disappeared`);
+      }
       if (staticTextColor === null) {
         assert.ok(pixels.centerY < 180, `${filename}: replacement text lost its live position`);
       }
     }
-    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedComposition || expectedCamera || expectedDifferentRotations) {
+    if (objectCount === 0 || endpointTime !== null || expectText || expectedFinalCenter !== null || expectedGlowPair || expectedComposition || expectedCamera || expectedDifferentRotations) {
       await page.evaluate(() => {
         window.sharedAuthoringSmoke.liveExampleExecution.terminate();
         window.sharedAuthoringSmoke.liveExampleExecution = null;
@@ -2310,7 +2498,8 @@ class SelectedAlignment(Scene):
     document.body.append(canvas);
     let execution = null;
     let registration = null;
-    let settled = false;
+    let executionReady = false;
+    let sourceError = null;
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -2322,38 +2511,36 @@ class SelectedAlignment(Scene):
           authoringClient: harness.authoring,
           loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
+          pacing: "external_samples",
         });
+        executionReady = true;
       },
     });
-    authoredPromise.then(() => { settled = true; }, () => {});
-    for (let attempt = 0; attempt < 150; attempt += 1) {
-      if (execution !== null && registration !== null) break;
+    authoredPromise.catch(error => { sourceError = String(error); });
+    for (let attempt = 0; attempt < 1500; attempt += 1) {
+      if (executionReady || sourceError !== null) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    if (execution === null || registration === null) {
-      throw new Error("composition source did not register its semantic continuation");
+    if (!executionReady || execution === null || registration === null) {
+      throw new Error(`composition source did not start its semantic continuation: ${JSON.stringify({
+        registered: registration !== null, executionCreated: execution !== null,
+        sourceError,
+      })}`);
     }
-    harness.compositionContinuation = { authoredPromise, execution, registration, get settled() { return settled; } };
+    harness.compositionContinuation = { authoredPromise, execution, registration };
     return { canvasId: canvas.id };
   }, compositionContinuationSource);
 
   async function observeCompositionDuring(start, end, label) {
     return page.evaluate(async ({ startTime, endTime, phaseLabel }) => {
       const continuation = window.sharedAuthoringSmoke.compositionContinuation;
-      let latest = null;
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        if (continuation.settled) break;
-        try {
-          latest = await continuation.execution.state();
-          if (latest.time > startTime && latest.time < endTime) return latest;
-          if (latest.time >= endTime) break;
-        } catch {
-          // The player may be transferred only at an exact endpoint. Keep
-          // observing while the source remains suspended on this segment.
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      const target = (startTime + endTime) / 2;
+      await continuation.execution.sampleToAuthoredTime(target);
+      const state = await continuation.execution.state();
+      if (state.time <= startTime || state.time >= endTime) {
+        throw new Error(`${phaseLabel} did not present its exact sample: ${JSON.stringify(state)}`);
       }
-      throw new Error(`${phaseLabel} did not reach its observable interval: ${JSON.stringify(latest)}`);
+      return state;
     }, { startTime: start, endTime: end, phaseLabel: label });
   }
 
@@ -2384,7 +2571,10 @@ class SelectedAlignment(Scene):
 
   const compositionContinuationResult = await page.evaluate(async () => {
     const continuation = window.sharedAuthoringSmoke.compositionContinuation;
-    const authored = await continuation.authoredPromise;
+    const [, authored] = await Promise.all([
+      continuation.execution.sampleToAuthoredTime(4),
+      continuation.authoredPromise,
+    ]);
     if (
       authored.semanticExecution.contextId !== continuation.registration.semanticExecution.contextId ||
       authored.semanticExecution.continuationGeneration !== continuation.registration.generation
@@ -2643,6 +2833,35 @@ class SelectedAlignment(Scene):
     window.sharedAuthoringSmoke.callbackSparseReadsAuthoredPromise = null;
   });
 
+  // Existing and provisional structural edits publish with effective writes.
+  // Derive synchronous JSPI cases from each controlled async fixture so their
+  // rollback, local identity, and wrapper binding assertions cannot drift.
+  for (const [fixture, objectCount] of [
+    ["ordinary_callback_membership_atomic", 3],
+    ["ordinary_callback_provisional_geometry", 4],
+    ["ordinary_callback_provisional_path", 2],
+    ["ordinary_mixed_updater_order", 3],
+    ["ordinary_effective_circle_updater", 1],
+    ["ordinary_effective_path_updater", 1],
+    ["ordinary_effective_text_updater", 1],
+    ["ordinary_always_redraw", 2],
+  ]) {
+    const callbackSource = await readFile(
+      path.join(repoRoot, `web/python/examples/${fixture}.py`), "utf8",
+    );
+    assert.equal(callbackSource.split("async def construct(self):").length, 2);
+    assert.equal(callbackSource.split("await self.wait(0.25)").length, 2);
+    const synchronousSource = callbackSource
+      .replace("async def construct(self):", "def construct(self):")
+      .replace("await self.wait(0.25)", "self.wait(0.25)");
+    for (const [mode, source] of [["async", callbackSource], ["sync", synchronousSource]]) {
+      const result = await runCallbackMembershipContinuation(page, source, `scene-${fixture}-${mode}`);
+      assert.equal(result.duration, 0.25, `${fixture} ${mode} duration`);
+      assert.equal(result.metrics.objectCount, objectCount, `${fixture} ${mode} object count`);
+      assert.ok(result.metrics.drawCalls > 0, `${fixture} ${mode} rendered no geometry`);
+    }
+  }
+
   // A normal def construct uses the canonical JSPI continuation when its first
   // supported play reaches the shared Rust segment barrier. Its source promise
   // stays pending while the one endpoint owns the player and presents a frame.
@@ -2660,6 +2879,7 @@ class SelectedAlignment(Scene):
     let execution = null;
     let registration = null;
     let settled = false;
+    const attachment = harness.createExecutionAttachment("synchronous");
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -2672,9 +2892,19 @@ class SelectedAlignment(Scene):
           loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
         });
+        attachment.resolve();
       },
     });
-    authoredPromise.then(() => { settled = true; });
+    authoredPromise.then(() => {
+      settled = true;
+      attachment.reject(new Error("synchronous source returned before execution startup"));
+    }, (error) => {
+      settled = true;
+      attachment.reject(error);
+    });
+    // Allocation precedes worker/renderer startup. Start the live-frame window
+    // only after attachment, while retaining a separate bounded startup failure.
+    await attachment.ready;
 
     let progressed = null;
     for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -2751,6 +2981,7 @@ class SelectedAlignment(Scene):
     document.body.append(canvas);
     let execution = null;
     let registration = null;
+    const attachment = harness.createExecutionAttachment("fade");
     const authoredPromise = harness.authoring.run(source, {}, {
       async onSemanticContinuation(next) {
         if (registration !== null) {
@@ -2763,11 +2994,14 @@ class SelectedAlignment(Scene):
           loopDurationSeconds: Math.max(1, next.duration),
           transportMode: "transferable",
         });
+        attachment.resolve();
       },
     });
-    for (let attempt = 0; attempt < 150 && execution === null; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    authoredPromise.then(
+      () => attachment.reject(new Error("fade source returned before execution startup")),
+      attachment.reject,
+    );
+    await attachment.ready;
     if (execution === null || registration === null) {
       throw new Error("fade source did not register its semantic continuation");
     }
@@ -3439,4 +3673,32 @@ class LateFailure(Scene):
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
+}
+
+// The same compiled-math family programs run through typed direct Rust/WASM
+// and the ordinary Python worker. Existing native-text programs remain unchanged.
+{
+  const { qualifyPairedAuthoring } = await import("./paired-authoring-qualification.mjs");
+  const { disableAuthoringJspi } = await import("./playground-browser-support.mjs");
+  const cases = [];
+  for (const [operation, factory, count] of [
+    ["write", "createDirectMathFamilyWriteSmokeRenderer", 3],
+    ["reveal", "createDirectMathFamilyRevealSmokeRenderer", 4],
+  ]) {
+    const source = (await readFile(path.join(repoRoot, `web/python/examples/ordinary_text_family_${operation}.py`), "utf8"))
+      .replace("from noon import ", "from noon import MathTypst, ")
+      .replace(/Text\("(I|LONG|ONE)"\)/g, "MathTypst('\"$1\"')")
+      .replace("Square(0.6)", "Square(0.6).set_fill(opacity=1)")
+      .replace("    def construct(self):", "    async def construct(self):")
+      .replaceAll("self.play(", "await self.play(")
+      .replaceAll("self.wait(", "await self.wait(");
+    for (const sampleTime of [1, 2.5, 3.25]) {
+      cases.push({ id: `math-family-${operation}-${sampleTime}`, source, factory,
+        playback: "live", duration: 3.25, sampleTime, boundaries: [2, 3],
+        objectCount: sampleTime === 3.25 ? 1 : count });
+    }
+  }
+  await qualifyPairedAuthoring({ cases,
+    artifactDirectory: "browser-smoke-artifacts/shared-math-family",
+    prepareContext: disableAuthoringJspi });
 }

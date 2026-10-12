@@ -45,6 +45,10 @@ pub(crate) struct SegmentCompletionEntry {
     pub property: Property,
     pub track: TrackId,
     pub end_time: f64,
+    /// Keep this execution endpoint authoritative instead of reconciling the track
+    /// back to authored base state at segment completion. Used only for derived/
+    /// presentation state with no authored field to receive the endpoint.
+    pub retain_effective: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -55,10 +59,22 @@ pub(crate) struct ScalarSegmentCompletionEntry {
     pub end_time: f64,
 }
 
+/// Persistent semantic handoff for the bounded flat unequal-family Transform path.
+///
+/// Interpolation padding remains compiler/runtime-local. Completion uses only the
+/// authored source/target family identities to materialize the Manim-aligned source
+/// endpoint before releasing those transient presentation resources.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UnequalFamilyTransformCompletion {
+    pub source: SemanticNodeId,
+    pub target_state: SemanticNodeId,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PendingSegmentCompletionKind {
     pub lifecycle_root: Option<SemanticNodeId>,
     pub lifecycle_removals: Vec<(SemanticNodeId, SemanticNodeId)>,
+    pub family_transform: Option<UnequalFamilyTransformCompletion>,
     pub object_entries: Vec<SegmentCompletionEntry>,
     pub scalar_entries: Vec<ScalarSegmentCompletionEntry>,
 }
@@ -66,8 +82,54 @@ pub(crate) struct PendingSegmentCompletionKind {
 #[derive(Clone, Debug)]
 pub(crate) struct PendingSegmentCompletion {
     pub token: ExecutionSegmentToken,
+    pub end_time: f64,
     pub activation_scene_revision: noon_core::SceneRevision,
     pub kind: PendingSegmentCompletionKind,
+    affected_objects: std::collections::HashSet<SemanticNodeId>,
+}
+
+impl PendingSegmentCompletion {
+    pub(crate) fn new(
+        token: ExecutionSegmentToken,
+        end_time: f64,
+        activation_scene_revision: noon_core::SceneRevision,
+        kind: PendingSegmentCompletionKind,
+    ) -> Self {
+        let affected_objects = kind
+            .object_entries
+            .iter()
+            .map(|entry| entry.semantic_object)
+            .collect();
+        Self {
+            token,
+            end_time,
+            activation_scene_revision,
+            kind,
+            affected_objects,
+        }
+    }
+
+    /// Indexed admission for a local edit beneath an unrelated animation. Structural
+    /// completion requires a separate migration policy; it cannot retire a held target.
+    pub(crate) fn allows_translation_drag(&self, target: SemanticNodeId) -> bool {
+        self.kind.lifecycle_root.is_none()
+            && self.kind.lifecycle_removals.is_empty()
+            && self.kind.family_transform.is_none()
+            && !self.affected_objects.contains(&target)
+    }
+}
+
+/// One exact semantic family replacement to publish at segment completion.
+///
+/// This is continuation metadata, not semantic or execution identity. It is carried
+/// only by the returned segment so the existing completion barrier can publish the
+/// source-family removal and detached target-family admission atomically with driver
+/// reconciliation. Ordinary segments leave it absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExecutionSegmentFamilyReplacement {
+    pub root: SemanticNodeId,
+    pub source: SemanticNodeId,
+    pub target: SemanticNodeId,
 }
 
 /// One authored-time continuation boundary owned by the execution session layer.
@@ -81,6 +143,7 @@ pub struct ExecutionSegment {
     start_time: f64,
     end_time: f64,
     token: Option<ExecutionSegmentToken>,
+    family_replacement: Option<ExecutionSegmentFamilyReplacement>,
 }
 
 impl ExecutionSegment {
@@ -102,6 +165,7 @@ impl ExecutionSegment {
             start_time,
             end_time,
             token: None,
+            family_replacement: None,
         })
     }
 
@@ -110,8 +174,26 @@ impl ExecutionSegment {
         self
     }
 
+    pub(crate) const fn with_family_replacement(
+        mut self,
+        root: SemanticNodeId,
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+    ) -> Self {
+        self.family_replacement = Some(ExecutionSegmentFamilyReplacement {
+            root,
+            source,
+            target,
+        });
+        self
+    }
+
     pub(crate) const fn token(self) -> Option<ExecutionSegmentToken> {
         self.token
+    }
+
+    pub(crate) const fn family_replacement(self) -> Option<ExecutionSegmentFamilyReplacement> {
+        self.family_replacement
     }
 
     pub const fn start_time(self) -> f64 {

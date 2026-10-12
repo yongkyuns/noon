@@ -5,37 +5,63 @@
 pub mod order_index;
 use order_index::{move_order_row, reposition_order_row};
 
+mod compaction;
 mod execution_patch;
+mod glow_attachment;
+mod graph_dependencies;
+pub use compaction::{CompiledSceneCompactionError, CompiledSceneCompactionStats};
+mod replay_revision;
+mod spatial_composition;
+pub use replay_revision::CompiledReplayRevision;
+pub use spatial_composition::{
+    CompiledCairoPathAppearance, CompiledLocalBounds2D64, CompiledWorldBounds3D64,
+};
 mod semantic_lowering;
+use spatial_composition::{CairoPathPointResourceCache, CompiledSpatialAnchorGroup};
 mod transaction_preflight;
 mod transform;
 
 use std::cmp::Ordering;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
-use noon_core::{continuous_time_map_interval, resolve_track_timing};
 use noon_core::{
-    validate_geometry, validate_style, validate_track_definition, validate_transform,
-    CompositionTimeMap, GeometryRef, ObjectId, ObjectStateField, Property, Style, TimelineError,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+    continuous_time_map_interval, resolve_track_timing, RasterImageContentRef, RasterImageResource,
+    RasterImageResourceArena, RasterImageResourceHandle, RasterImageResourceLookup,
+    SemanticImageContent, TextResourceArena,
 };
 use noon_core::{
-    FontFaceIdentity, FontResource, FontResourceHandle, FontResourceKey, FontResourceLookup,
-    GeometryId, GeometryResource, GeometryResourceHandle, GeometryResourceLookup, ObjectContentRef,
-    Rect, RetainedFamilyAnimationPlan, SemanticStore, TextResource, TextResourceHandle,
-    TextResourceLookup,
+    validate_geometry, validate_style, validate_track_definition, validate_transform,
+    CompositionTimeMap, GeometryRef, GraphEdgeId, ObjectId, ObjectStateField, Property, Style,
+    TimelineError, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+    VectorPath,
+};
+use noon_core::{
+    FontFaceIdentity, FontResource, FontResourceArena, FontResourceHandle, FontResourceKey,
+    FontResourceLookup, GeometryId, GeometryResource, GeometryResourceArena,
+    GeometryResourceHandle, GeometryResourceLookup, ObjectContentRef, Rect,
+    RetainedFamilyAnimationPlan, SemanticOrientation, SemanticStore, SemanticTransform,
+    SemanticVec3, TextResource, TextResourceHandle, TextResourceLookup,
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
-pub use execution_patch::{ExecutionMutationTransaction, ExecutionPatch};
+pub use execution_patch::{
+    CompiledGraphDependencyDefinition, CompiledGraphDependencyKind, ExecutionMutationTransaction,
+    ExecutionPatch,
+};
 pub use semantic_lowering::*;
 pub use transform::TransformGeometryPlan;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DynamicProperties {
+    pub glow: bool,
     pub presence: bool,
     pub z_index: bool,
     pub transform: bool,
+    pub world_transform: bool,
+    pub camera_profile: bool,
     pub position: bool,
     pub rotation: bool,
     pub scale: bool,
@@ -51,9 +77,14 @@ pub struct DynamicProperties {
 impl DynamicProperties {
     fn mark(&mut self, property: Property) {
         match property {
+            Property::GlowColor | Property::GlowRadius | Property::GlowIntensity => {
+                self.glow = true
+            }
             Property::Presence => self.presence = true,
             Property::ZIndex => self.z_index = true,
             Property::Transform => self.transform = true,
+            Property::WorldTransform => self.world_transform = true,
+            Property::CameraProfile => self.camera_profile = true,
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
             Property::Scale => self.scale = true,
@@ -68,9 +99,12 @@ impl DynamicProperties {
     }
 
     pub const fn any(self) -> bool {
-        self.presence
+        self.glow
+            || self.presence
             || self.z_index
             || self.transform
+            || self.world_transform
+            || self.camera_profile
             || self.position
             || self.rotation
             || self.scale
@@ -86,11 +120,15 @@ impl DynamicProperties {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledObject {
+    /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
+    pub glow: Option<Arc<CompiledGlow>>,
     pub id: ObjectId,
     pub content: ObjectContentRef,
     /// Immutable local bounds for resource-backed text; geometry bounds remain derived.
     pub text_bounds: Option<Rect>,
     pub base_transform: Transform2D,
+    /// Optional renderer-independent spatial pose and camera declaration.
+    pub spatial: Option<Box<CompiledSpatialState>>,
     pub base_style: Style,
     /// Derived finite painter priority; family traversal breaks equal-priority ties.
     pub base_z_index: f64,
@@ -98,6 +136,99 @@ pub struct CompiledObject {
     /// Whether this stable compiled slot currently contains a live scene object.
     /// Removed objects leave tombstones so unrelated slot numbers never change.
     pub live: bool,
+}
+
+/// One static attachment lowered from the existing generational semantic node.
+/// This is execution data, not a second attachment allocator or mutable scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGlow {
+    pub attachment: noon_core::SemanticNodeId,
+    pub definition: noon_core::Glow,
+}
+
+impl CompiledGlow {
+    /// Ordinary timeline channels owned by one lowered glow attachment.
+    pub const PARAMETER_PROPERTIES: [Property; 3] = [
+        Property::GlowColor,
+        Property::GlowRadius,
+        Property::GlowIntensity,
+    ];
+
+    /// Lower a captured parameter request to ordinary independent timeline values.
+    /// The caller assigns existing TrackIds, timing and composition maps. Capture
+    /// this value from the runtime row at activation, not an earlier authored copy.
+    pub fn parameter_channels(
+        &self,
+        update: noon_core::GlowUpdate,
+    ) -> Result<Vec<(Property, TrackValues)>, noon_core::GlowParameterError> {
+        update.prepare(self.definition)?;
+        let target = update.apply_to(self.definition)?;
+        let count = usize::from(update.color.is_some())
+            + usize::from(update.radius.is_some())
+            + usize::from(update.intensity.is_some());
+        let mut channels = Vec::with_capacity(count);
+        for (requested, property) in [
+            (update.color.is_some(), Property::GlowColor),
+            (update.radius.is_some(), Property::GlowRadius),
+            (update.intensity.is_some(), Property::GlowIntensity),
+        ] {
+            if requested {
+                channels.push((
+                    property,
+                    TrackValues::Glow {
+                        attachment: self.attachment,
+                        from: noon_core::GlowTrackValue::from_definition(property, self.definition)
+                            .expect("glow property"),
+                        to: noon_core::GlowTrackValue::from_definition(property, target)
+                            .expect("glow property"),
+                    },
+                ));
+            }
+        }
+        Ok(channels)
+    }
+}
+
+/// Compact optional 3D state shared by semantic lowering and runtime publication.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledSpatialState {
+    pub world: noon_core::SemanticWorldTransform3D,
+    pub camera_projection: Option<noon_core::SemanticProjection3D>,
+    pub camera_profile: Option<noon_core::ManimCamera3DProfile>,
+    pub camera_motions: Option<std::sync::Arc<[noon_core::CameraAngularMotion]>>,
+    pub material: noon_core::SemanticSpatialMaterial,
+    pub point_light: bool,
+    pub composition_domain: noon_core::SemanticSpatialCompositionDomain,
+    pub draw_kind: CompiledSpatialDrawKind,
+    /// Authoritative semantic family used by FixedOrientation composition or
+    /// CairoPath gradient bounds. Compiler/runtime only; worker payloads carry
+    /// the resolved center/bounds values.
+    pub spatial_anchor_family: Option<noon_core::SemanticNodeId>,
+    /// Effective world-bounds center shared by every row in the anchor family.
+    pub fixed_orientation_center: Option<SemanticVec3>,
+    /// Cold-prepared Cairo path appearance and its current world family bounds.
+    /// Ordinary spatial rows pay only for this optional pointer.
+    pub cairo_path_appearance: Option<Box<CompiledCairoPathAppearance>>,
+}
+
+/// Source geometry class used to route spatial objects without inferring role
+/// from authored metadata. Mesh identity comes from the captured resource type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledSpatialDrawKind {
+    Mesh,
+    Planar,
+}
+
+/// One sparse tracker-to-effective-text execution declaration.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledNumericTextDriver {
+    pub signal: noon_core::SignalId,
+    pub object_index: u32,
+    pub format: noon_core::DecimalFormat,
+    pub font_size: f32,
+    pub point_to_scene_scale: f32,
+    pub token_resources: Arc<[(Arc<str>, noon_core::TextResourceHandle)]>,
 }
 
 impl CompiledObject {
@@ -112,6 +243,8 @@ impl CompiledObject {
             content: content.into(),
             text_bounds: None,
             base_transform,
+            glow: None,
+            spatial: None,
             base_style,
             base_z_index: 0.0,
             dynamic: DynamicProperties::default(),
@@ -131,11 +264,18 @@ impl CompiledObject {
 /// Dependency-closed immutable resources retained by one compiled execution plan.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CompiledResources {
+    images: BTreeMap<RasterImageResourceHandle, Arc<RasterImageResource>>,
     texts: BTreeMap<TextResourceHandle, Arc<TextResource>>,
     fonts: BTreeMap<FontResourceHandle, Arc<FontResource>>,
     font_handles: BTreeMap<FontResourceKey, FontResourceHandle>,
     geometries: BTreeMap<GeometryResourceHandle, GeometryResource>,
     geometry_handles: BTreeMap<GeometryId, GeometryResourceHandle>,
+}
+
+impl RasterImageResourceLookup for CompiledResources {
+    fn get(&self, handle: RasterImageResourceHandle) -> Option<&RasterImageResource> {
+        self.images.get(&handle).map(Arc::as_ref)
+    }
 }
 
 impl TextResourceLookup for CompiledResources {
@@ -168,14 +308,31 @@ impl GeometryResourceLookup for CompiledResources {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompiledResourceError {
+    MissingImage(RasterImageResourceHandle),
+    ImageDimensionsMismatch(RasterImageResourceHandle),
+    ConflictingImage(RasterImageResourceHandle),
     MissingText(TextResourceHandle),
     MissingFont(FontResourceKey),
     MissingGeometry(GeometryResourceHandle),
+    ConflictingText(TextResourceHandle),
+    ConflictingFont(FontResourceHandle),
+    ConflictingGeometry(GeometryResourceHandle),
+    ConflictingGeometryId(GeometryId),
 }
 
 impl std::fmt::Display for CompiledResourceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MissingImage(handle) => {
+                write!(formatter, "missing raster image resource {handle:?}")
+            }
+            Self::ImageDimensionsMismatch(handle) => write!(
+                formatter,
+                "raster image dimensions differ from resource {handle:?}"
+            ),
+            Self::ConflictingImage(handle) => {
+                write!(formatter, "conflicting image payload for {handle:?}")
+            }
             Self::MissingText(handle) => write!(
                 formatter,
                 "missing text resource {}@{}",
@@ -193,13 +350,210 @@ impl std::fmt::Display for CompiledResourceError {
                 handle.id.get(),
                 handle.version
             ),
+            Self::ConflictingText(handle) => {
+                write!(formatter, "conflicting text payload for {handle:?}")
+            }
+            Self::ConflictingFont(handle) => {
+                write!(formatter, "conflicting font payload for {handle:?}")
+            }
+            Self::ConflictingGeometry(handle) => {
+                write!(formatter, "conflicting geometry payload for {handle:?}")
+            }
+            Self::ConflictingGeometryId(id) => {
+                write!(formatter, "conflicting geometry owner for ID {}", id.get())
+            }
         }
     }
 }
 
 impl std::error::Error for CompiledResourceError {}
 
+fn geometry_resources_equal(left: &GeometryResource, right: &GeometryResource) -> bool {
+    match (left, right) {
+        (GeometryResource::VectorPath(left), GeometryResource::VectorPath(right)) => {
+            Arc::ptr_eq(left, right) || left == right
+        }
+        (GeometryResource::Mesh(left), GeometryResource::Mesh(right)) => {
+            Arc::ptr_eq(left, right) || left == right
+        }
+        (GeometryResource::VectorPath(_), GeometryResource::Mesh(_))
+        | (GeometryResource::Mesh(_), GeometryResource::VectorPath(_)) => false,
+    }
+}
+
 impl CompiledResources {
+    pub fn image_count(&self) -> usize {
+        self.images.len()
+    }
+
+    pub(crate) fn capture_image(
+        &mut self,
+        store: &SemanticStore,
+        content: SemanticImageContent,
+    ) -> Result<RasterImageContentRef, CompiledResourceError> {
+        self.capture_image_from_arena(store.raster_image_resources(), content)
+    }
+
+    /// Prepare one immutable image dependency without changing compiled state.
+    /// A producer may drop its source arena after the prepared result owns the
+    /// captured pixels.
+    pub fn capture_image_from_arena(
+        &mut self,
+        source: &RasterImageResourceArena,
+        content: SemanticImageContent,
+    ) -> Result<RasterImageContentRef, CompiledResourceError> {
+        let handle = content.resource();
+        let resource = match self.images.entry(handle) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
+                source
+                    .get_shared(handle)
+                    .ok_or(CompiledResourceError::MissingImage(handle))?,
+            ),
+        };
+        Ok(RasterImageContentRef::from_resource(content, resource))
+    }
+
+    /// Capture one producer-owned immutable text resource and its font/path
+    /// dependency closure. The prepared set owns the payloads after the source
+    /// arenas are dropped; callers decide when to merge it into a compiled plan.
+    pub fn capture_text_from_arenas(
+        &mut self,
+        texts: &TextResourceArena,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+        handle: TextResourceHandle,
+    ) -> Result<Rect, CompiledResourceError> {
+        let resource = texts
+            .get_shared(handle)
+            .ok_or(CompiledResourceError::MissingText(handle))?;
+        self.capture_text_payload(
+            handle,
+            resource,
+            |face| {
+                let key = FontResourceKey::from_face(face);
+                let font_handle = fonts
+                    .handle_for_face(face)
+                    .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
+                let font = fonts
+                    .get_shared(font_handle)
+                    .ok_or(CompiledResourceError::MissingFont(key))?;
+                Ok((font_handle, font))
+            },
+            |geometry| {
+                geometries
+                    .get(geometry)
+                    .cloned()
+                    .ok_or(CompiledResourceError::MissingGeometry(geometry))
+            },
+        )
+    }
+
+    /// Reject a prepared resource closure that would retarget an immutable
+    /// handle already visible through this compiled projection.
+    pub fn preflight_merge(&self, additions: &Self) -> Result<(), CompiledResourceError> {
+        for (handle, resource) in &additions.images {
+            if self.images.get(handle).is_some_and(|existing| {
+                !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
+            }) {
+                return Err(CompiledResourceError::ConflictingImage(*handle));
+            }
+        }
+        for (handle, resource) in &additions.texts {
+            if self.texts.get(handle).is_some_and(|existing| {
+                !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
+            }) {
+                return Err(CompiledResourceError::ConflictingText(*handle));
+            }
+        }
+        for (handle, resource) in &additions.fonts {
+            if self.fonts.get(handle).is_some_and(|existing| {
+                !Arc::ptr_eq(existing, resource) && existing.as_ref() != resource.as_ref()
+            }) {
+                return Err(CompiledResourceError::ConflictingFont(*handle));
+            }
+        }
+        for (handle, resource) in &additions.geometries {
+            if self
+                .geometries
+                .get(handle)
+                .is_some_and(|existing| !geometry_resources_equal(existing, resource))
+            {
+                return Err(CompiledResourceError::ConflictingGeometry(*handle));
+            }
+        }
+        for (face, incoming_handle) in &additions.font_handles {
+            if let Some(existing_handle) = self.font_handles.get(face) {
+                if existing_handle != incoming_handle {
+                    let existing = self.fonts.get(existing_handle);
+                    let incoming = additions.fonts.get(incoming_handle);
+                    if existing
+                        .zip(incoming)
+                        .is_none_or(|(a, b)| !Arc::ptr_eq(a, b) && a.data != b.data)
+                    {
+                        return Err(CompiledResourceError::ConflictingFont(*incoming_handle));
+                    }
+                }
+            }
+        }
+        for (id, incoming_handle) in &additions.geometry_handles {
+            if self
+                .geometry_handles
+                .get(id)
+                .is_some_and(|existing| existing != incoming_handle)
+            {
+                return Err(CompiledResourceError::ConflictingGeometryId(*id));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether merging `additions` would change this dependency projection.
+    /// Call only after `preflight_merge` has ruled out handle conflicts.
+    pub fn contains_all(&self, additions: &Self) -> bool {
+        additions
+            .texts
+            .iter()
+            .all(|(handle, _)| self.texts.contains_key(handle))
+            && additions
+                .fonts
+                .iter()
+                .all(|(handle, _)| self.fonts.contains_key(handle))
+            && additions
+                .font_handles
+                .iter()
+                .all(|(face, handle)| self.font_handles.get(face) == Some(handle))
+            && additions
+                .geometries
+                .iter()
+                .all(|(handle, _)| self.geometries.contains_key(handle))
+            && additions
+                .geometry_handles
+                .iter()
+                .all(|(id, handle)| self.geometry_handles.get(id) == Some(handle))
+            && additions
+                .images
+                .iter()
+                .all(|(handle, _)| self.images.contains_key(handle))
+    }
+
+    /// Prepare one immutable geometry dependency from its producer-owned arena.
+    /// The resource remains sparse until this set is admitted to a compiled or
+    /// runtime-owned resource projection.
+    pub fn capture_geometry_from_arena(
+        &mut self,
+        source: &GeometryResourceArena,
+        handle: GeometryResourceHandle,
+    ) -> Result<(), CompiledResourceError> {
+        let resource = source
+            .get(handle)
+            .cloned()
+            .ok_or(CompiledResourceError::MissingGeometry(handle))?;
+        self.geometry_handles.insert(handle.id, handle);
+        self.geometries.insert(handle, resource);
+        Ok(())
+    }
+
     pub fn text_count(&self) -> usize {
         self.texts.len()
     }
@@ -217,6 +571,7 @@ impl CompiledResources {
     /// Handles are immutable resource identities, so insertion is infallible after
     /// preparation has resolved every dependency against the owning semantic store.
     pub(crate) fn merge(&mut self, additions: Self) {
+        self.images.extend(additions.images);
         self.texts.extend(additions.texts);
         self.fonts.extend(additions.fonts);
         self.font_handles.extend(additions.font_handles);
@@ -236,33 +591,79 @@ impl CompiledResources {
             .text_resources()
             .get_shared(handle)
             .ok_or(CompiledResourceError::MissingText(handle))?;
+        self.capture_text_payload(
+            handle,
+            resource,
+            |face| {
+                let key = FontResourceKey::from_face(face);
+                let font_handle = store
+                    .font_resources()
+                    .handle_for_face(face)
+                    .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
+                let font = store
+                    .font_resources()
+                    .get_shared(font_handle)
+                    .ok_or(CompiledResourceError::MissingFont(key))?;
+                Ok((font_handle, font))
+            },
+            |geometry| {
+                store
+                    .geometry_resources()
+                    .get(geometry)
+                    .cloned()
+                    .ok_or(CompiledResourceError::MissingGeometry(geometry))
+            },
+        )
+    }
 
+    fn capture_text_payload(
+        &mut self,
+        handle: TextResourceHandle,
+        resource: Arc<TextResource>,
+        mut font: impl FnMut(
+            &FontFaceIdentity,
+        )
+            -> Result<(FontResourceHandle, Arc<FontResource>), CompiledResourceError>,
+        mut geometry: impl FnMut(
+            GeometryResourceHandle,
+        ) -> Result<GeometryResource, CompiledResourceError>,
+    ) -> Result<Rect, CompiledResourceError> {
+        if let Some(existing) = self.texts.get(&handle) {
+            if !Arc::ptr_eq(existing, &resource) && existing.as_ref() != resource.as_ref() {
+                return Err(CompiledResourceError::ConflictingText(handle));
+            }
+            return Ok(existing.bounds);
+        }
+
+        let mut additions = Self::default();
         for run in resource.runs.iter() {
             let key = FontResourceKey::from_face(&run.font);
-            let font_handle = store
-                .font_resources()
-                .handle_for_face(&run.font)
-                .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
-            let font = store
-                .font_resources()
-                .get_shared(font_handle)
-                .ok_or_else(|| CompiledResourceError::MissingFont(key.clone()))?;
-            self.font_handles.insert(key, font_handle);
-            self.fonts.insert(font_handle, font);
+            let (font_handle, font_resource) = font(&run.font)?;
+            additions.font_handles.insert(key, font_handle);
+            additions.fonts.insert(font_handle, font_resource);
         }
         for item in resource.vector_items.iter() {
-            let geometry = store
-                .geometry_resources()
-                .get(item.geometry)
-                .cloned()
-                .ok_or(CompiledResourceError::MissingGeometry(item.geometry))?;
-            self.geometry_handles
+            let geometry_resource = geometry(item.geometry)?;
+            if additions
+                .geometry_handles
+                .get(&item.geometry.id)
+                .is_some_and(|existing| *existing != item.geometry)
+            {
+                return Err(CompiledResourceError::ConflictingGeometryId(
+                    item.geometry.id,
+                ));
+            }
+            additions
+                .geometry_handles
                 .insert(item.geometry.id, item.geometry);
-            self.geometries.insert(item.geometry, geometry);
+            additions
+                .geometries
+                .insert(item.geometry, geometry_resource);
         }
-
         let bounds = resource.bounds;
-        self.texts.insert(handle, resource);
+        additions.texts.insert(handle, resource);
+        self.preflight_merge(&additions)?;
+        self.merge(additions);
         Ok(bounds)
     }
 }
@@ -367,6 +768,157 @@ pub struct CompiledTransactionPreflightStats {
     pub staged_compiled_scene_clones: usize,
 }
 
+/// Renderer-neutral endpoint policy for one graph-owned Arrow dependency.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGraphArrowPolicy {
+    buff: f32,
+    tip_length: f32,
+    max_tip_length_to_length_ratio: f32,
+    initial_stroke_width: f32,
+    max_stroke_width_to_length_ratio: f32,
+}
+
+impl CompiledGraphArrowPolicy {
+    pub const fn new(
+        buff: f32,
+        tip_length: f32,
+        max_tip_length_to_length_ratio: f32,
+        initial_stroke_width: f32,
+        max_stroke_width_to_length_ratio: f32,
+    ) -> Self {
+        Self {
+            buff,
+            tip_length,
+            max_tip_length_to_length_ratio,
+            initial_stroke_width,
+            max_stroke_width_to_length_ratio,
+        }
+    }
+
+    pub const fn buff(self) -> f32 {
+        self.buff
+    }
+
+    pub const fn tip_length(self) -> f32 {
+        self.tip_length
+    }
+
+    pub const fn max_tip_length_to_length_ratio(self) -> f32 {
+        self.max_tip_length_to_length_ratio
+    }
+
+    pub const fn initial_stroke_width(self) -> f32 {
+        self.initial_stroke_width
+    }
+
+    pub const fn max_stroke_width_to_length_ratio(self) -> f32 {
+        self.max_stroke_width_to_length_ratio
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CompiledGraphEdgeKind {
+    Line,
+    Arrow {
+        end_tip_index: u32,
+        start_tip_index: Option<u32>,
+        policy: CompiledGraphArrowPolicy,
+    },
+}
+
+/// One graph endpoint dependency lowered into stable compiled object rows.
+///
+/// The rows still contain ordinary geometry/style. This declaration only tells
+/// runtime which effective rows must be recomputed when either vertex moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompiledGraphEdgeDependency {
+    owner: ObjectId,
+    edge: GraphEdgeId,
+    start_vertex_index: u32,
+    end_vertex_index: u32,
+    line_index: u32,
+    kind: CompiledGraphEdgeKind,
+    live: bool,
+}
+
+impl CompiledGraphEdgeDependency {
+    pub const fn new(
+        owner: ObjectId,
+        edge: GraphEdgeId,
+        start_vertex_index: u32,
+        end_vertex_index: u32,
+        line_index: u32,
+        kind: CompiledGraphEdgeKind,
+    ) -> Self {
+        Self {
+            owner,
+            edge,
+            start_vertex_index,
+            end_vertex_index,
+            line_index,
+            kind,
+            live: true,
+        }
+    }
+
+    pub const fn owner(self) -> ObjectId {
+        self.owner
+    }
+
+    pub const fn edge(self) -> GraphEdgeId {
+        self.edge
+    }
+
+    pub const fn is_live(self) -> bool {
+        self.live
+    }
+
+    pub const fn start_vertex_index(self) -> u32 {
+        self.start_vertex_index
+    }
+
+    pub const fn end_vertex_index(self) -> u32 {
+        self.end_vertex_index
+    }
+
+    pub const fn line_index(self) -> u32 {
+        self.line_index
+    }
+
+    pub const fn kind(self) -> CompiledGraphEdgeKind {
+        self.kind
+    }
+}
+
+/// Stable nondegenerate local geometry used by Graph endpoint dependencies.
+///
+/// Semantic rows keep their authored world-space content. The execution plan is
+/// free to specialize those rows, and a fixed local basis lets runtime publish
+/// endpoint motion as transforms even when the authored edge was initially
+/// collapsed. Worker transport consequently retains the ordinary object resource
+/// instead of minting a new effective geometry resource on every frame.
+pub(crate) fn graph_line_execution_content() -> ObjectContentRef {
+    GeometryRef::path(
+        VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0)),
+    )
+    .into()
+}
+
+pub(crate) fn graph_tip_execution_content() -> ObjectContentRef {
+    let [apex, first, second] = noon_geometry::arrow_tip_vertices((1.0, 0.0), (1.0, 0.0), 1.0)
+        .map(|(x, y)| Vec2::new(x as f32, y as f32));
+    GeometryRef::path(
+        VectorPath::new()
+            .move_to(apex)
+            .line_to(first)
+            .line_to(second)
+            .close(),
+    )
+    .into()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledScene {
     // Stable slot storage. Removal tombstones a slot instead of shifting it; re-entry
@@ -390,6 +942,29 @@ pub struct CompiledScene {
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
     family_animation_plans: Vec<RetainedFamilyAnimationPlan>,
     family_animations: Vec<CompiledFamilyAnimationChannel>,
+    /// Sparse graph endpoint dependencies; ordinary scenes allocate no entries.
+    graph_edge_dependencies: Vec<CompiledGraphEdgeDependency>,
+    graph_dependency_indices: HashMap<(ObjectId, GraphEdgeId), u32>,
+    free_graph_dependency_indices: Vec<u32>,
+    graph_owner_dependencies: HashMap<ObjectId, Vec<u32>>,
+    /// Vertex compiled row -> dependency indices. Lookup/iteration is O(degree).
+    graph_incident_dependencies: HashMap<u32, Vec<u32>>,
+    /// Any graph-owned row -> dependency indices that must be re-derived when
+    /// that effective row changes. Includes vertices, designated Lines and tips.
+    graph_dirty_dependencies: HashMap<u32, Vec<u32>>,
+    /// Authored content for only the rows whose executable content is graph-derived.
+    /// Restored when the last graph owner releases a still-live row.
+    graph_authored_content: HashMap<u32, ObjectContentRef>,
+    /// Sparse effective numeric-content drivers. Ordinary scenes allocate none.
+    numeric_text_drivers: Vec<CompiledNumericTextDriver>,
+    /// Sparse shared family-center dependencies. Ordinary scenes allocate none.
+    spatial_anchor_groups: Vec<CompiledSpatialAnchorGroup>,
+    spatial_anchor_group_indices: HashMap<noon_core::SemanticNodeId, u32>,
+    spatial_anchor_row_groups: HashMap<u32, u32>,
+    spatial_anchor_bounds_row_groups: HashMap<u32, Vec<u32>>,
+    spatial_anchor_local_bounds: HashMap<u32, Option<CompiledLocalBounds2D64>>,
+    cairo_path_control_points: HashMap<u32, Arc<Vec<SemanticVec3>>>,
+    cairo_path_points_by_resource: CairoPathPointResourceCache,
     resources: CompiledResources,
 }
 
@@ -506,8 +1081,20 @@ impl std::error::Error for CompileError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
+    InvalidGlowAttachmentChange {
+        object: ObjectId,
+    },
+    InvalidGlowUpdate {
+        object: ObjectId,
+    },
+    ReplaySealed,
     TooManyObjects(usize),
     TooManyFamilyAnimations,
+    TooManyGraphDependencies(usize),
+    DuplicateGraphDependency {
+        owner: ObjectId,
+        edge: GraphEdgeId,
+    },
     InvalidFamilyAnimation,
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
@@ -553,13 +1140,27 @@ pub enum CompilePatchError {
 impl std::fmt::Display for CompilePatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReplaySealed => formatter
+                .write_str("sealed replay is read-only; discard its retention before editing"),
             Self::TooManyObjects(count) => {
                 write!(formatter, "scene contains too many objects: {count}")
             }
             Self::TooManyFamilyAnimations => {
                 formatter.write_str("scene contains too many family animation plans")
             }
-            Self::InvalidZIndex(id) => write!(formatter, "object {} has non-finite z-index", id.get()),
+            Self::TooManyGraphDependencies(count) => write!(
+                formatter,
+                "scene contains too many graph endpoint dependencies: {count}"
+            ),
+            Self::DuplicateGraphDependency { owner, edge } => write!(
+                formatter,
+                "graph dependency owner {} repeats edge {}",
+                owner.get(),
+                edge.get()
+            ),
+            Self::InvalidZIndex(id) => {
+                write!(formatter, "object {} has non-finite z-index", id.get())
+            }
             Self::InvalidFamilyAnimation => {
                 formatter.write_str("invalid family animation plan, timing, or mapping")
             }
@@ -585,6 +1186,14 @@ impl std::fmt::Display for CompilePatchError {
                 "track {} overlaps track {} on its completion channel",
                 track.get(),
                 other.get()
+            ),
+            Self::InvalidGlowAttachmentChange { object } => write!(
+                formatter,
+                "glow attachment change must match the installed generation and replace or remove it for object {}",
+                object.get()
+            ),
+            Self::InvalidGlowUpdate { object } => write!(
+                formatter, "glow value update must preserve the attachment identity, source mode and radius units for object {}", object.get()
             ),
             Self::InvalidObjectState { object, field } => write!(
                 formatter,
@@ -619,7 +1228,9 @@ impl std::fmt::Display for CompilePatchError {
                 "object {} content carries invalid or mismatched text bounds",
                 object.get()
             ),
-            Self::Resource(error) => write!(formatter, "content replacement resource failed: {error}"),
+            Self::Resource(error) => {
+                write!(formatter, "content replacement resource failed: {error}")
+            }
             Self::DiscontinuousPresence { previous, next } => write!(
                 formatter,
                 "presence track {} does not hand off continuously to track {}",
@@ -656,6 +1267,26 @@ impl std::error::Error for CompilePatchError {
 }
 
 impl CompiledScene {
+    fn graph_execution_content_for_row(&self, object_index: u32) -> Option<ObjectContentRef> {
+        for &dependency_index in self.graph_dependencies_for_changed_row(object_index) {
+            let dependency = self.graph_edge_dependencies[dependency_index as usize];
+            if dependency.line_index() == object_index {
+                return Some(graph_line_execution_content());
+            }
+            if let CompiledGraphEdgeKind::Arrow {
+                end_tip_index,
+                start_tip_index,
+                ..
+            } = dependency.kind()
+            {
+                if end_tip_index == object_index || start_tip_index == Some(object_index) {
+                    return Some(graph_tip_execution_content());
+                }
+            }
+        }
+        None
+    }
+
     /// Validate the bounded affine completion policy for newly activated tracks.
     /// Existing and candidate tracks are inspected only in affected channels.
     /// Mapped composition leaves retain the root interval for completion, while
@@ -665,6 +1296,18 @@ impl CompiledScene {
     pub fn preflight_reconcilable_track_additions(
         &self,
         tracks: &[TrackDefinition],
+    ) -> Result<(), CompilePatchError> {
+        self.preflight_reconcilable_track_additions_with_staged_glow(tracks, &BTreeMap::new())
+    }
+
+    /// Validate completion/overlap admission when the *same prepared semantic
+    /// transaction* installs a fresh attachment immediately before its tracks.
+    /// This is not an alternate publication path: the complete patch sequence
+    /// still requires strict compiler/runtime preflight before semantic commit.
+    pub fn preflight_reconcilable_track_additions_with_staged_glow(
+        &self,
+        tracks: &[TrackDefinition],
+        staged_glow: &BTreeMap<ObjectId, CompiledGlow>,
     ) -> Result<(), CompilePatchError> {
         let mut candidates = BTreeMap::<CompiledChannelKey, Vec<&TrackDefinition>>::new();
         for track in tracks {
@@ -682,7 +1325,12 @@ impl CompiledScene {
                         | Property::Appearance
                         | Property::Reveal
                         | Property::Morph
+                        | Property::WorldTransform
+                        | Property::CameraProfile
                         | Property::ZIndex
+                        | Property::GlowColor
+                        | Property::GlowRadius
+                        | Property::GlowIntensity
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -690,6 +1338,15 @@ impl CompiledScene {
             let object_index = self
                 .object_index(track.object)
                 .ok_or(CompilePatchError::UnknownObject(track.object))?;
+            let resident_glow = self.objects[object_index as usize].glow.as_deref();
+            let staged = staged_glow.get(&track.object);
+            if staged.is_some() && resident_glow.is_some() {
+                return Err(CompilePatchError::InvalidGlowAttachmentChange {
+                    object: track.object,
+                });
+            }
+            validate_glow_track_attachment(track, staged.or(resident_glow))
+                .map_err(CompilePatchError::InvalidTrack)?;
             candidates
                 .entry(CompiledChannelKey::new(object_index, track.property))
                 .or_default()
@@ -740,6 +1397,11 @@ impl CompiledScene {
             if !object.base_z_index.is_finite() {
                 return Err(CompileError::InvalidZIndex(object.id));
             }
+            if !valid_compiled_spatial(object.spatial.as_deref()) {
+                return Err(CompileError::InvalidTrack(
+                    noon_core::TimelineError::InvalidWorldTransformValues,
+                ));
+            }
             let index =
                 u32::try_from(index).map_err(|_| CompileError::TooManyObjects(object_count))?;
             if object_indices.insert(object.id, index).is_some() {
@@ -756,6 +1418,13 @@ impl CompiledScene {
                 .get(&track.object)
                 .ok_or(CompileError::UnknownObject(track.object))?;
             validate_track_definition(track).map_err(CompileError::InvalidTrack)?;
+            validate_glow_track(track, &objects[object_index as usize])
+                .map_err(CompileError::InvalidTrack)?;
+            if !valid_track_for_spatial(track, objects[object_index as usize].spatial.as_deref()) {
+                return Err(CompileError::InvalidTrack(
+                    noon_core::TimelineError::InvalidWorldTransformValues,
+                ));
+            }
             reject_geometry_track_on_text(&objects[object_index as usize], track).map_err(
                 |(track, property)| CompileError::GeometryTrackTargetsText { track, property },
             )?;
@@ -766,6 +1435,16 @@ impl CompiledScene {
             );
         }
         sort_tracks(&mut tracks);
+        if camera_world_track_conflict(&tracks).is_some() {
+            return Err(CompileError::InvalidTrack(
+                noon_core::TimelineError::InvalidCameraProfileValues,
+            ));
+        }
+        if camera_motion_track_overlap(&tracks, &objects) {
+            return Err(CompileError::InvalidTrack(
+                noon_core::TimelineError::InvalidCameraProfileValues,
+            ));
+        }
         validate_presence_chains(&tracks)
             .map_err(|(previous, next)| CompileError::DiscontinuousPresence { previous, next })?;
         let track_locators = tracks
@@ -793,7 +1472,7 @@ impl CompiledScene {
         for (rank, &index) in painter_order.iter().enumerate() {
             painter_ranks[index as usize] = Some(rank as u32);
         }
-        Ok(Self {
+        let mut compiled = Self {
             family_order: (0..objects.len() as u32).collect(),
             family_ranks: (0..objects.len() as u32).map(Some).collect(),
             painter_order,
@@ -807,8 +1486,25 @@ impl CompiledScene {
             track_locators,
             family_animation_plans: Vec::new(),
             family_animations: Vec::new(),
+            graph_edge_dependencies: Vec::new(),
+            graph_dependency_indices: HashMap::new(),
+            free_graph_dependency_indices: Vec::new(),
+            graph_owner_dependencies: HashMap::new(),
+            graph_incident_dependencies: HashMap::new(),
+            graph_dirty_dependencies: HashMap::new(),
+            graph_authored_content: HashMap::new(),
+            numeric_text_drivers: Vec::new(),
+            spatial_anchor_groups: Vec::new(),
+            spatial_anchor_group_indices: HashMap::new(),
+            spatial_anchor_row_groups: HashMap::new(),
+            spatial_anchor_bounds_row_groups: HashMap::new(),
+            spatial_anchor_local_bounds: HashMap::new(),
+            cairo_path_control_points: HashMap::new(),
+            cairo_path_points_by_resource: CairoPathPointResourceCache::default(),
             resources: CompiledResources::default(),
-        })
+        };
+        compiled.rebuild_spatial_anchor_groups();
+        Ok(compiled)
     }
 
     /// Stable compiled object slots. Retired slots remain in this slice and have `live == false`.
@@ -818,6 +1514,11 @@ impl CompiledScene {
 
     pub const fn live_object_count(&self) -> usize {
         self.live_object_count
+    }
+
+    /// Retired execution rows retained for same-identity re-entry or replay.
+    pub fn retired_object_slot_count(&self) -> usize {
+        self.retired_object_indices.len()
     }
 
     pub fn painter_order(&self) -> &[u32] {
@@ -887,6 +1588,51 @@ impl CompiledScene {
         &self.family_animations
     }
 
+    pub fn graph_edge_dependencies(&self) -> &[CompiledGraphEdgeDependency] {
+        &self.graph_edge_dependencies
+    }
+
+    pub fn graph_edge_dependency(&self, index: u32) -> Option<CompiledGraphEdgeDependency> {
+        self.graph_edge_dependencies
+            .get(index as usize)
+            .copied()
+            .filter(|dependency| dependency.is_live())
+    }
+
+    pub fn graph_dependencies_for_owner(&self, owner: ObjectId) -> &[u32] {
+        self.graph_owner_dependencies
+            .get(&owner)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn numeric_text_drivers(&self) -> &[CompiledNumericTextDriver] {
+        &self.numeric_text_drivers
+    }
+
+    /// Return only the graph dependencies touching one compiled vertex row.
+    pub fn incident_graph_dependencies(&self, vertex_index: u32) -> &[u32] {
+        self.graph_incident_dependencies
+            .get(&vertex_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Return graph dependencies invalidated by one changed effective row.
+    ///
+    /// Ordinary rows use the shared empty slice. Graph vertices remain O(degree);
+    /// a designated Line or tip normally maps to exactly one dependency.
+    pub fn graph_dependencies_for_changed_row(&self, object_index: u32) -> &[u32] {
+        self.graph_dirty_dependencies
+            .get(&object_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn raster_image_resources(&self) -> &impl RasterImageResourceLookup {
+        &self.resources
+    }
+
     pub fn text_resources(&self) -> &impl TextResourceLookup {
         &self.resources
     }
@@ -905,9 +1651,41 @@ impl CompiledScene {
             .is_some_and(|object| object.live)
     }
 
+    /// Return the retained execution slot for a live or retired object identity.
+    ///
+    /// Structural publication uses this during preflight so a re-entering object
+    /// can stage sparse runtime state against the slot that `CreateObject` will
+    /// reactivate, without scanning or mutating the compiled scene.
+    pub fn retained_object_index(&self, id: ObjectId) -> Option<u32> {
+        self.object_indices
+            .get(&id)
+            .copied()
+            .or_else(|| self.retired_object_indices.get(&id).copied())
+    }
+
     pub fn object_id_at_slot(&self, object_index: u32) -> Option<ObjectId> {
         let object = self.objects.get(object_index as usize)?;
         object.live.then_some(object.id)
+    }
+
+    pub(crate) fn compiled_object_is_mesh(&self, object_index: usize) -> bool {
+        let Some(GeometryRef::External(id)) = self
+            .objects
+            .get(object_index)
+            .and_then(|object| object.content.geometry())
+        else {
+            return false;
+        };
+        self.resources
+            .current_handle(*id)
+            .and_then(|handle| GeometryResourceLookup::get(&self.resources, handle))
+            .is_some_and(|resource| matches!(resource, GeometryResource::Mesh(_)))
+    }
+
+    pub fn object_index_is_live(&self, object_index: u32) -> bool {
+        self.objects
+            .get(object_index as usize)
+            .is_some_and(|object| object.live)
     }
 
     pub fn object_channels(&self, id: ObjectId) -> Vec<CompiledChannelKey> {
@@ -1041,17 +1819,65 @@ impl CompiledScene {
                 text_bounds,
             } => self.object_index(*object).is_none_or(|index| {
                 let existing = &self.objects[index as usize];
-                &existing.content != content || existing.text_bounds != *text_bounds
+                let authored = self
+                    .graph_authored_content
+                    .get(&index)
+                    .unwrap_or(&existing.content);
+                authored != content || existing.text_bounds != *text_bounds
             }),
-            ExecutionPatch::SetTransform { object, transform } => self
-                .object_index(*object)
-                .is_none_or(|index| self.objects[index as usize].base_transform != *transform),
+            ExecutionPatch::SetTransform { object, transform } => {
+                self.object_index(*object).is_none_or(|index| {
+                    self.objects[index as usize].spatial.is_some()
+                        || self.objects[index as usize].base_transform != *transform
+                })
+            }
+            ExecutionPatch::SetSemanticTransform { object, transform } => {
+                self.object_index(*object).is_none_or(|index| {
+                    lower_semantic_transform_patch(
+                        *object,
+                        self.objects[index as usize].spatial.as_deref(),
+                        *transform,
+                    )
+                    .is_none_or(|(base, spatial)| {
+                        self.objects[index as usize].base_transform != base
+                            || self.objects[index as usize].spatial.as_deref() != spatial.as_ref()
+                    })
+                })
+            }
+            ExecutionPatch::SetSpatialState {
+                object,
+                base_transform,
+                spatial,
+            } => self.object_index(*object).is_none_or(|index| {
+                self.objects[index as usize].base_transform != *base_transform
+                    || self.objects[index as usize].spatial.as_deref() != spatial.as_ref()
+            }),
             ExecutionPatch::SetZIndex { object, value } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_z_index != *value),
             ExecutionPatch::SetStyle { object, style } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_style != *style),
+            ExecutionPatch::SetGlow { object, glow } => {
+                self.object_index(*object).is_none_or(|index| {
+                    self.objects[index as usize].glow.as_deref() != Some(glow.as_ref())
+                })
+            }
+            ExecutionPatch::SetGlowAttachment {
+                object,
+                expected,
+                glow,
+            } => {
+                self.object_index(*object).is_none_or(|index| {
+                    // Invalid redundant changes must still reach validation. Only
+                    // the exact absent -> absent case is an idempotent no-op.
+                    let previous = self.objects[index as usize].glow.as_deref();
+                    glow_attachment::validate_change(*object, previous, *expected, glow.as_deref())
+                        .is_err()
+                        || previous.is_some()
+                        || glow.is_some()
+                })
+            }
             ExecutionPatch::ReplaceTrack(track) => self.track(track.id).is_none_or(|existing| {
                 self.object_index(track.object) != Some(existing.object_index)
                     || existing.property != track.property
@@ -1064,6 +1890,22 @@ impl CompiledScene {
                 .is_none_or(|existing| !existing.reconciled),
             ExecutionPatch::ReorderObject { object, before } => {
                 self.painter_reorder_changes(*object, *before)
+            }
+            ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies,
+            } => self.graph_dependencies_patch_changes(*owner, dependencies),
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers {
+                anchor_family,
+                members,
+            } => {
+                let mut next = members
+                    .iter()
+                    .filter_map(|member| self.object_index(*member))
+                    .collect::<Vec<_>>();
+                next.sort_unstable();
+                self.spatial_anchor_group_for_anchor(*anchor_family)
+                    .is_some_and(|group| self.spatial_anchor_group_bounds_members(group) != next)
             }
             ExecutionPatch::CreateObject(_)
             | ExecutionPatch::RemoveObject(_)
@@ -1096,6 +1938,9 @@ impl CompiledScene {
                 object.live = true;
                 if let Some(index) = self.retired_object_indices.remove(&object.id) {
                     self.objects[index as usize] = object;
+                    let spatial = self.objects[index as usize].spatial.as_deref().cloned();
+                    self.update_spatial_anchor_group(index, None, spatial.as_ref());
+                    self.refresh_cairo_path_control_points(index);
                     self.object_indices
                         .insert(self.objects[index as usize].id, index);
                     self.live_object_count += 1;
@@ -1111,6 +1956,9 @@ impl CompiledScene {
                     .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
                 self.object_indices.insert(object.id, index);
                 self.objects.push(object);
+                let spatial = self.objects[index as usize].spatial.as_deref().cloned();
+                self.update_spatial_anchor_group(index, None, spatial.as_ref());
+                self.refresh_cairo_path_control_points(index);
                 self.live_object_count += 1;
                 self.family_order.push(index);
                 self.family_ranks
@@ -1125,6 +1973,9 @@ impl CompiledScene {
                 let index = self
                     .object_index(*id)
                     .ok_or(CompilePatchError::UnknownObject(*id))?;
+                let previous = self.objects[index as usize].spatial.as_deref().cloned();
+                self.update_spatial_anchor_group(index, previous.as_ref(), None);
+                self.graph_authored_content.remove(&index);
                 let channels: Vec<_> = self.channels_for_object_index(index).collect();
                 for channel in channels {
                     if let Some(removed) = self.tracks.remove(&channel) {
@@ -1140,6 +1991,7 @@ impl CompiledScene {
                 debug_assert!(object.live);
                 object.live = false;
                 object.dynamic = DynamicProperties::default();
+                self.refresh_cairo_path_control_points(index);
                 self.object_indices.remove(id);
                 self.retired_object_indices.insert(*id, index);
                 self.live_object_count -= 1;
@@ -1230,15 +2082,130 @@ impl CompiledScene {
                         });
                     }
                 }
-                self.objects[index as usize].content = content.clone();
+                if let Some(derived) = self.graph_execution_content_for_row(index) {
+                    self.graph_authored_content.insert(index, content.clone());
+                    self.objects[index as usize].content = derived;
+                } else {
+                    self.graph_authored_content.remove(&index);
+                    self.objects[index as usize].content = content.clone();
+                }
                 self.objects[index as usize].text_bounds = *text_bounds;
+                self.refresh_cairo_path_control_points(index);
+                let spatial = self.objects[index as usize].spatial.as_deref().cloned();
+                if spatial.as_ref().is_some_and(|spatial| {
+                    spatial.composition_domain
+                        == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
+                }) || self.spatial_anchor_bounds_row_groups.contains_key(&index)
+                {
+                    let bounds = self.spatial_anchor_local_bounds_for(index as usize);
+                    self.spatial_anchor_local_bounds.insert(index, bounds);
+                }
             }
             ExecutionPatch::SetTransform { object, transform } => {
                 let index = self
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
+                if self.objects[index as usize].spatial.is_some() {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: ObjectStateField::Transform,
+                    });
+                }
                 validate_transform(*object, *transform).map_err(map_object_state_error)?;
                 self.objects[index as usize].base_transform = *transform;
+            }
+            ExecutionPatch::SetSemanticTransform { object, transform } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let (base_transform, spatial) = lower_semantic_transform_patch(
+                    *object,
+                    self.objects[index as usize].spatial.as_deref(),
+                    *transform,
+                )
+                .ok_or(CompilePatchError::InvalidObjectState {
+                    object: *object,
+                    field: ObjectStateField::Transform,
+                })?;
+                let previous = self.objects[index as usize].spatial.as_deref().cloned();
+                self.update_spatial_anchor_group(index, previous.as_ref(), spatial.as_ref());
+                self.objects[index as usize].base_transform = base_transform;
+                self.objects[index as usize].spatial = spatial.map(Box::new);
+                self.refresh_cairo_path_control_points(index);
+            }
+            ExecutionPatch::SetSpatialState {
+                object,
+                base_transform,
+                spatial,
+            } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                validate_transform(*object, *base_transform).map_err(map_object_state_error)?;
+                if !valid_compiled_spatial(spatial.as_ref()) {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: ObjectStateField::Transform,
+                    });
+                }
+                let object_is_mesh = self.compiled_object_is_mesh(index as usize);
+                if spatial.as_ref().is_some_and(|spatial| {
+                    (spatial.draw_kind == CompiledSpatialDrawKind::Mesh) != object_is_mesh
+                }) || (object_is_mesh && spatial.is_none())
+                {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: ObjectStateField::Transform,
+                    });
+                }
+                const SPATIAL_CHANNELS: [Property; 15] = [
+                    Property::Presence,
+                    Property::ZIndex,
+                    Property::Transform,
+                    Property::WorldTransform,
+                    Property::CameraProfile,
+                    Property::Position,
+                    Property::Rotation,
+                    Property::Scale,
+                    Property::Fill,
+                    Property::Stroke,
+                    Property::StrokeWidth,
+                    Property::Opacity,
+                    Property::Appearance,
+                    Property::Reveal,
+                    Property::Morph,
+                ];
+                if SPATIAL_CHANNELS.into_iter().any(|property| {
+                    self.channel_tracks(CompiledChannelKey::new(index, property))
+                        .iter()
+                        .any(|track| {
+                            !valid_compiled_track_for_spatial(
+                                track.property,
+                                &track.values,
+                                spatial.as_ref(),
+                            )
+                        })
+                }) {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: ObjectStateField::Transform,
+                    });
+                }
+                let previous = self.objects[index as usize].spatial.as_deref().cloned();
+                self.update_spatial_anchor_group(index, previous.as_ref(), spatial.as_ref());
+                let compiled = &mut self.objects[index as usize];
+                compiled.base_transform = *base_transform;
+                match spatial {
+                    Some(next) => {
+                        if let Some(current) = compiled.spatial.as_deref_mut() {
+                            *current = next.clone();
+                        } else {
+                            compiled.spatial = Some(Box::new(next.clone()));
+                        }
+                    }
+                    None => compiled.spatial = None,
+                }
+                self.refresh_cairo_path_control_points(index);
             }
             ExecutionPatch::SetStyle { object, style } => {
                 let index = self
@@ -1246,6 +2213,43 @@ impl CompiledScene {
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_style(*object, *style).map_err(map_object_state_error)?;
                 self.objects[index as usize].base_style = *style;
+            }
+            ExecutionPatch::SetGlow { object, glow } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                execution_patch::validate_glow_replacement(
+                    *object,
+                    self.objects[index as usize].glow.as_deref(),
+                    glow,
+                )?;
+                self.objects[index as usize].glow = Some(Arc::clone(glow));
+            }
+            ExecutionPatch::SetGlowAttachment {
+                object,
+                expected,
+                glow,
+            } => {
+                self.apply_glow_attachment(*object, *expected, glow.clone(), &mut stats)?;
+            }
+            ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies,
+            } => self.apply_graph_dependencies(*owner, dependencies)?,
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers {
+                anchor_family,
+                members,
+            } => {
+                let indices = members
+                    .iter()
+                    .filter_map(|member| self.object_index(*member))
+                    .collect::<Vec<_>>();
+                if self
+                    .spatial_anchor_group_for_anchor(*anchor_family)
+                    .is_some()
+                {
+                    self.set_spatial_anchor_group_bounds_members(*anchor_family, &indices);
+                }
             }
             ExecutionPatch::AddTrack(track) => {
                 if self.track_locators.contains_key(&track.id) {
@@ -1398,7 +2402,12 @@ impl CompiledScene {
                             | Property::Appearance
                             | Property::Reveal
                             | Property::Morph
+                            | Property::WorldTransform
+                            | Property::CameraProfile
                             | Property::ZIndex
+                            | Property::GlowColor
+                            | Property::GlowRadius
+                            | Property::GlowIntensity
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -1439,6 +2448,16 @@ impl CompiledScene {
             .object_index(track.object)
             .ok_or(CompilePatchError::UnknownObject(track.object))?;
         validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
+        validate_glow_track(track, &self.objects[object_index as usize])
+            .map_err(CompilePatchError::InvalidTrack)?;
+        if !valid_track_for_spatial(
+            track,
+            self.objects[object_index as usize].spatial.as_deref(),
+        ) {
+            return Err(CompilePatchError::InvalidTrack(
+                noon_core::TimelineError::InvalidWorldTransformValues,
+            ));
+        }
         reject_geometry_track_on_text(&self.objects[object_index as usize], track).map_err(
             |(track, property)| CompilePatchError::GeometryTrackTargetsText { track, property },
         )?;
@@ -1552,6 +2571,38 @@ fn reject_geometry_track_on_text(
     Ok(())
 }
 
+pub(crate) fn validate_glow_track(
+    track: &TrackDefinition,
+    object: &CompiledObject,
+) -> Result<(), noon_core::TimelineError> {
+    validate_glow_track_attachment(track, object.glow.as_deref())
+}
+
+pub(crate) fn validate_glow_track_attachment(
+    track: &TrackDefinition,
+    glow: Option<&CompiledGlow>,
+) -> Result<(), noon_core::TimelineError> {
+    if let TrackValues::Glow {
+        attachment,
+        from,
+        to,
+    } = track.values
+    {
+        let Some(glow) = glow.filter(|glow| glow.attachment == attachment) else {
+            return Err(noon_core::TimelineError::InvalidGlowAttachment {
+                object: track.object,
+                attachment,
+            });
+        };
+        if from.update().prepare(glow.definition).is_err()
+            || to.update().prepare(glow.definition).is_err()
+        {
+            return Err(noon_core::TimelineError::InvalidGlowValues(track.property));
+        }
+    }
+    Ok(())
+}
+
 fn compile_track(
     track: &TrackDefinition,
     object_index: u32,
@@ -1619,6 +2670,11 @@ fn validate_execution_content(
             }
             validate_geometry(object, geometry).map_err(map_object_state_error)
         }
+        ObjectContentRef::Image(image) => {
+            (text_bounds.is_none() && image.width() > 0 && image.height() > 0)
+                .then_some(())
+                .ok_or(CompilePatchError::InvalidContentBounds(object))
+        }
         ObjectContentRef::Text(_) => {
             let valid = text_bounds.is_some_and(|bounds| {
                 bounds.min.x.is_finite()
@@ -1642,6 +2698,22 @@ fn validate_execution_content_resource(
     content: &ObjectContentRef,
     text_bounds: Option<Rect>,
 ) -> Result<(), CompilePatchError> {
+    if let ObjectContentRef::Image(image) = content {
+        let handle = image.resource();
+        let resource = RasterImageResourceLookup::get(resources, handle)
+            .or_else(|| {
+                additions.and_then(|resources| RasterImageResourceLookup::get(resources, handle))
+            })
+            .ok_or(CompilePatchError::Resource(
+                CompiledResourceError::MissingImage(handle),
+            ))?;
+        if image.width() != resource.width() || image.height() != resource.height() {
+            return Err(CompilePatchError::Resource(
+                CompiledResourceError::ImageDimensionsMismatch(handle),
+            ));
+        }
+        return Ok(());
+    }
     let ObjectContentRef::Text(handle) = content else {
         return Ok(());
     };
@@ -1669,9 +2741,287 @@ fn validate_z_index(object: ObjectId, value: f64) -> Result<(), CompilePatchErro
 
 fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchError> {
     validate_z_index(object.id, object.base_z_index)?;
+    if !valid_compiled_spatial(object.spatial.as_deref()) {
+        return Err(CompilePatchError::InvalidObjectState {
+            object: object.id,
+            field: ObjectStateField::Transform,
+        });
+    }
     validate_execution_content(object.id, &object.content, object.text_bounds)?;
     validate_transform(object.id, object.base_transform).map_err(map_object_state_error)?;
     validate_style(object.id, object.base_style).map_err(map_object_state_error)
+}
+
+pub(crate) fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> bool {
+    let Some(spatial) = spatial else {
+        return true;
+    };
+    let world = spatial.world;
+    noon_core::SemanticWorldTransform3D::new(world.translation, world.rotation, world.scale)
+        .is_some()
+        && ((!spatial.point_light && spatial.camera_projection.is_none())
+            || spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::World)
+        && (spatial.draw_kind != CompiledSpatialDrawKind::Mesh
+            || spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::World)
+        && (spatial.material != noon_core::SemanticSpatialMaterial::PointLit
+            || spatial.draw_kind == CompiledSpatialDrawKind::Mesh)
+        && (spatial.material != noon_core::SemanticSpatialMaterial::CairoSurface
+            || spatial.draw_kind == CompiledSpatialDrawKind::Mesh)
+        && (spatial.material != noon_core::SemanticSpatialMaterial::CairoPath
+            || (spatial.draw_kind == CompiledSpatialDrawKind::Planar
+                && spatial.composition_domain
+                    == noon_core::SemanticSpatialCompositionDomain::World
+                && spatial
+                    .cairo_path_appearance
+                    .as_deref()
+                    .is_some_and(CompiledCairoPathAppearance::is_valid)))
+        && ((spatial.material == noon_core::SemanticSpatialMaterial::CairoPath)
+            == spatial.cairo_path_appearance.is_some())
+        && ((spatial.composition_domain
+            == noon_core::SemanticSpatialCompositionDomain::FixedOrientation)
+            || (spatial.fixed_orientation_center.is_none()
+                && (spatial.material == noon_core::SemanticSpatialMaterial::CairoPath
+                    || spatial.spatial_anchor_family.is_none())))
+        && spatial.fixed_orientation_center.is_none_or(|center| {
+            center.x.is_finite() && center.y.is_finite() && center.z.is_finite()
+        })
+        && spatial
+            .camera_projection
+            .is_none_or(noon_core::SemanticProjection3D::is_valid)
+        && (spatial.camera_projection.is_none() || world.scale == SemanticVec3::new(1.0, 1.0, 1.0))
+        && (!spatial.point_light || world.scale == SemanticVec3::new(1.0, 1.0, 1.0))
+        && spatial.camera_profile.is_none_or(|profile| {
+            let Some(noon_core::SemanticProjection3D::Perspective { near, far, .. }) =
+                spatial.camera_projection
+            else {
+                return false;
+            };
+            profile.camera(near, far).is_some_and(|camera| {
+                world.scale == SemanticVec3::new(1.0, 1.0, 1.0)
+                    && world.translation == camera.position
+                    && world.rotation == camera.orientation
+                    && spatial.camera_projection == Some(camera.projection)
+            })
+        })
+        && spatial.camera_motions.as_deref().is_none_or(|motions| {
+            noon_core::camera_motion_history_is_valid(motions)
+                && spatial.camera_projection.is_some_and(|projection| {
+                    motions.iter().all(|motion| {
+                        let (near, far) = motion.clips();
+                        let Some(camera) = motion.source().camera(near, far) else {
+                            return false;
+                        };
+                        motion.end().is_some()
+                            || (projection == camera.projection
+                                && spatial.camera_profile == Some(motion.source()))
+                    })
+                })
+        })
+        && (spatial.material != noon_core::SemanticSpatialMaterial::PointLit
+            || [world.scale.x, world.scale.y, world.scale.z]
+                .into_iter()
+                .all(|value| value.is_finite() && value != 0.0))
+}
+
+pub(crate) fn camera_world_track_conflict(tracks: &[CompiledTrack]) -> Option<(TrackId, TrackId)> {
+    for profile in tracks
+        .iter()
+        .filter(|track| track.property == Property::CameraProfile)
+    {
+        let (profile_start, profile_end) =
+            continuous_time_map_interval(profile.timing, &profile.time_map).ok()?;
+        for world in tracks.iter().filter(|track| {
+            track.object_index == profile.object_index && track.property == Property::WorldTransform
+        }) {
+            let (world_start, world_end) =
+                continuous_time_map_interval(world.timing, &world.time_map).ok()?;
+            if profile_start < world_end && world_start < profile_end {
+                return Some((profile.id, world.id));
+            }
+        }
+    }
+    None
+}
+
+fn camera_motion_track_overlap(tracks: &[CompiledTrack], objects: &[CompiledObject]) -> bool {
+    tracks
+        .iter()
+        .filter(|track| {
+            matches!(
+                track.property,
+                Property::CameraProfile | Property::WorldTransform
+            )
+        })
+        .any(|track| {
+            let Some(motions) = objects
+                .get(track.object_index as usize)
+                .and_then(|object| object.spatial.as_deref())
+                .and_then(|spatial| spatial.camera_motions.as_deref())
+            else {
+                return false;
+            };
+            let Ok((track_start, track_end)) =
+                continuous_time_map_interval(track.timing, &track.time_map)
+            else {
+                return true;
+            };
+            motions.iter().any(|motion| {
+                let motion_end = motion.end().unwrap_or(f64::INFINITY);
+                if motion.start() == motion_end {
+                    track_start <= motion.start() && motion.start() <= track_end
+                } else {
+                    track_start < motion_end && motion.start() < track_end
+                }
+            })
+        })
+}
+
+fn valid_track_for_spatial(
+    track: &TrackDefinition,
+    spatial: Option<&CompiledSpatialState>,
+) -> bool {
+    valid_track_values_for_spatial(track.property, &track.values, spatial)
+}
+
+pub(crate) fn valid_compiled_track_for_spatial(
+    property: Property,
+    values: &TrackValues,
+    spatial: Option<&CompiledSpatialState>,
+) -> bool {
+    valid_track_values_for_spatial(property, values, spatial)
+}
+
+fn valid_track_values_for_spatial(
+    property: Property,
+    values: &TrackValues,
+    spatial: Option<&CompiledSpatialState>,
+) -> bool {
+    let Some(spatial) = spatial else {
+        return !matches!(property, Property::WorldTransform | Property::CameraProfile);
+    };
+    if spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::FixedFrame {
+        return !matches!(property, Property::WorldTransform | Property::CameraProfile);
+    }
+    if property == Property::WorldTransform {
+        return valid_world_track_for_spatial(values, Some(spatial));
+    }
+    if property == Property::CameraProfile {
+        return spatial.camera_projection.is_some()
+            && matches!(
+                values,
+                TrackValues::CameraProfile { from, to, near, far }
+                    if from.camera(*near, *far).is_some() && to.camera(*near, *far).is_some()
+            );
+    }
+    if spatial.camera_projection.is_some() {
+        return false;
+    }
+    // Point lights use ordinary color and opacity as color/intensity channels.
+    if spatial.point_light {
+        return matches!(property, Property::Fill | Property::Opacity);
+    }
+    // Meshes require opaque color endpoints. Planar stroke, reveal, appearance,
+    // and opacity effects must fail before activation rather than during drawing.
+    matches!(
+        (&property, values),
+        (
+            Property::Fill,
+            TrackValues::Color { from: Some(from), to: Some(to) }
+        ) if from.alpha == 1.0 && to.alpha == 1.0
+    )
+}
+
+fn valid_world_track_for_spatial(
+    values: &TrackValues,
+    spatial: Option<&CompiledSpatialState>,
+) -> bool {
+    let Some(spatial) = spatial else {
+        return false;
+    };
+    if spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::FixedFrame {
+        return false;
+    }
+    let TrackValues::WorldTransform { from, to } = values else {
+        return false;
+    };
+    let (Some(from), Some(to)) = (from.world(), to.world()) else {
+        return false;
+    };
+    ((spatial.camera_projection.is_none() && !spatial.point_light)
+        || (from.scale == SemanticVec3::new(1.0, 1.0, 1.0)
+            && to.scale == SemanticVec3::new(1.0, 1.0, 1.0)))
+        && (spatial.material != noon_core::SemanticSpatialMaterial::PointLit
+            || [
+                (from.scale.x, to.scale.x),
+                (from.scale.y, to.scale.y),
+                (from.scale.z, to.scale.z),
+            ]
+            .into_iter()
+            .all(|(from, to)| {
+                from != 0.0 && to != 0.0 && from.is_sign_positive() == to.is_sign_positive()
+            }))
+}
+
+fn lower_semantic_transform_patch(
+    object: ObjectId,
+    spatial: Option<&CompiledSpatialState>,
+    transform: SemanticTransform,
+) -> Option<(Transform2D, Option<CompiledSpatialState>)> {
+    if !transform.is_valid() {
+        return None;
+    }
+    if let Some(spatial) = spatial {
+        if spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::FixedFrame {
+            let planar = transform.as_planar()?;
+            let lowered = Transform2D {
+                translation: Vec2::new(planar.translation.x as f32, planar.translation.y as f32),
+                rotation: planar.rotation_z as f32,
+                scale: Vec2::new(planar.scale.x as f32, planar.scale.y as f32),
+            };
+            validate_transform(object, lowered).ok()?;
+            return Some((lowered, Some(spatial.clone())));
+        }
+        if (spatial.camera_projection.is_some() || spatial.point_light)
+            && transform.scale != SemanticVec3::new(1.0, 1.0, 1.0)
+        {
+            return None;
+        }
+        let world = transform.world_transform()?;
+        if spatial.material == noon_core::SemanticSpatialMaterial::PointLit
+            && [world.scale.x, world.scale.y, world.scale.z]
+                .into_iter()
+                .any(|value| value == 0.0)
+        {
+            return None;
+        }
+        return Some((
+            Transform2D::IDENTITY,
+            Some(CompiledSpatialState {
+                world,
+                camera_projection: spatial.camera_projection,
+                camera_profile: None,
+                camera_motions: spatial.camera_motions.clone(),
+                material: spatial.material,
+                point_light: spatial.point_light,
+                composition_domain: spatial.composition_domain,
+                draw_kind: spatial.draw_kind,
+                spatial_anchor_family: spatial.spatial_anchor_family,
+                fixed_orientation_center: spatial.fixed_orientation_center,
+                cairo_path_appearance: spatial.cairo_path_appearance.clone(),
+            }),
+        ));
+    }
+    if matches!(transform.orientation, SemanticOrientation::Spatial(_)) {
+        return None;
+    }
+    let planar = transform.as_planar()?;
+    let lowered = Transform2D {
+        translation: Vec2::new(planar.translation.x as f32, planar.translation.y as f32),
+        rotation: planar.rotation_z as f32,
+        scale: Vec2::new(planar.scale.x as f32, planar.scale.y as f32),
+    };
+    validate_transform(object, lowered).ok()?;
+    Some((lowered, None))
 }
 
 fn track_insertion_position(tracks: &[CompiledTrack], track: &CompiledTrack) -> usize {
@@ -1724,17 +3074,22 @@ const fn property_rank(property: Property) -> u8 {
     match property {
         Property::Presence => 0,
         Property::Transform => 1,
-        Property::Position => 2,
-        Property::Rotation => 3,
-        Property::Scale => 4,
-        Property::Fill => 5,
-        Property::Stroke => 6,
-        Property::StrokeWidth => 7,
-        Property::Opacity => 8,
-        Property::Appearance => 9,
-        Property::Reveal => 10,
-        Property::Morph => 11,
-        Property::ZIndex => 12,
+        Property::WorldTransform => 2,
+        Property::CameraProfile => 3,
+        Property::Position => 4,
+        Property::Rotation => 5,
+        Property::Scale => 6,
+        Property::Fill => 7,
+        Property::Stroke => 8,
+        Property::StrokeWidth => 9,
+        Property::Opacity => 10,
+        Property::Appearance => 11,
+        Property::Reveal => 12,
+        Property::Morph => 13,
+        Property::ZIndex => 14,
+        Property::GlowColor => 15,
+        Property::GlowRadius => 16,
+        Property::GlowIntensity => 17,
     }
 }
 
@@ -2016,6 +3371,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[animated_index].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 presence: false,
                 transform: false,
@@ -2029,6 +3385,8 @@ mod tests {
                 appearance: false,
                 reveal: false,
                 morph: false,
+                world_transform: false,
+                camera_profile: false,
             }
         );
         assert!(!compiled.objects()[static_index].dynamic.any());
@@ -2061,6 +3419,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 scale: true,
                 ..DynamicProperties::default()
@@ -2091,6 +3450,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 stroke_width: true,
                 ..DynamicProperties::default()
@@ -2122,6 +3482,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 appearance: true,
                 ..DynamicProperties::default()
@@ -2156,6 +3517,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 presence: true,
                 ..DynamicProperties::default()
@@ -2375,6 +3737,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                glow: false,
                 z_index: false,
                 presence: false,
                 transform: false,
@@ -2388,6 +3751,8 @@ mod tests {
                 appearance: false,
                 reveal: true,
                 morph: false,
+                world_transform: false,
+                camera_profile: false,
             }
         );
     }
@@ -3078,5 +4443,185 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn camera_world_track_requires_unit_scale_and_spatial_state_is_validated() {
+        let id = noon_core::ObjectId::new(1);
+        let camera = CompiledObject {
+            spatial: Some(Box::new(CompiledSpatialState {
+                world: noon_core::SemanticWorldTransform3D::IDENTITY,
+                camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
+                    vertical_fov_radians: 1.0,
+                    near: 0.1,
+                    far: 100.0,
+                }),
+                camera_profile: None,
+                camera_motions: None,
+                material: noon_core::SemanticSpatialMaterial::Unlit,
+                point_light: false,
+                composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+                draw_kind: CompiledSpatialDrawKind::Planar,
+                spatial_anchor_family: None,
+                fixed_orientation_center: None,
+                cairo_path_appearance: None,
+            })),
+            ..CompiledObject::new(
+                id,
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        };
+        let endpoint = |scale| {
+            noon_core::WorldTransformTrackEndpoint::from_world(
+                noon_core::SemanticWorldTransform3D::new(
+                    noon_core::SemanticVec3::ZERO,
+                    noon_core::SemanticRotation3D::IDENTITY,
+                    scale,
+                )
+                .unwrap(),
+            )
+        };
+        let track = TrackDefinition {
+            id: TrackId::new(1),
+            object: id,
+            property: Property::WorldTransform,
+            values: TrackValues::WorldTransform {
+                from: endpoint(noon_core::SemanticVec3::new(1.0, 1.0, 1.0)),
+                to: endpoint(noon_core::SemanticVec3::new(2.0, 1.0, 1.0)),
+            },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        assert!(matches!(
+            CompiledScene::compile_objects(vec![camera.clone()], std::slice::from_ref(&track)),
+            Err(CompileError::InvalidTrack(
+                noon_core::TimelineError::InvalidWorldTransformValues
+            ))
+        ));
+        let mut compiled = CompiledScene::compile_objects(vec![camera.clone()], &[]).unwrap();
+        assert!(matches!(
+            compiled.apply_execution_patch(&ExecutionPatch::AddTrack(track)),
+            Err(CompilePatchError::InvalidTrack(
+                noon_core::TimelineError::InvalidWorldTransformValues
+            ))
+        ));
+
+        let malformed = CompiledObject {
+            spatial: Some(Box::new(CompiledSpatialState {
+                world: noon_core::SemanticWorldTransform3D::IDENTITY,
+                camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
+                    vertical_fov_radians: 1.0,
+                    near: 2.0,
+                    far: 1.0,
+                }),
+                camera_profile: None,
+                camera_motions: None,
+                material: noon_core::SemanticSpatialMaterial::Unlit,
+                point_light: false,
+                composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+                draw_kind: CompiledSpatialDrawKind::Planar,
+                spatial_anchor_family: None,
+                fixed_orientation_center: None,
+                cairo_path_appearance: None,
+            })),
+            ..camera
+        };
+        assert!(matches!(
+            CompiledScene::compile_objects(vec![malformed], &[]),
+            Err(CompileError::InvalidTrack(
+                noon_core::TimelineError::InvalidWorldTransformValues
+            ))
+        ));
+    }
+
+    #[test]
+    fn cairo_path_material_and_appearance_are_admitted_together() {
+        let state = CompiledSpatialState {
+            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            camera_projection: None,
+            camera_profile: None,
+            camera_motions: None,
+            material: noon_core::SemanticSpatialMaterial::CairoPath,
+            point_light: false,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            draw_kind: CompiledSpatialDrawKind::Planar,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            cairo_path_appearance: Some(Box::new(CompiledCairoPathAppearance {
+                sheen_factor: 0.2,
+                gradient_direction: None,
+                world_family_bounds: None,
+            })),
+        };
+        assert!(valid_compiled_spatial(Some(&state)));
+        let mut orphaned = state.clone();
+        orphaned.material = noon_core::SemanticSpatialMaterial::Unlit;
+        assert!(!valid_compiled_spatial(Some(&orphaned)));
+        let mut missing = state.clone();
+        missing.cairo_path_appearance = None;
+        assert!(!valid_compiled_spatial(Some(&missing)));
+        let mut invalid = state.clone();
+        invalid
+            .cairo_path_appearance
+            .as_deref_mut()
+            .unwrap()
+            .sheen_factor = f64::NAN;
+        assert!(!valid_compiled_spatial(Some(&invalid)));
+        let mut mesh = state;
+        mesh.draw_kind = CompiledSpatialDrawKind::Mesh;
+        assert!(!valid_compiled_spatial(Some(&mesh)));
+    }
+
+    #[test]
+    fn spatial_track_capabilities_preserve_opaque_mesh_color_and_point_light_channels() {
+        let mesh = CompiledSpatialState {
+            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            camera_projection: None,
+            camera_profile: None,
+            camera_motions: None,
+            material: noon_core::SemanticSpatialMaterial::Unlit,
+            point_light: false,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            draw_kind: CompiledSpatialDrawKind::Mesh,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            cairo_path_appearance: None,
+        };
+        let light = CompiledSpatialState {
+            point_light: true,
+            ..mesh.clone()
+        };
+        let track = |property, values| TrackDefinition {
+            id: TrackId::new(1),
+            object: ObjectId::new(1),
+            property,
+            values,
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let opaque_fill = track(
+            Property::Fill,
+            TrackValues::Color {
+                from: Some(noon_core::Color::WHITE),
+                to: Some(noon_core::Color::BLUE),
+            },
+        );
+        assert!(valid_track_for_spatial(&opaque_fill, Some(&mesh)));
+        let translucent_fill = track(
+            Property::Fill,
+            TrackValues::Color {
+                from: Some(noon_core::Color::WHITE),
+                to: Some(noon_core::Color::rgba(0.0, 0.0, 1.0, 0.99)),
+            },
+        );
+        assert!(!valid_track_for_spatial(&translucent_fill, Some(&mesh)));
+        let opacity = track(
+            Property::Opacity,
+            TrackValues::Scalar { from: 1.0, to: 0.0 },
+        );
+        assert!(!valid_track_for_spatial(&opacity, Some(&mesh)));
+        assert!(valid_track_for_spatial(&opacity, Some(&light)));
     }
 }

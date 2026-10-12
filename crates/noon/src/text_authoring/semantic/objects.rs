@@ -1,0 +1,1097 @@
+//! Canonical text authoring in the same semantic store as geometry.
+use super::TextAuthoringError;
+#[cfg(feature = "typst")]
+use super::{MathTypst, Typst};
+#[cfg(feature = "native-text")]
+use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
+#[cfg(feature = "native-text")]
+use noon_core::Vec2;
+#[cfg(feature = "typst")]
+use noon_typst::TypstMode;
+
+#[cfg(feature = "typst")]
+pub(crate) struct TypstAdmission {
+    identity: noon_core::TextCompilationIdentity,
+    resource: noon_core::TextResource,
+    fonts: noon_core::FontResourceArena,
+    geometry: noon_core::GeometryResourceArena,
+    transform: noon_core::SemanticTransform2_5D,
+    style: noon_core::SemanticStyle,
+}
+
+trait CompiledTextAdmission {
+    fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError>;
+}
+
+#[cfg(feature = "typst")]
+impl TypstAdmission {
+    pub(crate) fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError> {
+        let Self {
+            identity,
+            resource,
+            fonts,
+            geometry,
+            transform,
+            style,
+        } = self;
+        store.publish_compiled_detached_text(
+            identity,
+            resource,
+            fonts,
+            &geometry,
+            move |handle| semantic_text_state(handle, transform, style),
+            publish,
+        )
+    }
+}
+
+#[cfg(feature = "native-text")]
+pub(crate) struct NativeTextAdmission {
+    identity: noon_core::TextCompilationIdentity,
+    resource: noon_core::TextResource,
+    fonts: noon_core::FontResourceArena,
+    transform: noon_core::SemanticTransform2_5D,
+    style: noon_core::SemanticStyle,
+}
+
+#[cfg(feature = "native-text")]
+impl NativeTextAdmission {
+    /// Split a native-text admission for a larger atomic publication.
+    ///
+    /// Containers such as `Table` import all shaped resources as one batch and
+    /// create their topology in the same semantic transaction.  Keeping this
+    /// at the text boundary prevents a container from recreating native text
+    /// state (and accidentally losing its presentation contract).
+    pub(crate) fn into_compiled_resource_parts_with_presentation(
+        self,
+    ) -> (
+        noon_core::TextCompilationIdentity,
+        noon_core::TextResource,
+        noon_core::FontResourceArena,
+        noon_core::GeometryResourceArena,
+        noon_core::SemanticTransform2_5D,
+        noon_core::SemanticStyle,
+    ) {
+        (
+            self.identity,
+            self.resource,
+            self.fonts,
+            noon_core::GeometryResourceArena::new(),
+            self.transform,
+            self.style,
+        )
+    }
+    pub(crate) fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError> {
+        let Self {
+            identity,
+            resource,
+            fonts,
+            transform,
+            style,
+        } = self;
+        store.publish_compiled_glyph_detached_text(
+            identity,
+            resource,
+            fonts,
+            move |handle| semantic_text_state(handle, transform, style),
+            publish,
+        )
+    }
+}
+
+#[cfg(feature = "native-text")]
+impl CompiledTextAdmission for NativeTextAdmission {
+    fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError> {
+        NativeTextAdmission::publish(self, store, publish)
+    }
+}
+
+#[cfg(feature = "typst")]
+impl CompiledTextAdmission for TypstAdmission {
+    fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError> {
+        TypstAdmission::publish(self, store, publish)
+    }
+}
+
+#[cfg(feature = "native-text")]
+pub(crate) fn prepare_native_text(text: Text) -> Result<NativeTextAdmission, TextAuthoringError> {
+    let mut transform = text.presentation.transform;
+    transform.scale = transform.scale.component_mul(Vec2::new(
+        NATIVE_POINT_TO_SCENE_SCALE,
+        NATIVE_POINT_TO_SCENE_SCALE,
+    ));
+    let identity = super::super::compiler::native_identity(&text)?;
+    let artifact = text.compile_artifact_with_fill(None)?;
+    let (transform, style) = text_artifact_presentation(
+        transform,
+        text.presentation.color,
+        text.presentation.opacity,
+    )?;
+    Ok(NativeTextAdmission {
+        identity,
+        resource: artifact.resource.as_ref().clone(),
+        fonts: artifact.fonts.as_ref().clone(),
+        transform,
+        style,
+    })
+}
+
+#[cfg(feature = "typst")]
+pub(crate) fn prepare_typst(text: Typst) -> Result<TypstAdmission, TextAuthoringError> {
+    prepare_typst_spec(text.0, TypstMode::Markup)
+}
+
+#[cfg(feature = "typst")]
+pub(crate) fn prepare_math_typst(text: MathTypst) -> Result<TypstAdmission, TextAuthoringError> {
+    prepare_typst_spec(text.0, TypstMode::Math)
+}
+
+impl crate::Scene {
+    /// Shape and atomically admit one detached native text Mobject.
+    #[cfg(feature = "native-text")]
+    pub fn text(&mut self, text: impl Into<Text>) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_text_admission(prepare_native_text(text.into())?)
+    }
+
+    /// Create an ordinary detached Typst Mobject in this scene's shared store.
+    #[cfg(feature = "typst")]
+    pub fn typst(&mut self, text: Typst) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_typst_admission(prepare_typst(text)?)
+    }
+
+    /// Create an ordinary detached MathTypst Mobject in this scene's shared store.
+    #[cfg(feature = "typst")]
+    pub fn math_typst(&mut self, text: MathTypst) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_typst_admission(prepare_math_typst(text)?)
+    }
+}
+
+impl crate::Scene {
+    #[cfg(feature = "native-text")]
+    fn publish_text_admission(
+        &mut self,
+        admission: NativeTextAdmission,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_compiled_text_admission(admission)
+    }
+
+    #[cfg(feature = "typst")]
+    fn publish_typst_admission(
+        &mut self,
+        admission: TypstAdmission,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        self.publish_compiled_text_admission(admission)
+    }
+
+    fn publish_compiled_text_admission<A: CompiledTextAdmission>(
+        &mut self,
+        admission: A,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        let root = self.root();
+        let store_rc = std::rc::Rc::clone(self.integration_store());
+        let result = if let Some(execution) = self.running_execution_mut() {
+            execution
+                .require_resource_creation_at_root(&store_rc.borrow(), root)
+                .map_err(|error| TextAuthoringError::Semantic(error.into()))?;
+            let mut store = store_rc.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(|error| TextAuthoringError::Semantic(error.into()))
+            })?
+        } else {
+            let mut store = store_rc.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map_err(|error| TextAuthoringError::Semantic(error.into()))
+            })?
+        };
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one text admission creates one detached semantic node")
+        };
+        crate::Mobject::from_node(store_rc, *node).map_err(TextAuthoringError::Semantic)
+    }
+}
+
+impl crate::Mobject {
+    /// Shape native text once and return an ordinary detached semantic Mobject.
+    /// Add it to this scene with the same `add` operation used for geometry.
+    #[cfg(feature = "native-text")]
+    pub fn from_text(
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        text: impl Into<Text>,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        let admission = prepare_native_text(text.into())?;
+        let result = {
+            let mut store_ref = store.borrow_mut();
+            admission.publish(&mut store_ref, |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map_err(|error| TextAuthoringError::Semantic(error.into()))
+            })
+        }?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached native text admission creates one semantic node")
+        };
+        crate::Mobject::from_node(store, *node).map_err(TextAuthoringError::Semantic)
+    }
+
+    /// Compile Typst into the shared semantic text resource and return its ordinary semantic handle.
+    #[cfg(feature = "typst")]
+    pub fn from_typst(
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        text: Typst,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        let admission = prepare_typst(text)?;
+        publish_detached_admission(store, admission)
+    }
+
+    /// Compile MathTypst into the shared semantic text resource and return its ordinary semantic handle.
+    #[cfg(feature = "typst")]
+    pub fn from_math_typst(
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        text: MathTypst,
+    ) -> Result<crate::Mobject, TextAuthoringError> {
+        let admission = prepare_math_typst(text)?;
+        publish_detached_admission(store, admission)
+    }
+}
+
+#[cfg(feature = "typst")]
+fn prepare_typst_spec(
+    text: super::TypstSpec,
+    mode: TypstMode,
+) -> Result<TypstAdmission, TextAuthoringError> {
+    if !text.font_size.is_finite() || text.font_size <= 0.0 {
+        return Err(TextAuthoringError::InvalidFontSize(text.font_size));
+    }
+    text.presentation.validate()?;
+    let identity = super::super::compiler::typst_identity(&text, mode);
+    let artifact = text.compile_artifact(mode)?;
+    let (transform, style) = text_artifact_presentation(
+        text.authored_transform(),
+        text.presentation.color,
+        text.presentation.opacity,
+    )?;
+    Ok(TypstAdmission {
+        identity,
+        resource: artifact.resource.as_ref().clone(),
+        fonts: artifact.fonts.as_ref().clone(),
+        geometry: artifact.geometry.as_ref().clone(),
+        transform,
+        style,
+    })
+}
+
+#[cfg(feature = "typst")]
+fn publish_detached_admission<A: CompiledTextAdmission>(
+    store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    admission: A,
+) -> Result<crate::Mobject, TextAuthoringError> {
+    let result = admission.publish(&mut store.borrow_mut(), |store, transaction| {
+        transaction
+            .apply(store)
+            .map_err(|error| TextAuthoringError::Semantic(error.into()))
+    })?;
+    let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+        unreachable!("one text admission creates one detached semantic node")
+    };
+    crate::Mobject::from_node(store, *node).map_err(TextAuthoringError::Semantic)
+}
+
+fn text_artifact_presentation(
+    transform: noon_core::Transform2D,
+    color: noon_core::Color,
+    opacity: f32,
+) -> Result<(noon_core::SemanticTransform2_5D, noon_core::SemanticStyle), TextAuthoringError> {
+    let semantic_transform = noon_core::SemanticTransform2_5D {
+        translation: noon_core::SemanticVec3::new(
+            transform.translation.x as f64,
+            transform.translation.y as f64,
+            0.0,
+        ),
+        scale: noon_core::SemanticVec3::new(
+            transform.scale.x as f64,
+            transform.scale.y as f64,
+            1.0,
+        ),
+        rotation_z: transform.rotation as f64,
+    };
+    if !semantic_transform.translation.is_finite()
+        || !semantic_transform.scale.is_finite()
+        || !semantic_transform.rotation_z.is_finite()
+    {
+        return Err(TextAuthoringError::Semantic(
+            crate::AuthoringError::NonFiniteTransform,
+        ));
+    }
+    let style = noon_core::SemanticStyle {
+        fill: Some(noon_core::SemanticPaint::Solid(color)),
+        fill_opacity: 1.0,
+        stroke: None,
+        stroke_width: 0.0,
+        object_opacity: opacity as f64,
+        ..Default::default()
+    };
+    if !style.is_finite() {
+        return Err(TextAuthoringError::Semantic(
+            crate::AuthoringError::NonFiniteStyle,
+        ));
+    }
+    Ok((semantic_transform, style))
+}
+
+pub(crate) fn semantic_text_state(
+    handle: noon_core::TextResourceHandle,
+    transform: noon_core::SemanticTransform2_5D,
+    style: noon_core::SemanticStyle,
+) -> noon_core::SemanticObjectState {
+    let mut state = noon_core::SemanticObjectState::new(handle);
+    state.transform = transform.into();
+    state.style = style;
+    state
+}
+
+#[cfg(all(
+    test,
+    feature = "native-text",
+    feature = "typst",
+    feature = "bundled-fonts"
+))]
+mod tests {
+    use noon_core::{
+        AnimationOptions, RateFunction, SemanticFadeDirection, SemanticMutationTransaction,
+        SemanticObjectProperty, SemanticVec3, TextResourceLookup,
+    };
+
+    #[test]
+    fn native_text_uses_shared_semantic_identity_bounds_and_live_publication() {
+        let mut scene = crate::Scene::new();
+        let circle = scene.circle(0.5).unwrap();
+        let mut label = scene.text(super::Text::new("Noon")).unwrap();
+        assert!(label.width().unwrap() > 0.0);
+        assert!(label.height().unwrap() > 0.0);
+        assert_ne!(circle.node_id(), label.node_id());
+        label.shift(1.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        scene.add(&label).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        assert_eq!(session.frame().objects.len(), 2);
+        assert!(session.frame().objects[0].geometry().is_some());
+        assert!(session.frame().objects[1].text().is_some());
+        let resource = label.state().unwrap().content.text().unwrap();
+        let before = scene.integration_store().borrow().text_resources().stats();
+        assert!(scene
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .get(resource)
+            .unwrap()
+            .runs
+            .iter()
+            .all(|run| run.fill.is_none()));
+        let mut live = scene.live(&mut session);
+        live.set_translation(&label, 3.0, -1.0).unwrap();
+        assert_eq!(
+            live.effective(&label).unwrap().transform.translation,
+            noon_core::Vec2::new(3.0, -1.0)
+        );
+        assert_eq!(
+            live.authored(&label).unwrap().content.text(),
+            Some(resource)
+        );
+        let mut style = live.authored(&label).unwrap().style;
+        style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::RED));
+        live.replace_style(&label, style).unwrap();
+        assert_eq!(
+            live.effective(&label).unwrap().style.fill,
+            Some(noon_core::RED)
+        );
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            before
+        );
+    }
+
+    #[test]
+    fn scene_owned_text_admission_stays_current_after_execution_install() {
+        let mut scene = crate::Scene::new();
+        let seed = scene.circle(0.25).unwrap();
+        scene.add(&seed).unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        let before = scene.revision();
+        let frame_len = scene.owned_execution().frame().objects.len();
+
+        let label = scene.text(super::Text::new("running native")).unwrap();
+        let typst = scene
+            .typst(super::Typst::new("#text[running Typst]"))
+            .unwrap();
+        let math = scene
+            .math_typst(super::MathTypst::new("x^2 + y^2"))
+            .unwrap();
+
+        assert_eq!(scene.revision().get(), before.get() + 3);
+        assert_eq!(scene.owned_execution().frame().objects.len(), frame_len);
+        for object in [&label, &typst, &math] {
+            assert!(scene
+                .owned_execution()
+                .execution_object_id(object.node_id())
+                .is_none());
+            scene.add(object).unwrap();
+        }
+        assert_eq!(scene.owned_execution().frame().objects.len(), frame_len + 3);
+        assert_eq!(
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision(),
+            scene.revision()
+        );
+    }
+
+    #[test]
+    fn identical_native_objects_share_one_retained_resource_but_not_node_identity() {
+        crate::text_authoring::compiler::clear_text_compiler_cache();
+        let mut scene = crate::Scene::new();
+        let first = scene.text(super::Text::new("shared")).unwrap();
+        let second = scene
+            .text(super::Text::new("shared").color(noon_core::RED))
+            .unwrap();
+        assert_ne!(first.node_id(), second.node_id());
+        assert_eq!(
+            first.state().unwrap().content.text(),
+            second.state().unwrap().content.text(),
+            "presentation state must not duplicate immutable normalized text"
+        );
+        assert_eq!(scene.integration_store().borrow().text_resources().len(), 1);
+        assert_eq!(
+            crate::text_authoring::compiler::text_compiler_diagnostics().successful_compiles,
+            1
+        );
+    }
+
+    #[test]
+    fn unicode_range_paint_is_shared_while_node_presentation_stays_independent() {
+        crate::text_authoring::compiler::clear_text_compiler_cache();
+        let mut scene = crate::Scene::new();
+        let source = "é Noon";
+        let first = scene
+            .text(
+                super::Text::new(source)
+                    .color(noon_core::YELLOW)
+                    .with_text2color([("[0:1]", noon_core::RED)]),
+            )
+            .unwrap();
+        let second = scene
+            .text(
+                super::Text::new(source)
+                    .color(noon_core::BLUE)
+                    .shift(noon_core::Vec2::new(2.0, 0.0))
+                    .with_text2color([("[0:1]", noon_core::RED)]),
+            )
+            .unwrap();
+
+        let handle = first.state().unwrap().content.text().unwrap();
+        assert_eq!(second.state().unwrap().content.text(), Some(handle));
+        let resource = scene
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .get(handle)
+            .unwrap()
+            .clone();
+        assert_eq!(resource.source.as_ref(), source);
+        assert!(resource
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::RED)));
+        assert_eq!(
+            first.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::YELLOW))
+        );
+        assert_eq!(
+            second.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::BLUE))
+        );
+        assert_eq!(scene.integration_store().borrow().text_resources().len(), 1);
+    }
+
+    #[test]
+    fn typst_and_math_typst_use_shared_semantic_text_resources() {
+        let mut scene = crate::Scene::new();
+        let label = scene
+            .typst(
+                super::Typst::new("*Hello* from _Typst!_")
+                    .with_font_size(72.0)
+                    .color(noon_core::YELLOW),
+            )
+            .unwrap();
+        let equation = scene
+            .math_typst(
+                super::MathTypst::new("sum_(k=1)^n k = frac(n(n + 1), 2)").with_font_size(72.0),
+            )
+            .unwrap();
+        let label_resource = label.state().unwrap().content.text().unwrap();
+        let equation_resource = equation.state().unwrap().content.text().unwrap();
+        assert_ne!(label.node_id(), equation.node_id());
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .text_resources()
+                .get(label_resource)
+                .unwrap()
+                .kind,
+            noon_core::TextSourceKind::Typst
+        );
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .text_resources()
+                .get(equation_resource)
+                .unwrap()
+                .kind,
+            noon_core::TextSourceKind::MathTypst
+        );
+        assert_eq!(
+            label.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::YELLOW))
+        );
+
+        scene.add(&label).unwrap();
+        scene.add(&equation).unwrap();
+        let session = scene.execution_session().unwrap();
+        assert_eq!(session.frame().objects.len(), 2);
+        assert_eq!(session.frame().objects[0].text(), Some(label_resource));
+        assert_eq!(session.frame().objects[1].text(), Some(equation_resource));
+    }
+
+    #[test]
+    fn invalid_text_presentation_registers_neither_resources_nor_semantic_nodes() {
+        let mut scene = crate::Scene::new();
+        let before = scene.integration_store().borrow().scene_revision();
+        let resources = scene.integration_store().borrow().text_resources().stats();
+        assert!(scene
+            .text(super::Text::new("Noon").scale(f32::NAN))
+            .is_err());
+        assert!(scene
+            .text(super::Text::new("Noon").color(noon_core::Color::rgba(f32::NAN, 1.0, 1.0, 1.0)))
+            .is_err());
+        assert_eq!(scene.integration_store().borrow().scene_revision(), before);
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            resources
+        );
+    }
+
+    #[test]
+    fn live_text_created_after_an_empty_wait_enters_through_the_same_session() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+
+        let label = {
+            let mut live = scene.live(&mut session);
+            let wait = live.wait_segment(1.0).unwrap();
+            live.advance_segment_to(wait, wait.end_time()).unwrap();
+            live.complete_segment(wait).unwrap();
+            live.create_text(super::Text::new("Late")).unwrap()
+        };
+        let resource = label.state().unwrap().content.text().unwrap();
+        assert_eq!(session.frame().time, 1.0);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+        assert!(session.text_resources().get(resource).is_none());
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            session.publication_context().scene_revision()
+        );
+
+        let fade = {
+            let mut live = scene.live(&mut session);
+            assert!(!live.contains(&label).unwrap());
+            let fade = live
+                .declare_and_activate_fade(
+                    &label,
+                    SemanticFadeDirection::In,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+                .unwrap();
+            assert_eq!(fade.start_time(), 1.0);
+            assert!(live.contains(&label).unwrap());
+            assert_eq!(live.effective(&label).unwrap().appearance, 0.0);
+            fade
+        };
+        assert_eq!(session.frame().objects.len(), 1);
+        assert!(session.text_resources().get(resource).is_some());
+        assert_eq!(session.take_frame_changes().added_indices(), &[0]);
+
+        let mut live = scene.live(&mut session);
+        live.advance_segment_to(fade, fade.end_time()).unwrap();
+        live.complete_segment(fade).unwrap();
+        assert!(live.contains(&label).unwrap());
+        assert_eq!(live.effective(&label).unwrap().appearance, 1.0);
+    }
+
+    #[test]
+    fn invalid_live_text_after_wait_changes_neither_resources_nor_publication() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        {
+            let mut live = scene.live(&mut session);
+            let wait = live.wait_segment(1.0).unwrap();
+            live.advance_segment_to(wait, wait.end_time()).unwrap();
+            live.complete_segment(wait).unwrap();
+        }
+        let revision = scene.integration_store().borrow().scene_revision();
+        let resources = scene.integration_store().borrow().text_resources().stats();
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+
+        {
+            let mut live = scene.live(&mut session);
+            assert!(live
+                .create_text(super::Text::new("invalid scale").scale(f32::NAN))
+                .is_err());
+            assert!(live
+                .create_text(super::Text::new("invalid size").with_font_size(0.0))
+                .is_err());
+        }
+
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            resources
+        );
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn constructor_range_colors_project_paint_before_cold_admission() {
+        let mut scene = crate::Scene::new();
+        let label = scene
+            .text(
+                super::Text::new("Noon blue Noon")
+                    .color(noon_core::WHITE)
+                    .with_text2color([("Noon", noon_core::RED), ("[5:9]", noon_core::BLUE)]),
+            )
+            .unwrap();
+        let resource = label.state().unwrap().content.text().unwrap();
+        let resource = scene
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .get(resource)
+            .unwrap()
+            .clone();
+        assert!(resource
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::RED)));
+        assert!(resource
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::BLUE)));
+        assert_eq!(resource.source.as_ref(), "Noon blue Noon");
+    }
+
+    #[test]
+    fn invalid_constructor_range_colors_publish_nothing_cold_or_live() {
+        let mut scene = crate::Scene::new();
+        let revision = scene.integration_store().borrow().scene_revision();
+        let resources = scene.integration_store().borrow().text_resources().stats();
+        assert!(matches!(
+            scene.text(
+                super::Text::new("abcdef")
+                    .with_text2color([("[1:5]", noon_core::RED), ("[3:]", noon_core::BLUE),])
+            ),
+            Err(super::TextAuthoringError::TextSourceStyle(
+                noon_core::TextSourceStyleError::AmbiguousFillOverlap { .. }
+            ))
+        ));
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            resources
+        );
+
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let publication = session.publication_context();
+        {
+            let mut live = scene.live(&mut session);
+            assert!(matches!(
+                live.create_text(super::Text::new("é").with_source_fills([
+                    noon_core::TextSourceFill::new(
+                        noon_core::TextSourceSpan::new(1, 2),
+                        noon_core::RED,
+                    ),
+                ])),
+                Err(crate::LiveSessionError::Text(
+                    super::TextAuthoringError::TextSourceStyle(
+                        noon_core::TextSourceStyleError::InvalidSourceSpan
+                    )
+                ))
+            ));
+        }
+        assert_eq!(session.publication_context(), publication);
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn constructor_range_colors_treat_the_nonwhite_base_color_as_default() {
+        let mut scene = crate::Scene::new();
+        let label = scene
+            .text(
+                super::Text::new("abcdef")
+                    .color(noon_core::YELLOW)
+                    .with_text2color([("[0:6]", noon_core::YELLOW), ("[1:5]", noon_core::RED)]),
+            )
+            .unwrap();
+        let handle = label.state().unwrap().content.text().unwrap();
+        let resource = scene
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .get(handle)
+            .unwrap()
+            .clone();
+        assert!(resource
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::RED)));
+        assert!(resource.runs.iter().any(|run| run.fill.is_none()));
+    }
+
+    #[test]
+    fn live_constructor_range_colors_admit_and_publish_normally() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let label = {
+            let mut live = scene.live(&mut session);
+            let label = live
+                .create_text(
+                    super::Text::new("live color").with_text2color([("color", noon_core::RED)]),
+                )
+                .unwrap();
+            live.add(&label).unwrap();
+            label
+        };
+        let handle = label.state().unwrap().content.text().unwrap();
+        assert!(session
+            .text_resources()
+            .get(handle)
+            .unwrap()
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::RED)));
+        assert_eq!(session.take_frame_changes().added_indices().len(), 1);
+    }
+
+    #[test]
+    fn live_typst_created_after_an_empty_wait_reuses_the_same_session() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let (label, equation) = {
+            let mut live = scene.live(&mut session);
+            let wait = live.wait_segment(1.0).unwrap();
+            live.advance_segment_to(wait, wait.end_time()).unwrap();
+            live.complete_segment(wait).unwrap();
+            (
+                live.create_typst(super::Typst::new("#text[Late]")).unwrap(),
+                live.create_math_typst(super::MathTypst::new("x^2"))
+                    .unwrap(),
+            )
+        };
+        let label_resource = label.state().unwrap().content.text().unwrap();
+        let equation_resource = equation.state().unwrap().content.text().unwrap();
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+        assert!(session.text_resources().get(label_resource).is_none());
+        assert!(session.text_resources().get(equation_resource).is_none());
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            session.publication_context().scene_revision()
+        );
+
+        {
+            let mut live = scene.live(&mut session);
+            live.add(&label).unwrap();
+            live.add(&equation).unwrap();
+        }
+        assert_eq!(session.frame().objects.len(), 2);
+        assert_eq!(
+            session.text_resources().get(label_resource).unwrap().kind,
+            noon_core::TextSourceKind::Typst
+        );
+        assert_eq!(
+            session
+                .text_resources()
+                .get(equation_resource)
+                .unwrap()
+                .kind,
+            noon_core::TextSourceKind::MathTypst
+        );
+    }
+
+    #[test]
+    fn invalid_live_typst_changes_neither_resources_nor_publication() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let revision = scene.integration_store().borrow().scene_revision();
+        let resources = scene.integration_store().borrow().text_resources().stats();
+        let publication = session.publication_context();
+
+        {
+            let mut live = scene.live(&mut session);
+            assert!(live
+                .create_typst(super::Typst::new("invalid").with_font_size(0.0))
+                .is_err());
+            assert!(live
+                .create_math_typst(
+                    super::MathTypst::new("invalid").color(noon_core::Color::rgba(
+                        f32::NAN,
+                        1.0,
+                        1.0,
+                        1.0
+                    ),)
+                )
+                .is_err());
+        }
+
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            resources
+        );
+        assert_eq!(session.publication_context(), publication);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn live_content_switch_installs_only_preowned_dependencies_and_preserves_other_slots() {
+        let mut scene = crate::Scene::new();
+        let target = scene.circle(0.5).unwrap();
+        let untouched = scene.square(2.0).unwrap();
+        let replacement_geometry = scene.circle(1.5).unwrap();
+        let replacement_text = scene.text(super::Text::new("replacement")).unwrap();
+        let unused_text = scene.text(super::Text::new("not selected")).unwrap();
+        let text_handle = replacement_text.state().unwrap().content.text().unwrap();
+        let unused_handle = unused_text.state().unwrap().content.text().unwrap();
+        scene.add(&target).unwrap();
+        scene.add(&untouched).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let target_slot = session.execution_slot_for_frame_index(0).unwrap();
+        let untouched_before = session.frame().objects[1].clone();
+        assert!(session.text_resources().get(text_handle).is_none());
+        assert!(session.text_resources().get(unused_handle).is_none());
+
+        {
+            let mut live = scene.live(&mut session);
+            live.set_translation(&target, 3.0, -2.0).unwrap();
+            live.replace_content(&target, &replacement_text).unwrap();
+            assert_eq!(
+                live.authored(&target).unwrap().content.text(),
+                Some(text_handle)
+            );
+            assert_eq!(
+                live.effective(&target).unwrap().transform.translation.x,
+                3.0
+            );
+        }
+        assert_eq!(session.execution_slot_for_frame_index(0), Some(target_slot));
+        assert_eq!(session.frame().objects[1], untouched_before);
+        assert_eq!(session.frame().objects[0].text(), Some(text_handle));
+        assert!(session.frame().objects[0].text_bounds.is_some());
+        assert!(session.text_resources().get(text_handle).is_some());
+        assert!(session.text_resources().get(unused_handle).is_none());
+        assert_eq!(session.last_patch_stats().objects_recomputed, 0);
+        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+
+        scene
+            .live(&mut session)
+            .replace_content(&target, &replacement_geometry)
+            .unwrap();
+        assert!(session.frame().objects[0].geometry().is_some());
+        assert!(session.frame().objects[0].text_bounds.is_none());
+        assert_eq!(session.frame().objects[1], untouched_before);
+    }
+
+    #[test]
+    fn detached_text_shrink_admits_only_its_preowned_resource() {
+        let mut scene = crate::Scene::new();
+        let label = scene.text(super::Text::new("Hello World!")).unwrap();
+        let unrelated = scene.text(super::Text::new("not admitted")).unwrap();
+        let label_resource = label.state().unwrap().content.text().unwrap();
+        let unrelated_resource = unrelated.state().unwrap().content.text().unwrap();
+        let semantic_id = label.node_id();
+        let authored = label.state().unwrap();
+        let mut session = scene.execution_session().unwrap();
+
+        assert!(session.text_resources().get(label_resource).is_none());
+        assert!(session.text_resources().get(unrelated_resource).is_none());
+
+        let segment = {
+            let mut live = scene.live(&mut session);
+            let segment = live
+                .declare_and_activate_affine_lifecycle(
+                    &label,
+                    crate::AffineLifecycleDirection::RemoveTo,
+                    crate::AffineLifecycleEndpoint::EffectiveCenter,
+                    AnimationOptions::new().run_time(1.0),
+                )
+                .unwrap();
+
+            assert!(live.contains(&label).unwrap());
+            assert_eq!(label.node_id(), semantic_id);
+            assert_eq!(live.authored(&label).unwrap(), authored);
+            segment
+        };
+        assert_eq!(session.frame().objects.len(), 1);
+        assert_eq!(session.frame().objects[0].text(), Some(label_resource));
+        assert!(session.frame().objects[0].text_bounds.is_some());
+        assert!(session.text_resources().get(label_resource).is_some());
+        assert!(session.text_resources().get(unrelated_resource).is_none());
+
+        let mut live = scene.live(&mut session);
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert!(!live.contains(&label).unwrap());
+        assert_eq!(label.node_id(), semantic_id);
+        assert_eq!(label.state().unwrap(), authored);
+    }
+
+    #[test]
+    fn missing_detached_text_resource_rejects_before_membership_or_runtime_publication() {
+        let scene = crate::Scene::new();
+        let missing_resource = noon_core::TextResourceHandle {
+            arena: u64::MAX,
+            id: noon_core::TextResourceId::new(1),
+            version: 0,
+        };
+        // Construct the malformed detached state directly so the publication
+        // boundary, rather than authoring validation, proves its atomicity.
+        let missing = scene
+            .integration_store()
+            .borrow_mut()
+            .insert_semantic_object(noon_core::SemanticObjectState::new(missing_resource));
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+
+        let result = session.declare_and_activate_affine_lifecycle(
+            &mut scene.integration_store().borrow_mut(),
+            scene.root(),
+            missing,
+            noon_core::SemanticAffineLifecycleDirection::RemoveTo,
+            noon_core::SemanticAffineLifecycleEndpoint {
+                point: SemanticVec3::ZERO,
+                rotation_offset: 0.0,
+                point_color: None,
+            },
+            AnimationOptions::new().run_time(1.0),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(session.publication_context(), before);
+        assert!(!scene
+            .integration_store()
+            .borrow()
+            .is_direct_member(scene.root(), missing)
+            .unwrap());
+        assert!(session.frame().objects.is_empty());
+        assert!(session.text_resources().get(missing_resource).is_none());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn late_foreign_content_failure_rolls_back_earlier_property_and_runtime_publication() {
+        let mut scene = crate::Scene::new();
+        let target = scene.circle(0.5).unwrap();
+        scene.add(&target).unwrap();
+        let foreign = crate::Scene::new()
+            .text(super::Text::new("foreign"))
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let authored_before = target.state().unwrap();
+        let frame_before = session.frame().clone();
+        let publication_before = session.publication_context();
+
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .set_property(
+                target.node_id(),
+                SemanticObjectProperty::Translation,
+                SemanticVec3::new(8.0, 2.0, 0.0),
+            )
+            .replace_content(target.node_id(), foreign.state().unwrap().content);
+        assert!(matches!(
+            scene.live(&mut session).apply(transaction),
+            Err(crate::LiveSessionError::Publication(_))
+        ));
+        assert_eq!(target.state().unwrap(), authored_before);
+        assert_eq!(session.frame(), &frame_before);
+        assert_eq!(session.publication_context(), publication_before);
+        assert!(session.take_frame_changes().is_empty());
+    }
+}

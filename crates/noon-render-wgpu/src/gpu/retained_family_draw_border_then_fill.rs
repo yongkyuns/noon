@@ -1,6 +1,6 @@
 use noon_core::{
     FamilyAnimationMode, ObjectId, RetainedAnimationMember, RetainedFamilyAnimationEvaluationError,
-    RetainedFamilyAnimationLeafFrame, RetainedFamilyAnimationPlan, TextAnimationGlyphRef,
+    RetainedFamilyAnimationLeafFrame, RetainedFamilyAnimationPlan, TextAnimationMemberKind,
 };
 use noon_runtime::{RetainedFamilyFrame, RetainedFamilyFramePlanError};
 
@@ -31,19 +31,20 @@ impl RetainedDrawBorderThenFillPhase {
     }
 }
 
-/// One Text-glyph realization command for DrawBorderThenFill.
+/// One retained glyph or vector realization command for DrawBorderThenFill.
 ///
 /// Glyph identity is renderer-local and derived from the immutable retained Text
 /// resource. It is never added to the semantic family request or execution wire.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RetainedFamilyDrawBorderThenFillMember {
     pub object: ObjectId,
-    pub glyph: TextAnimationGlyphRef,
+    pub member: TextAnimationMemberKind,
     pub phase: RetainedDrawBorderThenFillPhase,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RetainedFamilyDrawBorderThenFillError {
+    UnsupportedImage(ObjectId),
     UnsupportedMode(FamilyAnimationMode),
     UnsupportedGeometry(ObjectId),
     MissingPreparedMember { object: ObjectId, local_member: u32 },
@@ -54,6 +55,9 @@ pub enum RetainedFamilyDrawBorderThenFillError {
 impl std::fmt::Display for RetainedFamilyDrawBorderThenFillError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedImage(object) => {
+                write!(formatter, "image {object:?} cannot use DrawBorderThenFill")
+            }
             Self::UnsupportedMode(mode) => write!(
                 formatter,
                 "family DrawBorderThenFill realization does not support {mode:?}"
@@ -157,12 +161,22 @@ impl Iterator for RetainedFamilyDrawBorderThenFillMembers<'_> {
         };
 
         Some(match member {
+            RetainedAnimationMember::Image => Err(
+                RetainedFamilyDrawBorderThenFillError::UnsupportedImage(object),
+            ),
             RetainedAnimationMember::Geometry => Err(
                 RetainedFamilyDrawBorderThenFillError::UnsupportedGeometry(object),
             ),
+            RetainedAnimationMember::TextVector(vector) => {
+                Ok(RetainedFamilyDrawBorderThenFillMember {
+                    object,
+                    member: TextAnimationMemberKind::Vector(vector),
+                    phase: RetainedDrawBorderThenFillPhase::from_member_progress(progress),
+                })
+            }
             RetainedAnimationMember::Text(member) => Ok(RetainedFamilyDrawBorderThenFillMember {
                 object,
-                glyph: member.glyph,
+                member: TextAnimationMemberKind::Glyph(member),
                 phase: RetainedDrawBorderThenFillPhase::from_member_progress(progress),
             }),
         })
@@ -252,6 +266,8 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Text(text_handle),
@@ -270,6 +286,8 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                glow: None,
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(10),
                 content: ObjectContentRef::Text(text_handle),
@@ -337,13 +355,19 @@ mod tests {
 
         assert_eq!(members.len(), 2);
         assert_eq!(members[0].object, ObjectId::new(10));
-        assert_eq!(members[0].glyph.run_index, 0);
-        assert_eq!(members[0].glyph.glyph_index, 0);
+        let TextAnimationMemberKind::Glyph(first) = members[0].member else {
+            panic!("missing first glyph")
+        };
+        assert_eq!(first.glyph.run_index, 0);
+        assert_eq!(first.glyph.glyph_index, 0);
         assert_eq!(
             members[0].phase,
             RetainedDrawBorderThenFillPhase::Outline { reveal: 0.75 }
         );
-        assert_eq!(members[1].glyph.glyph_index, 1);
+        let TextAnimationMemberKind::Glyph(second) = members[1].member else {
+            panic!("missing second glyph")
+        };
+        assert_eq!(second.glyph.glyph_index, 1);
         assert_eq!(
             members[1].phase,
             RetainedDrawBorderThenFillPhase::Outline { reveal: 0.75 }
@@ -372,6 +396,8 @@ mod tests {
         let family_id = store.insert_family();
         store.add_member(family_id, leaf).unwrap();
         let object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -391,6 +417,8 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                glow: None,
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(20),
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),

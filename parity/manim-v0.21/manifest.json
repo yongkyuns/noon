@@ -11,6 +11,153 @@
   },
   "fixtures": [
     {
+      "id": "math-table",
+      "scene": "MathTableExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "mobject-table",
+      "scene": "MobjectTableExample",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "table-highlights",
+      "scene": "TableHighlightOrder",
+      "source": "parity/manim-v0.21/core-examples/table.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "matrix",
+      "scene": "OrdinaryMatrix",
+      "source": "parity/manim-v0.21/core-examples/matrix.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "bar-chart",
+      "scene": "BarChartExample",
+      "source": "parity/manim-v0.21/core-examples/bar_chart.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "graph",
+      "scene": "GraphExample",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "graph-style",
+      "scene": "GraphStyleExample",
+      "source": "parity/manim-v0.21/core-examples/graph.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "area-helpers",
+      "scene": "RetainedAreaHelpers",
+      "source": "parity/manim-v0.21/core-examples/area_helpers.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "callable-graph-queries",
+      "scene": "CallableGraphQueries",
+      "source": "parity/manim-v0.21/core-examples/graph_queries.py",
+      "expected_duration": 0.2,
+      "notes": "Callable-backed i2gp, creating-axes ownership, current coordinate frames, standalone graph.function and semantic t_min/t_max. Does not qualify default Axes or the full FollowingGraphCamera case."
+    },
+    {
+      "id": "implicit-curves",
+      "scene": "RetainedImplicitCurves",
+      "source": "parity/manim-v0.21/core-examples/implicit_curves.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 2,
+        "max_differing_ratio": 0.006,
+        "max_mean_absolute_channel_error": 0.5
+      }
+    },
+    {
+      "id": "number-plane-grid",
+      "scene": "NumberPlaneGrid",
+      "source": "parity/manim-v0.21/core-examples/number_plane.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 2,
+        "max_differing_ratio": 0.006,
+        "max_mean_absolute_channel_error": 0.5
+      }
+    },
+    {
+      "id": "matching-shapes-reordered",
+      "scene": "MatchingShapesReordered",
+      "source": "parity/manim-v0.21/core-examples/matching_shapes_reordered.py",
+      "expected_duration": 2.2,
+      "sample_times": [
+        0,
+        0.5,
+        1,
+        1.5,
+        2,
+        2.1
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "matching-shapes-duplicate-growth",
+      "scene": "MatchingShapesDuplicateGrowth",
+      "source": "parity/manim-v0.21/core-examples/matching_shapes_duplicates.py",
+      "expected_duration": 2.2,
+      "sample_times": [
+        0,
+        0.5,
+        1,
+        1.5,
+        2,
+        2.1
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "matching-shapes-duplicate-shrink",
+      "scene": "MatchingShapesDuplicateShrink",
+      "source": "parity/manim-v0.21/core-examples/matching_shapes_duplicates.py",
+      "expected_duration": 2.2,
+      "sample_times": [
+        0,
+        0.5,
+        1,
+        1.5,
+        2,
+        2.1
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
       "id": "animated-priority",
       "scene": "OrdinaryAnimatedPriority",
       "source": "parity/manim-v0.21/core-examples/animated_priority.py",
@@ -637,6 +784,19 @@
       "expected_duration": 1.0
     },
     {
+      "id": "zoomed-scene",
+      "scene": "RetainedZoom",
+      "source": "parity/manim-v0.21/core-examples/zoomed_scene.py",
+      "inset_camera_observation": true,
+      "expected_duration": 1.0
+    },
+    {
+      "id": "sample-space",
+      "scene": "SampleSpaceExample",
+      "source": "parity/manim-v0.21/core-examples/sample_space.py",
+      "expected_duration": 0.2
+    },
+    {
       "id": "path-queries",
       "scene": "OrdinaryPathQueries",
       "source": "parity/manim-v0.21/core-examples/path_queries.py",
@@ -657,6 +817,553 @@
         "max_differing_ratio": 0.003,
         "max_mean_absolute_channel_error": 0.1
       }
+    },
+    {
+      "id": "unequal-family-transform-expansion",
+      "scene": "UnequalFamilyTransformExpansion",
+      "source": "parity/manim-v0.21/core-examples/unequal_family_transform.py",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "unequal-family-transform-contraction",
+      "scene": "UnequalFamilyTransformContraction",
+      "source": "parity/manim-v0.21/core-examples/unequal_family_transform.py",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "unequal-family-path-transform-expansion",
+      "scene": "UnequalFamilyPathTransformExpansion",
+      "source": "parity/manim-v0.21/core-examples/unequal_family_path_transform.py",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "markup-text",
+      "scene": "MarkupTextExample",
+      "source": "parity/manim-v0.21/core-examples/markup_text.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo and ManimPango 0.6.1 with unchanged manifest tolerances on WebGPU and WebGL2. CI records fontconfig resolution and font-file hashes in the raster artifacts."
+    },
+    {
+      "id": "text-range-colors",
+      "scene": "TextRangeColors",
+      "source": "parity/manim-v0.21/core-examples/text_range_colors.py",
+      "expected_duration": 0.2,
+      "notes": "Qualified against pinned ManimCE Cairo and ManimPango 0.6.1 with unchanged manifest tolerances on WebGPU and WebGL2. CI records fontconfig resolution and font-file hashes in the raster artifacts."
+    },
+    {
+      "id": "variable",
+      "scene": "VariableExample",
+      "source": "parity/manim-v0.21/core-examples/variable.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "numeric-decimal-number",
+      "scene": "NumericDecimalNumberExample",
+      "source": "parity/manim-v0.21/core-examples/numeric_decimal_number.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "latex-text",
+      "scene": "LatexTextExample",
+      "source": "parity/manim-v0.21/core-examples/latex_text.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
+    },
+    {
+      "id": "spatial-mesh-depth",
+      "scene": "SpatialMeshDepthOracle",
+      "source": "parity/manim-v0.21/spatial_mesh.py",
+      "direct_factory": "createDirectSpatialMeshSmokeRenderer",
+      "expected_duration": 2.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        1.0,
+        1.5,
+        1.9666666666666666
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Source-equivalent pinned Manim 3D depth oracle for the shared typed Rust/WASM mesh scene; not a Python authoring API fixture.",
+      "expected_object_count": 3
+    },
+    {
+      "id": "vector-space-lts-direct",
+      "expected_object_count": 90,
+      "scene": "VectorSpaceLTS",
+      "source": "parity/manim-v0.21/vector_space.py",
+      "direct_factory": "createDirectVectorSpaceSmokeRenderer",
+      "expected_duration": 4.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        1.0,
+        2.5,
+        3.966666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.04
+      },
+      "notes": "Default retained VectorScene/LTS planes and basis arrows, plus one tracked vector, transformed together by the ordinary structural family Transform timeline. Axis-swap matrix has pinned Manim's default path_arc=0. Full-viewport thin-grid Cairo/WGPU antialiasing measured 3.32% differing edge pixels and at most 0.432 mean channel error; the 4% edge budget retains the default 0.5 mean-error limit and adds a strict 0.1% foreground mismatch / 1px neighborhood guard plus numeric Arrow bounds/colors."
+    },
+    {
+      "id": "vector-space-lts-worker",
+      "expected_object_count": 90,
+      "scene": "VectorSpaceLTS",
+      "source": "parity/manim-v0.21/vector_space.py",
+      "noon_source": "web/python/examples/noon_vector_space.py",
+      "expected_duration": 4.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        1.0,
+        2.5,
+        3.966666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.04
+      },
+      "notes": "The same VectorScene/LTS matrix animation through the async Python worker, using Rust-owned matrix path-arc defaults and ordinary shared ApplyMatrix/Transform requests. Shares the direct fixture's measured thin-grid edge budget, unchanged 0.5 mean-error limit, strict foreground coverage guard, and numeric Arrow bounds/colors."
+    },
+    {
+      "scene": "VectorSpaceLTSFeatures",
+      "source": "parity/manim-v0.21/vector_space_features.py",
+      "expected_duration": 1.5,
+      "sample_times": [
+        0.0,
+        0.25,
+        0.5166666666666666,
+        0.75,
+        1.0,
+        1.2666666666666666,
+        1.4666666666666666
+      ],
+      "notes": "Focused native/Python LTS parity for Rust-positioned coordinates, a non-Arrow transformable family, and retained faded ghosts across two matrix transforms. Animated intermediate samples use the materialized 30fps grid relative to each authored quarter-second wait boundary.",
+      "id": "lts-feature-slice-direct",
+      "requires_latex": true,
+      "direct_factory": "createDirectVectorSpaceFeaturesRenderer",
+      "expected_object_count": 15
+    },
+    {
+      "scene": "VectorSpaceLTSFeatures",
+      "source": "parity/manim-v0.21/vector_space_features.py",
+      "expected_duration": 1.5,
+      "sample_times": [
+        0.0,
+        0.25,
+        0.5166666666666666,
+        0.75,
+        1.0,
+        1.2666666666666666,
+        1.4666666666666666
+      ],
+      "notes": "Focused native/Python LTS parity for Rust-positioned coordinates, a non-Arrow transformable family, and retained faded ghosts across two matrix transforms. Animated intermediate samples use the materialized 30fps grid relative to each authored quarter-second wait boundary.",
+      "id": "lts-feature-slice-worker",
+      "requires_latex": true,
+      "noon_source": "web/python/examples/noon_vector_space_features.py",
+      "expected_object_count": 15
+    },
+    {
+      "id": "spatial-camera-labels-direct",
+      "camera_profile_observation": true,
+      "scene": "SpatialCameraLabels",
+      "source": "parity/manim-v0.21/spatial_camera_labels.py",
+      "direct_factory": "createDirectSpatialCameraLabelsSmokeRenderer",
+      "expected_duration": 1.0,
+      "expected_object_count": 7,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Pinned ManimCE 0.21 finite ThreeDCamera profile and three composition domains. This is a representative composition oracle, not glyph-raster parity: Noon uses retained Typst glyph/vector resources while the reference uses Cairo Text/MathTex."
+    },
+    {
+      "id": "spatial-camera-labels-worker",
+      "camera_profile_observation": true,
+      "scene": "SpatialCameraLabels",
+      "source": "parity/manim-v0.21/spatial_camera_labels.py",
+      "noon_source": "web/python/examples/noon_spatial_camera_labels.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 7,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "The same mixed World/FixedOrientation/FixedFrame composition and unwrapped camera-profile track through the async Python worker. Typst is used for retained labels; the pinned source provides a representative Cairo camera/layering oracle, not glyph-shape parity."
+    },
+    {
+      "id": "spatial-three-d-axes-direct",
+      "camera_profile_observation": true,
+      "expected_object_count": 98,
+      "scene": "SpatialThreeDAxes",
+      "source": "parity/manim-v0.21/spatial_three_d_axes.py",
+      "direct_factory": "createDirectSpatialThreeDAxesSmokeRenderer",
+      "expected_duration": 1.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Pinned default Cairo ThreeDAxes with 20 retained shaft pieces per axis, directional sheen and per-axis X/Y/Z color, tick and tip overrides. Retained DejaVu Sans Mono labels, a shared Rust c2p coordinate point and a finite camera-profile track exercise the direct Rust/WASM and Python worker paths. The oracle uses unmodified Manim ThreeDAxes; X has no tip, while Y and Z retain the tip-base shaft endpoint."
+    },
+    {
+      "id": "spatial-three-d-axes-worker",
+      "camera_profile_observation": true,
+      "expected_object_count": 98,
+      "scene": "SpatialThreeDAxes",
+      "source": "parity/manim-v0.21/spatial_three_d_axes.py",
+      "noon_source": "web/python/examples/noon_spatial_three_d_axes.py",
+      "expected_duration": 1.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Pinned default Cairo ThreeDAxes with 20 retained shaft pieces per axis, directional sheen and per-axis X/Y/Z color, tick and tip overrides. Retained DejaVu Sans Mono labels, a shared Rust c2p coordinate point and a finite camera-profile track exercise the direct Rust/WASM and Python worker paths. The oracle uses unmodified Manim ThreeDAxes; X has no tip, while Y and Z retain the tip-base shaft endpoint."
+    },
+    {
+      "id": "spatial-circle-screen-stroke-direct",
+      "camera_profile_observation": true,
+      "expected_object_count": 2,
+      "scene": "SpatialCircleScreenStroke",
+      "source": "parity/manim-v0.21/spatial_three_d_axes_circle_stroke.py",
+      "direct_factory": "createDirectSpatialCircleScreenStrokeSmokeRenderer",
+      "expected_duration": 1.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "A single planar Circle is statically tilted, nonuniformly scaled, and translated before a camera-only move. Its stroke uses Manim's pinned default width; samples qualify the retained stroke at the start, midpoint, and near the camera endpoint."
+    },
+    {
+      "id": "spatial-circle-screen-stroke-worker",
+      "camera_profile_observation": true,
+      "expected_object_count": 2,
+      "scene": "SpatialCircleScreenStroke",
+      "source": "parity/manim-v0.21/spatial_three_d_axes_circle_stroke.py",
+      "noon_source": "web/python/examples/noon_spatial_three_d_axes_circle_stroke.py",
+      "expected_duration": 1.0,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "The Circle reaches its static world pose before a separate camera-only move; the worker uses shared WorldTransformTo and CameraProfileTo operations. The samples do not claim equivalence between Manim pointwise pose interpolation and Rust SRT interpolation."
+    },
+    {
+      "scene": "SpatialSurface",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 2,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "id": "spatial-surface-direct",
+      "direct_factory": "createDirectSpatialSurfaceSmokeRenderer",
+      "notes": "Shared native/direct-WASM indexed UV surface with world rotation, compared with an explicitly opaque unlit pinned Manim surface; native mesh profile, not default Surface-class parity. Uses the existing 3D mesh raster policy: Cairo antialiases each UV cell boundary, while the immutable indexed mesh has continuous shared edges. This is not cell-seam raster parity.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      }
+    },
+    {
+      "scene": "SpatialSurface",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 2,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "id": "spatial-surface-worker",
+      "noon_source": "web/python/examples/noon_spatial_surface.py",
+      "notes": "The same native-profile surface and world intent through the actual Python authoring worker, retained resource bridge and existing renderer. Reference shading/checkerboard/transparency are explicitly disabled. Uses the existing 3D mesh raster policy: Cairo antialiases each UV cell boundary, while the immutable indexed mesh has continuous shared edges. This is not cell-seam raster parity.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      }
+    },
+    {
+      "scene": "CairoSpatialSurface",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 0.0,
+      "expected_object_count": 65,
+      "sample_times": [
+        0.0
+      ],
+      "id": "spatial-surface-cairo-direct",
+      "direct_factory": "createDirectSpatialSurfaceCairoSmokeRenderer",
+      "notes": "Static Cairo Surface appearance case: default checkerboard, opaque fill, 0.5-pixel border and shade_in_3d=True for F(u,v)=(u,v,0.35*(u\u00b2+v\u00b2)) over [-1,1]\u00b2 at 8\u00d78 resolution. Zero authored duration, compared against an independently captured terminal Cairo PNG; motion and broader Cairo behavior require separate qualification.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      }
+    },
+    {
+      "scene": "CairoSpatialSurface",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 0.0,
+      "expected_object_count": 65,
+      "sample_times": [
+        0.0
+      ],
+      "id": "spatial-surface-cairo-worker",
+      "noon_source": "web/python/examples/noon_spatial_surface.py",
+      "notes": "Static Cairo Surface appearance case: default checkerboard, opaque fill, 0.5-pixel border and shade_in_3d=True for F(u,v)=(u,v,0.35*(u\u00b2+v\u00b2)) over [-1,1]\u00b2 at 8\u00d78 resolution. Zero authored duration, compared against an independently captured terminal Cairo PNG; motion and broader Cairo behavior require separate qualification.",
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      }
+    },
+    {
+      "id": "spatial-surface-sphere-torus-direct",
+      "camera_profile_observation": true,
+      "scene": "CairoSphereTorus",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 865,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "direct_factory": "createDirectSpatialSurfaceSphereTorusSmokeRenderer",
+      "notes": "Pinned default-resolution Sphere and Torus use the same Cairo Surface callbacks, checkerboard, stroke, and shading under a one-second moving camera. The separate native/direct lane comparison bounds this initial paired surface-solids capability."
+    },
+    {
+      "id": "spatial-surface-sphere-torus-worker",
+      "camera_profile_observation": true,
+      "scene": "CairoSphereTorus",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 865,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "noon_source": "web/python/examples/noon_spatial_surface.py",
+      "notes": "The same default Sphere/Torus constructors and camera profile run through the Python worker; both shapes retain Manim Surface default shading, checkerboard, and stroke."
+    },
+    {
+      "id": "spatial-surface-cone-bodies-direct",
+      "scene": "CairoConeBodies",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "expected_duration": 0.0,
+      "expected_object_count": 2049,
+      "sample_times": [
+        0.0
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "direct_factory": "createDirectSpatialSurfaceConeBodiesSmokeRenderer",
+      "notes": "Static paired Cairo Surface-family Cone bodies: pinned 32x32 default Cone plus a tilted u_min=0.2 partial body, both with the default opaque fill, Surface border and Cairo shading."
+    },
+    {
+      "id": "spatial-surface-cone-bodies-worker",
+      "scene": "CairoConeBodies",
+      "source": "parity/manim-v0.21/spatial_surface.py",
+      "noon_source": "web/python/examples/noon_spatial_surface.py",
+      "expected_duration": 0.0,
+      "expected_object_count": 2049,
+      "sample_times": [
+        0.0
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Python worker counterpart of the static default and tilted partial Cairo-shaded Cone body families."
+    },
+    {
+      "id": "spatial-primitives-direct",
+      "scene": "SpatialPrimitives",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "direct_factory": "createDirectSpatialPrimitivesSmokeRenderer",
+      "expected_duration": 1.0,
+      "expected_object_count": 14,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Native and direct-WASM ordinary Scene publication of the bounded Line3D tube, explicit triangle, separate six-face unshaded Prism family at 0.75 fill opacity, oriented open/closed Cylinder/Cone meshes, and a bounded partial Sphere patch, matched to the pinned Manim source using the existing spatial mesh raster tolerance."
+    },
+    {
+      "id": "spatial-primitives-worker",
+      "scene": "SpatialPrimitives",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "noon_source": "web/python/examples/noon_spatial_primitives.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 14,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "The same Line3D, explicit triangle, separate six-face unshaded 0.75-opacity Prism family, and oriented open/closed Cylinder/Cone scene through the actual async Python worker, retained geometry bridge, and existing renderer; all line mesh defaults that affect geometry/material are set explicitly."
+    },
+    {
+      "id": "spatial-cairo-cube-prism-direct",
+      "camera_profile_observation": true,
+      "scene": "SpatialCairoCubePrism",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "direct_factory": "createDirectSpatialCairoCubePrismSmokeRenderer",
+      "expected_duration": 1.0,
+      "expected_object_count": 13,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "Separate nonintersecting six-face Cube and Prism families retain pinned default Cairo 3D shading and 0.75 opacity while the camera moves."
+    },
+    {
+      "id": "spatial-cairo-cube-prism-worker",
+      "camera_profile_observation": true,
+      "scene": "SpatialCairoCubePrism",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "noon_source": "web/python/examples/noon_spatial_primitives.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 13,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "The same default Cube and Prism face shading, 0.75 opacity, placements, and camera profile are authored through the actual Python worker."
+    },
+    {
+      "id": "spatial-cairo-cylinder-cone-caps-direct",
+      "camera_profile_observation": true,
+      "scene": "SpatialCairoCylinderConeCaps",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "direct_factory": "createDirectSpatialCairoCylinderConeCapsSmokeRenderer",
+      "expected_duration": 1.0,
+      "expected_object_count": 710,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "A no-argument pinned Cylinder preserves default 24x24 BLUE_D Cairo body and two shaded ends; an 8x8 arbitrary-axis Cylinder and 8x8 show_base Cone exercise direction transforms and the unshaded optional base during camera motion."
+    },
+    {
+      "id": "spatial-cairo-cylinder-cone-caps-worker",
+      "camera_profile_observation": true,
+      "scene": "SpatialCairoCylinderConeCaps",
+      "source": "parity/manim-v0.21/spatial_primitives.py",
+      "noon_source": "web/python/examples/noon_spatial_primitives.py",
+      "expected_duration": 1.0,
+      "expected_object_count": 710,
+      "sample_times": [
+        0.0,
+        0.5,
+        0.9666666666666667
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 3,
+        "max_differing_ratio": 0.02,
+        "max_mean_absolute_channel_error": 1.5
+      },
+      "notes": "The actual Python worker uses matching default Cylinder, arbitrary direction, show_base=True Cone, placements, and camera profile."
+    },
+    {
+      "id": "mathtex-substrings",
+      "scene": "MathTexSubstrings",
+      "source": "parity/manim-v0.21/core-examples/mathtex_substrings.py",
+      "expected_duration": 0.2,
+      "requires_latex": true,
+      "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     }
   ],
   "sample_fractions": [

@@ -11,14 +11,24 @@ fn transform_layout_point(transform: SemanticTransform2_5D, point: Vec2) -> (f64
     transform_layout_xy(transform, f64::from(point.x), f64::from(point.y))
 }
 pub(super) fn transform_layout_xy(transform: SemanticTransform2_5D, x: f64, y: f64) -> (f64, f64) {
-    let x = x * transform.scale.x;
-    let y = y * transform.scale.y;
-    let sine = transform.rotation_z.sin();
-    let cosine = transform.rotation_z.cos();
-    (
-        x * cosine - y * sine + transform.translation.x,
-        x * sine + y * cosine + transform.translation.y,
-    )
+    transform.transform_xy(x, y)
+}
+
+/// Bounds of a retained text rectangle under the shared semantic transform.
+pub(crate) fn transformed_rect_layout_bounds(
+    local: noon_core::Rect,
+    transform: SemanticTransform2_5D,
+) -> Bounds2D64 {
+    let mut bounds = None;
+    for point in [
+        local.min,
+        Vec2::new(local.min.x, local.max.y),
+        Vec2::new(local.max.x, local.min.y),
+        local.max,
+    ] {
+        include_layout_point(&mut bounds, transform_layout_point(transform, point));
+    }
+    bounds.expect("a rectangle has four corners")
 }
 
 fn canonical_circle_layout_bounds(
@@ -62,7 +72,7 @@ fn canonical_circle_layout_bounds(
 }
 // Manim dimensions bound cubic control points; centers and edges bound anchors.
 // These are layout bounds; runtime visibility continues using geometric bounds.
-fn transformed_path_layout_bounds(
+pub(crate) fn transformed_path_layout_bounds(
     path: &VectorPath,
     transform: SemanticTransform2_5D,
     include_handles: bool,
@@ -212,22 +222,31 @@ fn measure_content(
 ) -> Result<Option<Bounds2D64>, AuthoringError> {
     let geometry = match content {
         SemanticObjectContent::Geometry(geometry) => geometry,
+        SemanticObjectContent::Image(image) => {
+            let resource = store
+                .raster_image_resources()
+                .get(image.resource())
+                .ok_or(AuthoringError::MissingImageResource(image.resource()))?;
+            let half_x = f64::from(resource.width()) * 0.5;
+            let half_y = f64::from(resource.height()) * 0.5;
+            let mut bounds = None;
+            for (x, y) in [
+                (-half_x, -half_y),
+                (-half_x, half_y),
+                (half_x, -half_y),
+                (half_x, half_y),
+            ] {
+                include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
+            }
+            return Ok(bounds);
+        }
         SemanticObjectContent::Text(handle) => {
             let local = store
                 .text_resources()
                 .get(handle)
                 .ok_or(AuthoringError::MissingTextResource(handle))?
                 .bounds;
-            let mut bounds = None;
-            for point in [
-                local.min,
-                Vec2::new(local.min.x, local.max.y),
-                local.max,
-                Vec2::new(local.max.x, local.min.y),
-            ] {
-                include_layout_point(&mut bounds, transform_layout_point(transform, point));
-            }
-            return Ok(bounds);
+            return Ok(Some(transformed_rect_layout_bounds(local, transform)));
         }
     };
     Ok(match geometry {
@@ -250,6 +269,35 @@ fn measure_content(
             GeometryResource::VectorPath(path) => {
                 transformed_path_layout_bounds(path, transform, include_handles)
             }
+            GeometryResource::Mesh(_) => {
+                return Err(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::SpatialMeshBounds2D,
+                ));
+            }
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transformed_text_rectangle_preserves_offset_rotation_and_reflection() {
+        let rect = noon_core::Rect::new(Vec2::new(-1.0, 2.0), Vec2::new(3.0, 5.0));
+        let transform = SemanticTransform2_5D {
+            translation: noon_core::SemanticVec3::new(7.0, -4.0, 0.0),
+            scale: noon_core::SemanticVec3::new(-2.0, 3.0, 1.0),
+            rotation_z: std::f64::consts::FRAC_PI_2,
+        };
+        let bounds = transformed_rect_layout_bounds(rect, transform);
+        for (actual, expected) in [
+            (bounds.min_x, -8.0),
+            (bounds.max_x, 1.0),
+            (bounds.min_y, -10.0),
+            (bounds.max_y, -2.0),
+        ] {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
 }

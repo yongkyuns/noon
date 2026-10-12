@@ -1,3 +1,6 @@
+mod effect_snapshot;
+pub use effect_snapshot::*;
+
 use crate::{
     AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
     SemanticSceneOperationError, SemanticSignalError, SemanticStore, SemanticVec3,
@@ -10,6 +13,10 @@ pub enum SemanticObjectTrackProperty {
     Presence,
     ZIndex,
     Transform,
+    WorldTransform,
+    /// Unwrapped finite Manim camera coordinates; compile to pose and lens as
+    /// one camera sample rather than interpolating derived quaternions.
+    CameraProfile,
     Position,
     Rotation,
     Scale,
@@ -48,6 +55,16 @@ pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
         from: R,
         to: R,
     },
+    WorldTransform {
+        from: crate::SemanticWorldTransform3D,
+        to: crate::SemanticWorldTransform3D,
+    },
+    CameraProfile {
+        from: crate::ManimCamera3DProfile,
+        to: crate::ManimCamera3DProfile,
+        near: f64,
+        far: f64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +74,8 @@ enum SemanticObjectTrackValueKind {
     Vec3,
     Color,
     Object,
+    WorldTransform,
+    CameraProfile,
 }
 
 impl SemanticObjectTrackProperty {
@@ -64,6 +83,8 @@ impl SemanticObjectTrackProperty {
         match self {
             Self::Presence => SemanticObjectTrackValueKind::Bool,
             Self::Transform => SemanticObjectTrackValueKind::Object,
+            Self::WorldTransform => SemanticObjectTrackValueKind::WorldTransform,
+            Self::CameraProfile => SemanticObjectTrackValueKind::CameraProfile,
             Self::Position | Self::Scale => SemanticObjectTrackValueKind::Vec3,
             Self::Fill | Self::Stroke => SemanticObjectTrackValueKind::Color,
             Self::ZIndex
@@ -89,6 +110,8 @@ impl<R> SemanticObjectTrackValues<R> {
             Self::Vec3 { .. } => SemanticObjectTrackValueKind::Vec3,
             Self::Color { .. } => SemanticObjectTrackValueKind::Color,
             Self::Object { .. } => SemanticObjectTrackValueKind::Object,
+            Self::WorldTransform { .. } => SemanticObjectTrackValueKind::WorldTransform,
+            Self::CameraProfile { .. } => SemanticObjectTrackValueKind::CameraProfile,
         }
     }
 }
@@ -249,6 +272,18 @@ pub enum SemanticTransformInterpolation {
     PointCorrespondence,
 }
 
+/// Correspondence policy for one authored family Transform.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SemanticFamilyTransformMode {
+    /// Preserve authored family order/topology and derive positional correspondence.
+    #[default]
+    Structural,
+    /// Match normalized vector-path shape keys at the activation boundary.
+    MatchingShapes,
+    /// Match ordinary retained text leaves by compiler-authored source identity.
+    MatchingSourceKeys,
+}
+
 /// One authored animation operation before execution scheduling/lowering.
 ///
 /// Targets and composition children are semantic identities. Execution tracks,
@@ -267,6 +302,12 @@ pub enum SemanticAnimationIntent {
         timing: TrackTiming,
         time_map: CompositionTimeMap,
     },
+    /// Move an object's effective bounds center along a retained semantic vector path.
+    /// The path identity is resolved at activation; no sampled points are authored.
+    MoveAlongPath {
+        target: SemanticNodeId,
+        path: SemanticNodeId,
+    },
     /// Transform one semantic object toward the authored state of another semantic
     /// object. The target-state node is a semantic reference, not an execution
     /// snapshot; A1.6 lowering decides when/how to snapshot and interpolate it.
@@ -278,6 +319,25 @@ pub enum SemanticAnimationIntent {
         /// Animated method targets copy priority when their containing animation finishes.
         /// Ordinary Transform leaves source priority unchanged.
         complete_priority: bool,
+    },
+    /// Animate an object's effective world pose to a typed spatial endpoint.
+    /// The source pose is captured from the current effective frame at activation.
+    WorldTransformTo {
+        target: SemanticNodeId,
+        transform: crate::SemanticWorldTransform3D,
+    },
+    /// Animate an authored unwrapped camera profile through the regular timeline.
+    CameraProfileTo {
+        target: SemanticNodeId,
+        profile: crate::ManimCamera3DProfile,
+    },
+    /// Transform one semantic family toward another through compiler-derived visual
+    /// correspondence. The two family identities remain authored scene state;
+    /// unequal padding occurrences never receive semantic identities.
+    FamilyTransformTo {
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        mode: SemanticFamilyTransformMode,
     },
     /// Temporarily scale and recolor one object around a shared activation center.
     /// The compiler captures the effective source and lowers a restoring track.
@@ -306,7 +366,7 @@ pub enum SemanticAnimationIntent {
         count: usize,
         mode: SemanticSubsetDisplayMode,
     },
-    /// Draw one plain Text object's derived glyph members in retained painter order.
+    /// Draw one retained text object's glyph and vector members in painter order.
     TextGlyph {
         target: SemanticNodeId,
         mode: FamilyAnimationMode,
@@ -358,8 +418,12 @@ pub enum SemanticAnimationIntent {
 impl SemanticAnimationIntent {
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
+            Self::FamilyTransformTo { source, .. } => Some(*source),
             Self::ObjectPropertyTrack { target, .. }
+            | Self::MoveAlongPath { target, .. }
             | Self::TransformTo { target, .. }
+            | Self::WorldTransformTo { target, .. }
+            | Self::CameraProfileTo { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::PassingFlash { target, .. }
@@ -377,8 +441,11 @@ impl SemanticAnimationIntent {
 
     pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
-            Self::TransformTo { target_state, .. } => Some(*target_state),
+            Self::TransformTo { target_state, .. }
+            | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
+            Self::WorldTransformTo { .. } | Self::CameraProfileTo { .. } => None,
             Self::ObjectPropertyTrack { .. }
+            | Self::MoveAlongPath { .. }
             | Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
@@ -395,10 +462,34 @@ impl SemanticAnimationIntent {
         }
     }
 
+    /// Return the two authored family endpoints when this is a family Transform.
+    pub const fn family_transform(&self) -> Option<(SemanticNodeId, SemanticNodeId)> {
+        match self {
+            Self::FamilyTransformTo {
+                source,
+                target_state,
+                ..
+            } => Some((*source, *target_state)),
+            _ => None,
+        }
+    }
+
+    /// Return the authored correspondence policy for one family Transform.
+    pub const fn family_transform_mode(&self) -> Option<SemanticFamilyTransformMode> {
+        match self {
+            Self::FamilyTransformTo { mode, .. } => Some(*mode),
+            _ => None,
+        }
+    }
+
     pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
         match self {
             Self::ObjectPropertyTrack { .. }
+            | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
+            | Self::WorldTransformTo { .. }
+            | Self::CameraProfileTo { .. }
+            | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
@@ -418,7 +509,11 @@ impl SemanticAnimationIntent {
     pub fn children(&self) -> &[SemanticNodeId] {
         match self {
             Self::ObjectPropertyTrack { .. }
+            | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
+            | Self::WorldTransformTo { .. }
+            | Self::CameraProfileTo { .. }
+            | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
@@ -445,11 +540,20 @@ impl SemanticAnimationIntent {
 pub struct SemanticAnimationState {
     intent: SemanticAnimationIntent,
     options: AnimationOptions,
+    pub(crate) transform_effects: Option<Box<SemanticTransformEffectSnapshot>>,
 }
 
 impl SemanticAnimationState {
     pub const fn new(intent: SemanticAnimationIntent, options: AnimationOptions) -> Self {
-        Self { intent, options }
+        Self {
+            intent,
+            options,
+            transform_effects: None,
+        }
+    }
+
+    pub fn transform_effect_snapshot(&self) -> Option<&SemanticTransformEffectSnapshot> {
+        self.transform_effects.as_deref()
     }
 
     pub const fn intent(&self) -> &SemanticAnimationIntent {
@@ -481,7 +585,9 @@ pub enum SemanticAnimationError {
     NotScalarInputSignal(SemanticNodeId),
     NativeOwnedSignal(SemanticNodeId),
     InvalidScalarTarget(f64),
+    UnsupportedImageAnimation,
     InvalidObjectPropertyTrack,
+    InvalidMoveAlongPath,
 }
 
 impl std::fmt::Display for SemanticAnimationError {
@@ -524,7 +630,7 @@ impl std::fmt::Display for SemanticAnimationError {
             Self::InvalidSubsetDisplayMember => formatter
                 .write_str("subset display member requires a nonempty count and an in-range index"),
             Self::InvalidTextWriteTarget => {
-                formatter.write_str("TextWrite requires one plain Text semantic object")
+                formatter.write_str("TextWrite requires one retained text semantic object")
             }
             Self::InvalidFadeEndpoint => formatter
                 .write_str("Fade scale, translation, and scale center must be finite 2D values"),
@@ -550,8 +656,14 @@ impl std::fmt::Display for SemanticAnimationError {
                     "scalar animation target must be finite, got {value}"
                 )
             }
+            Self::UnsupportedImageAnimation => {
+                formatter.write_str("vector/color animation is not supported for immutable images")
+            }
             Self::InvalidObjectPropertyTrack => formatter.write_str(
                 "object property track requires matching finite endpoints and valid exact timing",
+            ),
+            Self::InvalidMoveAlongPath => formatter.write_str(
+                "MoveAlongPath requires distinct live objects and a retained static vector path",
             ),
         }
     }
@@ -617,7 +729,54 @@ pub(crate) fn validate_object_property_track<R>(
                 return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
             }
         }
+        SemanticObjectTrackValues::WorldTransform { from, to } => {
+            if crate::SemanticWorldTransform3D::new(from.translation, from.rotation, from.scale)
+                .is_none()
+                || crate::SemanticWorldTransform3D::new(to.translation, to.rotation, to.scale)
+                    .is_none()
+            {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
+        SemanticObjectTrackValues::CameraProfile {
+            from,
+            to,
+            near,
+            far,
+        } => {
+            if from.camera(*near, *far).is_none() || to.camera(*near, *far).is_none() {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
         SemanticObjectTrackValues::Bool { .. } | SemanticObjectTrackValues::Object { .. } => {}
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_camera_profile_track_target<NodeId>(
+    state: &crate::SemanticObjectState,
+    property: SemanticObjectTrackProperty,
+    values: &SemanticObjectTrackValues<NodeId>,
+) -> Result<(), SemanticAnimationError> {
+    if property != SemanticObjectTrackProperty::CameraProfile {
+        return Ok(());
+    }
+    let clips_match = match state.camera_projection() {
+        Some(crate::SemanticProjection3D::Perspective { near, far, .. }) => matches!(
+            values,
+            SemanticObjectTrackValues::CameraProfile {
+                near: track_near,
+                far: track_far,
+                ..
+            } if near == *track_near && far == *track_far
+        ),
+        _ => false,
+    };
+    if state.role() != crate::SemanticObjectRole::Camera3D
+        || state.camera_profile().is_none()
+        || !clips_match
+    {
+        return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
     }
     Ok(())
 }
@@ -670,6 +829,11 @@ impl SemanticStore {
         self.set_last_mutation_writes(0);
         self.semantic_object_state_checked(target)?;
         validate_object_property_track(property, &values, timing, &time_map)?;
+        validate_camera_profile_track_target(
+            self.semantic_object_state_checked(target)?,
+            property,
+            &values,
+        )?;
         if let SemanticObjectTrackValues::Object { from, to } = &values {
             for endpoint in [*from, *to] {
                 self.semantic_object_state_checked(endpoint)?;
@@ -705,7 +869,14 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
+        if self
+            .semantic_object_state_checked(target)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         let color_is_finite = color.red.is_finite()
             && color.green.is_finite()
             && color.blue.is_finite()
@@ -754,6 +925,43 @@ impl SemanticStore {
         )
     }
 
+    /// Insert one exact authored path-motion declaration. The target's effective
+    /// bounds center follows a retained static 2D VectorPath captured at activation.
+    pub fn insert_semantic_move_along_path_animation(
+        &mut self,
+        target: SemanticNodeId,
+        path: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        let target_state = self.semantic_object_state_checked(target)?;
+        let path_state = self.semantic_object_state_checked(path)?;
+        if target == path || target_state.content.image().is_some() {
+            return Err(SemanticAnimationError::InvalidMoveAlongPath);
+        }
+        let Some(crate::StoredGeometry::Resource(handle)) = path_state.content.geometry() else {
+            return Err(SemanticAnimationError::InvalidMoveAlongPath);
+        };
+        let Some(crate::GeometryResource::VectorPath(vector_path)) =
+            self.geometry_resources().get(handle)
+        else {
+            return Err(SemanticAnimationError::InvalidMoveAlongPath);
+        };
+        if !vector_path.has_drawable_segments()
+            || vector_path.retained_command_count() > crate::MAX_PATH_MOTION_COMMANDS
+            || !path_state.signal_bindings().is_empty()
+        {
+            return Err(SemanticAnimationError::InvalidMoveAlongPath);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::MoveAlongPath { target, path },
+                options,
+            )),
+        )
+    }
+
     /// Insert one TransformTo declaration with an explicit geometry interpolation contract.
     pub fn insert_semantic_transform_animation_with_interpolation(
         &mut self,
@@ -764,21 +972,152 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
-        self.semantic_object_state_checked(target_state)?;
+        let source = self.semantic_object_state_checked(target)?;
+        let target_object = self.semantic_object_state_checked(target_state)?;
+        // Same immutable image content lowers through the ordinary affine/style
+        // channels. Pixel/resource replacement and image-to-vector morphs have
+        // no TransformTo payload and must fail before declaration publication.
+        if (source.content.image().is_some() || target_object.content.image().is_some())
+            && source.content != target_object.content
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         if target == target_state {
             return Err(SemanticAnimationError::SameTargetAndTargetState(target));
         }
         validate_authored_animation_options(options)?;
 
+        let mut state = SemanticAnimationState::new(
+            SemanticAnimationIntent::TransformTo {
+                target,
+                target_state,
+                interpolation,
+                complete_priority,
+            },
+            options,
+        );
+        state.transform_effects = SemanticTransformEffectSnapshot::new(
+            self.animation_effect_snapshot(target)
+                .expect("validated transform source"),
+            self.animation_effect_snapshot(target_state)
+                .expect("validated transform target"),
+        );
+        Ok(self.insert_semantic_animation_state(state))
+    }
+
+    /// Insert a typed world-pose animation. The endpoint is captured in the
+    /// authored declaration; activation captures the effective source pose.
+    pub fn insert_semantic_world_transform_animation(
+        &mut self,
+        target: SemanticNodeId,
+        transform: crate::SemanticWorldTransform3D,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        if crate::SemanticWorldTransform3D::new(
+            transform.translation,
+            transform.rotation,
+            transform.scale,
+        )
+        .is_none()
+        {
+            return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+        }
+        validate_authored_animation_options(options)?;
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
-                SemanticAnimationIntent::TransformTo {
-                    target,
-                    target_state,
-                    interpolation,
+                SemanticAnimationIntent::WorldTransformTo { target, transform },
+                options,
+            )),
+        )
+    }
 
-                    complete_priority,
+    /// Insert a camera profile animation whose endpoint remains unwrapped and
+    /// whose perspective clips are inherited from the camera's authored lens.
+    pub fn insert_semantic_camera_profile_animation(
+        &mut self,
+        target: SemanticNodeId,
+        profile: crate::ManimCamera3DProfile,
+        near: f64,
+        far: f64,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        let state = self.semantic_object_state_checked(target)?;
+        if state.role() != crate::SemanticObjectRole::Camera3D
+            || state.camera_profile().is_none()
+            || state
+                .camera_motions()
+                .last()
+                .is_some_and(|motion| motion.end().is_none())
+            || profile.camera(near, far).is_none()
+        {
+            return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::CameraProfileTo { target, profile },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one family Transform declaration without expanding semantic children.
+    ///
+    /// Both endpoints must be real semantic families. Correspondence and padding are
+    /// derived below the Semantic Scene and therefore allocate no synthetic members.
+    pub fn insert_semantic_family_transform_animation(
+        &mut self,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_family_transform_animation_with_mode(
+            source,
+            target_state,
+            SemanticFamilyTransformMode::Structural,
+            options,
+        )
+    }
+
+    /// Insert one activation-time matching-shape family Transform declaration.
+    pub fn insert_semantic_matching_family_transform_animation(
+        &mut self,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_family_transform_animation_with_mode(
+            source,
+            target_state,
+            SemanticFamilyTransformMode::MatchingShapes,
+            options,
+        )
+    }
+
+    /// Insert one family Transform with an explicit correspondence policy.
+    pub fn insert_semantic_family_transform_animation_with_mode(
+        &mut self,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        mode: SemanticFamilyTransformMode,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_family_members_checked(source)?;
+        self.semantic_family_members_checked(target_state)?;
+        if source == target_state {
+            return Err(SemanticAnimationError::SameTargetAndTargetState(source));
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::FamilyTransformTo {
+                    source,
+                    target_state,
+                    mode,
                 },
                 options,
             )),
@@ -795,7 +1134,14 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
+        if self
+            .semantic_object_state_checked(target)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         let color_is_finite = stroke_color.is_none_or(|color| {
             color.red.is_finite()
                 && color.green.is_finite()
@@ -878,7 +1224,7 @@ impl SemanticStore {
         )
     }
 
-    /// Insert one forward plain-Text Write declaration.
+    /// Insert one forward retained-text Write declaration.
     pub fn insert_semantic_text_write_animation(
         &mut self,
         target: SemanticNodeId,
@@ -907,13 +1253,9 @@ impl SemanticStore {
         match (mode, state.content) {
             (_, crate::SemanticObjectContent::Geometry(_)) if family_member.is_some() => {}
             (_, crate::SemanticObjectContent::Text(handle)) => {
-                let resource = self
-                    .text_resources()
+                self.text_resources()
                     .get(handle)
                     .ok_or(SemanticAnimationError::InvalidTextWriteTarget)?;
-                if resource.kind != crate::TextSourceKind::Plain {
-                    return Err(SemanticAnimationError::InvalidTextWriteTarget);
-                }
             }
             _ => {
                 return Err(SemanticAnimationError::InvalidTextWriteTarget);
@@ -1053,7 +1395,14 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
+        if self
+            .semantic_object_state_checked(target)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         validate_authored_animation_options(options)?;
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
@@ -1551,5 +1900,44 @@ mod tests {
         assert_eq!(reveal.reverse_rate_function, Some(false));
         assert_eq!(reveal.introducer, Some(true));
         assert_eq!(reveal.remover, Some(false));
+    }
+}
+
+#[cfg(test)]
+mod family_transform_mode_tests {
+    use super::*;
+
+    #[test]
+    fn family_transform_correspondence_mode_is_authored_state() {
+        let mut store = SemanticStore::new();
+        let source = store.insert_family();
+        let target = store.insert_family();
+        let structural = store
+            .insert_semantic_family_transform_animation(source, target, AnimationOptions::new())
+            .unwrap();
+        let matching = store
+            .insert_semantic_matching_family_transform_animation(
+                source,
+                target,
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .semantic_animation_state(structural)
+                .unwrap()
+                .intent()
+                .family_transform_mode(),
+            Some(SemanticFamilyTransformMode::Structural)
+        );
+        assert_eq!(
+            store
+                .semantic_animation_state(matching)
+                .unwrap()
+                .intent()
+                .family_transform_mode(),
+            Some(SemanticFamilyTransformMode::MatchingShapes)
+        );
     }
 }

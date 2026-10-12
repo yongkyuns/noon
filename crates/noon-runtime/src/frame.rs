@@ -10,22 +10,130 @@ use crate::release_render_transform;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameObjectState {
+    /// Current persistent leaf effect, published with this row and its frame epoch.
+    pub glow: Option<Arc<noon_compile::CompiledGlow>>,
     pub z_index: f64,
     pub id: ObjectId,
     pub content: ObjectContentRef,
     pub text_bounds: Option<noon_core::Rect>,
     pub transform: Transform2D,
+    /// Effective 3D pose and optional camera projection from the same runtime epoch.
+    pub spatial: Option<Box<noon_compile::CompiledSpatialState>>,
     pub style: Style,
     pub appearance: f32,
 }
 
 impl FrameObjectState {
+    pub fn world_transform(&self) -> Option<noon_core::SemanticWorldTransform3D> {
+        self.spatial
+            .as_deref()
+            .filter(|spatial| {
+                spatial.composition_domain
+                    != noon_core::SemanticSpatialCompositionDomain::FixedFrame
+            })
+            .map(|spatial| spatial.world)
+    }
+
+    pub fn camera_projection(&self) -> Option<noon_core::SemanticProjection3D> {
+        self.spatial
+            .as_deref()
+            .and_then(|spatial| spatial.camera_projection)
+    }
+
+    /// Effective unwrapped camera profile and clipping planes, if this row is a
+    /// profiled camera. The tuple comes from the same spatial epoch as its pose.
+    pub fn camera_profile(&self) -> Option<(noon_core::ManimCamera3DProfile, f64, f64)> {
+        let spatial = self.spatial.as_deref()?;
+        let profile = spatial.camera_profile?;
+        let projection = spatial.camera_projection?;
+        let (near, far) = match projection {
+            noon_core::SemanticProjection3D::Perspective { near, far, .. }
+            | noon_core::SemanticProjection3D::Orthographic { near, far, .. } => (near, far),
+        };
+        Some((profile, near, far))
+    }
+
     pub fn geometry(&self) -> Option<&GeometryRef> {
+        if self
+            .spatial
+            .as_deref()
+            .is_some_and(|spatial| !is_fixed_frame_planar(spatial))
+        {
+            return None;
+        }
         self.content.geometry()
     }
 
-    pub const fn text(&self) -> Option<TextResourceHandle> {
+    pub fn text(&self) -> Option<TextResourceHandle> {
+        // Spatial world/fixed-orientation content belongs to the spatial
+        // renderer. FixedFrame text stays on the ordinary retained 2D lane.
+        if let Some(spatial) = self.spatial.as_deref() {
+            if !is_fixed_frame_planar(spatial) {
+                return None;
+            }
+        }
         self.content.text()
+    }
+}
+
+#[cfg(test)]
+mod spatial_render_routing_tests {
+    use super::*;
+    use noon_compile::{CompiledSpatialDrawKind, CompiledSpatialState};
+    use noon_core::{SemanticSpatialCompositionDomain as Domain, SemanticSpatialMaterial};
+
+    fn row(domain: Domain, draw_kind: CompiledSpatialDrawKind) -> FrameObjectState {
+        FrameObjectState {
+            glow: None,
+            z_index: 0.0,
+            id: ObjectId::new(1),
+            content: GeometryRef::circle(1.0).into(),
+            text_bounds: None,
+            transform: Transform2D::IDENTITY,
+            spatial: Some(Box::new(CompiledSpatialState {
+                world: noon_core::SemanticWorldTransform3D::IDENTITY,
+                camera_projection: None,
+                camera_profile: None,
+                camera_motions: None,
+                material: SemanticSpatialMaterial::Unlit,
+                point_light: false,
+                composition_domain: domain,
+                draw_kind,
+                spatial_anchor_family: None,
+                fixed_orientation_center: None,
+                cairo_path_appearance: None,
+            })),
+            style: Style::default(),
+            appearance: 1.0,
+        }
+    }
+
+    #[test]
+    fn only_fixed_frame_planar_spatial_rows_enter_the_ordinary_geometry_lane() {
+        let geometry = GeometryRef::circle(1.0);
+        let fixed = row(Domain::FixedFrame, CompiledSpatialDrawKind::Planar);
+        assert_eq!(fixed.geometry(), Some(&geometry));
+        assert_eq!(fixed.world_transform(), None);
+
+        let fixed_frame = FrameState {
+            time: 0.0,
+            objects: vec![fixed],
+            presences: vec![true],
+            reveals: vec![1.0],
+            morphs: vec![0.0],
+            render_geometries: vec![None],
+            render_transforms: vec![None],
+            family_animations: vec![None],
+            family_animation_plan_indices: vec![None],
+        };
+        assert_eq!(fixed_frame.render_geometry(0), Some(&geometry));
+
+        let world = row(Domain::World, CompiledSpatialDrawKind::Planar);
+        assert_eq!(world.geometry(), None);
+        assert!(world.world_transform().is_some());
+        let mesh = row(Domain::World, CompiledSpatialDrawKind::Mesh);
+        assert_eq!(mesh.geometry(), None);
+        assert!(mesh.world_transform().is_some());
     }
 }
 
@@ -73,6 +181,13 @@ impl FrameState {
     }
 
     pub fn render_geometry(&self, object_index: usize) -> Option<&GeometryRef> {
+        if self.objects[object_index]
+            .spatial
+            .as_deref()
+            .is_some_and(|spatial| !is_fixed_frame_planar(spatial))
+        {
+            return None;
+        }
         self.render_geometries[object_index]
             .as_deref()
             .or_else(|| self.objects[object_index].geometry())
@@ -81,6 +196,17 @@ impl FrameState {
     pub fn text(&self, object_index: usize) -> Option<TextResourceHandle> {
         self.objects[object_index].text()
     }
+}
+
+fn is_fixed_frame_planar(spatial: &noon_compile::CompiledSpatialState) -> bool {
+    matches!(
+        spatial.draw_kind,
+        noon_compile::CompiledSpatialDrawKind::Planar
+    ) && matches!(
+        spatial.composition_domain,
+        noon_core::SemanticSpatialCompositionDomain::FixedFrame
+    ) && spatial.camera_projection.is_none()
+        && !spatial.point_light
 }
 
 /// Copyable effective properties exposed to required host callbacks without
@@ -130,6 +256,20 @@ impl EffectiveObjectProperties {
         } else {
             self.bounds = None;
         }
+    }
+
+    /// Set a callback-prepared transform and its authoritative projected bounds
+    /// together. This is used when Rust has already resolved geometry from the
+    /// exact sparse callback overlay and must preserve that result for immediate
+    /// reads in the same callback phase.
+    pub fn set_transform_and_bounds(
+        &mut self,
+        transform: Transform2D,
+        bounds: Option<noon_core::Rect>,
+    ) {
+        self.transform = transform;
+        self.bounds = bounds;
+        self.bounds_basis = None;
     }
 
     pub fn set_style(&mut self, style: Style) {
@@ -222,7 +362,12 @@ pub(super) enum EffectiveBoundsBasis {
 impl EffectiveBoundsBasis {
     pub(super) fn from_frame(frame: &FrameState, object_index: usize) -> Option<Self> {
         let object = &frame.objects[object_index];
-        Self::from_content(frame.render_geometry(object_index), object.text_bounds)
+        Self::from_content(
+            frame.render_geometry(object_index),
+            object
+                .text_bounds
+                .or_else(|| object.content.image().map(|image| image.local_bounds())),
+        )
     }
 
     pub(super) fn from_content(
@@ -278,8 +423,10 @@ impl EffectiveBoundsBasis {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FrameRowState {
+    pub(super) glow: Option<Arc<noon_compile::CompiledGlow>>,
     pub(super) z_index: f64,
     pub(super) transform: Transform2D,
+    pub(super) spatial: Option<noon_compile::CompiledSpatialState>,
     pub(super) style: Style,
     pub(super) appearance: f32,
     pub(super) presence: bool,
@@ -293,8 +440,10 @@ pub(crate) struct FrameRowState {
 impl FrameRowState {
     pub(crate) fn from_frame(frame: &FrameState, object_index: usize) -> Self {
         Self {
+            glow: frame.objects[object_index].glow.clone(),
             z_index: frame.objects[object_index].z_index,
             transform: frame.objects[object_index].transform,
+            spatial: frame.objects[object_index].spatial.as_deref().cloned(),
             style: frame.objects[object_index].style,
             appearance: frame.objects[object_index].appearance,
             presence: frame.presences[object_index],
@@ -308,8 +457,13 @@ impl FrameRowState {
 
     pub(super) fn write_to_frame(self, frame: &mut FrameState, object_index: usize) {
         let object = &mut frame.objects[object_index];
+        object.glow = self.glow;
         object.z_index = self.z_index;
         object.transform = self.transform;
+        match (&mut object.spatial, self.spatial) {
+            (Some(target), Some(value)) => **target = value,
+            (target, value) => *target = value.map(Box::new),
+        }
         object.style = self.style;
         object.appearance = self.appearance;
         if let Some(content) = self.content_override {
@@ -324,8 +478,10 @@ impl FrameRowState {
 
     pub(crate) fn differs_from_frame(&self, frame: &FrameState, object_index: usize) -> bool {
         let object = &frame.objects[object_index];
-        self.z_index != object.z_index
+        self.glow != object.glow
+            || self.z_index != object.z_index
             || self.transform != object.transform
+            || self.spatial.as_ref() != object.spatial.as_deref()
             || self.style != object.style
             || self.appearance != object.appearance
             || self.presence != frame.presences[object_index]
@@ -364,6 +520,7 @@ impl FrameRowState {
     ) -> bool {
         let object = &frame.objects[object_index];
         self.transform != object.transform
+            || self.spatial.as_ref() != object.spatial.as_deref()
             || self.style.stroke != object.style.stroke
             || self.style.stroke_width != object.style.stroke_width
             || self.content_override.is_some()
@@ -373,12 +530,14 @@ impl FrameRowState {
 
     pub(super) fn as_mut<'a>(&'a mut self, base_content: &'a ObjectContentRef) -> FrameRowMut<'a> {
         FrameRowMut {
+            glow: &mut self.glow,
             content: FrameContentMut::Staged {
                 base: base_content,
                 content_override: &mut self.content_override,
             },
             z_index: &mut self.z_index,
             transform: &mut self.transform,
+            spatial: FrameSpatialMut::Inline(&mut self.spatial),
             style: &mut self.style,
             appearance: &mut self.appearance,
             presence: &mut self.presence,
@@ -415,9 +574,11 @@ impl FrameContentMut<'_> {
 }
 
 pub(super) struct FrameRowMut<'a> {
+    pub(super) glow: &'a mut Option<Arc<noon_compile::CompiledGlow>>,
     pub(super) z_index: &'a mut f64,
     pub(super) content: FrameContentMut<'a>,
     pub(super) transform: &'a mut Transform2D,
+    pub(super) spatial: FrameSpatialMut<'a>,
     pub(super) style: &'a mut Style,
     pub(super) appearance: &'a mut f32,
     pub(super) presence: &'a mut bool,
@@ -430,9 +591,11 @@ pub(super) struct FrameRowMut<'a> {
 pub(super) fn frame_row_mut(frame: &mut FrameState, object_index: usize) -> FrameRowMut<'_> {
     let object = &mut frame.objects[object_index];
     FrameRowMut {
+        glow: &mut object.glow,
         content: FrameContentMut::Direct(&mut object.content),
         z_index: &mut object.z_index,
         transform: &mut object.transform,
+        spatial: FrameSpatialMut::Retained(&mut object.spatial),
         style: &mut object.style,
         appearance: &mut object.appearance,
         presence: &mut frame.presences[object_index],
@@ -443,9 +606,33 @@ pub(super) fn frame_row_mut(frame: &mut FrameState, object_index: usize) -> Fram
     }
 }
 
+/// Borrow either retained spatial storage or a transaction-local value without
+/// allocating/copying a Box for every animated row on every frame.
+pub(super) enum FrameSpatialMut<'a> {
+    Retained(&'a mut Option<Box<noon_compile::CompiledSpatialState>>),
+    Inline(&'a mut Option<noon_compile::CompiledSpatialState>),
+}
+
+impl FrameSpatialMut<'_> {
+    pub(super) fn as_ref(&self) -> Option<&noon_compile::CompiledSpatialState> {
+        match self {
+            Self::Retained(value) => value.as_deref(),
+            Self::Inline(value) => value.as_ref(),
+        }
+    }
+
+    pub(super) fn as_mut(&mut self) -> Option<&mut noon_compile::CompiledSpatialState> {
+        match self {
+            Self::Retained(value) => value.as_deref_mut(),
+            Self::Inline(value) => value.as_mut(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameChanges {
     pub(super) all: bool,
+    pub(super) presentation_redraw: bool,
     pub(super) object_indices: Vec<usize>,
     pub(super) added_indices: Vec<usize>,
     pub(super) removed_indices: Vec<usize>,
@@ -456,6 +643,23 @@ impl FrameChanges {
     pub fn all() -> Self {
         Self {
             all: true,
+            presentation_redraw: false,
+            object_indices: Vec::new(),
+            added_indices: Vec::new(),
+            removed_indices: Vec::new(),
+            painter_order_range: None,
+        }
+    }
+
+    /// Request one renderer/presentation redraw without claiming any stable frame
+    /// object, structure, painter order, or spatial state changed.
+    ///
+    /// This is intended for removing or replacing identity-free transient
+    /// presentation occurrences after their stable anchor state is already resident.
+    pub fn presentation_redraw() -> Self {
+        Self {
+            all: false,
+            presentation_redraw: true,
             object_indices: Vec::new(),
             added_indices: Vec::new(),
             removed_indices: Vec::new(),
@@ -467,6 +671,7 @@ impl FrameChanges {
         sort_dedup(&mut object_indices);
         Self {
             all: false,
+            presentation_redraw: false,
             object_indices,
             added_indices: Vec::new(),
             removed_indices: Vec::new(),
@@ -482,6 +687,7 @@ impl FrameChanges {
         sort_dedup(&mut object_indices);
         Self {
             all: false,
+            presentation_redraw: false,
             object_indices,
             added_indices,
             removed_indices,
@@ -514,6 +720,7 @@ impl FrameChanges {
         sort_dedup(&mut object_indices);
         Self {
             all: false,
+            presentation_redraw: false,
             object_indices,
             added_indices,
             removed_indices,
@@ -541,6 +748,22 @@ impl FrameChanges {
         self.all
     }
 
+    pub const fn requires_presentation_redraw(&self) -> bool {
+        self.presentation_redraw
+    }
+
+    /// Whether this change set carries any stable retained-frame dirtiness.
+    ///
+    /// Presentation-only redraw requests deliberately do not count: they wake one
+    /// draw without claiming that resident frame, structure, or painter state changed.
+    pub const fn has_stable_changes(&self) -> bool {
+        self.all
+            || !self.object_indices.is_empty()
+            || !self.added_indices.is_empty()
+            || !self.removed_indices.is_empty()
+            || self.painter_order_range.is_some()
+    }
+
     pub fn object_indices(&self) -> &[usize] {
         &self.object_indices
     }
@@ -562,7 +785,7 @@ impl FrameChanges {
     }
 
     pub const fn is_empty(&self) -> bool {
-        !self.all && self.object_indices.is_empty() && self.painter_order_range.is_none()
+        !self.presentation_redraw && !self.has_stable_changes()
     }
 
     pub fn painter_order_range(&self) -> Option<std::ops::Range<usize>> {
@@ -571,13 +794,14 @@ impl FrameChanges {
 
     pub(super) fn invalidate_all(&mut self) {
         self.all = true;
+        self.presentation_redraw = false;
         self.object_indices.clear();
         self.added_indices.clear();
         self.removed_indices.clear();
         self.painter_order_range = None;
     }
 
-    pub(super) fn insert(&mut self, object_index: usize) {
+    pub(crate) fn insert(&mut self, object_index: usize) {
         insert_sorted_unique(&mut self.object_indices, object_index);
     }
 
@@ -605,6 +829,49 @@ impl FrameChanges {
             Some(existing) => existing.start.min(range.start)..existing.end.max(range.end),
             None => range,
         });
+    }
+}
+
+#[cfg(test)]
+mod frame_changes_tests {
+    use super::FrameChanges;
+
+    #[test]
+    fn presentation_redraw_is_non_full_non_structural_and_has_no_stable_rows() {
+        let changes = FrameChanges::presentation_redraw();
+
+        assert!(!changes.is_all());
+        assert!(!changes.is_structural());
+        assert!(!changes.has_painter_order_change());
+        assert!(changes.requires_presentation_redraw());
+        assert!(!changes.has_stable_changes());
+        assert!(!changes.is_empty());
+        assert!(changes.object_indices().is_empty());
+        assert!(changes.added_indices().is_empty());
+        assert!(changes.removed_indices().is_empty());
+    }
+
+    #[test]
+    fn presentation_redraw_keeps_later_stable_dirtiness_visible() {
+        let mut changes = FrameChanges::presentation_redraw();
+        changes.insert(7);
+        changes.insert_painter_order_range(2..4);
+
+        assert!(changes.requires_presentation_redraw());
+        assert!(changes.has_stable_changes());
+        assert!(!changes.is_empty());
+        assert_eq!(changes.object_indices(), &[7]);
+        assert_eq!(changes.painter_order_range(), Some(2..4));
+    }
+
+    #[test]
+    fn full_invalidation_supersedes_presentation_redraw() {
+        let mut changes = FrameChanges::presentation_redraw();
+        changes.invalidate_all();
+
+        assert!(changes.is_all());
+        assert!(changes.has_stable_changes());
+        assert!(!changes.requires_presentation_redraw());
     }
 }
 

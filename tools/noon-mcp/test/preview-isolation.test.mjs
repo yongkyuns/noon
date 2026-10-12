@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -21,6 +21,27 @@ const config = {
   toolingRoot: "/repo/tools/noon-mcp",
   limits,
 };
+
+function attachedProcess() {
+  const attached = new EventEmitter();
+  attached.stdin = new PassThrough();
+  attached.stdout = new PassThrough();
+  attached.stderr = new PassThrough();
+  attached.exitCode = null;
+  attached.signalCode = null;
+  attached.kill = (signal) => {
+    attached.signalCode = signal;
+    queueMicrotask(() => attached.emit("close", null, signal));
+    return true;
+  };
+  attached.stdin.once("finish", () => setTimeout(() => {
+    if (attached.exitCode === null && attached.signalCode === null) {
+      attached.exitCode = 0;
+      attached.emit("close", 0, null);
+    }
+  }, 20));
+  return attached;
+}
 
 test("Docker create contract is fail-closed and exposes only bounded read-only assets", () => {
   const args = buildDockerCreateArgs(config, ["node", "/noon/tools/noon-mcp/test/preview-isolation-probe.mjs"]);
@@ -92,23 +113,7 @@ test("concurrent close calls await the same authoritative container cleanup", as
   ].join("\n"));
   await chmod(docker, 0o755);
 
-  const attached = new EventEmitter();
-  attached.stdin = new PassThrough();
-  attached.stdout = new PassThrough();
-  attached.stderr = new PassThrough();
-  attached.exitCode = null;
-  attached.signalCode = null;
-  attached.kill = (signal) => {
-    attached.signalCode = signal;
-    queueMicrotask(() => attached.emit("close", null, signal));
-    return true;
-  };
-  attached.stdin.once("finish", () => setTimeout(() => {
-    if (attached.exitCode === null && attached.signalCode === null) {
-      attached.exitCode = 0;
-      attached.emit("close", 0, null);
-    }
-  }, 20));
+  const attached = attachedProcess();
 
   const process = new DockerIsolatedProcess(
     { ...config, dockerExecutable: docker },
@@ -127,3 +132,41 @@ test("concurrent close calls await the same authoritative container cleanup", as
   assert.equal(result.cleanup.removed, true);
   assert.equal(await process.close("later close"), result);
 });
+
+for (const [name, failure, expectedAttempts, removed] of [
+  ["automatic removal races wait for verified container absence",
+    "removal of container " + "a".repeat(64) + " is already in progress", 3, true],
+  ["unrelated Docker cleanup failures remain errors", "Docker daemon unavailable", 1, false],
+]) {
+  test(name, async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "noon-preview-removal-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const counter = path.join(root, "attempts");
+    const docker = path.join(root, "docker");
+    await writeFile(docker, [
+      "#!/usr/bin/env node",
+      "const fs = require('node:fs');",
+      `const counter = ${JSON.stringify(counter)};`,
+      "const attempt = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) + 1 : 1;",
+      "fs.writeFileSync(counter, String(attempt));",
+      `const failure = ${JSON.stringify(failure)};`,
+      "console.error(attempt < 3 ? failure : 'No such container: ' + 'a'.repeat(64));",
+      "process.exit(1);",
+      "",
+    ].join("\n"));
+    await chmod(docker, 0o755);
+    const process = new DockerIsolatedProcess(
+      { ...config, dockerExecutable: docker }, "a".repeat(64), attachedProcess(),
+    );
+    if (removed) {
+      const result = await process.close("automatic removal race");
+      assert.equal(result.cleanup.outcome, "already_absent");
+      assert.equal(result.cleanup.removed, true);
+      assert.equal(process.diagnostics.cleanupError, null);
+    } else {
+      await assert.rejects(process.close("genuine cleanup failure"), /Docker daemon unavailable/);
+      assert.match(process.diagnostics.cleanupError, /Docker daemon unavailable/);
+    }
+    assert.equal(Number(await readFile(counter, "utf8")), expectedAttempts);
+  });
+}

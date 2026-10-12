@@ -94,6 +94,86 @@ class Transform:
         _store_animation_args(self, kwargs)
 
 
+class MoveAlongPath:
+    """Inert ManimCE path-motion request for the shared Rust timeline."""
+
+    def __init__(self, mobject: object, path: object, **kwargs: Any) -> None:
+        if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+            raise TypeError("MoveAlongPath target must be a Mobject or Group")
+        if not isinstance(path, _base.Mobject):
+            raise TypeError("MoveAlongPath path must be a retained Mobject")
+        self.mobject = mobject
+        self.path = path
+        _store_animation_args(self, kwargs)
+
+
+def _matrix_arguments(matrix: object):
+    """Preserve rectangular row boundaries when marshalling a Rust matrix request."""
+    try:
+        raw_rows = list(matrix)
+    except TypeError:
+        raw_rows = [matrix]
+    rows: list[list[object]] = []
+    for raw_row in raw_rows:
+        try:
+            row = list(raw_row)
+        except TypeError:
+            row = [raw_row]
+        rows.append(row)
+    columns = len(rows[0]) if rows else 0
+    if any(len(row) != columns for row in rows):
+        raise ValueError("matrix rows must have equal lengths")
+    values = [float(value) for row in rows for value in row]
+    return rows, columns, values
+
+
+class ApplyMatrix:
+    """Inert ManimCE ``ApplyMatrix`` request for shared Rust pointwise target preparation."""
+
+    def __init__(
+        self,
+        matrix: object,
+        mobject: object,
+        about_point: object = _base.ORIGIN,
+        run_time: float = 3.0,
+        **kwargs: Any,
+    ) -> None:
+        if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+            raise TypeError("ApplyMatrix target must be a Mobject or Group")
+        self.matrix = matrix
+        self.mobject = mobject
+        self.source = mobject
+        self.about_point = about_point
+        animation_kwargs = dict(kwargs)
+        animation_kwargs["run_time"] = float(run_time)
+        _store_animation_args(self, animation_kwargs)
+
+
+class CyclicReplace(Transform):
+    """Inert ManimCE ``CyclicReplace`` request over shared family Transform."""
+
+    def __init__(
+        self,
+        *mobjects: object,
+        path_arc: float = math.pi / 2.0,
+        **kwargs: Any,
+    ) -> None:
+        if len(mobjects) == 1 and isinstance(mobjects[0], _compat.Group):
+            group = mobjects[0]
+        else:
+            group = _compat.Group(*mobjects)
+        self.group = group
+        animation_kwargs = dict(kwargs)
+        animation_kwargs["path_arc"] = float(path_arc)
+        # Preserve Transform subclass/call-shape compatibility. The canonical
+        # Scene adapter constructs the detached cyclic target at play begin.
+        super().__init__(group, group, **animation_kwargs)
+
+
+class Swap(CyclicReplace):
+    """ManimCE alias for a two-entry ``CyclicReplace``."""
+
+
 class Indicate:
     """Inert ManimCE ``Indicate`` request for shared Rust semantic playback."""
 
@@ -148,17 +228,43 @@ class TransformFromCopy:
 
 
 class TransformMatchingShapes:
+    """Inert ManimCE matching request; Rust owns activation-time correspondence."""
+
     def __init__(
         self,
-        sources: object,
-        targets: object,
-        key: str | None = None,
+        mobject: object,
+        target_mobject: object,
+        transform_mismatches: bool = False,
+        fade_transform_mismatches: bool = False,
+        key_map: dict[object, object] | None = None,
         **kwargs: Any,
     ) -> None:
-        self.sources = sources
-        self.targets = targets
-        self.key = key
+        if transform_mismatches:
+            raise NotImplementedError(
+                "TransformMatchingShapes transform_mismatches is not yet supported"
+            )
+        if fade_transform_mismatches:
+            raise NotImplementedError(
+                "TransformMatchingShapes fade_transform_mismatches is not yet supported"
+            )
+        if key_map is not None and not isinstance(key_map, dict):
+            raise TypeError("TransformMatchingShapes key_map must be a dict or None")
+        if key_map:
+            raise NotImplementedError(
+                "TransformMatchingShapes key_map is not yet exposed by the public adapter"
+            )
+        self.mobject = mobject
+        self.target_mobject = target_mobject
+        self.source = mobject
+        self.target = target_mobject
+        self.transform_mismatches = False
+        self.fade_transform_mismatches = False
+        self.key_map = {} if key_map is None else dict(key_map)
         _store_animation_args(self, kwargs)
+
+
+class TransformMatchingTex(TransformMatchingShapes):
+    """Match retained TeX part families by compiler-authored source keys."""
 
 
 class Create:

@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn procedural_rotation_rejects_stale_external_edge_and_offset_pivots_atomically() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut square = scene.square(2.0).unwrap();
         let captured = square.center().unwrap();
         square.shift(2.0, 1.0).unwrap();

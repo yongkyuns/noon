@@ -1,4 +1,6 @@
-// Job-local byte reuse for immutable Pyodide assets. Scene/worker sources and
+import { LATEX_ASSETS } from "../web/latex/assets.js";
+
+// Job-local byte reuse for pinned Python and optional LaTeX assets. Scene/worker sources and
 // browser state remain isolated; this does not retry a failed gallery case.
 export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 1024) {
   const moduleUrl = workerSource.match(
@@ -6,8 +8,17 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
   )?.[1];
   if (!moduleUrl) throw new Error('Gallery cache requires the worker to pin a Pyodide release');
   const baseUrl = new URL('.', moduleUrl).href;
+  const latexUrls = new Set([LATEX_ASSETS.bundle, LATEX_ASSETS.metrics]);
   const entries = new Map();
-  const counts = { requests: 0, hits: 0, upstreamRequests: 0, upstreamFailures: 0, retainedBytes: 0 };
+  const counts = {
+    requests: 0,
+    hits: 0,
+    upstreamRequests: 0,
+    upstreamFailures: 0,
+    fulfillFailures: 0,
+    fulfillFailureDetails: [],
+    retainedBytes: 0,
+  };
 
   async function read(route, url) {
     counts.upstreamRequests++;
@@ -39,7 +50,7 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
 
   return {
     async install(context) {
-      await context.route(`${baseUrl}**`, async route => {
+      await context.route(url => url.href.startsWith(baseUrl) || latexUrls.has(url.href), async route => {
         if (route.request().method() !== 'GET') return route.continue();
         counts.requests++;
         const url = route.request().url();
@@ -49,15 +60,34 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
           value = read(route, url);
           entries.set(url, value);
         }
+        let responseValue;
         try {
-          await route.fulfill(await value);
+          responseValue = await value;
         } catch {
+          await route.abort('failed').catch(() => {});
+          return;
+        }
+        try {
+          await route.fulfill(responseValue);
+        } catch (error) {
+          counts.fulfillFailures++;
+          counts.fulfillFailureDetails.push({
+            url: url.slice(0, 500),
+            error: String(error?.message ?? error).slice(0, 240),
+          });
+          if (counts.fulfillFailureDetails.length > 5) counts.fulfillFailureDetails.shift();
           // Preserve the failing request. A subsequent case may make a fresh
           // request, but this case is neither retried nor reported as successful.
           await route.abort('failed').catch(() => {});
         }
       });
     },
-    stats() { return { baseUrl, ...counts }; },
+    stats() {
+      return {
+        baseUrl,
+        ...counts,
+        fulfillFailureDetails: counts.fulfillFailureDetails.map((detail) => ({ ...detail })),
+      };
+    },
   };
 }

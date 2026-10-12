@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     mem::{size_of, size_of_val},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -42,11 +43,103 @@ pub struct TextResourceHandle {
     pub version: u64,
 }
 
-/// UTF-8 byte range in the original authoring source.
+/// Complete compiler-owned identity for an immutable normalized text resource.
+/// The compact deterministic descriptor is paired with shared font buffers so a
+/// fingerprint collision cannot alias two distinct compiler inputs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextCompilationIdentity {
+    pub descriptor: Arc<[u8]>,
+    pub font_contents: Arc<[Arc<[u8]>]>,
+}
+
+impl std::hash::Hash for TextCompilationIdentity {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Font buffers are compared by Eq after this descriptor hash selects a
+        // bucket; hashing them here would rescan megabytes on every lookup.
+        std::hash::Hash::hash(&self.descriptor, state);
+    }
+}
+
+/// UTF-8 byte range in [`TextResource::source`].
+/// Native markup uses decoded text without tags; backends that retain their
+/// source language (such as Typst) use that backend's original source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TextSourceSpan {
     pub start: u32,
     pub end: u32,
+}
+
+/// One intrinsic fill override addressed by a UTF-8 source range.
+///
+/// Range colors are projected after shaping. They preserve the source, cluster,
+/// glyph, vector and layout identities of the shaped resource.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextSourceFill {
+    pub source_span: TextSourceSpan,
+    pub color: Color,
+}
+
+impl TextSourceFill {
+    pub const fn new(source_span: TextSourceSpan, color: Color) -> Self {
+        Self { source_span, color }
+    }
+}
+
+/// Failure to project source-addressed paint onto an already shaped resource.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextSourceStyleError {
+    InvalidSourceSpan,
+    AmbiguousFillOverlap {
+        left: TextSourceSpan,
+        right: TextSourceSpan,
+    },
+    SplitsCluster {
+        source_span: TextSourceSpan,
+        cluster_span: TextSourceSpan,
+    },
+    TargetsVector {
+        source_span: TextSourceSpan,
+    },
+    InvalidResource(TextResourceValidationError),
+}
+
+impl std::fmt::Display for TextSourceStyleError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSourceSpan => formatter.write_str("invalid text source span"),
+            Self::AmbiguousFillOverlap { left, right } => write!(
+                formatter,
+                "ambiguous text fill overlap {}..{} with {}..{}",
+                left.start, left.end, right.start, right.end
+            ),
+            Self::SplitsCluster {
+                source_span,
+                cluster_span,
+            } => write!(
+                formatter,
+                "text style span {}..{} splits shaped cluster {}..{}",
+                source_span.start, source_span.end, cluster_span.start, cluster_span.end
+            ),
+            Self::TargetsVector { source_span } => write!(
+                formatter,
+                "text style span {}..{} targets unsupported vector content",
+                source_span.start, source_span.end
+            ),
+            Self::InvalidResource(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for TextSourceStyleError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidResource(error) => Some(error),
+            Self::InvalidSourceSpan
+            | Self::AmbiguousFillOverlap { .. }
+            | Self::SplitsCluster { .. }
+            | Self::TargetsVector { .. } => None,
+        }
+    }
 }
 
 impl TextSourceSpan {
@@ -254,6 +347,10 @@ pub struct TextVectorStyle {
     pub fill: Option<Color>,
     pub stroke: Option<Color>,
     pub stroke_width: f32,
+    /// Exact cap requested by the layout backend for stroked decorations.
+    pub stroke_cap: StrokeCap,
+    /// Exact join requested by the layout backend for stroked decorations.
+    pub stroke_join: StrokeJoin,
 }
 
 impl Default for TextVectorStyle {
@@ -262,6 +359,8 @@ impl Default for TextVectorStyle {
             fill: None,
             stroke: None,
             stroke_width: 0.0,
+            stroke_cap: StrokeCap::Butt,
+            stroke_join: StrokeJoin::Miter,
         }
     }
 }
@@ -305,6 +404,8 @@ pub struct TextPart {
 /// Immutable renderer-independent shaped text/math payload.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextResource {
+    /// Canonical source used by every cluster and part range. For native markup
+    /// this is decoded UTF-8 text, not the wrapper's original markup string.
     pub source: Arc<str>,
     pub kind: TextSourceKind,
     pub runs: Arc<[GlyphRun]>,
@@ -449,6 +550,167 @@ impl TextResource {
 
         bytes
     }
+
+    /// Return an immutable paint projection over this shaped resource.
+    ///
+    /// This never reshapes or alters layout. Glyph runs are split only where
+    /// their effective intrinsic fill changes, while glyph/cluster identities,
+    /// vector items, painter ordering, metrics and layout artifact remain the
+    /// original shaped values.
+    pub fn with_source_fills(
+        &self,
+        fills: &[TextSourceFill],
+    ) -> Result<Self, TextSourceStyleError> {
+        if fills.is_empty() {
+            return Ok(self.clone());
+        }
+
+        let mut fills = fills.to_vec();
+        fills.sort_unstable_by_key(|fill| (fill.source_span.start, fill.source_span.end));
+        let source_len = u32::try_from(self.source.len()).unwrap_or(u32::MAX);
+        for fill in &fills {
+            let span = fill.source_span;
+            let start =
+                usize::try_from(span.start).map_err(|_| TextSourceStyleError::InvalidSourceSpan)?;
+            let end =
+                usize::try_from(span.end).map_err(|_| TextSourceStyleError::InvalidSourceSpan)?;
+            if span.end > source_len
+                || start > end
+                || !self.source.is_char_boundary(start)
+                || !self.source.is_char_boundary(end)
+            {
+                return Err(TextSourceStyleError::InvalidSourceSpan);
+            }
+        }
+        fills.retain(|fill| !fill.source_span.is_empty());
+        if fills.is_empty() {
+            return Ok(self.clone());
+        }
+
+        // Explicit settings for the same paint property must not depend on map
+        // iteration order, including whitespace-only overlapping ranges.
+        for pair in fills.windows(2) {
+            if spans_overlap(pair[0].source_span, pair[1].source_span) {
+                return Err(TextSourceStyleError::AmbiguousFillOverlap {
+                    left: pair[0].source_span,
+                    right: pair[1].source_span,
+                });
+            }
+        }
+
+        for vector in self.vector_items.iter() {
+            let Some(span) = vector.source_span else {
+                continue;
+            };
+            let index = fills.partition_point(|fill| fill.source_span.end <= span.start);
+            if fills
+                .get(index)
+                .is_some_and(|fill| spans_overlap(fill.source_span, span))
+            {
+                return Err(TextSourceStyleError::TargetsVector { source_span: span });
+            }
+        }
+
+        // A partial cluster cannot be recolored without choosing a new shaping
+        // boundary, so reject it rather than silently approximating it.
+        for run in self.runs.iter() {
+            for glyph in run.glyphs.iter() {
+                let cluster_span = glyph.cluster.source_span;
+                let index =
+                    fills.partition_point(|fill| fill.source_span.end <= cluster_span.start);
+                if let Some(fill) = fills.get(index) {
+                    if spans_overlap(fill.source_span, cluster_span)
+                        && !span_contains(fill.source_span, cluster_span)
+                    {
+                        return Err(TextSourceStyleError::SplitsCluster {
+                            source_span: fill.source_span,
+                            cluster_span,
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut runs = Vec::new();
+        let mut render_items = Vec::with_capacity(self.render_items.len());
+        for item in self.render_items.iter().copied() {
+            match item {
+                TextRenderItem::GlyphRun(index) => {
+                    let run = &self.runs[index as usize];
+                    for styled in split_run_by_fill(run, &fills) {
+                        let index = u32::try_from(runs.len()).map_err(|_| {
+                            TextSourceStyleError::InvalidResource(
+                                TextResourceValidationError::InvalidRenderItem,
+                            )
+                        })?;
+                        runs.push(styled);
+                        render_items.push(TextRenderItem::GlyphRun(index));
+                    }
+                }
+                TextRenderItem::Vector(index) => render_items.push(TextRenderItem::Vector(index)),
+            }
+        }
+
+        let mut styled = self.clone();
+        styled.runs = runs.into();
+        styled.render_items = render_items.into();
+        styled
+            .validate()
+            .map_err(TextSourceStyleError::InvalidResource)?;
+        Ok(styled)
+    }
+}
+
+fn split_run_by_fill(run: &GlyphRun, fills: &[TextSourceFill]) -> Vec<GlyphRun> {
+    if run.glyphs.is_empty() {
+        return vec![run.clone()];
+    }
+
+    let mut result = Vec::new();
+    let mut segment_start = 0;
+    let mut current_fill = effective_fill(run.fill, run.glyphs[0].cluster.source_span, fills);
+    for index in 1..run.glyphs.len() {
+        let fill = effective_fill(run.fill, run.glyphs[index].cluster.source_span, fills);
+        if fill != current_fill {
+            result.push(run_segment(run, segment_start, index, current_fill));
+            segment_start = index;
+            current_fill = fill;
+        }
+    }
+    result.push(run_segment(
+        run,
+        segment_start,
+        run.glyphs.len(),
+        current_fill,
+    ));
+    result
+}
+
+fn effective_fill(
+    base: Option<Color>,
+    cluster_span: TextSourceSpan,
+    fills: &[TextSourceFill],
+) -> Option<Color> {
+    let index = fills.partition_point(|fill| fill.source_span.end <= cluster_span.start);
+    fills
+        .get(index)
+        .filter(|fill| span_contains(fill.source_span, cluster_span))
+        .map_or(base, |fill| Some(fill.color))
+}
+
+fn spans_overlap(left: TextSourceSpan, right: TextSourceSpan) -> bool {
+    left.start < right.end && right.start < left.end
+}
+
+fn span_contains(outer: TextSourceSpan, inner: TextSourceSpan) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
+}
+
+fn run_segment(run: &GlyphRun, start: usize, end: usize, fill: Option<Color>) -> GlyphRun {
+    let mut segment = run.clone();
+    segment.fill = fill;
+    segment.glyphs = Arc::from(run.glyphs[start..end].to_vec());
+    segment
 }
 
 fn validate_span(span: TextSourceSpan, source_len: u32) -> Result<(), TextResourceValidationError> {
@@ -672,6 +934,23 @@ impl TextResourceArena {
         })
     }
 
+    /// Iterate the currently live versioned handles. This remains arena-local and
+    /// is used only while cloning a semantic store to rebuild derived ownership
+    /// indexes; ordinary resource mutations never scan it.
+    pub(crate) fn handles(&self) -> impl Iterator<Item = TextResourceHandle> + '_ {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                entry.value.as_ref()?;
+                Some(TextResourceHandle {
+                    arena: self.namespace,
+                    id: text_resource_id(index, entry.generation),
+                    version: entry.version,
+                })
+            })
+    }
+
     pub fn replace(
         &mut self,
         id: TextResourceId,
@@ -711,6 +990,64 @@ impl TextResourceArena {
             id,
             version,
         })
+    }
+
+    /// Start a rollback-safe sparse replacement stage without cloning this arena.
+    ///
+    /// The stage owns only replacement payloads for changed slots. Call
+    /// [`TextResourceReplacementStaging::replace`] to validate and reserve each
+    /// next handle, then commit it once the surrounding transaction succeeds.
+    pub fn replacement_staging(&self) -> TextResourceReplacementStaging {
+        TextResourceReplacementStaging {
+            namespace: self.namespace,
+            replacements: Vec::new(),
+            targets: HashMap::new(),
+            handles: HashMap::new(),
+        }
+    }
+
+    /// Validate that a sparse stage remains current without mutating this arena.
+    ///
+    /// Multi-arena callers can preflight every owning arena before committing any
+    /// replacement, preserving all-or-nothing publication across layered tables.
+    pub fn validate_replacement_staging(
+        &self,
+        staging: &TextResourceReplacementStaging,
+    ) -> Result<(), TextResourceReplacementStagingError> {
+        if self.namespace != staging.namespace {
+            return Err(TextResourceReplacementStagingError::WrongArena {
+                expected_namespace: staging.namespace,
+                actual_namespace: self.namespace,
+            });
+        }
+        for replacement in &staging.replacements {
+            let actual = self.current_handle(replacement.expected.id);
+            if actual != Some(replacement.expected) {
+                return Err(TextResourceReplacementStagingError::Stale {
+                    expected: replacement.expected,
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Commit a stage prepared against this exact arena.
+    ///
+    /// Every expected slot is revalidated before any write. A stale or foreign
+    /// stage therefore returns a typed error without partially publishing it.
+    pub fn commit_replacement_staging(
+        &mut self,
+        staging: TextResourceReplacementStaging,
+    ) -> Result<(), TextResourceReplacementStagingError> {
+        self.validate_replacement_staging(&staging)?;
+        for replacement in staging.replacements {
+            let handle = self
+                .replace(replacement.expected.id, replacement.resource)
+                .expect("preflighted text replacement must remain valid while committing");
+            debug_assert_eq!(handle, replacement.next);
+        }
+        Ok(())
     }
 
     pub fn remove(&mut self, id: TextResourceId) -> Result<Arc<TextResource>, TextResourceError> {
@@ -793,6 +1130,116 @@ impl TextResourceArena {
     }
 }
 
+/// Sparse, rollback-safe replacements prepared against one text arena.
+///
+/// This is intentionally not an arena snapshot: it retains only dirty slots and
+/// their new immutable payloads until the caller commits the surrounding work.
+#[derive(Debug)]
+pub struct TextResourceReplacementStaging {
+    namespace: u64,
+    replacements: Vec<StagedTextResourceReplacement>,
+    targets: HashMap<TextResourceId, usize>,
+    handles: HashMap<TextResourceHandle, usize>,
+}
+
+#[derive(Debug)]
+struct StagedTextResourceReplacement {
+    expected: TextResourceHandle,
+    next: TextResourceHandle,
+    resource: TextResource,
+}
+
+/// A sparse text replacement stage cannot commit against a different or stale arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextResourceReplacementStagingError {
+    WrongArena {
+        expected_namespace: u64,
+        actual_namespace: u64,
+    },
+    Stale {
+        expected: TextResourceHandle,
+        actual: Option<TextResourceHandle>,
+    },
+}
+
+impl std::fmt::Display for TextResourceReplacementStagingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WrongArena {
+                expected_namespace,
+                actual_namespace,
+            } => write!(
+                formatter,
+                "text replacement stage belongs to arena {expected_namespace}, not {actual_namespace}"
+            ),
+            Self::Stale { expected, actual } => write!(
+                formatter,
+                "text replacement stage for {}@{} is stale; current handle is {actual:?}",
+                expected.id.get(),
+                expected.version
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TextResourceReplacementStagingError {}
+
+impl TextResourceReplacementStaging {
+    /// Validate and reserve one versioned replacement without modifying `arena`.
+    pub fn replace(
+        &mut self,
+        arena: &TextResourceArena,
+        expected: TextResourceHandle,
+        resource: TextResource,
+    ) -> Result<TextResourceHandle, TextResourceError> {
+        if arena.namespace != self.namespace || arena.current_handle(expected.id) != Some(expected)
+        {
+            return Err(TextResourceError::UnknownResource(expected.id));
+        }
+        let version = expected
+            .version
+            .checked_add(1)
+            .ok_or(TextResourceError::VersionExhausted(expected.id))?;
+        resource
+            .validate()
+            .map_err(TextResourceError::InvalidResource)?;
+        if self.targets.contains_key(&expected.id) {
+            return Err(TextResourceError::DuplicateStagedResource(expected.id));
+        }
+        let next = TextResourceHandle {
+            arena: self.namespace,
+            id: expected.id,
+            version,
+        };
+        let index = self.replacements.len();
+        self.targets.insert(expected.id, index);
+        self.handles.insert(next, index);
+        self.replacements.push(StagedTextResourceReplacement {
+            expected,
+            next,
+            resource,
+        });
+        Ok(next)
+    }
+
+    /// Return a payload staged for the exact next handle in O(1).
+    pub fn get(&self, handle: TextResourceHandle) -> Option<&TextResource> {
+        self.handles
+            .get(&handle)
+            .and_then(|&index| self.replacements.get(index))
+            .map(|replacement| &replacement.resource)
+    }
+
+    /// Number of physical text slots staged for replacement.
+    pub fn len(&self) -> usize {
+        self.replacements.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.replacements.is_empty()
+    }
+}
+
 fn text_resource_id(slot: usize, generation: u32) -> TextResourceId {
     let slot = u32::try_from(slot).expect("Noon text resource slot space exhausted");
     TextResourceId::new((u64::from(generation) << TEXT_RESOURCE_SLOT_BITS) | u64::from(slot))
@@ -805,6 +1252,7 @@ fn text_resource_slot(id: TextResourceId) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextResourceError {
     UnknownResource(TextResourceId),
+    DuplicateStagedResource(TextResourceId),
     VersionExhausted(TextResourceId),
     InvalidResource(TextResourceValidationError),
 }
@@ -813,6 +1261,11 @@ impl std::fmt::Display for TextResourceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownResource(id) => write!(formatter, "unknown text resource {}", id.get()),
+            Self::DuplicateStagedResource(id) => write!(
+                formatter,
+                "text resource {} is staged more than once",
+                id.get()
+            ),
             Self::VersionExhausted(id) => {
                 write!(
                     formatter,
@@ -942,6 +1395,89 @@ mod tests {
         assert!(arena.get(first).is_none());
         assert_eq!(arena.get(second).unwrap().source.as_ref(), "x^2");
         assert_eq!(arena.stats().glyphs, 3);
+    }
+
+    #[test]
+    fn sparse_staging_indexes_repeated_exact_handle_lookups_and_commits() {
+        let mut arena = TextResourceArena::new();
+        let first = arena.insert(sample_text("first")).unwrap();
+        let second = arena.insert(sample_text("second")).unwrap();
+        let mut staging = arena.replacement_staging();
+        let next_first = staging
+            .replace(&arena, first, sample_text("first-next"))
+            .unwrap();
+        let next_second = staging
+            .replace(&arena, second, sample_text("second-next"))
+            .unwrap();
+
+        for _ in 0..64 {
+            assert_eq!(
+                staging.get(next_first).unwrap().source.as_ref(),
+                "first-next"
+            );
+            assert_eq!(
+                staging.get(next_second).unwrap().source.as_ref(),
+                "second-next"
+            );
+        }
+        assert!(staging.get(first).is_none());
+        arena.commit_replacement_staging(staging).unwrap();
+        assert_eq!(arena.get(next_first).unwrap().source.as_ref(), "first-next");
+        assert_eq!(
+            arena.get(next_second).unwrap().source.as_ref(),
+            "second-next"
+        );
+    }
+
+    #[test]
+    fn sparse_staging_rejects_stale_later_slot_without_partial_commit() {
+        let mut arena = TextResourceArena::new();
+        let first = arena.insert(sample_text("first")).unwrap();
+        let second = arena.insert(sample_text("second")).unwrap();
+        let mut staging = arena.replacement_staging();
+        staging
+            .replace(&arena, first, sample_text("first-staged"))
+            .unwrap();
+        staging
+            .replace(&arena, second, sample_text("second-staged"))
+            .unwrap();
+        let externally_replaced = arena
+            .replace(second.id, sample_text("second-external"))
+            .unwrap();
+
+        assert_eq!(
+            arena.commit_replacement_staging(staging),
+            Err(TextResourceReplacementStagingError::Stale {
+                expected: second,
+                actual: Some(externally_replaced),
+            })
+        );
+        assert_eq!(arena.current_handle(first.id), Some(first));
+        assert_eq!(arena.get(first).unwrap().source.as_ref(), "first");
+        assert_eq!(
+            arena.get(externally_replaced).unwrap().source.as_ref(),
+            "second-external"
+        );
+    }
+
+    #[test]
+    fn invalid_sparse_stage_payload_does_not_claim_its_target() {
+        let mut arena = TextResourceArena::new();
+        let handle = arena.insert(sample_text("stable")).unwrap();
+        let mut invalid = sample_text("invalid");
+        invalid.render_items = Arc::from([TextRenderItem::GlyphRun(1)]);
+        let mut staging = arena.replacement_staging();
+
+        assert!(matches!(
+            staging.replace(&arena, handle, invalid),
+            Err(TextResourceError::InvalidResource(_))
+        ));
+        let next = staging
+            .replace(&arena, handle, sample_text("reusable"))
+            .unwrap();
+        assert_eq!(staging.len(), 1);
+        arena.commit_replacement_staging(staging).unwrap();
+        assert_eq!(arena.get(next).unwrap().source.as_ref(), "reusable");
     }
 
     #[test]
@@ -1203,5 +1739,89 @@ mod tests {
         };
         assert_eq!(outline.key.text, text);
         assert_eq!(outline.geometry, geometry);
+    }
+
+    #[test]
+    fn source_fills_preserve_glyph_identity_layout_and_painter_order() {
+        let original = sample_text("abcd");
+        let styled = original
+            .with_source_fills(&[TextSourceFill::new(TextSourceSpan::new(1, 3), Color::RED)])
+            .unwrap();
+
+        assert_eq!(styled.bounds, original.bounds);
+        assert_eq!(styled.baseline, original.baseline);
+        assert_eq!(styled.vector_items, original.vector_items);
+        assert_eq!(styled.layout_artifact, original.layout_artifact);
+        assert_eq!(
+            styled
+                .runs
+                .iter()
+                .flat_map(|run| run.glyphs.iter())
+                .collect::<Vec<_>>(),
+            original
+                .runs
+                .iter()
+                .flat_map(|run| run.glyphs.iter())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(styled.runs.len(), 3);
+        assert_eq!(styled.runs[0].fill, None);
+        assert_eq!(styled.runs[1].fill, Some(Color::RED));
+        assert_eq!(styled.runs[2].fill, None);
+        assert_eq!(styled.parts, original.parts);
+    }
+
+    #[test]
+    fn source_fill_rejects_invalid_utf8_and_ambiguous_overlap() {
+        let original = sample_text("éx");
+        assert_eq!(
+            original
+                .with_source_fills(&[TextSourceFill::new(TextSourceSpan::new(1, 2), Color::RED,)]),
+            Err(TextSourceStyleError::InvalidSourceSpan)
+        );
+        assert_eq!(
+            original.with_source_fills(&[
+                TextSourceFill::new(TextSourceSpan::new(0, 2), Color::RED),
+                TextSourceFill::new(TextSourceSpan::new(0, 3), Color::BLUE),
+            ]),
+            Err(TextSourceStyleError::AmbiguousFillOverlap {
+                left: TextSourceSpan::new(0, 2),
+                right: TextSourceSpan::new(0, 3),
+            })
+        );
+    }
+
+    #[test]
+    fn source_fill_rejects_a_shaped_cluster_cut() {
+        let mut original = sample_text("fi");
+        let mut glyph = original.runs[0].glyphs[0].clone();
+        glyph.cluster.source_span = TextSourceSpan::new(0, 2);
+        original.runs = Arc::from([GlyphRun {
+            glyphs: Arc::from([glyph]),
+            ..original.runs[0].clone()
+        }]);
+        assert_eq!(
+            original
+                .with_source_fills(&[TextSourceFill::new(TextSourceSpan::new(1, 2), Color::RED,)]),
+            Err(TextSourceStyleError::SplitsCluster {
+                source_span: TextSourceSpan::new(1, 2),
+                cluster_span: TextSourceSpan::new(0, 2),
+            })
+        );
+    }
+
+    #[test]
+    fn source_fill_projection_handles_many_repeated_source_spans() {
+        let source = "a ".repeat(10_000);
+        let original = sample_text(&source);
+        let fills = (0..10_000_u32)
+            .map(|index| {
+                let start = index * 2;
+                TextSourceFill::new(TextSourceSpan::new(start, start + 1), Color::RED)
+            })
+            .collect::<Vec<_>>();
+        let styled = original.with_source_fills(&fills).unwrap();
+        assert_eq!(styled.glyph_count(), original.glyph_count());
+        assert_eq!(styled.bounds, original.bounds);
     }
 }

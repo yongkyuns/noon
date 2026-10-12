@@ -26,6 +26,9 @@ jobs:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: "READ_ONLY"
+      NOON_WASM_PROFILE: release
+      NOON_WASM_SKIP_OPT: "0"
+      NOON_RENDERER_SMOKE: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -53,10 +56,13 @@ jobs:
           version: v0.16.0
 
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
         with:
           tool: wasm-pack@0.15.0
           fallback: none
+
+      - name: Install pinned wasm-opt
+        uses: ./.github/actions/install-wasm-opt
 
       - name: Build and validate playground
         run: bash scripts/build-web-demo.sh

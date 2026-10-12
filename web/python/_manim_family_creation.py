@@ -13,12 +13,12 @@ import _manim_typst as _typst
 
 
 
-def _native_text(value: object) -> bool:
-    return isinstance(value, _typst.Text)
+def _retained_text(value: object) -> bool:
+    return isinstance(value, _typst._RetainedTextMobject)
 
 
 class Write:
-    """Simulate writing retained native Text with ManimCE v0.21 family semantics."""
+    """Write retained glyphs and vector rules through shared family semantics."""
 
     def __init__(
         self,
@@ -38,7 +38,7 @@ class Write:
         if not math.isfinite(stroke_width) or stroke_width < 0.0:
             raise ValueError("Write stroke_width must be finite and non-negative")
         leaves = _compat._leaf_mobjects(vmobject)
-        retained_text = any(_native_text(member) for member in leaves)
+        retained_text = any(_retained_text(member) for member in leaves)
         if retained_text and (
             not math.isclose(stroke_width, 2.0, abs_tol=1e-15) or stroke_color is not None
         ):
@@ -66,7 +66,7 @@ class Write:
 
 
 class Unwrite(Write):
-    """Simulate erasing retained native Text with ManimCE v0.21 family semantics."""
+    """Erase retained glyphs and vector rules through shared family semantics."""
 
     def __init__(
         self,

@@ -49,7 +49,7 @@ impl LiveContinuation for DrawBorderThenFill {
 }
 
 pub fn program() -> Result<LiveProgram<DrawBorderThenFill>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut square = Mobject::manim_square(Rc::clone(scene.integration_store()), 0.8)
         .map_err(|error| error.to_string())?;
     square

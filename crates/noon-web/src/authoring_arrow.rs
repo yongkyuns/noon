@@ -53,6 +53,16 @@ pub struct WasmManimArrowOptions {
 }
 
 impl WasmManimArrowOptions {
+    pub(crate) fn into_live_arrow_options(self) -> Result<noon::ManimArrowOptions, JsValue> {
+        match self.request {
+            ArrowRequest::Arrow(options) => Ok(options),
+            ArrowRequest::VectorField(_) => Err(invalid_input(
+                "vector_field.live_creation",
+                "live Arrow construction does not support ArrowVectorField",
+            )),
+        }
+    }
+
     fn arrow_options_mut(&mut self) -> Result<&mut noon::ManimArrowOptions, JsValue> {
         match &mut self.request {
             ArrowRequest::Arrow(options) => Ok(options),
@@ -433,7 +443,46 @@ pub struct WasmAuthoringArrowHandle {
 }
 
 impl WasmAuthoringArrowHandle {
-    fn arrow(&self) -> Result<&noon::ManimArrow, JsValue> {
+    pub(crate) fn from_manim_arrow(arrow: noon::ManimArrow) -> Self {
+        Self {
+            published: PublishedArrowRequest::Arrow(arrow),
+        }
+    }
+
+    pub(crate) fn rebind_from_family_copy(
+        &self,
+        copied: &noon::FamilyCopy,
+        vector_index: Option<u32>,
+    ) -> Result<Self, JsValue> {
+        let published = match (&self.published, vector_index) {
+            (PublishedArrowRequest::Arrow(arrow), None) => {
+                PublishedArrowRequest::Arrow(copied.rebind_manim_arrow(arrow).map_err(js_error)?)
+            }
+            (PublishedArrowRequest::Arrow(_), Some(_)) => {
+                return Err(invalid_input(
+                    "arrow.copy_index",
+                    "a single Arrow aggregate cannot be rebound with a vector-field index",
+                ));
+            }
+            (PublishedArrowRequest::VectorField(field), None) => {
+                PublishedArrowRequest::VectorField(
+                    copied
+                        .rebind_manim_arrow_vector_field(field)
+                        .map_err(js_error)?,
+                )
+            }
+            (PublishedArrowRequest::VectorField(field), Some(index)) => {
+                PublishedArrowRequest::Arrow(
+                    copied
+                        .rebind_manim_arrow_vector(field, index as usize)
+                        .map_err(js_error)?,
+                )
+            }
+        };
+        Ok(Self { published })
+    }
+
+    pub(crate) fn arrow(&self) -> Result<&noon::ManimArrow, JsValue> {
         match &self.published {
             PublishedArrowRequest::Arrow(arrow) => Ok(arrow),
             PublishedArrowRequest::VectorField(_) => Err(invalid_input(
@@ -463,6 +512,39 @@ impl WasmAuthoringArrowHandle {
 
 #[wasm_bindgen]
 impl WasmAuthoringArrowHandle {
+    /// Transform public arrow endpoints with the shared pointwise matrix path.
+    /// The caller can rebuild an Arrow target so its tip is regenerated.
+    #[wasm_bindgen(js_name = matrixTransformedEndpoints)]
+    pub fn matrix_transformed_endpoints(
+        &self,
+        values: Vec<f64>,
+        rows: u32,
+        columns: u32,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<js_sys::Array, JsValue> {
+        let endpoints = self
+            .arrow()?
+            .matrix_transformed_endpoints(
+                &values,
+                rows as usize,
+                columns as usize,
+                about_x,
+                about_y,
+            )
+            .map_err(js_error)?;
+        let result = js_sys::Array::new();
+        for value in [
+            endpoints.start.0,
+            endpoints.start.1,
+            endpoints.end.0,
+            endpoints.end.1,
+        ] {
+            result.push(&JsValue::from_f64(value));
+        }
+        Ok(result)
+    }
+
     pub fn family(&self) -> WasmAuthoringFamilyHandle {
         let family = match &self.published {
             PublishedArrowRequest::Arrow(arrow) => arrow.family(),

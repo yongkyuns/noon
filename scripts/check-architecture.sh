@@ -8,8 +8,9 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/check-architecture.sh [BASE]
 
-Run the layer, core-module, renderer-host, active-perf, migration/identity,
-and crate-private export guardrails against the current working tree.
+Run the layer, core-module, renderer-host, transient-presentation,
+active-perf, migration/identity, and crate-private export guardrails against the
+current working tree.
 BASE defaults to origin/master, is printed and resolved once, and must exist
 locally. Pass HEAD explicitly for working-tree-only checks. No fetch, merge-base
 selection, HEAD^ fallback, dependency download or compilation is performed.
@@ -75,6 +76,7 @@ run_guard() {
 run_guard layer-dependency-ratchet.sh
 run_guard noon-core-module-ownership-ratchet.sh
 run_guard renderer-host-boundary-ratchet.sh
+run_guard transient-presentation-ratchet.sh
 run_guard active-perf-frontend-ratchet.sh
 run_guard architecture-ratchet.sh "$base"
 

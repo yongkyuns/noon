@@ -27,6 +27,35 @@ fn bounds_json(bounds: Option<Rect>) -> Value {
     }
 }
 
+fn diagnostic_geometry_at_progress(
+    geometry: &GeometryRef,
+    morph: f32,
+    reveal: f32,
+) -> Option<GeometryRef> {
+    if let GeometryRef::VectorPath(path) = geometry {
+        if let Some(target) = path.morph_target() {
+            return noon_geometry::interpolate_revealed_path_preserving_order(
+                path, target, morph, reveal,
+            )
+            .ok()
+            .map(GeometryRef::VectorPath);
+        }
+        if morph != 0.0 {
+            return None;
+        }
+    } else if morph != 0.0 {
+        return None;
+    }
+
+    if reveal >= 1.0 {
+        return Some(geometry.clone());
+    }
+    let path = noon_geometry::canonical_outline_path(geometry)?;
+    Some(GeometryRef::VectorPath(
+        noon_geometry::authored_partial_path(&path, 0.0, reveal.clamp(0.0, 1.0)),
+    ))
+}
+
 /// Capture derived current-frame observations for debugging and test artifacts.
 ///
 /// This opt-in codec performs O(frame size) work and never advances or mutates execution.
@@ -50,9 +79,17 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                         GeometryResource::VectorPath(path) => {
                             GeometryRef::VectorPath((**path).clone())
                         }
+                        GeometryResource::Mesh(_) => GeometryRef::External(*id),
                     }),
                 geometry => geometry.cloned(),
             };
+            let geometry = geometry.and_then(|geometry| {
+                diagnostic_geometry_at_progress(
+                    &geometry,
+                    frame.morph(index),
+                    frame.reveal(index),
+                )
+            });
             let bounds = geometry
                 .as_ref()
                 .and_then(|geometry| geometry.world_bounds(transform))
@@ -71,10 +108,63 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                 });
             let center = bounds.map(Rect::center).unwrap_or(transform.translation);
             let opacity = object.style.opacity * object.appearance;
+            let spatial = object.spatial.as_deref().map(|state| {
+                let world = state.world;
+                let camera_profile = object.camera_profile().map(|(profile, near, far)| {
+                    json!({
+                        "phi": profile.phi,
+                        "theta": profile.theta,
+                        "gamma": profile.gamma,
+                        "focal_distance": profile.focal_distance,
+                        "zoom": profile.zoom,
+                        "frame_height": profile.frame_height,
+                        "frame_center": [
+                            profile.frame_center.x,
+                            profile.frame_center.y,
+                            profile.frame_center.z,
+                        ],
+                        "near": near,
+                        "far": far,
+                    })
+                });
+                let projection = state.camera_projection.map(|projection| match projection {
+                    noon_core::SemanticProjection3D::Perspective {
+                        vertical_fov_radians,
+                        near,
+                        far,
+                    } => {
+                        json!({ "kind": "perspective", "vertical_fov_radians": vertical_fov_radians,
+                            "near": near, "far": far })
+                    }
+                    noon_core::SemanticProjection3D::Orthographic { height, near, far } => {
+                        json!({ "kind": "orthographic", "height": height,
+                            "near": near, "far": far })
+                    }
+                });
+                json!({
+                    "draw_kind": state.draw_kind,
+                    "composition_domain": state.composition_domain,
+                    "fixed_orientation_center": state.fixed_orientation_center.map(|v| [v.x, v.y, v.z]),
+                    "translation": [world.translation.x, world.translation.y, world.translation.z],
+                    "rotation_wxyz": world.rotation.components(),
+                    "scale": [world.scale.x, world.scale.y, world.scale.z],
+                    "camera_projection": projection,
+                    "camera_profile": camera_profile,
+                    "material": match state.material {
+                        noon_core::SemanticSpatialMaterial::Unlit => "unlit",
+                        noon_core::SemanticSpatialMaterial::PointLit => "point_lit",
+                        noon_core::SemanticSpatialMaterial::CairoSurface => "cairo_surface",
+                        noon_core::SemanticSpatialMaterial::CairoPath => "cairo_path",
+                    },
+                    "point_light": state.point_light,
+                    "cairo_path_appearance": state.cairo_path_appearance,
+                })
+            });
             json!({
                 "id": object.id.get(), "present": frame.is_present(index),
                 "center": [center.x, center.y], "bounds": bounds_json(bounds),
                 "transform": transform,
+                "spatial": spatial,
                 "fill": paint_json(object.style.fill, opacity),
                 "stroke": paint_json(object.style.stroke, opacity),
                 "stroke_width": object.style.stroke_width,
@@ -85,9 +175,27 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
             })
         })
         .collect::<Vec<_>>();
+    // Observe the same effective camera consumed by rendering, not the authored
+    // frame or a frontend mirror. This remains an opt-in diagnostic read.
+    let camera = session
+        .camera()
+        .map(|camera| {
+            json!({
+                "center": [camera.center.x, camera.center.y],
+                "height": camera.height,
+            })
+        })
+        .unwrap_or(Value::Null);
     json!({
         "engine": "noon", "time": frame.time,
         "publication": session.publication_context(),
+        "camera": camera,
+        // Resolve the renderer's existing typed inset relation only on this
+        // opt-in diagnostic path. Invalid state must not look like no insets.
+        "inset_2d_views": match session.inset_2d_views() {
+            Ok(views) => json!(views),
+            Err(error) => json!({ "error": error.to_string() }),
+        },
         "present_object_count": objects.iter().filter(|object| object["present"] == true).count(),
         "objects": objects,
     })
@@ -96,7 +204,78 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnimationOptions, LiveProgramStatus, RateFunction, RustHostCallbackTable, Scene};
+    use crate::{
+        AnimationOptions, LiveProgramStatus, ManimArrowOptions, MobjectTarget, RateFunction,
+        RustHostCallbackTable, Scene,
+    };
+
+    #[test]
+    fn debug_capture_observes_effective_camera_without_mutating_publication() {
+        let (mut program, mut callbacks) =
+            crate::example_scenes::following_graph_camera::program().unwrap();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        program.drive_to(&mut callbacks, 0.5).unwrap();
+        let session = program.session();
+        let before = session.publication_context();
+        let expected = session.camera().unwrap();
+        let capture = execution_frame_value(session);
+        assert_eq!(capture["time"], 0.5);
+        assert_eq!(
+            capture["camera"]["center"],
+            json!([expected.center.x, expected.center.y])
+        );
+        assert_eq!(capture["camera"]["height"], json!(expected.height));
+        assert!(expected.height > 4.0 && expected.height < 8.0);
+        assert_eq!(session.publication_context(), before);
+    }
+
+    #[test]
+    fn spatial_capture_reads_exact_effective_pose_and_light_material() {
+        let mut session = crate::example_scenes::spatial_surface::lighting_session().unwrap();
+        session.advance_to(0.5).unwrap();
+        let before = session.publication_context();
+        let capture = execution_frame_value(&session);
+        let rows = capture["objects"].as_array().unwrap();
+        let light = rows
+            .iter()
+            .find(|row| row["spatial"]["point_light"] == true)
+            .unwrap();
+        assert_eq!(light["spatial"]["translation"], json!([0.5, 0.0, 5.0]));
+        assert!(rows
+            .iter()
+            .any(|row| row["spatial"]["material"] == "point_lit"));
+        assert!(rows
+            .iter()
+            .any(|row| row["spatial"]["camera_projection"]["far"] == 30.0));
+        assert_eq!(session.publication_context(), before);
+    }
+
+    #[test]
+    fn debug_capture_observes_effective_insets_without_mutating_publication() {
+        let mut session = crate::example_scenes::zoomed_scene::session().unwrap();
+        for time in [0.0, 0.5, 1.0] {
+            session.seek(time).unwrap();
+            let before = session.publication_context();
+            let expected = session.inset_2d_views().unwrap();
+            assert_eq!(expected.len(), 1);
+            let capture = execution_frame_value(&session);
+            assert_eq!(capture["inset_2d_views"], json!(expected));
+            assert_eq!(session.publication_context(), before);
+        }
+
+        let mut scene = Scene::new();
+        let view = scene
+            .zoomed_view(crate::ZoomedSceneOptions::default())
+            .unwrap();
+        scene.activate_zooming(&view).unwrap();
+        let mut display = view.display().clone();
+        display.set_rotation(0.125).unwrap();
+        let session = scene.execution_session().unwrap();
+        assert!(execution_frame_value(&session)["inset_2d_views"]["error"].is_string());
+    }
 
     #[test]
     fn debug_capture_reads_the_current_shared_frame_without_advancing_it() {
@@ -114,6 +293,36 @@ mod tests {
         assert_eq!(value["objects"][0]["center"][0], 0.25);
         assert_eq!(value["objects"][0]["center"][1], 0.125);
         assert_eq!(program.session().publication_context(), before);
+    }
+
+    #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+    #[test]
+    fn debug_capture_reports_effective_unwrapped_three_d_camera_profile() {
+        let mut session = crate::example_scenes::spatial_three_d_axes::session().unwrap();
+        session.advance_to(0.5).unwrap();
+        let publication = session.publication_context();
+
+        let value = execution_frame_value(&session);
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(value["time"], 0.5);
+        let profile = value["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|object| object["spatial"]["camera_profile"].as_object())
+            .expect("the effective profiled camera row is diagnosed");
+        let close =
+            |key: &str, expected: f64| (profile[key].as_f64().unwrap() - expected).abs() < 1.0e-12;
+        assert!(close("phi", 0.7));
+        assert!(close("theta", -0.65));
+        assert!(close("gamma", 0.1));
+        assert!(close("focal_distance", 5.0));
+        assert!(close("zoom", 1.05));
+        assert!(close("frame_height", 8.0));
+        assert_eq!(profile["frame_center"].as_array().unwrap().len(), 3);
+        assert!((profile["frame_center"][0].as_f64().unwrap() - 0.15).abs() < 1.0e-12);
+        assert!(close("near", 0.1));
+        assert!(close("far", 100.0));
     }
 
     #[test]
@@ -144,5 +353,60 @@ mod tests {
         assert_eq!(value["objects"][0]["center"], json!([1.0, -0.5]));
         assert_eq!(value["objects"][0]["bounds"]["width"], 2.0);
         assert!((value["objects"][0]["fill"]["alpha"].as_f64().unwrap() - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn debug_capture_bounds_follow_line_arrow_morph_at_begin_midpoint_and_end() {
+        let mut scene = Scene::new();
+        let mut horizontal = ManimArrowOptions::arrow(0.0, 0.0, 1.0, 0.0).unwrap();
+        horizontal.set_buff(0.0).unwrap();
+        horizontal.set_tip_length(0.25).unwrap();
+        let mut vertical = ManimArrowOptions::arrow(0.0, 0.0, 0.0, 1.0).unwrap();
+        vertical.set_buff(0.0).unwrap();
+        vertical.set_tip_length(0.25).unwrap();
+        let source = scene.manim_arrow(horizontal).unwrap();
+        let target = scene.manim_arrow(vertical).unwrap();
+        scene
+            .add_many(&[MobjectTarget::Family(source.family())])
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let shaft_id = session
+            .execution_object_id(source.shaft().node_id())
+            .unwrap()
+            .get();
+        let segment = {
+            let mut live = scene.live(&mut session);
+            live.declare_and_activate_family_transform_to(
+                source.family(),
+                target.family(),
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap()
+        };
+
+        for (time, progress) in [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)] {
+            {
+                let mut live = scene.live(&mut session);
+                live.advance_segment_to(segment, time).unwrap();
+            }
+            let capture = execution_frame_value(&session);
+            let row = capture["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| {
+                    row["id"] == shaft_id
+                        && row["stroke_width_mode"] == "screen_space"
+                        && row["stroke"]["alpha"] != Value::Null
+                })
+                .unwrap();
+            let expected_end = [0.75 * (1.0 - progress), 0.75 * progress];
+            let bounds = &row["bounds"];
+            assert_eq!(bounds["min"], json!([0.0, 0.0]));
+            assert!((bounds["max"][0].as_f64().unwrap() - expected_end[0]).abs() < 1e-6);
+            assert!((bounds["max"][1].as_f64().unwrap() - expected_end[1]).abs() < 1e-6);
+        }
     }
 }

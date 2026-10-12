@@ -2,13 +2,41 @@
 
 #![forbid(unsafe_code)]
 
+mod compaction;
+mod derived_display_evaluation;
+pub use compaction::{RuntimeCompactionError, RuntimeCompactionStats};
+mod effective_content;
+mod effective_write;
 mod execution_slots;
 mod frame;
+mod glow_attachment;
+mod graph_endpoints;
+mod numeric_text;
+pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
 mod prepared_frame;
+mod spatial_composition;
+
+mod transient_animation;
+pub use transient_animation::PreparedTransientAnimation;
 mod reactive;
 mod renderer_publication;
+mod replay;
+mod signal_timeline;
 mod spatial_index;
+mod translation_drag;
+pub use replay::{ReplayError, ReplayLimits, ReplayStats};
+pub use signal_timeline::{
+    PreparedSignalTimelineAppend, SignalTimelineAppendError, SignalTimelinePreview,
+    SignalTimelineSchedule,
+};
 
+pub use derived_display_evaluation::*;
+pub use effective_content::{
+    EffectiveContentError, EffectiveContentLease, PreparedEffectiveContentReplacement,
+    PreparedFrameContentCommitError,
+};
+use effective_write::apply_effective_property_to_row;
+pub use effective_write::EffectivePropertyWrite;
 pub use execution_slots::*;
 use frame::{frame_row_mut, EffectiveBoundsBasis, FrameRowMut, FrameRowState};
 pub use frame::{EffectiveObjectProperties, FrameChanges, FrameObjectState, FrameState};
@@ -27,16 +55,18 @@ use std::{
 
 use noon_compile::{
     CompilePatchError, CompiledChannelKey, CompiledFamilyAnimationChannel, CompiledScene,
-    CompiledTrack, ExecutionPatch, TransformGeometryPlan,
+    CompiledSpatialState, CompiledTrack, ExecutionPatch, TransformGeometryPlan,
 };
 use noon_core::{
-    continuous_time_map_interval, mapped_continuous_progress, FamilyAnimationState,
-    PublicationContext, RetainedFamilyAnimationPlan, TrackTiming,
+    continuous_time_map_interval, mapped_continuous_progress, mapped_continuous_progress_f64,
+    FamilyAnimationState, PublicationContext, RetainedFamilyAnimationPlan, TrackTiming,
 };
 use noon_core::{
     Color, GeometryRef, ObjectId, PathCommand, Property, StrokeWidthMode, Style, TrackDefinition,
     TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
+    MANIM_STRAIGHT_PATH_ARC_THRESHOLD,
 };
+use numeric_text::NumericTextRuntime;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EvaluationStats {
@@ -47,17 +77,43 @@ pub struct EvaluationStats {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvaluationError {
+    ReplaySealed,
+    ForeignScalarTimeline {
+        expected: RuntimeIdentity,
+        actual: RuntimeIdentity,
+    },
+    ReplayTimeOutsideRange {
+        time: f64,
+        start: f64,
+        end: f64,
+    },
     InvalidTime(f64),
-    NonMonotonicPreparedAdvance { current: f64, requested: f64 },
+    NonMonotonicPreparedAdvance {
+        current: f64,
+        requested: f64,
+    },
     FrameEpochExhausted(noon_core::FrameEpoch),
     RequiredCallbackPending,
     RequiredCallbackBarrier,
     Reactive(noon_core::ReactiveError),
+    NumericText(noon_core::NumericTextResourceError),
 }
 
 impl std::fmt::Display for EvaluationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReplaySealed => {
+                formatter.write_str("sealed replay cannot stage live effective mutations")
+            }
+            Self::ForeignScalarTimeline { expected, actual } => {
+                write!(
+                    formatter,
+                    "scalar timeline belongs to runtime {actual:?}, not {expected:?}"
+                )
+            }
+            Self::ReplayTimeOutsideRange { time, start, end } => {
+                write!(formatter, "replay time {time} is outside {start}..={end}")
+            }
             Self::InvalidTime(time) => write!(formatter, "invalid scene time {time}"),
             Self::NonMonotonicPreparedAdvance { current, requested } => write!(
                 formatter,
@@ -72,6 +128,7 @@ impl std::fmt::Display for EvaluationError {
             Self::RequiredCallbackBarrier => formatter
                 .write_str("semantic host callbacks require callback-aware session advancement"),
             Self::Reactive(error) => error.fmt(formatter),
+            Self::NumericText(error) => error.fmt(formatter),
         }
     }
 }
@@ -80,6 +137,7 @@ impl std::error::Error for EvaluationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Reactive(error) => Some(error),
+            Self::NumericText(error) => Some(error),
             _ => None,
         }
     }
@@ -136,6 +194,8 @@ impl RuntimeIdentity {
 pub struct SceneInstance {
     identity: RuntimeIdentity,
     compiled: CompiledScene,
+    path_motion_plans: BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
+    replay_history: Option<replay::ReplayHistory>,
     frame: FrameState,
     painter_order: Vec<u32>,
     painter_ranks: Vec<Option<u32>>,
@@ -145,19 +205,50 @@ pub struct SceneInstance {
     last_patch_stats: RuntimePatchStats,
     changes: FrameChanges,
     spatial_changes: FrameChanges,
+    pending_spatial_anchor_groups: BTreeSet<u32>,
+    pending_spatial_anchor_rows: BTreeSet<usize>,
     reactive: Option<ReactiveRuntime>,
     last_reactive_stats: ReactiveRuntimeStats,
     publication: PublicationContext,
     effective_driver_rows: BTreeSet<usize>,
+    effective_content_drivers: BTreeMap<usize, effective_content::EffectiveContentDriver>,
+    effective_images: BTreeMap<
+        noon_core::RasterImageResourceHandle,
+        (std::sync::Arc<noon_core::RasterImageResource>, usize),
+    >,
+    effective_geometries: BTreeMap<
+        noon_core::GeometryId,
+        (
+            noon_core::GeometryResourceHandle,
+            noon_core::GeometryResource,
+            usize,
+        ),
+    >,
+    next_effective_content_sequence: u64,
+    /// Session-owned pointer translation leases. Unlike ordinary whole-row
+    /// effective writes these own only Position, so unrelated channels continue
+    /// through the normal scheduler while a pointer is held.
+    translation_drag_rows: BTreeMap<usize, Vec2>,
+    transient_animations: transient_animation::TransientAnimations,
     active_family_animation_indices: BTreeSet<usize>,
     pending_family_endpoint_expirations: BTreeMap<usize, usize>,
+    /// Monotonic diagnostic count of sparse graph dependency visits.
+    graph_dependency_visits: u64,
+    numeric_text: NumericTextRuntime,
 }
 
 impl Clone for SceneInstance {
     fn clone(&self) -> Self {
+        let identity = RuntimeIdentity::fresh();
+        let mut effective_content_drivers = self.effective_content_drivers.clone();
+        for driver in effective_content_drivers.values_mut() {
+            driver.lease.runtime = identity;
+        }
         Self {
-            identity: RuntimeIdentity::fresh(),
+            identity,
             compiled: self.compiled.clone(),
+            path_motion_plans: self.path_motion_plans.clone(),
+            replay_history: self.replay_history.clone(),
             frame: self.frame.clone(),
             painter_order: self.painter_order.clone(),
             painter_ranks: self.painter_ranks.clone(),
@@ -167,13 +258,67 @@ impl Clone for SceneInstance {
             last_patch_stats: self.last_patch_stats,
             changes: self.changes.clone(),
             spatial_changes: self.spatial_changes.clone(),
+            pending_spatial_anchor_groups: self.pending_spatial_anchor_groups.clone(),
+            pending_spatial_anchor_rows: self.pending_spatial_anchor_rows.clone(),
             reactive: self.reactive.clone(),
             last_reactive_stats: self.last_reactive_stats,
             publication: self.publication,
             effective_driver_rows: self.effective_driver_rows.clone(),
+            effective_content_drivers,
+            effective_images: self.effective_images.clone(),
+            effective_geometries: self.effective_geometries.clone(),
+            next_effective_content_sequence: self.next_effective_content_sequence,
+            translation_drag_rows: self.translation_drag_rows.clone(),
+            transient_animations: self.transient_animations.clone(),
             active_family_animation_indices: self.active_family_animation_indices.clone(),
             pending_family_endpoint_expirations: self.pending_family_endpoint_expirations.clone(),
+            graph_dependency_visits: self.graph_dependency_visits,
+            numeric_text: self.numeric_text.clone(),
         }
+    }
+}
+
+impl noon_core::TextResourceLookup for SceneInstance {
+    fn get(&self, handle: noon_core::TextResourceHandle) -> Option<&noon_core::TextResource> {
+        self.numeric_text
+            .resources()
+            .get(handle)
+            .or_else(|| self.compiled.text_resources().get(handle))
+    }
+}
+
+impl noon_core::RasterImageResourceLookup for SceneInstance {
+    fn get(
+        &self,
+        handle: noon_core::RasterImageResourceHandle,
+    ) -> Option<&noon_core::RasterImageResource> {
+        self.effective_images
+            .get(&handle)
+            .map(|(resource, _)| resource.as_ref())
+            .or_else(|| self.compiled.raster_image_resources().get(handle))
+    }
+}
+
+impl noon_core::GeometryResourceLookup for SceneInstance {
+    fn current_handle(
+        &self,
+        id: noon_core::GeometryId,
+    ) -> Option<noon_core::GeometryResourceHandle> {
+        self.effective_geometries
+            .get(&id)
+            .map(|(handle, _, _)| *handle)
+            .or_else(|| self.compiled.geometry_resources().current_handle(id))
+    }
+
+    fn get(
+        &self,
+        handle: noon_core::GeometryResourceHandle,
+    ) -> Option<&noon_core::GeometryResource> {
+        self.effective_geometries
+            .get(&handle.id)
+            .filter(|(effective, _, _)| *effective == handle)
+            .map(|(_, resource, _)| resource)
+            .or_else(|| self.compiled.geometry_resources().get(handle))
     }
 }
 
@@ -185,8 +330,22 @@ impl SceneInstance {
         self.compiled.preflight_reconcilable_track_additions(tracks)
     }
 
+    /// A staged, allocator-owned new attachment may be the source of a track
+    /// in this one atomic semantic/runtime commit. The final transaction still
+    /// proves that the attachment precedes the track before publication.
+    pub fn preflight_reconcilable_track_additions_with_staged_glow(
+        &self,
+        tracks: &[TrackDefinition],
+        staged_glow: &std::collections::BTreeMap<noon_core::ObjectId, noon_compile::CompiledGlow>,
+    ) -> Result<(), CompilePatchError> {
+        self.compiled
+            .preflight_reconcilable_track_additions_with_staged_glow(tracks, staged_glow)
+    }
+
     pub fn new(compiled: CompiledScene) -> Self {
         let frame = base_frame(&compiled, 0.0);
+        let path_motion_plans = prepare_path_motion_plans(&compiled);
+        let numeric_text = NumericTextRuntime::new(&compiled);
         let groups = build_groups(&compiled);
         let timeline_scheduler = TimelineEventScheduler::from_compiled(&compiled);
         let mut instance = Self {
@@ -196,6 +355,8 @@ impl SceneInstance {
                 .map(|index| compiled.painter_rank(index as u32))
                 .collect(),
             compiled,
+            path_motion_plans,
+            replay_history: None,
             frame,
             groups,
             timeline_scheduler,
@@ -203,12 +364,22 @@ impl SceneInstance {
             last_patch_stats: RuntimePatchStats::default(),
             changes: FrameChanges::all(),
             spatial_changes: FrameChanges::all(),
+            pending_spatial_anchor_groups: BTreeSet::new(),
+            pending_spatial_anchor_rows: BTreeSet::new(),
             reactive: None,
             last_reactive_stats: ReactiveRuntimeStats::default(),
             publication: PublicationContext::default(),
             effective_driver_rows: BTreeSet::new(),
+            effective_content_drivers: BTreeMap::new(),
+            effective_images: BTreeMap::new(),
+            effective_geometries: BTreeMap::new(),
+            next_effective_content_sequence: 1,
+            translation_drag_rows: BTreeMap::new(),
+            transient_animations: Default::default(),
             active_family_animation_indices: BTreeSet::new(),
             pending_family_endpoint_expirations: BTreeMap::new(),
+            graph_dependency_visits: 0,
+            numeric_text,
         };
         instance.seek_unchecked(0.0);
         instance
@@ -220,6 +391,32 @@ impl SceneInstance {
 
     pub fn frame(&self) -> &FrameState {
         &self.frame
+    }
+
+    /// Current effective visual bounds for one live retained object.
+    pub fn effective_object_bounds(&self, id: ObjectId) -> Option<noon_core::Rect> {
+        let index = self.frame_index_for_object(id)?;
+        let object = self.frame.objects.get(index)?;
+        crate::spatial_index::effective_object_conservative_bounds_with_resources(
+            self.frame.render_geometry(index),
+            object
+                .text_bounds
+                .or_else(|| object.content.image().map(|image| image.local_bounds())),
+            self.frame.render_transform(index),
+            object.style,
+            self,
+        )
+    }
+
+    /// Logical heap held by the prepared path-motion cache. Plans shared by
+    /// tracks with the same activation snapshot are counted once.
+    pub fn path_motion_plan_retained_bytes(&self) -> usize {
+        let mut seen = BTreeSet::new();
+        self.path_motion_plans
+            .values()
+            .filter(|plan| seen.insert(Arc::as_ptr(plan) as usize))
+            .map(|plan| plan.retained_bytes())
+            .sum()
     }
 
     pub fn planned_family_frame(&self) -> RetainedPlannedFamilyFrame<'_> {
@@ -244,6 +441,8 @@ impl SceneInstance {
         cached_bounds: Option<noon_core::Rect>,
     ) -> Option<EffectiveObjectProperties> {
         self.object_slot_is_live(object_index).then(|| {
+            let cached_bounds = cached_bounds
+                .or_else(|| self.effective_object_bounds(self.frame.objects[object_index].id));
             EffectiveObjectProperties::from_frame(&self.frame, object_index, cached_bounds)
         })
     }
@@ -275,9 +474,36 @@ impl SceneInstance {
             self.publication,
             &self.frame,
             changes,
-            self.compiled.text_resources(),
+            self,
             self.compiled.font_resources(),
-            self.compiled.geometry_resources(),
+            self,
+            self,
+            self.compiled.family_animation_plans(),
+            &self.active_family_animation_indices,
+            &self.painter_order,
+        )
+    }
+
+    /// Consume one renderer publication while queueing a presentation-only redraw
+    /// for the immediately following publication.
+    ///
+    /// This supports identity-free transient occurrences whose exact endpoint must
+    /// be presented once and then removed from the next presented surface. Stable
+    /// frame rows, painter order, resources, and spatial state remain resident and
+    /// are not marked dirty merely to erase the transient occurrence.
+    pub fn take_renderer_publication_with_followup_presentation_redraw(
+        &mut self,
+    ) -> RendererPublication<'_> {
+        let changes = self.take_frame_changes();
+        self.changes = FrameChanges::presentation_redraw();
+        RendererPublication::new(
+            self.publication,
+            &self.frame,
+            changes,
+            self,
+            self.compiled.font_resources(),
+            self,
+            self,
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
             &self.painter_order,
@@ -292,11 +518,54 @@ impl SceneInstance {
     pub(crate) fn mark_changed(&mut self, object_index: usize) {
         self.changes.insert(object_index);
         self.spatial_changes.insert(object_index);
+        if let Ok(index) = u32::try_from(object_index) {
+            let contributes_spatial_geometry = self
+                .frame
+                .objects
+                .get(object_index)
+                .and_then(|object| object.spatial.as_deref())
+                .is_none_or(|spatial| spatial.camera_projection.is_none() && !spatial.point_light);
+            if contributes_spatial_geometry {
+                let groups = self.compiled.spatial_anchor_groups_for_row(index);
+                if !groups.is_empty() {
+                    self.pending_spatial_anchor_groups
+                        .extend(groups.iter().copied());
+                }
+            }
+            // Bounds dependencies do not imply ownership of this row's center.
+            // A surviving row whose anchor was removed still derives its own
+            // center even while it contributes to another retained group.
+            if self.compiled.spatial_anchor_group_for_row(index).is_none()
+                && self.frame.objects.get(object_index).is_some_and(|object| {
+                    object.spatial.as_deref().is_some_and(|spatial| {
+                        spatial.composition_domain
+                            == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
+                    })
+                })
+            {
+                self.pending_spatial_anchor_rows.insert(object_index);
+            }
+            if self.compiled.spatial_anchor_group_for_row(index).is_none()
+                && self.frame.objects.get(object_index).is_some_and(|object| {
+                    object.spatial.as_deref().is_some_and(|spatial| {
+                        spatial.material == noon_core::SemanticSpatialMaterial::CairoPath
+                            && spatial
+                                .cairo_path_appearance
+                                .as_deref()
+                                .is_some_and(|a| a.gradient_direction.is_some())
+                    })
+                })
+            {
+                self.pending_spatial_anchor_rows.insert(object_index);
+            }
+        }
+        self.refresh_graph_dependencies_for_changed_row(object_index);
     }
 
     pub(crate) fn mark_added(&mut self, object_index: usize) {
         self.changes.insert_added(object_index);
         self.spatial_changes.insert_added(object_index);
+        self.refresh_graph_dependencies_for_changed_row(object_index);
     }
 
     pub(crate) fn mark_removed(&mut self, object_index: usize) {
@@ -336,7 +605,20 @@ impl SceneInstance {
     }
 
     pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {
-        self.compiled.text_resources()
+        self
+    }
+
+    /// Bounded effective numeric-resource diagnostics.
+    pub fn effective_text_resource_stats(&self) -> noon_core::TextResourceStats {
+        self.numeric_text.resources().stats()
+    }
+
+    pub fn effective_text_resource_slot_capacity(&self) -> usize {
+        self.numeric_text.resources().slot_capacity()
+    }
+
+    pub fn raster_image_resources(&self) -> &impl noon_core::RasterImageResourceLookup {
+        self
     }
 
     pub fn font_resources(&self) -> &impl noon_core::FontResourceLookup {
@@ -344,7 +626,7 @@ impl SceneInstance {
     }
 
     pub fn geometry_resources(&self) -> &impl noon_core::GeometryResourceLookup {
-        self.compiled.geometry_resources()
+        self
     }
 
     pub fn object_slot_is_live(&self, object_index: usize) -> bool {
@@ -358,6 +640,8 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
+        self.validate_replay_time(time)?;
+        self.select_replay_revision(time);
         if time >= self.frame.time {
             self.advance_unchecked(time);
         } else {
@@ -371,9 +655,12 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
+        self.validate_replay_time(time)?;
+        self.select_replay_revision(time);
         let previous_time = self.frame.time;
+        let had_interaction = self.interactions_active();
         self.seek_unchecked(time);
-        if self.frame.time != previous_time {
+        if self.frame.time != previous_time || had_interaction {
             self.publish_effective_change();
         }
         Ok(&self.frame)
@@ -383,6 +670,8 @@ impl SceneInstance {
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
+        self.validate_replay_time(time)?;
+        self.select_replay_revision(time);
         let previous_time = self.frame.time;
         if time < previous_time {
             self.seek_unchecked(time);
@@ -412,14 +701,138 @@ impl SceneInstance {
         &mut self,
         patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {
+        self.require_replay_writable()?;
+        let previous_anchor_groups = match patch {
+            ExecutionPatch::SetContent { object, .. }
+            | ExecutionPatch::SetTransform { object, .. }
+            | ExecutionPatch::SetSemanticTransform { object, .. }
+            | ExecutionPatch::SetSpatialState { object, .. }
+            | ExecutionPatch::SetStyle { object, .. }
+            | ExecutionPatch::RemoveObject(object) => self
+                .compiled
+                .object_index(*object)
+                .filter(|index| {
+                    self.frame
+                        .objects
+                        .get(*index as usize)
+                        .and_then(|row| row.spatial.as_deref())
+                        .is_none_or(|spatial| {
+                            spatial.camera_projection.is_none() && !spatial.point_light
+                        })
+                })
+                .map(|index| self.compiled.spatial_anchor_groups_for_row(index).to_vec()),
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { anchor_family, .. } => self
+                .compiled
+                .spatial_anchor_group_for_anchor(*anchor_family)
+                .map(|group| vec![group]),
+            _ => None,
+        };
+        let affected_path_tracks = match patch {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => {
+                BTreeSet::from([track.id])
+            }
+            ExecutionPatch::RemoveTrack(track) | ExecutionPatch::ReconcileTrack { track, .. } => {
+                BTreeSet::from([*track])
+            }
+            ExecutionPatch::RemoveObject(object) => self
+                .compiled
+                .object_channels(*object)
+                .into_iter()
+                .flat_map(|channel| self.compiled.channel_tracks(channel))
+                .map(|track| track.id)
+                .collect(),
+            _ => BTreeSet::new(),
+        };
+        let inverse = self.prepare_replay_change(patch);
+        self.apply_patch_without_history(patch)?;
+        if matches!(patch, ExecutionPatch::RemoveObject(_)) {
+            for track in affected_path_tracks {
+                self.path_motion_plans.remove(&track);
+            }
+        }
+        if let Some(groups) = previous_anchor_groups {
+            self.pending_spatial_anchor_groups.extend(groups);
+        }
+        self.flush_spatial_anchor_changes();
+        match patch {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track)
+                if matches!(track.property, Property::Morph | Property::Transform) =>
+            {
+                if let Some(index) = self.compiled.object_index(track.object) {
+                    self.retire_effective_content_driver(index as usize);
+                }
+            }
+            ExecutionPatch::AddFamilyAnimation(animation) => {
+                if let Some(index) = self.compiled.object_index(animation.target) {
+                    self.retire_effective_content_driver(index as usize);
+                }
+            }
+            ExecutionPatch::SetGraphDependencies { owner, .. } => {
+                let mut affected = BTreeSet::new();
+                for &dependency_index in self.compiled.graph_dependencies_for_owner(*owner) {
+                    let Some(dependency) = self.compiled.graph_edge_dependency(dependency_index)
+                    else {
+                        continue;
+                    };
+                    affected.extend([
+                        dependency.start_vertex_index() as usize,
+                        dependency.end_vertex_index() as usize,
+                        dependency.line_index() as usize,
+                    ]);
+                    if let noon_compile::CompiledGraphEdgeKind::Arrow {
+                        end_tip_index,
+                        start_tip_index,
+                        ..
+                    } = dependency.kind()
+                    {
+                        affected.insert(end_tip_index as usize);
+                        affected.extend(start_tip_index.map(|index| index as usize));
+                    }
+                }
+                for index in affected {
+                    self.retire_effective_content_driver(index);
+                }
+            }
+            _ => {}
+        }
+        self.retain_replay_change(inverse);
+        Ok(&self.frame)
+    }
+
+    fn apply_patch_without_history(
+        &mut self,
+        patch: &ExecutionPatch,
+    ) -> Result<&FrameState, CompilePatchError> {
         self.last_patch_stats = RuntimePatchStats::default();
         if matches!(
             patch,
             ExecutionPatch::SetContent { .. }
                 | ExecutionPatch::SetTransform { .. }
+                | ExecutionPatch::SetSemanticTransform { .. }
+                | ExecutionPatch::SetSpatialState { .. }
                 | ExecutionPatch::SetStyle { .. }
+                | ExecutionPatch::SetGlow { .. }
         ) {
             self.apply_value_patch(patch)?;
+            return Ok(&self.frame);
+        }
+        if let ExecutionPatch::SetGlowAttachment { object, glow, .. } = patch {
+            self.apply_glow_attachment_patch(patch, *object, glow.clone())?;
+            return Ok(&self.frame);
+        }
+        if matches!(patch, ExecutionPatch::SetGraphDependencies { .. }) {
+            self.apply_graph_dependency_patch(patch)?;
+            return Ok(&self.frame);
+        }
+        if let ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { anchor_family, .. } = patch {
+            self.compiled.apply_execution_patch(patch)?;
+            if let Some(group) = self
+                .compiled
+                .spatial_anchor_group_for_anchor(*anchor_family)
+            {
+                self.pending_spatial_anchor_groups.insert(group);
+            }
+            self.last_patch_stats = RuntimePatchStats::default();
             return Ok(&self.frame);
         }
         if matches!(
@@ -467,7 +880,21 @@ impl SceneInstance {
                     .compiled
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
-                Some((object_index, self.compiled.object_channels(*object)))
+                let mut channels = self.compiled.object_channels(*object);
+                let has_motions = self.compiled.objects()[object_index as usize]
+                    .spatial
+                    .as_deref()
+                    .and_then(|spatial| spatial.camera_motions.as_deref())
+                    .is_some_and(|motions| !motions.is_empty());
+                if has_motions {
+                    channels.push(CompiledChannelKey::new(
+                        object_index,
+                        Property::CameraProfile,
+                    ));
+                }
+                channels.sort_unstable();
+                channels.dedup();
+                Some((object_index, channels))
             }
             ExecutionPatch::CreateObject(_) => None,
             ExecutionPatch::ReorderObject { .. } | ExecutionPatch::SetZIndex { .. } => None,
@@ -506,6 +933,7 @@ impl SceneInstance {
                 self.reposition_painter_row(object_index);
                 self.rebind_reactive_object(object.id, object_index);
                 self.reapply_reactive_for_object(object_index);
+                self.reapply_numeric_text_for_object(object_index);
             }
             ExecutionPatch::RemoveObject(_) => {
                 let (object_index, old_channels) = removed.expect("remove context captured above");
@@ -521,6 +949,9 @@ impl SceneInstance {
                 self.frame.render_geometries[object_index] = None;
                 self.frame.render_transforms[object_index] = None;
                 self.clear_family_animation_runtime_state(object_index);
+                self.effective_driver_rows.remove(&object_index);
+                self.effective_content_drivers.remove(&object_index);
+                self.translation_drag_rows.remove(&object_index);
                 let position = self.painter_ranks[object_index]
                     .take()
                     .expect("removed row was live") as usize;
@@ -616,19 +1047,27 @@ impl SceneInstance {
                 .ok_or(CompilePatchError::UnknownTrack(*track))?;
             self.compiled.apply_execution_patch(patch)?;
             let mut evaluation = EvaluationStats::default();
-            self.relower_object(
+            self.relower_timeline_object(
                 channel.object_index as usize,
-                self.frame.time,
+                &[Some(channel), None],
                 &mut evaluation,
             );
             self.reapply_reactive_for_object(channel.object_index as usize);
+            self.reapply_numeric_text_for_object(channel.object_index as usize);
             self.last_stats = evaluation;
             self.last_patch_stats = RuntimePatchStats {
                 objects_recomputed: 1,
                 groups_evaluated: evaluation.groups_evaluated,
                 ..RuntimePatchStats::default()
             };
-            self.mark_changed(channel.object_index as usize);
+            if matches!(
+                channel.property,
+                Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+            ) {
+                self.changes.insert(channel.object_index as usize);
+            } else {
+                self.mark_changed(channel.object_index as usize);
+            }
             return Ok(());
         }
         let old_channel = match patch {
@@ -640,6 +1079,21 @@ impl SceneInstance {
             _ => unreachable!("timeline patch helper accepts only track mutations"),
         };
         self.compiled.apply_execution_patch(patch)?;
+        let changed_path_track = match patch {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => Some(track.id),
+            ExecutionPatch::RemoveTrack(track) | ExecutionPatch::ReconcileTrack { track, .. } => {
+                Some(*track)
+            }
+            _ => None,
+        };
+        if let Some(track_id) = changed_path_track {
+            self.path_motion_plans.remove(&track_id);
+            if let Some(track) = self.compiled.track(track_id) {
+                if let Some(plan) = prepare_path_motion_plan(track) {
+                    self.path_motion_plans.insert(track_id, plan);
+                }
+            }
+        }
         let new_channel = match patch {
             ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => {
                 self.compiled.channel_for_track(track.id)
@@ -673,6 +1127,12 @@ impl SceneInstance {
                         mapped,
                     });
             }
+            if channel.property == Property::CameraProfile {
+                let motion_stats = self.relower_camera_motion_channel(channel);
+                patch_stats.channels_relowered += motion_stats.groups_relowered;
+                patch_stats.scheduler_events_removed += motion_stats.events_removed;
+                patch_stats.scheduler_events_inserted += motion_stats.events_inserted;
+            }
         }
 
         let mut affected_objects = [None, None];
@@ -686,8 +1146,9 @@ impl SceneInstance {
         );
         let mut evaluation = EvaluationStats::default();
         for object_index in affected_objects.into_iter().flatten() {
-            self.relower_object(object_index, self.frame.time, &mut evaluation);
+            self.relower_timeline_object(object_index, &affected_channels, &mut evaluation);
             self.reapply_reactive_for_object(object_index);
+            self.reapply_numeric_text_for_object(object_index);
             self.mark_changed(object_index);
             patch_stats.objects_recomputed += 1;
         }
@@ -701,7 +1162,10 @@ impl SceneInstance {
         let object = match patch {
             ExecutionPatch::SetContent { object, .. }
             | ExecutionPatch::SetTransform { object, .. }
-            | ExecutionPatch::SetStyle { object, .. } => *object,
+            | ExecutionPatch::SetSemanticTransform { object, .. }
+            | ExecutionPatch::SetSpatialState { object, .. }
+            | ExecutionPatch::SetStyle { object, .. }
+            | ExecutionPatch::SetGlow { object, .. } => *object,
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         };
         let index = self
@@ -712,18 +1176,18 @@ impl SceneInstance {
         self.compiled.apply_execution_patch(patch)?;
 
         match patch {
-            ExecutionPatch::SetContent {
-                content,
-                text_bounds,
-                ..
-            } => {
-                self.frame.objects[index].content = content.clone();
-                self.frame.objects[index].text_bounds = *text_bounds;
+            ExecutionPatch::SetContent { .. } => {
+                // Compiler-owned Graph rows may specialize authored world-space
+                // geometry into a stable nondegenerate local basis. Publish the
+                // committed compiled value so prepared/runtime state cannot split.
+                self.frame.objects[index].content = self.compiled.objects()[index].content.clone();
+                self.frame.objects[index].text_bounds = self.compiled.objects()[index].text_bounds;
                 // Host callbacks run after ordinary timeline/reactive evaluation for the frame.
                 // Clearing a transient render override makes authored content authoritative for
                 // this phase without rebuilding unrelated runtime slots.
                 self.frame.render_geometries[index] = None;
                 self.frame.render_transforms[index] = None;
+                self.reapply_effective_content_driver(index);
             }
             ExecutionPatch::SetTransform { transform, .. } => {
                 self.frame.release_render_transform(index);
@@ -735,6 +1199,50 @@ impl SceneInstance {
                         Property::Position,
                         Property::Rotation,
                         Property::Scale,
+                    ],
+                );
+            }
+            ExecutionPatch::SetSemanticTransform { .. }
+            | ExecutionPatch::SetSpatialState { .. } => {
+                let compiled = &self.compiled.objects()[index];
+                self.frame.release_render_transform(index);
+                self.frame.objects[index].transform = compiled.base_transform;
+                if let Some(next) = compiled.spatial.as_deref() {
+                    if let Some(current) = self.frame.objects[index].spatial.as_deref_mut() {
+                        *current = next.clone();
+                    } else {
+                        self.frame.objects[index].spatial = Some(Box::new(next.clone()));
+                    }
+                } else {
+                    self.frame.objects[index].spatial = None;
+                }
+                self.reapply_properties(
+                    index,
+                    &[
+                        Property::Transform,
+                        Property::Position,
+                        Property::Rotation,
+                        Property::Scale,
+                        Property::WorldTransform,
+                        Property::CameraProfile,
+                    ],
+                );
+                let motion_stats = self.relower_camera_motion_channel(CompiledChannelKey::new(
+                    index as u32,
+                    Property::CameraProfile,
+                ));
+                self.last_patch_stats.channels_relowered += motion_stats.groups_relowered;
+                self.last_patch_stats.scheduler_events_removed += motion_stats.events_removed;
+                self.last_patch_stats.scheduler_events_inserted += motion_stats.events_inserted;
+            }
+            ExecutionPatch::SetGlow { glow, .. } => {
+                self.frame.objects[index].glow = Some(std::sync::Arc::clone(glow));
+                self.reapply_properties(
+                    index,
+                    &[
+                        Property::GlowColor,
+                        Property::GlowRadius,
+                        Property::GlowIntensity,
                     ],
                 );
             }
@@ -753,11 +1261,175 @@ impl SceneInstance {
             }
             _ => unreachable!("value patch helper only accepts object-local property patches"),
         }
-        self.reapply_reactive_for_object(index);
-        if self.frame.objects[index] != before {
-            self.mark_changed(index);
+        if matches!(patch, ExecutionPatch::SetGlow { .. }) {
+            if self.frame.objects[index].glow != before.glow {
+                self.changes.insert(index);
+            }
+        } else {
+            self.reapply_reactive_for_object(index);
+            self.reapply_numeric_text_for_object(index);
+            if self.frame.objects[index] != before {
+                self.mark_changed(index);
+            }
         }
         Ok(())
+    }
+
+    fn relower_camera_motion_channel(
+        &mut self,
+        channel: CompiledChannelKey,
+    ) -> TimelineRelowerStats {
+        let motions = self.compiled.objects()[channel.object_index as usize]
+            .spatial
+            .as_deref()
+            .and_then(|spatial| spatial.camera_motions.as_deref())
+            .unwrap_or(&[])
+            .to_vec();
+        let tracks = self.compiled.channel_tracks(channel).to_vec();
+        let stats = self
+            .timeline_scheduler
+            .relower_camera_motion_channel(channel, &motions, &tracks);
+        if !motions.is_empty() || !tracks.is_empty() {
+            self.groups.entry(channel).or_insert(TrackGroup {
+                channel,
+                cursor: tracks.partition_point(|track| track.timing.start_time <= self.frame.time),
+                mapped: tracks.iter().any(|track| !track.time_map.is_identity()),
+            });
+        } else {
+            self.groups.remove(&channel);
+        }
+        stats
+    }
+
+    /// A primitive timeline channel owns one property, not its entire frame row.
+    /// Preserve independent effective values, including values left by a stopped
+    /// updater. Composite transform/morph tracks retain their coupled evaluation.
+    fn relower_timeline_object(
+        &mut self,
+        object_index: usize,
+        channels: &[Option<CompiledChannelKey>; 2],
+        stats: &mut EvaluationStats,
+    ) {
+        let relevant = || {
+            channels
+                .iter()
+                .flatten()
+                .filter(|channel| channel.object_index as usize == object_index)
+        };
+        let coupled = [Property::Transform, Property::Morph]
+            .into_iter()
+            .any(|property| {
+                !self
+                    .compiled
+                    .channel_tracks(CompiledChannelKey::new(object_index as u32, property))
+                    .is_empty()
+            });
+        if coupled
+            || relevant()
+                .any(|channel| matches!(channel.property, Property::Transform | Property::Morph))
+        {
+            self.relower_object(object_index, self.frame.time, stats);
+            return;
+        }
+        for channel in relevant() {
+            let object = &self.compiled.objects()[object_index];
+            match channel.property {
+                Property::GlowColor | Property::GlowRadius | Property::GlowIntensity => {
+                    // Reset only the edited channel; independent glow/motion lanes
+                    // retain their effective values when tracks are added/removed.
+                    if let (Some(base), Some(current)) =
+                        (&object.glow, &mut self.frame.objects[object_index].glow)
+                    {
+                        let next = noon_core::GlowTrackValue::from_definition(
+                            channel.property,
+                            base.definition,
+                        )
+                        .expect("glow channel")
+                        .update()
+                        .apply_to(current.definition)
+                        .expect("validated base glow");
+                        if current.definition != next {
+                            Arc::make_mut(current).definition = next;
+                        }
+                    }
+                }
+                Property::Position => {
+                    self.frame.objects[object_index].transform.translation = affine_base_at_time(
+                        &self.compiled,
+                        object_index,
+                        object.base_transform,
+                        self.frame.time,
+                    )
+                    .translation
+                }
+                Property::WorldTransform => {
+                    self.frame.objects[object_index].spatial =
+                        spatial_base_at_time(&self.compiled, object_index, self.frame.time);
+                }
+                Property::CameraProfile => {
+                    self.frame.objects[object_index].spatial =
+                        spatial_base_at_time(&self.compiled, object_index, self.frame.time);
+                }
+                Property::Rotation => {
+                    self.frame.objects[object_index].transform.rotation = affine_base_at_time(
+                        &self.compiled,
+                        object_index,
+                        object.base_transform,
+                        self.frame.time,
+                    )
+                    .rotation
+                }
+                Property::Scale => {
+                    self.frame.objects[object_index].transform.scale = affine_base_at_time(
+                        &self.compiled,
+                        object_index,
+                        object.base_transform,
+                        self.frame.time,
+                    )
+                    .scale
+                }
+                Property::Fill => {
+                    self.frame.objects[object_index].style.fill = object.base_style.fill
+                }
+                Property::Stroke => {
+                    self.frame.objects[object_index].style.stroke = object.base_style.stroke
+                }
+                Property::StrokeWidth => {
+                    self.frame.objects[object_index].style.stroke_width =
+                        object.base_style.stroke_width
+                }
+                Property::Opacity => {
+                    self.frame.objects[object_index].style.opacity = object.base_style.opacity
+                }
+                Property::ZIndex => {
+                    self.frame.objects[object_index].z_index =
+                        initial_z_index(&self.compiled, object_index)
+                }
+                Property::Presence => {
+                    self.frame.presences[object_index] =
+                        initial_channel_bool(&self.compiled, object_index, Property::Presence, true)
+                }
+                Property::Appearance => {
+                    self.frame.objects[object_index].appearance = initial_channel_scalar(
+                        &self.compiled,
+                        object_index,
+                        Property::Appearance,
+                        1.0,
+                    )
+                }
+                Property::Reveal => {
+                    self.frame.reveals[object_index] =
+                        initial_channel_scalar(&self.compiled, object_index, Property::Reveal, 1.0)
+                }
+                Property::Transform | Property::Morph => {
+                    unreachable!("coupled channels were handled above")
+                }
+            }
+            self.reapply_properties(object_index, &[channel.property]);
+            stats.groups_evaluated += self.last_stats.groups_evaluated;
+            stats.tracks_advanced += self.last_stats.tracks_advanced;
+            stats.binary_search_steps += self.last_stats.binary_search_steps;
+        }
     }
 
     fn reapply_properties(&mut self, object_index: usize, properties: &[Property]) {
@@ -779,6 +1451,7 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             );
             stats.groups_evaluated += 1;
         }
@@ -806,6 +1479,7 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             );
             stats.groups_evaluated += 1;
         }
@@ -855,8 +1529,10 @@ impl SceneInstance {
     }
 
     fn seek_unchecked(&mut self, time: f64) {
+        self.clear_transient_animations();
         self.frame = base_frame(&self.compiled, time);
         self.effective_driver_rows.clear();
+        self.translation_drag_rows.clear();
         self.active_family_animation_indices.clear();
         self.pending_family_endpoint_expirations.clear();
         self.mark_all_changed();
@@ -874,6 +1550,7 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             );
             stats.groups_evaluated += 1;
         }
@@ -884,6 +1561,17 @@ impl SceneInstance {
         }
 
         self.reapply_reactive();
+        self.reapply_numeric_text();
+        for (&index, driver) in &self.effective_content_drivers {
+            if self.object_slot_is_live(index) {
+                self.frame.objects[index].content = driver.content.clone();
+                self.frame.objects[index].text_bounds = driver.text_bounds;
+                self.frame.render_geometries[index] = None;
+                self.frame.render_transforms[index] = None;
+            }
+        }
+        self.refresh_all_graph_dependencies();
+        self.refresh_all_spatial_anchors();
         self.last_stats = stats;
     }
 
@@ -924,6 +1612,7 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             ) {
                 if channel.property == Property::ZIndex {
                     self.reposition_painter_row(channel.object_index as usize);
@@ -933,6 +1622,8 @@ impl SceneInstance {
             stats.groups_evaluated += 1;
         }
         self.update_requested_family_animations(time);
+
+        self.flush_spatial_anchor_changes();
 
         self.last_stats = stats;
         if self.frame.time != previous_time {
@@ -1064,11 +1755,13 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .iter()
         .enumerate()
         .map(|(index, object)| FrameObjectState {
+            glow: object.glow.clone(),
             z_index: initial_z_index(compiled, index),
             id: object.id,
             content: object.content.clone(),
             text_bounds: object.text_bounds,
             transform: affine_base_at_time(compiled, index, object.base_transform, time),
+            spatial: spatial_base_at_time(compiled, index, time),
             style: object.base_style,
             appearance: appearances[index],
         })
@@ -1144,10 +1837,12 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 13] = [
+const PROPERTY_ORDER: [Property; 18] = [
     Property::Presence,
     Property::ZIndex,
     Property::Transform,
+    Property::WorldTransform,
+    Property::CameraProfile,
     Property::Position,
     Property::Rotation,
     Property::Scale,
@@ -1158,6 +1853,9 @@ const PROPERTY_ORDER: [Property; 13] = [
     Property::Appearance,
     Property::Reveal,
     Property::Morph,
+    Property::GlowColor,
+    Property::GlowRadius,
+    Property::GlowIntensity,
 ];
 
 fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackGroup> {
@@ -1175,6 +1873,21 @@ fn build_groups(compiled: &CompiledScene) -> BTreeMap<CompiledChannelKey, TrackG
                 mapped,
             },
         );
+    }
+    for (index, object) in compiled.objects().iter().enumerate() {
+        if object.spatial.as_deref().is_some_and(|spatial| {
+            spatial
+                .camera_motions
+                .as_ref()
+                .is_some_and(|motions| !motions.is_empty())
+        }) {
+            let channel = CompiledChannelKey::new(index as u32, Property::CameraProfile);
+            groups.entry(channel).or_insert(TrackGroup {
+                channel,
+                cursor: 0,
+                mapped: false,
+            });
+        }
     }
     groups
 }
@@ -1211,11 +1924,13 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     let object = &compiled.objects()[object_index];
     debug_assert!(object.live);
     frame.objects.push(FrameObjectState {
+        glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
         text_bounds: object.text_bounds,
         transform: affine_base_at_time(compiled, object_index, object.base_transform, frame.time),
+        spatial: spatial_base_at_time(compiled, object_index, frame.time),
         style: object.base_style,
         appearance: initial_channel_scalar(compiled, object_index, Property::Appearance, 1.0),
     });
@@ -1251,11 +1966,13 @@ fn reset_object_frame(
 ) {
     let object = &compiled.objects()[object_index];
     frame.objects[object_index] = FrameObjectState {
+        glow: object.glow.clone(),
         z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
         text_bounds: object.text_bounds,
         transform: affine_base_at_time(compiled, object_index, object.base_transform, time),
+        spatial: spatial_base_at_time(compiled, object_index, time),
         style: object.base_style,
         appearance: initial_channel_scalar(compiled, object_index, Property::Appearance, 1.0),
     };
@@ -1334,13 +2051,165 @@ fn affine_base_at_time(
             continue;
         }
         match (property, &track.values) {
-            (Property::Position, TrackValues::Vec2 { from, .. }) => transform.translation = *from,
+            (
+                Property::Position,
+                TrackValues::Vec2 { from, .. } | TrackValues::ArcVec2 { from, .. },
+            ) => transform.translation = *from,
+            (Property::Position, TrackValues::PathVec2 { .. }) => {}
             (Property::Rotation, TrackValues::Scalar { from, .. }) => transform.rotation = *from,
             (Property::Scale, TrackValues::Vec2 { from, .. }) => transform.scale = *from,
             _ => unreachable!("validated affine track must carry matching values"),
         }
     }
     transform
+}
+
+fn spatial_base_at_time(
+    compiled: &CompiledScene,
+    object_index: usize,
+    time: f64,
+) -> Option<Box<CompiledSpatialState>> {
+    let mut spatial = compiled
+        .objects()
+        .get(object_index)?
+        .spatial
+        .as_deref()
+        .cloned()?;
+    let channel = CompiledChannelKey::new(object_index as u32, Property::WorldTransform);
+    let tracks = compiled.channel_tracks(channel);
+    for track in tracks {
+        let TrackValues::WorldTransform { from, to } = track.values else {
+            unreachable!("compiled WorldTransform track has typed endpoints")
+        };
+        if track.reconciled && time >= track.timing.start_time + track.timing.duration {
+            continue;
+        }
+        if let Some(progress) = world_track_progress(track, time) {
+            let (Some(from), Some(to)) = (from.world(), to.world()) else {
+                return None;
+            };
+            spatial.world = if progress <= 0.0 {
+                from
+            } else if progress >= 1.0 {
+                to
+            } else {
+                from.interpolate(to, progress)?
+            };
+        }
+    }
+    let channel = CompiledChannelKey::new(object_index as u32, Property::CameraProfile);
+    let first_profile_track = compiled.channel_tracks(channel).first();
+    let first_motion = spatial
+        .camera_motions
+        .as_deref()
+        .and_then(|motions| motions.first());
+    let initial = match (first_profile_track, first_motion) {
+        (Some(track), motion)
+            if motion.is_none_or(|motion| track.timing.start_time <= motion.start()) =>
+        {
+            let TrackValues::CameraProfile {
+                from, near, far, ..
+            } = track.values
+            else {
+                unreachable!("compiled CameraProfile track has typed endpoints")
+            };
+            Some((track.timing.start_time, from, near, far))
+        }
+        (_, Some(motion)) => {
+            let (near, far) = motion.clips();
+            Some((motion.start(), motion.source(), near, far))
+        }
+        _ => None,
+    };
+    // Stops reconcile the authored baseline to their endpoint. Restore the
+    // earliest captured source before the first occurrence, so an initial wait
+    // cannot expose a future finite-move or ambient-stop position.
+    if let Some((_, profile, near, far)) = initial.filter(|(start, ..)| time < *start) {
+        let camera = profile.camera(near, far)?;
+        spatial.world = noon_core::SemanticWorldTransform3D::new(
+            camera.position,
+            camera.orientation,
+            noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+        )?;
+        spatial.camera_projection = Some(camera.projection);
+        spatial.camera_profile = Some(profile);
+    }
+    let mut camera_owner_start = f64::NEG_INFINITY;
+    let released_ambient_start = spatial
+        .camera_motions
+        .as_deref()
+        .and_then(|motions| camera_base_release_start(motions, time));
+    for track in compiled.channel_tracks(channel) {
+        let TrackValues::CameraProfile {
+            from,
+            to,
+            near,
+            far,
+        } = track.values
+        else {
+            unreachable!("compiled CameraProfile track has typed endpoints")
+        };
+        // A closed final ambient interval has reconciled its endpoint into the
+        // authored baseline. Earlier finite tracks cannot reclaim that released
+        // channel and overwrite a subsequent ordinary camera edit.
+        if released_ambient_start.is_some_and(|start| track.timing.start_time <= start) {
+            continue;
+        }
+        if track.reconciled && time >= track.timing.start_time + track.timing.duration {
+            continue;
+        }
+        if let Some(progress) = world_track_progress(track, time) {
+            let (profile, camera) = sample_camera_profile(from, to, near, far, progress)?;
+            spatial.world = noon_core::SemanticWorldTransform3D::new(
+                camera.position,
+                camera.orientation,
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+            )?;
+            spatial.camera_projection = Some(camera.projection);
+            spatial.camera_profile = Some(profile);
+            camera_owner_start = track.timing.start_time;
+        }
+    }
+    if let Some(motions) = spatial.camera_motions.as_deref() {
+        if let Some(motion) = camera_motion_at_time(motions, time) {
+            if motion.start() < camera_owner_start {
+                return Some(Box::new(spatial));
+            }
+            let profile = motion.sample(time)?;
+            let (near, far) = motion.clips();
+            let camera = profile.camera(near, far)?;
+            spatial.world = noon_core::SemanticWorldTransform3D::new(
+                camera.position,
+                camera.orientation,
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+            )?;
+            spatial.camera_projection = Some(camera.projection);
+            spatial.camera_profile = Some(profile);
+        }
+    }
+    Some(Box::new(spatial))
+}
+
+fn camera_motion_at_time(
+    motions: &[noon_core::CameraAngularMotion],
+    time: f64,
+) -> Option<noon_core::CameraAngularMotion> {
+    let index = motions
+        .partition_point(|motion| motion.start() <= time)
+        .checked_sub(1)?;
+    let motion = motions[index];
+    // A later occurrence makes this closed endpoint part of immutable authored
+    // history. Hold it across the intervening wait instead of reading the final
+    // camera baseline. After the last closed occurrence, ordinary base writes
+    // remain authoritative (including explicit orientation edits after stop).
+    (index + 1 < motions.len() || motion.end().is_none_or(|end| time < end)).then_some(motion)
+}
+
+fn camera_base_release_start(motions: &[noon_core::CameraAngularMotion], time: f64) -> Option<f64> {
+    motions
+        .last()
+        .filter(|motion| motion.end().is_some_and(|end| time >= end))
+        .map(|motion| motion.start())
 }
 
 fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> usize {
@@ -1358,6 +2227,7 @@ fn upper_bound_start(tracks: &[CompiledTrack], time: f64, steps: &mut usize) -> 
     low
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_group(
     compiled: &CompiledScene,
     frame: &mut FrameState,
@@ -1366,6 +2236,7 @@ fn apply_group(
     time: f64,
     base_transform: Transform2D,
     base_style: Style,
+    path_motion_plans: &BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
 ) -> bool {
     let object_index = group.channel.object_index as usize;
     apply_group_to_row(
@@ -1376,9 +2247,11 @@ fn apply_group(
         time,
         base_transform,
         base_style,
+        path_motion_plans,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_group_to_row(
     compiled: &CompiledScene,
     mut row: FrameRowMut<'_>,
@@ -1387,8 +2260,95 @@ fn apply_group_to_row(
     time: f64,
     base_transform: Transform2D,
     base_style: Style,
+    path_motion_plans: &BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>>,
 ) -> bool {
+    if matches!(
+        group.channel.property,
+        Property::GlowColor | Property::GlowRadius | Property::GlowIntensity
+    ) {
+        return apply_glow_channel(
+            compiled.objects()[group.channel.object_index as usize]
+                .glow
+                .as_deref(),
+            row.glow,
+            tracks,
+            group,
+            time,
+        );
+    }
+    if matches!(
+        group.channel.property,
+        Property::WorldTransform | Property::CameraProfile
+    ) {
+        let row_spatial = row.spatial.as_ref();
+        let motions = row_spatial.and_then(|spatial| spatial.camera_motions.as_deref());
+        let motion = motions.and_then(|motions| camera_motion_at_time(motions, time));
+        if group.channel.property == Property::CameraProfile {
+            let track_owner_start = tracks[..group.cursor]
+                .iter()
+                .rev()
+                .find_map(|track| {
+                    world_track_progress(track, time).map(|_| track.timing.start_time)
+                })
+                .unwrap_or(f64::NEG_INFINITY);
+            let sample =
+                if let Some(motion) = motion.filter(|motion| motion.start() >= track_owner_start) {
+                    motion.sample(time).map(|profile| {
+                        let (near, far) = motion.clips();
+                        (profile, near, far)
+                    })
+                } else if motions
+                    .and_then(|motions| camera_base_release_start(motions, time))
+                    .is_some_and(|start| start >= track_owner_start)
+                {
+                    // Publish the reconciled baseline at release, even if this
+                    // frame crosses the boundary without landing on the stop time.
+                    compiled.objects()[group.channel.object_index as usize]
+                        .spatial
+                        .as_deref()
+                        .and_then(|spatial| {
+                            match (spatial.camera_profile, spatial.camera_projection) {
+                                (
+                                    Some(profile),
+                                    Some(noon_core::SemanticProjection3D::Perspective {
+                                        near,
+                                        far,
+                                        ..
+                                    }),
+                                ) => Some((profile, near, far)),
+                                _ => None,
+                            }
+                        })
+                } else {
+                    None
+                };
+            if let Some((profile, near, far)) = sample {
+                let Some(camera) = profile.camera(near, far) else {
+                    return false;
+                };
+                return apply_evaluated_value(
+                    &mut row,
+                    Property::CameraProfile,
+                    EvaluatedValue::CameraProfile { profile, camera },
+                    false,
+                );
+            }
+        }
+    }
     if group.cursor == 0 {
+        // Completion can replace authored geometry with the latest endpoint.
+        // Coupled geometry tracks retain their source snapshot so an earlier
+        // wait must recover it, just as affine channels recover their first `from`.
+        if let Some(first) = tracks.first() {
+            if group.channel.property == Property::Transform {
+                return apply_transform_track(&mut row, first, 0.0);
+            }
+            if group.channel.property == Property::Morph
+                && matches!(first.values, TrackValues::PreparedMorph { .. })
+            {
+                return apply_prestart_morph_track(&mut row, first);
+            }
+        }
         return false;
     }
     if group.channel.property == Property::ZIndex {
@@ -1414,6 +2374,68 @@ fn apply_group_to_row(
         return changed;
     }
 
+    if matches!(
+        group.channel.property,
+        Property::WorldTransform | Property::CameraProfile
+    ) {
+        let latest = &tracks[group.cursor - 1];
+        if latest.reconciled && time >= latest.timing.start_time + latest.timing.duration {
+            return false;
+        }
+        let selected = tracks[..group.cursor]
+            .iter()
+            .rev()
+            .find_map(|track| world_track_progress(track, time).map(|progress| (track, progress)));
+        let Some((track, progress)) = selected else {
+            return false;
+        };
+        if group.channel.property == Property::CameraProfile {
+            let TrackValues::CameraProfile {
+                from,
+                to,
+                near,
+                far,
+            } = &track.values
+            else {
+                unreachable!("validated CameraProfile track has profile endpoints");
+            };
+            let Some((profile, camera)) = sample_camera_profile(*from, *to, *near, *far, progress)
+            else {
+                return false;
+            };
+            return apply_evaluated_value(
+                &mut row,
+                Property::CameraProfile,
+                EvaluatedValue::CameraProfile { profile, camera },
+                false,
+            );
+        }
+        let TrackValues::WorldTransform { from, to } = &track.values else {
+            unreachable!("validated WorldTransform track has world endpoints");
+        };
+        let Some(from) = from.world() else {
+            return false;
+        };
+        let Some(to) = to.world() else {
+            return false;
+        };
+        let value = if progress <= 0.0 {
+            from
+        } else if progress >= 1.0 {
+            to
+        } else if let Some(value) = from.interpolate(to, progress) {
+            value
+        } else {
+            return false;
+        };
+        return apply_evaluated_value(
+            &mut row,
+            Property::WorldTransform,
+            EvaluatedValue::WorldTransform(value),
+            false,
+        );
+    }
+
     let selected = if group.mapped {
         tracks[..group.cursor]
             .iter()
@@ -1431,7 +2453,13 @@ fn apply_group_to_row(
             group.channel.property,
             Property::Position | Property::Rotation | Property::Scale
         ) && prepared_morph_owns_render_frame(compiled, group.channel.object_index, time);
-    if track.reconciled && time >= track.timing.start_time + track.timing.duration {
+    // Authored base contains the latest completed endpoint, not the endpoint
+    // of every historical track. Earlier tracks must keep their own target
+    // through replay gaps until the next track on this channel starts.
+    if tracks.last().is_some_and(|last| last.id == track.id)
+        && track.reconciled
+        && time >= track.timing.start_time + track.timing.duration
+    {
         if group.channel.property == Property::Morph
             && matches!(track.values, TrackValues::PreparedMorph { .. })
         {
@@ -1453,7 +2481,28 @@ fn apply_group_to_row(
             Property::Opacity => Some(EvaluatedValue::Scalar(base_style.opacity)),
             Property::Appearance | Property::Reveal => Some(EvaluatedValue::Scalar(1.0)),
             Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
-            Property::Presence | Property::ZIndex | Property::Transform => None,
+            Property::WorldTransform => row
+                .spatial
+                .as_ref()
+                .map(|spatial| EvaluatedValue::WorldTransform(spatial.world)),
+            Property::CameraProfile => row.spatial.as_ref().and_then(|spatial| {
+                let profile = spatial.camera_profile?;
+                let noon_core::SemanticProjection3D::Perspective { near, far, .. } =
+                    spatial.camera_projection?
+                else {
+                    return None;
+                };
+                Some(EvaluatedValue::CameraProfile {
+                    profile,
+                    camera: profile.camera(near, far)?,
+                })
+            }),
+            Property::GlowColor
+            | Property::GlowRadius
+            | Property::GlowIntensity
+            | Property::Presence
+            | Property::ZIndex
+            | Property::Transform => None,
         };
         return base.is_some_and(|value| {
             apply_evaluated_value(
@@ -1473,23 +2522,17 @@ fn apply_group_to_row(
     {
         return apply_prepared_morph_track(&mut row, track, progress);
     }
-    let value = interpolate(track, progress);
+    let value = interpolate(
+        track,
+        progress,
+        path_motion_plans.get(&track.id).map(AsRef::as_ref),
+    );
     apply_evaluated_value(
         &mut row,
         group.channel.property,
         value,
         preserve_render_frame,
     )
-}
-
-fn apply_effective_property_to_row(row: FrameRowMut<'_>, write: EffectivePropertyWrite) {
-    match write {
-        EffectivePropertyWrite::Transform { transform, .. } => {
-            release_render_transform(row.render_geometry, row.render_transform, *row.transform);
-            *row.transform = transform;
-        }
-        EffectivePropertyWrite::Style { style, .. } => *row.style = style,
-    }
 }
 
 fn apply_evaluated_value(
@@ -1570,6 +2613,35 @@ fn apply_evaluated_value(
             row.style.opacity = value;
             changed
         }
+        (Property::WorldTransform, EvaluatedValue::WorldTransform(value)) => {
+            let spatial = row
+                .spatial
+                .as_mut()
+                .expect("validated WorldTransform track has spatial state");
+            let changed = spatial.world != value;
+            spatial.world = value;
+            spatial.camera_profile = None;
+            changed
+        }
+        (Property::CameraProfile, EvaluatedValue::CameraProfile { profile, camera }) => {
+            let spatial = row
+                .spatial
+                .as_mut()
+                .expect("validated CameraProfile track has camera state");
+            let world = noon_core::SemanticWorldTransform3D::new(
+                camera.position,
+                camera.orientation,
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .expect("profile camera sample was validated");
+            let changed = spatial.camera_profile != Some(profile)
+                || spatial.world != world
+                || spatial.camera_projection != Some(camera.projection);
+            spatial.camera_profile = Some(profile);
+            spatial.world = world;
+            spatial.camera_projection = Some(camera.projection);
+            changed
+        }
         _ => unreachable!("compiled track value type must match its property"),
     }
 }
@@ -1579,6 +2651,11 @@ enum EvaluatedValue {
     Scalar(f32),
     Vec2(Vec2),
     Color(Option<Color>),
+    WorldTransform(noon_core::SemanticWorldTransform3D),
+    CameraProfile {
+        profile: noon_core::ManimCamera3DProfile,
+        camera: noon_core::SemanticCamera3D,
+    },
 }
 
 // A prepared morph owns its fixed rendering frame alongside ordinary semantic
@@ -1594,7 +2671,9 @@ fn prepared_morph_owns_render_frame(
     cursor.checked_sub(1).is_some_and(|index| {
         let track = &tracks[index];
         matches!(track.values, TrackValues::PreparedMorph { .. })
-            && !(track.reconciled && time >= track.timing.start_time + track.timing.duration)
+            && !(cursor == tracks.len()
+                && track.reconciled
+                && time >= track.timing.start_time + track.timing.duration)
             && mapped_track_progress(track, time).is_some()
     })
 }
@@ -1604,22 +2683,122 @@ fn apply_prepared_morph_track(
     track: &CompiledTrack,
     progress: f32,
 ) -> bool {
-    let TrackValues::PreparedMorph { from, to, .. } = &track.values else {
-        unreachable!("prepared Morph track must contain scalar endpoints");
+    let plan = track
+        .transform_geometry_plan
+        .as_ref()
+        .expect("prepared Morph track must carry compiled endpoint geometry");
+    apply_prepared_morph_values(row, &track.values, plan, progress)
+        .expect("prepared Morph track must contain matching scalar endpoints and path plan")
+}
+
+fn apply_prestart_morph_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack) -> bool {
+    let TrackValues::PreparedMorph { from, .. } = track.values else {
+        unreachable!("prepared Morph track has scalar endpoints");
     };
     let Some(TransformGeometryPlan::PathPair {
         geometry,
-        render_transform,
+        prestart_geometry,
+        ..
     }) = track.transform_geometry_plan.as_ref()
     else {
-        unreachable!("prepared Morph track must carry compiled endpoint geometry");
+        unreachable!("prepared Morph track has endpoint geometry");
+    };
+    let morph = from.clamp(0.0, 1.0);
+    let changed = *row.morph != morph || row.render_transform.is_some();
+    *row.morph = morph;
+    *row.render_transform = None;
+    changed
+        | set_optional_geometry_if_changed(
+            row.render_geometry,
+            Some(prestart_geometry.as_ref().unwrap_or(geometry)),
+            true,
+        )
+}
+
+fn apply_prepared_morph_values(
+    row: &mut FrameRowMut<'_>,
+    values: &TrackValues,
+    plan: &TransformGeometryPlan,
+    progress: f32,
+) -> Option<bool> {
+    let TrackValues::PreparedMorph { from, to, .. } = values else {
+        return None;
+    };
+    let TransformGeometryPlan::PathPair {
+        geometry,
+        render_frame,
+        ..
+    } = plan
+    else {
+        return None;
     };
     let morph = lerp(*from, *to, progress).clamp(0.0, 1.0);
-    let mut changed = *row.morph != morph || *row.render_transform != *render_transform;
+    let render_transform = render_frame.map(|frame| frame.sample(morph));
+    let mut changed = *row.morph != morph || *row.render_transform != render_transform;
     *row.morph = morph;
-    *row.render_transform = *render_transform;
+    *row.render_transform = render_transform;
     changed |= set_optional_geometry_if_changed(row.render_geometry, Some(geometry), true);
-    changed
+    Some(changed)
+}
+
+fn apply_glow_channel(
+    base: Option<&noon_compile::CompiledGlow>,
+    glow: &mut Option<Arc<noon_compile::CompiledGlow>>,
+    tracks: &[CompiledTrack],
+    group: &TrackGroup,
+    time: f64,
+) -> bool {
+    let selected = if group.cursor == 0 {
+        tracks.first().map(|track| (track, 0.0))
+    } else {
+        tracks[..group.cursor]
+            .iter()
+            .rev()
+            .find_map(|track| world_track_progress(track, time).map(|alpha| (track, alpha)))
+    };
+    let Some((track, alpha)) = selected else {
+        return false;
+    };
+    let TrackValues::Glow {
+        attachment,
+        from,
+        to,
+    } = track.values
+    else {
+        unreachable!("validated glow channel");
+    };
+    let Some(current) = glow.as_ref().filter(|glow| glow.attachment == attachment) else {
+        return false; // an old generation can never control a replacement
+    };
+    let patch = if tracks.last().is_some_and(|last| last.id == track.id)
+        && track.reconciled
+        && time >= track.timing.start_time + track.timing.duration
+    {
+        let Some(base) = base else {
+            return false;
+        };
+        match track.property {
+            Property::GlowColor => noon_core::GlowUpdate::default().color(base.definition.color()),
+            Property::GlowRadius => {
+                noon_core::GlowUpdate::default().radius(base.definition.radius())
+            }
+            Property::GlowIntensity => {
+                noon_core::GlowUpdate::default().intensity(base.definition.intensity())
+            }
+            _ => unreachable!(),
+        }
+    } else {
+        from.sample(to, alpha)
+            .expect("validated glow endpoints and normalized timing")
+    };
+    let next = patch
+        .apply_to(current.definition)
+        .expect("validated single-channel glow update");
+    if current.definition == next {
+        return false;
+    }
+    Arc::make_mut(glow.as_mut().expect("checked attachment")).definition = next;
+    true
 }
 
 fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progress: f32) -> bool {
@@ -1639,7 +2818,7 @@ fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progr
     let fixed_endpoint = matches!(
         plan,
         TransformGeometryPlan::PathPair {
-            render_transform: Some(_),
+            render_frame: Some(_),
             ..
         }
     ) && (progress <= 0.0 || progress >= 1.0);
@@ -1651,7 +2830,8 @@ fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progr
     let owned_render_geometry = match plan {
         TransformGeometryPlan::PathPair {
             geometry: prepared,
-            render_transform: None,
+            render_frame: None,
+            ..
         } if from.style.stroke_width_mode == StrokeWidthMode::ScreenSpace
             && to.style.stroke_width_mode == StrokeWidthMode::ScreenSpace =>
         {
@@ -1673,9 +2853,9 @@ fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progr
         next_render_geometry = None;
     }
     let next_render_transform = match plan {
-        TransformGeometryPlan::PathPair {
-            render_transform, ..
-        } if !fixed_endpoint => *render_transform,
+        TransformGeometryPlan::PathPair { render_frame, .. } if !fixed_endpoint => {
+            render_frame.map(|frame| frame.sample(progress))
+        }
         _ => None,
     };
     let transform_changed = *row.render_transform != next_render_transform;
@@ -2023,33 +3203,204 @@ fn track_progress(track: &CompiledTrack, time: f64) -> f32 {
         return 1.0;
     }
     let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0) as f32;
-    track.timing.easing.evaluate(raw)
+    track.timing.evaluate_progress(raw)
 }
 
 fn mapped_track_progress(track: &CompiledTrack, time: f64) -> Option<f32> {
     mapped_continuous_progress(track.timing, &track.time_map, time)
 }
 
-fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {
-    match &track.values {
-        TrackValues::Scalar { from, to } => EvaluatedValue::Scalar(lerp(*from, *to, progress)),
-        TrackValues::Vec2 { from, to } => EvaluatedValue::Vec2(Vec2::new(
+fn world_track_progress(track: &CompiledTrack, time: f64) -> Option<f64> {
+    if time < track.timing.start_time {
+        return None;
+    }
+    if track.timing.is_instant() {
+        return Some(1.0);
+    }
+    if track.time_map.is_identity() {
+        let raw = ((time - track.timing.start_time) / track.timing.duration).clamp(0.0, 1.0);
+        return Some(track.timing.evaluate_progress_f64(raw));
+    }
+    mapped_continuous_progress_f64(track.timing, &track.time_map, time)
+}
+
+fn sample_camera_profile(
+    from: noon_core::ManimCamera3DProfile,
+    to: noon_core::ManimCamera3DProfile,
+    near: f64,
+    far: f64,
+    progress: f64,
+) -> Option<(noon_core::ManimCamera3DProfile, noon_core::SemanticCamera3D)> {
+    let profile = noon_core::ManimCamera3DProfile::interpolate(from, to, progress)?;
+    Some((profile, profile.camera(near, far)?))
+}
+
+fn interpolate(
+    track: &CompiledTrack,
+    progress: f32,
+    path_plan: Option<&noon_geometry::PathProportionPlan>,
+) -> EvaluatedValue {
+    interpolate_track_values_with_path_plan(&track.values, progress, path_plan)
+        .expect("compiled continuous track carries an interpolable value kind")
+}
+
+fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<EvaluatedValue> {
+    interpolate_track_values_with_path_plan(values, progress, None)
+}
+
+fn interpolate_track_values_with_path_plan(
+    values: &TrackValues,
+    progress: f32,
+    path_plan: Option<&noon_geometry::PathProportionPlan>,
+) -> Option<EvaluatedValue> {
+    match values {
+        TrackValues::Scalar { from, to } => {
+            Some(EvaluatedValue::Scalar(lerp(*from, *to, progress)))
+        }
+        TrackValues::Vec2 { from, to } => Some(EvaluatedValue::Vec2(Vec2::new(
             lerp(from.x, to.x, progress),
             lerp(from.y, to.y, progress),
+        ))),
+        TrackValues::ArcVec2 {
+            from,
+            to,
+            arc_angle,
+        } => Some(EvaluatedValue::Vec2(interpolate_arc_vec2(
+            *from, *to, *arc_angle, progress,
+        ))),
+        TrackValues::PathVec2 {
+            path_transform,
+            target_center_offset,
+            ..
+        } => {
+            let point = path_plan?.point_f64(f64::from(progress)).ok()?;
+            let local = Vec2::new(point.x as f32, point.y as f32);
+            Some(EvaluatedValue::Vec2(
+                path_transform.transform_point(local) - *target_center_offset,
+            ))
+        }
+        TrackValues::Color { from, to } => Some(EvaluatedValue::Color(interpolate_optional_color(
+            *from, *to, progress,
+        ))),
+        TrackValues::WorldTransform { from, to } => Some(EvaluatedValue::WorldTransform(
+            from.world()?
+                .interpolate(to.world()?, f64::from(progress))?,
         )),
-        TrackValues::Color { from, to } => {
-            EvaluatedValue::Color(interpolate_optional_color(*from, *to, progress))
+        TrackValues::CameraProfile {
+            from,
+            to,
+            near,
+            far,
+        } => {
+            let (profile, camera) =
+                sample_camera_profile(*from, *to, *near, *far, f64::from(progress))?;
+            Some(EvaluatedValue::CameraProfile { profile, camera })
         }
-        TrackValues::Bool { .. } | TrackValues::ZIndex { .. } => {
-            unreachable!("instant tracks are evaluated as discrete events")
-        }
-        TrackValues::Object { .. } => {
-            unreachable!("Transform tracks are evaluated atomically")
-        }
-        TrackValues::PreparedMorph { .. } => {
-            unreachable!("prepared Morph tracks install compiled geometry with scalar progress")
-        }
+        TrackValues::Glow { .. }
+        | TrackValues::Bool { .. }
+        | TrackValues::ZIndex { .. }
+        | TrackValues::Object { .. }
+        | TrackValues::PreparedMorph { .. } => None,
     }
+}
+
+pub(crate) fn prepare_path_motion_plans(
+    compiled: &CompiledScene,
+) -> BTreeMap<noon_core::TrackId, Arc<noon_geometry::PathProportionPlan>> {
+    let mut plans = BTreeMap::new();
+    let mut by_snapshot =
+        BTreeMap::<(usize, u32, u32), Arc<noon_geometry::PathProportionPlan>>::new();
+    for track in compiled.tracks_iter() {
+        let TrackValues::PathVec2 {
+            path,
+            path_transform,
+            ..
+        } = &track.values
+        else {
+            continue;
+        };
+        let key = path_motion_cache_key(path, *path_transform);
+        let plan = by_snapshot.entry(key).or_insert_with(|| {
+            Arc::new(
+                noon_geometry::PathProportionPlan::with_scale(
+                    path,
+                    (
+                        f64::from(path_transform.scale.x),
+                        f64::from(path_transform.scale.y),
+                    ),
+                )
+                .expect("compiled MoveAlongPath track must contain a measurable retained path"),
+            )
+        });
+        plans.insert(track.id, Arc::clone(plan));
+    }
+    plans
+}
+
+fn prepare_path_motion_plan(
+    track: &CompiledTrack,
+) -> Option<Arc<noon_geometry::PathProportionPlan>> {
+    let TrackValues::PathVec2 {
+        path,
+        path_transform,
+        ..
+    } = &track.values
+    else {
+        return None;
+    };
+    Some(Arc::new(
+        noon_geometry::PathProportionPlan::with_scale(
+            path,
+            (
+                f64::from(path_transform.scale.x),
+                f64::from(path_transform.scale.y),
+            ),
+        )
+        .expect("compiled MoveAlongPath track must contain a measurable retained path"),
+    ))
+}
+
+fn path_motion_cache_key(path: &Arc<VectorPath>, transform: Transform2D) -> (usize, u32, u32) {
+    (
+        Arc::as_ptr(path) as usize,
+        transform.scale.x.to_bits(),
+        transform.scale.y.to_bits(),
+    )
+}
+
+fn interpolate_arc_vec2(from: Vec2, to: Vec2, arc_angle: f64, progress: f32) -> Vec2 {
+    if progress <= 0.0 {
+        return from;
+    }
+    if progress >= 1.0 {
+        return to;
+    }
+    if arc_angle.abs() < MANIM_STRAIGHT_PATH_ARC_THRESHOLD {
+        return Vec2::new(lerp(from.x, to.x, progress), lerp(from.y, to.y, progress));
+    }
+
+    let from_x = f64::from(from.x);
+    let from_y = f64::from(from.y);
+    let dx = f64::from(to.x) - from_x;
+    let dy = f64::from(to.y) - from_y;
+    let mut center_x = from_x + 0.5 * dx;
+    let mut center_y = from_y + 0.5 * dy;
+    // Match ManimCE v0.21 `path_along_arc`: only +PI takes the explicit
+    // semicircle shortcut; -PI follows the tangent expression.
+    if arc_angle != std::f64::consts::PI {
+        let tangent = (arc_angle * 0.5).tan();
+        center_x -= 0.5 * dy / tangent;
+        center_y += 0.5 * dx / tangent;
+    }
+
+    let theta = f64::from(progress) * arc_angle;
+    let (sin, cos) = theta.sin_cos();
+    let relative_x = from_x - center_x;
+    let relative_y = from_y - center_y;
+    Vec2::new(
+        (center_x + cos * relative_x - sin * relative_y) as f32,
+        (center_y + sin * relative_x + cos * relative_y) as f32,
+    )
 }
 
 const fn lerp(from: f32, to: f32, progress: f32) -> f32 {
@@ -2094,6 +3445,520 @@ mod tests {
             time_map: CompositionTimeMap::identity(),
         });
         CompiledScene::compile_objects(objects, &tracks).expect("scene must compile")
+    }
+
+    #[test]
+    fn delayed_transform_recovers_its_source_before_start_after_completion() {
+        let object = ObjectId::new(0);
+        let from = TransformTrackEndpoint::new(GeometryRef::circle(1.0));
+        let mut to = TransformTrackEndpoint::new(GeometryRef::circle(2.0));
+        to.transform.translation = Vec2::new(10.0, 0.0);
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Transform,
+            values: TrackValues::Object {
+                from: from.clone(),
+                to: to.clone(),
+            },
+            timing: TrackTiming::new(0.25, 0.5, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        // Completion has reconciled the endpoint into the authored object.
+        // The historical track must still recover the source during an earlier wait.
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                to.geometry,
+                to.transform,
+                to.style,
+            )],
+            &[track],
+        )
+        .unwrap();
+        let mut instance = SceneInstance::new(compiled);
+        for time in [0.0, 0.1, 0.25, 0.75, 0.0] {
+            let frame = instance.seek(time).unwrap();
+            let expected = if time >= 0.75 { 2.0 } else { 1.0 };
+            assert_eq!(
+                frame.objects[0].geometry(),
+                Some(&GeometryRef::circle(expected))
+            );
+            assert_eq!(
+                frame.objects[0].transform.translation,
+                if time >= 0.75 {
+                    Vec2::new(10.0, 0.0)
+                } else {
+                    Vec2::ZERO
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn delayed_prepared_morph_recovers_its_source_rendering_before_start() {
+        let object = ObjectId::new(0);
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0));
+        let pair = GeometryRef::path(source.with_morph_target(target.clone()));
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Morph,
+            values: TrackValues::PreparedMorph {
+                from: 0.0,
+                to: 1.0,
+                geometry: pair.clone(),
+                render_frame: Some(noon_core::MorphRenderFrame::fixed(Transform2D::IDENTITY)),
+                source_transform: Transform2D::IDENTITY,
+            },
+            timing: TrackTiming::new(0.25, 0.5, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                GeometryRef::path(target),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )],
+            &[track],
+        )
+        .unwrap();
+        let mut instance = SceneInstance::new(compiled);
+        instance.seek(0.5).unwrap();
+        for time in [0.0, 0.1, 0.25] {
+            let frame = instance.seek(time).unwrap();
+            assert_eq!(frame.morph(0), 0.0);
+            assert_eq!(frame.render_geometries[0].as_deref(), Some(&pair));
+            assert_eq!(
+                frame.render_transforms[0],
+                (time >= 0.25).then_some(Transform2D::IDENTITY)
+            );
+        }
+    }
+
+    #[test]
+    fn translated_prepared_morph_preserves_pointwise_rotation_through_seek_and_forward_playback() {
+        for (rate, morph_from, morph_to) in [
+            (RateFunction::Linear, 0.0, 1.0),
+            (RateFunction::ThereAndBack, 0.0, 1.0),
+            (RateFunction::Linear, 0.5, 1.0),
+            (RateFunction::Linear, 1.0, 0.0),
+        ] {
+            let source = VectorPath::new()
+                .move_to(Vec2::new(-1.0, 0.0))
+                .line_to(Vec2::new(1.0, 0.0));
+            let target = VectorPath::new()
+                .move_to(Vec2::new(0.0, -1.0))
+                .line_to(Vec2::new(0.0, 1.0));
+            let pair = GeometryRef::path(source.clone().with_morph_target(target));
+            let mut tracks = Vec::new();
+            let mut objects = Vec::new();
+            let positions = [
+                (Vec2::new(2.0, 3.0), Vec2::new(6.0, 11.0)),
+                (Vec2::new(-3.0, 2.0), Vec2::new(8.0, -7.0)),
+            ];
+            for (index, (from, to)) in positions.into_iter().enumerate() {
+                let object = ObjectId::new(index as u64);
+                let source_transform = Transform2D {
+                    translation: from + (to - from) * morph_from,
+                    ..Transform2D::IDENTITY
+                };
+                objects.push(CompiledObject::new(
+                    object,
+                    GeometryRef::path(source.clone()),
+                    source_transform,
+                    Style::default(),
+                ));
+                tracks.push(TrackDefinition {
+                    id: TrackId::new((index * 2) as u64),
+                    object,
+                    property: Property::Position,
+                    values: TrackValues::Vec2 {
+                        from: source_transform.translation,
+                        to: from + (to - from) * morph_to,
+                    },
+                    timing: TrackTiming::new(0.25, 1.0, rate),
+                    time_map: CompositionTimeMap::identity(),
+                });
+                tracks.push(TrackDefinition {
+                    id: TrackId::new((index * 2 + 1) as u64),
+                    object,
+                    property: Property::Morph,
+                    values: TrackValues::PreparedMorph {
+                        from: morph_from,
+                        to: morph_to,
+                        geometry: pair.clone(),
+                        render_frame: Some(noon_core::MorphRenderFrame {
+                            from: Transform2D {
+                                translation: from,
+                                ..Transform2D::IDENTITY
+                            },
+                            to_translation: to,
+                        }),
+                        source_transform,
+                    },
+                    timing: TrackTiming::new(0.25, 1.0, rate),
+                    time_map: CompositionTimeMap::identity(),
+                });
+            }
+            let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
+            let mut direct = SceneInstance::new(compiled.clone());
+            for time in [0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 0.1, 0.75] {
+                let frame = direct.seek(time).unwrap();
+                let mut forward = SceneInstance::new(compiled.clone());
+                for step in 0..=(time * 100.0).round() as usize {
+                    forward.advance_to(step as f64 / 100.0).unwrap();
+                }
+                let forward_frame = forward.advance_to(time).unwrap();
+                assert_eq!(frame.render_transforms, forward_frame.render_transforms);
+                assert_eq!(frame.render_geometries, forward_frame.render_geometries);
+                for (index, (from, to)) in positions.into_iter().enumerate() {
+                    let progress = rate.evaluate(((time - 0.25) as f32).clamp(0.0, 1.0));
+                    let alpha = morph_from + (morph_to - morph_from) * progress;
+                    assert_eq!(frame.morph(index), alpha);
+                    let transform = frame.render_transform(index);
+                    let corner = Vec2::new(-1.0 + alpha, -alpha);
+                    let expected = from + (to - from) * alpha + corner;
+                    let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(index) else {
+                        panic!("prepared morph must retain its path pair")
+                    };
+                    let noon_core::PathCommand::MoveTo { to: source_point } = path.commands()[0]
+                    else {
+                        panic!("source endpoint")
+                    };
+                    let noon_core::PathCommand::MoveTo { to: target_point } =
+                        path.morph_target().unwrap().commands()[0]
+                    else {
+                        panic!("target endpoint")
+                    };
+                    let actual_point = source_point + (target_point - source_point) * alpha;
+                    assert!(
+                        (transform.transform_point(actual_point) - expected).length() < 1.0e-6,
+                        "object {index}@{time}, morph {morph_from}->{morph_to}"
+                    );
+                    if time >= 0.25 {
+                        assert_eq!(frame.render_geometries[index].as_deref(), Some(&pair));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn future_fixed_morph_keeps_an_earlier_collapsed_scale_driver_and_shared_geometry() {
+        let object = ObjectId::new(0);
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0));
+        let source_transform = Transform2D {
+            translation: Vec2::new(2.0, 3.0),
+            rotation: 0.3,
+            scale: Vec2::new(2.0, 3.0),
+        };
+        let pair = GeometryRef::path(
+            source
+                .transformed(source_transform)
+                .with_morph_target(target.transformed(source_transform)),
+        );
+        let tracks = [
+            TrackDefinition {
+                id: TrackId::new(0),
+                object,
+                property: Property::Scale,
+                values: TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: source_transform.scale,
+                },
+                timing: TrackTiming::new(0.0, 0.5, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            },
+            TrackDefinition {
+                id: TrackId::new(1),
+                object,
+                property: Property::Morph,
+                values: TrackValues::PreparedMorph {
+                    from: 0.0,
+                    to: 1.0,
+                    geometry: pair,
+                    render_frame: Some(noon_core::MorphRenderFrame::fixed(Transform2D::IDENTITY)),
+                    source_transform,
+                },
+                timing: TrackTiming::new(0.75, 0.5, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            },
+        ];
+        let compiled = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                object,
+                GeometryRef::path(target),
+                source_transform,
+                Style::default(),
+            )],
+            &tracks,
+        )
+        .unwrap();
+        let mut instance = SceneInstance::new(compiled);
+        let mut retained = None;
+        for time in [0.0, 0.25, 0.5, 1.0, 0.0, 0.25] {
+            let frame = instance.seek(time).unwrap();
+            if time >= 0.75 {
+                assert_eq!(frame.render_transforms[0], Some(Transform2D::IDENTITY));
+                continue;
+            }
+            assert_eq!(frame.render_transforms[0], None);
+            assert_eq!(frame.morph(0), 0.0);
+            assert_eq!(
+                frame.objects[0].transform.scale,
+                source_transform.scale * (time / 0.5) as f32,
+            );
+            let geometry = frame.render_geometries[0].as_ref().unwrap();
+            if let Some(previous) = &retained {
+                assert!(Arc::ptr_eq(geometry, previous));
+            } else {
+                retained = Some(Arc::clone(geometry));
+            }
+            let GeometryRef::VectorPath(path) = geometry.as_ref() else {
+                panic!("source frame retains a path");
+            };
+            for (actual, expected) in path.commands().iter().zip(source.commands()) {
+                let (PathCommand::MoveTo { to: actual } | PathCommand::LineTo { to: actual }) =
+                    actual
+                else {
+                    panic!("source frame contains the original line");
+                };
+                let (PathCommand::MoveTo { to: expected } | PathCommand::LineTo { to: expected }) =
+                    expected
+                else {
+                    unreachable!();
+                };
+                assert!((*actual - *expected).length() < 1.0e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn retained_path_motion_uses_one_prepared_plan_and_retires_it_with_its_track() {
+        let object = ObjectId::new(900);
+        let path = Arc::new(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(4.0, 0.0))
+                .line_to(Vec2::new(4.0, 4.0)),
+        );
+        let object_state = CompiledObject::new(
+            object,
+            GeometryRef::circle(0.25),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let track_id = TrackId::new(901);
+        let track = TrackDefinition {
+            id: track_id,
+            object,
+            property: Property::Position,
+            values: TrackValues::PathVec2 {
+                path,
+                path_transform: Transform2D {
+                    translation: Vec2::new(1.0, -1.0),
+                    rotation: 0.0,
+                    scale: Vec2::new(2.0, 0.5),
+                },
+                target_center_offset: Vec2::ZERO,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let mut instance = SceneInstance::new(
+            CompiledScene::compile_objects(vec![object_state], std::slice::from_ref(&track))
+                .unwrap(),
+        );
+        assert!(instance.path_motion_plan_retained_bytes() > 0);
+        let prepared_plan = Arc::clone(instance.path_motion_plans.get(&track_id).unwrap());
+        let prepared_bytes = instance.path_motion_plan_retained_bytes();
+
+        instance.seek(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(6.0, -1.0)
+        );
+        instance.seek(0.5).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(3.5, -1.0)
+        );
+        assert!(Arc::ptr_eq(
+            &prepared_plan,
+            instance.path_motion_plans.get(&track_id).unwrap()
+        ));
+        assert_eq!(instance.path_motion_plan_retained_bytes(), prepared_bytes);
+
+        // An unrelated channel patch must not rebuild the retained path sampler.
+        instance
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(902),
+                object,
+                property: Property::Opacity,
+                values: TrackValues::Scalar { from: 1.0, to: 0.5 },
+                timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &prepared_plan,
+            instance.path_motion_plans.get(&track_id).unwrap()
+        ));
+
+        instance
+            .apply_execution_patch(&ExecutionPatch::RemoveTrack(track_id))
+            .unwrap();
+        assert_eq!(instance.path_motion_plan_retained_bytes(), 0);
+    }
+
+    #[test]
+    fn zero_scale_path_motion_keeps_a_finite_deterministic_endpoint_contract() {
+        let object = ObjectId::new(905);
+        let track = TrackDefinition {
+            id: TrackId::new(906),
+            object,
+            property: Property::Position,
+            values: TrackValues::PathVec2 {
+                path: Arc::new(
+                    VectorPath::new()
+                        .move_to(Vec2::ZERO)
+                        .line_to(Vec2::new(4.0, 0.0)),
+                ),
+                path_transform: Transform2D {
+                    translation: Vec2::new(2.0, -1.0),
+                    scale: Vec2::ZERO,
+                    ..Transform2D::IDENTITY
+                },
+                target_center_offset: Vec2::ZERO,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let object_state = CompiledObject::new(
+            object,
+            GeometryRef::circle(0.25),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let mut instance = SceneInstance::new(
+            CompiledScene::compile_objects(vec![object_state], &[track]).unwrap(),
+        );
+        assert!(instance.path_motion_plan_retained_bytes() > 0);
+        instance.seek(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        instance.seek(2.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn replay_restores_the_activation_time_path_snapshot_and_prepared_sampler() {
+        let object = ObjectId::new(910);
+        let original_path = Arc::new(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(10.0, 0.0)),
+        );
+        let track_id = TrackId::new(911);
+        let track = TrackDefinition {
+            id: track_id,
+            object,
+            property: Property::Position,
+            values: TrackValues::PathVec2 {
+                path: original_path.clone(),
+                path_transform: Transform2D::IDENTITY,
+                target_center_offset: Vec2::ZERO,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let object_state = CompiledObject::new(
+            object,
+            GeometryRef::circle(0.25),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let mut instance = SceneInstance::new(
+            CompiledScene::compile_objects(vec![object_state], std::slice::from_ref(&track))
+                .unwrap(),
+        );
+        instance
+            .begin_replay_retention(ReplayLimits {
+                revisions: 16,
+                payloads: 4096,
+            })
+            .unwrap();
+        instance.seek(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(5.0, 0.0)
+        );
+
+        let original_plan = Arc::clone(instance.path_motion_plans.get(&track_id).unwrap());
+        let replacement_path = Arc::new(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(0.0, 8.0)),
+        );
+        let replacement = TrackDefinition {
+            values: TrackValues::PathVec2 {
+                path: replacement_path.clone(),
+                path_transform: Transform2D::IDENTITY,
+                target_center_offset: Vec2::ZERO,
+            },
+            ..track.clone()
+        };
+        instance
+            .apply_execution_patch(&ExecutionPatch::ReplaceTrack(replacement))
+            .unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(0.0, 4.0)
+        );
+        assert!(!Arc::ptr_eq(
+            &original_plan,
+            instance.path_motion_plans.get(&track_id).unwrap()
+        ));
+        assert!(instance.replay_stats().payloads_retained > 0);
+        instance.seal_replay().unwrap();
+
+        instance.seek(0.5).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(2.5, 0.0)
+        );
+        match &instance.compiled.tracks()[0].values {
+            TrackValues::PathVec2 { path, .. } => assert!(Arc::ptr_eq(path, &original_path)),
+            _ => panic!("replay must restore the captured path-valued track"),
+        }
+        assert!(instance.path_motion_plan_retained_bytes() > 0);
+
+        instance.seek(1.0).unwrap();
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::new(0.0, 4.0)
+        );
+        match &instance.compiled.tracks()[0].values {
+            TrackValues::PathVec2 { path, .. } => assert!(Arc::ptr_eq(path, &replacement_path)),
+            _ => panic!("replay must reapply the replacement path snapshot"),
+        }
     }
 
     #[test]
@@ -2221,6 +4086,67 @@ mod tests {
         assert!(instance.take_frame_changes().is_empty());
         assert!(instance.active_family_animation_indices().is_empty());
         assert!(instance.frame().family_animations[0].is_none());
+    }
+
+    #[test]
+    fn manim_path_arc_interpolation_matches_direction_threshold_and_endpoints() {
+        let from = Vec2::ZERO;
+        let to = Vec2::new(2.0, 0.0);
+        assert_eq!(
+            interpolate_arc_vec2(from, to, std::f64::consts::PI, 0.0),
+            from
+        );
+        assert_eq!(
+            interpolate_arc_vec2(from, to, std::f64::consts::PI, 1.0),
+            to
+        );
+
+        let positive = interpolate_arc_vec2(from, to, std::f64::consts::PI, 0.5);
+        assert!((positive.x - 1.0).abs() < 1e-6);
+        assert!((positive.y + 1.0).abs() < 1e-6);
+        let negative = interpolate_arc_vec2(from, to, -std::f64::consts::PI, 0.5);
+        assert!((negative.x - 1.0).abs() < 1e-6);
+        assert!((negative.y - 1.0).abs() < 1e-6);
+
+        let straight = interpolate_arc_vec2(from, to, 0.009, 0.5);
+        assert_eq!(straight, Vec2::new(1.0, 0.0));
+    }
+
+    #[test]
+    fn path_arc_direct_seek_matches_forward_playback() {
+        let object = CompiledObject::new(
+            ObjectId::new(0),
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object: object.id,
+            property: Property::Position,
+            values: TrackValues::ArcVec2 {
+                from: Vec2::ZERO,
+                to: Vec2::new(2.0, 0.0),
+                arc_angle: std::f64::consts::PI,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let compiled = CompiledScene::compile_objects(vec![object], &[track]).unwrap();
+        let mut seek = SceneInstance::new(compiled.clone());
+        let mut forward = SceneInstance::new(compiled);
+        let seek_mid = seek.seek(1.0).unwrap().objects[0].transform.translation;
+        forward.advance_to(0.5).unwrap();
+        let forward_mid = forward.advance_to(1.0).unwrap().objects[0]
+            .transform
+            .translation;
+        assert_eq!(seek_mid, forward_mid);
+        assert!((seek_mid.x - 1.0).abs() < 1e-6);
+        assert!((seek_mid.y + 1.0).abs() < 1e-6);
+        assert_eq!(
+            seek.seek(2.0).unwrap().objects[0].transform.translation,
+            Vec2::new(2.0, 0.0)
+        );
     }
 
     #[test]

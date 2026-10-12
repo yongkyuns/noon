@@ -1,4 +1,10 @@
-import init, { createDirectRecoverySmokeRenderer } from "./pkg/noon_web.js";
+import init, {
+  createDirectRecoverySmokeRenderer,
+  createDirectTransformMatchingShapesBreadthSmokeRenderer,
+  createDirectTransformMatchingShapesSmokeRenderer,
+  RetainedExecutionCanvasRenderer,
+  WasmAuthoringStore,
+} from "./pkg/noon_web.js";
 import {
   drainRendererGpuDiagnostics,
   formatGpuDiagnostic,
@@ -19,6 +25,10 @@ let backingWidth = canvas.width;
 let backingHeight = canvas.height;
 let rendererCanvas = null;
 let webglContextRecovery = null;
+let matchingShapesQualification = null;
+let matchingShapesBreadthQualification = null;
+let retainedRecoveryFixture = null;
+let retainedDisposalFixture = null;
 
 window.noonSmoke = {
   state,
@@ -29,6 +39,15 @@ window.noonSmoke = {
     throw new Error("Noon browser smoke harness is not ready");
   },
   webglContextControl() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
+  async retainedContextLossControl() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
+  retainedDeviceDisposalControl() {
+    throw new Error("Noon browser smoke harness is not ready");
+  },
+  disposeDirectRenderer() {
     throw new Error("Noon browser smoke harness is not ready");
   },
   metrics() {
@@ -59,6 +78,8 @@ function metrics() {
     backingHeight,
     cssWidth: canvas.clientWidth,
     cssHeight: canvas.clientHeight,
+    matchingShapesQualification,
+    matchingShapesBreadthQualification,
   };
 }
 
@@ -155,6 +176,271 @@ async function resizeBacking(width, height) {
   return { ...metrics(), presented };
 }
 
+async function presentQualificationFrame(qualificationRenderer) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (qualificationRenderer.render()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("matching-shapes qualification could not acquire a frame");
+}
+
+async function settleQualification(qualificationRenderer, wallTimeMs) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const directive = JSON.parse(
+      qualificationRenderer.directWakeDirectiveJson(wallTimeMs),
+    );
+    if (!directive.presentNow) return directive;
+    await presentQualificationFrame(qualificationRenderer);
+  }
+  throw new Error("matching-shapes qualification did not settle its publications");
+}
+
+async function renderedPixelContext(qualificationCanvas) {
+  const bitmap = await createImageBitmap(
+    await qualificationCanvas.convertToBlob({ type: "image/png" }),
+  );
+  const pixels = new OffscreenCanvas(
+    qualificationCanvas.width,
+    qualificationCanvas.height,
+  );
+  const context = pixels.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    bitmap.close();
+    throw new Error("matching-shapes qualification could not create a pixel reader");
+  }
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return context;
+}
+
+async function sampleQualificationColor(qualificationCanvas, worldX, worldY) {
+  const context = await renderedPixelContext(qualificationCanvas);
+  const worldHeight = MANIM_DEFAULT_CAMERA_HEIGHT;
+  const worldWidth = worldHeight * (qualificationCanvas.width / qualificationCanvas.height);
+  const x = Math.round(
+    ((worldX + worldWidth / 2) / worldWidth) * (qualificationCanvas.width - 1),
+  );
+  const y = Math.round(
+    ((worldHeight / 2 - worldY) / worldHeight) *
+      (qualificationCanvas.height - 1),
+  );
+  const data = context.getImageData(x, y, 1, 1).data;
+  return { red: data[0], green: data[1], blue: data[2], alpha: data[3] };
+}
+
+async function qualificationYellowPixelCount(qualificationCanvas) {
+  const context = await renderedPixelContext(qualificationCanvas);
+  const data = context.getImageData(
+    0,
+    0,
+    qualificationCanvas.width,
+    qualificationCanvas.height,
+  ).data;
+  let count = 0;
+  for (let index = 0; index < data.length; index += 4) {
+    const red = data[index];
+    const green = data[index + 1];
+    const blue = data[index + 2];
+    if (red > blue + 80 && green > blue + 80) count += 1;
+  }
+  return count;
+}
+
+function isPink(pixel) {
+  return pixel.red > pixel.green + 50 && pixel.blue > pixel.green + 50;
+}
+
+function isBlue(pixel) {
+  return pixel.blue > pixel.red + 70 && pixel.green > pixel.red + 50;
+}
+
+function matchesRgb(pixel, expected) {
+  // Interior samples allow only byte quantization, not shape/opacity differences.
+  return [pixel.red, pixel.green, pixel.blue].every(
+    (channel, index) => Math.abs(channel - expected[index]) <= 2,
+  );
+}
+
+function isWhite(pixel) {
+  return pixel.red > 80 && pixel.green > 80 && pixel.blue > 80
+    && Math.max(pixel.red, pixel.green, pixel.blue)
+      - Math.min(pixel.red, pixel.green, pixel.blue) < 24;
+}
+
+async function qualifyTransformMatchingShapes(expectedBackend) {
+  const qualificationCanvas = new OffscreenCanvas(960, 540);
+  const qualificationRenderer =
+    await createDirectTransformMatchingShapesSmokeRenderer(qualificationCanvas);
+  try {
+    qualificationRenderer.resize(qualificationCanvas.width, qualificationCanvas.height);
+    await settleQualification(qualificationRenderer, 0);
+
+    qualificationRenderer.advanceDirectRealtime(500);
+    await settleQualification(qualificationRenderer, 500);
+    const midpointTriangle = await sampleQualificationColor(qualificationCanvas, 1, 0);
+    const midpointKite = await sampleQualificationColor(qualificationCanvas, -1, 0);
+    if (!isPink(midpointTriangle) || !isBlue(midpointKite)) {
+      throw new Error(
+        `matching-shapes midpoint used positional/index pairing: ${JSON.stringify({ midpointTriangle, midpointKite })}`,
+      );
+    }
+
+    qualificationRenderer.advanceDirectRealtime(1000);
+    await settleQualification(qualificationRenderer, 1000);
+    const completedKite = await sampleQualificationColor(qualificationCanvas, -4, 0);
+    const completedTriangle = await sampleQualificationColor(qualificationCanvas, 4, 0);
+    if (!isBlue(completedKite) || !isPink(completedTriangle)) {
+      throw new Error(
+        `matching-shapes completion did not publish the authored target: ${JSON.stringify({ completedKite, completedTriangle })}`,
+      );
+    }
+
+    qualificationRenderer.advanceDirectRealtime(1500);
+    await settleQualification(qualificationRenderer, 1500);
+    const yellowPixels = await qualificationYellowPixelCount(qualificationCanvas);
+    if (yellowPixels < 500) {
+      throw new Error(
+        `matching-shapes replacement target did not survive into Indicate: yellowPixels=${yellowPixels}`,
+      );
+    }
+
+    qualificationRenderer.advanceDirectRealtime(2000);
+    const finalWake = await settleQualification(qualificationRenderer, 2000);
+    const restoredKite = await sampleQualificationColor(qualificationCanvas, -4, 0);
+    const restoredTriangle = await sampleQualificationColor(qualificationCanvas, 4, 0);
+    if (!isBlue(restoredKite) || !isPink(restoredTriangle)) {
+      throw new Error(
+        `matching-shapes Indicate did not restore target paint: ${JSON.stringify({ restoredKite, restoredTriangle })}`,
+      );
+    }
+
+    const result = {
+      backend: qualificationRenderer.rendererBackend(),
+      time: qualificationRenderer.time(),
+      objectCount: qualificationRenderer.objectCount(),
+      cadence: finalWake.cadence,
+      midpointTriangle,
+      midpointKite,
+      completedKite,
+      completedTriangle,
+      yellowPixels,
+      restoredKite,
+      restoredTriangle,
+    };
+    if (
+      result.backend !== expectedBackend ||
+      result.time !== 2 ||
+      result.objectCount !== 2 ||
+      result.cadence !== "idle"
+    ) {
+      throw new Error(
+        `matching-shapes qualification did not settle coherently: ${JSON.stringify(result)}`,
+      );
+    }
+    return result;
+  } finally {
+    qualificationRenderer.free();
+    if (expectedBackend === "WebGL2") {
+      qualificationCanvas
+        .getContext("webgl2")
+        ?.getExtension("WEBGL_lose_context")
+        ?.loseContext();
+    }
+  }
+}
+
+async function qualifyTransformMatchingShapesBreadth(expectedBackend) {
+  const qualificationCanvas = new OffscreenCanvas(960, 540);
+  const qualificationRenderer =
+    await createDirectTransformMatchingShapesBreadthSmokeRenderer(qualificationCanvas);
+  try {
+    qualificationRenderer.resize(qualificationCanvas.width, qualificationCanvas.height);
+    await settleQualification(qualificationRenderer, 0);
+
+    qualificationRenderer.advanceDirectRealtime(500);
+    await settleQualification(qualificationRenderer, 500);
+    const sourceFade = await sampleQualificationColor(qualificationCanvas, -0.25, 0);
+    const targetFade = await sampleQualificationColor(qualificationCanvas, 4, 1.5);
+    // Manim repeats source indices [0, 0, 1] for a 2 -> 3 group. The
+    // identity-free copy moves from (-4, 1.5) to (-1, -1.5), so its midpoint
+    // is (-2.5, 0). (0.5, 0) belongs to the other stable triangle and is
+    // overlapped by the fading kite; it cannot qualify the padded occurrence.
+    const paddedDuplicate = await sampleQualificationColor(qualificationCanvas, -2.5, 0);
+    // Half-time paints over black: RED * .9 * .5; WHITE * .9 * .5;
+    // and midpoint(BLUE, PINK) * .9 * .5 for the initially transparent copy.
+    const sourceFadeRgb = [252, 98, 85].map((channel) => channel * 0.45);
+    const targetFadeRgb = [255, 255, 255].map((channel) => channel * 0.45);
+    const paddedRgb = [88 + 209, 196 + 71, 221 + 189].map(
+      (channel) => channel * 0.5 * 0.45,
+    );
+    if (
+      !matchesRgb(sourceFade, sourceFadeRgb) ||
+      !matchesRgb(targetFade, targetFadeRgb) ||
+      !matchesRgb(paddedDuplicate, paddedRgb)
+    ) {
+      throw new Error(
+        `matching-shapes breadth did not preserve duplicate expansion and default leftovers: ${JSON.stringify({ sourceFade, targetFade, paddedDuplicate })}`,
+      );
+    }
+
+    qualificationRenderer.advanceDirectRealtime(750);
+    await settleQualification(qualificationRenderer, 750);
+    // An interior, unoccluded point on the directional source FadeOut. Cairo's
+    // premultiplied solid source at RED alpha .9 * .25 is exactly (56, 22, 19).
+    // Nearest-UNORM conversion of unquantized path paint incorrectly gives 57 red.
+    const quantizedSourceFade = await sampleQualificationColor(qualificationCanvas, 1.625, 0.75);
+    if (
+      quantizedSourceFade.red !== 56 ||
+      quantizedSourceFade.green !== 22 ||
+      quantizedSourceFade.blue !== 19
+    ) {
+      throw new Error(`matching source fade differs from Cairo solid-source quantization: ${JSON.stringify(quantizedSourceFade)}`);
+    }
+
+    qualificationRenderer.advanceDirectRealtime(1000);
+    await settleQualification(qualificationRenderer, 1000);
+    const completedTargetLeftover = await sampleQualificationColor(qualificationCanvas, 4, 1.5);
+    if (!isWhite(completedTargetLeftover)) {
+      throw new Error(
+        `matching-shapes breadth did not publish the authored unmatched target: ${JSON.stringify({ completedTargetLeftover })}`,
+      );
+    }
+
+    qualificationRenderer.advanceDirectRealtime(2000);
+    const finalWake = await settleQualification(qualificationRenderer, 2000);
+    const result = {
+      backend: qualificationRenderer.rendererBackend(),
+      time: qualificationRenderer.time(),
+      objectCount: qualificationRenderer.objectCount(),
+      cadence: finalWake.cadence,
+      sourceFade,
+      targetFade,
+      paddedDuplicate,
+      quantizedSourceFade,
+      completedTargetLeftover,
+    };
+    if (
+      result.backend !== expectedBackend ||
+      result.time !== 2 ||
+      result.objectCount !== 4 ||
+      result.cadence !== "idle"
+    ) {
+      throw new Error(
+        `matching-shapes breadth qualification did not settle coherently: ${JSON.stringify(result)}`,
+      );
+    }
+    return result;
+  } finally {
+    qualificationRenderer.free();
+    if (expectedBackend === "WebGL2") {
+      qualificationCanvas
+        .getContext("webgl2")
+        ?.getExtension("WEBGL_lose_context")
+        ?.loseContext();
+    }
+  }
+}
+
 async function start() {
   await init();
 
@@ -163,6 +449,12 @@ async function start() {
   renderer = await createDirectRecoverySmokeRenderer(rendererCanvas, fixture);
   renderer.resize(backingWidth, backingHeight);
   presentPending();
+  matchingShapesQualification = await qualifyTransformMatchingShapes(
+    renderer.rendererBackend(),
+  );
+  matchingShapesBreadthQualification = await qualifyTransformMatchingShapesBreadth(
+    renderer.rendererBackend(),
+  );
 
   window.noonSmoke.renderAt = presentAt;
   window.noonSmoke.resizeBacking = resizeBacking;
@@ -193,6 +485,154 @@ async function start() {
       restore: () => extension.restoreContext(),
     };
     return webglContextRecovery;
+  };
+  window.noonSmoke.retainedContextLossControl = async () => {
+    if (retainedRecoveryFixture !== null) return retainedRecoveryFixture.control;
+    const retainedCanvas = document.createElement("canvas");
+    retainedCanvas.id = "retained-scene";
+    retainedCanvas.width = 960;
+    retainedCanvas.height = 540;
+    document.body.append(retainedCanvas);
+    const offscreen = retainedCanvas.transferControlToOffscreen();
+    const authoring = new WasmAuthoringStore();
+    const context = authoring.createSceneContext();
+    const circle = authoring.createManimCircle(0.75);
+    context.beginLiveExecution(2);
+    context.liveAdd("1", circle);
+    const player = context.createExecutionPlayer(2, 17);
+    const resourceBundle = player.resourceBundleBytes();
+    const initialDelta = player.initialDeltaJson();
+    const retained = await RetainedExecutionCanvasRenderer.create(offscreen, resourceBundle);
+    retained.resize(retainedCanvas.width, retainedCanvas.height);
+    if (!retained.applyDeltaJson(initialDelta) || !retained.render()) {
+      retained.free();
+      player.free();
+      context.free();
+      authoring.free();
+      throw new Error("retained recovery fixture did not publish its initial scene");
+    }
+    const state = { lost: 0, restored: 0, recovery: "idle", error: null };
+    const gl = offscreen.getContext("webgl2");
+    const extension = gl?.getExtension("WEBGL_lose_context");
+    if (!extension) throw new Error("retained renderer has no WEBGL_lose_context extension");
+    offscreen.addEventListener("webglcontextlost", (event) => {
+      event.preventDefault();
+      state.lost += 1;
+    });
+    offscreen.addEventListener("webglcontextrestored", async () => {
+      state.restored += 1;
+      state.recovery = "pending";
+      try {
+        if (!(await retained.recoverWebGlContext())) {
+          throw new Error("retained renderer declined WebGL context recovery");
+        }
+        state.recovery = "ready";
+      } catch (error) {
+        state.error = String(error?.message ?? error);
+        state.recovery = "error";
+      }
+    });
+    const control = {
+      state,
+      canvas: retainedCanvas,
+      lose: () => extension.loseContext(),
+      restore: () => extension.restoreContext(),
+      applyPendingDelta(time) {
+        const delta = player.seekDeltaJson(time);
+        return delta === undefined ? false : retained.applyDeltaJson(delta);
+      },
+      metrics() {
+        return {
+          backend: retained.rendererBackend(),
+          generation: retained.gpuGeneration(),
+          objectCount: retained.objectCount(),
+          time: retained.time(),
+          drawCalls: retained.lastDrawCalls(),
+        };
+      },
+      render() {
+        const presented = retained.render();
+        return {
+          ...this.metrics(),
+          presented,
+        };
+      },
+      async rejectCreationWhileLost() {
+        const creation = RetainedExecutionCanvasRenderer.create(offscreen, resourceBundle);
+        creation.then((unexpected) => unexpected.free(), () => {});
+        const outcome = await Promise.race([
+          creation.then(
+            () => ({ rejected: false, error: null, wasmTrap: false }),
+            (error) => {
+              const message = String(error?.message ?? error);
+              return {
+                rejected: true,
+                error: message,
+                wasmTrap: error instanceof WebAssembly.RuntimeError ||
+                  /unreachable executed/i.test(message),
+              };
+            },
+          ),
+          new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 5_000)),
+        ]);
+        return outcome;
+      },
+    };
+    retainedRecoveryFixture = { control, retained, player, context, authoring };
+    return control;
+  };
+  window.noonSmoke.retainedDeviceDisposalControl = async () => {
+    if (retainedDisposalFixture !== null) return retainedDisposalFixture;
+    const canvas = document.createElement("canvas");
+    canvas.id = "retained-disposal-scene";
+    canvas.width = 960;
+    canvas.height = 540;
+    document.body.append(canvas);
+    const offscreen = canvas.transferControlToOffscreen();
+    let authoring = null;
+    let context = null;
+    let circle = null;
+    let player = null;
+    let retained = null;
+    let ready = false;
+    try {
+      authoring = new WasmAuthoringStore();
+      context = authoring.createSceneContext();
+      circle = authoring.createManimCircle(0.75);
+      context.beginLiveExecution(2);
+      context.liveAdd("1", circle);
+      player = context.createExecutionPlayer(2, 23);
+      const resourceBundle = player.resourceBundleBytes();
+      const initialDelta = player.initialDeltaJson();
+      retained = await RetainedExecutionCanvasRenderer.create(offscreen, resourceBundle);
+      retained.resize(canvas.width, canvas.height);
+      if (!retained.applyDeltaJson(initialDelta) || !retained.render()) {
+        throw new Error("retained disposal fixture did not publish its initial scene");
+      }
+      const control = {
+        dispose() {
+          try { retained.free(); }
+          finally { canvas.remove(); retainedDisposalFixture = null; }
+        },
+      };
+      retainedDisposalFixture = control;
+      ready = true;
+      return control;
+    } finally {
+      player?.free();
+      context?.free();
+      circle?.free();
+      authoring?.free();
+      if (!ready) {
+        retained?.free();
+        canvas.remove();
+      }
+    }
+  };
+  window.noonSmoke.disposeDirectRenderer = () => {
+    if (renderer === null) throw new Error("direct renderer has already been disposed");
+    renderer.free();
+    renderer = null;
   };
   window.noonSmoke.metrics = metrics;
   state.ready = true;

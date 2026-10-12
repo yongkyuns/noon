@@ -1,15 +1,17 @@
+use crate::retained_resource_transport::residency::{ResourceResidency, StagedResourceResidency};
 use noon_core::{
-    Camera2DState, FontResourceLookup, GeometryResourceLookup, RetainedFamilyAnimationPlan,
-    TextResourceHandle, TextResourceLookup,
+    Camera2DState, FontResourceLookup, GeometryRef, GeometryResource, GeometryResourceLookup,
+    RetainedFamilyAnimationPlan, TextResourceHandle, TextResourceLookup,
 };
 use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
+    RenderGeometryPreparation, RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
     RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionTransportError,
-    RetainedResourceBundle, RetainedResourceInventory, RetainedResourceTransportError,
+    RetainedResourceBundle, RetainedResourceInventory, RetainedResourceRetirements,
+    RetainedResourceTransportError, TransportTextResourceHandle,
 };
 
 /// Sequence-owning producer for the additive retained family execution envelope.
@@ -25,6 +27,21 @@ pub struct RetainedFamilyExecutionDeltaEncoder {
     published_plan_count: usize,
     observed_plan_count: usize,
     resources: RetainedResourceInventory,
+    resource_roots: ResourceResidency,
+    text_closures: HashMap<TransportTextResourceHandle, TextClosure>,
+    geometry_references: HashMap<crate::TransportGeometryResourceHandle, usize>,
+    font_references: HashMap<(String, u32), usize>,
+    render_geometry_resources: HashMap<crate::TransportSlotId, u64>,
+    render_geometry_generations: Vec<u32>,
+    free_render_geometry_resources: Vec<u32>,
+    next_render_geometry_resource: u32,
+    published_rows: HashMap<crate::TransportSlotId, crate::RetainedTransportObjectState>,
+}
+
+#[derive(Clone, Debug)]
+struct TextClosure {
+    geometries: Vec<crate::TransportGeometryResourceHandle>,
+    fonts: Vec<(String, u32)>,
 }
 
 #[derive(Debug)]
@@ -34,8 +51,239 @@ struct StagedPlanMappings {
     next_published_plan_count: usize,
 }
 
+/// Borrow the live arena during preparation. Reservations and generation changes
+/// stay in a small overlay until all fallible resource capture has succeeded.
+struct StagedRenderGeometryResources<'a> {
+    installed: &'a HashMap<crate::TransportSlotId, u64>,
+    generations: &'a [u32],
+    free: &'a [u32],
+    slot_changes: HashMap<crate::TransportSlotId, Option<u64>>,
+    generation_changes: HashMap<u32, u32>,
+    newly_free: Vec<u32>,
+    reserved_free: usize,
+    next: u32,
+}
+
+struct RenderGeometryChanges {
+    slot_changes: HashMap<crate::TransportSlotId, Option<u64>>,
+    generation_changes: HashMap<u32, u32>,
+    newly_free: Vec<u32>,
+    reserved_free: usize,
+    next: u32,
+}
+
+impl<'a> StagedRenderGeometryResources<'a> {
+    fn new(encoder: &'a RetainedFamilyExecutionDeltaEncoder) -> Self {
+        Self {
+            installed: &encoder.render_geometry_resources,
+            generations: &encoder.render_geometry_generations,
+            free: &encoder.free_render_geometry_resources,
+            slot_changes: HashMap::new(),
+            generation_changes: HashMap::new(),
+            newly_free: Vec::new(),
+            reserved_free: 0,
+            next: encoder.next_render_geometry_resource,
+        }
+    }
+
+    fn resource(&self, slot: &crate::TransportSlotId) -> Option<u64> {
+        self.slot_changes
+            .get(slot)
+            .copied()
+            .unwrap_or_else(|| self.installed.get(slot).copied())
+    }
+
+    fn generation(&self, index: u32) -> u32 {
+        self.generation_changes
+            .get(&index)
+            .copied()
+            .or_else(|| self.generations.get(index as usize).copied())
+            .unwrap_or(0)
+    }
+
+    fn retire(
+        &mut self,
+        slot: crate::TransportSlotId,
+    ) -> Result<Option<(u32, u32)>, RetainedResourceTransportError> {
+        let Some(id) = self.resource(&slot) else {
+            return Ok(None);
+        };
+        let (index, generation) = crate::retained_resource_transport::render_geometry_parts(id);
+        let next = generation.checked_add(1).ok_or_else(|| {
+            RetainedResourceTransportError::Encode(
+                "retained render geometry generation exhausted".into(),
+            )
+        })?;
+        self.slot_changes.insert(slot, None);
+        self.generation_changes.insert(index, next);
+        self.newly_free.push(index);
+        Ok(Some((index, next)))
+    }
+
+    fn publish(
+        &mut self,
+        slot: crate::TransportSlotId,
+    ) -> Result<u64, RetainedResourceTransportError> {
+        let (index, generation) = if let Some(id) = self.resource(&slot) {
+            let (index, generation) = crate::retained_resource_transport::render_geometry_parts(id);
+            let next = generation.checked_add(1).ok_or_else(|| {
+                RetainedResourceTransportError::Encode(
+                    "retained render geometry generation exhausted".into(),
+                )
+            })?;
+            self.generation_changes.insert(index, next);
+            (index, next)
+        } else {
+            let index = if let Some(index) = self.newly_free.pop() {
+                index
+            } else if self.reserved_free < self.free.len() {
+                let index = self.free[self.free.len() - 1 - self.reserved_free];
+                self.reserved_free += 1;
+                index
+            } else {
+                let index = self.next;
+                self.next = self.next.checked_add(1).ok_or_else(|| {
+                    RetainedResourceTransportError::Encode(
+                        "retained render geometry resource index exhausted".into(),
+                    )
+                })?;
+                index
+            };
+            (index, self.generation(index))
+        };
+        let id = crate::retained_resource_transport::render_geometry_id(index, generation);
+        self.slot_changes.insert(slot, Some(id));
+        Ok(id)
+    }
+
+    fn finish(self) -> RenderGeometryChanges {
+        RenderGeometryChanges {
+            slot_changes: self.slot_changes,
+            generation_changes: self.generation_changes,
+            newly_free: self.newly_free,
+            reserved_free: self.reserved_free,
+            next: self.next,
+        }
+    }
+}
+
+impl RenderGeometryChanges {
+    fn commit(self, encoder: &mut RetainedFamilyExecutionDeltaEncoder) {
+        for (slot, resource) in self.slot_changes {
+            if let Some(resource) = resource {
+                encoder.render_geometry_resources.insert(slot, resource);
+            } else {
+                encoder.render_geometry_resources.remove(&slot);
+            }
+        }
+        encoder
+            .render_geometry_generations
+            .resize(self.next as usize, 0);
+        for (index, generation) in self.generation_changes {
+            encoder.render_geometry_generations[index as usize] = generation;
+        }
+        encoder
+            .free_render_geometry_resources
+            .truncate(encoder.free_render_geometry_resources.len() - self.reserved_free);
+        encoder
+            .free_render_geometry_resources
+            .extend(self.newly_free);
+        encoder.next_render_geometry_resource = self.next;
+    }
+
+    #[cfg(test)]
+    fn touched_slots(&self) -> usize {
+        self.slot_changes.len()
+    }
+}
+
 impl RetainedFamilyExecutionDeltaEncoder {
-    #[cfg(any(target_arch = "wasm32", test))]
+    /// Compact only dense updates whose stable wire fields are unchanged. This
+    /// runs after resource attachment so the comparison uses published IDs.
+    pub(crate) fn compact_dense_rows(
+        &mut self,
+        envelope: &mut RetainedFamilyExecutionDeltaEnvelope,
+    ) {
+        let retained = &mut envelope.retained;
+        if retained.snapshot {
+            self.published_rows.clear();
+            return;
+        }
+        // Static snapshots and small scenes do not need a second row copy. A
+        // dense incremental first seeds the cache without altering its wire.
+        if self.published_rows.is_empty() && retained.objects.len() < 128 {
+            return;
+        }
+        for slot in &retained.removed_slots {
+            self.published_rows.remove(slot);
+        }
+
+        let eligible = !retained.snapshot
+            && retained.objects.len() >= 128
+            && retained.removed_slots.is_empty()
+            && retained.painter_order.is_none()
+            && envelope.family_plans.is_empty()
+            && envelope.resource_additions.is_none()
+            && envelope.resource_retirements.is_empty();
+        let mut full = Vec::new();
+        for row in std::mem::take(&mut retained.objects) {
+            let previous = self.published_rows.get(&row.slot);
+            let stable = previous.is_some_and(|previous| {
+                previous.order == row.order
+                    && previous.object == row.object
+                    && previous.z_index == row.z_index
+                    && previous.content == row.content
+                    && previous.spatial == row.spatial
+                    && previous.appearance == row.appearance
+                    && previous.text_bounds == row.text_bounds
+                    && previous.presence == row.presence
+                    && previous.reveal == row.reveal
+                    && previous.render_geometry == row.render_geometry
+                    && match (previous.render_transform, row.render_transform) {
+                        (None, None) => true,
+                        (Some(previous), Some(current)) => {
+                            previous.scale == current.scale && previous.rotation == current.rotation
+                        }
+                        _ => false,
+                    }
+                    && previous.render_geometry_resource == row.render_geometry_resource
+            });
+            let patch = previous.and_then(|previous| {
+                let transform = (previous.transform != row.transform).then_some(row.transform);
+                let style = (previous.style != row.style).then_some(row.style);
+                let morph = (previous.morph != row.morph).then_some(row.morph);
+                let render_translation = previous
+                    .render_transform
+                    .zip(row.render_transform)
+                    .and_then(|(previous, current)| {
+                        (previous.translation != current.translation).then_some(current.translation)
+                    });
+                (eligible
+                    && stable
+                    && (transform.is_some()
+                        || style.is_some()
+                        || morph.is_some()
+                        || render_translation.is_some()))
+                .then_some(crate::RetainedTransportObjectPatch {
+                    slot: row.slot,
+                    object: row.object,
+                    transform,
+                    style,
+                    morph,
+                    render_translation,
+                })
+            });
+            if let Some(patch) = patch {
+                retained.object_patches.push(patch);
+                self.published_rows.insert(row.slot, row);
+            } else {
+                self.published_rows.insert(row.slot, row.clone());
+                full.push(row);
+            }
+        }
+        retained.objects = full;
+    }
+
     pub(crate) const fn session(&self) -> u32 {
         self.retained.session()
     }
@@ -47,27 +295,80 @@ impl RetainedFamilyExecutionDeltaEncoder {
             published_plan_count: 0,
             observed_plan_count: 0,
             resources: RetainedResourceInventory::default(),
+            resource_roots: ResourceResidency::default(),
+            text_closures: HashMap::new(),
+            geometry_references: HashMap::new(),
+            font_references: HashMap::new(),
+            render_geometry_resources: HashMap::new(),
+            render_geometry_generations: Vec::new(),
+            free_render_geometry_resources: Vec::new(),
+            next_render_geometry_resource: 0,
+            published_rows: HashMap::new(),
         }
     }
 
     pub(crate) fn new_with_resources(session: u32, resources: &RetainedResourceBundle) -> Self {
-        Self {
-            retained: RetainedExecutionDeltaEncoder::new(session),
-            plan_index_remap: HashMap::new(),
-            published_plan_count: 0,
-            observed_plan_count: 0,
-            resources: resources.inventory(),
+        let mut encoder = Self::new(session);
+        encoder.next_render_geometry_resource = u32::try_from(resources.render_geometry_count())
+            .expect("retained render geometry resources exceed u32 transport index space");
+        encoder.render_geometry_generations =
+            vec![0; encoder.next_render_geometry_resource as usize];
+        encoder.resources = resources.inventory();
+        for closure in resources.text_closures() {
+            encoder.register_text_closure(closure.text, closure.geometries, closure.fonts);
         }
+        encoder
     }
 
     pub(crate) fn attach_resource_additions(
         &mut self,
         envelope: &mut RetainedFamilyExecutionDeltaEnvelope,
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
-        texts: &impl TextResourceLookup,
-        geometries: &impl GeometryResourceLookup,
-        fonts: &impl FontResourceLookup,
+        texts: &(impl TextResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        images: &(impl noon_core::RasterImageResourceLookup + ?Sized),
     ) -> Result<(), RetainedResourceTransportError> {
+        // Effective content may borrow an external path from the producer's
+        // runtime lease. The receiver has a separate geometry arena, so encode
+        // only touched paths as self-contained immutable content. Unchanged
+        // objects are absent from an incremental delta.
+        let mut mesh_geometry_handles =
+            std::collections::BTreeSet::<noon_core::GeometryResourceHandle>::new();
+        for object in &mut envelope.retained.objects {
+            if let crate::TransportObjectContent::Geometry { geometry, resource } =
+                &mut object.content
+            {
+                let source_handle = resolve_external_geometry(geometry, geometries)?;
+                *resource = source_handle.map(Into::into);
+                if let Some(handle) = source_handle {
+                    let transport = crate::TransportGeometryResourceHandle::from(handle);
+                    if !self.resources.contains_geometry(transport) {
+                        mesh_geometry_handles.insert(handle);
+                    }
+                }
+            }
+            if let Some(geometry) = &mut object.render_geometry {
+                if let Some(handle) = resolve_external_geometry(geometry, geometries)? {
+                    return Err(RetainedResourceTransportError::UnsupportedMeshGeometry(
+                        handle.into(),
+                    ));
+                }
+            }
+        }
+        let new_images = envelope
+            .retained
+            .objects
+            .iter()
+            .filter_map(|object| match object.content {
+                crate::TransportObjectContent::Image { image, .. }
+                    if !self.resources.contains_image(image) =>
+                {
+                    Some(noon_core::RasterImageResourceHandle::from(image))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         let new_texts = text_handles
             .into_iter()
             .filter(|handle| {
@@ -76,29 +377,165 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 )
             })
             .collect::<std::collections::BTreeSet<_>>();
-        if new_texts.is_empty() {
+
+        // The retained encoder emits a changed immutable geometry inline. Convert
+        // only those changes into generation-qualified reusable arena slots.
+        let mut staged = StagedRenderGeometryResources::new(self);
+        let mut updates = std::collections::BTreeMap::<u32, (u32, Option<Arc<GeometryRef>>)>::new();
+        let mut preparations = Vec::<RenderGeometryPreparation>::new();
+        for slot in envelope.retained.removed_slots.iter().chain(
+            envelope
+                .retained
+                .objects
+                .iter()
+                .filter(|object| object.render_transform.is_none())
+                .map(|object| &object.slot),
+        ) {
+            if let Some((index, generation)) = staged.retire(*slot)? {
+                updates.insert(index, (generation, None));
+            }
+        }
+        for object in &mut envelope.retained.objects {
+            if object.render_transform.is_none() {
+                continue;
+            }
+
+            if let Some(geometry) = object.render_geometry.take() {
+                // Resident GPU preloading is a one-time installation hint. A
+                // later version of the same render-geometry slot travels as an
+                // ordinary resource replacement and is tessellated into the
+                // renderer's reusable per-row ranges on its next frame.
+                let preload = envelope.retained.snapshot && staged.resource(&object.slot).is_none();
+                let resource = staged.publish(object.slot)?;
+                let (index, generation) =
+                    crate::retained_resource_transport::render_geometry_parts(resource);
+                if preload {
+                    preparations.push(RenderGeometryPreparation {
+                        resource: index,
+                        style: object.style,
+                        transform: object
+                            .render_transform
+                            .expect("render geometry publication has a render transform"),
+                    });
+                }
+                updates.insert(index, (generation, Some(Arc::new(geometry))));
+                object.render_geometry_resource = Some(resource);
+            } else if object.render_geometry_resource.is_none() {
+                if let Some(resource) = staged.resource(&object.slot) {
+                    object.render_geometry_resource = Some(resource);
+                }
+            }
+        }
+        let pending_render = staged.finish();
+        let staged_roots = self.resource_roots.stage(&envelope.retained);
+        let retirements = self.resource_roots.retirements(&staged_roots);
+        if new_texts.is_empty()
+            && new_images.is_empty()
+            && mesh_geometry_handles.is_empty()
+            && updates.is_empty()
+        {
+            envelope.resource_retirements = retirements;
+            self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
+            pending_render.commit(self);
             return Ok(());
         }
-        let mut additions = RetainedResourceBundle::capture_additions(
+
+        let mut additions = RetainedResourceBundle::capture_additions_with_geometries(
             new_texts,
+            mesh_geometry_handles,
             texts,
             geometries,
             fonts,
             &self.resources,
         )?;
+        additions.capture_images(new_images, images)?;
+        let closures = additions.text_closures().collect::<Vec<_>>();
         additions.retain_additions(&mut self.resources);
+        for closure in closures {
+            self.register_text_closure(closure.text, closure.geometries, closure.fonts);
+        }
+        if !updates.is_empty() {
+            additions.set_render_geometry_updates(
+                self.session(),
+                updates
+                    .into_iter()
+                    .map(|(slot, (generation, geometry))| (slot, generation, geometry))
+                    .collect(),
+                preparations,
+            );
+        }
         debug_assert!(!additions.is_empty());
         envelope.resource_additions = Some(additions);
+        envelope.resource_retirements = retirements;
+        self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
+        pending_render.commit(self);
         Ok(())
     }
 
-    pub fn encode_snapshot(
+    fn register_text_closure(
+        &mut self,
+        text: TransportTextResourceHandle,
+        geometries: Vec<crate::TransportGeometryResourceHandle>,
+        fonts: Vec<(String, u32)>,
+    ) {
+        for geometry in &geometries {
+            *self.geometry_references.entry(*geometry).or_default() += 1;
+        }
+        for font in &fonts {
+            *self.font_references.entry(font.clone()).or_default() += 1;
+        }
+        self.text_closures
+            .insert(text, TextClosure { geometries, fonts });
+    }
+
+    fn commit_resource_roots(
+        &mut self,
+        staged: StagedResourceResidency,
+        retirements: &RetainedResourceRetirements,
+    ) {
+        self.resources.forget_root_retirements(retirements);
+        for geometry in &retirements.geometries {
+            if !self.geometry_references.contains_key(geometry) {
+                self.resources.forget_geometry(*geometry);
+            }
+        }
+        for text in &retirements.texts {
+            if let Some(TextClosure { geometries, fonts }) = self.text_closures.remove(text) {
+                for geometry in geometries {
+                    if let Some(count) = self.geometry_references.get_mut(&geometry) {
+                        *count -= 1;
+                        if *count == 0 {
+                            self.geometry_references.remove(&geometry);
+                            self.resources.forget_geometry(geometry);
+                        }
+                    }
+                }
+                for font in fonts {
+                    if let Some(count) = self.font_references.get_mut(&font) {
+                        *count -= 1;
+                        if *count == 0 {
+                            self.font_references.remove(&font);
+                            self.resources.forget_font(&font);
+                        }
+                    }
+                }
+            }
+        }
+        self.resource_roots.commit(staged);
+    }
+
+    pub fn encode_snapshot_with_context(
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
-        let retained = self.retained.encode_snapshot(frame.retained, camera)?;
+        let retained = self.retained.encode_snapshot_with_context(
+            frame.retained,
+            camera,
+            publication_context,
+        )?;
         let envelope = RetainedFamilyExecutionDeltaEnvelope::snapshot(retained, frame, plans)?;
         self.plan_index_remap = (0..plans.len())
             .map(|index| (index, index as u32))
@@ -108,13 +545,18 @@ impl RetainedFamilyExecutionDeltaEncoder {
         Ok(envelope)
     }
 
-    pub fn encode_planned_snapshot(
+    pub fn encode_planned_snapshot_with_context(
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
-        let retained = self.retained.encode_snapshot(frame.retained, camera)?;
+        let retained = self.retained.encode_snapshot_with_context(
+            frame.retained,
+            camera,
+            publication_context,
+        )?;
         let envelope =
             RetainedFamilyExecutionDeltaEnvelope::planned_snapshot(retained, frame, plans)?;
         self.compact_planned_snapshot(envelope, plans)
@@ -123,17 +565,19 @@ impl RetainedFamilyExecutionDeltaEncoder {
     /// Encode an authoritative snapshot for the execution rows that still own a
     /// live slot. The family sidecar uses the same exact row selection as the base
     /// retained envelope, so retired rows cannot reappear through plan state.
-    pub fn encode_planned_snapshot_indices(
+    pub fn encode_planned_snapshot_indices_with_context(
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
         indices: impl IntoIterator<Item = usize>,
     ) -> Result<RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionEncodeError> {
         let indices = indices.into_iter().collect::<Vec<_>>();
-        let retained = self.retained.encode_snapshot_indices(
+        let retained = self.retained.encode_snapshot_indices_with_context(
             frame.retained,
             camera,
+            publication_context,
             indices.iter().copied(),
         )?;
         let envelope = RetainedFamilyExecutionDeltaEnvelope::planned_snapshot_indices(
@@ -147,18 +591,22 @@ impl RetainedFamilyExecutionDeltaEncoder {
     /// `plans` are normally used only by the initial snapshot. They are supplied here
     /// as well because the base retained encoder may legitimately promote an
     /// `FrameChanges::all()` update to an authoritative snapshot.
-    pub fn encode_incremental(
+    pub fn encode_incremental_with_context(
         &mut self,
         frame: &RetainedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
         self.validate_plan_count(plans)?;
-        let Some(retained) = self
-            .retained
-            .encode_incremental(frame.retained, changes, camera)?
+        let Some(retained) = self.retained.encode_incremental_with_context(
+            frame.retained,
+            changes,
+            camera,
+            publication_context,
+        )?
         else {
             return Ok(None);
         };
@@ -172,19 +620,23 @@ impl RetainedFamilyExecutionDeltaEncoder {
         Ok(Some(envelope))
     }
 
-    pub fn encode_planned_incremental(
+    pub fn encode_planned_incremental_with_context(
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
         self.validate_plan_count(plans)?;
         let staged = self.stage_plan_mappings(frame, plans, changes.object_indices())?;
-        let Some(retained) = self
-            .retained
-            .encode_incremental(frame.retained, changes, camera)?
+        let Some(retained) = self.retained.encode_incremental_with_context(
+            frame.retained,
+            changes,
+            camera,
+            publication_context,
+        )?
         else {
             return Ok(None);
         };
@@ -215,27 +667,49 @@ impl RetainedFamilyExecutionDeltaEncoder {
     /// Encode one sparse family-aware update with a compact painter-order splice.
     /// Newly admitted rows may begin an active family animation in this same atomic
     /// delta; their plan descriptor is appended before their state references it.
-    pub fn encode_planned_incremental_with_painter_order(
+    pub fn encode_planned_incremental_with_painter_order_and_context(
         &mut self,
         frame: &RetainedPlannedFamilyFrame<'_>,
         plans: &[RetainedFamilyAnimationPlan],
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: noon_core::PublicationContext,
         painter_order: &[u32],
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, RetainedFamilyExecutionEncodeError>
     {
         self.validate_plan_count(plans)?;
-        let family_changes = FrameChanges::objects(changes.object_indices().to_vec());
-        let staged = self.stage_plan_mappings(frame, plans, family_changes.object_indices())?;
-        let Some(retained) = self.retained.encode_incremental_with_painter_order(
-            frame.retained,
-            changes,
-            camera,
-            painter_order,
-        )?
+        // Validate before the base encoder advances its sequence. The final
+        // family rows must follow that encoder's coalesced membership decision.
+        self.stage_plan_mappings(frame, plans, changes.object_indices())?;
+        let Some(retained) = self
+            .retained
+            .encode_incremental_with_painter_order_and_context(
+                frame.retained,
+                changes,
+                camera,
+                publication_context,
+                painter_order,
+            )?
         else {
             return Ok(None);
         };
+        // A row created and removed between publications never reaches the
+        // consumer. Sending a family reset for it would reference an unknown
+        // object. Use only the sparse rows emitted by the base transport.
+        let published_objects = retained
+            .objects
+            .iter()
+            .map(|object| object.object)
+            .collect::<std::collections::HashSet<_>>();
+        let family_changes = FrameChanges::objects(
+            changes
+                .object_indices()
+                .iter()
+                .copied()
+                .filter(|&index| published_objects.contains(&frame.retained.objects[index].id))
+                .collect(),
+        );
+        let staged = self.stage_plan_mappings(frame, plans, family_changes.object_indices())?;
         let added_plans = staged
             .added_plan_indices
             .iter()
@@ -354,6 +828,28 @@ impl RetainedFamilyExecutionDeltaEncoder {
     }
 }
 
+fn resolve_external_geometry(
+    geometry: &mut GeometryRef,
+    resources: &(impl GeometryResourceLookup + ?Sized),
+) -> Result<Option<noon_core::GeometryResourceHandle>, RetainedResourceTransportError> {
+    let GeometryRef::External(id) = geometry else {
+        return Ok(None);
+    };
+    let handle = resources
+        .current_handle(*id)
+        .ok_or(RetainedResourceTransportError::UnknownGeometryId(*id))?;
+    let resource = resources
+        .get(handle)
+        .ok_or_else(|| RetainedResourceTransportError::UnknownGeometry(handle.into()))?;
+    match resource {
+        GeometryResource::VectorPath(path) => {
+            *geometry = GeometryRef::VectorPath(path.as_ref().clone());
+            Ok(None)
+        }
+        GeometryResource::Mesh(_) => Ok(Some(handle)),
+    }
+}
+
 fn remap_family_state_indices(
     envelope: &mut RetainedFamilyExecutionDeltaEnvelope,
     remap: &HashMap<usize, u32>,
@@ -408,9 +904,9 @@ impl From<RetainedFamilyExecutionTransportError> for RetainedFamilyExecutionEnco
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        FamilyAnimationMode, FamilyAnimationState, GeometryRef, ObjectContentRef, ObjectId,
-        RateFunction, RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena,
-        Transform2D,
+        FamilyAnimationMode, FamilyAnimationState, FontResourceArena, GeometryRef,
+        GeometryResourceArena, ObjectContentRef, ObjectId, RateFunction,
+        RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena, Transform2D,
     };
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -433,6 +929,8 @@ mod tests {
         Vec<Option<FamilyAnimationState>>,
     ) {
         let first = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -442,6 +940,8 @@ mod tests {
             text_bounds: None,
         };
         let second = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -472,6 +972,8 @@ mod tests {
             time: 0.5,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: first.id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -481,6 +983,8 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: second.id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -500,6 +1004,669 @@ mod tests {
     }
 
     #[test]
+    fn dense_row_compaction_preserves_changed_content_as_full_row() {
+        for render_override in [false, true] {
+            check_dense_row_compaction(render_override);
+        }
+    }
+
+    fn check_dense_row_compaction(render_override: bool) {
+        let (_, mut frame, _) = fixture();
+        let template = frame.objects[0].clone();
+        frame.objects = (0..128)
+            .map(|index| FrameObjectState {
+                spatial: None,
+                id: ObjectId::new(index + 1),
+                ..template.clone()
+            })
+            .collect();
+        frame.family_animations = vec![None; 128];
+        frame.family_animation_plan_indices = vec![None; 128];
+        frame.presences = vec![true; 128];
+        frame.reveals = vec![1.0; 128];
+        frame.morphs = vec![0.0; 128];
+        frame.render_geometries = vec![None; 128];
+        frame.render_transforms = vec![None; 128];
+        if render_override {
+            frame
+                .render_geometries
+                .fill(Some(Arc::new(GeometryRef::path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::ZERO)
+                        .line_to(noon_core::Vec2::ONE),
+                ))));
+            frame.render_transforms.fill(Some(Transform2D::IDENTITY));
+        }
+
+        let mut base = RetainedExecutionDeltaEncoder::new(1);
+        let mut compactor = RetainedFamilyExecutionDeltaEncoder::new(1);
+        let mut full_mirror = crate::RetainedExecutionFrameMirror::default();
+        let mut compact_mirror = crate::RetainedExecutionFrameMirror::default();
+        let wrap = |retained| RetainedFamilyExecutionDeltaEnvelope {
+            retained,
+            family_states: Vec::new(),
+            family_plans: Vec::new(),
+            resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
+        };
+        let mut snapshot = wrap(
+            base.encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap(),
+        );
+        compactor.compact_dense_rows(&mut snapshot);
+        assert_eq!(snapshot.retained.objects.len(), 128);
+        assert!(snapshot.retained.object_patches.is_empty());
+        full_mirror.apply(snapshot.retained.clone()).unwrap();
+        compact_mirror.apply(snapshot.retained).unwrap();
+
+        frame.time = 0.5;
+        frame.morphs.fill(0.3);
+        let mut seed = wrap(
+            base.encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects((0..128).collect()),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        compactor.compact_dense_rows(&mut seed);
+        assert_eq!(seed.retained.objects.len(), 128);
+        assert!(seed.retained.object_patches.is_empty());
+        full_mirror.apply(seed.retained.clone()).unwrap();
+        compact_mirror.apply(seed.retained).unwrap();
+
+        frame.time = 0.6;
+        frame.morphs.fill(0.4);
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::circle(4.0));
+        if render_override {
+            for (index, transform) in frame.render_transforms.iter_mut().enumerate() {
+                transform.as_mut().unwrap().translation = noon_core::Vec2::new(index as f32, -2.0);
+            }
+        }
+        let full = wrap(
+            base.encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects((0..128).collect()),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        let full_bytes = serde_json::to_vec(&full).unwrap().len();
+        let mut compact = full.clone();
+        compactor.compact_dense_rows(&mut compact);
+        assert_eq!(compact.retained.objects.len(), 1);
+        assert_eq!(compact.retained.object_patches.len(), 127);
+        assert!(serde_json::to_vec(&compact).unwrap().len() < full_bytes);
+        for patch in &compact.retained.object_patches {
+            assert_eq!(patch.transform, None);
+            assert_eq!(patch.render_translation.is_some(), render_override);
+        }
+        full_mirror.apply(full.retained).unwrap();
+        let decoded =
+            serde_json::from_slice(&serde_json::to_vec(&compact.retained).unwrap()).unwrap();
+        compact_mirror.apply(decoded).unwrap();
+        assert_eq!(full_mirror.frame(), Some(&frame));
+        assert_eq!(compact_mirror.frame(), full_mirror.frame());
+
+        if !render_override {
+            return;
+        }
+        let installed_geometry = compact_mirror.frame().unwrap().render_geometries[1]
+            .clone()
+            .unwrap();
+        // Derived movement alone is a patch, independent of semantic TRS/morph.
+        frame.time = 0.7;
+        for transform in &mut frame.render_transforms {
+            transform.as_mut().unwrap().translation.y += 1.0;
+        }
+        let full = base
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects((0..128).collect()),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let mut compact = wrap(full.clone());
+        compactor.compact_dense_rows(&mut compact);
+        assert!(compact.retained.objects.is_empty());
+        assert_eq!(compact.retained.object_patches.len(), 128);
+        assert!(compact.retained.object_patches.iter().all(|patch| {
+            patch.transform.is_none()
+                && patch.style.is_none()
+                && patch.morph.is_none()
+                && patch.render_translation.is_some()
+        }));
+        full_mirror.apply(full).unwrap();
+        compact_mirror.apply(compact.retained).unwrap();
+        assert_eq!(compact_mirror.frame(), Some(&frame));
+        assert_eq!(compact_mirror.frame(), full_mirror.frame());
+        assert!(Arc::ptr_eq(
+            &installed_geometry,
+            compact_mirror.frame().unwrap().render_geometries[1]
+                .as_ref()
+                .unwrap()
+        ));
+
+        // Entry, exit, changed geometry and linear frames keep complete rows. Other active
+        // overrides still compact and retain their immutable geometry.
+        for step in 0..5 {
+            frame.time += 0.1;
+            frame.morphs.iter_mut().for_each(|morph| *morph += 0.1);
+            if step == 0 {
+                frame.render_geometries[0] = None;
+                frame.render_transforms[0] = None;
+            } else if step < 3 {
+                frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::ZERO)
+                        .line_to(noon_core::Vec2::new(2.0 + step as f32, 3.0)),
+                )));
+                frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+            } else if step == 3 {
+                frame.render_transforms[0].as_mut().unwrap().scale = noon_core::Vec2::new(2.0, 3.0);
+            } else {
+                frame.render_transforms[0].as_mut().unwrap().rotation = 0.5;
+            }
+            let full = base
+                .encode_incremental_with_context(
+                    &frame,
+                    &FrameChanges::objects((0..128).collect()),
+                    Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
+                )
+                .unwrap()
+                .unwrap();
+            let mut compact = wrap(full.clone());
+            compactor.compact_dense_rows(&mut compact);
+            assert_eq!(compact.retained.objects.len(), 1);
+            assert_eq!(compact.retained.objects[0].object, frame.objects[0].id);
+            assert_eq!(compact.retained.object_patches.len(), 127);
+            assert!(compact.resource_additions.is_none());
+            assert!(compact.resource_retirements.is_empty());
+            full_mirror.apply(full).unwrap();
+            compact_mirror.apply(compact.retained).unwrap();
+            assert_eq!(compact_mirror.frame(), Some(&frame));
+            assert_eq!(compact_mirror.frame(), full_mirror.frame());
+            assert!(Arc::ptr_eq(
+                &installed_geometry,
+                compact_mirror.frame().unwrap().render_geometries[1]
+                    .as_ref()
+                    .unwrap()
+            ));
+        }
+    }
+
+    #[test]
+    fn initial_render_geometry_snapshot_carries_one_residency_hint() {
+        let (_, mut frame, states) = fixture();
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::ZERO)
+                .line_to(noon_core::Vec2::ONE),
+        )));
+        frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+        let texts = TextResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let images = noon_core::RasterImageResourceArena::new();
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(92);
+        let mut snapshot = encoder
+            .encode_snapshot_with_context(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        encoder
+            .attach_resource_additions(&mut snapshot, [], &texts, &geometries, &fonts, &images)
+            .unwrap();
+
+        let resources = snapshot.resource_additions.unwrap();
+        assert_eq!(resources.render_geometry_count(), 1);
+        let addition = resources.render_geometry_addition().unwrap().unwrap();
+        assert_eq!(addition.session, 92);
+        assert_eq!(addition.preparations.len(), 1);
+
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::new(2.0, 0.0))
+                .line_to(noon_core::Vec2::new(3.0, 1.0)),
+        )));
+        let mut resnapshot = encoder
+            .encode_snapshot_with_context(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        encoder
+            .attach_resource_additions(&mut resnapshot, [], &texts, &geometries, &fonts, &images)
+            .unwrap();
+        assert!(resnapshot
+            .resource_additions
+            .as_ref()
+            .unwrap()
+            .render_geometry_addition()
+            .unwrap()
+            .unwrap()
+            .preparations
+            .is_empty());
+    }
+
+    #[test]
+    fn unique_render_geometry_replacements_reuse_one_wire_slot() {
+        let (_, mut frame, _) = fixture();
+        let states = [None, None];
+        let texts = TextResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let images = noon_core::RasterImageResourceArena::new();
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(92);
+        let mut initial = encoder
+            .encode_snapshot_with_context(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        encoder
+            .attach_resource_additions(&mut initial, [], &texts, &geometries, &fonts, &images)
+            .unwrap();
+
+        for generation in 0..64 {
+            frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(generation as f32, 0.0))
+                    .line_to(noon_core::Vec2::new(generation as f32 + 1.0, 1.0)),
+            )));
+            frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+            let mut delta = encoder
+                .encode_incremental_with_context(
+                    &RetainedFamilyFrame {
+                        retained: &frame,
+                        family_animations: &states,
+                    },
+                    &[],
+                    &FrameChanges::objects(vec![0]),
+                    Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
+                )
+                .unwrap()
+                .unwrap();
+            encoder
+                .attach_resource_additions(&mut delta, [], &texts, &geometries, &fonts, &images)
+                .unwrap();
+            assert_eq!(delta.retained.objects.len(), 1);
+            assert_eq!(
+                delta.retained.objects[0].render_geometry_resource,
+                Some(crate::retained_resource_transport::render_geometry_id(
+                    0, generation
+                ))
+            );
+            assert_eq!(
+                delta
+                    .resource_additions
+                    .as_ref()
+                    .unwrap()
+                    .render_geometry_count(),
+                1
+            );
+            assert!(delta
+                .resource_additions
+                .as_ref()
+                .unwrap()
+                .render_geometry_addition()
+                .unwrap()
+                .unwrap()
+                .preparations
+                .is_empty());
+            assert_eq!(encoder.next_render_geometry_resource, 1);
+        }
+
+        frame.render_geometries[0] = None;
+        frame.render_transforms[0] = None;
+        let mut removal = encoder
+            .encode_incremental_with_context(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        encoder
+            .attach_resource_additions(&mut removal, [], &texts, &geometries, &fonts, &images)
+            .unwrap();
+        assert_eq!(
+            removal
+                .resource_additions
+                .as_ref()
+                .unwrap()
+                .render_geometry_count(),
+            0
+        );
+        assert_eq!(encoder.free_render_geometry_resources, vec![0]);
+
+        // A failed unrelated resource capture must leave the retired slot
+        // available for the next successfully published geometry.
+        let missing_text = noon_core::TextResourceHandle {
+            arena: 99,
+            id: noon_core::TextResourceId::new(999),
+            version: 1,
+        };
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::new(100.0, 0.0))
+                .line_to(noon_core::Vec2::new(101.0, 1.0)),
+        )));
+        frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+        frame.objects[1].content = ObjectContentRef::Text(missing_text);
+        let mut failed = encoder
+            .encode_incremental_with_context(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                &FrameChanges::objects(vec![0, 1]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let mut retry = failed.clone();
+        let previous_inventory = encoder.resources.clone();
+        assert!(encoder
+            .attach_resource_additions(
+                &mut failed,
+                [missing_text],
+                &texts,
+                &geometries,
+                &fonts,
+                &images,
+            )
+            .is_err());
+        assert_eq!(encoder.resources, previous_inventory);
+        assert_eq!(encoder.free_render_geometry_resources, vec![0]);
+        assert!(encoder.render_geometry_resources.is_empty());
+        assert_eq!(encoder.render_geometry_generations, vec![64]);
+
+        retry.retained.objects[1].content = crate::TransportObjectContent::Geometry {
+            geometry: GeometryRef::circle(2.0),
+            resource: None,
+        };
+        encoder
+            .attach_resource_additions(&mut retry, [], &texts, &geometries, &fonts, &images)
+            .unwrap();
+        assert_eq!(
+            retry.retained.objects[0].render_geometry_resource,
+            Some(crate::retained_resource_transport::render_geometry_id(
+                0, 64
+            ))
+        );
+        assert_eq!(encoder.next_render_geometry_resource, 1);
+        assert!(encoder.free_render_geometry_resources.is_empty());
+    }
+
+    #[test]
+    fn one_change_stages_one_entry_with_a_hundred_thousand_live_render_slots() {
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(92);
+        for index in 0..100_000 {
+            encoder.render_geometry_resources.insert(
+                crate::TransportSlotId {
+                    slot: index,
+                    generation: 0,
+                },
+                crate::retained_resource_transport::render_geometry_id(index, 0),
+            );
+        }
+        encoder.render_geometry_generations = vec![0; 100_000];
+        encoder.next_render_geometry_resource = 100_000;
+
+        let slot = crate::TransportSlotId {
+            slot: 42,
+            generation: 0,
+        };
+        let mut staged = StagedRenderGeometryResources::new(&encoder);
+        assert_eq!(
+            staged.publish(slot).unwrap(),
+            crate::retained_resource_transport::render_geometry_id(42, 1)
+        );
+        let changes = staged.finish();
+        assert_eq!(changes.touched_slots(), 1);
+        assert_eq!(changes.generation_changes.len(), 1);
+        assert_eq!(changes.reserved_free, 0);
+        assert!(changes.newly_free.is_empty());
+        changes.commit(&mut encoder);
+        assert_eq!(encoder.render_geometry_resources.len(), 100_000);
+        assert_eq!(encoder.render_geometry_generations[42], 1);
+        assert_eq!(encoder.next_render_geometry_resource, 100_000);
+    }
+
+    #[test]
+    fn retired_text_closures_reintroduce_complete_payloads_without_inventory_growth() {
+        let mut scene = noon::Scene::new();
+        let first = scene
+            .typst(noon::Typst::new("#line(length: 10pt) A"))
+            .unwrap();
+        let second = scene
+            .typst(noon::Typst::new("#line(length: 10pt) B"))
+            .unwrap();
+        let first = first.state().unwrap().content.text().unwrap();
+        let second = second.state().unwrap().content.text().unwrap();
+        let owner = scene.integration_store();
+        let store = owner.borrow();
+        let images = noon_core::RasterImageResourceArena::new();
+        let resources = RetainedResourceBundle::capture(
+            [first, second],
+            store.text_resources(),
+            store.geometry_resources(),
+            store.font_resources(),
+        )
+        .unwrap();
+        assert!(resources.font_bytes() > 0);
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(47, &resources);
+        assert_eq!(encoder.text_closures.len(), 2);
+        assert!(!encoder.geometry_references.is_empty());
+        assert!(!encoder.font_references.is_empty());
+        let (_, mut frame, _) = fixture();
+        frame.objects[0].content = ObjectContentRef::Text(first);
+        frame.objects[1].content = ObjectContentRef::Text(second);
+        let states = [None, None];
+        let mut initial = encoder
+            .encode_snapshot_with_context(
+                &RetainedFamilyFrame {
+                    retained: &frame,
+                    family_animations: &states,
+                },
+                &[],
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        encoder
+            .attach_resource_additions(
+                &mut initial,
+                [first, second],
+                store.text_resources(),
+                store.geometry_resources(),
+                store.font_resources(),
+                &images,
+            )
+            .unwrap();
+        assert!(initial.resource_additions.is_none());
+
+        for index in 0..2 {
+            frame.objects[index].content = ObjectContentRef::Geometry(GeometryRef::circle(1.0));
+            let mut delta = encoder
+                .encode_incremental_with_context(
+                    &RetainedFamilyFrame {
+                        retained: &frame,
+                        family_animations: &states,
+                    },
+                    &[],
+                    &FrameChanges::objects(vec![index]),
+                    Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
+                )
+                .unwrap()
+                .unwrap();
+            encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    [],
+                    store.text_resources(),
+                    store.geometry_resources(),
+                    store.font_resources(),
+                    &images,
+                )
+                .unwrap();
+            assert_eq!(delta.resource_retirements.texts.len(), 1);
+            if index == 0 {
+                assert_eq!(encoder.text_closures.len(), 1);
+                assert!(
+                    !encoder.font_references.is_empty(),
+                    "second text owns shared fonts"
+                );
+            }
+        }
+        assert_eq!(encoder.resources.counts(), [0; 4]);
+        assert!(encoder.text_closures.is_empty());
+        assert!(encoder.geometry_references.is_empty());
+        assert!(encoder.font_references.is_empty());
+
+        for cycle in 0..32 {
+            frame.objects[0].content = ObjectContentRef::Text(first);
+            let mut delta = encoder
+                .encode_incremental_with_context(
+                    &RetainedFamilyFrame {
+                        retained: &frame,
+                        family_animations: &states,
+                    },
+                    &[],
+                    &FrameChanges::objects(vec![0]),
+                    Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
+                )
+                .unwrap()
+                .unwrap();
+            // Failed capture leaves producer residency unchanged and permits exact retry.
+            assert!(encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    [first],
+                    &TextResourceArena::new(),
+                    store.geometry_resources(),
+                    store.font_resources(),
+                    &images,
+                )
+                .is_err());
+            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert!(encoder.resource_roots.is_empty());
+            encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    [first],
+                    store.text_resources(),
+                    store.geometry_resources(),
+                    store.font_resources(),
+                    &images,
+                )
+                .unwrap();
+            let additions = delta.resource_additions.as_ref().unwrap();
+            assert!(
+                additions.font_bytes() > 0,
+                "cycle {cycle} must resend retired fonts"
+            );
+            let installed = additions.clone().install().unwrap();
+            assert!(installed
+                .resolve_text_handle(TransportTextResourceHandle::from_source_handle(first))
+                .is_some());
+            assert_eq!(encoder.text_closures.len(), 1);
+
+            frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::circle(1.0));
+            let mut removal = encoder
+                .encode_incremental_with_context(
+                    &RetainedFamilyFrame {
+                        retained: &frame,
+                        family_animations: &states,
+                    },
+                    &[],
+                    &FrameChanges::objects(vec![0]),
+                    Camera2DState::default(),
+                    noon_core::PublicationContext::default(),
+                )
+                .unwrap()
+                .unwrap();
+            encoder
+                .attach_resource_additions(
+                    &mut removal,
+                    [],
+                    store.text_resources(),
+                    store.geometry_resources(),
+                    store.font_resources(),
+                    &images,
+                )
+                .unwrap();
+            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert!(encoder.text_closures.is_empty());
+            assert!(encoder.geometry_references.is_empty());
+            assert!(encoder.font_references.is_empty());
+            assert!(encoder.resource_roots.is_empty());
+        }
+    }
+
+    #[test]
+    fn resource_backed_encoder_starts_after_installed_render_geometry_prefix() {
+        let texts = TextResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let mut resources =
+            RetainedResourceBundle::capture([], &texts, &geometries, &fonts).unwrap();
+        resources.set_render_geometries(
+            29,
+            vec![Arc::new(GeometryRef::circle(1.0))].into(),
+            vec![RenderGeometryPreparation {
+                resource: 0,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            }],
+        );
+
+        let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(29, &resources);
+        assert_eq!(encoder.next_render_geometry_resource, 1);
+    }
+
+    #[test]
     fn snapshot_and_incremental_share_base_sequence_and_sparse_family_indices() {
         let (plan, frame, states) = fixture();
         let family = RetainedFamilyFrame {
@@ -509,10 +1676,11 @@ mod tests {
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(17);
 
         let snapshot = encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         assert!(snapshot.retained.snapshot);
@@ -521,11 +1689,12 @@ mod tests {
         assert_eq!(snapshot.family_states.len(), 2);
 
         let incremental = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -547,21 +1716,23 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(19);
         let snapshot = encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         assert_eq!(snapshot.family_states[0].family_plan_index, Some(0));
         assert_eq!(snapshot.family_states[1].family_plan_index, Some(0));
 
         let incremental = encoder
-            .encode_planned_incremental(
+            .encode_planned_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -580,10 +1751,11 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(20);
         encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &initial,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
@@ -595,11 +1767,12 @@ mod tests {
             family_plan_indices: &appended_indices,
         };
         let delta = encoder
-            .encode_planned_incremental(
+            .encode_planned_incremental_with_context(
                 &appended,
                 &plans,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -624,7 +1797,7 @@ mod tests {
             render_transforms: Vec::new(),
         };
         encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &RetainedPlannedFamilyFrame {
                     retained: &empty,
                     family_animations: &[],
@@ -632,13 +1805,14 @@ mod tests {
                 },
                 &[],
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
         let (plan, frame, states) = fixture();
         let plan_indices = [Some(0), Some(0)];
         let delta = encoder
-            .encode_planned_incremental_with_painter_order(
+            .encode_planned_incremental_with_painter_order_and_context(
                 &RetainedPlannedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
@@ -648,6 +1822,7 @@ mod tests {
                 &FrameChanges::with_structure(vec![0, 1], vec![0, 1], Vec::new())
                     .with_painter_order(0..2),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[0, 1],
             )
             .unwrap()
@@ -661,6 +1836,43 @@ mod tests {
             .family_states
             .iter()
             .all(|state| state.family_plan_index == Some(0)));
+    }
+
+    #[test]
+    fn created_then_removed_rows_do_not_publish_unknown_family_objects() {
+        let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(25);
+        let (_, frame, _) = fixture();
+        let states = [None, None];
+        let planned = RetainedPlannedFamilyFrame {
+            retained: &frame,
+            family_animations: &states,
+            family_plan_indices: &[None, None],
+        };
+        encoder
+            .encode_planned_snapshot_indices_with_context(
+                &planned,
+                &[],
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+                [0],
+            )
+            .unwrap();
+        let delta = encoder
+            .encode_planned_incremental_with_painter_order_and_context(
+                &planned,
+                &[],
+                &FrameChanges::with_structure(vec![1], vec![1], vec![1]).with_painter_order(1..1),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+                &[0],
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!delta.retained.snapshot);
+        assert!(delta.retained.objects.is_empty());
+        assert!(delta.retained.removed_slots.is_empty());
+        assert!(delta.family_states.is_empty());
+        assert!(delta.family_plans.is_empty());
     }
 
     #[test]
@@ -678,7 +1890,7 @@ mod tests {
             render_transforms: Vec::new(),
         };
         encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &RetainedPlannedFamilyFrame {
                     retained: &empty,
                     family_animations: &[],
@@ -686,6 +1898,7 @@ mod tests {
                 },
                 &[],
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
@@ -693,7 +1906,7 @@ mod tests {
         let plans = vec![plan; 1_024];
         let plan_indices = [Some(1_023), Some(1_023)];
         let delta = encoder
-            .encode_planned_incremental_with_painter_order(
+            .encode_planned_incremental_with_painter_order_and_context(
                 &RetainedPlannedFamilyFrame {
                     retained: &frame,
                     family_animations: &states,
@@ -703,6 +1916,7 @@ mod tests {
                 &FrameChanges::with_structure(vec![0, 1], vec![0, 1], Vec::new())
                     .with_painter_order(0..2),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[0, 1],
             )
             .unwrap()
@@ -730,10 +1944,11 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(21);
         let snapshot = encoder
-            .encode_planned_snapshot(
+            .encode_planned_snapshot_with_context(
                 &inactive,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
         assert!(snapshot.family_plans.is_empty());
@@ -752,28 +1967,31 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(23);
         encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
         assert!(encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::default(),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default()
             )
             .unwrap()
             .is_none());
         let next = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -789,19 +2007,21 @@ mod tests {
         };
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(31);
         encoder
-            .encode_snapshot(
+            .encode_snapshot_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap();
 
         let replacement = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &family,
                 std::slice::from_ref(&plan),
                 &FrameChanges::all(),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();

@@ -3,7 +3,7 @@ use noon_core::{PathCommand, Vec2, VectorPath};
 
 #[test]
 fn unfinished_anchors_and_discontinuous_curves_have_distinct_endpoints_and_length() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene
         .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
         .unwrap();
@@ -42,19 +42,49 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     scene.add(&object).unwrap();
     let before = object.path_query().unwrap();
     let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    live.add_line_to(&object, Vec2::new(4., 3.)).unwrap();
-    live.add_quadratic_bezier_curve_to(&object, Vec2::new(5., 4.), Vec2::new(6., 3.))
-        .unwrap();
-    live.add_cubic_bezier_curve_to(
-        &object,
-        Vec2::new(7., 3.),
-        Vec2::new(7., 1.),
-        Vec2::new(6., 1.),
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Line {
+            object: &object,
+            point: Vec2::new(4., 3.),
+        },
     )
     .unwrap();
-    live.close_path(&object).unwrap();
-    let query = live.effective_path_query(&object).unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Quadratic {
+            object: &object,
+            control: Vec2::new(5., 4.),
+            anchor: Vec2::new(6., 3.),
+        },
+    )
+    .unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Cubic {
+            object: &object,
+            control1: Vec2::new(7., 3.),
+            control2: Vec2::new(7., 1.),
+            anchor: Vec2::new(6., 1.),
+        },
+    )
+    .unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Close { object: &object },
+    )
+    .unwrap();
+    let query =
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap();
     let start = before.start().unwrap();
     assert!((query.start().unwrap().0 - start.0).abs() < 1e-6);
     assert!((query.start().unwrap().1 - start.1).abs() < 1e-6);
@@ -65,9 +95,16 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
         .borrow()
         .geometry_resources()
         .stats();
-    assert!(live
-        .add_line_to(&object, Vec2::new(f32::INFINITY, 0.))
-        .is_err());
+    assert!(noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Line {
+            object: &object,
+            point: Vec2::new(f32::INFINITY, 0.),
+        },
+    )
+    .is_err());
     assert_eq!(object.state().unwrap(), before);
     assert_eq!(
         object
@@ -77,10 +114,31 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
             .stats(),
         resources
     );
-    live.start_new_path(&object, Vec2::new(-2., -1.)).unwrap();
-    live.add_line_to(&object, Vec2::new(-1., 0.)).unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Start {
+            object: &object,
+            point: Vec2::new(-2., -1.),
+        },
+    )
+    .unwrap();
+    noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Line {
+            object: &object,
+            point: Vec2::new(-1., 0.),
+        },
+    )
+    .unwrap();
     assert_eq!(
-        live.effective_path_query(&object).unwrap().end().unwrap(),
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap()
+            .end()
+            .unwrap(),
         (-1., 0.)
     );
 }
@@ -103,7 +161,7 @@ fn extending_a_closed_contour_keeps_its_closing_edge_and_earlier_subpaths() {
         })
     );
     assert_eq!(open.endpoints(), Some((Vec2::ZERO, Vec2::new(2., 0.))));
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene
         .geometry(ManimGeometryOptions::path(open.close()).unwrap())
         .unwrap();

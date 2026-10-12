@@ -1,11 +1,12 @@
-import { ExecutionWorkerClient } from "./execution-worker-client.js";
+import { ExecutionWorkerClient, ExecutionTransitionCancelled, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
+import { attachBrowserPointerInput } from "./browser-pointer-input.js";
+import { DEFAULT_SHARED_SLOT_CAPACITY } from "./execution-transport.js";
 
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
 export const SEMANTIC_PACING_REALTIME = "realtime";
 export const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
 
 const DEFAULT_LOOP_DURATION_SECONDS = 4;
-const DEFAULT_SHARED_SLOT_CAPACITY = 1024 * 1024;
 const LIFECYCLE_CANCELLED_MESSAGE =
   "AuthoringExecutionClient was terminated during an asynchronous operation";
 const EMPTY_HOST_METRICS = Object.freeze({
@@ -29,10 +30,16 @@ export class AuthoringExecutionClient {
   #onError;
   #onRecoverableError;
   #resizeObserver = null;
+  #pointerAbortController = null;
+  #pointerViewRevision = 0;
+  #pointerSourceSequence = 0;
+  #pointerCollector = null;
+  #inspectionZoom = false;
+  #pointerViewport = null;
   #transition = null;
   #lifecycleGeneration = 0;
 
-  constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
+  constructor(canvas, { onError = null, onRecoverableError = null, inspectionZoom = false } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
       throw new TypeError("AuthoringExecutionClient requires an HTMLCanvasElement");
     }
@@ -42,6 +49,10 @@ export class AuthoringExecutionClient {
     if (onRecoverableError !== null && typeof onRecoverableError !== "function") {
       throw new TypeError("AuthoringExecutionClient onRecoverableError must be a function");
     }
+    if (typeof inspectionZoom !== "boolean") {
+      throw new TypeError("inspectionZoom must be a boolean");
+    }
+    this.#inspectionZoom = inspectionZoom;
     this.#canvas = canvas;
     this.#onError = onError;
     this.#onRecoverableError = onRecoverableError;
@@ -159,6 +170,7 @@ export class AuthoringExecutionClient {
       this.#rendererBackend = ready.render.backend;
       this.#transportMode = ready.transportMode;
       this.#resizeCurrentCanvas();
+      await this.#attachPointerInput();
       return ready;
     } catch (error) {
       if (this.#preparedPlayer === player) {
@@ -189,7 +201,7 @@ export class AuthoringExecutionClient {
     if (duration !== null) {
       this.#loopDurationSeconds = duration;
     }
-    return this.#runTransition(async () => {
+    const result = await this.#runTransition(async () => {
       const ready = await this.#player.switchToSemanticExecution(semantic.contextId, authoringClient, {
         loopDurationSeconds: duration,
         callbackSessionId: semantic.callbackSessionId,
@@ -197,7 +209,6 @@ export class AuthoringExecutionClient {
       });
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
-      this.#resizeCurrentCanvas();
       const state = await this.#player.state();
       return {
         type: "result",
@@ -209,14 +220,19 @@ export class AuthoringExecutionClient {
         ...state,
       };
     });
+    await this.#withStablePlayer(
+      () => this.#attachPointerInput(),
+      { retryOnTransition: true },
+    );
+    return result;
   }
 
   async state() {
     return this.#withStablePlayer((player) => player.state());
   }
 
-  async metrics() {
-    const report = await this.#withStablePlayer((player) => player.metrics());
+  async metrics(options = {}) {
+    const report = await this.#withStablePlayer((player) => player.metrics(options));
     return {
       ...report,
       executionMode: this.#mode,
@@ -248,8 +264,8 @@ export class AuthoringExecutionClient {
     return this.#withStablePlayer((player) => player.seek(timeSeconds));
   }
 
-  async advanceTo(timeSeconds) {
-    return this.#withStablePlayer((player) => player.advanceTo(timeSeconds));
+  async advanceTo(timeSeconds, options = {}) {
+    return this.#withStablePlayer((player) => player.advanceTo(timeSeconds, options));
   }
 
   async debugFrame() {
@@ -268,21 +284,34 @@ export class AuthoringExecutionClient {
   }
 
   async setNativeStateInput(source, value) {
-    return this.#withStablePlayer((player) => player.setNativeStateInput(source, value));
+    return this.#withInputPlayer((player) => player.setNativeStateInput(source, value));
+  }
+
+  async setPointerFillSelection(maxMovement) {
+    return this.#withInputPlayer((player) => player.setPointerFillSelection(maxMovement));
+  }
+
+  setInspectionZoom(enabled) {
+    if (typeof enabled !== "boolean") throw new TypeError("inspectionZoom must be a boolean");
+    this.#inspectionZoom = enabled;
   }
 
   async emitNativeEvent(source) {
-    return this.#withStablePlayer((player) => player.emitNativeEvent(source));
+    return this.#withInputPlayer((player) => player.emitNativeEvent(source));
   }
 
   async restartPlayback() {
     return this.#withStablePlayer((player) => player.restartPlayback());
   }
 
+  async undoTranslationDrag() {
+    return this.#withStablePlayer((player) => player.undoTranslationDrag());
+  }
+
   async restart() {
     if (this.#transition !== null) await this.#transition;
     this.#requireStarted();
-    return this.#runTransition(async () => {
+    const ready = await this.#runTransition(async () => {
       const player = this.#player;
       const mode = this.#mode;
       const generation = this.#lifecycleGeneration;
@@ -297,7 +326,6 @@ export class AuthoringExecutionClient {
         this.#rendererBackend = ready.render.backend;
         this.#transportMode = ready.transportMode;
         this.#observeCanvas();
-        this.#resizeCurrentCanvas();
         return { ...ready, mode };
       } catch (error) {
         if (generation !== this.#lifecycleGeneration) {
@@ -307,18 +335,35 @@ export class AuthoringExecutionClient {
         throw error;
       }
     });
+    await this.#withStablePlayer(
+      () => this.#attachPointerInput(),
+      { retryOnTransition: true },
+    );
+    return ready;
   }
 
   resize(width, height, devicePixelRatio = 1) {
     if (this.#transition !== null) return;
     this.#requireStarted();
+    this.#resizeViewport(width, height, devicePixelRatio);
+  }
+
+  #resizeViewport(width, height, devicePixelRatio) {
     this.#player.resize(width, height, devicePixelRatio);
+    const viewport = [width, height, devicePixelRatio];
+    if (this.#pointerViewport === null || viewport.some((value, i) => value !== this.#pointerViewport[i])) {
+      this.#advancePointerView();
+      this.#pointerViewport = viewport;
+      this.#pointerCollector?.invalidateView();
+    }
   }
 
   terminate() {
     this.#lifecycleGeneration += 1;
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
+    this.#retirePointerInput();
+    this.#pointerViewport = null;
     const preparedPlayer = this.#preparedPlayer;
     const activePlayer = this.#player;
     preparedPlayer?.terminate();
@@ -358,16 +403,35 @@ export class AuthoringExecutionClient {
     }
     const transition = rebuild();
     this.#transition = transition;
+    let completed = false;
     try {
-      return await transition;
+      const result = await transition;
+      completed = true;
+      return result;
     } finally {
       if (this.#transition === transition) {
+        if (completed) this.#retirePointerInput();
         this.#transition = null;
+        // ResizeObserver may have delivered while the transition was awaiting
+        // its final state query. Apply the latest layout before fresh input is
+        // attached; no later resize event is guaranteed for that same size.
+        if (completed) this.#resizeCurrentCanvas();
       }
     }
   }
 
-  async #withStablePlayer(operation) {
+  // Queries may retry after recovery; input must remain bound to one endpoint.
+  #withInputPlayer(operation) {
+    if (this.#transition !== null) {
+      throw new Error("native input is unavailable during an execution transition");
+    }
+    this.#requireStarted();
+    return operation(this.#player);
+  }
+
+  // Registration may repeat after a same-player transition. A completed playback
+  // command must not be reissued into its successor source's execution ownership.
+  async #withStablePlayer(operation, { retryOnTransition = false } = {}) {
     for (;;) {
       if (this.#transition !== null) {
         await this.#transition;
@@ -378,7 +442,7 @@ export class AuthoringExecutionClient {
       const mode = this.#mode;
       try {
         const result = await operation(player, mode);
-        if (this.#player !== player) {
+        if (this.#player !== player || (retryOnTransition && this.#transition !== null)) {
           continue;
         }
         return result;
@@ -423,7 +487,116 @@ export class AuthoringExecutionClient {
       return;
     }
     const scale = window.devicePixelRatio || 1;
-    this.#player.resize(this.#canvas.clientWidth, this.#canvas.clientHeight, scale);
+    this.#resizeViewport(this.#canvas.clientWidth, this.#canvas.clientHeight, scale);
+  }
+
+  #advancePointerView() {
+    if (this.#pointerViewRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("browser pointer view revision exhausted");
+    }
+    this.#pointerViewRevision += 1;
+  }
+
+  #retirePointerInput() {
+    this.#pointerAbortController?.abort();
+    this.#pointerAbortController = null;
+    this.#pointerCollector = null;
+  }
+
+  #attachPointerInput() {
+    this.#retirePointerInput();
+    // Headless contract tests intentionally use a minimal canvas double. Pointer
+    // collection is a DOM capability, not a startup requirement.
+    if (typeof this.#canvas.addEventListener !== "function" ||
+        typeof this.#canvas.getBoundingClientRect !== "function" ||
+        typeof globalThis.window?.addEventListener !== "function") {
+      return;
+    }
+    const controller = new AbortController();
+    this.#pointerAbortController = controller;
+    const { signal } = controller;
+    const canvas = this.#canvas;
+    const player = this.#player;
+    const generation = this.#lifecycleGeneration;
+    let previousDelivery = Promise.resolve();
+    let initialViewDelivery = previousDelivery;
+    const report = (error) => {
+      if (this.#onRecoverableError !== null) this.#onRecoverableError(error);
+      else console.warn("[Noon input] pointer collection stopped; restart execution to resume input", error);
+    };
+    let lastInput = null;
+    let inspectionInFlight = false;
+    const fault = async (error, preceding = previousDelivery) => {
+      if (signal.aborted) return;
+      controller.abort();
+      // A successful owner replacement intentionally rejects pending input.
+      // Keep genuine failures visible, including a failed candidate attachment
+      // that leaves the previous owner and its collector usable.
+      if (error instanceof ExecutionTransitionCancelled) return;
+      report(error);
+      await preceding.catch(() => {});
+      if (lastInput === null || this.#pointerAbortController !== controller || this.#player !== player ||
+          this.#lifecycleGeneration !== generation || this.#transition !== null) return;
+      try {
+        await player.submitBrowserPointerInput({
+          kind: "cancel", source_id: lastInput.source_id, pointer_id: lastInput.pointer_id,
+          view_revision: lastInput.view_revision, surface_x: null, surface_y: null,
+        });
+      } catch (cancellationError) { report(cancellationError); }
+    };
+    const submit = input => {
+      if (signal.aborted || this.#player !== player || this.#transition !== null) return;
+      lastInput = input;
+      const preceding = previousDelivery;
+      const delivery = player.submitBrowserPointerInput(input);
+      previousDelivery = delivery;
+      void delivery.then(result => {
+        if (result.pointerInputAccepted === false && this.#pointerAbortController === controller) {
+          this.#pointerCollector?.retireSource(input.source_id);
+        }
+      }).catch(error => fault(error, preceding));
+    };
+    this.#pointerCollector = attachBrowserPointerInput(canvas, {
+      signal,
+      isCurrent: () => this.#player === player && this.#lifecycleGeneration === generation &&
+        this.#transition === null,
+      send: submit,
+      allocateSource: () => {
+        if (this.#pointerSourceSequence >= Number.MAX_SAFE_INTEGER) {
+          throw new Error("browser pointer source sequence exhausted");
+        }
+        return ++this.#pointerSourceSequence;
+      },
+      viewRevision: () => this.#pointerViewRevision,
+      advanceView: () => this.#advancePointerView(),
+      onError: error => { void fault(error); },
+      maxSamples: MAX_IN_FLIGHT_NATIVE_INPUTS,
+      asynchronousWheel: true,
+      onWheel: input => {
+        // A DOM wheel has no associated pointer identity. Retain its own cursor
+        // and the last successful render receipt, not a cached mouse position.
+        // One pending request is sufficient: never queue or relabel a burst.
+        if (!this.#inspectionZoom || inspectionInFlight || player.pointerPresentation === null || input.delta_pixels === 0) return;
+        inspectionInFlight = true;
+        const delivery = player.scrollInspectionView(input);
+        previousDelivery = delivery;
+        return delivery.then(result => {
+          const value = result.inspectionScrollChanged;
+          if (value !== null && typeof value !== "boolean") {
+            throw new TypeError("invalid worker inspection acknowledgement");
+          }
+          return value ?? undefined;
+        }).finally(() => { inspectionInFlight = false; });
+      },
+      onView: (revision, width, height) => {
+        const preceding = previousDelivery;
+        const delivery = player.setBrowserPointerView(revision, width, height);
+        previousDelivery = delivery;
+        initialViewDelivery = delivery;
+        void delivery.catch(error => fault(error, preceding));
+      },
+    });
+    return initialViewDelivery;
   }
 
   #assertLifecycleCurrent(generation, terminateCandidate = null) {

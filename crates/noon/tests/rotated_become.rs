@@ -23,7 +23,7 @@ fn options() -> ManimBecomeOptions {
 
 #[test]
 fn rotated_become_preserves_world_controls_identity_and_unchanged_resources() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut source = scene.rectangle(4., 1.).unwrap();
     source.shift(-2., 1.).unwrap();
     let mut target = scene.square(2.).unwrap();
@@ -99,7 +99,7 @@ fn live_become_publishes_new_content_once_and_leaves_unrelated_objects_untouched
 
 #[test]
 fn unsupported_late_stroke_rolls_back_the_entire_family_and_resource_admission() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut source_a = scene.square(2.).unwrap();
     source_a.shift(-2., 0.).unwrap();
     let mut source_b = scene.square(2.).unwrap();

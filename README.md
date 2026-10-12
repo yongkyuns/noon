@@ -65,6 +65,26 @@ assert_eq!(session.frame().objects.len(), 2);
 
 Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
 
+### Source-declared click indication
+
+An authored primary click can run a restoring `Indicate` without a Python callback or per-frame Python work. The current action supports filled analytic `Circle` and `Rectangle` targets, and the `Indicate` must name the same target:
+
+```python
+self.on_click(shape, Indicate(shape, run_time=0.4))
+```
+
+The Rust equivalents publish the same semantic binding before or during live authoring:
+
+```rust
+scene.on_click_indicate(&shape, IndicateOptions::default(), AnimationOptions::new().run_time(0.4))?;
+// Or, after execution starts:
+live.on_click_indicate(&shape, IndicateOptions::default(), AnimationOptions::new().run_time(0.4))?;
+```
+
+The action uses restoring `there_and_back` timing. A click on an already active target is ignored. Clicks do not interrupt an active authored segment or signal/host driver. Input remains available after the introduction, including when playback is paused at its endpoint or its source program has completed; the runtime drives and settles the short effective animation without advancing authored time.
+
+The selection gallery and native `pointer_selection` example also enable cursor-anchored inspection zoom. Scroll over the canvas to zoom, including during an indication. Rust composes a bounded session adjustment with the effective camera for both rendering and picking; authored camera values and playback remain unchanged. Native hosts opt in with `NativeViewportConfig { inspection_zoom: true, ..Default::default() }`; browser hosts use `inspectionZoom: true`. Other gallery lessons leave page scrolling available. Inspection persists across same-session seeks and playback restarts; rerunning a source or replacing its session resets inspection. Stale wheel receipts and excess in-flight worker samples are rejected rather than queued.
+
 ### Live authoring and integration boundaries
 
 The crate root and `noon::prelude` expose ordinary authoring handles, values, live operations, completion, and typed errors. `noon::integration` is the explicit raw semantic/resource and host plumbing boundary; `noon::diagnostics` is opt-in debug/export access. Neither namespace creates another scene or runtime.
@@ -73,6 +93,14 @@ After creating an execution session, `scene.live(&mut session)` applies supporte
 
 Raw integration-store access is deliberately not a live-mutation shortcut: edits outside coherent publication can stale a session and must be handled explicitly. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for the public typed path and `docs/architecture.md` for the authored/effective and publication contracts.
 
+### Indexed spatial meshes
+
+The native spatial profile uses the same scene, runtime and canvas. Python exposes `SpatialScene`, `Mesh3D` and `WorldTransformTo`; Rust exposes `Scene::camera_3d`, `Scene::mesh`, `MeshOptions` and ordinary world-transform animation requests. UV callbacks run once at construction. Rust validates sampling coordinates, topology and normals, and retains the resulting immutable mesh while motion updates its instance pose.
+
+This profile supports opaque fills without mesh strokes, quaternion rotation and one optional point light. Generated spheres, cubes, prisms, cylinders, cones and tori share the mesh lane. Cylinders and cones extend from zero to height along +Z. Surface resolution counts cells, including both endpoint rows. These explicit conventions do not claim Manim's class defaults or Cairo surface shading. Use `WorldTransformTo` for spatial animation; the planar `.animate` path is rejected for mesh objects. `SpatialScene` examples use `async construct` and `await self.play(...)` to run in browsers without JS Promise Integration.
+
+Native mesh replacement uses ordinary atomic content publication at a valid authoring barrier. Failed replacement preserves the previous resource and pose; transforms and lights do not regenerate topology. Effective getters read published runtime state, while Rust authored getters keep the base declaration.
+
 Equivalent examples run through the native Rust renderer and the Python browser host:
 
 | Feature | Rust | Python |
@@ -80,15 +108,22 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | Geometry and text | [shared_text.rs](crates/noon-native/examples/shared_text.rs) | [shared_text.py](web/python/examples/shared_text.py) |
 | Live membership | [live_semantic_scene.rs](crates/noon-native/examples/live_semantic_scene.rs) | [live_semantic_scene.py](web/python/examples/live_semantic_scene.py) |
 | Ordinary affine playback | [ordinary_affine_play.rs](crates/noon-native/examples/ordinary_affine_play.rs) | [ordinary_affine_play.py](web/python/examples/ordinary_affine_play.py) |
+| Indexed surface motion | [spatial_surface.rs](crates/noon-native/examples/spatial_surface.rs) | [noon_spatial_surface.py](web/python/examples/noon_spatial_surface.py) |
 | Composition | [ordinary_composition_play.rs](crates/noon-native/examples/ordinary_composition_play.rs) | [ordinary_composition_play.py](web/python/examples/ordinary_composition_play.py) |
 | Ordered callbacks | [live_affine_callbacks.rs](crates/noon-native/examples/live_affine_callbacks.rs) | [live_affine_callbacks.py](web/python/examples/live_affine_callbacks.py) |
 | Content replacement | [live_content_switch.rs](crates/noon-native/examples/live_content_switch.rs) | [live_content_switch.py](web/python/examples/live_content_switch.py) |
+| Coordinate plotting | [coordinate_plotting.rs](crates/noon-native/examples/coordinate_plotting.rs) | [coordinate_plotting.py](web/python/examples/coordinate_plotting.py) |
+| Retained images | [raster_image.rs](crates/noon-native/examples/raster_image.rs) | [raster_image.py](web/python/examples/raster_image.py) |
 
 The complete qualification corpus lives under [`crates/noon-native/examples`](crates/noon-native/examples) and [`web/python/examples`](web/python/examples).
 
 Run a Rust example with `cargo run -p noon-native --example live_content_switch`, or paste its paired Python source into the playground. The shared browser smoke executes the published Python files and checks their rendered output.
 
 The broader example corpus covers callback ordering, sparse reads, family operations, composition, transforms, text, and renderer behavior. Required host callbacks hold authored progress at their ordered barrier; deterministic segments do not require per-frame Python execution when no host-dynamic work is scheduled. Unsupported compatibility behavior remains explicit rather than silently approximated.
+
+The current plotting subset is explicit-range, linear 2D, and tipless. Function callbacks run only during bounded plot preparation; the resulting curves are ordinary retained paths. Numeric labels are constructed before playback, and a prepared plot captures its coordinate frame, so recreate it after moving its axes. Synchronized and gapped examples demonstrate bounded timestamped data rather than a streaming graph architecture.
+
+The retained raster image example admits immutable PNG/JPEG or uint8 array resources through shared Rust semantics. The qualification corpus checks decoded dimensions, sampler behavior, opacity, endpoint transforms, and texture reuse. Noon’s decomposed Transform midpoint (22.5°/.875) differs from Manim’s pointwise quad midpoint (19.113565°/.809809), so that sample is recorded as a known boundary while endpoint parity remains explicit.
 
 Current Phase A acceptance status is intentionally not duplicated here; use the [Phase A umbrella](https://github.com/yongkyuns/noon/issues/953) and the architecture guide for current ownership and invariants.
 
@@ -193,6 +228,15 @@ resource integrations. These inputs normalize into the existing shared resource
 store; they do not introduce another registry or execution path. Selecting a
 native family with `with_font` clears an earlier explicit face. An empty or
 invalid explicit Typst font set is an error even when bundled fonts are enabled.
+
+`bundled_native_font_face(family)` resolves the same embedded regular face into a
+reusable Rust input. Python exposes `NativeFontFace(family, bytes, face_index=0)`
+and `NativeFontFace.bundled(family)`, accepted by `Text` and `MarkupText` through
+`font=face`. Reusing a face shares its immutable Rust bytes and content identity.
+`Text.set_default(font=face)` changes only future Python constructors that omit
+`font`; `Text.set_default()` restores the portable DejaVu Sans Mono default.
+MarkupText has its own constructor default. These APIs do not discover OS fonts.
+Markup styles require a matching embedded styled face; unavailable styles reject.
 
 Without bundles, family lookup fails with `TextAuthoringError::FontUnavailable`
 and the Typst convenience constructors report `TypstBackendError::FontsUnavailable`.

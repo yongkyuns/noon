@@ -14,6 +14,8 @@ fn geometry_frame(geometry: GeometryRef) -> FrameState {
         family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(1),
             content: ObjectContentRef::Geometry(geometry),
@@ -36,14 +38,13 @@ fn failed_geometry_rebuild_cannot_be_reused_by_empty_changes() {
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
 
     let mut frame = geometry_frame(GeometryRef::circle(1.0));
     preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -59,6 +60,8 @@ fn failed_geometry_rebuild_cannot_be_reused_by_empty_changes() {
             scratch_reuses: 0,
             text_snapshot_copies: 0,
             mixed_order_rebuilds: 0,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 
@@ -67,7 +70,6 @@ fn failed_geometry_rebuild_cannot_be_reused_by_empty_changes() {
     let error = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::all(),
             &texts,
@@ -82,7 +84,6 @@ fn failed_geometry_rebuild_cannot_be_reused_by_empty_changes() {
     let retry = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             &frame,
             &FrameChanges::default(),
             &texts,
@@ -100,6 +101,8 @@ fn failed_geometry_rebuild_cannot_be_reused_by_empty_changes() {
             scratch_reuses: 0,
             text_snapshot_copies: 0,
             mixed_order_rebuilds: 0,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 }

@@ -75,6 +75,39 @@ impl Error for AuthoringFailure {
         self.cause.as_deref().map(|cause| cause as &dyn Error)
     }
 }
+impl From<noon::TableAuthoringError> for AuthoringFailure {
+    fn from(error: noon::TableAuthoringError) -> Self {
+        use noon::TableAuthoringError::*;
+        match error {
+            EmptyTable => Self::new("input", "table.empty", error),
+            RaggedRows { .. } => Self::new("input", "table.ragged_rows", error),
+            DuplicateEntry => Self::new("input", "table.duplicate_entry", error),
+            InvalidLabels { .. } => Self::new("input", "table.invalid_labels", error),
+            InvalidOption { .. } => Self::new("input", "table.invalid_option", error),
+            InvalidStructure => Self::new("semantic", "table.invalid_structure", error),
+            Text(error) => error.into(),
+            Numeric(error) => error.into(),
+            Semantic(error) => error.into(),
+            LiveSession(error) => Self::unclassified("table.live_session", &error),
+        }
+    }
+}
+impl From<noon::MatrixAuthoringError> for AuthoringFailure {
+    fn from(error: noon::MatrixAuthoringError) -> Self {
+        use noon::MatrixAuthoringError::*;
+        match error {
+            EmptyMatrix => Self::new("input", "matrix.empty", error),
+            RaggedRows { .. } => Self::new("input", "matrix.ragged_rows", error),
+            DuplicateEntry => Self::new("input", "matrix.duplicate_entry", error),
+            InvalidOption { .. } => Self::new("input", "matrix.invalid_option", error),
+            InvalidStructure => Self::new("semantic", "matrix.invalid_structure", error),
+            Text(error) => error.into(),
+            Numeric(error) => error.into(),
+            Semantic(error) => error.into(),
+            LiveSession(error) => Self::unclassified("matrix.live_session", &error),
+        }
+    }
+}
 impl From<noon::FamilyCallbackPaintError> for AuthoringFailure {
     fn from(error: noon::FamilyCallbackPaintError) -> Self {
         use noon::FamilyCallbackPaintError::*;
@@ -109,6 +142,20 @@ impl From<AuthoringError> for AuthoringFailure {
     fn from(error: AuthoringError) -> Self {
         let message = error.to_string();
         match error {
+            AuthoringError::GlowParameter(_) => {
+                Self::new("invalid_input", "effect.invalid_parameter", message)
+            }
+            AuthoringError::EffectNotFound { .. } => {
+                Self::new("invalid_input", "effect.not_found", message)
+            }
+            AuthoringError::EffectOwnerMismatch { .. } => {
+                Self::new("foreign_handle", "effect.foreign_owner", message)
+            }
+            AuthoringError::EffectStateReplacementUnavailable => Self::new(
+                "unsupported_operation",
+                "effect.state_replacement_unavailable",
+                message,
+            ),
             AuthoringError::ForeignStore => {
                 Self::new("foreign_handle", "authoring.foreign_store", message)
             }
@@ -118,6 +165,22 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::Transaction(cause) => {
                 Self::caused_by("authoring.transaction", message, cause.into())
             }
+            AuthoringError::ExecutionAnimation(cause) => Self::caused_by(
+                "authoring.execution_animation",
+                message,
+                Self::unclassified("execution.animation", &cause),
+            ),
+            AuthoringError::ImageDecode(_) => {
+                Self::new("invalid_input", "authoring.image_input", message)
+            }
+            AuthoringError::ImageResource(_) => {
+                Self::new("invalid_input", "authoring.image_input", message)
+            }
+            AuthoringError::MissingImageResource(_) => Self::new(
+                "missing_resource",
+                "authoring.missing_image_resource",
+                message,
+            ),
             AuthoringError::MissingGeometryResource(_) => Self::new(
                 "missing_resource",
                 "authoring.missing_geometry_resource",
@@ -159,6 +222,12 @@ impl From<AuthoringError> for AuthoringFailure {
                 "authoring.non_finite_object_state",
                 message,
             ),
+            AuthoringError::InvalidCameraMotionInput(_) => {
+                Self::new("invalid_input", "camera.invalid_motion", message)
+            }
+            AuthoringError::CameraMotionAlreadyActive => {
+                Self::new("lifecycle", "camera.motion_active", message)
+            }
             AuthoringError::NonFiniteTransform => {
                 Self::new("invalid_input", "authoring.non_finite_transform", message)
             }
@@ -310,6 +379,9 @@ impl From<noon_core::AnimationOptionsError> for AuthoringFailure {
             E::UnsupportedReverseRateFunction => {
                 ("unsupported_operation", "animation.unsupported_reverse")
             }
+            E::UnsupportedLagRatio(_) => {
+                ("unsupported_operation", "animation.unsupported_lag_ratio")
+            }
             E::InvalidRunTime(_) => ("invalid_input", "animation.invalid_run_time"),
             E::InvalidLagRatio(_) => ("invalid_input", "animation.invalid_lag_ratio"),
             E::InvalidPathArc(_) => ("invalid_input", "animation.invalid_path_arc"),
@@ -407,6 +479,44 @@ impl From<noon_core::SemanticScalarSignalQueryError> for AuthoringFailure {
     }
 }
 
+impl From<noon::TextPartAuthoringError> for AuthoringFailure {
+    fn from(error: noon::TextPartAuthoringError) -> Self {
+        match error {
+            noon::TextPartAuthoringError::Authoring(cause) => AuthoringFailure::from(cause),
+            noon::TextPartAuthoringError::NotText(_) => {
+                AuthoringFailure::new("unsupported_operation", "text_parts.not_text", error)
+            }
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::MissingGeometry(_)) => {
+                AuthoringFailure::new("invalid_state", "text_parts.missing_geometry", error)
+            }
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::UnsupportedGeometry(
+                _,
+            )) => AuthoringFailure::new(
+                "unsupported_operation",
+                "text_parts.unsupported_geometry",
+                error,
+            ),
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::InvalidSourceSpan) => {
+                AuthoringFailure::new("invalid_input", "text_parts.invalid_source_span", error)
+            }
+            noon::TextPartAuthoringError::Query(
+                noon::TextPartQueryError::NonContiguousClusters,
+            ) => AuthoringFailure::new(
+                "unsupported_operation",
+                "text_parts.non_contiguous_clusters",
+                error,
+            ),
+            noon::TextPartAuthoringError::Query(noon::TextPartQueryError::NonContiguousVectors) => {
+                AuthoringFailure::new(
+                    "unsupported_operation",
+                    "text_parts.non_contiguous_vectors",
+                    error,
+                )
+            }
+        }
+    }
+}
+
 impl From<noon::TextAuthoringError> for AuthoringFailure {
     fn from(error: noon::TextAuthoringError) -> Self {
         use noon::TextAuthoringError as E;
@@ -414,6 +524,13 @@ impl From<noon::TextAuthoringError> for AuthoringFailure {
         match error {
             E::InvalidFontSize(_) => Self::new("invalid_input", "text.invalid_font_size", message),
             E::InvalidOpacity(_) => Self::new("invalid_input", "text.invalid_opacity", message),
+            E::TextSourceStyle(_) => Self::new("invalid_input", "text.source_style", message),
+            E::InvalidTextColorSelector(_) => {
+                Self::new("invalid_input", "text.invalid_color_selector", message)
+            }
+            E::TextColorUnsupportedSourceKind(_) => {
+                Self::new("unsupported_operation", "text.color_source_kind", message)
+            }
             E::FontUnavailable(_) => {
                 Self::new("missing_resource", "text.font_unavailable", message)
             }
@@ -437,6 +554,11 @@ impl From<noon_core::SemanticTextImportError> for AuthoringFailure {
             E::MissingGeometry(_) => {
                 Self::new("missing_resource", "text_import.missing_geometry", error)
             }
+            E::UnsupportedGeometry(_) => Self::new(
+                "unsupported_operation",
+                "text_import.unsupported_geometry",
+                error,
+            ),
             E::NonFiniteGeometry(_) => {
                 Self::new("invalid_input", "text_import.non_finite_geometry", error)
             }
@@ -464,10 +586,16 @@ impl From<SemanticSceneOperationError> for AuthoringFailure {
             E::NotSemanticFamily(_) => ("invalid_input", "semantic.not_family"),
             E::NotSemanticAuthoringNode(_) => ("invalid_input", "semantic.not_authoring_node"),
             E::DuplicateMembershipTarget(_) => ("invalid_input", "membership.duplicate_target"),
+            E::InvalidPendingAdmission(_) => {
+                ("invalid_input", "membership.invalid_pending_admission")
+            }
             E::MissingMembershipTarget(_) => ("invalid_input", "membership.missing_target"),
             E::AmbiguousMembershipTarget(_) => ("invalid_input", "membership.ambiguous_target"),
             E::AmbiguousCrossRootAlias(_) => {
                 ("unsupported_operation", "membership.cross_root_alias")
+            }
+            E::GraphMutationRequiresTransaction(_) => {
+                ("unsupported_operation", "graph.requires_transaction")
             }
             E::Store(cause) => return Self::caused_by("semantic.store", message, cause.into()),
         };
@@ -481,6 +609,8 @@ impl From<SemanticStoreError> for AuthoringFailure {
         let (category, code) = match &error {
             E::UnknownNode(_) => ("stale_handle", "store.unknown_node"),
             E::NotFamily(_) => ("invalid_input", "store.not_family"),
+            E::NotEffect(_) => ("invalid_input", "store.not_effect"),
+            E::EffectCannotBeMember(_) => ("invalid_input", "store.effect_not_painter_member"),
             E::NotFamilyMember { .. } => ("invalid_input", "store.not_family_member"),
             E::FamilyCycle { .. } => ("invalid_input", "store.family_cycle"),
             E::DuplicateSourceIdentity(_) => ("invalid_input", "store.duplicate_source_identity"),
@@ -501,6 +631,19 @@ impl From<SemanticMutationTransactionError> for AuthoringFailure {
                 Self::caused_by("transaction.animation_target", message, error.into())
             }
             E::Node { error, .. } => Self::caused_by("transaction.node", message, error.into()),
+            E::DuplicateEffectParameter { .. } => Self::new(
+                "invalid_input",
+                "transaction.duplicate_effect_parameter",
+                message,
+            ),
+            E::InvalidEffectAttachment { .. } => Self::new(
+                "invalid_input",
+                "transaction.invalid_effect_attachment",
+                message,
+            ),
+            E::EffectParameter { .. } => {
+                Self::new("invalid_input", "effect.invalid_parameter", message)
+            }
             E::NonFinitePropertyValue { .. } => Self::new(
                 "invalid_input",
                 "transaction.non_finite_property_value",
@@ -577,6 +720,7 @@ impl From<ExecutionSessionCallbackError> for AuthoringFailure {
             E::UnknownObject(_) => Self::new("stale_handle", "callback.unknown_object", message),
             E::Read(cause) => Self::caused_by("callback.read", message, cause.into()),
             E::Evaluation(cause) => Self::caused_by("callback.evaluation", message, cause.into()),
+            E::Publication(cause) => Self::caused_by("callback.publication", message, cause.into()),
             E::InvalidEffectiveWrite(cause) => Self::caused_by(
                 "callback.invalid_effective_write",
                 message,
@@ -598,12 +742,18 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
         use ExecutionSessionPublicationError as E;
         let message = error.to_string();
         match error {
+            E::ReplaySealed => Self::new("invalid_state", "publication.replay_sealed", message),
             E::RequiredCallbackPending => {
                 Self::new("pending_work", "publication.callback_pending", message)
             }
             E::SegmentCompletionPending => {
                 Self::new("pending_work", "publication.segment_pending", message)
             }
+            E::TranslationDragActive => Self::new(
+                "pending_work",
+                "publication.translation_drag_active",
+                message,
+            ),
             E::ForeignSemanticStore => {
                 Self::new("foreign_handle", "publication.foreign_store", message)
             }
@@ -613,12 +763,18 @@ impl From<ExecutionSessionPublicationError> for AuthoringFailure {
                 message,
             ),
             E::UnknownObject(_) => Self::new("stale_handle", "publication.unknown_object", message),
+            E::Geometry(cause) => Self::caused_by("publication.geometry", message, cause.into()),
             E::Semantic(cause) => Self::caused_by("publication.semantic", message, cause.into()),
             E::Lowering(cause) => Self::caused_by("publication.lowering", message, cause.into()),
             E::Runtime(cause) => Self::caused_by(
                 "publication.runtime",
                 message,
                 Self::unclassified("runtime.publication", &cause),
+            ),
+            E::NumericText(cause) => Self::caused_by(
+                "publication.numeric_text",
+                message,
+                Self::unclassified("runtime.numeric_text", &cause),
             ),
             E::ExecutionSlot(cause) => Self::caused_by(
                 "publication.execution_slot",
@@ -638,6 +794,9 @@ impl From<noon_compile::SemanticPublicationLoweringError> for AuthoringFailure {
             E::UnsupportedTextMembership { .. } => "lowering.unsupported_text_membership",
             E::UnsupportedCameraMembership { .. } => "lowering.unsupported_camera_membership",
             E::UnsupportedNodeRemoval { .. } => "lowering.unsupported_node_removal",
+            E::Value(noon_compile::SemanticLoweringError::UnsupportedGlowProfile { .. }) => {
+                "effect.unsupported_source_profile"
+            }
             // Other lowering producer domains are consumed by later R2 slices.
             _ => return Self::unclassified("lowering.unclassified", &error),
         };
@@ -818,10 +977,79 @@ pub(crate) fn js_error(error: impl Into<AuthoringFailure>) -> wasm_bindgen::JsVa
     object.into()
 }
 
+impl From<noon::VariableAuthoringError> for AuthoringFailure {
+    fn from(error: noon::VariableAuthoringError) -> Self {
+        match error {
+            noon::VariableAuthoringError::Text(error) => error.into(),
+            noon::VariableAuthoringError::Numeric(error) => error.into(),
+            noon::VariableAuthoringError::Authoring(error) => error.into(),
+        }
+    }
+}
+
+impl From<noon::NumericAuthoringError> for AuthoringFailure {
+    fn from(error: noon::NumericAuthoringError) -> Self {
+        match error {
+            noon::NumericAuthoringError::Text(error) => error.into(),
+            noon::NumericAuthoringError::Semantic(error) => error.into(),
+            other => Self::new("invalid_input", "numeric.input", other),
+        }
+    }
+}
+
+impl From<noon::SpatialCompositionError> for AuthoringFailure {
+    fn from(error: noon::SpatialCompositionError) -> Self {
+        use noon::SpatialCompositionError::*;
+        match error {
+            Authoring(error) => error.into(),
+            Live(error) => error.into(),
+            FixedFrameRequiresPlanarOrientation => Self::new(
+                "unsupported_operation",
+                "spatial.fixed_frame_orientation",
+                error,
+            ),
+            CameraOrLightMustRemainWorld => Self::new(
+                "unsupported_operation",
+                "spatial.camera_light_domain",
+                error,
+            ),
+            MeshMustRemainWorld => Self::new("unsupported_operation", "spatial.mesh_domain", error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use noon_core::SemanticNodeId;
+
+    #[test]
+    fn duplicate_effect_parameter_keeps_a_typed_language_boundary_error() {
+        let effect = SemanticNodeId::new(7, 3);
+        let error =
+            AuthoringFailure::from(SemanticMutationTransactionError::DuplicateEffectParameter {
+                index: 2,
+                effect,
+                parameter: noon_core::GlowParameter::Intensity,
+            });
+        assert_eq!(error.category, "invalid_input");
+        assert_eq!(error.code, "transaction.duplicate_effect_parameter");
+        assert!(error.message.contains("Intensity"));
+        assert!(error.message.contains("generation: 3"));
+    }
+
+    #[test]
+    fn pending_admission_error_preserves_typed_membership_diagnostic() {
+        let mut transaction = noon_core::SemanticMutationTransaction::new();
+        let token = transaction.create_node(noon_core::SemanticNodeCreation::family());
+        let error = SemanticSceneOperationError::InvalidPendingAdmission(token);
+        let message = error.to_string();
+        let failure = AuthoringFailure::from(error);
+        assert_eq!(failure.category, "invalid_input");
+        assert_eq!(failure.code, "membership.invalid_pending_admission");
+        assert_eq!(failure.message, message);
+        assert!(failure.cause.is_none());
+    }
 
     #[test]
     fn typed_membership_chain_preserves_categories_and_sources() {
@@ -916,6 +1144,11 @@ mod tests {
                 .category,
             "unsupported_operation"
         );
+        let graph = AuthoringFailure::from(
+            SemanticSceneOperationError::GraphMutationRequiresTransaction(node),
+        );
+        assert_eq!(graph.category, "unsupported_operation");
+        assert_eq!(graph.code, "graph.requires_transaction");
         assert_eq!(
             AuthoringFailure::from(ExecutionSessionPublicationError::RequiredCallbackPending)
                 .category,
@@ -942,7 +1175,7 @@ mod tests {
     #[test]
     fn accepted_public_operations_project_real_rust_causes_and_retry() {
         use noon::{LayoutAnchor, MobjectTarget, Scene};
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.circle(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -1009,12 +1242,8 @@ mod tests {
         family.arrange_in_grid(Some(1), Some(2), 0.1, 0.1).unwrap();
         assert_eq!(first.fill_opacity().unwrap(), 0.5);
         assert!(family.copy_family().is_ok());
-        assert_eq!(
-            scene
-                .value_tracker_value(&scene.value_tracker(2.0).unwrap())
-                .unwrap(),
-            2.0
-        );
+        let tracker = scene.value_tracker(2.0).unwrap();
+        assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 2.0);
     }
 
     #[test]
@@ -1052,5 +1281,34 @@ mod tests {
             .unwrap();
         assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
         assert_eq!(execution.frame().objects[1], before.objects[1]);
+    }
+    #[test]
+    fn effect_errors_project_shared_causes_without_text_matching() {
+        use noon::effects::{Glow, GlowUpdate};
+        let mut scene = noon::Scene::new();
+        let object = scene.circle(0.08).unwrap();
+        scene.set_glow(&object, GlowUpdate::default()).unwrap();
+        let invalid = scene
+            .set_glow(&object, GlowUpdate::default().intensity(-1.0))
+            .unwrap_err();
+        let projected = AuthoringFailure::from(invalid);
+        assert_eq!(projected.category, "invalid_input");
+        assert_eq!(
+            projected.cause.as_ref().unwrap().code,
+            "effect.invalid_parameter"
+        );
+        let duplicate = scene
+            .add_effect(&object, Glow::default(), "glow")
+            .unwrap_err();
+        let projected = AuthoringFailure::from(duplicate);
+        assert_eq!(projected.category, "invalid_input");
+        assert_eq!(
+            projected.cause.as_ref().unwrap().code,
+            "transaction.invalid_effect_attachment"
+        );
+        let handle = object.get_effect("glow").unwrap();
+        scene.remove_glow(&object).unwrap();
+        let stale = handle.authored_definition().unwrap_err();
+        assert_eq!(AuthoringFailure::from(stale).category, "stale_handle");
     }
 }

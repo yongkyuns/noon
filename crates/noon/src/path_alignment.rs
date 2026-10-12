@@ -1,9 +1,13 @@
 //! Pair alignment uses the same atomic retained-resource transaction as family edits.
 use crate::{
-    path_editing::{world_path, PreparedPathEdits},
-    AuthoringError, Mobject,
+    path_editing::{
+        publish_running_path_edits, require_running_path_resource_admission, world_path,
+        PreparedPathEdits,
+    },
+    AuthoringError, ExecutionSession, Mobject,
 };
 use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore};
+use std::{cell::RefCell, rc::Rc};
 
 pub(crate) fn prepare_alignment(
     store: &SemanticStore,
@@ -23,6 +27,39 @@ pub(crate) fn prepare_alignment(
     }
     PreparedPathEdits::prepare(store, replacements)
 }
+pub fn publish_alignment(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    left: &Mobject,
+    right: &Mobject,
+) -> Result<(), AuthoringError> {
+    if !Rc::ptr_eq(store, left.integration_store()) || !Rc::ptr_eq(store, right.integration_store())
+    {
+        return Err(AuthoringError::ForeignStore);
+    }
+    left.validate()?;
+    right.validate()?;
+    if left.node_id() == right.node_id() {
+        return Ok(());
+    }
+    require_running_path_resource_admission(store, root, execution)?;
+    let left = (
+        left.node_id(),
+        crate::effective_capture::capture_mobject_state(store, execution, left)?,
+    );
+    let right = (
+        right.node_id(),
+        crate::effective_capture::capture_mobject_state(store, execution, right)?,
+    );
+    let prepared = {
+        let store = store.borrow();
+        prepare_alignment(&store, left, right)?
+    };
+    publish_running_path_edits(store, root, execution, prepared)?;
+    Ok(())
+}
+
 impl Mobject {
     /// Match corresponding path contour/curve counts using exact subdivision.
     /// Both operands retain identity, paint and visible shape. Publication is

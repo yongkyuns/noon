@@ -4,6 +4,7 @@ Native discovery explicitly skips these tests. The fixtures never forge semantic
 handles or import diagnostic state into the engine; detached objects and callback
 receipts come from actual public WASM operations.
 """
+import asyncio
 import copy
 import json
 import unittest
@@ -21,11 +22,15 @@ from _noon_errors import (
 
 
 class CallbackFixture:
-    def __init__(self, with_tracker=False, with_families=False):
+    def __init__(self, with_tracker=False, with_families=False, bind_detached=False, with_text=False):
         self.store = wasm.WasmAuthoringStore.new()
         self.context = self.store.createSceneContext()
         self.target = self.store.createManimCircle(0.5)
         self.detached = self.store.createManimCircle(0.2)
+        self.text_source = (
+            self.store.createManimText("callback replacement", "DejaVu Sans Mono", 24.0, -1.0, None)
+            if with_text else None
+        )
         self.families = []
         if with_families:
             for handles in ((self.target, self.detached), (self.target,)):
@@ -34,6 +39,8 @@ class CallbackFixture:
                     members.appendMobject("", handle)
                 self.families.append(self.store.createFamily(members, 0))
         self.context.bindMobject("0", self.target)
+        if bind_detached:
+            self.context.bindMobject("1", self.detached)
         self.context.addUpdater(self.target, "1", 0)
         self.tracker = self.context.createValueTracker(2.0) if with_tracker else None
         self.context.beginOrdinaryWait(0.25)
@@ -47,6 +54,8 @@ class CallbackFixture:
         self.context.free()
         self.target.free()
         self.detached.free()
+        if self.text_source is not None:
+            self.text_source.free()
         if self.tracker is not None:
             self.tracker.free()
         for family in self.families:
@@ -117,6 +126,164 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
         self.assertEqual(fixture.state(), before)
         self.assertIsNone(fixture.player.drainDeltaJson())
         return error
+
+    def test_python_callback_effective_text_crosses_wasm_and_keeps_one_lease(self):
+        import _manim_updaters as updaters
+
+        fixture = CallbackFixture(with_text=True)
+        self.addCleanup(fixture.close)
+        scene = updaters._base.Scene()
+        def wrapper(handle):
+            value = object.__new__(updaters._base.Mobject)
+            value.__dict__.update({
+                "_scene": scene, "_object": object(), "_semantic_handle": handle,
+                "_semantic_handle_fresh": True,
+            })
+            return value
+
+        target, source = wrapper(fixture.target), wrapper(fixture.text_source)
+        overlay = updaters._CanonicalCallbackContext(
+            fixture.phase, fixture.context, callback_player=fixture.player, scene=scene,
+        )
+        overlay._last_invocation = True
+        updaters._ACTIVE_CONTEXTS[id(scene)] = overlay
+        try:
+            before_bounds = json.loads(fixture.player.debugFrameJson())["objects"][0]["bounds"]
+            updaters.set_effective_text(target, source)
+            content = overlay.effective_batch()
+            self.assertEqual(content["content"]["text_source"], {
+                "slot": fixture.text_source.semanticSlot,
+                "generation": fixture.text_source.semanticGeneration,
+            })
+            engine_call(
+                fixture.player.commitCallbackPhaseJson, json.dumps(content),
+                operation="callback.commit",
+            )
+            frame = json.loads(fixture.player.debugFrameJson())
+            self.assertEqual(frame["time"], 0.0)
+            self.assertNotEqual(frame["objects"][0]["bounds"], before_bounds)
+            self.assertTrue(fixture.context.liveExecutionOwnership())
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+    def test_typed_callback_membership_stages_ordered_existing_handles_until_one_commit(self):
+        fixture = CallbackFixture(bind_detached=True)
+        self.addCleanup(fixture.close)
+        remove = wasm.WasmSceneMembershipBatch.new("remove")
+        remove.appendMobject("", fixture.target)
+        add = wasm.WasmSceneMembershipBatch.new("add")
+        add.appendMobject("", fixture.target)
+        engine_call(
+            fixture.player.stageCallbackMembership,
+            json.dumps(fixture.phase["token"]),
+            remove,
+            operation="callback.membership",
+        )
+        engine_call(
+            fixture.player.stageCallbackMembership,
+            json.dumps(fixture.phase["token"]),
+            add,
+            operation="callback.membership",
+        )
+        self.assertEqual(
+            list(fixture.player.callbackMembershipRootKeys(json.dumps(fixture.phase["token"]))),
+            [
+                f"{fixture.detached.semanticSlot}:{fixture.detached.semanticGeneration}",
+                f"{fixture.target.semanticSlot}:{fixture.target.semanticGeneration}",
+            ],
+        )
+        transform = copy.deepcopy(fixture.phase["objects"][0]["transform"])
+        transform["translation"]["x"] = 1.25
+        fixture.commit([{
+            "kind": "transform",
+            "object": fixture.phase["objects"][0]["node"],
+            "transform": transform,
+        }])
+        fixture.phase = None
+        self.assertEqual(
+            list(fixture.context.rootMembershipKeys()),
+            [
+                f"{fixture.detached.semanticSlot}:{fixture.detached.semanticGeneration}",
+                f"{fixture.target.semanticSlot}:{fixture.target.semanticGeneration}",
+            ],
+        )
+        frame = json.loads(fixture.player.debugFrameJson())
+        self.assertEqual(
+            [row["transform"]["translation"]["x"] for row in frame["objects"]],
+            [0.0, 1.25],
+        )
+
+    def test_provisional_callback_constructor_resolves_one_phase_bound_handle_after_commit(self):
+        fixture = self.fixture()
+        token = json.dumps(fixture.phase["token"])
+        before = list(fixture.context.rootMembershipKeys())
+        options = wasm.WasmManimGeometryOptions.rectangle(1.5, 0.5)
+        options.setTranslation(2.0, -1.0)
+        provisional = engine_call(
+            fixture.player.stageCallbackProvisionalGeometry,
+            token,
+            options,
+            operation="callback.provisional_geometry",
+        )
+        engine_call(
+            fixture.player.stageCallbackProvisionalShift,
+            token,
+            provisional,
+            0.5,
+            1.5,
+            operation="callback.provisional_geometry",
+        )
+        engine_call(
+            fixture.player.stageCallbackProvisionalFill,
+            token,
+            provisional,
+            0.2,
+            0.4,
+            0.8,
+            0.75,
+            0.6,
+            operation="callback.provisional_geometry",
+        )
+        center = engine_call(
+            fixture.player.callbackProvisionalCenter,
+            token,
+            provisional,
+            operation="callback.provisional_geometry",
+        )
+        self.assertEqual((center.x, center.y), (2.5, 0.5))
+        center.free()
+        batch = fixture.context.beginMembershipBatch("add")
+        engine_call(
+            batch.appendCallbackProvisional,
+            provisional,
+            operation="callback.provisional_membership",
+        )
+        engine_call(
+            fixture.player.stageCallbackMembership,
+            token,
+            batch,
+            operation="callback.membership",
+        )
+        self.assertEqual(list(fixture.context.rootMembershipKeys()), before)
+        fixture.commit()
+        handle = engine_call(
+            fixture.player.resolveCallbackProvisionalMobject,
+            token,
+            provisional,
+            operation="callback.provisional_geometry",
+        )
+        self.addCleanup(handle.free)
+        self.assertIn(
+            f"{handle.semanticSlot}:{handle.semanticGeneration}",
+            list(fixture.context.rootMembershipKeys()),
+        )
+        with self.assertRaises(NoonStalePublicationError):
+            engine_call(
+                fixture.player.resolveCallbackProvisionalMobject,
+                token,
+                provisional,
+                operation="callback.provisional_geometry",
+            )
 
     def test_foreign_abort_receipts_reject_even_with_matching_sequence_numbers(self):
         for method in ("failCallbackPhaseJson", "interruptCallbackPhaseJson"):
@@ -281,11 +448,13 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
             (fixture.player.interruptCallbackPhaseJson, ["{broken json"]),
             (fixture.player.commitCallbackPhaseJson, ["{broken json"]),
             (fixture.player.requiredCallbackReadJson, ["{}", "{}"]),
-            (fixture.player.commitCallbackPhaseJson, [json.dumps({"token": foreign.phase["token"], "writes": []})]),
             (fixture.player.requiredCallbackReadJson, [json.dumps(foreign.phase["token"]), "{}"]),
         ):
             with self.subTest(function=str(function)):
                 self.rejection(fixture, function, args, NoonError, "unclassified", "unclassified")
+        self.rejection(fixture, fixture.player.commitCallbackPhaseJson,
+                       [json.dumps({"token": foreign.phase["token"], "writes": []})],
+                       NoonStalePublicationError, "stale_publication", "callback.stale_token")
         fixture.finish()
 
 
@@ -324,4 +493,74 @@ async def check_sparse_callback_read_callsite():
         fixture.finish()
     finally:
         restore()
+        fixture.close()
+
+
+async def check_delayed_callback_completion_rejects_stale_receipt():
+    """A delayed host completion cannot publish after a later phase is pending."""
+    fixture = CallbackFixture()
+    old_phase = copy.deepcopy(fixture.phase)
+    transform = copy.deepcopy(old_phase["objects"][0]["transform"])
+    transform["translation"]["x"] = 1.25
+    delayed_result = {
+        "token": old_phase["token"],
+        "writes": [{
+            "kind": "transform",
+            "object": old_phase["objects"][0]["node"],
+            "transform": transform,
+        }],
+    }
+    old_state = fixture.state()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_completion():
+        started.set()
+        await release.wait()
+        try:
+            engine_call(
+                fixture.player.commitCallbackPhaseJson,
+                json.dumps(delayed_result),
+                operation="callback.commit",
+            )
+        except NoonError as error:
+            return error
+        raise AssertionError("delayed callback result was accepted after its phase ended")
+
+    task = asyncio.create_task(delayed_completion())
+    try:
+        await started.wait()
+        assert fixture.state() == old_state
+        observed = json.loads(engine_call(
+            fixture.player.requiredCallbackReadJson,
+            json.dumps(old_phase["token"]),
+            json.dumps({"kind": "object", "node": old_phase["objects"][0]["node"]}),
+            operation="callback.read",
+        ))
+        assert observed["object"]["transform"] == old_phase["objects"][0]["transform"]
+        assert fixture.state() == old_state
+        assert not task.done()
+
+        # Complete phase one independently while the host result remains held.
+        fixture.commit()
+        fixture.phase = None
+        fixture.player.drainDeltaJson()
+
+        # Advancing creates a newer required phase while preserving the frame
+        # until that phase completes. The delayed receipt from phase one is stale.
+        assert not fixture.advance()
+        new_phase = fixture.phase
+        assert new_phase is not None
+        assert new_phase["token"] != old_phase["token"]
+        before_stale_result = fixture.state()
+        release.set()
+        stale_error = await task
+        assert isinstance(stale_error, NoonStalePublicationError)
+        assert (stale_error.category, stale_error.code) == ("stale_publication", "callback.stale_token")
+        assert fixture.state() == before_stale_result
+        fixture.finish()
+    finally:
+        if not task.done():
+            release.set()
+            await task
         fixture.close()

@@ -1,15 +1,110 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    sync::Arc,
+};
 
-use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceLookup};
-use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
+use noon_core::{
+    FamilyAnimationState, GeometryRef, ObjectContentRef, ObjectId, RetainedFamilyAnimationPlan,
+    Style, TextResourceLookup, Transform2D,
+};
+use noon_runtime::{
+    FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame,
+    TransientPresentationOccurrence, TransientPresentationState,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     RetainedExecutionDeltaEnvelope, RetainedFamilyPlanTransport, RetainedFamilyTransportError,
-    RetainedFamilyTransportState, RetainedResourceBundle,
+    RetainedFamilyTransportState, RetainedResourceBundle, RetainedResourceRetirements,
 };
 
 pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
+
+/// One identity-free transient presentation occurrence crossing the genuine
+/// execution-worker to render-worker boundary. `anchor` is an existing stable
+/// source object used only to recover renderer-local painter placement; it never
+/// becomes the occurrence's semantic or retained identity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetainedTransientPresentationOccurrence {
+    pub anchor: ObjectId,
+    pub before_anchor: bool,
+    pub occurrence_index: u32,
+    pub z_index: f64,
+    pub geometry: GeometryRef,
+    pub transform: Transform2D,
+    pub style: Style,
+    pub appearance: f32,
+    pub presence: bool,
+    pub reveal: f32,
+    pub morph: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_geometry: Option<GeometryRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_transform: Option<Transform2D>,
+}
+
+impl RetainedTransientPresentationOccurrence {
+    fn from_runtime(
+        frame: &FrameState,
+        object: &TransientPresentationOccurrence,
+    ) -> Result<Self, RetainedFamilyExecutionTransportError> {
+        let anchor_index = object.anchor_object_index() as usize;
+        let anchor = frame.objects.get(anchor_index).ok_or(
+            RetainedFamilyExecutionTransportError::InvalidTransientAnchorIndex(anchor_index),
+        )?;
+        let state = object.state();
+        let geometry = match &state.content {
+            ObjectContentRef::Geometry(geometry) => geometry.clone(),
+            ObjectContentRef::Text(_) | ObjectContentRef::Image(_) => {
+                return Err(
+                    RetainedFamilyExecutionTransportError::UnsupportedTransientContent(
+                        object.occurrence_index(),
+                    ),
+                );
+            }
+        };
+        Ok(Self {
+            anchor: anchor.id,
+            before_anchor: object.anchor_side() == noon_runtime::TransientAnchorSide::Before,
+            occurrence_index: object.occurrence_index(),
+            z_index: state.z_index,
+            geometry,
+            transform: state.transform,
+            style: state.style,
+            appearance: state.appearance,
+            presence: state.presence,
+            reveal: state.reveal,
+            morph: state.morph,
+            render_geometry: state.render_geometry.as_deref().cloned(),
+            render_transform: state.render_transform,
+        })
+    }
+
+    pub(crate) fn install(&self, anchor_object_index: u32) -> TransientPresentationOccurrence {
+        TransientPresentationOccurrence::new(
+            anchor_object_index,
+            self.occurrence_index,
+            TransientPresentationState {
+                z_index: self.z_index,
+                content: ObjectContentRef::Geometry(self.geometry.clone()),
+                text_bounds: None,
+                transform: self.transform,
+                style: self.style,
+                appearance: self.appearance,
+                presence: self.presence,
+                reveal: self.reveal,
+                morph: self.morph,
+                render_geometry: self.render_geometry.clone().map(Arc::new),
+                render_transform: self.render_transform,
+            },
+        )
+        .with_anchor_side(if self.before_anchor {
+            noon_runtime::TransientAnchorSide::Before
+        } else {
+            noon_runtime::TransientAnchorSide::After
+        })
+    }
+}
 
 /// Sparse per-object family scheduler state carried alongside an ordinary retained delta.
 ///
@@ -77,6 +172,18 @@ pub struct RetainedFamilyExecutionDeltaEnvelope {
     pub family_plans: Vec<RetainedFamilyPlanTransport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_additions: Option<RetainedResourceBundle>,
+    #[serde(default, skip_serializing_if = "RetainedResourceRetirements::is_empty")]
+    pub resource_retirements: RetainedResourceRetirements,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transient_presentations: Vec<RetainedTransientPresentationOccurrence>,
+    /// Complete session-only overlay for this transport sequence; absence clears.
+    /// Ordinary scene/export producers leave it absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_overlay: Option<crate::SelectionOverlayPresentation>,
+    /// Logical projection used by a worker-host pointer frame; absence carries
+    /// no pointer presentation authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer_view: Option<crate::PointerPresentationView>,
 }
 
 impl RetainedFamilyExecutionDeltaEnvelope {
@@ -96,6 +203,10 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
             retained,
         };
         envelope.validate()?;
@@ -128,6 +239,10 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
             retained,
         };
         envelope.validate()?;
@@ -150,6 +265,10 @@ impl RetainedFamilyExecutionDeltaEnvelope {
             )?,
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
             retained,
         };
         envelope.validate()?;
@@ -185,6 +304,10 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
             retained,
         };
         envelope.validate()?;
@@ -192,6 +315,27 @@ impl RetainedFamilyExecutionDeltaEnvelope {
     }
 
     pub fn validate(&self) -> Result<(), RetainedFamilyExecutionTransportError> {
+        if !self.retained.object_patches.is_empty()
+            && (self.retained.snapshot
+                || self.retained.painter_order.is_some()
+                || !self.retained.removed_slots.is_empty()
+                || !self.family_plans.is_empty()
+                || self.resource_additions.is_some()
+                || !self.resource_retirements.is_empty())
+        {
+            return Err(RetainedFamilyExecutionTransportError::InvalidPatchCombination);
+        }
+        if let Some(view) = self.pointer_view {
+            view.validate()
+                .map_err(|_| RetainedFamilyExecutionTransportError::InvalidPointerView)?;
+            if !view.drawable() {
+                return Err(RetainedFamilyExecutionTransportError::InvalidPointerView);
+            }
+        }
+        if let Some(overlay) = self.selection_overlay {
+            overlay.validate()?;
+        }
+        self.resource_retirements.validate()?;
         let mut seen = HashSet::with_capacity(self.family_states.len());
         for entry in &self.family_states {
             if !seen.insert(entry.object) {
@@ -205,7 +349,30 @@ impl RetainedFamilyExecutionDeltaEnvelope {
         for plan in &self.family_plans {
             plan.validate()?;
         }
+        let mut occurrences = HashSet::with_capacity(self.transient_presentations.len());
+        for object in &self.transient_presentations {
+            if !occurrences.insert(object.occurrence_index) {
+                return Err(
+                    RetainedFamilyExecutionTransportError::DuplicateTransientOccurrence(
+                        object.occurrence_index,
+                    ),
+                );
+            }
+        }
         Ok(())
+    }
+
+    pub fn replace_transient_presentations(
+        &mut self,
+        frame: &FrameState,
+        objects: &[TransientPresentationOccurrence],
+    ) -> Result<(), RetainedFamilyExecutionTransportError> {
+        let next = objects
+            .iter()
+            .map(|object| RetainedTransientPresentationOccurrence::from_runtime(frame, object))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.transient_presentations = next;
+        self.validate()
     }
 }
 
@@ -537,18 +704,26 @@ fn validated_state_updates(
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedFamilyExecutionTransportError {
+    Resource(crate::RetainedResourceTransportError),
     Family(RetainedFamilyTransportError),
     ExpectedSnapshot,
     ExpectedIncremental,
     IncrementalBeforeSnapshot,
     MissingSnapshot,
     FrameShapeMismatch,
+    InvalidPatchCombination,
     PlanSetShrank {
         published: usize,
         available: usize,
     },
     InvalidObjectIndex(usize),
     DuplicateStateObject(ObjectId),
+    InvalidTransientAnchorIndex(usize),
+    DuplicateTransientOccurrence(u32),
+    UnsupportedTransientContent(u32),
+    InvalidSelectionOverlay,
+    InvalidPointerView,
+    UnknownTransientAnchor(ObjectId),
     UnknownObject(ObjectId),
     StateWithoutPlan(ObjectId),
     PlanIndexWithoutState(ObjectId),
@@ -568,6 +743,7 @@ pub enum RetainedFamilyExecutionTransportError {
 impl std::fmt::Display for RetainedFamilyExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Resource(error) => error.fmt(formatter),
             Self::Family(error) => error.fmt(formatter),
             Self::ExpectedSnapshot => formatter
                 .write_str("family execution snapshot requires a retained snapshot envelope"),
@@ -580,6 +756,9 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
             }
             Self::FrameShapeMismatch => formatter
                 .write_str("retained family state shape does not match retained frame objects"),
+            Self::InvalidPatchCombination => formatter.write_str(
+                "retained row patches require a nonstructural delta without resource or plan changes",
+            ),
             Self::PlanSetShrank {
                 published,
                 available,
@@ -593,6 +772,27 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
             Self::DuplicateStateObject(object) => write!(
                 formatter,
                 "retained family delta repeats object {}",
+                object.get()
+            ),
+            Self::InvalidTransientAnchorIndex(index) => write!(
+                formatter,
+                "transient presentation anchor index {index} is outside the retained frame"
+            ),
+            Self::DuplicateTransientOccurrence(occurrence) => write!(
+                formatter,
+                "transient presentation occurrence {occurrence} is duplicated in one retained delta"
+            ),
+            Self::UnsupportedTransientContent(occurrence) => write!(
+                formatter,
+                "transient presentation occurrence {occurrence} requires unsupported retained text content"
+            ),
+            Self::InvalidPointerView => formatter.write_str("pointer presentation view requires finite positive dimensions and a safe revision"),
+            Self::InvalidSelectionOverlay => formatter.write_str(
+                "selection overlay requires finite, nondegenerate analytic geometry and transform",
+            ),
+            Self::UnknownTransientAnchor(object) => write!(
+                formatter,
+                "transient presentation occurrence references unknown stable anchor {}",
                 object.get()
             ),
             Self::UnknownObject(object) => write!(
@@ -639,6 +839,12 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
 
 impl std::error::Error for RetainedFamilyExecutionTransportError {}
 
+impl From<crate::RetainedResourceTransportError> for RetainedFamilyExecutionTransportError {
+    fn from(value: crate::RetainedResourceTransportError) -> Self {
+        Self::Resource(value)
+    }
+}
+
 impl From<RetainedFamilyTransportError> for RetainedFamilyExecutionTransportError {
     fn from(value: RetainedFamilyTransportError) -> Self {
         Self::Family(value)
@@ -678,6 +884,8 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![FrameObjectState {
+                glow: None,
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(7),
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -700,9 +908,11 @@ mod tests {
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 1,
             sequence,
+            publication_context: noon_core::PublicationContext::default(),
             snapshot,
             time: 0.0,
             camera: Camera2DState::default(),
+            inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
                 slot: TransportSlotId {
                     slot: 0,
@@ -710,10 +920,14 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(7),
+                glow: None,
+                z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::circle(1.0),
+                    resource: None,
                 },
                 transform: Transform2D::IDENTITY,
+                spatial: None,
                 style: Style::default(),
                 appearance: 1.0,
                 text_bounds: None,
@@ -724,6 +938,7 @@ mod tests {
                 render_transform: None,
                 render_geometry_resource: None,
             }],
+            object_patches: Vec::new(),
             removed_slots: Vec::new(),
             painter_order: None,
         }
@@ -731,6 +946,8 @@ mod tests {
 
     fn geometry_plan() -> RetainedFamilyAnimationPlan {
         let object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(7),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -762,6 +979,114 @@ mod tests {
             std::slice::from_ref(&geometry_plan()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn row_patch_cannot_arrive_with_new_family_plan() {
+        let mut delta = family_snapshot(0.25);
+        delta.retained.snapshot = false;
+        delta.retained.sequence = 1;
+        let row = &delta.retained.objects[0];
+        delta
+            .retained
+            .object_patches
+            .push(crate::RetainedTransportObjectPatch {
+                slot: row.slot,
+                object: row.object,
+                transform: None,
+                style: Some(row.style),
+                morph: None,
+                render_translation: None,
+            });
+        assert_eq!(
+            delta.validate(),
+            Err(RetainedFamilyExecutionTransportError::InvalidPatchCombination)
+        );
+    }
+
+    #[test]
+    fn transient_path_occurrence_round_trips_with_only_real_anchor_identity() {
+        let path = noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(-1.0, 0.0))
+            .cubic_to(
+                noon_core::Vec2::new(-0.5, 1.0),
+                noon_core::Vec2::new(0.5, 1.0),
+                noon_core::Vec2::new(1.0, 0.0),
+            );
+        let frame = frame();
+        let occurrence = TransientPresentationOccurrence::new(
+            0,
+            7,
+            TransientPresentationState {
+                z_index: 0.0,
+                content: ObjectContentRef::Geometry(GeometryRef::VectorPath(path.clone())),
+                text_bounds: None,
+                transform: Transform2D::IDENTITY,
+                style: Style::default(),
+                appearance: 0.5,
+                presence: true,
+                reveal: 1.0,
+                morph: 0.25,
+                render_geometry: Some(Arc::new(GeometryRef::VectorPath(path))),
+                render_transform: None,
+            },
+        );
+        let wire =
+            RetainedTransientPresentationOccurrence::from_runtime(&frame, &occurrence).unwrap();
+        assert_eq!(wire.anchor, ObjectId::new(7));
+        assert_eq!(wire.occurrence_index, 7);
+        assert!(matches!(
+            wire.render_geometry,
+            Some(GeometryRef::VectorPath(_))
+        ));
+
+        let installed = wire.install(0);
+        assert_eq!(installed.anchor_object_index(), 0);
+        assert_eq!(installed.occurrence_index(), 7);
+        assert_eq!(installed.state().appearance, 0.5);
+        assert!(matches!(
+            installed.state().effective_render_geometry(),
+            Some(GeometryRef::VectorPath(_))
+        ));
+    }
+
+    #[test]
+    fn transient_anchor_side_survives_worker_codec_and_slot_remapping() {
+        for side in [
+            noon_runtime::TransientAnchorSide::Before,
+            noon_runtime::TransientAnchorSide::After,
+        ] {
+            let frame = frame();
+            let occurrence = TransientPresentationOccurrence::new(
+                0,
+                9,
+                TransientPresentationState {
+                    z_index: 0.0,
+                    content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
+                    text_bounds: None,
+                    transform: Transform2D::IDENTITY,
+                    style: Style::default(),
+                    appearance: 0.5,
+                    presence: true,
+                    reveal: 1.0,
+                    morph: 0.0,
+                    render_geometry: None,
+                    render_transform: None,
+                },
+            )
+            .with_anchor_side(side);
+            let wire =
+                RetainedTransientPresentationOccurrence::from_runtime(&frame, &occurrence).unwrap();
+            let json = serde_json::to_string(&wire).unwrap();
+            let decoded: RetainedTransientPresentationOccurrence =
+                serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded.anchor, frame.objects[0].id);
+            let installed = decoded.install(12);
+            assert_eq!(installed.anchor_side(), side);
+            assert_eq!(installed.anchor_object_index(), 12);
+            assert_eq!(installed.occurrence_index(), 9);
+            assert_eq!(installed.state(), occurrence.state());
+        }
     }
 
     #[test]
@@ -847,6 +1172,10 @@ mod tests {
                 RetainedFamilyPlanTransport::from_plan(&plan),
             ],
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -869,6 +1198,10 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
         };
         assert_eq!(
             installed
@@ -900,6 +1233,10 @@ mod tests {
             .unwrap()],
             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
         };
         installed
             .apply(&appended, &retained_frame, &TextResourceArena::new())
@@ -935,6 +1272,10 @@ mod tests {
             .unwrap()],
             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
         };
         let index_lookups = Cell::new(0);
         let object_lookups = Cell::new(0);
@@ -992,6 +1333,10 @@ mod tests {
                 global_span: None,
             }],
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
         };
 
         assert!(installed
@@ -1018,6 +1363,10 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -1027,6 +1376,10 @@ mod tests {
                     family_states: Vec::new(),
                     family_plans: Vec::new(),
                     resource_additions: None,
+                    resource_retirements: RetainedResourceRetirements::default(),
+                    transient_presentations: Vec::new(),
+                    selection_overlay: None,
+                    pointer_view: None,
                 },
                 &frame(),
                 &TextResourceArena::new(),
@@ -1061,6 +1414,10 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            resource_retirements: RetainedResourceRetirements::default(),
+            transient_presentations: Vec::new(),
+            selection_overlay: None,
+            pointer_view: None,
         };
         assert_eq!(
             installed

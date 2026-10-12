@@ -188,6 +188,17 @@ impl WasmManimGeometryOptions {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = crossLine)]
+    pub fn cross_line(index: u32, scale_factor: f64) -> Result<Self, JsValue> {
+        let [first, second] =
+            noon::ManimGeometryOptions::cross_lines(None, scale_factor).map_err(js_error)?;
+        match index {
+            0 => Ok(Self::from_options(first)),
+            1 => Ok(Self::from_options(second)),
+            _ => Err(js_error("Cross line index must be 0 or 1")),
+        }
+    }
+
     #[wasm_bindgen(js_name = dot)]
     pub fn dot(x: f64, y: f64, radius: f64) -> Result<Self, JsValue> {
         noon::ManimGeometryOptions::dot(x, y, radius)

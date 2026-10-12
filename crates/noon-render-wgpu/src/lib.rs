@@ -11,6 +11,7 @@ mod mega_mesh;
 mod path_residency;
 mod render_order;
 mod reveal;
+mod sampled_morph;
 pub mod text;
 
 pub use gpu::*;
@@ -26,7 +27,7 @@ use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use reveal::{analytic_reveal_key, temporary_reveal_path, AnalyticRevealKey};
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{hash_map::DefaultHasher, BTreeMap, HashMap},
     hash::{Hash, Hasher},
     ops::Range,
 };
@@ -66,6 +67,26 @@ pub struct PackedStyle {
     pub opacity: f32,
     pub fill_enabled: u32,
     pub stroke_enabled: u32,
+}
+
+impl PackedStyle {
+    /// Exact, conservative source-over eligibility using effective packed paint.
+    /// No epsilon: every nonzero alpha remains eligible, including tiny fades.
+    pub(crate) fn may_contribute_color(self) -> bool {
+        if !self.opacity.is_finite()
+            || !self.stroke_width.is_finite()
+            || !self
+                .fill
+                .iter()
+                .chain(self.stroke.iter())
+                .all(|v| v.is_finite())
+        {
+            return true;
+        }
+        self.opacity != 0.0
+            && ((self.fill_enabled != 0 && self.fill[3] != 0.0)
+                || (self.stroke_enabled & 1 != 0 && self.stroke[3] != 0.0))
+    }
 }
 
 impl From<Style> for PackedStyle {
@@ -129,15 +150,20 @@ pub struct PathVertex {
     pub position: [f32; 2],
     pub target_position: [f32; 2],
     /// Low bit is surface (0 fill, 1 stroke); the next 24 bits are normalized
-    /// ordered path progress. Keeping this packed preserves the existing GPU
-    /// vertex stride while adding reveal metadata.
+    /// ordered path progress.
     pub surface: u32,
+    /// Source/target pairs for polygon vertices B, C, and D. Vertex A is held
+    /// in `position` and `target_position`; ordinary path vertices leave this
+    /// zeroed.
+    pub polygon: [[[f32; 2]; 2]; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PathBatch {
     pub index_range: Range<u32>,
     pub instance_range: Range<u32>,
+    /// Use the renderer-local exact convex-polygon vertex stream for this draw.
+    pub polygon_coverage: bool,
 }
 
 /// One ordered draw slice in the packed unique-path index stream.
@@ -173,6 +199,8 @@ pub struct PreparedOrderedRenderBatchRef<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
     pub batch_count: usize,
+    /// Present resident primitive instances, before zero-contribution suppression.
+    /// Retained packed arrays may be larger while absent rows remain resident.
     pub instance_count: usize,
     pub unsupported_count: usize,
     pub capacity_growths: usize,
@@ -216,6 +244,8 @@ pub struct RenderStats {
 #[derive(Debug)]
 pub struct PreparedFrame<'a> {
     pub time: f64,
+    /// Resident identities aligned one-to-one with the corresponding packed
+    /// instance arrays. Presence affects ordered submission, not this mapping.
     pub circle_ids: &'a [ObjectId],
     pub circles: &'a [CircleInstance],
     pub rectangle_ids: &'a [ObjectId],
@@ -227,6 +257,8 @@ pub struct PreparedFrame<'a> {
     pub path_vertices: &'a [PathVertex],
     pub path_indices: &'a [u32],
     pub path_batches: &'a [PathBatch],
+    path_mesh_cache: &'a [CachedPathMesh],
+    path_batch_cache_indices: &'a [usize],
     /// Painter-ordered index stream for mostly-unique path geometry.
     pub mega_path_indices: &'a [u32],
     /// Path instance attributes repeated per geometry vertex so the packed path
@@ -258,7 +290,11 @@ pub struct PreparedFrame<'a> {
     pub path_geometry_dirty: bool,
     pub stats: RenderStats,
     slots: &'a [PreparedSlot],
+    slot_presences: &'a [bool],
     complete_submission: bool,
+    submitted_source_slots: Option<&'a std::collections::HashSet<usize>>,
+    zero_contribution: &'a [render_order::ZeroContributionRanges; 5],
+    mega_path_offsets: &'a [u32],
 }
 
 /// Packed geometry state for one exact source-frame row.
@@ -289,6 +325,14 @@ pub enum PreparedGeometryObjectOutcome {
 }
 
 impl PreparedFrame<'_> {
+    pub(crate) fn source_is_submitted(&self, index: usize) -> bool {
+        self.slot_presences.get(index).copied().unwrap_or(false)
+            && (self.complete_submission
+                || self
+                    .submitted_source_slots
+                    .is_some_and(|slots| slots.contains(&index)))
+    }
+
     /// Visit the canonical painter-ordered draw metadata.
     ///
     /// Ordinary frames use bounded chunks after a local reorder; projections and
@@ -336,6 +380,14 @@ impl PreparedFrame<'_> {
         &self,
         object_index: usize,
     ) -> Result<PreparedGeometryObjectObservation, PreparedGeometryObjectOutcome> {
+        if !self
+            .slot_presences
+            .get(object_index)
+            .copied()
+            .unwrap_or(false)
+        {
+            return Err(PreparedGeometryObjectOutcome::Absent);
+        }
         let slot = self
             .slots
             .get(object_index)
@@ -435,7 +487,9 @@ impl PreparedFrame<'_> {
             instance_dirty: dirty_ranges
                 .iter()
                 .any(|range| range.contains(&instance_index)),
-            submission_membership: self.complete_submission.then_some(true),
+            submission_membership: self.complete_submission.then(|| {
+                slot.may_contribute_color(self.circles, self.rectangles, self.lines, self.paths)
+            }),
         })
     }
 }
@@ -454,6 +508,37 @@ enum PreparedSlot {
         reveal_head: Option<usize>,
     },
     Unsupported(usize),
+}
+
+impl PreparedSlot {
+    fn may_contribute_color(
+        self,
+        circles: &[CircleInstance],
+        rectangles: &[RectangleInstance],
+        lines: &[LineInstance],
+        paths: &[PathInstance],
+    ) -> bool {
+        match self {
+            Self::Absent | Self::Unsupported(_) => false,
+            Self::Circle(index) => circles[index].style.may_contribute_color(),
+            Self::Rectangle(index) => rectangles[index].style.may_contribute_color(),
+            Self::Line(index) => lines[index].style.may_contribute_color(),
+            Self::Path {
+                index, reveal_head, ..
+            } => {
+                paths[index].style.may_contribute_color()
+                    || reveal_head.is_some_and(|head| lines[head].style.may_contribute_color())
+            }
+        }
+    }
+}
+
+const fn prepared_slot_instance_count(slot: PreparedSlot) -> usize {
+    match slot {
+        PreparedSlot::Absent | PreparedSlot::Unsupported(_) => 0,
+        PreparedSlot::Circle(_) | PreparedSlot::Rectangle(_) | PreparedSlot::Line(_) => 1,
+        PreparedSlot::Path { reveal_head, .. } => 1 + reveal_head.is_some() as usize,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -482,8 +567,10 @@ struct CachedPathMesh {
     stroke_cap: StrokeCap,
     fill_enabled: bool,
     mesh: TessellatedPath,
+    bounds: Option<[noon_core::Rect; 2]>,
     resident: Option<path_residency::ResidentPathRanges>,
     last_used: u64,
+    sampled: Option<sampled_morph::SampledPathMesh>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -504,6 +591,7 @@ struct StructuralAppendStats {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VisibleProjectionKey {
     object_index: usize,
+    present: bool,
     slot: PreparedSlot,
     mega_path_segment: Option<Range<u32>>,
     mega_path_detached: bool,
@@ -535,12 +623,15 @@ pub struct FramePreparer {
     individual_path_draws: bool,
     resident_vertex_count: usize,
     resident_index_count: usize,
+    resident_mesh_count: usize,
     mega_path_indices: Vec<u32>,
     mega_path_vertex_instances: Vec<PathInstance>,
     mega_path_batches: Vec<MegaPathBatch>,
     // Stable slices in the immutable packed mega index stream. A live-edited
     // path is detached rather than forcing a whole-stream rewrite.
     mega_path_segments: Vec<Option<Range<u32>>>,
+    mega_path_offsets: Vec<u32>,
+    zero_contribution: [render_order::ZeroContributionRanges; 5],
     mega_path_detached: Vec<bool>,
     render_batches: Vec<OrderedRenderBatch>,
     render_chunks: Vec<PreparedRenderChunk>,
@@ -558,21 +649,31 @@ pub struct FramePreparer {
     visible_mega_path_batches: Vec<MegaPathBatch>,
     visible_projection_ready: bool,
     visible_projection_key: Vec<VisibleProjectionKey>,
+    visible_submission_slots: std::collections::HashSet<usize>,
     visible_projection_stats: VisibleRenderProjectionStats,
     // Stable execution-row indices in the runtime's derived semantic painter order.
     painter_order_indices: Vec<u32>,
+    painter_order_positions: Vec<Option<usize>>,
     // Distinguishes the runtime's explicit empty scene order from the legacy dense
     // default used before any painter permutation has been installed.
     painter_order_installed: bool,
     path_batch_cache_indices: Vec<usize>,
     path_mesh_cache: Vec<CachedPathMesh>,
     path_mesh_lookup: HashMap<PathMeshKey, Vec<usize>>,
+    sampled_path_mesh_lookup: HashMap<sampled_morph::SampledMeshOwner, usize>,
     path_mesh_cache_limit: Option<usize>,
     path_mesh_clock: u64,
     path_mesh_cache_generation: u64,
+    path_mesh_cache_prune_baseline: usize,
     packed_path_mesh_cache_generation: u64,
+    // A unique incremental replacement can relocate its mesh into the transient
+    // arena. Cache identities still match after that edit, but the arena no
+    // longer has the dense batch layout a later full rebuild can reuse.
+    transient_path_groups_packed: bool,
     unsupported: Vec<ObjectId>,
     slots: Vec<PreparedSlot>,
+    slot_presences: Vec<bool>,
+    active_instance_count: usize,
     circle_dirty_ranges: Vec<Range<usize>>,
     rectangle_dirty_ranges: Vec<Range<usize>>,
     line_dirty_ranges: Vec<Range<usize>>,
@@ -648,6 +749,29 @@ impl FramePreparer {
             return self.rebuild(frame);
         }
 
+        let retirement_indices = changes
+            .object_indices()
+            .iter()
+            .copied()
+            .filter(|&index| {
+                index < old_slot_len
+                    && !frame.is_present(index)
+                    && self.slot_presences[index]
+                    && !matches!(self.slots[index], PreparedSlot::Absent)
+            })
+            .collect::<Vec<_>>();
+        let reactivation_indices = changes
+            .object_indices()
+            .iter()
+            .copied()
+            .filter(|&index| {
+                index < old_slot_len
+                    && frame.is_present(index)
+                    && !self.slot_presences[index]
+                    && !matches!(self.slots[index], PreparedSlot::Absent)
+            })
+            .collect::<Vec<_>>();
+
         let replacement_indices = changes
             .object_indices()
             .iter()
@@ -657,7 +781,9 @@ impl FramePreparer {
                 changes.removed_indices().binary_search(index).is_err()
                     || changes.added_indices().binary_search(index).is_ok()
             })
+            .filter(|&index| frame.is_present(index))
             .filter(|&index| !self.slot_matches(frame, index))
+            .filter(|&index| !self.can_materialize_absent_slot(frame, index))
             .collect::<Vec<_>>();
         if !replacement_indices
             .iter()
@@ -670,23 +796,45 @@ impl FramePreparer {
         let mut geometry_cache_misses = 0;
         let mut path_vertices_repacked = 0;
         let mut path_indices_repacked = 0;
+        let mut replacement_chunks = std::collections::BTreeSet::new();
         for object_index in replacement_indices {
+            let previous_instance_count = prepared_slot_instance_count(self.slots[object_index]);
             let replacement = self
                 .replace_unique_path_geometry(frame, object_index)
                 .expect("preflighted unique path replacement must tessellate");
+            let next_instance_count = prepared_slot_instance_count(self.slots[object_index]);
+            self.active_instance_count = self
+                .active_instance_count
+                .saturating_sub(previous_instance_count)
+                .saturating_add(next_instance_count);
             geometry_cache_misses += usize::from(replacement.cache_miss);
             path_vertices_repacked += replacement.vertices_repacked;
             path_indices_repacked += replacement.indices_repacked;
-        }
-        if path_vertices_repacked > 0 || path_indices_repacked > 0 {
-            self.rebuild_ordered_render_batches();
-            self.rebuild_mega_render_batches();
-            self.rebuild_render_order_chunks(None);
+            let position = if self.painter_order_installed {
+                self.painter_order_positions
+                    .get(object_index)
+                    .copied()
+                    .flatten()
+            } else {
+                Some(object_index)
+            };
+            if let Some(position) = position {
+                replacement_chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
+            }
         }
 
         let mut instances_repacked = 0;
-        for &object_index in changes.removed_indices() {
-            instances_repacked += self.retire_structural_slot(object_index);
+        for &object_index in &retirement_indices {
+            self.slot_presences[object_index] = false;
+            let retired = self.retire_structural_slot(object_index);
+            self.active_instance_count = self.active_instance_count.saturating_sub(retired);
+            instances_repacked += retired;
+            self.record_render_order_chunk(object_index, &mut replacement_chunks);
+        }
+        for &object_index in &reactivation_indices {
+            self.slot_presences[object_index] = true;
+            self.active_instance_count += prepared_slot_instance_count(self.slots[object_index]);
+            self.record_render_order_chunk(object_index, &mut replacement_chunks);
         }
         for &object_index in &appended_indices {
             let appended = self.append_structural_slot(frame, object_index);
@@ -694,6 +842,42 @@ impl FramePreparer {
             geometry_cache_misses += appended.geometry_cache_misses;
             path_vertices_repacked += appended.path_vertices_repacked;
             path_indices_repacked += appended.path_indices_repacked;
+            self.active_instance_count += appended.instances_repacked;
+            // Once a prior painter change has enabled chunked submission, the
+            // flat append above is no longer the draw source. Rebuild only the
+            // new object's painter partition so a forward structural append is
+            // submitted without waiting for a seek or unrelated reorder.
+            self.record_render_order_chunk(object_index, &mut replacement_chunks);
+        }
+
+        let materialized_indices = changes
+            .object_indices()
+            .iter()
+            .copied()
+            .filter(|&index| self.can_materialize_absent_slot(frame, index))
+            .collect::<Vec<_>>();
+        for &object_index in &materialized_indices {
+            let materialized = self.append_structural_slot(frame, object_index);
+            instances_repacked += materialized.instances_repacked;
+            geometry_cache_misses += materialized.geometry_cache_misses;
+            path_vertices_repacked += materialized.path_vertices_repacked;
+            path_indices_repacked += materialized.path_indices_repacked;
+            self.active_instance_count += materialized.instances_repacked;
+            let position = if self.painter_order_installed {
+                self.painter_order_positions
+                    .get(object_index)
+                    .copied()
+                    .flatten()
+            } else {
+                Some(object_index)
+            };
+            if let Some(position) = position {
+                replacement_chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
+            }
+        }
+        for chunk in replacement_chunks {
+            let start = chunk * Self::RENDER_ORDER_CHUNK_SIZE;
+            self.rebuild_render_order_chunks(Some(start..start + Self::RENDER_ORDER_CHUNK_SIZE));
         }
 
         for &object_index in changes.object_indices() {
@@ -702,7 +886,11 @@ impl FramePreparer {
                 .removed_indices()
                 .binary_search(&object_index)
                 .is_ok();
-            if object_index >= old_slot_len || (removed && !added) {
+            if object_index >= old_slot_len
+                || (removed && !added)
+                || retirement_indices.binary_search(&object_index).is_ok()
+                || materialized_indices.binary_search(&object_index).is_ok()
+            {
                 continue;
             }
             let object = &frame.objects[object_index];
@@ -765,6 +953,7 @@ impl FramePreparer {
                             frame.render_transform(object_index),
                             &self.path_mesh_cache[cache_index].mesh,
                             reveal,
+                            frame.morph(object_index),
                         );
                         instances_repacked += 1;
                         if self.lines[head_index] != packed_head {
@@ -789,6 +978,22 @@ impl FramePreparer {
         normalize_dirty_ranges(&mut self.path_index_dirty_ranges);
         normalize_dirty_ranges(&mut self.mega_path_instance_dirty_ranges);
         normalize_dirty_ranges(&mut self.mega_path_index_dirty_ranges);
+        self.sync_zero_contribution();
+
+        // Incremental path replacements can create one CPU tessellation per
+        // content version. Compact only after crossing a high-water mark, and
+        // pin meshes still referenced by current draw descriptors so pruning
+        // never invalidates a dormant or active row.
+        let path_mesh_prune_window = self
+            .path_mesh_cache_limit()
+            .max(self.path_batch_cache_indices.len())
+            .max(1);
+        let path_mesh_prune_threshold = self
+            .path_mesh_cache_prune_baseline
+            .saturating_add(path_mesh_prune_window);
+        if self.path_mesh_cache.len() > path_mesh_prune_threshold {
+            self.prune_path_mesh_cache(frame, true);
+        }
 
         self.prepared_frame(
             frame.time,
@@ -797,10 +1002,37 @@ impl FramePreparer {
             geometry_cache_misses,
             path_vertices_repacked,
             path_indices_repacked,
-            changes.added_indices().len(),
-            changes.removed_indices().len(),
+            appended_indices.len() + materialized_indices.len() + reactivation_indices.len(),
+            retirement_indices.len(),
             0,
         )
+    }
+
+    fn can_materialize_absent_slot(&self, frame: &FrameState, object_index: usize) -> bool {
+        if !matches!(self.slots.get(object_index), Some(PreparedSlot::Absent))
+            || !frame.is_present(object_index)
+        {
+            return false;
+        }
+        self.can_append_structural_slot(frame, object_index)
+    }
+
+    fn record_render_order_chunk(
+        &self,
+        object_index: usize,
+        chunks: &mut std::collections::BTreeSet<usize>,
+    ) {
+        let position = if self.painter_order_installed {
+            self.painter_order_positions
+                .get(object_index)
+                .copied()
+                .flatten()
+        } else {
+            Some(object_index)
+        };
+        if let Some(position) = position {
+            chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
+        }
     }
 
     fn can_append_structural_slot(&self, frame: &FrameState, object_index: usize) -> bool {
@@ -824,10 +1056,13 @@ impl FramePreparer {
         frame: &FrameState,
         object_index: usize,
     ) -> StructuralAppendStats {
-        debug_assert_eq!(object_index, self.slots.len());
+        debug_assert!(
+            object_index == self.slots.len()
+                || matches!(self.slots.get(object_index), Some(PreparedSlot::Absent))
+        );
         let object = &frame.objects[object_index];
         let Some(render_geometry) = frame.render_geometry(object_index) else {
-            self.slots.push(PreparedSlot::Absent);
+            self.install_structural_slot(object_index, PreparedSlot::Absent);
             return StructuralAppendStats::default();
         };
         let reveal = frame.reveal(object_index);
@@ -877,8 +1112,9 @@ impl FramePreparer {
             }
             GeometryRef::VectorPath(_) => unreachable!("vector path must enter append path branch"),
         };
-        self.slots.push(slot);
-        self.append_ordered_render_slot(slot);
+        if self.install_structural_slot(object_index, slot) {
+            self.append_ordered_render_slot(slot);
+        }
         StructuralAppendStats {
             instances_repacked: usize::from(!matches!(slot, PreparedSlot::Unsupported(_))),
             ..StructuralAppendStats::default()
@@ -895,17 +1131,23 @@ impl FramePreparer {
         let object = &frame.objects[object_index];
         let reveal = frame.reveal(object_index);
         let partial_reveal_bits = analytic_reveal.map(|_| reveal.clamp(0.0, 1.0).to_bits());
-        let (cache_index, cache_miss) =
-            match self.cache_path_mesh(path, object.style, frame.render_transform(object_index)) {
-                Ok(value) => value,
-                Err(_) => {
-                    let slot = PreparedSlot::Unsupported(self.unsupported.len());
-                    self.unsupported.push(object.id);
-                    self.slots.push(slot);
+        let (cache_index, cache_miss) = match self.cache_path_mesh_at_progress(
+            path,
+            object.style,
+            frame.render_transform(object_index),
+            sampled_morph::SampledMeshOwner::Stable(object.id),
+            frame.morph(object_index),
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                let slot = PreparedSlot::Unsupported(self.unsupported.len());
+                self.unsupported.push(object.id);
+                if self.install_structural_slot(object_index, slot) {
                     self.append_ordered_render_slot(slot);
-                    return StructuralAppendStats::default();
                 }
-            };
+                return StructuralAppendStats::default();
+            }
+        };
 
         let packed = if partial_reveal_bits.is_some() {
             pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
@@ -929,6 +1171,7 @@ impl FramePreparer {
                     frame.render_transform(object_index),
                     &self.path_mesh_cache[cache_index].mesh,
                     reveal,
+                    frame.morph(object_index),
                 ))
             } else {
                 None
@@ -959,20 +1202,7 @@ impl FramePreparer {
             } else {
                 let (packed_vertices, local_indices) = {
                     let mesh = &self.path_mesh_cache[cache_index].mesh;
-                    (
-                        mesh.vertices
-                            .iter()
-                            .map(|vertex| PathVertex {
-                                position: [vertex.position.x, vertex.position.y],
-                                target_position: [
-                                    vertex.target_position.x,
-                                    vertex.target_position.y,
-                                ],
-                                surface: pack_path_surface(vertex.surface, vertex.path_progress),
-                            })
-                            .collect::<Vec<_>>(),
-                        mesh.indices.clone(),
-                    )
+                    pack_path_mesh(mesh)
                 };
                 let vertex_start = u32::try_from(self.path_vertices.len())
                     .expect("path vertex count exceeds renderer limits");
@@ -1010,6 +1240,8 @@ impl FramePreparer {
         self.path_batches.push(PathBatch {
             index_range,
             instance_range: instance_start..instance_start + 1,
+            polygon_coverage: single_filled_convex_polygon(&self.path_mesh_cache[cache_index].mesh)
+                .is_some(),
         });
         self.path_batch_cache_indices.push(cache_index);
         if !self.individual_path_draws {
@@ -1023,14 +1255,16 @@ impl FramePreparer {
             partial_reveal_bits,
             reveal_head,
         };
-        self.slots.push(slot);
+        let appended_at_tail = self.install_structural_slot(object_index, slot);
 
         let appended_to_mega = mega_eligible && self.append_mega_path_draw(batch, packed);
         if appended_to_mega {
-            if let Some(line_index) = reveal_head {
-                self.append_ordered_reveal_head(line_index);
+            if appended_at_tail {
+                if let Some(line_index) = reveal_head {
+                    self.append_ordered_reveal_head(line_index);
+                }
             }
-        } else {
+        } else if appended_at_tail {
             self.append_ordered_render_slot(slot);
         }
 
@@ -1039,6 +1273,22 @@ impl FramePreparer {
             geometry_cache_misses: usize::from(cache_miss),
             path_vertices_repacked: vertices_repacked,
             path_indices_repacked: indices_repacked,
+        }
+    }
+
+    /// Install one renderer-derived slot. Existing absent source rows keep their
+    /// semantic index while their packed primitive record is appended locally.
+    /// Returns whether the source row itself was appended at the tail.
+    fn install_structural_slot(&mut self, object_index: usize, slot: PreparedSlot) -> bool {
+        if object_index == self.slots.len() {
+            self.slots.push(slot);
+            self.slot_presences.push(true);
+            true
+        } else {
+            debug_assert!(matches!(self.slots[object_index], PreparedSlot::Absent));
+            self.slots[object_index] = slot;
+            self.slot_presences[object_index] = true;
+            false
         }
     }
 
@@ -1139,8 +1389,13 @@ impl FramePreparer {
         let PreparedSlot::Path { batch, .. } = self.slots[object_index] else {
             unreachable!("unique path replacement preflight requires a path slot");
         };
-        let (cache_index, cache_miss) =
-            self.cache_path_mesh(path, object.style, frame.render_transform(object_index))?;
+        let (cache_index, cache_miss) = self.cache_path_mesh_at_progress(
+            path,
+            object.style,
+            frame.render_transform(object_index),
+            sampled_morph::SampledMeshOwner::Stable(object.id),
+            frame.morph(object_index),
+        )?;
         let resident = self.path_mesh_cache[cache_index].resident.clone();
         let (vertices_repacked, indices_repacked) = if let Some(ranges) = resident {
             let old_vertices = self.path_batch_vertex_ranges[batch].clone();
@@ -1156,16 +1411,7 @@ impl FramePreparer {
             (0, 0)
         } else {
             let mesh = &self.path_mesh_cache[cache_index].mesh;
-            let packed_vertices = mesh
-                .vertices
-                .iter()
-                .map(|vertex| PathVertex {
-                    position: [vertex.position.x, vertex.position.y],
-                    target_position: [vertex.target_position.x, vertex.target_position.y],
-                    surface: pack_path_surface(vertex.surface, vertex.path_progress),
-                })
-                .collect::<Vec<_>>();
-            let local_indices = mesh.indices.clone();
+            let (packed_vertices, local_indices) = pack_path_mesh(mesh);
 
             let old_vertex_range = self.path_batch_vertex_ranges[batch].clone();
             let old_vertex_range = if old_vertex_range.start < self.resident_vertex_count as u32 {
@@ -1221,6 +1467,9 @@ impl FramePreparer {
             (packed_vertices.len(), local_indices.len())
         };
         self.path_batch_cache_indices[batch] = cache_index;
+        self.transient_path_groups_packed = false;
+        self.path_batches[batch].polygon_coverage =
+            single_filled_convex_polygon(&self.path_mesh_cache[cache_index].mesh).is_some();
         if let PreparedSlot::Path {
             analytic_reveal,
             partial_reveal_bits,
@@ -1243,7 +1492,7 @@ impl FramePreparer {
     }
 
     fn rebuild<'a>(&'a mut self, frame: &FrameState) -> PreparedFrame<'a> {
-        self.prune_path_mesh_cache(frame);
+        self.prune_path_mesh_cache(frame, false);
         let capacities_before = self.capacities();
 
         self.circle_ids.clear();
@@ -1270,6 +1519,9 @@ impl FramePreparer {
         let previous_path_batch_cache_indices = std::mem::take(&mut self.path_batch_cache_indices);
         self.unsupported.clear();
         self.slots.clear();
+        self.slot_presences.clear();
+        self.active_instance_count = 0;
+        self.zero_contribution = Default::default();
         self.clear_dirty_ranges();
 
         let mut path_groups = Vec::<PathGroup>::new();
@@ -1278,10 +1530,12 @@ impl FramePreparer {
         for (object_index, object) in frame.objects.iter().enumerate() {
             if !frame.is_present(object_index) {
                 self.slots.push(PreparedSlot::Absent);
+                self.slot_presences.push(false);
                 continue;
             }
             let Some(render_geometry) = frame.render_geometry(object_index) else {
                 self.slots.push(PreparedSlot::Absent);
+                self.slot_presences.push(true);
                 continue;
             };
             let temporary_reveal =
@@ -1294,10 +1548,12 @@ impl FramePreparer {
                     _ => None,
                 });
             if let Some(path) = path {
-                let cache_index = match self.cache_path_mesh(
+                let cache_index = match self.cache_path_mesh_at_progress(
                     path,
                     object.style,
                     frame.render_transform(object_index),
+                    sampled_morph::SampledMeshOwner::Stable(object.id),
+                    frame.morph(object_index),
                 ) {
                     Ok((index, cache_miss)) => {
                         geometry_cache_misses += usize::from(cache_miss);
@@ -1306,6 +1562,7 @@ impl FramePreparer {
                     Err(_) => {
                         self.slots
                             .push(PreparedSlot::Unsupported(self.unsupported.len()));
+                        self.slot_presences.push(true);
                         self.unsupported.push(object.id);
                         continue;
                     }
@@ -1351,6 +1608,7 @@ impl FramePreparer {
                         frame.render_transform(object_index),
                         &self.path_mesh_cache[cache_index].mesh,
                         reveal,
+                        frame.morph(object_index),
                     ));
                     Some(head_index)
                 } else {
@@ -1363,12 +1621,14 @@ impl FramePreparer {
                     partial_reveal_bits,
                     reveal_head,
                 });
+                self.slot_presences.push(true);
                 continue;
             }
 
             match render_geometry {
                 GeometryRef::Circle { .. } => {
                     self.slots.push(PreparedSlot::Circle(self.circles.len()));
+                    self.slot_presences.push(true);
                     self.circle_ids.push(object.id);
                     self.circles
                         .push(pack_circle(object, frame.reveal(object_index)));
@@ -1376,11 +1636,13 @@ impl FramePreparer {
                 GeometryRef::Rectangle { .. } => {
                     self.slots
                         .push(PreparedSlot::Rectangle(self.rectangles.len()));
+                    self.slot_presences.push(true);
                     self.rectangle_ids.push(object.id);
                     self.rectangles.push(pack_rectangle(object));
                 }
                 GeometryRef::Line { .. } => {
                     self.slots.push(PreparedSlot::Line(self.lines.len()));
+                    self.slot_presences.push(true);
                     self.line_ids.push(object.id);
                     self.lines
                         .push(pack_line(object, frame.reveal(object_index)));
@@ -1391,6 +1653,7 @@ impl FramePreparer {
                 GeometryRef::External(_) => {
                     self.slots
                         .push(PreparedSlot::Unsupported(self.unsupported.len()));
+                    self.slot_presences.push(true);
                     self.unsupported.push(object.id);
                 }
             }
@@ -1398,6 +1661,7 @@ impl FramePreparer {
 
         let (group_offsets, path_vertices_repacked, path_indices_repacked) =
             if self.resident_vertex_count != 0 || self.resident_index_count != 0 {
+                self.transient_path_groups_packed = false;
                 self.pack_resident_path_groups(path_groups)
             } else {
                 self.pack_transient_path_groups(path_groups, &previous_path_batch_cache_indices)
@@ -1407,6 +1671,13 @@ impl FramePreparer {
                 *index += group_offsets[*batch];
             }
         }
+        self.active_instance_count = self
+            .slots
+            .iter()
+            .copied()
+            .zip(self.slot_presences.iter().copied())
+            .filter_map(|(slot, present)| present.then_some(prepared_slot_instance_count(slot)))
+            .sum();
         self.rebuild_ordered_render_batches();
         self.rebuild_mega_path_draws();
         self.rebuild_render_order_chunks(None);
@@ -1423,7 +1694,9 @@ impl FramePreparer {
         if !self.paths.is_empty() {
             self.path_dirty_ranges.push(0..self.paths.len());
         }
+        self.sync_zero_contribution();
         self.initialized = true;
+        self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
 
         let capacities_after = self.capacities();
         let capacity_growths = capacities_before
@@ -1452,6 +1725,7 @@ impl FramePreparer {
     ) -> (Vec<usize>, usize, usize) {
         let reuse_packed_path_geometry = self.packed_path_mesh_cache_generation
             == self.path_mesh_cache_generation
+            && self.transient_path_groups_packed
             && previous_path_batch_cache_indices.len() == path_groups.len()
             && previous_path_batch_cache_indices
                 .iter()
@@ -1475,19 +1749,16 @@ impl FramePreparer {
                 u32::try_from(index_count).expect("path index count exceeds renderer limits");
             if let (Some(vertices), Some(indices)) = (next_vertices.as_mut(), next_indices.as_mut())
             {
-                vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
-                    position: [vertex.position.x, vertex.position.y],
-                    target_position: [vertex.target_position.x, vertex.target_position.y],
-                    surface: pack_path_surface(vertex.surface, vertex.path_progress),
-                }));
-                indices.extend(mesh.indices.iter().map(|index| {
+                let (packed_vertices, local_indices) = pack_path_mesh(mesh);
+                vertices.extend_from_slice(&packed_vertices);
+                indices.extend(local_indices.iter().map(|index| {
                     index
                         .checked_add(vertex_start)
                         .expect("path index exceeds renderer limits")
                 }));
             }
-            vertex_count += mesh.vertices.len();
-            index_count += mesh.indices.len();
+            vertex_count += packed_path_vertex_count(mesh);
+            index_count += packed_path_index_count(mesh);
             let vertex_end =
                 u32::try_from(vertex_count).expect("path vertex count exceeds renderer limits");
             let index_end =
@@ -1500,6 +1771,7 @@ impl FramePreparer {
                 instance_range: u32::try_from(instance_start)
                     .expect("path instance count exceeds renderer limits")
                     ..instance_end,
+                polygon_coverage: single_filled_convex_polygon(mesh).is_some(),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
@@ -1525,6 +1797,7 @@ impl FramePreparer {
             self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
             repacked
         };
+        self.transient_path_groups_packed = true;
         (group_offsets, path_vertices_repacked, path_indices_repacked)
     }
 
@@ -1563,6 +1836,8 @@ impl FramePreparer {
             path_vertices: &self.path_vertices,
             path_indices: &self.path_indices,
             path_batches: &self.path_batches,
+            path_mesh_cache: &self.path_mesh_cache,
+            path_batch_cache_indices: &self.path_batch_cache_indices,
             mega_path_indices: &self.mega_path_indices,
             mega_path_vertex_instances: &self.mega_path_vertex_instances,
             mega_path_batches: &self.mega_path_batches,
@@ -1586,10 +1861,7 @@ impl FramePreparer {
             path_geometry_dirty: self.path_geometry_dirty,
             stats: RenderStats {
                 batch_count,
-                instance_count: self.circles.len()
-                    + self.rectangles.len()
-                    + self.lines.len()
-                    + self.paths.len(),
+                instance_count: self.active_instance_count,
                 unsupported_count: self.unsupported.len(),
                 capacity_growths,
                 instances_repacked,
@@ -1639,7 +1911,11 @@ impl FramePreparer {
                 render_order_chunks_rebuilt: self.render_order_chunks_rebuilt,
             },
             slots: &self.slots,
+            slot_presences: &self.slot_presences,
             complete_submission: true,
+            submitted_source_slots: None,
+            zero_contribution: &self.zero_contribution,
+            mega_path_offsets: &self.mega_path_offsets,
         }
     }
 
@@ -1720,6 +1996,10 @@ impl FramePreparer {
                     || !should_create_path_reveal_head(object, frame.reveal(object_index));
                 self.path_ids.get(*index) == Some(&object.id)
                     && geometry_matches
+                    && cache.sampled.as_ref().is_none_or(|sampled| {
+                        sampled.owner == sampled_morph::SampledMeshOwner::Stable(object.id)
+                            && sampled.progress_bits == frame.morph(object_index).to_bits()
+                    })
                     && reveal_head_available
                     && cache.stroke_transform
                         == path_stroke_transform_key(
@@ -1729,7 +2009,7 @@ impl FramePreparer {
                     && cache.stroke_width_bits == object.style.stroke_width.to_bits()
                     && cache.stroke_join == object.style.stroke_join
                     && cache.stroke_cap == object.style.stroke_cap
-                    && cache.fill_enabled == object.style.fill.is_some()
+                    && path_fill_cache_matches(cache.fill_enabled, &cache.path, object.style)
             }
             PreparedSlot::Unsupported(index) => {
                 matches!(render_geometry, GeometryRef::External(_))
@@ -1738,7 +2018,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 32] {
+    fn capacities(&self) -> [usize; 34] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -1756,6 +2036,7 @@ impl FramePreparer {
             self.mega_path_vertex_instances.capacity(),
             self.mega_path_batches.capacity(),
             self.mega_path_segments.capacity(),
+            self.mega_path_offsets.capacity(),
             self.mega_path_detached.capacity(),
             self.mega_path_instance_dirty_ranges.capacity(),
             self.mega_path_index_dirty_ranges.capacity(),
@@ -1764,6 +2045,7 @@ impl FramePreparer {
             self.path_mesh_lookup.capacity(),
             self.unsupported.capacity(),
             self.slots.capacity(),
+            self.slot_presences.capacity(),
             self.circle_dirty_ranges.capacity(),
             self.rectangle_dirty_ranges.capacity(),
             self.line_dirty_ranges.capacity(),
@@ -1783,7 +2065,33 @@ impl FramePreparer {
     ) -> Result<(usize, bool), noon_geometry::GeometryError> {
         let stroke_transform = path_stroke_transform_key(style, transform);
         let stroke_width_bits = style.stroke_width.to_bits();
-        let fill_enabled = style.fill.is_some();
+        for fill_enabled in path_fill_cache_candidates(path, style)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(index) = self.find_cached_path_mesh_index(
+                path,
+                stroke_transform,
+                stroke_width_bits,
+                style.stroke_join,
+                style.stroke_cap,
+                fill_enabled,
+            ) {
+                self.mark_path_mesh_used(index);
+                return Ok((index, false));
+            }
+        }
+
+        let requested_fill = style.fill.is_some();
+        let (mesh, fill_enabled) =
+            match tessellate_path_mesh_with_fill(path, style, transform, requested_fill) {
+                Ok(mesh) => (mesh, requested_fill),
+                Err(_) if transparent_morph_fill_fallback_allowed(path, style) => (
+                    tessellate_path_mesh_with_fill(path, style, transform, false)?,
+                    false,
+                ),
+                Err(error) => return Err(error),
+            };
         let key = path_mesh_key(
             path,
             stroke_transform,
@@ -1792,48 +2100,6 @@ impl FramePreparer {
             style.stroke_cap,
             fill_enabled,
         );
-        let existing = self.path_mesh_lookup.get(&key).and_then(|candidates| {
-            candidates.iter().copied().find(|&index| {
-                let entry = &self.path_mesh_cache[index];
-                entry.path == *path
-                    && entry.stroke_transform == stroke_transform
-                    && entry.stroke_width_bits == stroke_width_bits
-                    && entry.stroke_join == style.stroke_join
-                    && entry.stroke_cap == style.stroke_cap
-                    && entry.fill_enabled == fill_enabled
-            })
-        });
-        if let Some(index) = existing {
-            self.mark_path_mesh_used(index);
-            return Ok((index, false));
-        }
-
-        let transformed_path;
-        let tessellation_path = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
-            transformed_path = transform_path_without_translation(path, transform);
-            &transformed_path
-        } else {
-            path
-        };
-        // Correspondence is established by shared transform preparation. Stroke
-        // scaling affects tessellation coordinates, never semantic point pairing.
-        let mesh = if tessellation_path.morph_target().is_some() {
-            noon_geometry::tessellate_styled_with_fill_preserving_morph_order(
-                tessellation_path,
-                style.stroke_width,
-                style.stroke_join,
-                style.stroke_cap,
-                fill_enabled,
-            )?
-        } else {
-            noon_geometry::tessellate_styled_with_fill(
-                tessellation_path,
-                style.stroke_width,
-                style.stroke_join,
-                style.stroke_cap,
-                fill_enabled,
-            )?
-        };
         let index = self.path_mesh_cache.len();
         let last_used = self.next_path_mesh_use();
         self.path_mesh_cache.push(CachedPathMesh {
@@ -1843,12 +2109,62 @@ impl FramePreparer {
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
             fill_enabled,
+            bounds: tessellated_path_bounds(&mesh),
             mesh,
             resident: None,
             last_used,
+            sampled: None,
         });
         self.path_mesh_lookup.entry(key).or_default().push(index);
         Ok((index, true))
+    }
+
+    fn find_cached_path_mesh_index(
+        &self,
+        path: &VectorPath,
+        stroke_transform: PathStrokeTransformKey,
+        stroke_width_bits: u32,
+        stroke_join: StrokeJoin,
+        stroke_cap: StrokeCap,
+        fill_enabled: bool,
+    ) -> Option<usize> {
+        let key = path_mesh_key(
+            path,
+            stroke_transform,
+            stroke_width_bits,
+            stroke_join,
+            stroke_cap,
+            fill_enabled,
+        );
+        self.path_mesh_lookup.get(&key).and_then(|candidates| {
+            candidates.iter().copied().find(|&index| {
+                let entry = &self.path_mesh_cache[index];
+                entry.path == *path
+                    && entry.stroke_transform == stroke_transform
+                    && entry.stroke_width_bits == stroke_width_bits
+                    && entry.stroke_join == stroke_join
+                    && entry.stroke_cap == stroke_cap
+                    && entry.fill_enabled == fill_enabled
+            })
+        })
+    }
+
+    pub(crate) fn cached_path_mesh(
+        &mut self,
+        path: &VectorPath,
+        style: Style,
+        transform: Transform2D,
+        owner: sampled_morph::SampledMeshOwner,
+        progress: f32,
+    ) -> Result<(&TessellatedPath, bool), noon_geometry::GeometryError> {
+        let (index, cache_miss) =
+            self.cache_path_mesh_at_progress(path, style, transform, owner, progress)?;
+        Ok((&self.path_mesh_cache[index].mesh, cache_miss))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn path_mesh_cache_len(&self) -> usize {
+        self.path_mesh_cache.len()
     }
 
     fn next_path_mesh_use(&mut self) -> u64 {
@@ -1861,9 +2177,10 @@ impl FramePreparer {
         self.path_mesh_cache[index].last_used = last_used;
     }
 
-    fn prune_path_mesh_cache(&mut self, frame: &FrameState) {
+    fn prune_path_mesh_cache(&mut self, frame: &FrameState, preserve_current_batches: bool) {
         let limit = self.path_mesh_cache_limit();
         if self.path_mesh_cache.len() <= limit {
+            self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
             return;
         }
 
@@ -1871,14 +2188,16 @@ impl FramePreparer {
         // `frame.render_geometry`. Defer eviction while any such outline is active
         // so a full rebuild cannot evict and immediately retessellate visible work.
         // Once all analytic reveals complete, normal bounded LRU pruning resumes.
-        if frame.objects.iter().enumerate().any(|(object_index, _)| {
-            frame.is_present(object_index)
-                && frame.reveal(object_index) < 1.0
-                && frame
-                    .render_geometry(object_index)
-                    .and_then(analytic_reveal_key)
-                    .is_some()
-        }) {
+        if !preserve_current_batches
+            && frame.objects.iter().enumerate().any(|(object_index, _)| {
+                frame.is_present(object_index)
+                    && frame.reveal(object_index) < 1.0
+                    && frame
+                        .render_geometry(object_index)
+                        .and_then(analytic_reveal_key)
+                        .is_some()
+            })
+        {
             return;
         }
 
@@ -1887,6 +2206,11 @@ impl FramePreparer {
             .iter()
             .map(|entry| entry.resident.is_some())
             .collect();
+        if preserve_current_batches {
+            for &index in &self.path_batch_cache_indices {
+                keep[index] = true;
+            }
+        }
         for (object_index, object) in frame.objects.iter().enumerate() {
             if !frame.is_present(object_index) {
                 continue;
@@ -1894,30 +2218,30 @@ impl FramePreparer {
             let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(object_index) else {
                 continue;
             };
+            if let Some(&index) = self
+                .sampled_path_mesh_lookup
+                .get(&sampled_morph::SampledMeshOwner::Stable(object.id))
+            {
+                keep[index] = true;
+            }
             let stroke_transform =
                 path_stroke_transform_key(object.style, frame.render_transform(object_index));
             let stroke_width_bits = object.style.stroke_width.to_bits();
-            let fill_enabled = object.style.fill.is_some();
-            let key = path_mesh_key(
-                path,
-                stroke_transform,
-                stroke_width_bits,
-                object.style.stroke_join,
-                object.style.stroke_cap,
-                fill_enabled,
-            );
-            if let Some(candidates) = self.path_mesh_lookup.get(&key) {
-                if let Some(index) = candidates.iter().copied().find(|&index| {
-                    let entry = &self.path_mesh_cache[index];
-                    entry.path == *path
-                        && entry.stroke_transform == stroke_transform
-                        && entry.stroke_width_bits == stroke_width_bits
-                        && entry.stroke_join == object.style.stroke_join
-                        && entry.stroke_cap == object.style.stroke_cap
-                        && entry.fill_enabled == fill_enabled
-                }) {
-                    keep[index] = true;
-                }
+            if let Some(index) = path_fill_cache_candidates(path, object.style)
+                .into_iter()
+                .flatten()
+                .find_map(|fill_enabled| {
+                    self.find_cached_path_mesh_index(
+                        path,
+                        stroke_transform,
+                        stroke_width_bits,
+                        object.style.stroke_join,
+                        object.style.stroke_cap,
+                        fill_enabled,
+                    )
+                })
+            {
+                keep[index] = true;
             }
         }
 
@@ -1936,6 +2260,7 @@ impl FramePreparer {
             keep[index] = true;
         }
         if keep.iter().all(|&retained| retained) {
+            self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
             return;
         }
 
@@ -1945,6 +2270,7 @@ impl FramePreparer {
         let old_cache = std::mem::take(&mut self.path_mesh_cache);
         let mut remapped_indices = vec![None; old_cache.len()];
         self.path_mesh_lookup.clear();
+        self.sampled_path_mesh_lookup.clear();
         for (old_index, entry) in old_cache.into_iter().enumerate() {
             if !keep[old_index] {
                 continue;
@@ -1959,26 +2285,33 @@ impl FramePreparer {
             );
             let new_index = self.path_mesh_cache.len();
             remapped_indices[old_index] = Some(new_index);
+            if let Some(sampled) = &entry.sampled {
+                self.sampled_path_mesh_lookup
+                    .insert(sampled.owner, new_index);
+            } else {
+                self.path_mesh_lookup
+                    .entry(key)
+                    .or_default()
+                    .push(new_index);
+            }
             self.path_mesh_cache.push(entry);
-            self.path_mesh_lookup
-                .entry(key)
-                .or_default()
-                .push(new_index);
         }
-        // Evicting stale cache entries changes their indices, not the packed
-        // geometry of surviving batches. Preserve that correspondence so the
-        // next frame does not repack and upload the same meshes a second time.
-        if packed_generation_current
-            && self
-                .path_batch_cache_indices
-                .iter()
-                .all(|&index| remapped_indices[index].is_some())
-        {
+        // Batch descriptors always need their cache indices remapped when all
+        // referenced entries survive. The packed-generation marker separately
+        // controls whether packed vertex/index bytes can be reused.
+        let batches_survive = self
+            .path_batch_cache_indices
+            .iter()
+            .all(|&index| remapped_indices[index].is_some());
+        if batches_survive {
             for index in &mut self.path_batch_cache_indices {
                 *index = remapped_indices[*index].expect("packed mesh survived cache pruning");
             }
-            self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
+            if packed_generation_current {
+                self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
+            }
         }
+        self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
     }
 
     /// Sets the target number of path meshes retained across full rebuilds.
@@ -2004,7 +2337,7 @@ fn range_usize_u32(range: &Range<u32>) -> Range<usize> {
     range.start as usize..range.end as usize
 }
 
-fn allocate_replacement_range(
+pub(crate) fn allocate_replacement_range(
     old: Range<u32>,
     required_len: usize,
     free_ranges: &mut Vec<Range<u32>>,
@@ -2040,7 +2373,7 @@ fn allocate_replacement_range(
     start..start + required
 }
 
-fn insert_free_range(free_ranges: &mut Vec<Range<u32>>, range: Range<u32>) {
+pub(crate) fn insert_free_range(free_ranges: &mut Vec<Range<u32>>, range: Range<u32>) {
     if range.is_empty() {
         return;
     }
@@ -2056,6 +2389,67 @@ fn insert_free_range(free_ranges: &mut Vec<Range<u32>>, range: Range<u32>) {
         }
     }
     free_ranges.truncate(write);
+}
+
+pub(crate) fn tessellate_path_mesh(
+    path: &VectorPath,
+    style: Style,
+    transform: Transform2D,
+) -> Result<TessellatedPath, noon_geometry::GeometryError> {
+    tessellate_path_mesh_with_fill(path, style, transform, style.fill.is_some())
+}
+
+fn tessellate_path_mesh_with_fill(
+    path: &VectorPath,
+    style: Style,
+    transform: Transform2D,
+    fill_enabled: bool,
+) -> Result<TessellatedPath, noon_geometry::GeometryError> {
+    let transformed_path;
+    let tessellation_path = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
+        transformed_path = transform_path_without_translation(path, transform);
+        &transformed_path
+    } else {
+        path
+    };
+    // Correspondence is established by shared transform preparation. Stroke
+    // scaling affects tessellation coordinates, never semantic point pairing.
+    if tessellation_path.morph_target().is_some() {
+        noon_geometry::tessellate_styled_with_fill_preserving_morph_order(
+            tessellation_path,
+            style.stroke_width,
+            style.stroke_join,
+            style.stroke_cap,
+            fill_enabled,
+        )
+    } else {
+        noon_geometry::tessellate_styled_with_fill(
+            tessellation_path,
+            style.stroke_width,
+            style.stroke_join,
+            style.stroke_cap,
+            fill_enabled,
+        )
+    }
+}
+
+fn transparent_morph_fill_fallback_allowed(path: &VectorPath, style: Style) -> bool {
+    path.morph_target().is_some() && style.fill.is_some_and(|color| color.alpha == 0.0)
+}
+
+fn path_fill_cache_candidates(path: &VectorPath, style: Style) -> [Option<bool>; 2] {
+    let requested = style.fill.is_some();
+    [
+        Some(requested),
+        (requested && transparent_morph_fill_fallback_allowed(path, style)).then_some(false),
+    ]
+}
+
+fn path_fill_cache_matches(fill_enabled: bool, path: &VectorPath, style: Style) -> bool {
+    path_fill_cache_candidates(path, style)
+        .into_iter()
+        .flatten()
+        .any(|candidate| candidate == fill_enabled)
 }
 
 fn path_stroke_transform_key(style: Style, transform: Transform2D) -> PathStrokeTransformKey {
@@ -2077,7 +2471,7 @@ fn transform_path_without_translation(path: &VectorPath, transform: Transform2D)
     })
 }
 
-fn packed_path_transform(style: Style, transform: Transform2D) -> PackedTransform {
+pub(crate) fn packed_path_transform(style: Style, transform: Transform2D) -> PackedTransform {
     if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
         PackedTransform {
             translation: [transform.translation.x, transform.translation.y],
@@ -2219,9 +2613,12 @@ fn pack_path_reveal_head(
     render_transform: Transform2D,
     mesh: &TessellatedPath,
     reveal: f32,
+    morph: f32,
 ) -> LineInstance {
     let reveal = reveal.clamp(0.0, 1.0);
-    let point = mesh.reveal_head_position(reveal).unwrap_or(Vec2::ZERO);
+    let point = mesh
+        .reveal_head_position_at_morph(reveal, morph)
+        .unwrap_or(Vec2::ZERO);
     let mut transform = packed_path_transform(object.style, render_transform);
     transform.padding = 1.0;
     let mut style = pack_style(object);
@@ -2268,7 +2665,21 @@ fn pack_path(
     }
 }
 
-fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
+const POLYGON_COVERAGE_FLAG: u32 = 1 << 25;
+const POLYGON_QUAD_FLAG: u32 = 1 << 26;
+const POLYGON_CORNER_SHIFT: u32 = 27;
+/// Eligibility only examines bounded planner output so morph preparation stays
+/// local even when an authored contour contains many segments.
+const MAX_CONVEX_MORPH_VERTICES: usize = 129;
+/// Dimensionless angular tolerance for f32 planner subdivision roundoff; it is
+/// relative to adjacent edge lengths and therefore preserves geometry scale.
+const MORPH_COLLINEAR_ANGLE_TOLERANCE: f64 = 1.0e-5;
+#[cfg(test)]
+const PATH_PROGRESS_MASK: u32 = (PATH_PROGRESS_MAX << 1) | 1;
+const TRIANGLE_QUAD: [[f32; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+const TRIANGLE_QUAD_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
+
+pub(crate) fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
     let progress = (progress.clamp(0.0, 1.0) * PATH_PROGRESS_MAX as f32).round() as u32;
     (progress << 1)
         | match surface {
@@ -2277,9 +2688,271 @@ fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
         }
 }
 
+// Cache source/target tessellation boxes, including stroke triangles. Blending
+// their extents conservatively bounds the GPU's current interpolated vertices.
+fn tessellated_path_bounds(mesh: &TessellatedPath) -> Option<[noon_core::Rect; 2]> {
+    if mesh.vertices.is_empty() {
+        return None;
+    }
+    let mut min = [Vec2::new(f32::INFINITY, f32::INFINITY); 2];
+    let mut max = [Vec2::new(f32::NEG_INFINITY, f32::NEG_INFINITY); 2];
+    for vertex in &mesh.vertices {
+        for (index, point) in [vertex.position, vertex.target_position]
+            .into_iter()
+            .enumerate()
+        {
+            if !point.x.is_finite() || !point.y.is_finite() {
+                return None;
+            }
+            min[index].x = min[index].x.min(point.x);
+            min[index].y = min[index].y.min(point.y);
+            max[index].x = max[index].x.max(point.x);
+            max[index].y = max[index].y.max(point.y);
+        }
+    }
+    Some([
+        noon_core::Rect::new(min[0], max[0]),
+        noon_core::Rect::new(min[1], max[1]),
+    ])
+}
+
+pub(crate) fn packed_path_vertex_count(mesh: &TessellatedPath) -> usize {
+    if single_filled_convex_polygon(mesh).is_some() {
+        4
+    } else {
+        mesh.vertices.len()
+    }
+}
+
+pub(crate) fn packed_path_index_count(mesh: &TessellatedPath) -> usize {
+    if single_filled_convex_polygon(mesh).is_some() {
+        6
+    } else {
+        mesh.indices.len()
+    }
+}
+
+pub(crate) fn pack_path_mesh(mesh: &TessellatedPath) -> (Vec<PathVertex>, Vec<u32>) {
+    if let Some(polygon) = single_filled_convex_polygon(mesh) {
+        return (
+            TRIANGLE_QUAD
+                .iter()
+                .enumerate()
+                .map(|(corner, _)| PathVertex {
+                    position: polygon[0][0],
+                    target_position: polygon[0][1],
+                    surface: pack_path_surface(PathSurface::Fill, 1.0)
+                        | POLYGON_COVERAGE_FLAG
+                        | if polygon[3] != polygon[2] {
+                            POLYGON_QUAD_FLAG
+                        } else {
+                            0
+                        }
+                        | (u32::try_from(corner).expect("quad corner") << POLYGON_CORNER_SHIFT),
+                    polygon: [polygon[1], polygon[2], polygon[3]],
+                })
+                .collect(),
+            TRIANGLE_QUAD_INDICES.to_vec(),
+        );
+    }
+    (
+        mesh.vertices
+            .iter()
+            .map(|vertex| PathVertex {
+                position: [vertex.position.x, vertex.position.y],
+                target_position: [vertex.target_position.x, vertex.target_position.y],
+                surface: pack_path_surface(vertex.surface, vertex.path_progress),
+                polygon: [[[0.0; 2]; 2]; 3],
+            })
+            .collect(),
+        mesh.indices.clone(),
+    )
+}
+
+pub(crate) fn single_filled_convex_polygon(mesh: &TessellatedPath) -> Option<[[[f32; 2]; 2]; 4]> {
+    let vertex_count = mesh.vertices.len();
+    // Ordinary paths are never scanned beyond the small direct meshes. Morph
+    // planning may linearly subdivide a straight contour, so only that bounded
+    // case needs boundary recovery below.
+    if (!mesh.morphing && vertex_count > 4)
+        || (mesh.morphing && vertex_count > MAX_CONVEX_MORPH_VERTICES)
+        || mesh.indices.len() < 3
+        || !mesh.indices.len().is_multiple_of(3)
+        || mesh
+            .indices
+            .iter()
+            .any(|&index| index as usize >= vertex_count)
+        || mesh.vertices.iter().any(|vertex| {
+            vertex.surface != PathSurface::Fill
+                || !vertex.position.x.is_finite()
+                || !vertex.position.y.is_finite()
+                || !vertex.target_position.x.is_finite()
+                || !vertex.target_position.y.is_finite()
+        })
+    {
+        return None;
+    }
+
+    let mut edges = BTreeMap::<(usize, usize), u8>::new();
+    for triangle in mesh.indices.as_chunks::<3>().0 {
+        for [left, right] in [
+            [triangle[0], triangle[1]],
+            [triangle[1], triangle[2]],
+            [triangle[2], triangle[0]],
+        ] {
+            let edge = (left.min(right) as usize, left.max(right) as usize);
+            let count = edges.entry(edge).or_default();
+            *count = count.saturating_add(1);
+        }
+    }
+    let mut adjacency = vec![[usize::MAX; 2]; vertex_count];
+    for ((left, right), count) in edges {
+        if count != 1 {
+            continue;
+        }
+        let left_slot = adjacency[left]
+            .iter()
+            .position(|&value| value == usize::MAX)?;
+        let right_slot = adjacency[right]
+            .iter()
+            .position(|&value| value == usize::MAX)?;
+        adjacency[left][left_slot] = right;
+        adjacency[right][right_slot] = left;
+    }
+    let start = adjacency
+        .iter()
+        .position(|neighbors| !neighbors.contains(&usize::MAX))?;
+    let mut order = vec![start, adjacency[start][0]];
+    while order.len() <= vertex_count {
+        let previous = order[order.len() - 2];
+        let current = *order.last()?;
+        let next = adjacency[current]
+            .into_iter()
+            .find(|&candidate| candidate != previous)?;
+        if next == start {
+            break;
+        }
+        order.push(next);
+    }
+    if order.len() > vertex_count
+        || !adjacency[*order.last()?].contains(&start)
+        || adjacency
+            .iter()
+            .enumerate()
+            .any(|(index, neighbors)| !neighbors.contains(&usize::MAX) && !order.contains(&index))
+    {
+        return None;
+    }
+    let mut boundary = order
+        .into_iter()
+        .map(|index| {
+            let vertex = mesh.vertices[index];
+            [
+                [vertex.position.x, vertex.position.y],
+                [vertex.target_position.x, vertex.target_position.y],
+            ]
+        })
+        .collect::<Vec<_>>();
+    while mesh.morphing && boundary.len() > 3 {
+        let Some(index) = (0..boundary.len()).find(|&index| {
+            collinear_morph_vertex(
+                boundary[(index + boundary.len() - 1) % boundary.len()],
+                boundary[index],
+                boundary[(index + 1) % boundary.len()],
+            )
+        }) else {
+            break;
+        };
+        boundary.remove(index);
+    }
+    if !(3..=4).contains(&boundary.len()) {
+        return None;
+    }
+    let mut polygon = [[[0.0; 2]; 2]; 4];
+    for (output, point) in polygon.iter_mut().zip(boundary.iter()) {
+        *output = *point;
+    }
+    if boundary.len() == 3 {
+        polygon[3] = polygon[2];
+    }
+    convex_polygon(&polygon[..boundary.len()]).then_some(polygon)
+}
+
+fn collinear_morph_vertex(a: [[f32; 2]; 2], b: [[f32; 2]; 2], c: [[f32; 2]; 2]) -> bool {
+    [0.0_f64, 0.5, 1.0].into_iter().all(|time| {
+        let point = |pair: [[f32; 2]; 2]| {
+            [
+                f64::from(pair[0][0]) + (f64::from(pair[1][0]) - f64::from(pair[0][0])) * time,
+                f64::from(pair[0][1]) + (f64::from(pair[1][1]) - f64::from(pair[0][1])) * time,
+            ]
+        };
+        let a = point(a);
+        let b = point(b);
+        let c = point(c);
+        let ab = [b[0] - a[0], b[1] - a[1]];
+        let bc = [c[0] - b[0], c[1] - b[1]];
+        let ab_length = (ab[0] * ab[0] + ab[1] * ab[1]).sqrt();
+        let bc_length = (bc[0] * bc[0] + bc[1] * bc[1]).sqrt();
+        ab_length.is_finite()
+            && bc_length.is_finite()
+            && ab_length > f64::EPSILON
+            && bc_length > f64::EPSILON
+            && (ab[0] * bc[1] - ab[1] * bc[0]).abs()
+                <= MORPH_COLLINEAR_ANGLE_TOLERANCE * ab_length * bc_length
+            && ab[0] * bc[0] + ab[1] * bc[1] >= 0.0
+    })
+}
+
+fn convex_polygon(points: &[[[f32; 2]; 2]]) -> bool {
+    let mut winding = 0.0_f64;
+    for index in 0..points.len() {
+        let a = points[index];
+        let b = points[(index + 1) % points.len()];
+        let c = points[(index + 2) % points.len()];
+        // Each turn is quadratic over the linear morph. Check its endpoints and
+        // its interior extremum, if present, so an apparently convex pair of
+        // endpoints cannot fold or reverse between frames.
+        let cross = |time: f64| {
+            let point = |pair: [[f32; 2]; 2]| {
+                [
+                    f64::from(pair[0][0]) + (f64::from(pair[1][0]) - f64::from(pair[0][0])) * time,
+                    f64::from(pair[0][1]) + (f64::from(pair[1][1]) - f64::from(pair[0][1])) * time,
+                ]
+            };
+            let a = point(a);
+            let b = point(b);
+            let c = point(c);
+            (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+        };
+        let at_zero = cross(0.0);
+        let at_half = cross(0.5);
+        let at_one = cross(1.0);
+        let quadratic = 2.0_f64 * (at_one + at_zero - 2.0 * at_half);
+        let linear = at_one - at_zero - quadratic;
+        let mut checks = [0.0_f64, 1.0, f64::NAN];
+        if quadratic.abs() > f64::EPSILON {
+            let extremum = -linear / (2.0 * quadratic);
+            if extremum > 0.0 && extremum < 1.0 {
+                checks[2] = extremum;
+            }
+        }
+        for time in checks.into_iter().filter(|time| time.is_finite()) {
+            let turn = cross(time);
+            if !turn.is_finite()
+                || turn.abs() <= f64::EPSILON
+                || (winding != 0.0 && turn.signum() != winding.signum())
+            {
+                return false;
+            }
+            winding = turn;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 fn unpack_path_progress(surface: u32) -> f32 {
-    (surface >> 1) as f32 / PATH_PROGRESS_MAX as f32
+    ((surface & PATH_PROGRESS_MASK) >> 1) as f32 / PATH_PROGRESS_MAX as f32
 }
 
 fn push_dirty_range(ranges: &mut Vec<Range<usize>>, index: usize) {
@@ -2331,6 +3004,8 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
             content: noon_core::ObjectContentRef::Geometry(geometry),
@@ -2441,6 +3116,65 @@ mod tests {
     }
 
     #[test]
+    fn transparent_open_morph_falls_back_to_stroke_only_mesh() {
+        let source = VectorPath::new().move_to(Vec2::new(-1.0, 0.0)).cubic_to(
+            Vec2::new(-0.5, 1.0),
+            Vec2::new(0.5, 1.0),
+            Vec2::new(1.0, 0.0),
+        );
+        let target = VectorPath::new().move_to(Vec2::new(-1.25, 0.25)).cubic_to(
+            Vec2::new(-0.25, 1.25),
+            Vec2::new(0.75, 0.75),
+            Vec2::new(1.25, -0.25),
+        );
+        let geometry = GeometryRef::path(source.with_morph_target(target));
+        let mut path = object(91, geometry);
+        path.style.fill = Some(Color {
+            alpha: 0.0,
+            ..Color::WHITE
+        });
+        path.style.stroke = Some(Color::WHITE);
+        path.style.stroke_width = 0.08;
+        let initial = frame(vec![path]);
+        let mut preparer = FramePreparer::new();
+
+        let vertices = {
+            let cold = preparer.prepare(&initial);
+            assert_eq!(cold.stats.unsupported_count, 0);
+            assert_eq!(cold.stats.geometry_cache_misses, 1);
+            assert!(!cold.path_vertices.is_empty());
+            assert!(cold
+                .path_vertices
+                .iter()
+                .all(|vertex| vertex.surface & 1 == 1));
+            cold.path_vertices.to_vec()
+        };
+
+        let mut advanced = initial.clone();
+        advanced.morphs[0] = 0.5;
+        let steady = preparer.prepare_incremental(&advanced, &FrameChanges::objects(vec![0]));
+        assert_eq!(steady.stats.unsupported_count, 0);
+        assert_eq!(steady.stats.geometry_cache_misses, 0);
+        assert!(!steady.path_geometry_dirty);
+        assert_eq!(steady.path_vertices, vertices);
+
+        let mut visible = initial;
+        visible.objects[0].style.fill = Some(Color::WHITE);
+        let mut visible_preparer = FramePreparer::new();
+        let filled = visible_preparer.prepare(&visible);
+        assert_eq!(filled.stats.unsupported_count, 0);
+        assert!(filled
+            .path_vertices
+            .iter()
+            .any(|vertex| vertex.surface & 1 == 0));
+        visible.morphs[0] = 0.5;
+        let middle =
+            visible_preparer.prepare_incremental(&visible, &FrameChanges::objects(vec![0]));
+        assert_eq!(middle.stats.unsupported_count, 0);
+        assert!(middle.stats.path_vertices_repacked > 0);
+    }
+
+    #[test]
     fn fill_presence_is_part_of_path_mesh_cache_identity() {
         let geometry = GeometryRef::path(curved_path());
         let mut path = object(17, geometry);
@@ -2492,6 +3226,419 @@ mod tests {
         assert_eq!(rebuilt.path_indices, indices);
     }
 
+    fn filled_triangle_mesh(points: [[f32; 2]; 3]) -> TessellatedPath {
+        noon_geometry::tessellate(
+            &VectorPath::new()
+                .move_to(Vec2::new(points[0][0], points[0][1]))
+                .line_to(Vec2::new(points[1][0], points[1][1]))
+                .line_to(Vec2::new(points[2][0], points[2][1]))
+                .close(),
+            0.0,
+        )
+        .unwrap()
+    }
+
+    fn filled_quad_mesh(points: [[f32; 2]; 4]) -> TessellatedPath {
+        noon_geometry::tessellate(
+            &VectorPath::new()
+                .move_to(Vec2::new(points[0][0], points[0][1]))
+                .line_to(Vec2::new(points[1][0], points[1][1]))
+                .line_to(Vec2::new(points[2][0], points[2][1]))
+                .line_to(Vec2::new(points[3][0], points[3][1]))
+                .close(),
+            0.0,
+        )
+        .unwrap()
+    }
+
+    fn polygon_pixel_coverage(points: &[[f32; 2]], pixel_minimum: [f32; 2]) -> f32 {
+        fn clip(
+            polygon: Vec<[f32; 2]>,
+            axis: usize,
+            boundary: f32,
+            keep_greater: bool,
+        ) -> Vec<[f32; 2]> {
+            if polygon.is_empty() {
+                return polygon;
+            }
+            let mut clipped = Vec::with_capacity(8);
+            for index in 0..polygon.len() {
+                let point = polygon[index];
+                let next = polygon[(index + 1) % polygon.len()];
+                let point_inside = if keep_greater {
+                    point[axis] >= boundary
+                } else {
+                    point[axis] <= boundary
+                };
+                let next_inside = if keep_greater {
+                    next[axis] >= boundary
+                } else {
+                    next[axis] <= boundary
+                };
+                if point_inside {
+                    clipped.push(point);
+                }
+                if point_inside != next_inside {
+                    let t = (boundary - point[axis]) / (next[axis] - point[axis]);
+                    clipped.push([
+                        point[0] + (next[0] - point[0]) * t,
+                        point[1] + (next[1] - point[1]) * t,
+                    ]);
+                }
+            }
+            clipped
+        }
+
+        let polygon = points
+            .iter()
+            .map(|point| [point[0] - pixel_minimum[0], point[1] - pixel_minimum[1]])
+            .collect::<Vec<_>>();
+        let polygon = clip(
+            clip(
+                clip(clip(polygon, 0, 0.0, true), 0, 1.0, false),
+                1,
+                0.0,
+                true,
+            ),
+            1,
+            1.0,
+            false,
+        );
+        if polygon.len() < 3 {
+            return 0.0;
+        }
+        let twice_area: f32 = polygon
+            .iter()
+            .enumerate()
+            .map(|(index, point)| {
+                let next = polygon[(index + 1) % polygon.len()];
+                point[0] * next[1] - point[1] * next[0]
+            })
+            .sum();
+        (twice_area.abs() * 0.5).clamp(0.0, 1.0)
+    }
+
+    fn conservative_convex_pixel_classification(
+        points: &[[f32; 2]],
+        pixel_minimum: [f32; 2],
+    ) -> Option<f32> {
+        const EPSILON: f32 = 1.907_348_6e-6;
+        let points = points
+            .iter()
+            .map(|point| [point[0] - pixel_minimum[0], point[1] - pixel_minimum[1]])
+            .collect::<Vec<_>>();
+        let mut twice_area = 0.0_f32;
+        let mut area_scale = 0.0_f32;
+        for (index, point) in points.iter().enumerate() {
+            let next = points[(index + 1) % points.len()];
+            let positive = point[0] * next[1];
+            let negative = point[1] * next[0];
+            twice_area += positive - negative;
+            area_scale += positive.abs() + negative.abs();
+        }
+        let area_guard = EPSILON * area_scale.max(1.0e-12);
+        if !twice_area.is_finite() || !area_scale.is_finite() || twice_area.abs() <= area_guard {
+            return None;
+        }
+        let winding = twice_area.signum();
+        let mut inside = true;
+        for (index, point) in points.iter().enumerate() {
+            let next = points[(index + 1) % points.len()];
+            let edge = [next[0] - point[0], next[1] - point[1]];
+            let delta = [0.5 - point[0], 0.5 - point[1]];
+            let positive = edge[0] * delta[1];
+            let negative = edge[1] * delta[0];
+            let signed = winding * (positive - negative);
+            let support = 0.5 * (edge[0].abs() + edge[1].abs());
+            let guard = EPSILON * (positive.abs() + negative.abs() + support).max(1.0e-12);
+            if !signed.is_finite() || !support.is_finite() || !guard.is_finite() {
+                return None;
+            }
+            if signed < -support - guard {
+                return Some(0.0);
+            }
+            if signed <= support + guard {
+                inside = false;
+            }
+        }
+        inside.then_some(1.0)
+    }
+
+    fn polygon_pixel_coverage_f64(points: &[[f32; 2]], pixel: [f32; 2]) -> f64 {
+        fn clip(input: Vec<[f64; 2]>, axis: usize, bound: f64, greater: bool) -> Vec<[f64; 2]> {
+            let mut output = Vec::new();
+            for index in 0..input.len() {
+                let p = input[index];
+                let q = input[(index + 1) % input.len()];
+                let pin = if greater {
+                    p[axis] >= bound
+                } else {
+                    p[axis] <= bound
+                };
+                let qin = if greater {
+                    q[axis] >= bound
+                } else {
+                    q[axis] <= bound
+                };
+                if pin {
+                    output.push(p);
+                }
+                if pin != qin {
+                    let t = (bound - p[axis]) / (q[axis] - p[axis]);
+                    output.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+                }
+            }
+            output
+        }
+        let mut polygon = points
+            .iter()
+            .map(|p| [f64::from(p[0] - pixel[0]), f64::from(p[1] - pixel[1])])
+            .collect();
+        for (axis, bound, greater) in [
+            (0, 0.0, true),
+            (0, 1.0, false),
+            (1, 0.0, true),
+            (1, 1.0, false),
+        ] {
+            polygon = clip(polygon, axis, bound, greater);
+        }
+        if polygon.len() < 3 {
+            return 0.0;
+        }
+        polygon
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let q = polygon[(i + 1) % polygon.len()];
+                p[0] * q[1] - p[1] * q[0]
+            })
+            .sum::<f64>()
+            .abs()
+            .mul_add(0.5, 0.0)
+            .clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn exact_polygon_packing_accepts_both_windings_and_rejects_degenerate_inputs() {
+        let positive = filled_triangle_mesh([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        let negative = filled_triangle_mesh([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]]);
+        for mesh in [&positive, &negative] {
+            let (vertices, indices) = pack_path_mesh(mesh);
+            assert_eq!(vertices.len(), 4);
+            assert_eq!(indices.as_slice(), TRIANGLE_QUAD_INDICES);
+            assert!(vertices
+                .iter()
+                .all(|vertex| vertex.surface & POLYGON_COVERAGE_FLAG != 0));
+            let polygon = single_filled_convex_polygon(mesh).expect("filled triangle");
+            let payload = [
+                vertices[0].position,
+                vertices[0].polygon[0][0],
+                vertices[0].polygon[1][0],
+            ];
+            assert!(payload
+                .iter()
+                .all(|point| polygon.iter().any(|pair| pair[0] == *point)));
+        }
+
+        let degenerate = filled_triangle_mesh([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]]);
+        assert!(single_filled_convex_polygon(&degenerate).is_none());
+        let mut stroked = positive.clone();
+        stroked.vertices[0].surface = PathSurface::Stroke;
+        assert!(single_filled_convex_polygon(&stroked).is_none());
+        let (fallback_vertices, fallback_indices) = pack_path_mesh(&stroked);
+        assert_eq!(fallback_vertices.len(), stroked.vertices.len());
+        assert_eq!(fallback_indices, stroked.indices);
+        assert!(fallback_vertices
+            .iter()
+            .all(|vertex| vertex.surface & POLYGON_COVERAGE_FLAG == 0));
+        let mut non_finite = negative;
+        non_finite.vertices[0].position.x = f32::NAN;
+        assert!(single_filled_convex_polygon(&non_finite).is_none());
+    }
+
+    #[test]
+    fn exact_polygon_packing_covers_convex_morphing_kites_without_triangle_seams() {
+        let source = [[-1.0, 0.0], [0.0, -1.0], [1.0, 0.0], [0.0, 1.0]];
+        let target = [[-1.2, -0.1], [0.1, -0.8], [1.1, 0.2], [-0.1, 1.2]];
+        let path = VectorPath::new()
+            .move_to(Vec2::new(source[0][0], source[0][1]))
+            .line_to(Vec2::new(source[1][0], source[1][1]))
+            .line_to(Vec2::new(source[2][0], source[2][1]))
+            .line_to(Vec2::new(source[3][0], source[3][1]))
+            .close()
+            .with_morph_target(
+                VectorPath::new()
+                    .move_to(Vec2::new(target[0][0], target[0][1]))
+                    .line_to(Vec2::new(target[1][0], target[1][1]))
+                    .line_to(Vec2::new(target[2][0], target[2][1]))
+                    .line_to(Vec2::new(target[3][0], target[3][1]))
+                    .close(),
+            );
+        let mesh = tessellate_path_mesh(
+            &path,
+            Style {
+                fill: Some(Color::WHITE),
+                stroke: None,
+                stroke_width: 0.0,
+                ..Style::default()
+            },
+            Transform2D::IDENTITY,
+        )
+        .expect("stable filled morph");
+        let (vertices, indices) = pack_path_mesh(&mesh);
+        assert_eq!(vertices.len(), 4, "mesh: {mesh:#?}");
+        assert_eq!(indices.as_slice(), TRIANGLE_QUAD_INDICES);
+        assert!(vertices.iter().all(|vertex| {
+            vertex.surface & POLYGON_COVERAGE_FLAG != 0 && vertex.surface & POLYGON_QUAD_FLAG != 0
+        }));
+
+        // Convex endpoints alone are insufficient: a 180-degree rotation has
+        // matching winding at both endpoints but collapses at t=0.5.
+        let pinching = [
+            [[-1.0, -1.0], [1.0, 1.0]],
+            [[1.0, -1.0], [-1.0, 1.0]],
+            [[1.0, 1.0], [-1.0, -1.0]],
+            [[-1.0, 1.0], [1.0, -1.0]],
+        ];
+        assert!(!convex_polygon(&pinching));
+        // Endpoint collinearity alone is unsafe: the different interpolation
+        // fractions make this sampled point bow away from its rotating edge.
+        assert!(!collinear_morph_vertex(
+            [[0.0, 0.0], [0.0, 0.0]],
+            [[0.25, 0.0], [0.0, 0.75]],
+            [[1.0, 0.0], [0.0, 1.0]],
+        ));
+
+        let static_quad = filled_quad_mesh([[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]);
+        assert!(single_filled_convex_polygon(&static_quad).is_some());
+        let tiny_quad =
+            filled_quad_mesh([[0.0, 0.0], [1.0e-4, 0.0], [1.0e-4, 1.0e-4], [0.0, 1.0e-4]]);
+        let (tiny_vertices, _) = pack_path_mesh(&tiny_quad);
+        assert!(tiny_vertices
+            .iter()
+            .all(|vertex| vertex.surface & POLYGON_QUAD_FLAG != 0));
+        // The rotating-edge counterexample remains unsafe at a tiny scale.
+        assert!(!collinear_morph_vertex(
+            [[0.0, 0.0], [0.0, 0.0]],
+            [[2.5e-5, 0.0], [0.0, 7.5e-5]],
+            [[1.0e-4, 0.0], [0.0, 1.0e-4]],
+        ));
+    }
+
+    #[test]
+    fn exact_polygon_coverage_uses_pixel_area_for_each_winding() {
+        let positive = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let negative = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]];
+        assert!((polygon_pixel_coverage(&positive, [0.0, 0.0]) - 0.5).abs() < 1e-6);
+        assert!((polygon_pixel_coverage(&negative, [0.0, 0.0]) - 0.5).abs() < 1e-6);
+        assert_eq!(
+            polygon_pixel_coverage(&[[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], [0.0, 0.0]),
+            0.0
+        );
+        assert!(
+            (polygon_pixel_coverage(
+                &[[4096.0, 4096.0], [4097.0, 4096.0], [4096.0, 4097.0]],
+                [4096.0, 4096.0],
+            ) - 0.5)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (polygon_pixel_coverage(
+                &[[-0.5, -0.5], [1.5, -0.5], [1.5, 1.5], [-0.5, 1.5]],
+                [0.0, 0.0],
+            ) - 1.0)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn conservative_polygon_classification_matches_f64_clipping_across_scales() {
+        let mut seed = 0x9e37_79b9_u32;
+        let mut inside = 0;
+        let mut outside = 0;
+        for scale in [1.0e-4_f32, 0.02, 1.0, 64.0, 4096.0] {
+            for offset in [[0.0, 0.0], [1.0e7, -1.0e7]] {
+                for _ in 0..1024 {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let angle =
+                        f32::from((seed >> 8) as u16) / f32::from(u16::MAX) * std::f32::consts::TAU;
+                    let radius = scale * (0.2 + f32::from((seed >> 24) as u8) / 255.0 * 3.0);
+                    let center = [
+                        offset[0] + (f32::from((seed & 0xff) as u8) / 255.0 * 4.0 - 2.0) * scale,
+                        offset[1]
+                            + (f32::from(((seed >> 16) & 0xff) as u8) / 255.0 * 4.0 - 2.0) * scale,
+                    ];
+                    let quad = [
+                        0.0,
+                        std::f32::consts::FRAC_PI_2,
+                        std::f32::consts::PI,
+                        std::f32::consts::FRAC_PI_2 * 3.0,
+                    ]
+                    .map(|corner| {
+                        let corner = corner + angle;
+                        [
+                            center[0] + radius * corner.cos(),
+                            center[1] + radius * corner.sin(),
+                        ]
+                    });
+                    for points in [&quad[..], &quad[..3]] {
+                        for winding in [false, true] {
+                            let mut points = points.to_vec();
+                            if winding {
+                                points.reverse();
+                            }
+                            for pixel in [
+                                [center[0] - scale, center[1] - scale],
+                                center,
+                                [center[0] + scale, center[1] + scale],
+                            ] {
+                                let Some(classified) =
+                                    conservative_convex_pixel_classification(&points, pixel)
+                                else {
+                                    continue;
+                                };
+                                let exact = polygon_pixel_coverage_f64(&points, pixel);
+                                assert!(
+                                    (exact - f64::from(classified)).abs() < 1.0e-8,
+                                    "{points:?} at {pixel:?}"
+                                );
+                                if classified == 1.0 {
+                                    inside += 1;
+                                } else {
+                                    outside += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(conservative_convex_pixel_classification(
+            &[[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+            [0.0, 0.0]
+        )
+        .is_none());
+        // Pixel-edge uncertainty must retain partial-area clipping, including
+        // almost-flat polygons whose winding is vulnerable to cancellation.
+        for top in [1.0 - 1.0e-6, 1.0, 1.0 + 1.0e-6] {
+            let points = [[-1.0, -1.0], [2.0, -1.0], [2.0, top], [-1.0, top]];
+            assert!(conservative_convex_pixel_classification(&points, [0.0, 0.0]).is_none());
+        }
+        for points in [
+            [[-4096.0, -4096.0], [4096.0, 4096.0], [4096.0, 4096.001]],
+            [[0.0, 0.0], [f32::INFINITY, 0.0], [0.0, 1.0]],
+            [[0.0, 0.0], [f32::NAN, 0.0], [0.0, 1.0]],
+        ] {
+            assert!(conservative_convex_pixel_classification(&points, [0.0, 0.0]).is_none());
+        }
+        assert!(
+            inside > 100 && outside > 100,
+            "both fast outcomes need coverage"
+        );
+    }
+
     #[test]
     fn packed_instance_layout_is_stable() {
         assert_eq!(std::mem::size_of::<PackedTransform>(), 24);
@@ -2500,7 +3647,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<RectangleInstance>(), 88);
         assert_eq!(std::mem::size_of::<LineInstance>(), 88);
         assert_eq!(std::mem::size_of::<PathInstance>(), 80);
-        assert_eq!(std::mem::size_of::<PathVertex>(), 20);
+        assert_eq!(std::mem::size_of::<PathVertex>(), 68);
     }
 
     fn curved_path() -> VectorPath {
@@ -2633,7 +3780,7 @@ mod tests {
     }
 
     #[test]
-    fn circle_create_uses_partial_geometry_then_returns_to_analytic_circle() {
+    fn circle_create_stays_analytic_while_reveal_progresses() {
         let mut state = object(7, GeometryRef::circle(1.25));
         state.style.fill = Some(Color::rgba(1.0, 0.0, 0.5, 0.5));
         state.style.stroke = Some(Color::WHITE);
@@ -2642,39 +3789,35 @@ mod tests {
         frame.reveals[0] = 0.25;
         let mut preparer = FramePreparer::new();
 
-        let (cold_vertices, cold_indices) = {
-            let cold = preparer.prepare(&frame);
-            assert!(cold.circles.is_empty());
-            assert_eq!(cold.paths.len(), 1);
-            assert!(cold.lines.is_empty());
-            assert_eq!(cold.paths[0].path_params, [1.0, 0.0]);
-            assert_eq!(cold.stats.geometry_cache_misses, 1);
-            assert!(cold.path_geometry_dirty);
-            (cold.path_vertices.to_vec(), cold.path_indices.to_vec())
-        };
+        let cold = preparer.prepare(&frame);
+        assert_eq!(cold.circles.len(), 1);
+        assert!(cold.paths.is_empty());
+        assert!(cold.lines.is_empty());
+        assert_eq!(cold.circles[0].padding[0], 0.25);
+        assert_eq!(cold.stats.geometry_cache_misses, 0);
+        assert!(!cold.path_geometry_dirty);
 
         frame.reveals[0] = 0.6;
         let steady = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
-        assert!(steady.circles.is_empty());
-        assert_eq!(steady.paths.len(), 1);
-        assert_eq!(steady.paths[0].path_params, [1.0, 0.0]);
+        assert_eq!(steady.circles.len(), 1);
+        assert!(steady.paths.is_empty());
+        assert_eq!(steady.circles[0].padding[0], 0.6);
         assert!(steady.lines.is_empty());
-        assert_eq!(steady.stats.geometry_cache_misses, 1);
-        assert!(steady.path_geometry_dirty);
-        assert!(steady.stats.path_vertices_repacked > 0);
-        assert!(steady.stats.path_indices_repacked > 0);
-        assert!(steady.path_vertices != cold_vertices || steady.path_indices != cold_indices);
+        assert_eq!(steady.stats.geometry_cache_misses, 0);
+        assert!(!steady.path_geometry_dirty);
 
         frame.reveals[0] = 1.0;
         let complete = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
         assert_eq!(complete.circles.len(), 1);
         assert!(complete.paths.is_empty());
         assert_eq!(complete.circles[0].padding[0], 1.0);
+        assert_eq!(complete.stats.geometry_cache_misses, 0);
+        assert!(!complete.path_geometry_dirty);
         assert_eq!(complete.stats.instance_count, 1);
     }
 
     #[test]
-    fn closed_analytic_create_uses_partial_paths_while_line_stays_analytic() {
+    fn circle_create_and_line_stay_analytic_while_rectangle_uses_partial_path() {
         let mut circle = object(1, GeometryRef::circle(1.0));
         let mut rectangle = object(2, GeometryRef::rectangle(2.0, 1.0));
         let mut line = object(
@@ -2691,9 +3834,10 @@ mod tests {
         let mut preparer = FramePreparer::new();
 
         let prepared = preparer.prepare(&frame);
-        assert!(prepared.circles.is_empty());
+        assert_eq!(prepared.circles.len(), 1);
+        assert_eq!(prepared.circles[0].padding[0], 0.5);
         assert!(prepared.rectangles.is_empty());
-        assert_eq!(prepared.paths.len(), 2);
+        assert_eq!(prepared.paths.len(), 1);
         assert!(prepared
             .paths
             .iter()
@@ -2702,7 +3846,7 @@ mod tests {
         assert_eq!(prepared.lines[0].transform.padding, 0.5);
         assert_eq!(prepared.stats.instance_count, 3);
         assert_eq!(prepared.stats.unsupported_count, 0);
-        assert_eq!(prepared.stats.geometry_cache_misses, 2);
+        assert_eq!(prepared.stats.geometry_cache_misses, 1);
 
         frame.reveals[2] = 0.8;
         let advanced = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![2]));
@@ -3078,13 +4222,168 @@ mod tests {
         frame.presences[0] = false;
         let hidden = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
         assert_eq!(hidden.stats.instance_count, 1);
-        assert_eq!(hidden.circle_ids, &[ObjectId::new(2)]);
+        assert_eq!(
+            hidden.circle_ids,
+            &[ObjectId::new(1), ObjectId::new(2)],
+            "resident IDs stay aligned with retained packed instances"
+        );
+        assert!(matches!(
+            hidden.observe_object(0),
+            Err(PreparedGeometryObjectOutcome::Absent)
+        ));
         assert_eq!(hidden.stats.unsupported_count, 0);
 
         frame.presences[0] = true;
         let restored = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
         assert_eq!(restored.stats.instance_count, 2);
-        assert_eq!(restored.circle_ids, &[ObjectId::new(1), ObjectId::new(2)]);
+        assert_eq!(
+            restored.circle_ids,
+            &[ObjectId::new(1), ObjectId::new(2)],
+            "reactivation preserves the existing resident index mapping"
+        );
+        assert_eq!(restored.observe_object(0).unwrap().object, ObjectId::new(1));
+    }
+
+    #[test]
+    fn initially_absent_analytic_object_materializes_locally_in_painter_order() {
+        let mut frame = frame(vec![
+            object(1, GeometryRef::circle(1.0)),
+            object(2, GeometryRef::rectangle(2.0, 3.0)),
+            object(3, GeometryRef::circle(0.5)),
+        ]);
+        frame.presences[1] = false;
+        let mut preparer = FramePreparer::new();
+        preparer.set_painter_order(&frame, &[2, 1, 0]);
+        let initial = preparer.prepare(&frame);
+        assert_eq!(initial.stats.instance_count, 2);
+
+        frame.presences[1] = true;
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        let ordered = prepared
+            .ordered_render_batches()
+            .map(|prepared| prepared.batch.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_added, 1);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert_eq!(prepared.stats.render_order_positions_visited, 3);
+        assert_eq!(prepared.stats.render_order_chunks_rebuilt, 1);
+        assert_eq!(prepared.rectangle_ids, &[ObjectId::new(2)]);
+        assert_eq!(prepared.rectangle_dirty_ranges.len(), 1);
+        assert_eq!(prepared.rectangle_dirty_ranges[0], 0..1);
+        assert_eq!(
+            ordered,
+            vec![
+                OrderedRenderBatch {
+                    primitive: RenderPrimitive::Circle,
+                    instance_range: 1..2,
+                },
+                OrderedRenderBatch {
+                    primitive: RenderPrimitive::Rectangle,
+                    instance_range: 0..1,
+                },
+                OrderedRenderBatch {
+                    primitive: RenderPrimitive::Circle,
+                    instance_range: 0..1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn forward_path_append_rebuilds_only_its_active_painter_chunk() {
+        const INITIAL_OBJECTS: usize = FramePreparer::RENDER_ORDER_CHUNK_SIZE;
+        let mut frame = frame(
+            (0..INITIAL_OBJECTS)
+                .map(|index| object(index as u64, GeometryRef::circle(1.0)))
+                .collect(),
+        );
+        let mut preparer = FramePreparer::new();
+        let initial_order = (0..INITIAL_OBJECTS as u32).collect::<Vec<_>>();
+        preparer.set_painter_order(&frame, &initial_order);
+        preparer.prepare(&frame);
+
+        // Activate chunked submissions with a local painter change before the
+        // later structural publication adds the plotted path.
+        let mut active_order = initial_order;
+        active_order.swap(0, 1);
+        preparer.set_painter_order_range(&frame, &active_order, 0..2);
+        preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..2));
+
+        let mut curve = object(
+            INITIAL_OBJECTS as u64,
+            GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::new(-1.0, -0.5))
+                    .quadratic_to(Vec2::new(0.0, 1.0), Vec2::new(1.0, -0.5)),
+            ),
+        );
+        curve.style.fill = None;
+        curve.style.stroke = Some(Color::WHITE);
+        curve.style.stroke_width = 0.02;
+        frame.objects.push(curve);
+        frame.presences.push(true);
+        frame.reveals.push(0.734_193_44);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
+
+        active_order.push(INITIAL_OBJECTS as u32);
+        preparer.set_painter_order_range(&frame, &active_order, 0..active_order.len());
+        let prepared = preparer.prepare_incremental(
+            &frame,
+            &FrameChanges::structural(vec![INITIAL_OBJECTS], Vec::new()),
+        );
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_added, 1);
+        assert_eq!(prepared.stats.render_order_chunks_rebuilt, 1);
+        assert_eq!(prepared.stats.render_order_positions_visited, 1);
+        assert!(prepared.stats.path_vertices_repacked > 0);
+        assert!(prepared
+            .ordered_render_batches()
+            .any(|entry| { matches!(entry.batch.primitive, RenderPrimitive::MegaPath { .. }) }));
+    }
+
+    #[test]
+    fn ordinary_presence_churn_keeps_path_geometry_resident() {
+        let retained_path = VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close();
+        let mut frame = frame(vec![
+            object(1, GeometryRef::circle(1.0)),
+            object(2, GeometryRef::path(retained_path)),
+            object(3, GeometryRef::circle(0.5)),
+        ]);
+        let mut preparer = FramePreparer::new();
+        let initial = preparer.prepare(&frame);
+        assert_eq!(initial.stats.geometry_cache_misses, 1);
+        assert!(initial.path_geometry_dirty);
+
+        frame.presences[1] = false;
+        let hidden = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        assert_eq!(hidden.stats.full_rebuilds, 0);
+        assert_eq!(hidden.stats.structural_slots_retired, 1);
+        assert_eq!(hidden.stats.geometry_cache_misses, 0);
+        assert_eq!(hidden.stats.path_vertices_repacked, 0);
+        assert_eq!(hidden.stats.path_indices_repacked, 0);
+        assert_eq!(hidden.stats.mega_path_indices_repacked, 0);
+        assert!(!hidden.path_geometry_dirty);
+        assert_eq!(hidden.paths[0].style.opacity, 0.0);
+
+        frame.presences[1] = true;
+        let restored = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        assert_eq!(restored.stats.full_rebuilds, 0);
+        assert_eq!(restored.stats.geometry_cache_misses, 0);
+        assert_eq!(restored.stats.path_vertices_repacked, 0);
+        assert_eq!(restored.stats.path_indices_repacked, 0);
+        assert_eq!(restored.stats.mega_path_indices_repacked, 0);
+        assert!(!restored.path_geometry_dirty);
+        assert_ne!(restored.paths[0].style.opacity, 0.0);
     }
 
     #[test]
@@ -3470,19 +4769,27 @@ mod tests {
         assert_eq!(prepared.stats.mega_path_count, OBJECT_COUNT - 1);
         assert_eq!(prepared.stats.mega_path_batch_count, 2);
         assert_eq!(prepared.stats.mega_path_detached_count, 1);
-        assert_eq!(prepared.render_batches.len(), 3);
-        assert!(matches!(
-            prepared.render_batches[0].primitive,
-            RenderPrimitive::MegaPath { .. }
-        ));
-        assert!(matches!(
-            prepared.render_batches[1].primitive,
-            RenderPrimitive::Path { batch: REPLACED }
-        ));
-        assert!(matches!(
-            prepared.render_batches[2].primitive,
-            RenderPrimitive::MegaPath { .. }
-        ));
+        // The GPU consumes the canonical chunk iterator, not the obsolete
+        // flat snapshot. Adjacent mega chunks coalesce at draw encoding.
+        let ordered = prepared.ordered_render_batches().collect::<Vec<_>>();
+        let pivot = ordered
+            .iter()
+            .position(|entry| {
+                matches!(
+                    entry.batch.primitive,
+                    RenderPrimitive::Path { batch: REPLACED }
+                )
+            })
+            .unwrap();
+        assert!(pivot > 0 && pivot + 1 < ordered.len());
+        assert!(ordered[..pivot]
+            .iter()
+            .all(|entry| matches!(entry.batch.primitive, RenderPrimitive::MegaPath { .. })));
+        assert!(ordered[pivot + 1..]
+            .iter()
+            .all(|entry| matches!(entry.batch.primitive, RenderPrimitive::MegaPath { .. })));
+        assert_eq!(prepared.stats.render_order_chunks_rebuilt, 1);
+        assert!(prepared.stats.render_order_positions_visited <= 64);
         assert!(!prepared.mega_path_index_dirty);
         assert!(prepared.mega_path_instance_dirty_ranges.is_empty());
         assert!(prepared.stats.path_vertex_free_range_count > 0);
@@ -3508,6 +4815,62 @@ mod tests {
         assert_eq!(compacted.stats.mega_path_detached_count, 0);
         assert_eq!(compacted.stats.mega_path_count, OBJECT_COUNT);
         assert_eq!(compacted.stats.mega_path_batch_count, 1);
+    }
+
+    #[test]
+    fn full_rebuild_repacks_transient_arena_after_unique_path_relocation() {
+        let make_path = |id: u64, y: f32| {
+            let mut state = object(
+                id,
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                ),
+            );
+            state.style.fill = None;
+            state.style.stroke = Some(Color::WHITE);
+            state.style.stroke_width = 0.02;
+            state
+        };
+        let mut frame = frame(vec![make_path(1, 0.0), make_path(2, 0.5)]);
+        let mut preparer = FramePreparer::for_individual_path_draws();
+        preparer.prepare(&frame);
+
+        // This larger replacement cannot fit in the old second path range, so
+        // the incremental path arena releases that range and appends a new one.
+        frame.objects[1].content = noon_core::ObjectContentRef::Geometry(GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.5, 0.5))
+                .cubic_to(
+                    Vec2::new(-0.5, 1.5),
+                    Vec2::new(0.5, -0.5),
+                    Vec2::new(0.5, 0.5),
+                )
+                .cubic_to(
+                    Vec2::new(0.5, 1.5),
+                    Vec2::new(-0.5, -0.5),
+                    Vec2::new(-0.5, 0.5),
+                ),
+        ));
+        let incremental = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        assert!(incremental.stats.path_vertices_repacked > 0);
+        assert!(incremental.stats.path_indices_repacked > 0);
+
+        let mut fresh = FramePreparer::for_individual_path_draws();
+        let (expected_vertices, expected_indices) = {
+            let expected = fresh.prepare(&frame);
+            (
+                expected.path_vertices.to_vec(),
+                expected.path_indices.to_vec(),
+            )
+        };
+        let rebuilt = preparer.prepare(&frame);
+
+        assert_eq!(rebuilt.path_vertices, expected_vertices);
+        assert_eq!(rebuilt.path_indices, expected_indices);
+        assert!(rebuilt.stats.path_vertices_repacked > 0);
+        assert!(rebuilt.stats.path_indices_repacked > 0);
     }
 
     #[test]
@@ -3584,7 +4947,7 @@ mod tests {
             )
         };
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut preparer = FramePreparer::for_individual_path_draws();
         preparer.set_path_mesh_cache_limit(CACHE_LIMIT);
         let stale = make_frame(0, CACHE_LIMIT);
@@ -3709,6 +5072,8 @@ mod structural_execution_delta_tests {
 
     fn circle(id: u64) -> FrameObjectState {
         FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.1)),

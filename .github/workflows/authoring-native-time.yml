@@ -1,0 +1,68 @@
+name: Native authored-time conformance
+on:
+  pull_request:
+    paths:
+      - 'crates/noon-native/**'
+      - 'crates/noon/src/live_program*'
+      - 'crates/noon/src/integration/forward_sample*'
+      - '.github/workflows/authoring-native-time.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-time-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-time:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Preserve exact source identity
+        run: |
+          mkdir -p native-time-proof
+          git rev-parse HEAD > native-time-proof/source-sha.txt
+          git archive --format=tar.gz --output=native-time-proof/source.tar.gz HEAD
+      - name: Install repository-pinned Rust
+        run: |
+          rustup install
+          rustc -Vv > native-time-proof/rust-version.txt
+      - name: Check native source, callbacks, and clock lifecycle
+        run: |
+          set -o pipefail
+          cargo test -p noon-native --all-features --lib -- --nocapture 2>&1 | tee native-time-proof/tests.log
+      - name: Install virtual display and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
+      - name: First late physical frame must finish all short authored segments
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+          xvfb-run -a cargo test -p noon-native --all-features --lib \
+            late_native_surface_retains_all_endpoints_but_presents_only_the_caught_up_frame \
+            -- --include-ignored --nocapture --test-threads=1 2>&1 | tee native-time-proof/surface.log
+      - name: Check formatting and strict native lint
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p noon-native --all-features --all-targets -- -D warnings
+      - name: Retain pinned formatting diagnostics
+        if: always()
+        run: |
+          cargo fmt --all
+          git diff --binary > native-time-proof/rustfmt.patch
+      - name: Retain native timing evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-authored-time
+          path: native-time-proof/
+          retention-days: 14
+          if-no-files-found: error

@@ -52,9 +52,7 @@ impl SemanticExecutionLoweringOutput {
         self.publication
     }
 
-    /// Execution identity of the unique semantic object carrying the canonical 2D
-    /// camera role, if authored. The camera value itself remains derived from this
-    /// object's effective runtime geometry/transform rather than duplicated here.
+    /// Execution identity of the unique semantic camera (2D or 3D), if authored.
     pub const fn camera_object(&self) -> Option<ObjectId> {
         self.camera_object
     }
@@ -118,7 +116,7 @@ impl std::fmt::Display for SemanticExecutionLoweringError {
             Self::InitialAnimation(error) => error.fmt(formatter),
             Self::MultipleCameraObjects { first, second } => write!(
                 formatter,
-                "semantic scene has multiple 2D camera objects: {}:{} and {}:{}",
+                "semantic scene has multiple camera objects: {}:{} and {}:{}",
                 first.slot(),
                 first.generation(),
                 second.slot(),
@@ -234,8 +232,11 @@ fn finish_semantic_execution(
     let camera = semantic_camera_object(store, &projection)?;
     let reactive = lower_semantic_reactive_projection_for_roots(store, &projection, roots)?;
     let host_callbacks = lower_semantic_host_callbacks(store, roots);
-    let mut compiled =
-        CompiledScene::from_semantic_projection_after_reactive_lowering(&projection, store)?;
+    let mut compiled = CompiledScene::from_semantic_projection_after_reactive_lowering(
+        &projection,
+        store,
+        &reactive,
+    )?;
     if let Some((animation_root, origin)) = animation_root {
         super::install_initial_animation_root(
             store,
@@ -291,7 +292,10 @@ fn semantic_camera_object(
             .node(object.semantic_id)
             .and_then(|node| node.semantic_object_state())
             .expect("semantic projection object must retain authored object state");
-        if state.role() != SemanticObjectRole::Camera2D {
+        if !matches!(
+            state.role(),
+            SemanticObjectRole::Camera2D | SemanticObjectRole::Camera3D
+        ) {
             continue;
         }
         if let Some((first, _)) = camera {
@@ -317,10 +321,26 @@ fn validate_camera_object(
         .iter()
         .find(|object| object.live && object.id == object_id)
         .expect("semantic camera object must exist in its compiled projection");
-    object
-        .geometry()
-        .and_then(|geometry| Camera2DState::from_frame_object(geometry, object.base_transform))
-        .ok_or(SemanticExecutionLoweringError::InvalidCameraObject { node })?;
+    let role = object
+        .spatial
+        .as_deref()
+        .and_then(|spatial| spatial.camera_projection);
+    if let Some(projection) = role {
+        let world = object.spatial.as_deref().map(|spatial| spatial.world);
+        if !projection.is_valid()
+            || world.is_none_or(|world| {
+                world.scale != noon_core::SemanticVec3::new(1.0, 1.0, 1.0)
+                    || world.world_matrix().is_none()
+            })
+        {
+            return Err(SemanticExecutionLoweringError::InvalidCameraObject { node });
+        }
+    } else {
+        object
+            .geometry()
+            .and_then(|geometry| Camera2DState::from_frame_object(geometry, object.base_transform))
+            .ok_or(SemanticExecutionLoweringError::InvalidCameraObject { node })?;
+    }
     Ok(Some(object_id))
 }
 
@@ -915,5 +935,21 @@ mod tests {
             lowered.compiled().objects()[0].text_bounds,
             Some(Rect::new(Vec2::ZERO, Vec2::new(3.0, 1.0)))
         );
+
+        let mut replacement = SemanticMutationTransaction::new();
+        replacement.replace_content(object, StoredGeometry::Circle { radius: 2.0 });
+        replacement.apply(&mut store).unwrap();
+
+        assert!(store.text_resources().get(handle).is_none());
+        assert!(store
+            .font_resources()
+            .handle_for_face(&selected_face)
+            .is_none());
+        assert!(store.geometry_resources().get(retained_vector).is_none());
+        // The old execution revision owns an Arc dependency closure, so semantic
+        // reclamation cannot invalidate an execution/replay snapshot in flight.
+        assert!(TextResourceLookup::get(resources, handle).is_some());
+        assert!(GeometryResourceLookup::get(resources, retained_vector).is_some());
+        assert!(FontResourceLookup::get(resources, retained_font).is_some());
     }
 }

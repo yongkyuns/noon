@@ -53,7 +53,7 @@ impl LiveContinuation for MovingAround {
 }
 
 pub fn program() -> Result<LiveProgram<MovingAround>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut square = scene.square(2.0).map_err(|error| error.to_string())?;
     square
         .set_color(

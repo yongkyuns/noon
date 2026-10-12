@@ -15,8 +15,51 @@ import noon as _base
 from noon import Mobject, Scene
 _ir = _base._ir
 
-OUT = (0.0, 0.0, 1.0)
-IN = (0.0, 0.0, -1.0)
+
+class _Direction3(tuple):
+    """Immutable three-component arithmetic for the Manim depth directions."""
+
+    __slots__ = ()
+
+    def __new__(cls, x, y, z):
+        return tuple.__new__(cls, (
+            _ir._finite_number("direction component", float(value)) for value in (x, y, z)
+        ))
+
+    def __getnewargs__(self):
+        return tuple(self)
+
+    @staticmethod
+    def _components(value):
+        if isinstance(value, _base.Vec2):
+            return (*value, 0.0)
+        components = tuple(value)
+        if len(components) != 3:
+            raise TypeError("direction arithmetic requires three components")
+        return tuple(float(component) for component in components)
+
+    def __add__(self, other):
+        return _Direction3(*(left + right for left, right in zip(self, self._components(other))))
+
+    def __sub__(self, other):
+        return _Direction3(*(left - right for left, right in zip(self, self._components(other))))
+
+    def __neg__(self):
+        return self * -1
+
+    def __mul__(self, scalar):
+        factor = float(scalar)
+        return _Direction3(*(component * factor for component in self))
+
+    def __rmul__(self, scalar):
+        return self * scalar
+
+    def __truediv__(self, scalar):
+        return self * (1 / float(scalar))
+
+
+OUT = _Direction3(0.0, 0.0, 1.0)
+IN = _Direction3(0.0, 0.0, -1.0)
 
 
 # Pinned ManimCE v0.21.0 Cairo presentation contract. Cairo converts
@@ -304,7 +347,7 @@ class Path(VMobject):
 
 
 def _leaf_mobjects(value: object) -> list[Mobject]:
-    if isinstance(value, Group):
+    if _is_shared_family(value):
         leaves: list[Mobject] = []
         for member in value.submobjects:
             leaves.extend(_leaf_mobjects(member))
@@ -312,6 +355,11 @@ def _leaf_mobjects(value: object) -> list[Mobject]:
     if isinstance(value, Mobject):
         return [value]
     raise TypeError("expected a Mobject or Group")
+
+
+def _is_shared_family(value: object) -> bool:
+    from _manim_semantic_handles import _is_shared_family as is_shared_family
+    return is_shared_family(value)
 
 
 def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
@@ -366,18 +414,26 @@ class Group(Mobject):
 
     @property
     def id(self) -> int:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.id.fget(self)
         raise AttributeError("Group has no single runtime object id in Noon")
 
     @property
     def geometry(self) -> dict[str, Any]:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.geometry.fget(self)
         raise AttributeError("Group has no single runtime geometry in Noon")
 
     @property
     def transform(self) -> dict[str, Any]:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.transform.fget(self)
         raise AttributeError("Group has no single runtime transform in Noon")
 
     @property
     def style(self) -> dict[str, Any]:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.style.fget(self)
         raise AttributeError("Group has no single runtime style in Noon")
 
     def __iter__(self) -> Iterator[object]:
@@ -450,21 +506,33 @@ class Group(Mobject):
         return _group_rotate(self, angle, axis, about_point=about_point, about_edge=about_edge, **kwargs)
 
     def set_color(self, color: object) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_color(self, color)
         from _manim_semantic_handles import _group_set_color
         return _group_set_color(self, color)
 
     def set_fill(self, color: object = None, opacity: float | None = None) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_fill(self, color, opacity)
         from _manim_semantic_handles import _group_set_fill
         return _group_set_fill(self, color, opacity)
 
     def set_stroke(self, color: object = None, width: float | None = None,
                    opacity: float | None = None) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_stroke(self, color, width, opacity)
         from _manim_semantic_handles import _group_set_stroke
         return _group_set_stroke(self, color, width, opacity)
 
     def set_opacity(self, opacity: float) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_opacity(self, opacity)
         from _manim_semantic_handles import _group_set_opacity
         return _group_set_opacity(self, opacity)
+
+    def fade(self, darkness: float = 0.5) -> Group:
+        from _manim_semantic_handles import _group_fade
+        return _group_fade(self, darkness)
 
     def next_to(
         self,
@@ -479,6 +547,8 @@ class Group(Mobject):
         return _base._semantic_operations()._next_to(self, mobject_or_point, direction, buff, aligned_edge, submobject_to_align, index_of_submobject_to_align, coor_mask)
 
     def align_to(self, mobject_or_point: object, direction: object = _base.ORIGIN) -> Group:
+        if not _is_shared_family(self):
+            return _base.Mobject.align_to(self, mobject_or_point, direction)
         return _base._semantic_operations()._group_align_to(self, mobject_or_point, direction)
 
     def to_edge(
@@ -525,12 +595,16 @@ class Group(Mobject):
         return _AlignedGroupAnimationBuilder(self)
 
     def _copy_for_animate_target(self) -> Group:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject._copy_for_animate_target(self)
         return _base._semantic_operations()._group_copy(self)
 
     def __deepcopy__(self, memo):
         return deepcopy_semantic_wrapper(self, memo)
 
     def get_color(self) -> _base.Color:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.get_color(self)
         from _manim_geometry import _group_get_color
         return _group_get_color(self)
 
@@ -590,6 +664,18 @@ class MoveToTarget:
         return _base.Transform(mobject, target, **kwargs)
 
 
+class Restore:
+    """Animate to the saved shared-semantic snapshot with ordinary Transform."""
+
+    def __new__(cls, mobject: object, **kwargs: Any):
+        if not isinstance(mobject, Mobject):
+            raise TypeError("Restore target must be a Mobject")
+        target = getattr(mobject, "saved_state", None)
+        if not isinstance(target, Mobject):
+            raise Exception("Trying to restore without having saved")
+        return _base.Transform(mobject, target, **kwargs)
+
+
 _FAMILY_COPY_METADATA = object()
 
 
@@ -620,7 +706,7 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
         clone = object.__new__(type(value))
         memo[id(value)] = clone
         pairs.append((value, clone))
-        if isinstance(value, Group):
+        if _is_shared_family(value):
             family_members.append((clone, [allocate(member) for member in value.submobjects]))
         return clone
 

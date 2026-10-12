@@ -162,6 +162,76 @@ fn batch_membership_uses_authoritative_root_order_and_one_revision() {
 }
 
 #[test]
+fn scene_owned_membership_publishes_running_edits_and_rejects_stale_state_atomically() {
+    let mut scene = Scene::new();
+    let first = scene.circle(1.0).unwrap();
+    let candidate = scene.rectangle(2.0, 1.0).unwrap();
+    let mut detached_editor = scene.square(1.0).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+
+    let before = scene.revision();
+    scene.add(&first).unwrap();
+    assert_eq!(scene.revision().get(), before.get() + 1);
+    assert!(scene
+        .owned_execution()
+        .execution_object_id(first.node_id())
+        .is_some());
+    assert_eq!(
+        scene
+            .owned_execution()
+            .publication_context()
+            .scene_revision(),
+        scene.revision()
+    );
+
+    scene.remove(&first).unwrap();
+    assert!(!scene
+        .owned_execution()
+        .semantic_object_is_reachable(first.node_id()));
+    assert!(scene
+        .integration_store()
+        .borrow()
+        .node(scene.root())
+        .unwrap()
+        .members()
+        .is_empty());
+
+    detached_editor.set_translation(1.0, 0.0).unwrap();
+    let stale_revision = scene.revision();
+    let publication = scene.owned_execution().publication_context();
+    let members = scene
+        .integration_store()
+        .borrow()
+        .node(scene.root())
+        .unwrap()
+        .members()
+        .to_vec();
+    let error = scene.add(&candidate).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::AuthoringError::ExecutionPublication(
+            crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+        )
+    ));
+    assert_eq!(scene.revision(), stale_revision);
+    assert_eq!(scene.owned_execution().publication_context(), publication);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .node(scene.root())
+            .unwrap()
+            .members(),
+        members.as_slice()
+    );
+    assert!(scene
+        .owned_execution()
+        .execution_object_id(candidate.node_id())
+        .is_none());
+}
+
+#[test]
 fn initial_animation_root_rejects_foreign_and_stale_declaration_handles() {
     fn root(scene: &Scene) -> crate::DeclaredAnimation {
         scene
@@ -245,4 +315,560 @@ fn exact_transform_track_preserves_constant_endpoints_that_differ_from_base() {
         1,
         "endpoint identities remain detached"
     );
+}
+
+#[test]
+fn effective_path_query_is_scene_owned_and_requires_running_execution() {
+    let mut scene = Scene::new();
+    let line = scene.line((1.0, 2.0), (4.0, 6.0)).unwrap();
+    scene.add(&line).unwrap();
+
+    let error = scene.effective_path_query(&line).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let query = scene.effective_path_query(&line).unwrap();
+    assert_eq!(query.start().unwrap(), (1.0, 2.0));
+    assert_eq!(query.end().unwrap(), (4.0, 6.0));
+
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
+    assert!(matches!(
+        scene.effective_path_query(&foreign),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+}
+
+#[test]
+fn scene_point_matching_captures_effective_target_and_blocks_pending_publication() {
+    let mut scene = Scene::new();
+    let source = scene.square(1.0).unwrap();
+    let target = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+    let mut endpoint = target.target_editor().unwrap();
+    endpoint.shift(0.0, 2.0).unwrap();
+    scene
+        .add_many(&[(&source).into(), (&target).into()])
+        .unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &target,
+            &endpoint,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let segment = {
+        let mut live = scene.owned_live();
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 1.0).unwrap();
+        segment
+    };
+    let before = source.state().unwrap();
+    assert!(scene.match_points(&source, &target).is_err());
+    assert_eq!(source.state().unwrap(), before);
+    {
+        let mut live = scene.owned_live();
+        live.advance_segment_to(segment, 2.0).unwrap();
+        live.complete_segment(segment).unwrap();
+    }
+    scene.owned_execution_mut().seek(1.0).unwrap();
+    scene.match_points(&source, &target).unwrap();
+    assert!((source.center().unwrap().1 - 1.0).abs() < 1e-6);
+    scene.owned_execution_mut().seek(2.0).unwrap();
+    let live = scene.owned_live();
+    assert!((live.effective_layout(&target).unwrap().center.1 - 2.0).abs() < 1e-6);
+    assert!((live.effective_layout(&source).unwrap().center.1 - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn scene_point_matching_rejects_active_render_override_before_mutating_source() {
+    let mut scene = Scene::new();
+    let source = scene.square(1.0).unwrap();
+    let target = scene.circle(1.0).unwrap();
+    scene.add(&source).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    {
+        let mut live = scene.owned_live();
+        live.declare_and_activate_create(&target, AnimationOptions::new())
+            .unwrap();
+    }
+    let before = source.state().unwrap();
+    let revision = source.integration_store().borrow().scene_revision();
+    assert!(scene.match_points(&source, &target).is_err());
+    assert_eq!(source.state().unwrap(), before);
+    assert_eq!(
+        source.integration_store().borrow().scene_revision(),
+        revision
+    );
+}
+
+#[test]
+fn effective_family_layout_is_scene_owned_and_requires_running_execution() {
+    let mut scene = Scene::new();
+    let mut left = scene.square(2.0).unwrap();
+    let mut right = scene.square(2.0).unwrap();
+    left.set_translation(-2.0, 0.0).unwrap();
+    right.set_translation(2.0, 0.0).unwrap();
+    let family = scene
+        .family(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])
+        .unwrap();
+    scene
+        .add_many(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])
+        .unwrap();
+
+    let error = scene.effective_family_layout(&family).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let layout = scene.effective_family_layout(&family).unwrap();
+    assert_eq!(layout.center, (0.0, 0.0));
+    assert_eq!((layout.width, layout.height), (6.0, 2.0));
+    assert_eq!(
+        layout.publication,
+        scene.owned_execution().publication_context()
+    );
+
+    let mut foreign_scene = Scene::new();
+    let foreign_object = foreign_scene.square(1.0).unwrap();
+    let foreign_family = foreign_scene
+        .family(&[MobjectTarget::Object(&foreign_object)])
+        .unwrap();
+    assert!(matches!(
+        scene.effective_family_layout(&foreign_family),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+}
+
+#[test]
+fn effective_family_layout_preserves_detached_member_authored_bounds() {
+    let mut scene = Scene::new();
+    let mut live = scene.square(2.0).unwrap();
+    let mut detached = scene.square(2.0).unwrap();
+    live.set_translation(-2.0, 0.0).unwrap();
+    detached.set_translation(4.0, 0.0).unwrap();
+    let family = scene
+        .family(&[
+            MobjectTarget::Object(&live),
+            MobjectTarget::Object(&detached),
+        ])
+        .unwrap();
+    scene.add(&live).unwrap();
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    assert!(!scene
+        .owned_execution()
+        .semantic_object_is_reachable(detached.node_id()));
+
+    let layout = scene.effective_family_layout(&family).unwrap();
+    assert_eq!(layout.center, (1.0, 0.0));
+    assert_eq!((layout.width, layout.height), (8.0, 2.0));
+}
+
+#[test]
+fn scene_path_alignment_publishes_effective_operands_coherently() {
+    let mut scene = Scene::new();
+    let left = scene.line((0.0, 0.0), (3.0, 0.0)).unwrap();
+    let right = scene.square(2.0).unwrap();
+    scene.add(&left).unwrap();
+    scene.add(&right).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    {
+        let mut live = scene.owned_live();
+        live.shift(&left, 1.0, 2.0).unwrap();
+    }
+
+    scene.align_points(&left, &right).unwrap();
+
+    let left_query = scene.effective_path_query(&left).unwrap();
+    let right_query = scene.effective_path_query(&right).unwrap();
+    assert_eq!(left_query.curve_count(), 4);
+    assert_eq!(right_query.curve_count(), 4);
+    assert_eq!(left_query.start().unwrap(), (1.0, 2.0));
+}
+
+#[test]
+fn scene_path_alignment_self_alias_is_noop_before_unsupported_capture() {
+    let mut scene = Scene::new();
+    let object = scene.circle(1.0).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    {
+        let mut live = scene.owned_live();
+        live.declare_and_activate_create(&object, AnimationOptions::new())
+            .unwrap();
+    }
+    scene.owned_execution_mut().take_frame_changes();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    scene.align_points(&object, &object).unwrap();
+
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+    assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
+}
+
+#[test]
+fn scene_path_alignment_rejects_foreign_before_resource_or_frame_publication() {
+    let mut scene = Scene::new();
+    let object = scene.line((0.0, 0.0), (3.0, 0.0)).unwrap();
+    scene.add(&object).unwrap();
+    let foreign = Scene::new().square(2.0).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    scene.owned_execution_mut().take_frame_changes();
+    let before = object.state().unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    assert!(scene.align_points(&object, &foreign).is_err());
+
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+    assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
+}
+
+#[test]
+fn scene_subcurve_requires_running_and_captures_effective_state() {
+    let mut scene = Scene::new();
+    let source = scene.line((0.0, 0.0), (4.0, 0.0)).unwrap();
+    let mut target = source.target_editor().unwrap();
+    target.shift(0.0, 2.0).unwrap();
+    scene.add(&source).unwrap();
+
+    let cold = scene.subcurve(&source, 0.25, 0.75).unwrap_err();
+    assert!(matches!(
+        cold,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+
+    let animation = scene
+        .declare_transform_to(
+            &source,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    {
+        let mut live = scene.owned_live();
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 2.0).unwrap();
+        live.complete_segment(segment).unwrap();
+    }
+    scene.owned_execution_mut().seek(1.0).unwrap();
+
+    let selected = scene.subcurve(&source, 0.25, 0.75).unwrap();
+    assert_eq!(selected.path_query().unwrap().start().unwrap(), (1.0, 1.0));
+    assert_eq!(selected.path_query().unwrap().end().unwrap(), (3.0, 1.0));
+    assert_eq!(source.path_query().unwrap().start().unwrap(), (0.0, 2.0));
+    assert!(!scene
+        .owned_execution()
+        .semantic_object_is_reachable(selected.node_id()));
+
+    scene.owned_execution_mut().seek(2.0).unwrap();
+    assert_eq!(selected.path_query().unwrap().start().unwrap(), (1.0, 1.0));
+
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+    assert!(matches!(
+        scene.subcurve(&foreign, 0.0, 1.0),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+}
+
+#[test]
+fn scene_move_to_matches_authored_and_running_placement_for_stable_state() {
+    fn make_scene() -> (Scene, Mobject, Mobject) {
+        let mut scene = Scene::new();
+        let source = scene.square(2.0).unwrap();
+        let mut target = scene.square(2.0).unwrap();
+        target.shift(4.0, -3.0).unwrap();
+        (scene, source, target)
+    }
+
+    let (mut cold, cold_source, cold_target) = make_scene();
+    cold.move_to(
+        &cold_source,
+        crate::LiveLayoutTarget::Mobject(&cold_target),
+        (0.0, 0.0),
+        (1.0, 1.0),
+    )
+    .unwrap();
+    let cold_center = cold_source.center().unwrap();
+
+    let (mut running, running_source, running_target) = make_scene();
+    let execution = running.execution_session().unwrap();
+    running.install_execution(execution);
+    running
+        .move_to(
+            &running_source,
+            crate::LiveLayoutTarget::Mobject(&running_target),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
+        .unwrap();
+    let running_center = running_source.center().unwrap();
+
+    assert_eq!(cold_center, (4.0, -3.0));
+    assert_eq!(running_center, cold_center);
+}
+
+#[test]
+fn scene_family_placement_surface_is_available_before_execution_bootstrap() {
+    let mut scene = Scene::new();
+    let mut left = scene.square(2.0).unwrap();
+    let mut right = scene.square(2.0).unwrap();
+    left.shift(-2.0, 0.0).unwrap();
+    right.shift(2.0, 0.0).unwrap();
+    let family = scene
+        .family(&[
+            crate::MobjectTarget::Object(&left),
+            crate::MobjectTarget::Object(&right),
+        ])
+        .unwrap();
+    let source_anchor = crate::LayoutAnchor::from(&family);
+    let aligner = crate::LayoutAnchor::from(&left);
+    let revision = scene.revision();
+
+    scene
+        .move_family_to(
+            &family,
+            crate::LiveLayoutTarget::Point(1.0, 2.0),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
+        .unwrap();
+    assert_eq!(family.layout().unwrap().center(), (1.0, 2.0));
+
+    scene
+        .next_family_to(
+            &family,
+            crate::LiveLayoutTarget::Point(0.0, 0.0),
+            crate::ManimNextToArgs {
+                direction: (1.0, 0.0),
+                buff: 0.25,
+                aligned_edge: (0.0, 0.0),
+                mask: (1.0, 1.0),
+            },
+        )
+        .unwrap();
+
+    scene
+        .align_family_to(
+            &family,
+            crate::LiveLayoutTarget::Point(0.0, 0.0),
+            (0.0, 1.0),
+        )
+        .unwrap();
+
+    scene
+        .align_family_on_frame(&family, (1.0, 0.0), 0.5)
+        .unwrap();
+
+    scene
+        .next_layout_to_aligned(
+            &source_anchor,
+            crate::LiveLayoutTarget::Point(0.0, 0.0),
+            &aligner,
+            crate::ManimNextToArgs {
+                direction: (0.0, 1.0),
+                buff: 0.1,
+                aligned_edge: (0.0, 0.0),
+                mask: (1.0, 1.0),
+            },
+        )
+        .unwrap();
+
+    assert!(scene.revision().get() > revision.get());
+}
+
+#[test]
+fn scene_running_path_edits_reject_cold_and_foreign_without_mutation() {
+    let mut scene = Scene::new();
+    let source = scene.line((0.0, 0.0), (4.0, 0.0)).unwrap();
+    let destination = scene.line((10.0, 0.0), (12.0, 0.0)).unwrap();
+    scene.add(&source).unwrap();
+    scene.add(&destination).unwrap();
+
+    let revision = scene.revision();
+    let cold = scene
+        .pointwise_become_partial(&destination, &source, 0.25, 0.75)
+        .unwrap_err();
+    assert!(matches!(
+        cold,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        destination.path_query().unwrap().start().unwrap(),
+        (10.0, 0.0)
+    );
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    scene
+        .pointwise_become_partial(&destination, &source, 0.25, 0.75)
+        .unwrap();
+    assert_eq!(
+        destination.path_query().unwrap().start().unwrap(),
+        (1.0, 0.0)
+    );
+    assert_eq!(destination.path_query().unwrap().end().unwrap(), (3.0, 0.0));
+    assert!(scene.revision().get() > revision.get());
+
+    let foreign = Scene::new().line((0.0, 0.0), (1.0, 0.0)).unwrap();
+    let revision = scene.revision();
+    let state = destination.state().unwrap();
+    assert!(matches!(
+        scene.pointwise_become_partial(&destination, &foreign, 0.0, 1.0),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(destination.state().unwrap(), state);
+}
+
+#[test]
+fn scene_path_edit_surface_rejects_cold_invalid_and_foreign_before_publication() {
+    let mut scene = Scene::new();
+    let object = scene.square(2.0).unwrap();
+    let family = scene.family(&[MobjectTarget::Object(&object)]).unwrap();
+    scene.add(&object).unwrap();
+    let revision = scene.revision();
+    let before = object.state().unwrap();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    let straight = [noon_core::Vec2::ZERO, noon_core::Vec2::new(1.0, 0.0)];
+    assert!(scene.set_points_smoothly(&object, &straight).is_err());
+    assert!(scene.make_family_jagged(&family).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let invalid = [noon_core::Vec2::ZERO, noon_core::Vec2::new(f32::NAN, 0.0)];
+    let revision = scene.revision();
+    assert!(scene.set_points_smoothly(&object, &invalid).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+
+    let foreign = Scene::new().square(1.0).unwrap();
+    assert!(matches!(
+        scene.set_points_smoothly(
+            &foreign,
+            &[
+                noon_core::Vec2::new(-1.0, 0.0),
+                noon_core::Vec2::new(1.0, 0.0)
+            ]
+        ),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+
+    scene
+        .set_points_smoothly(
+            &object,
+            &[
+                noon_core::Vec2::new(-1.0, 0.0),
+                noon_core::Vec2::new(0.0, 1.0),
+                noon_core::Vec2::new(1.0, 0.0),
+            ],
+        )
+        .unwrap();
+    assert_eq!(object.path_query().unwrap().curve_count(), 2);
+    scene.make_family_smooth(&family).unwrap();
+    scene.make_family_jagged(&family).unwrap();
+    assert!(scene.revision().get() > revision.get());
 }

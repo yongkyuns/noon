@@ -5,6 +5,7 @@ impl Camera2DState {
     ///
     /// Camera height is the semantic vertical span. The horizontal span follows
     /// the render target aspect exactly, matching the renderer's camera contract.
+    /// Returns `None` when either projected axis lacks finite, distinct f32 endpoints.
     pub fn viewport_bounds(self, aspect: f32) -> Option<Rect> {
         if !self.center.x.is_finite()
             || !self.center.y.is_finite()
@@ -15,14 +16,32 @@ impl Camera2DState {
         {
             return None;
         }
-        let half_extent = Vec2::new(self.height * aspect * 0.5, self.height * 0.5);
-        if !half_extent.x.is_finite() || !half_extent.y.is_finite() {
+        // Widen before multiplying or halving: the final endpoints may be
+        // representable even when a f32 intermediate product is not. Validate
+        // after narrowing too, since translation can overflow an endpoint or
+        // round both ends of a positive span to the same world coordinate.
+        let half_height = f64::from(self.height) * 0.5;
+        let half_width = half_height * f64::from(aspect);
+        let center_x = f64::from(self.center.x);
+        let center_y = f64::from(self.center.y);
+        let min = Vec2::new(
+            (center_x - half_width) as f32,
+            (center_y - half_height) as f32,
+        );
+        let max = Vec2::new(
+            (center_x + half_width) as f32,
+            (center_y + half_height) as f32,
+        );
+        if !min.x.is_finite()
+            || !min.y.is_finite()
+            || !max.x.is_finite()
+            || !max.y.is_finite()
+            || min.x >= max.x
+            || min.y >= max.y
+        {
             return None;
         }
-        Some(Rect::new(
-            self.center - half_extent,
-            self.center + half_extent,
-        ))
+        Some(Rect::new(min, max))
     }
 
     /// Derive the renderer-facing viewport from an evaluated semantic camera frame.
@@ -100,5 +119,122 @@ mod tests {
             },
         )
         .is_none());
+    }
+
+    #[test]
+    fn viewport_projection_avoids_intermediate_width_overflow() {
+        let camera = Camera2DState {
+            center: Vec2::ZERO,
+            height: f32::MAX,
+        };
+        let bounds = camera.viewport_bounds(1.5).unwrap();
+        let half_width = (f64::from(f32::MAX) * 0.75) as f32;
+        assert_eq!(bounds.min, Vec2::new(-half_width, -f32::MAX * 0.5));
+        assert_eq!(bounds.max, Vec2::new(half_width, f32::MAX * 0.5));
+    }
+
+    #[test]
+    fn viewport_projection_rejects_overflow_after_translation() {
+        for center in [
+            Vec2::new(f32::MAX, 0.0),
+            Vec2::new(-f32::MAX, 0.0),
+            Vec2::new(0.0, f32::MAX),
+            Vec2::new(0.0, -f32::MAX),
+        ] {
+            let camera = Camera2DState {
+                center,
+                height: f32::MAX,
+            };
+            assert!(camera.viewport_bounds(1.0).is_none(), "{center:?}");
+        }
+    }
+
+    #[test]
+    fn viewport_projection_rejects_unrepresentable_width() {
+        let camera = Camera2DState {
+            center: Vec2::ZERO,
+            height: f32::MAX,
+        };
+        assert!(camera.viewport_bounds(f32::MAX).is_none());
+    }
+
+    #[test]
+    fn viewport_projection_rejects_underflowed_height() {
+        let camera = Camera2DState {
+            center: Vec2::ZERO,
+            height: f32::from_bits(1),
+        };
+        assert!(camera.viewport_bounds(1.0).is_none());
+    }
+
+    #[test]
+    fn viewport_projection_rejects_underflowed_width() {
+        let camera = Camera2DState {
+            center: Vec2::ZERO,
+            height: 1.0,
+        };
+        assert!(camera.viewport_bounds(f32::from_bits(1)).is_none());
+    }
+
+    #[test]
+    fn viewport_projection_rejects_spans_lost_at_large_centers() {
+        for center in [
+            Vec2::new(16_777_216.0, 0.0),
+            Vec2::new(-16_777_216.0, 0.0),
+            Vec2::new(0.0, 16_777_216.0),
+            Vec2::new(0.0, -16_777_216.0),
+        ] {
+            let camera = Camera2DState {
+                center,
+                height: 1.0,
+            };
+            assert!(camera.viewport_bounds(1.0).is_none(), "{center:?}");
+        }
+    }
+
+    #[test]
+    fn viewport_projection_accepts_representable_subnormal_endpoints() {
+        let camera = Camera2DState {
+            center: Vec2::ZERO,
+            height: f32::MIN_POSITIVE,
+        };
+        let bounds = camera.viewport_bounds(0.5).unwrap();
+        assert_eq!(bounds.min.x, -f32::MIN_POSITIVE * 0.25);
+        assert_eq!(bounds.max.x, f32::MIN_POSITIVE * 0.25);
+        assert_eq!(bounds.min.y, -f32::MIN_POSITIVE * 0.5);
+        assert_eq!(bounds.max.y, f32::MIN_POSITIVE * 0.5);
+    }
+
+    #[test]
+    fn viewport_projection_accepts_resolvable_spans_at_large_centers() {
+        let center = Vec2::new(16_777_216.0, -16_777_216.0);
+        let camera = Camera2DState {
+            center,
+            height: 4.0,
+        };
+        let bounds = camera.viewport_bounds(1.0).unwrap();
+        assert_eq!(bounds.min, center - Vec2::new(2.0, 2.0));
+        assert_eq!(bounds.max, center + Vec2::new(2.0, 2.0));
+    }
+
+    #[test]
+    fn viewport_projection_rejects_invalid_camera_and_aspect_inputs() {
+        for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(Camera2DState::default().viewport_bounds(invalid).is_none());
+            let camera = Camera2DState {
+                height: invalid,
+                ..Camera2DState::default()
+            };
+            assert!(camera.viewport_bounds(1.0).is_none());
+        }
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for center in [Vec2::new(invalid, 0.0), Vec2::new(0.0, invalid)] {
+                let camera = Camera2DState {
+                    center,
+                    ..Camera2DState::default()
+                };
+                assert!(camera.viewport_bounds(1.0).is_none());
+            }
+        }
     }
 }

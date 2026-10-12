@@ -1,5 +1,9 @@
 import asyncio
+import ast
 import inspect
+import sys
+from types import SimpleNamespace
+from pathlib import Path
 import textwrap
 from unittest.mock import patch
 import unittest
@@ -11,7 +15,43 @@ from _manim_source_execution import (
 )
 
 
+def _nested_code_objects(code):
+    for value in code.co_consts:
+        if isinstance(value, type(code)):
+            yield value
+            yield from _nested_code_objects(value)
+
+
 class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_module_preparation_finishes_before_scene_definition(self):
+        from _manim_source_execution import execute_authoring_module
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                events = []
+                release = asyncio.Event()
+                async def prepare():
+                    events.append("preparing")
+                    await release.wait()
+                    events.append("prepared")
+                source = textwrap.dedent("""
+                    await prepare()
+                    class Example:
+                        events.append("defined")
+                        def construct(self):
+                            self.wait(0.2)
+                """)
+                code, pairs = compile_authoring_source(source, portable=portable)
+                namespace = {"prepare": prepare, "events": events}
+                task = asyncio.create_task(execute_authoring_module(code, namespace))
+                await asyncio.sleep(0)
+                self.assertEqual(events, ["preparing"])
+                self.assertNotIn("Example", namespace)
+                release.set()
+                await task
+                self.assertEqual(events, ["preparing", "prepared", "defined"])
+                self.assertEqual(bool(pairs), portable)
+                self.assertFalse(inspect.iscoroutinefunction(namespace["Example"].construct))
+
     async def test_source_invocation_restores_cleanup_after_failure(self):
         cleanups = []
         self.assertIsNone(current_source_invocation())
@@ -84,6 +124,43 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         await task
         self.assertEqual(events[-5:], ["completed", "after play", ("wait", 0.5), "completed", "after wait"])
+
+    async def test_move_along_path_is_an_ordered_source_barrier(self):
+        events = []
+        release = asyncio.Event()
+
+        class Base:
+            def play(self, *animations, **kwargs):
+                events.append((animations, kwargs))
+
+        async def barrier(method, *args, **kwargs):
+            method(*args, **kwargs)
+            await release.wait()
+            events.append("path complete")
+
+        _, portable, _ = self.compile_scene("""
+            class Example(Base):
+                def construct(self):
+                    self.play(MoveAlongPath(dot, graph, rate_func=linear))
+                    events.append("after path")
+        """, {
+            "Base": Base,
+            "MoveAlongPath": lambda target, path, **kwargs: (target, path, kwargs),
+            "dot": object(),
+            "graph": object(),
+            "linear": "linear",
+            "events": events,
+            BARRIER_GLOBAL: barrier,
+        })
+        task = asyncio.create_task(portable())
+        await asyncio.sleep(0)
+        self.assertEqual(len(events), 1)
+        self.assertIsInstance(events[0][0][0], tuple)
+        self.assertEqual(events[0][0][0][2], {"rate_func": "linear"})
+        self.assertFalse(task.done())
+        release.set()
+        await task
+        self.assertEqual(events[-2:], ["path complete", "after path"])
 
     async def test_globals_closure_defaults_and_definition_effects_are_not_replayed(self):
         effects = []
@@ -180,6 +257,171 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         _, pairs = compile_authoring_source("class Example:\n    async def construct(self):\n        await self.wait(1)\n")
         self.assertEqual(pairs, {})
 
+    def test_raster_image_gallery_uses_portable_continuation(self):
+        source = Path(__file__).with_name("examples").joinpath("raster_image.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="raster_image.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "RasterImage.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_zoomed_scene_gallery_uses_portable_continuation(self):
+        source = Path(__file__).with_name("examples").joinpath("zoomed_scene.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="zoomed_scene.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "RetainedZoom.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_following_graph_camera_uses_portable_continuation(self):
+        filename = "manim_example_following_graph_camera.py"
+        source = Path(__file__).with_name("examples").joinpath(filename).read_text()
+        _, pairs = compile_authoring_source(source, filename=filename)
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "FollowingGraphCamera.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_timed_supplementary_camera_fixtures_are_portable(self):
+        examples = Path(__file__).with_name("examples")
+        filenames = (
+            "manim_example_fixed_in_frame_mobject_test.py",
+            "manim_example_three_d_camera_rotation.py",
+            "manim_example_three_d_camera_illusion_rotation.py",
+            "manim_example_following_graph_camera.py",
+            "manim_example_moving_zoomed_scene_around.py",
+        )
+        for filename in filenames:
+            with self.subTest(filename=filename):
+                source = examples.joinpath(filename).read_text()
+                code, pairs = compile_authoring_source(source, filename=filename)
+                constructs = [
+                    item for item in _nested_code_objects(code)
+                    if item.co_name == "construct"
+                ]
+                self.assertEqual(len(constructs), 1)
+                original = constructs[0]
+                explicit_async = bool(original.co_flags & inspect.CO_COROUTINE)
+                compiled_portable = original in pairs and bool(
+                    pairs[original].co_flags & inspect.CO_COROUTINE
+                )
+                self.assertTrue(explicit_async or compiled_portable)
+                if explicit_async:
+                    tree = ast.parse(source, filename=filename)
+                    construct = next(
+                        node for node in ast.walk(tree)
+                        if isinstance(node, ast.AsyncFunctionDef)
+                        and node.name == "construct"
+                    )
+                    parents = {
+                        child: parent
+                        for parent in ast.walk(construct)
+                        for child in ast.iter_child_nodes(parent)
+                    }
+                    for node in ast.walk(construct):
+                        if (
+                            isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Attribute)
+                            and isinstance(node.func.value, ast.Name)
+                            and node.func.value.id == "self"
+                            and node.func.attr in {"play", "wait", "move_camera"}
+                        ):
+                            self.assertIsInstance(parents.get(node), ast.Await)
+
+    def test_static_camera_surface_fixtures_select_native_point_lighting(self):
+        examples = Path(__file__).with_name("examples")
+        for filename in (
+            "manim_example_three_d_light_source_position.py",
+            "manim_example_three_d_surface_plot.py",
+        ):
+            with self.subTest(filename=filename):
+                tree = ast.parse(examples.joinpath(filename).read_text(), filename=filename)
+                surfaces = [
+                    node for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "Surface"
+                ]
+                self.assertEqual(len(surfaces), 1)
+                options = {keyword.arg: keyword.value for keyword in surfaces[0].keywords}
+                self.assertIsInstance(options.get("shade_in_3d"), ast.Constant)
+                self.assertIs(options["shade_in_3d"].value, False)
+                self.assertIsInstance(options.get("point_lit"), ast.Constant)
+                self.assertIs(options["point_lit"].value, True)
+
+    def test_click_indicate_gallery_uses_portable_continuation(self):
+        source = Path(__file__).with_name("examples").joinpath("showcase_pointer_selection.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="showcase_pointer_selection.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "PointerSelection.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+    def test_moving_zoomed_example_uses_portable_continuation(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "manim_example_moving_zoomed_scene_around.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="moving_zoomed.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "MovingZoomedSceneAround.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            from _manim_scene import _portable_scene_methods
+        scene = object.__new__(noon.Scene)
+        methods = _portable_scene_methods(scene)
+        self.assertTrue(has_portable_scene_methods(scene, **methods))
+        for name in ("add_foreground_mobject", "add_foreground_mobjects"):
+            with self.subTest(name=name):
+                self.assertIs(methods[name], getattr(noon.Scene, name))
+                setattr(scene, name, lambda *args: scene.wait(1))
+                self.assertFalse(has_portable_scene_methods(scene, **methods))
+                delattr(scene, name)
+
+    def test_translation_drag_gallery_uses_portable_continuation_and_canonical_drag_binding(self):
+        source = Path(__file__).with_name("examples").joinpath("showcase_translation_drag.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="showcase_translation_drag.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "TranslationDrag.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            from _manim_scene import _portable_scene_methods
+        scene = object.__new__(noon.Scene)
+        methods = _portable_scene_methods(scene)
+        self.assertIs(methods.get("set_drag_targets"), noon.Scene.set_drag_targets)
+        self.assertTrue(has_portable_scene_methods(scene, **methods))
+        scene.set_drag_targets = lambda *args: scene.wait(1)
+        self.assertFalse(has_portable_scene_methods(scene, **methods))
+
+    def test_click_binding_overrides_cannot_hide_uncompiled_barriers(self):
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            from _manim_scene import _portable_scene_methods
+
+        scene = object.__new__(noon.Scene)
+        methods = _portable_scene_methods(scene)
+        self.assertIs(methods.get("on_click"), noon.Scene.on_click)
+        self.assertTrue(has_portable_scene_methods(scene, **methods))
+        scene.on_click = lambda *args: scene.wait(1)
+        self.assertFalse(has_portable_scene_methods(scene, **methods))
+
+        class Override(noon.Scene):
+            def on_click(self, *args):
+                return self.wait(1)
+
+        class Descriptor(noon.Scene):
+            @property
+            def on_click(self):
+                raise AssertionError("admission invoked authored descriptor")
+
+        for scene_type in (Override, Descriptor):
+            with self.subTest(scene_type=scene_type):
+                self.assertFalse(has_portable_scene_methods(object.__new__(scene_type), **methods))
+
     def test_decorators_are_not_replayed_or_unwrapped(self):
         effects = []
         def decorate(function):
@@ -196,6 +438,16 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
             compile_authoring_source("class Example:\n    def construct(self):\n        self.play(\n", "user-scene.py")
         self.assertEqual(caught.exception.filename, "user-scene.py")
         self.assertEqual(caught.exception.lineno, 3)
+
+    def test_transform_matching_shapes_gallery_uses_portable_continuations(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "ordinary_transform_matching_shapes.py"
+        ).read_text()
+        _, pairs = compile_authoring_source(source, filename="ordinary_transform_matching_shapes.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "OrdinaryTransformMatchingShapes.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
 
     def test_static_async_and_export_source_never_allocates_an_ast(self):
@@ -227,6 +479,24 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         class Override(Base):
             def wait(self, *args): pass
         self.assertFalse(has_portable_scene_methods(Override(), play=Base.play, wait=Base.wait))
+
+    async def test_unmatched_portable_construct_keeps_ordinary_fallback(self):
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            import _manim_scene
+        import noon
+
+        events = []
+
+        class Example(noon.Scene):
+            def construct(self):
+                events.append("ordinary")
+
+        scene = Example()
+        scene._canonical_authoring_context = object()
+        # A truthy pair map exercises portable admission, while an unmatched
+        # construct must never be inspected as if it were portable.
+        await _manim_scene.execute_construct(scene, portable_constructs={object(): object()})
+        self.assertEqual(events, ["ordinary"])
 
     def test_admission_does_not_invoke_descriptors_or_dynamic_lookup(self):
         effects = []

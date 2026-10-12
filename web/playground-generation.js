@@ -90,6 +90,12 @@ export class PlaygroundGeneration {
     });
   }
 
+  invalidateRun() {
+    const nextGeneration = checkedNext(this.#runGeneration, "playground run generation");
+    this.#runGeneration = nextGeneration;
+    return nextGeneration;
+  }
+
   isRunCurrent(token, activeExampleId) {
     return (
       token?.kind === "run" &&

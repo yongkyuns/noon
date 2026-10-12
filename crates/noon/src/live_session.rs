@@ -6,18 +6,20 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
-mod boolean_geometry;
+mod arrow;
+mod brace;
+mod camera_motion;
+mod coordinates;
 mod family_layout;
-mod path_alignment;
+mod image;
 mod path_editing;
-mod path_queries;
-mod point_matching;
-mod z_index;
+mod spatial;
 pub use family_layout::LiveLayoutTarget;
 
-use crate::execution_session::EffectiveSemanticObject;
+#[cfg(test)]
+use crate::effective_capture::target_style_from_effective;
+use crate::execution_session::{EffectiveSemanticObject, NativePointerInputToken};
 use crate::{
-    family_arrangement::FamilyArrangePlan,
     semantic_mobject::authoring_render_f64,
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
@@ -29,14 +31,15 @@ use crate::{
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
     ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectTarget,
-    SceneMembershipRequest, ValueTracker,
+    SceneMembershipRequest, TranslationDragError, TranslationDragReceipt, ValueTracker,
 };
 use noon_core::{
-    AnimationOptions, Bounds2D64, Color, PublicationContext, SemanticAffineLifecycleDirection,
-    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore, SemanticStyle,
-    SemanticSubsetDisplayMode, SemanticVec3, Style, Transform2D,
+    AnimationOptions, Bounds2D64, Color, NativePointerInput, PublicationContext,
+    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
+    SemanticSignalValue, SemanticStore, SemanticStyle, SemanticSubsetDisplayMode, SemanticVec3,
+    Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -178,79 +181,6 @@ impl Default for IndicateOptions {
     }
 }
 
-/// Reconstruct the supported authored target style directly from one effective
-/// runtime row. Preserve exact authored values when their lowered values match.
-/// Changed runtime colors already contain evaluated paint opacity, so capture
-/// those as solid paints with unit paint opacity. Resource paints are not
-/// represented by `Style` and must remain explicitly unavailable here.
-pub(crate) fn target_style_from_effective(
-    authored: &SemanticStyle,
-    effective: Style,
-) -> Result<SemanticStyle, LiveSessionError> {
-    if matches!(
-        authored.fill.as_ref(),
-        Some(noon_core::SemanticPaint::Resource(_))
-    ) || matches!(
-        authored.stroke.as_ref(),
-        Some(noon_core::SemanticPaint::Resource(_))
-    ) {
-        return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::CaptureResourcePaint,
-        )));
-    }
-    let (fill, fill_opacity) =
-        if lowered_solid_color(authored.fill.as_ref(), authored.fill_opacity) == effective.fill {
-            (authored.fill.clone(), authored.fill_opacity)
-        } else {
-            (effective.fill.map(noon_core::SemanticPaint::Solid), 1.0)
-        };
-    let (stroke, stroke_opacity) =
-        if lowered_solid_color(authored.stroke.as_ref(), authored.stroke_opacity)
-            == effective.stroke
-        {
-            (authored.stroke.clone(), authored.stroke_opacity)
-        } else {
-            (effective.stroke.map(noon_core::SemanticPaint::Solid), 1.0)
-        };
-    Ok(SemanticStyle {
-        fill,
-        fill_opacity,
-        stroke,
-        stroke_opacity,
-        // Retain authored precision when runtime lowering did not change width.
-        // An f32 round trip must not invent a structural style change.
-        stroke_width: if authored.stroke_width as f32 == effective.stroke_width {
-            authored.stroke_width
-        } else {
-            f64::from(effective.stroke_width)
-        },
-        stroke_width_mode: effective.stroke_width_mode,
-        stroke_join: effective.stroke_join,
-        stroke_cap: effective.stroke_cap,
-        object_opacity: if authored.object_opacity as f32 == effective.opacity {
-            authored.object_opacity
-        } else {
-            f64::from(effective.opacity)
-        },
-    })
-}
-
-fn lowered_solid_color(paint: Option<&noon_core::SemanticPaint>, opacity: f64) -> Option<Color> {
-    let noon_core::SemanticPaint::Solid(color) = paint? else {
-        return None;
-    };
-    Some(Color {
-        alpha: (f64::from(color.alpha) * f64::from(opacity as f32)) as f32,
-        ..*color
-    })
-}
-
-fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
-    if *authored as f32 != effective {
-        *authored = f64::from(effective);
-    }
-}
-
 /// One borrowed TransformTo leaf in an atomic live composition request.
 ///
 /// This value contains no schedule or runtime state. The shared Rust compiler resolves all child
@@ -276,7 +206,41 @@ pub enum AnimationCompositionRequest<'a> {
         options: AnimationOptions,
     },
     TransformTo(TransformToRequest<'a>),
+    /// Move one target's bounds center along an activation-time retained path.
+    MoveAlongPath {
+        target: &'a Mobject,
+        path: &'a Mobject,
+        options: AnimationOptions,
+    },
+    /// Invoke a registered host callback during this compiler-scheduled interval.
+    CallbackInterval {
+        target: &'a Mobject,
+        callback: noon_core::HostCallbackId,
+        options: AnimationOptions,
+    },
+    /// Animate one mesh/camera/light through the shared effective world-pose track.
+    WorldTransform {
+        target: &'a Mobject,
+        transform: noon_core::SemanticWorldTransform3D,
+        options: AnimationOptions,
+    },
+    CameraProfile {
+        target: &'a Mobject,
+        profile: noon_core::ManimCamera3DProfile,
+        options: AnimationOptions,
+    },
     FamilyTransformTo {
+        source: &'a MobjectFamily,
+        target_state: &'a MobjectFamily,
+        options: AnimationOptions,
+    },
+    /// Match ordered family members by activation-time normalized point geometry.
+    MatchingFamilyTransformTo {
+        source: &'a MobjectFamily,
+        target_state: &'a MobjectFamily,
+        options: AnimationOptions,
+    },
+    MatchingSourceFamilyTransformTo {
         source: &'a MobjectFamily,
         target_state: &'a MobjectFamily,
         options: AnimationOptions,
@@ -311,6 +275,12 @@ pub enum AnimationCompositionRequest<'a> {
     FamilyFade {
         target: &'a MobjectFamily,
         direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    },
+    /// Introduce an Arrow family from its retained start point using shared
+    /// per-leaf affine lifecycle tracks and one atomic family admission.
+    FamilyArrowGrow {
+        target: &'a crate::ManimArrow,
         options: AnimationOptions,
     },
     /// Write or unwrite one plain Text object through its Rust-derived glyph members.
@@ -439,7 +409,7 @@ pub enum LiveSessionError {
     // The remaining animation-specific shape checks are migrated in R2b.
     Mobject(String),
     Callback(crate::ExecutionSessionCallbackError),
-    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
     Text(crate::TextAuthoringError),
     Animation(String),
     Activation(ExecutionSessionAnimationError),
@@ -447,6 +417,7 @@ pub enum LiveSessionError {
     Advance(ExecutionSegmentAdvanceError),
     Completion(ExecutionSegmentCompletionError),
     Publication(ExecutionSessionPublicationError),
+    TranslationDrag(TranslationDragError),
 }
 
 impl std::fmt::Display for LiveSessionError {
@@ -458,7 +429,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::Authoring(error) => error.fmt(formatter),
             Self::Mobject(error) => error.fmt(formatter),
             Self::Callback(error) => error.fmt(formatter),
-            #[cfg(any(feature = "native-text", feature = "typst"))]
+            #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
             Self::Activation(error) => error.fmt(formatter),
@@ -466,6 +437,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::Advance(error) => error.fmt(formatter),
             Self::Completion(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
+            Self::TranslationDrag(error) => error.fmt(formatter),
         }
     }
 }
@@ -475,13 +447,14 @@ impl std::error::Error for LiveSessionError {
         match self {
             Self::Authoring(error) => Some(error),
             Self::Callback(error) => Some(error),
-            #[cfg(any(feature = "native-text", feature = "typst"))]
+            #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => Some(error),
             Self::Activation(error) => Some(error),
             Self::Segment(error) => Some(error),
             Self::Advance(error) => Some(error),
             Self::Completion(error) => Some(error),
             Self::Publication(error) => Some(error),
+            Self::TranslationDrag(error) => Some(error),
             Self::ForeignMobjectStore | Self::Mobject(_) | Self::Animation(_) => None,
         }
     }
@@ -540,20 +513,77 @@ pub struct LiveSession<'a> {
 }
 
 impl<'a> LiveSession<'a> {
-    /// Create and sparsely enroll one scalar tracker in this already-live Scene.
-    pub fn value_tracker(&mut self, initial: f64) -> Result<ValueTracker, LiveSessionError> {
-        let mut store = self.store.borrow_mut();
-        let node = self
-            .session
-            .create_scoped_value_tracker(&mut store, self.root, initial)?;
-        Ok(ValueTracker::from_semantic_node(
-            Rc::clone(self.store),
-            node,
-        ))
+    /// Configure the semantic objects that may acquire the session-owned
+    /// translation-drag lease. The platform still supplies only typed pointer
+    /// occurrences; it never chooses an object identity per event.
+    pub fn set_translation_drag_targets<'target>(
+        &mut self,
+        targets: impl IntoIterator<Item = &'target Mobject>,
+    ) -> Result<(), LiveSessionError> {
+        let mut nodes = Vec::new();
+        for target in targets {
+            if !Rc::ptr_eq(self.store, target.integration_store()) {
+                return Err(LiveSessionError::ForeignMobjectStore);
+            }
+            target.validate().map_err(LiveSessionError::from)?;
+            nodes.push(target.node_id());
+        }
+        self.session
+            .set_translation_drag_targets(nodes)
+            .map_err(LiveSessionError::TranslationDrag)
     }
 
-    /// Associate one existing detached tracker with this live Scene root.
-    pub fn associate_value_tracker(
+    /// Deliver one normalized native pointer occurrence through the shared
+    /// drag policy and ordinary native-input publication path.
+    ///
+    /// Non-captured occurrences retain normal pointer/hover/click behavior;
+    /// a captured primary drag alone acquires the scoped Position lease.
+    pub fn submit_translation_drag_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<TranslationDragReceipt, LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        self.session
+            .submit_translation_drag_input(&mut store, token, input)
+            .map_err(LiveSessionError::TranslationDrag)
+    }
+
+    /// Publish one object-owned restoring `click -> Indicate` declaration
+    /// through the live semantic transaction path.
+    pub fn on_click_indicate(
+        &mut self,
+        target: &Mobject,
+        indication: IndicateOptions,
+        options: AnimationOptions,
+    ) -> Result<(), LiveSessionError> {
+        if !Rc::ptr_eq(self.store, target.integration_store()) {
+            return Err(LiveSessionError::ForeignMobjectStore);
+        }
+        target.validate().map_err(LiveSessionError::from)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_click_indicate(
+            target.node_id(),
+            Some(crate::scene::click_indicate_declaration(
+                indication, options,
+            )?),
+        );
+        let mut store = self.store.borrow_mut();
+        self.session
+            .apply_semantic_transaction_at_root(&mut store, self.root, transaction)
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
+        self.store
+    }
+
+    /// Associate an existing detached tracker while a continuation holds the
+    /// only borrowed execution capability.
+    ///
+    /// Ordinary authoring uses [`crate::Scene::associate_value_tracker`].
+    pub(crate) fn associate_value_tracker(
         &mut self,
         tracker: &ValueTracker,
     ) -> Result<(), LiveSessionError> {
@@ -580,17 +610,40 @@ impl<'a> LiveSession<'a> {
         }
     }
 
-    /// Apply one supported semantic transaction and publish it into the same
-    /// runtime. Unsupported content and structural work fails before
+    /// Apply one supported semantic transaction through the Scene-owned running
+    /// publication route. Unsupported content and structural work fails before
     /// either layer commits.
     pub fn apply(
         &mut self,
         transaction: SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let mut store = self.store.borrow_mut();
-        self.session
-            .apply_semantic_transaction_at_root(&mut store, self.root, transaction)
+        crate::Scene::publish_running_transaction(self.store, self.root, self.session, transaction)
             .map_err(Into::into)
+    }
+
+    /// Prepare resources and publish one semantic transaction while borrowing
+    /// the already-running execution session. Composite authoring uses this
+    /// boundary so resource admission and the transaction share one rollback
+    /// scope without manufacturing a second Scene or runtime owner.
+    pub(crate) fn with_semantic_publication<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            &mut dyn FnMut(
+                &mut noon_core::SemanticStore,
+                SemanticMutationTransaction,
+            )
+                -> Result<SemanticMutationTransactionResult, crate::AuthoringError>,
+        ) -> Result<T, crate::AuthoringError>,
+    ) -> Result<T, LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        let mut publish = |store: &mut noon_core::SemanticStore,
+                           transaction: SemanticMutationTransaction| {
+            self.session
+                .apply_semantic_transaction_at_root(store, self.root, transaction)
+                .map_err(crate::AuthoringError::from)
+        };
+        operation(&mut store, &mut publish).map_err(Into::into)
     }
 
     /// Add an existing detached object to this live scene root.
@@ -675,6 +728,139 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Compile a detached numeric object without invalidating the live publication.
+    #[cfg(feature = "latex")]
+    pub fn create_decimal_number(
+        &mut self,
+        backend: &mut impl crate::LatexBackend,
+        value: f64,
+        format: crate::DecimalFormat,
+        font_size: f32,
+    ) -> Result<crate::DecimalNumber, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        crate::DecimalNumber::construct_with(
+            Rc::clone(self.store),
+            backend,
+            value,
+            format,
+            font_size,
+            |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            },
+        )
+        .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
+    /// Persist one DecimalNumber value through the current execution publication.
+    #[cfg(feature = "latex")]
+    pub fn set_decimal_value(
+        &mut self,
+        number: &crate::DecimalNumber,
+        backend: &mut impl crate::LatexBackend,
+        value: f64,
+    ) -> Result<(), LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let authored = self.authored(number.mobject())?;
+        let effective = self.capture_mobject_state(number.mobject())?;
+        number
+            .set_value_live(backend, value, authored, effective, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn increment_decimal_value(
+        &mut self,
+        number: &crate::DecimalNumber,
+        backend: &mut impl crate::LatexBackend,
+        delta: f64,
+    ) -> Result<(), LiveSessionError> {
+        let value = number
+            .value()
+            .map_err(crate::numeric_authoring::numeric_live_error)?;
+        self.set_decimal_value(number, backend, value + delta)
+    }
+
+    /// Bind one existing DecimalNumber to a canonical scalar tracker through
+    /// the current live publication. Glyph dependencies, semantic metadata and
+    /// the runtime driver revision are prepared before either layer commits.
+    #[cfg(feature = "latex")]
+    pub fn bind_decimal_to_tracker(
+        &mut self,
+        number: &crate::DecimalNumber,
+        backend: &mut impl crate::LatexBackend,
+        tracker: &ValueTracker,
+    ) -> Result<(), LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        tracker.require_store(self.store)?;
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        number
+            .bind_to_tracker_live(backend, tracker, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
+    /// Construct an atomic shared Variable with a fresh scoped tracker.
+    #[cfg(feature = "latex")]
+    pub fn create_variable(
+        &mut self,
+        backend: &mut impl crate::LatexBackend,
+        label: impl Into<String>,
+        initial: f64,
+        format: noon_core::DecimalFormat,
+        font_size: f32,
+    ) -> Result<crate::Variable, LiveSessionError> {
+        crate::variable_authoring::construct_variable(
+            self.store,
+            self.root,
+            Some(self.session),
+            backend,
+            label.into(),
+            initial,
+            format,
+            font_size,
+        )
+        .map_err(crate::variable_authoring::variable_live_error)
+    }
+
+    /// Read DecimalNumber's current runtime value through its declared tracker binding.
+    /// Unbound numbers retain their authored/base value.
+    #[cfg(feature = "latex")]
+    pub fn decimal_value(&self, number: &crate::DecimalNumber) -> Result<f64, LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        number
+            .current_value(self.session)
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
+    /// Read DecimalNumber font size from the current effective publication.
+    #[cfg(feature = "latex")]
+    pub fn decimal_font_size(
+        &self,
+        number: &crate::DecimalNumber,
+    ) -> Result<f64, LiveSessionError> {
+        self.require_mobject(number.mobject())?;
+        let effective = self.capture_mobject_state(number.mobject())?;
+        number
+            .font_size_at(&effective)
+            .map_err(crate::numeric_authoring::numeric_live_error)
+    }
+
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].
     pub fn authored(&self, mobject: &Mobject) -> Result<SemanticObjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
@@ -693,12 +879,19 @@ impl<'a> LiveSession<'a> {
         let state = self.capture_mobject_state(source)?;
 
         let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+        let target = transaction.create_node(noon_core::SemanticNodeCreation::object(state));
+        crate::effective_capture::stage_effect_copy(
+            &self.store.borrow(),
+            self.session,
+            source.node_id(),
+            target,
+            &mut transaction,
+        )?;
         let result = self.apply(transaction)?;
-        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one prepared target copy has one exact semantic impact")
-        };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
+        let node = result
+            .resolve(target)
+            .ok_or(crate::AuthoringError::UnresolvedCreatedNode(target))?;
+        Mobject::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
     }
 
     fn require_target_capture(&self) -> Result<(), LiveSessionError> {
@@ -734,11 +927,51 @@ impl<'a> LiveSession<'a> {
         self.require_family(source)?;
         self.require_target_capture()?;
         let (transaction, pending) =
-            crate::family_copy::prepare_family_copy(source, references, |mobject| {
-                self.capture_mobject_state(mobject)
+            crate::family_copy::prepare_family_copy(source, references, |mobject, graph_row| {
+                crate::effective_capture::capture_mobject_state_with_graph_dependency(
+                    self.store,
+                    self.session,
+                    mobject,
+                    graph_row,
+                )
+                .map_err(LiveSessionError::from)
             })?;
         let result = self.apply(transaction)?;
         pending.resolve(&result).map_err(LiveSessionError::from)
+    }
+
+    /// Capture one flat family at the current publication and cyclically move
+    /// each copied member to the next source member's effective position.
+    pub fn cyclic_replace_target(
+        &mut self,
+        source: &MobjectFamily,
+    ) -> Result<crate::FamilyCopy, LiveSessionError> {
+        self.cyclic_replace_target_with_references(source, &[])
+    }
+
+    /// Preserve detached wrapper metadata references while constructing the same
+    /// activation-effective cyclic target used by the no-reference helper.
+    pub fn cyclic_replace_target_with_references(
+        &mut self,
+        source: &MobjectFamily,
+        references: &[crate::MobjectTarget<'_>],
+    ) -> Result<crate::FamilyCopy, LiveSessionError> {
+        self.require_family(source)?;
+        self.require_target_capture()?;
+        let members = crate::cyclic_replace::direct_object_members(source)?;
+        let mut centers = Vec::with_capacity(members.len());
+        for member in &members {
+            let mobject = Mobject::from_node(Rc::clone(self.store), *member)?;
+            centers.push(self.effective_layout(&mobject)?.center);
+        }
+        let copied = self.copy_family_with_references(source, references)?;
+        let target_members = crate::cyclic_replace::direct_object_members(copied.root())?;
+        let transaction = {
+            let store = self.store.borrow();
+            crate::cyclic_replace::cyclic_target_transaction(&store, &target_members, &centers)?
+        };
+        self.apply(transaction)?;
+        Ok(copied)
     }
 
     /// Replace one object's presentation with another object's effective state while
@@ -756,6 +989,7 @@ impl<'a> LiveSession<'a> {
         let prepared = prepare_become(
             &self.store.borrow(),
             target.node_id(),
+            other.node_id(),
             &source,
             candidate,
             options,
@@ -781,83 +1015,47 @@ impl<'a> LiveSession<'a> {
         self.publish_path_edits(prepared)
     }
 
-    fn capture_mobject_state(
+    pub(crate) fn capture_mobject_state(
         &self,
         source: &Mobject,
     ) -> Result<SemanticObjectState, LiveSessionError> {
-        // A reachable object starts from the coherent effective row rather than
-        // an authored base superseded by a driver. A detached object has no row,
-        // so its authored state is the exact capture. Immutable content remains
-        // authored because effective render-content overrides are rejected.
-        let mut state = source.state().map_err(LiveSessionError::from)?;
-        if !state.signal_bindings().is_empty() {
-            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::CaptureReactiveBinding,
-            )));
-        }
-        if self.session.semantic_object_is_reachable(source.node_id()) {
-            let store = self.store.borrow();
-            let observed = self
-                .session
-                .effective_semantic_object(&store, source.node_id())?;
-            if !observed.authored_content_layout_applicable() {
-                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::CaptureRenderOverride,
-                )));
-            }
-            if observed.object.appearance != 1.0 {
-                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::CaptureNonUnitAppearance,
-                )));
-            }
-            preserve_or_capture_f32(
-                &mut state.transform.translation.x,
-                observed.object.transform.translation.x,
-            );
-            preserve_or_capture_f32(
-                &mut state.transform.translation.y,
-                observed.object.transform.translation.y,
-            );
-            preserve_or_capture_f32(
-                &mut state.transform.scale.x,
-                observed.object.transform.scale.x,
-            );
-            preserve_or_capture_f32(
-                &mut state.transform.scale.y,
-                observed.object.transform.scale.y,
-            );
-            preserve_or_capture_f32(
-                &mut state.transform.rotation_z,
-                observed.object.transform.rotation,
-            );
-            state.set_z_index(observed.object.z_index);
-            state.style = target_style_from_effective(&state.style, observed.object.style)?;
-        }
-        Ok(state)
+        crate::effective_capture::capture_mobject_state(self.store, self.session, source)
+            .map_err(LiveSessionError::from)
     }
 
-    /// Publish one detached ordered family through this session's semantic owner.
-    pub fn family(
-        &mut self,
-        members: &[MobjectTarget<'_>],
-    ) -> Result<MobjectFamily, LiveSessionError> {
-        self.family_with_z_index(members, 0.0)
+    pub(crate) fn composite_entry_state(
+        &self,
+        source: &Mobject,
+    ) -> Result<SemanticObjectState, crate::AuthoringError> {
+        crate::family_layout::composite_entry_state(
+            self.store,
+            Some(self.session),
+            self.root,
+            source,
+        )
     }
 
-    /// Atomically create a detached family with root-only painter priority.
-    pub fn family_with_z_index(
-        &mut self,
-        members: &[MobjectTarget<'_>],
-        z_index: f64,
-    ) -> Result<MobjectFamily, LiveSessionError> {
-        let (transaction, family) =
-            crate::family_authoring::family_creation_transaction(self.store, members, z_index)
-                .map_err(LiveSessionError::from)?;
-        let result = self.apply(transaction)?;
-        let node = result
-            .resolve(family)
-            .expect("committed family token resolves to one semantic identity");
-        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
+    /// Capture conservative world-axis bounds from one coherent object state.
+    /// Reachable objects use the live effective transform; detached objects use
+    /// their validated authored state. Publication and callback gates are shared
+    /// with other live target-capture operations.
+    pub(crate) fn capture_boundary_bounds(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<noon_core::Bounds2D64>, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        self.require_target_capture()?;
+        let state = self.capture_mobject_state(mobject)?;
+        let store = self.store.borrow();
+        crate::semantic_mobject::boundary_for_content(
+            &store,
+            state.content,
+            state
+                .transform
+                .as_planar()
+                .ok_or(crate::AuthoringError::NonFiniteObjectState)?,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     /// Publish one atomic batch of direct family additions.
@@ -891,20 +1089,83 @@ impl<'a> LiveSession<'a> {
         Ok(changed)
     }
 
-    /// Publish one fully validated detached Manim geometry object through this session.
+    /// Publish one fully validated detached Manim geometry object through this
+    /// explicitly borrowed execution session.
     ///
-    /// The new identity has no root membership, execution slot, or frame work
-    /// until [`Self::add`] admits it.
+    /// Normal durable construction belongs to [`crate::Scene::geometry`]. This
+    /// narrow entry point remains for integrations whose existing
+    /// `ExecutionSession` is deliberately paired with a store/root outside a
+    /// `Scene` owner, including callback-time creation. The new identity has no
+    /// root membership, execution slot, or frame work until [`Self::add`] admits
+    /// it.
     pub fn create_manim_geometry(
         &mut self,
         options: crate::ManimGeometryOptions,
     ) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state = options
-            .into_state(&mut self.store.borrow_mut())
-            .map_err(LiveSessionError::from)?;
-        self.create_detached_mobject(state)
+        let node = {
+            let mut store = self.store.borrow_mut();
+            crate::scene::publish_geometry_options(options, &mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+            })
+        }
+        .map_err(|error| match error {
+            crate::AuthoringError::ExecutionPublication(error) => {
+                LiveSessionError::Publication(error)
+            }
+            error => LiveSessionError::from(error),
+        })?;
+        Mobject::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
+    }
+
+    /// Publish a detached family of prepared ordinary paths in the current
+    /// borrowed execution publication. Geometry admission and every family leaf
+    /// share one transaction and rollback scope.
+    pub fn create_path_family(
+        &mut self,
+        paths: Vec<(noon_core::VectorPath, noon_core::SemanticStyle)>,
+    ) -> Result<MobjectFamily, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let family = crate::family_authoring::publish_path_family_with(
+            &mut self.store.borrow_mut(),
+            paths,
+            |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+            },
+        )
+        .map_err(|error| match error {
+            crate::AuthoringError::ExecutionPublication(error) => {
+                LiveSessionError::Publication(error)
+            }
+            error => LiveSessionError::from(error),
+        })?;
+        MobjectFamily::from_node(Rc::clone(self.store), family).map_err(LiveSessionError::from)
+    }
+
+    /// Construct a family while a continuation holds the only borrowed live
+    /// execution capability.
+    ///
+    /// This in-crate bridge exists because continuations receive a
+    /// [`LiveSession`] without a durable [`crate::Scene`] owner. Public
+    /// ordinary authoring uses [`crate::Scene::family`].
+    pub(crate) fn create_family(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<MobjectFamily, LiveSessionError> {
+        let (transaction, family) =
+            crate::family_authoring::family_creation_transaction(self.store, members, 0.0)
+                .map_err(LiveSessionError::from)?;
+        let result = self.apply(transaction)?;
+        let node = result
+            .resolve(family)
+            .expect("family creation transaction resolves its created token");
+        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
     }
 
     /// Shape and publish one detached plain Text object through this live session.
@@ -915,9 +1176,138 @@ impl<'a> LiveSession<'a> {
     pub fn create_text(&mut self, text: crate::Text) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state = crate::text_authoring::native_text_state(self.store, text)
-            .map_err(LiveSessionError::Text)?;
-        self.create_detached_mobject(state)
+        let admission =
+            crate::text_authoring::prepare_native_text(text).map_err(LiveSessionError::Text)?;
+        let result = {
+            let mut store = self.store.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(|error| {
+                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
+                    })
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached native text admission creates one semantic node")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
+    }
+
+    /// Compile and publish one detached TeX object through this live session.
+    #[cfg(feature = "latex")]
+    pub fn create_tex(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.create_latex(
+            crate::latex_authoring::prepare_tex(text, backend).map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    /// Compile and publish one detached display-math object through this live session.
+    #[cfg(feature = "latex")]
+    pub fn create_math_tex(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.create_latex(
+            crate::latex_authoring::prepare_math_tex(text, backend)
+                .map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn create_math_tex_parts(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<crate::LatexParts, LiveSessionError> {
+        self.create_latex_parts(
+            crate::latex_authoring::prepare_math_tex(text, backend)
+                .map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn create_tex_parts(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<crate::LatexParts, LiveSessionError> {
+        self.create_latex_parts(
+            crate::latex_authoring::prepare_tex(text, backend).map_err(LiveSessionError::Text)?,
+        )
+    }
+
+    #[cfg(feature = "latex")]
+    fn create_latex_parts(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<crate::LatexParts, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let (result, family, members, source, parts, _font_size) = {
+            let mut store = self.store.borrow_mut();
+            admission.publish_parts(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+                    .map_err(crate::TextAuthoringError::Semantic)
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
+        crate::latex_authoring::finish_latex_parts(
+            std::rc::Rc::clone(self.store),
+            &result,
+            family,
+            members,
+            source,
+            parts,
+        )
+        .map_err(LiveSessionError::Text)
+    }
+
+    #[cfg(feature = "latex")]
+    fn create_latex(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<Mobject, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let result = {
+            let mut store = self.store.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(|error| {
+                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
+                    })
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one LaTeX admission creates one detached semantic node")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
 
     /// Compile and publish one detached Typst object through this live session.
@@ -925,9 +1315,9 @@ impl<'a> LiveSession<'a> {
     pub fn create_typst(&mut self, text: crate::Typst) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state =
-            crate::text_authoring::typst_state(self.store, text).map_err(LiveSessionError::Text)?;
-        self.create_detached_mobject(state)
+        self.create_compiled_text(
+            crate::text_authoring::prepare_typst(text).map_err(LiveSessionError::Text)?,
+        )
     }
 
     /// Compile and publish one detached MathTypst object through this live session.
@@ -938,20 +1328,34 @@ impl<'a> LiveSession<'a> {
     ) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state = crate::text_authoring::math_typst_state(self.store, text)
-            .map_err(LiveSessionError::Text)?;
-        self.create_detached_mobject(state)
+        self.create_compiled_text(
+            crate::text_authoring::prepare_math_typst(text).map_err(LiveSessionError::Text)?,
+        )
     }
 
-    fn create_detached_mobject(
+    #[cfg(feature = "typst")]
+    fn create_compiled_text(
         &mut self,
-        state: SemanticObjectState,
+        admission: crate::text_authoring::TypstAdmission,
     ) -> Result<Mobject, LiveSessionError> {
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
-        let result = self.apply(transaction)?;
+        let result = {
+            let mut store = self.store.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(|error| {
+                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
+                    })
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one detached primitive creation has one exact semantic impact")
+            unreachable!("one Typst admission creates one detached semantic node")
         };
         Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
@@ -1165,6 +1569,26 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Atomically animate a mobject's effective bounds center along a retained path.
+    pub fn declare_and_activate_move_along_path(
+        &mut self,
+        target: &Mobject,
+        path: &Mobject,
+        options: noon_core::AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_mobject(target)?;
+        self.require_mobject(path)?;
+        let mut store = self.store.borrow_mut();
+        self.session
+            .declare_and_activate_move_along_path(
+                &mut store,
+                target.node_id(),
+                path.node_id(),
+                options,
+            )
+            .map_err(Into::into)
+    }
+
     /// Transform two equivalent semantic families through one ordered composition.
     pub fn declare_and_activate_family_transform_to(
         &mut self,
@@ -1178,6 +1602,38 @@ impl<'a> LiveSession<'a> {
             options,
         };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Match family members by activation-time shape and replace the source family
+    /// with the original authored target at the exact completion barrier.
+    pub fn declare_and_activate_matching_family_transform_to(
+        &mut self,
+        source: &MobjectFamily,
+        target_state: &MobjectFamily,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::MatchingFamilyTransformTo {
+            source,
+            target_state,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    pub fn declare_and_activate_source_matching_family_transform_to(
+        &mut self,
+        source: &MobjectFamily,
+        target_state: &MobjectFamily,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            },
+            AnimationOptions::new(),
+        )
     }
 
     /// Indicate one object and restore its activation-effective source state.
@@ -1267,6 +1723,18 @@ impl<'a> LiveSession<'a> {
             direction,
             options,
         };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
+    /// Grow one retained Arrow from its authored start point through the shared
+    /// family lifecycle path. Only Arrow families are accepted by this API.
+    pub fn declare_and_activate_arrow_grow(
+        &mut self,
+        target: &crate::ManimArrow,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.require_family(target.family())?;
+        let request = AnimationCompositionRequest::FamilyArrowGrow { target, options };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
@@ -1635,6 +2103,55 @@ impl<'a> LiveSession<'a> {
                     options: child.options,
                 }
             }
+            AnimationCompositionRequest::MoveAlongPath {
+                target,
+                path,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                self.require_mobject(path)?;
+                Request::MoveAlongPath {
+                    target: target.node_id(),
+                    path: path.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::CallbackInterval {
+                target,
+                callback,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::CallbackInterval {
+                    target: target.node_id(),
+                    callback: *callback,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::WorldTransform {
+                target,
+                transform,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::WorldTransform {
+                    target: target.node_id(),
+                    transform: *transform,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::CameraProfile {
+                target,
+                profile,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::CameraProfile {
+                    target: target.node_id(),
+                    profile: *profile,
+                    options: *options,
+                }
+            }
             AnimationCompositionRequest::FamilyTransformTo {
                 source,
                 target_state,
@@ -1643,6 +2160,32 @@ impl<'a> LiveSession<'a> {
                 self.require_family(source)?;
                 self.require_family(target_state)?;
                 Request::FamilyTransformTo {
+                    source: source.node_id(),
+                    target_state: target_state.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::MatchingFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            } => {
+                self.require_family(source)?;
+                self.require_family(target_state)?;
+                Request::MatchingFamilyTransformTo {
+                    source: source.node_id(),
+                    target_state: target_state.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            } => {
+                self.require_family(source)?;
+                self.require_family(target_state)?;
+                Request::MatchingSourceFamilyTransformTo {
                     source: source.node_id(),
                     target_state: target_state.node_id(),
                     options: *options,
@@ -1722,6 +2265,25 @@ impl<'a> LiveSession<'a> {
                 Request::FamilyFade {
                     target: target.node_id(),
                     direction: *direction,
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::FamilyArrowGrow { target, options } => {
+                self.require_family(target.family())?;
+                let endpoints = target
+                    .manim_endpoints()
+                    .map_err(|error| LiveSessionError::Animation(error.to_string()))?;
+                Request::FamilyArrowGrow {
+                    target: target.family().node_id(),
+                    endpoint: noon_core::SemanticAffineLifecycleEndpoint {
+                        point: noon_core::SemanticVec3::new(
+                            endpoints.start.0,
+                            endpoints.start.1,
+                            0.0,
+                        ),
+                        rotation_offset: 0.0,
+                        point_color: None,
+                    },
                     options: *options,
                 }
             }
@@ -2057,41 +2619,15 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        let leaves = self
-            .store
-            .borrow()
-            .ordered_family_leaf_pairs(family.node_id(), family.node_id())
-            .map_err(crate::AuthoringError::from)?
-            .into_iter()
-            .map(|(leaf, _)| leaf)
-            .collect::<Vec<_>>();
-        let mut transaction = SemanticMutationTransaction::new();
-        for leaf in leaves {
-            let mobject =
-                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
-            let mut translation = self.authored(&mobject)?.transform.translation;
-            translation.x += x;
-            translation.y += y;
-            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
-        }
-        self.apply(transaction)
-    }
-
-    /// Arrange direct family members from effective runtime layout and publish
-    /// every resulting leaf translation in one semantic transaction.
-    pub fn arrange_family(
-        &mut self,
-        family: &MobjectFamily,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-        center: bool,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.arrange_family_with_options(
+        crate::family_layout::publish_shift_family(
+            self.store,
+            self.root,
+            self.session,
             family,
-            &crate::FamilyArrangeOptions::new(direction_x, direction_y, buff, center),
+            x,
+            y,
         )
+        .map_err(LiveSessionError::from)
     }
 
     /// Stage sequential layout observations and publish one atomic family edit.
@@ -2100,30 +2636,14 @@ impl<'a> LiveSession<'a> {
         family: &MobjectFamily,
         options: &crate::FamilyArrangeOptions,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        let plan = FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::from)?;
-        self.publish_family_arrangement(plan)
-    }
-
-    /// Arrange a family using coherent live bounds and one shared translation transaction.
-    pub fn arrange_family_in_grid(
-        &mut self,
-        family: &MobjectFamily,
-        rows: Option<usize>,
-        columns: Option<usize>,
-        gap_x: f64,
-        gap_y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.arrange_family_in_grid_with_options(
+        crate::family_layout::publish_arrange_family(
+            self.store,
+            self.root,
+            self.session,
             family,
-            &crate::FamilyGridOptions {
-                rows,
-                columns,
-                gap: (gap_x, gap_y),
-                ..Default::default()
-            },
+            options,
         )
+        .map_err(LiveSessionError::from)
     }
 
     /// Grid alignment and sizing consume coherent live bounds and publish atomically.
@@ -2132,29 +2652,14 @@ impl<'a> LiveSession<'a> {
         family: &MobjectFamily,
         options: &crate::FamilyGridOptions,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        let plan = FamilyArrangePlan::grid(family, options).map_err(LiveSessionError::from)?;
-        self.publish_family_arrangement(plan)
-    }
-
-    fn publish_family_arrangement(
-        &mut self,
-        mut plan: FamilyArrangePlan,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        plan.observe_leaf_bounds(|leaf| {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-            Ok::<_, LiveSessionError>(crate::family_arrangement::ArrangementBounds {
-                dimensions: self.family_member_bounds(&mobject)?,
-                anchors: self.family_member_measure(&mobject, true)?,
-            })
-        })?;
-        let transaction = plan.transaction(|leaf| {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-            self.placement_authored_transform(&mobject)?;
-            self.authored(&mobject).map(|s| s.transform.translation)
-        })?;
-        self.apply(transaction)
+        crate::family_layout::publish_arrange_family_in_grid(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            options,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     /// Move an object's effective layout center to one point through a single
@@ -2178,44 +2683,8 @@ impl<'a> LiveSession<'a> {
         &self,
         mobject: &Mobject,
     ) -> Result<Transform2D, LiveSessionError> {
-        let authored = self.authored(mobject)?;
-        let authored_transform = Transform2D {
-            translation: authored
-                .transform
-                .translation
-                .lower_xy_f32()
-                .map_err(crate::AuthoringError::from)?,
-            rotation: authoring_render_f64(
-                "move_to authored rotation",
-                authored.transform.rotation_z,
-            )
-            .map_err(LiveSessionError::from)? as f32,
-            scale: authored
-                .transform
-                .scale
-                .lower_xy_f32()
-                .map_err(crate::AuthoringError::from)?,
-        };
-        let store = self.store.borrow();
-        match self
-            .session
-            .effective_semantic_object(&store, mobject.node_id())
-        {
-            Ok(observed) if !observed.authored_content_layout_applicable() => {
-                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::PlacementRenderOverride,
-                )));
-            }
-            Ok(observed) if observed.object.transform != authored_transform => {
-                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver,
-                )));
-            }
-            Ok(_) | Err(ExecutionSessionPublicationError::UnknownObject(_)) => {}
-            Err(error) => return Err(error.into()),
-        }
-        drop(store);
-        Ok(authored_transform)
+        crate::family_layout::placement_authored_transform(self.store, self.session, mobject)
+            .map_err(LiveSessionError::from)
     }
 
     /// Multiply an object's authored affine scale through the shared live
@@ -2518,6 +2987,60 @@ impl<'a> LiveSession<'a> {
         self.edit_family_style(family, |style| edit_manim_opacity(style, opacity))
     }
 
+    /// Fade enabled fill and stroke channels through the live execution owner.
+    pub fn fade_family(
+        &mut self,
+        family: &MobjectFamily,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.fade_transaction(darkness)?)
+    }
+
+    pub fn set_family_member_colors(
+        &mut self,
+        family: &MobjectFamily,
+        colors: &[Option<Color>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let expected = self
+            .store
+            .borrow()
+            .ordered_leaf_nodes(family.node_id())
+            .map_err(crate::AuthoringError::from)?
+            .len();
+        if colors.len() != expected {
+            return Err(crate::AuthoringError::FamilyMemberValueCount {
+                expected,
+                actual: colors.len(),
+            }
+            .into());
+        }
+        let transaction = family.style_transaction_indexed(|index, _, style| {
+            if let Some(Some(color)) = colors.get(index) {
+                edit_color(
+                    style,
+                    color.red.into(),
+                    color.green.into(),
+                    color.blue.into(),
+                    color.alpha.into(),
+                )?;
+            }
+            Ok(())
+        })?;
+        self.apply(transaction)
+    }
+
+    #[cfg(feature = "latex")]
+    pub fn latex_font_size(&self, parts: &crate::LatexParts) -> Result<f64, LiveSessionError> {
+        let layout = self.effective_family_layout(parts.family())?;
+        parts
+            .font_size_for_height(layout.height)
+            .map_err(LiveSessionError::from)
+    }
+
     fn edit_family_style(
         &mut self,
         family: &MobjectFamily,
@@ -2542,14 +3065,14 @@ impl<'a> LiveSession<'a> {
         self.replace_style(mobject, style)
     }
 
-    fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
+    pub(crate) fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
         if !Rc::ptr_eq(self.store, mobject.integration_store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
         mobject.validate().map_err(Into::into)
     }
 
-    fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
+    pub(crate) fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
         if !Rc::ptr_eq(self.store, family.integration_store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
@@ -2712,7 +3235,13 @@ mod tests {
             target_state.transform.scale,
             SemanticVec3::new(1.5, 1.0, 1.0)
         );
-        assert_eq!(target_state.transform.rotation_z, 0.25);
+        assert_eq!(
+            target_state
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            0.25
+        );
         assert_eq!(
             target_state.style,
             SemanticStyle {
@@ -2755,7 +3284,13 @@ mod tests {
         live.rotate(&target, 0.75).unwrap();
         let authored = live.authored(&target).unwrap();
         assert_eq!(authored.transform.scale, SemanticVec3::new(1.0, 2.0, 1.0));
-        assert_eq!(authored.transform.rotation_z, 1.0);
+        assert_eq!(
+            authored
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            1.0
+        );
         assert!(live.session.take_frame_changes().is_empty());
     }
 
@@ -2902,7 +3437,7 @@ mod tests {
 
     #[test]
     fn live_line_endpoints_reject_active_content_overrides() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
@@ -3273,6 +3808,56 @@ mod tests {
     }
 
     #[test]
+    fn reverse_smooth_transform_returns_to_and_freezes_the_activation_source() {
+        let mut scene = Scene::new();
+        let mut source = scene.circle(0.4).unwrap();
+        source.set_translation(1.25, -0.75).unwrap();
+        scene.add(&source).unwrap();
+        let original = source.state().unwrap();
+        let mut target = source.target_editor().unwrap();
+        target.set_translation(3.25, 1.25).unwrap();
+
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_transform_to(
+                &source,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Smooth)
+                    .reverse_rate_function(true),
+            )
+            .unwrap();
+
+        live.advance_segment_to(segment, 0.0).unwrap();
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation,
+            noon_core::Vec2::new(3.25, 1.25)
+        );
+        live.advance_segment_to(segment, 1.0).unwrap();
+        let at_finish = live.effective(&source).unwrap();
+        assert_eq!(
+            at_finish.transform.translation,
+            noon_core::Vec2::new(
+                original.transform.translation.x as f32,
+                original.transform.translation.y as f32,
+            )
+        );
+        live.complete_segment(segment).unwrap();
+        assert_eq!(live.authored(&source).unwrap(), original);
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation,
+            at_finish.transform.translation
+        );
+        live.set_translation(&source, -2.0, 0.0).unwrap();
+        assert_eq!(
+            live.effective(&source).unwrap().transform.translation.x,
+            -2.0
+        );
+    }
+
+    #[test]
     fn returning_sequence_completion_keeps_the_preceding_leaf_endpoint() {
         let mut scene = Scene::new();
         let source = scene.circle(0.4).unwrap();
@@ -3431,7 +4016,7 @@ mod tests {
 
     #[test]
     fn parallel_create_admits_all_detached_leaves_in_one_reveal_segment() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(0.4).unwrap();
         let square = scene.square(0.8).unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -3474,7 +4059,7 @@ mod tests {
 
     #[test]
     fn parallel_create_rejects_duplicate_detached_target_before_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(0.4).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -3508,7 +4093,7 @@ mod tests {
 
     #[test]
     fn affine_lifecycle_admits_from_effective_channels_then_removes_at_completion() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let authored = square.state().unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -3556,7 +4141,7 @@ mod tests {
 
     #[test]
     fn detached_effective_center_removal_admits_and_removes_one_identity_atomically() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut square = scene.square(1.0).unwrap();
         square.set_translation(2.0, -1.0).unwrap();
         let detached_family = {
@@ -3605,7 +4190,7 @@ mod tests {
 
     #[test]
     fn grow_then_shrink_preserves_an_unmounted_family_membership() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let detached_family = {
             let mut store = scene.integration_store().borrow_mut();
@@ -3696,7 +4281,7 @@ mod tests {
 
     #[test]
     fn affine_removal_rejects_another_live_reachable_parent() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let live_family = {
             let mut store = scene.integration_store().borrow_mut();
@@ -3738,7 +4323,7 @@ mod tests {
 
     #[test]
     fn invalid_detached_affine_removal_does_not_admit_or_publish() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -3817,7 +4402,7 @@ mod tests {
 
     #[test]
     fn uncreate_honors_asymmetric_reversal_without_removing_kept_target() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -3847,7 +4432,7 @@ mod tests {
 
     #[test]
     fn uncreate_honors_explicit_forward_rate_and_keeps_membership() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -4103,7 +4688,7 @@ mod tests {
 
     #[test]
     fn mixed_composition_rejects_foreign_leaf_before_detached_admission() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.rectangle(2.0, 2.0).unwrap();
         let mut target = square.target_editor().unwrap();
         target.rotate(std::f64::consts::PI).unwrap();
@@ -4144,7 +4729,7 @@ mod tests {
 
     #[test]
     fn unsupported_point_correspondence_rolls_back_detached_admission() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         let mut target = line.target_editor().unwrap();
         target.rotate(std::f64::consts::PI).unwrap();
@@ -4184,7 +4769,7 @@ mod tests {
 
     #[test]
     fn mixed_sequence_preserves_rotate_before_transform_order() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let rotating = scene.square(1.0).unwrap();
         let moving = scene.square(1.0).unwrap();
         let mut moving_target = moving.target_editor().unwrap();
@@ -4418,7 +5003,7 @@ mod tests {
             .create_manim_geometry(crate::ManimGeometryOptions::square(0.7).unwrap())
             .unwrap();
         let _family = live
-            .family(&[
+            .create_family(&[
                 MobjectTarget::Object(&first),
                 MobjectTarget::Object(&second),
             ])
@@ -4456,12 +5041,15 @@ mod tests {
     #[test]
     fn fade_in_accepts_detached_family_members_but_rejects_reachable_targets() {
         for nested_family in [false, true] {
-            let scene = Scene::new();
+            let mut scene = Scene::new();
             let shape = scene.circle(0.5).unwrap();
             let family = scene.family(&[(&shape).into()]).unwrap();
-            let mut session = scene.execution_session().unwrap();
-            let mut live = scene.live(&mut session);
-            let outer = live.family(&[MobjectTarget::Family(&family)]).unwrap();
+            let execution = scene.execution_session().unwrap();
+            scene.install_execution(execution);
+            let outer = scene.family(&[MobjectTarget::Family(&family)]).unwrap();
+            let root = scene.root();
+            let store = Rc::clone(scene.integration_store());
+            let mut live = scene.owned_live();
             let segment = if nested_family {
                 live.declare_and_activate_family_fade(
                     &family,
@@ -4485,10 +5073,9 @@ mod tests {
                 .unwrap();
             live.complete_segment(segment).unwrap();
             assert_eq!(live.effective(&shape).unwrap().appearance, 1.0);
-            assert!(!scene
-                .integration_store()
+            assert!(!store
                 .borrow()
-                .semantic_family_members_checked(scene.root())
+                .semantic_family_members_checked(root)
                 .unwrap()
                 .contains(&outer.node_id()));
             let before = live.session.publication_context();
@@ -4658,7 +5245,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn nested_add_and_wait_publish_one_membership_batch_and_one_segment() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -4723,7 +5310,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn repeated_detached_add_is_rejected_before_any_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -4757,6 +5344,239 @@ mod recursive_composition_tests {
         assert_eq!(session.publication_context(), before);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn create_only_shares_detached_admission_with_point_morph_driver() {
+        let mut scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        let target = square.target_editor().unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let before = session.publication_context();
+        let before_nodes = square.integration_store().borrow().len();
+        let request = AnimationCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new(),
+            children: vec![
+                AnimationCompositionRequest::Create {
+                    target: &square,
+                    options: linear(0.2),
+                },
+                AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                    &square,
+                    &target,
+                    linear(0.2),
+                )),
+            ],
+        };
+        let result = scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new());
+        assert!(matches!(
+            result,
+            Err(LiveSessionError::Activation(
+                ExecutionSessionAnimationError::CreateTarget {
+                    error: crate::ExecutionSessionCreateError::DuplicateTarget,
+                    ..
+                }
+            ))
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(square.integration_store().borrow().len(), before_nodes);
+        assert!(session.frame().objects.is_empty());
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+    #[test]
+    fn reveal_and_effect_edit_share_one_admission_in_either_order() {
+        use crate::effects::{EffectDefinition, GlowUpdate};
+        for mode in 0..3 {
+            for reverse in [false, true] {
+                for attached in [false, true] {
+                    let initial = if attached { 0.5 } else { 0.0 };
+                    let midpoint = (initial + 1.5) * 0.5;
+                    let mut scene = Scene::new();
+                    let mut source = if mode == 0 {
+                        scene.circle(1.0).unwrap()
+                    } else {
+                        scene.text(crate::Text::new("Write")).unwrap()
+                    };
+                    if attached {
+                        source
+                            .set_glow(GlowUpdate::default().intensity(initial))
+                            .unwrap();
+                    }
+                    let mut target = source.target_editor().unwrap();
+                    target
+                        .set_glow(GlowUpdate::default().intensity(1.5))
+                        .unwrap();
+                    let mut session = scene.execution_session().unwrap();
+                    let reveal = match mode {
+                        0 => AnimationCompositionRequest::Create {
+                            target: &source,
+                            options: linear(1.0),
+                        },
+                        1 => AnimationCompositionRequest::TextReveal {
+                            target: &source,
+                            reverse: false,
+                            options: linear(1.0),
+                        },
+                        _ => AnimationCompositionRequest::TextWrite {
+                            target: &source,
+                            reverse_member_order: false,
+                            options: linear(1.0),
+                        },
+                    };
+                    let edit = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                        &source,
+                        &target,
+                        linear(1.0),
+                    ));
+                    let mut children = vec![reveal, edit];
+                    if reverse {
+                        children.reverse();
+                    }
+                    let request = AnimationCompositionRequest::Composition {
+                        kind: SemanticAnimationCompositionKind::Parallel,
+                        options: AnimationOptions::new(),
+                        children,
+                    };
+                    let mut live = scene.live(&mut session);
+                    let segment = live
+                        .declare_and_activate_composition(&request, AnimationOptions::new())
+                        .unwrap();
+                    assert!(live.contains(&source).unwrap());
+                    live.advance_segment_to(segment, 0.5).unwrap();
+                    assert_eq!(live.session.frame().objects.len(), 1);
+                    assert_eq!(
+                        live.session.frame().objects[0]
+                            .glow
+                            .as_ref()
+                            .unwrap()
+                            .definition
+                            .intensity(),
+                        midpoint
+                    );
+                    live.advance_segment_to(segment, 1.0).unwrap();
+                    live.complete_segment(segment).unwrap();
+                    let EffectDefinition::Glow(glow) = source
+                        .get_effect("glow")
+                        .unwrap()
+                        .authored_definition()
+                        .unwrap();
+                    assert_eq!(glow.intensity(), 1.5);
+                    let rewind = live.session.seek(0.5).unwrap();
+                    assert_eq!(rewind.objects.len(), 1);
+                    assert_eq!(
+                        rewind.objects[0]
+                            .glow
+                            .as_ref()
+                            .unwrap()
+                            .definition
+                            .intensity(),
+                        midpoint
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+    #[test]
+    fn concurrent_write_unwrite_keeps_the_glyph_conflict_and_publication_atomic() {
+        for reverse in [false, true] {
+            let mut scene = Scene::new();
+            let source = scene.text(crate::Text::new("AB")).unwrap();
+            scene.add(&source).unwrap();
+            let mut session = scene.execution_session().unwrap();
+            session.take_frame_changes();
+            let before = session.publication_context();
+            let nodes = source.integration_store().borrow().len();
+            let mut children = [false, true]
+                .map(
+                    |reverse_member_order| AnimationCompositionRequest::TextWrite {
+                        target: &source,
+                        reverse_member_order,
+                        options: linear(1.0),
+                    },
+                )
+                .to_vec();
+            if reverse {
+                children.reverse();
+            }
+            let request = AnimationCompositionRequest::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                options: AnimationOptions::new(),
+                children,
+            };
+            let error = scene
+                .live(&mut session)
+                .declare_and_activate_composition(&request, AnimationOptions::new())
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("ConflictingObjectDrivers"),
+                "{error}"
+            );
+            assert_eq!(session.publication_context(), before);
+            assert_eq!(source.integration_store().borrow().len(), nodes);
+            assert_eq!(session.frame().objects.len(), 1);
+            assert!(session.take_frame_changes().is_empty());
+        }
+    }
+
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+    #[test]
+    fn reveal_with_competing_introductions_or_combined_pose_edit_is_atomic() {
+        use crate::effects::GlowUpdate;
+        for duplicate in [false, true] {
+            let mut scene = Scene::new();
+            let mut source = scene.text(crate::Text::new("Write")).unwrap();
+            source
+                .set_glow(GlowUpdate::default().intensity(0.5))
+                .unwrap();
+            let mut target = source.target_editor().unwrap();
+            target
+                .set_glow(GlowUpdate::default().intensity(1.5))
+                .unwrap();
+            if !duplicate {
+                target.shift(1.0, 0.0).unwrap();
+            }
+            let mut session = scene.execution_session().unwrap();
+            session.take_frame_changes();
+            let before = session.publication_context();
+            let nodes = source.integration_store().borrow().len();
+            let write = || AnimationCompositionRequest::TextWrite {
+                target: &source,
+                reverse_member_order: false,
+                options: linear(1.0),
+            };
+            let mut children = vec![
+                write(),
+                AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                    &source,
+                    &target,
+                    linear(1.0),
+                )),
+            ];
+            if duplicate {
+                children.push(write());
+            }
+            let request = AnimationCompositionRequest::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                options: AnimationOptions::new(),
+                children,
+            };
+            assert!(scene
+                .live(&mut session)
+                .declare_and_activate_composition(&request, AnimationOptions::new())
+                .is_err());
+            assert_eq!(session.publication_context(), before);
+            assert_eq!(source.integration_store().borrow().len(), nodes);
+            assert!(session.frame().objects.is_empty());
+            assert!(session.take_frame_changes().is_empty());
+        }
     }
 
     #[test]
@@ -4988,7 +5808,15 @@ mod recursive_composition_tests {
             Ok(4.0)
         );
         assert!(
-            (square.state().unwrap().transform.rotation_z - std::f64::consts::PI).abs() < 1e-12
+            (square
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .unwrap_or(f64::NAN)
+                - std::f64::consts::PI)
+                .abs()
+                < 1e-12
         );
 
         live.set_value(&tracker, 3.0).unwrap();
@@ -5000,7 +5828,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn invalid_mixed_sibling_rolls_back_tracker_scope_and_object_admission() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 0.0).unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -5167,7 +5995,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn live_family_arrange_uses_detached_authored_bounds_in_one_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -5175,7 +6003,11 @@ mod recursive_composition_tests {
         let before = session.publication_context();
         let mut live = scene.live(&mut session);
 
-        live.arrange_family(&family, 1.0, 0.0, 0.2, true).unwrap();
+        live.arrange_family_with_options(
+            &family,
+            &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
+        )
+        .unwrap();
         let publication = live.session.publication_context();
         let first_center = first.center().unwrap();
         let second_center = second.center().unwrap();
@@ -5215,13 +6047,20 @@ mod recursive_composition_tests {
             let unrelated_before = live.effective(&unrelated).unwrap();
 
             assert!(live
-                .arrange_family(&outer, 1.0, 0.0, f64::NAN, true)
+                .arrange_family_with_options(
+                    &outer,
+                    &crate::FamilyArrangeOptions::new(1.0, 0.0, f64::NAN, true)
+                )
                 .is_err());
             assert_eq!(live.session.publication_context(), before);
             assert_eq!(first.center().unwrap(), (0.0, 0.0));
             assert_eq!(second.center().unwrap(), (2.0, 0.0));
 
-            live.arrange_family(&outer, 1.0, 0.0, 0.2, true).unwrap();
+            live.arrange_family_with_options(
+                &outer,
+                &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
+            )
+            .unwrap();
             assert_eq!(
                 live.session.publication_context().scene_revision(),
                 before.scene_revision().checked_next().unwrap()
@@ -5246,7 +6085,7 @@ mod recursive_composition_tests {
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_fade_preserves_family_membership_and_ordered_lifecycle() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let label = scene.text(crate::Text::new("Fade")).unwrap();
         let shape = scene.circle(0.25).unwrap();
         let family = scene.family(&[(&label).into(), (&shape).into()]).unwrap();
@@ -5428,6 +6267,81 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn point_correspondence_reflection_crosses_singular_midpoint_and_releases_fixed_frame() {
+        let mut scene = Scene::new();
+        let mut square = scene.square(2.0).unwrap();
+        square
+            .set_fill(
+                f64::from(Color::BLUE.red),
+                f64::from(Color::BLUE.green),
+                f64::from(Color::BLUE.blue),
+                1.0,
+            )
+            .unwrap();
+        scene.add(&square).unwrap();
+        let mut target = square.target_editor().unwrap();
+        target.scale(-1.0, 1.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let options = linear(1.0);
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[AnimationCompositionRequest::TransformTo(
+                    TransformToRequest::point_correspondence(&square, &target, options),
+                )],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        let midpoint = segment.start_time() + 0.5;
+        live.advance_segment_to(segment, midpoint).unwrap();
+        assert!(live.effective(&square).unwrap().transform.scale.x.abs() < 1.0e-6);
+        let forward_midpoint = live.session.frame().objects.clone();
+        live.session.seek(segment.start_time()).unwrap();
+        live.session.seek(midpoint).unwrap();
+        assert_eq!(live.session.frame().objects, forward_midpoint);
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert!((square.state().unwrap().transform.scale.x + 1.0).abs() < 1.0e-12);
+        assert!((square.state().unwrap().transform.scale.y - 1.0).abs() < 1.0e-12);
+
+        let follow = live
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[AnimationCompositionRequest::Rotate {
+                    target: &square,
+                    angle: 0.4,
+                    options,
+                }],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        live.advance_segment_to(follow, follow.start_time() + 0.5)
+            .unwrap();
+        let rotated = live.effective(&square).unwrap();
+        assert!(rotated.transform.rotation.is_finite());
+        assert!((rotated.transform.rotation - 0.2).abs() < 1.0e-5);
+        live.advance_segment_to(follow, follow.end_time()).unwrap();
+        live.complete_segment(follow).unwrap();
+        assert!(
+            (square
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .unwrap_or(f64::NAN)
+                - 0.4)
+                .abs()
+                < 1.0e-12
+        );
+    }
+
+    #[test]
     fn indicate_restores_the_activation_effective_source() {
         let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
@@ -5573,7 +6487,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn draw_border_then_fill_holds_the_explicit_outline_through_the_reveal_phase() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut square = scene.square(1.0).unwrap();
         square
             .set_fill(
@@ -5633,7 +6547,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn increasing_subsets_uses_absolute_floor_thresholds_and_retains_members() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         first.set_fill_opacity(0.35).unwrap();
@@ -5688,7 +6602,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn one_by_one_default_smooth_keeps_the_prior_member_at_the_exact_boundary() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -5732,7 +6646,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn one_by_one_preserves_the_strict_boundary_through_nested_smooth_maps() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -5778,7 +6692,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn three_member_one_by_one_keeps_prior_member_at_fractional_boundaries() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let third = scene.square(1.0).unwrap();
@@ -5882,7 +6796,7 @@ mod recursive_composition_tests {
             .create_manim_geometry(crate::ManimGeometryOptions::circle(0.25).unwrap())
             .unwrap();
         let family = live
-            .family(&[
+            .create_family(&[
                 MobjectTarget::Object(&first),
                 MobjectTarget::Object(&second),
             ])
@@ -5919,7 +6833,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn subset_preparation_rejects_nested_families_without_partial_style_changes() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.square(1.0).unwrap();
         first.set_fill_opacity(1.0).unwrap();
         let nested_member = scene.square(1.0).unwrap();
@@ -5962,7 +6876,7 @@ mod recursive_composition_tests {
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_text_write_admits_and_unwrite_removes_one_family_root_atomically() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let left = scene.text(crate::Text::new("A")).unwrap();
         let right = scene.text(crate::Text::new("BCDE")).unwrap();
         let family = scene.family(&[(&left).into(), (&right).into()]).unwrap();

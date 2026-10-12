@@ -16,7 +16,7 @@ const artifactRoot = path.resolve(
   process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts",
 );
 const manifest = JSON.parse(
-  await readFile(path.join(repoRoot, "parity", "manim-v0.21", "manifest.json"), "utf8"),
+  await readFile(path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json"), "utf8"),
 );
 const report = JSON.parse(await readFile(path.join(artifactRoot, "report.json"), "utf8"));
 
@@ -36,6 +36,10 @@ for (const fixtureReport of report.fixtures) {
   for (const [backend, backendReport] of Object.entries(fixtureReport.backends)) {
     const samples = [];
     for (const sample of backendReport.samples) {
+      if (fixture.id.startsWith("vector-space-lts-")) {
+        assert.equal(sample.foregroundCoverage?.pass, true,
+          `${fixture.id}/${backend}@${sample.time}: missing or failed grid coverage qualification`);
+      }
       const result = evaluateRasterTolerance({
         sample,
         timingDelta: backendReport.durationDelta,

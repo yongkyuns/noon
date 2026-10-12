@@ -83,7 +83,7 @@ impl LiveContinuation for OrdinaryMembership {
 }
 
 pub fn program() -> Result<LiveProgram<OrdinaryMembership>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut red = scene.square(2.0).map_err(|error| error.to_string())?;
     red.set_fill(1.0, 0.0, 0.0, 1.0)
         .map_err(|error| error.to_string())?;

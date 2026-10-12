@@ -59,7 +59,7 @@ fn assert_live_unchanged(
 
 #[test]
 fn constructor_and_resource_rejections_do_not_allocate_and_recover() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     assert!(matches!(
         scene.circle(0.0),
@@ -113,7 +113,7 @@ fn constructor_and_resource_rejections_do_not_allocate_and_recover() -> TestResu
 
 #[test]
 fn style_transform_and_query_categories_are_typed_and_atomic() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene.circle(1.0)?;
     let before = snapshot(&scene, &[&object]);
     assert!(matches!(
@@ -143,7 +143,7 @@ fn style_transform_and_query_categories_are_typed_and_atomic() -> TestResult {
 
 #[test]
 fn scalar_failures_preserve_domain_and_transaction_causes() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     let error = scene.value_tracker(f64::NAN).unwrap_err();
     assert_eq!(
@@ -196,7 +196,7 @@ fn scalar_failures_preserve_domain_and_transaction_causes() -> TestResult {
 
 #[test]
 fn duplicate_binding_preserves_existing_signal_and_same_binding_is_a_noop() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let object = scene.circle(1.0)?;
     let tracker = scene.value_tracker(1.0)?;
     let first = scene.position_from_tracker(
@@ -234,7 +234,7 @@ fn duplicate_binding_preserves_existing_signal_and_same_binding_is_a_noop() -> T
 
 #[test]
 fn layout_and_copy_failures_leave_all_family_leaves_unchanged() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let left = scene.circle(1.0)?;
     let right = scene.square(1.0)?;
     let family = scene.family(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])?;
@@ -366,7 +366,10 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
     let unaffected_id = session.execution_object_id(unaffected.node_id());
     let error = scene
         .live(&mut session)
-        .arrange_family(&family, 1.0, 0.0, 0.1, true)
+        .arrange_family_with_options(
+            &family,
+            &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
+        )
         .unwrap_err();
     assert!(matches!(
         error,
@@ -409,7 +412,10 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
     let mut live = scene.live(&mut session);
     live.advance_segment_to(segment, segment.end_time())?;
     live.complete_segment(segment)?;
-    live.arrange_family(&family, 1.0, 0.0, 0.1, true)?;
+    live.arrange_family_with_options(
+        &family,
+        &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
+    )?;
     assert_eq!(
         session.execution_object_id(unaffected.node_id()),
         unaffected_id
@@ -469,7 +475,7 @@ fn rejection_retains_previously_queued_changes_and_local_recovery() -> TestResul
 fn callback_family_invalid_paint_retains_shared_cause_before_reads_and_recovers() -> TestResult {
     use noon::{FamilyCallbackPaintError, FamilyPaint, Style};
 
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.circle(0.5)?;
     let second = scene.square(0.5)?;
     let nested = scene.family(&[(&first).into(), (&second).into()])?;
@@ -567,7 +573,7 @@ fn scalar_callback_paint_preserves_typed_rejection_and_composite_domain() -> Tes
 
 #[test]
 fn positive_number_rejection_retains_original_f64_and_recovers() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     for supplied in [
         f64::MIN_POSITIVE,

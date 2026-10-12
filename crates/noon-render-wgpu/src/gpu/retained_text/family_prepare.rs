@@ -23,6 +23,10 @@ pub enum RetainedFamilyPrepareError {
         object: ObjectId,
         glyph: TextAnimationGlyphRef,
     },
+    InvalidTextVector {
+        object: ObjectId,
+        vector_index: u32,
+    },
     UnexpectedGeometryMember(ObjectId),
     UnsupportedTextOutlineBaseline(ObjectId),
 }
@@ -52,6 +56,14 @@ impl std::fmt::Display for RetainedFamilyPrepareError {
                 "retained family preparation references missing Text glyph {}:{} on object {}",
                 glyph.run_index,
                 glyph.glyph_index,
+                object.get()
+            ),
+            Self::InvalidTextVector {
+                object,
+                vector_index,
+            } => write!(
+                formatter,
+                "retained Text object {} references missing vector item {vector_index}",
                 object.get()
             ),
             Self::UnexpectedGeometryMember(object) => write!(
@@ -95,7 +107,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -105,7 +116,7 @@ impl RetainedFramePreparer {
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPrepareError> {
         let changes = FrameChanges::all();
         self.prepare_family_with_changes(
-            device, queue, frame, plan, &changes, texts, fonts, geometries, metrics,
+            device, frame, plan, &changes, texts, fonts, geometries, metrics,
         )
     }
 
@@ -113,7 +124,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family_with_changes<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         changes: &FrameChanges,
@@ -122,9 +132,9 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPrepareError> {
+        let images = self.stage_image_publication(device, frame.retained, changes, None)?;
         self.prepare_canonical_mixed_baseline(
             device,
-            queue,
             frame.retained,
             changes,
             texts,
@@ -144,23 +154,21 @@ impl RetainedFramePreparer {
 
         let geometry = self.geometry.prepare(&self.scratch);
         self.render_items.clear();
-        rebuild_mixed_order(
+        rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
+        reorder_mixed_items(
             &mut self.render_items,
-            &self.sources,
-            &self.snapshot_text_items,
-            &geometry,
+            frame.retained,
+            &self.painter_order_indices,
         );
+        rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         self.incremental_stats.mixed_order_rebuilds = self
             .incremental_stats
             .mixed_order_rebuilds
             .saturating_add(1);
-        let glyph_batches = self
-            .render_items
-            .iter()
-            .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
-            .count();
+        let glyph_batches = self.snapshot_text_object_slots.iter().map(Vec::len).sum();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             semantic_objects: frame.retained.objects.len(),
             geometry_slots: self.scratch.objects.len(),
             glyph_batches,
@@ -183,23 +191,40 @@ impl RetainedFramePreparer {
             mask_quads: &self.snapshot_mask_quads,
             color_quads: &self.snapshot_color_quads,
             items: &self.snapshot_text_items,
+            object_glyph_slots: &self.snapshot_text_object_slots,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
             partial_upload_base_generation: None,
             dirty_mask_ranges: &self.dirty_mask_ranges,
             dirty_color_ranges: &self.dirty_color_ranges,
         };
-        Ok(PreparedRetainedGpuFrame {
+        let mut prepared = PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
             geometry,
             text_generation: self.text_generation,
             text,
             render_items: &self.render_items,
+            image_draw: PreparedImageDrawState {
+                items: &mut self.image_render_items,
+                visible_items: &mut self.visible_image_render_items,
+                keys: &mut self.image_draw_keys,
+                incremental_stats: &mut self.incremental_stats,
+                visible: false,
+            },
+            object_indices: &self.object_indices,
+            painter_ranks: &self.painter_ranks,
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,
-        })
+            capture_items: Some(PreparedSourceItems {
+                items: &self.render_items,
+                ranges: &self.render_item_ranges,
+            }),
+        };
+        prepared.commit_images(images, None);
+        Ok(prepared)
     }
 
     pub(super) fn apply_family_reveal_to_scratch(
@@ -218,18 +243,31 @@ impl RetainedFramePreparer {
                     object_id,
                     scratch_id,
                 } => {
-                    let object_index = frame
-                        .retained
-                        .objects
-                        .iter()
-                        .position(|object| object.id == object_id)
+                    let object_index = *self
+                        .object_indices
+                        .get(&object_id)
                         .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
-                    if let Some(reveal) =
+                    let scratch_index = usize::try_from(scratch_id.get()).map_err(|_| {
+                        RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
+                    })?;
+                    let text_vector = self
+                        .text_vector_member_by_scratch_slot
+                        .get(&scratch_index)
+                        .copied()
+                        .filter(|(owner, _)| *owner == object_index);
+                    let reveal = if let Some((_, vector_index)) = text_vector {
+                        self.family_text_vector_progress(
+                            frame,
+                            plan,
+                            object_index,
+                            object_id,
+                            vector_index,
+                            texts,
+                        )?
+                    } else {
                         self.family_geometry_reveal(frame, plan, object_index, object_id)?
-                    {
-                        let scratch_index = usize::try_from(scratch_id.get()).map_err(|_| {
-                            RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
-                        })?;
+                    };
+                    if let Some(reveal) = reveal {
                         let target =
                             self.scratch.reveals.get_mut(scratch_index).ok_or(
                                 RetainedFamilyPrepareError::MissingScratchObject(scratch_id),
@@ -253,6 +291,7 @@ impl RetainedFramePreparer {
                         object_index_usize,
                         object_id,
                         run_index,
+                        false,
                     )? {
                         self.push_family_glyph_run(
                             frame,
@@ -262,6 +301,7 @@ impl RetainedFramePreparer {
                             run_index,
                             texts,
                             fonts,
+                            false,
                         )?;
                     } else {
                         self.sources.push(SourceItem::FastGlyphRun {
@@ -301,7 +341,65 @@ impl RetainedFramePreparer {
             RetainedFamilyRevealMember::TextGlyph { .. } => Err(
                 RetainedFamilyPrepareError::UnsupportedTextOutlineBaseline(object),
             ),
+            RetainedFamilyRevealMember::TextVector { .. } => Err(
+                RetainedFamilyPrepareError::UnsupportedTextOutlineBaseline(object),
+            ),
         }
+    }
+
+    pub(super) fn family_text_vector_progress(
+        &mut self,
+        frame: &RetainedFamilyFrame<'_>,
+        plan: &RetainedFamilyAnimationPlan,
+        object_index: usize,
+        object_id: ObjectId,
+        vector_index: u32,
+        texts: &(impl TextResourceLookup + ?Sized),
+    ) -> Result<Option<f32>, RetainedFamilyPrepareError> {
+        if !self
+            .text_vector_member_ordinals
+            .contains_key(&(object_index, vector_index))
+        {
+            let object = frame
+                .retained
+                .objects
+                .get(object_index)
+                .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
+            let handle = object
+                .text()
+                .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
+            let resource = texts
+                .get(handle)
+                .ok_or(RetainedPrepareError::MissingTextResource)?;
+            for (ordinal, member) in noon_core::text_animation_members(resource)
+                .map_err(RetainedPrepareError::TextAnimationMembers)?
+                .into_iter()
+                .enumerate()
+            {
+                if let noon_core::TextAnimationMemberKind::Vector(vector) = member {
+                    let ordinal = u32::try_from(ordinal)
+                        .map_err(|_| RetainedPrepareError::TooManyTextAnimationMembers)?;
+                    self.text_vector_member_ordinals
+                        .insert((object_index, vector.vector_index), ordinal);
+                }
+            }
+        }
+        let Some(ordinal) = self
+            .text_vector_member_ordinals
+            .get(&(object_index, vector_index))
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let Some(leaf) = frame
+            .planned_family_leaf(plan, object_index)
+            .map_err(RetainedFamilyRevealError::FramePlan)?
+        else {
+            return Ok(None);
+        };
+        leaf.member_progress(ordinal)
+            .map(Some)
+            .map_err(|error| RetainedFamilyRevealError::Evaluation(error).into())
     }
 
     pub(super) fn family_text_run_needs_outline(
@@ -311,6 +409,7 @@ impl RetainedFramePreparer {
         object_index: usize,
         object: ObjectId,
         run_index: u32,
+        stable_rows: bool,
     ) -> Result<bool, RetainedFamilyPrepareError> {
         let Some(members) = retained_family_reveal_members_for_object(frame, plan, object_index)?
         else {
@@ -319,11 +418,12 @@ impl RetainedFramePreparer {
         for member in members {
             match member? {
                 RetainedFamilyRevealMember::TextGlyph { glyph, reveal, .. }
-                    if glyph.run_index == run_index && reveal < 1.0 =>
+                    if glyph.run_index == run_index && (stable_rows || reveal < 1.0) =>
                 {
                     return Ok(true);
                 }
                 RetainedFamilyRevealMember::TextGlyph { .. } => {}
+                RetainedFamilyRevealMember::TextVector { .. } => {}
                 RetainedFamilyRevealMember::Geometry { .. } => {
                     return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(object));
                 }
@@ -342,6 +442,7 @@ impl RetainedFramePreparer {
         run_index: u32,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
+        stable_rows: bool,
     ) -> Result<(), RetainedFamilyPrepareError> {
         let object = frame
             .retained
@@ -370,7 +471,7 @@ impl RetainedFramePreparer {
                 RetainedFamilyRevealMember::TextGlyph { glyph, reveal, .. }
                     if glyph.run_index == run_index =>
                 {
-                    if reveal <= 0.0 {
+                    if reveal <= 0.0 && !stable_rows {
                         continue;
                     }
                     let positioned = run.glyphs.get(glyph.glyph_index as usize).ok_or(
@@ -390,7 +491,7 @@ impl RetainedFramePreparer {
                         continue;
                     }
                     let fill = run.fill.or(object.style.fill).unwrap_or(Color::WHITE);
-                    self.push_geometry(
+                    let scratch_slot = self.push_geometry(
                         object_id,
                         GeometryRef::VectorPath(path),
                         object.transform,
@@ -407,8 +508,15 @@ impl RetainedFramePreparer {
                         reveal,
                         0.0,
                     );
+                    if stable_rows {
+                        self.family_plan_scratch_slots
+                            .entry(object_index)
+                            .or_default()
+                            .insert(glyph, scratch_slot);
+                    }
                 }
                 RetainedFamilyRevealMember::TextGlyph { .. } => {}
+                RetainedFamilyRevealMember::TextVector { .. } => {}
                 RetainedFamilyRevealMember::Geometry { .. } => {
                     return Err(RetainedFamilyPrepareError::UnexpectedGeometryMember(
                         object_id,
@@ -457,6 +565,8 @@ mod tests {
         store.add_member(family, first).unwrap();
         store.add_member(family, second).unwrap();
         let first_object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -466,6 +576,8 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -489,6 +601,8 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -498,6 +612,8 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -571,6 +687,8 @@ mod tests {
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
             content: noon_core::ObjectContentRef::Text(text),
@@ -589,6 +707,8 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                glow: None,
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(20),
                 content: ObjectContentRef::Text(text),

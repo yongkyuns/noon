@@ -1,4 +1,23 @@
+#[cfg(any(target_arch = "wasm32", test))]
+mod effects;
+mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
+#[cfg(target_arch = "wasm32")]
+mod brace;
+#[cfg(any(target_arch = "wasm32", test))]
+mod camera_profile;
+#[cfg(any(target_arch = "wasm32", test))]
+mod coordinates;
+#[cfg(target_arch = "wasm32")]
+mod graph;
+#[cfg(target_arch = "wasm32")]
+mod matrix;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sample_space;
+#[cfg(any(target_arch = "wasm32", test))]
+mod spatial;
+#[cfg(target_arch = "wasm32")]
+mod table;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -8,13 +27,20 @@ pub(crate) use player_ownership::PlayerReturnError;
 #[cfg(any(target_arch = "wasm32", test))]
 use player_ownership::{PlayerOwnership, RejectedPlayerReturn};
 #[cfg(test)]
+mod completed_binding_tests;
+#[cfg(test)]
 mod ownership_tests;
 #[cfg(test)]
 mod wait_bootstrap_tests;
 
+#[cfg(any(target_arch = "wasm32", test))]
+use noon::integration::CallbackPhaseToken;
 use noon_core::ObjectId;
 #[cfg(any(target_arch = "wasm32", test))]
-use noon_core::{HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction, SemanticVec3};
+use noon_core::{
+    HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction,
+    SemanticSceneMembershipRequest, SemanticStore, SemanticVec3,
+};
 
 #[derive(Clone)]
 enum OwnedSceneMembershipMember {
@@ -22,28 +48,280 @@ enum OwnedSceneMembershipMember {
         wrapper_id: Option<ObjectId>,
         handle: noon::Mobject,
     },
+    #[cfg(any(target_arch = "wasm32", test))]
+    CallbackProvisional {
+        token: CallbackPhaseToken,
+        local: noon_core::SemanticLocalNodeToken,
+    },
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Family(noon::MobjectFamily),
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SceneMembershipBatchKind {
+pub(crate) enum SceneMembershipBatchKind {
     Add,
+    AddForeground,
+    RemoveForeground,
     Remove,
     Clear,
     Replace,
     BringToBack,
 }
 
-struct SceneMembershipBatch {
+// The browser binding constructs these policies; native builds validate the
+// same batch type without exposing the JS constructor.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(Clone, Copy)]
+pub(crate) enum SpatialMembershipPolicy {
+    Assign(noon_core::SemanticSpatialCompositionDomain),
+    DefaultWorld,
+}
+
+impl SpatialMembershipPolicy {
+    fn apply_scene(
+        self,
+        scene: &mut noon::Scene,
+        targets: &[noon::MobjectTarget<'_>],
+    ) -> Result<(), AuthoringFailure> {
+        match self {
+            Self::Assign(domain) => scene.add_all_in_spatial_composition_domain(targets, domain),
+            Self::DefaultWorld => scene.add_all_world_mobjects(targets),
+        }
+        .map(|_| ())
+        .map_err(Into::into)
+    }
+}
+
+pub(crate) struct SceneMembershipBatch {
     kind: SceneMembershipBatchKind,
+    spatial_domain: Option<SpatialMembershipPolicy>,
     members: Vec<OwnedSceneMembershipMember>,
     bindings: Vec<(ObjectId, noon::Mobject)>,
 }
 
+#[cfg(test)]
+pub(crate) enum CallbackMembershipTestMember {
+    Existing(noon::Mobject),
+    Provisional {
+        token: CallbackPhaseToken,
+        local: noon_core::SemanticLocalNodeToken,
+    },
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 impl SceneMembershipBatch {
+    #[cfg(test)]
+    pub(crate) fn callback_existing(
+        kind: SceneMembershipBatchKind,
+        members: impl IntoIterator<Item = noon::Mobject>,
+    ) -> Self {
+        Self {
+            kind,
+            spatial_domain: None,
+            members: members
+                .into_iter()
+                .map(|handle| OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle,
+                })
+                .collect(),
+            bindings: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn callback_ordered(
+        kind: SceneMembershipBatchKind,
+        members: impl IntoIterator<Item = CallbackMembershipTestMember>,
+    ) -> Self {
+        Self {
+            kind,
+            spatial_domain: None,
+            members: members
+                .into_iter()
+                .map(|member| match member {
+                    CallbackMembershipTestMember::Existing(handle) => {
+                        OwnedSceneMembershipMember::Mobject {
+                            wrapper_id: None,
+                            handle,
+                        }
+                    }
+                    CallbackMembershipTestMember::Provisional { token, local } => {
+                        OwnedSceneMembershipMember::CallbackProvisional { token, local }
+                    }
+                })
+                .collect(),
+            bindings: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn callback_with_provisional(
+        kind: SceneMembershipBatchKind,
+        members: impl IntoIterator<Item = noon::Mobject>,
+        token: CallbackPhaseToken,
+        local: noon_core::SemanticLocalNodeToken,
+    ) -> Self {
+        let mut batch = Self::callback_existing(kind, members);
+        batch
+            .members
+            .push(OwnedSceneMembershipMember::CallbackProvisional { token, local });
+        batch
+    }
+
+    /// Validate only existing typed handles for one required callback's scene
+    /// membership edit. The callback boundary cannot create Python bindings or
+    /// infer identity from a numeric node slot: every target stays attached to
+    /// its original semantic store until this closure stages the shared core
+    /// request.
+    pub(crate) fn with_existing_callback_membership<R>(
+        &self,
+        store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+        apply: impl FnOnce(SemanticSceneMembershipRequest<'_>) -> Result<R, AuthoringFailure>,
+    ) -> Result<R, AuthoringFailure> {
+        if self.spatial_domain.is_some() {
+            return Err(AuthoringFailure::new(
+                "unsupported_operation",
+                "callback.spatial_domain",
+                "spatial membership edits require an ordinary continuation boundary",
+            ));
+        }
+        let ids = self
+            .family_members()
+            .map_err(AuthoringFailure::from)?
+            .into_iter()
+            .map(|member| match member {
+                noon::MobjectTarget::Object(handle) => {
+                    if !std::rc::Rc::ptr_eq(store, handle.integration_store()) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback membership handle belongs to another authoring store",
+                            ));
+                    }
+                    handle.validate().map_err(AuthoringFailure::from)?;
+                    Ok(handle.node_id())
+                }
+                noon::MobjectTarget::Family(family) => {
+                    if !std::rc::Rc::ptr_eq(store, family.integration_store()) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback membership handle belongs to another authoring store",
+                            ));
+                    }
+                    family.validate().map_err(AuthoringFailure::from)?;
+                    Ok(family.node_id())
+                }
+            })
+            .collect::<Result<Vec<_>, AuthoringFailure>>()?;
+        let request = match self.kind {
+            SceneMembershipBatchKind::Add => SemanticSceneMembershipRequest::Add(&ids),
+            SceneMembershipBatchKind::Remove => SemanticSceneMembershipRequest::Remove(&ids),
+            SceneMembershipBatchKind::Clear => {
+                if !ids.is_empty() {
+                    return Err(AuthoringFailure::new(
+                        "invalid_input",
+                        "boundary.clear_members",
+                        "Clear membership batch must not contain members",
+                    ));
+                }
+                SemanticSceneMembershipRequest::Clear
+            }
+            _ => {
+                return Err(AuthoringFailure::new(
+                    "unsupported_operation",
+                    "callback.membership_operation",
+                    "required callbacks currently support add, remove, and clear membership",
+                ));
+            }
+        };
+        apply(request)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn has_callback_provisionals(&self) -> bool {
+        self.members.iter().any(|member| {
+            matches!(
+                member,
+                OwnedSceneMembershipMember::CallbackProvisional { .. }
+            )
+        })
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn callback_provisionals(&self) -> Option<Vec<noon_core::SemanticLocalNodeToken>> {
+        let locals = self
+            .members
+            .iter()
+            .filter_map(|member| match member {
+                OwnedSceneMembershipMember::CallbackProvisional { local, .. } => Some(*local),
+                OwnedSceneMembershipMember::Mobject { .. }
+                | OwnedSceneMembershipMember::Family(_) => None,
+            })
+            .collect::<Vec<_>>();
+        (!locals.is_empty()).then_some(locals)
+    }
+
+    /// Validate one ordered callback-local Scene.add batch. Existing typed
+    /// handles retain their original store provenance; pending names retain the
+    /// exact callback token that created them. The returned references preserve
+    /// source argument order for the shared pending-node admission planner.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn with_callback_mixed_addition<R>(
+        &self,
+        expected_token: CallbackPhaseToken,
+        store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+        apply: impl FnOnce(Vec<noon_core::SemanticTransactionNodeRef>) -> Result<R, AuthoringFailure>,
+    ) -> Result<R, AuthoringFailure> {
+        if self.kind != SceneMembershipBatchKind::Add {
+            return Err(AuthoringFailure::new(
+                "unsupported_operation",
+                "callback.membership_operation",
+                "callback-local objects currently support Scene.add only",
+            ));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(self.members.len());
+        let mut members = Vec::with_capacity(self.members.len());
+        for member in &self.members {
+            let reference = match member {
+                OwnedSceneMembershipMember::Mobject { wrapper_id, handle } => {
+                    if wrapper_id.is_some() {
+                        return Err("callback membership cannot reserve wrapper bindings".into());
+                    }
+                    if !std::rc::Rc::ptr_eq(store, handle.integration_store()) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback membership handle belongs to another authoring store",
+                            ));
+                    }
+                    handle.validate().map_err(AuthoringFailure::from)?;
+                    handle.node_id().into()
+                }
+                OwnedSceneMembershipMember::Family(family) => {
+                    if !std::rc::Rc::ptr_eq(store, family.integration_store()) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback membership handle belongs to another authoring store",
+                            ));
+                    }
+                    family.validate().map_err(AuthoringFailure::from)?;
+                    family.node_id().into()
+                }
+                OwnedSceneMembershipMember::CallbackProvisional { token, local } => {
+                    if *token != expected_token {
+                        return Err("callback provisional geometry token is stale".into());
+                    }
+                    (*local).into()
+                }
+            };
+            if !seen.insert(reference) {
+                return Err("callback membership request contains a duplicate Mobject".into());
+            }
+            members.push(reference);
+        }
+        apply(members)
+    }
+
     fn create_family(
         &self,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
@@ -84,6 +362,10 @@ impl SceneMembershipBatch {
                     wrapper_id: Some(_),
                     ..
                 } => Err("family membership does not accept wrapper binding IDs".into()),
+                #[cfg(any(target_arch = "wasm32", test))]
+                OwnedSceneMembershipMember::CallbackProvisional { .. } => {
+                    Err("callback-local membership requires the pinned callback collector".into())
+                }
                 OwnedSceneMembershipMember::Family(family) => Ok(family.into()),
             })
             .collect()
@@ -93,6 +375,16 @@ impl SceneMembershipBatch {
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone)]
 enum OrdinaryCompositionChild {
+    WorldTransform {
+        target: noon::Mobject,
+        transform: noon_core::SemanticWorldTransform3D,
+        options: noon_core::AnimationOptions,
+    },
+    CameraProfile {
+        target: noon::Mobject,
+        profile: noon_core::ManimCamera3DProfile,
+        options: noon_core::AnimationOptions,
+    },
     FocusOn {
         focus: noon::FocusOnOptions,
         options: noon_core::AnimationOptions,
@@ -105,7 +397,28 @@ enum OrdinaryCompositionChild {
         complete_priority: bool,
         options: noon_core::AnimationOptions,
     },
+    MoveAlongPath {
+        target: noon::Mobject,
+        path: noon::Mobject,
+        options: noon_core::AnimationOptions,
+    },
+    CallbackInterval {
+        target: noon::Mobject,
+        callback: noon_core::HostCallbackId,
+        options: noon_core::AnimationOptions,
+    },
     FamilyTransformTo {
+        source: noon::MobjectFamily,
+        target_state: noon::MobjectFamily,
+        options: noon_core::AnimationOptions,
+    },
+    MatchingFamilyTransformTo {
+        source: noon::MobjectFamily,
+        target_state: noon::MobjectFamily,
+        options: noon_core::AnimationOptions,
+    },
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    MatchingSourceFamilyTransformTo {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,
         options: noon_core::AnimationOptions,
@@ -201,6 +514,12 @@ enum OrdinaryCompositionChild {
         direction: SemanticFadeDirection,
         options: noon_core::AnimationOptions,
     },
+    FamilyArrowGrow {
+        target: noon::MobjectFamily,
+        arrow: noon::ManimArrow,
+        entering: Vec<(ObjectId, noon::Mobject)>,
+        options: noon_core::AnimationOptions,
+    },
     Create {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
@@ -232,6 +551,8 @@ pub struct CanonicalAuthoringScene {
     bindings: BTreeMap<ObjectId, noon_core::SemanticNodeId>,
     identities: BTreeMap<noon_core::SemanticNodeId, ObjectId>,
     #[cfg(any(target_arch = "wasm32", test))]
+    translation_drag_targets: Vec<noon::Mobject>,
+    #[cfg(any(target_arch = "wasm32", test))]
     player_ownership: PlayerOwnership,
 }
 
@@ -253,6 +574,8 @@ impl CanonicalAuthoringScene {
             bindings: BTreeMap::new(),
             identities: BTreeMap::new(),
             #[cfg(any(target_arch = "wasm32", test))]
+            translation_drag_targets: Vec::new(),
+            #[cfg(any(target_arch = "wasm32", test))]
             player_ownership: PlayerOwnership::Unstarted,
         }
     }
@@ -264,6 +587,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<(), AuthoringFailure> {
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: Some(id),
                 handle: handle.clone(),
@@ -386,7 +710,9 @@ impl CanonicalAuthoringScene {
         if let Some(player) = self.player_ownership.local_mut() {
             player.set_loop_duration(duration)?;
         } else {
-            self.player_ownership = PlayerOwnership::Active(self.build_live_player(duration, 0)?);
+            let mut player = self.build_live_player(duration, 0)?;
+            player.begin_replay_retention()?;
+            self.player_ownership = PlayerOwnership::Active(player);
         }
         Ok(self
             .player_ownership
@@ -400,13 +726,55 @@ impl CanonicalAuthoringScene {
         duration: f64,
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {
-        crate::SemanticExecutionPlayer::from_live_session(
+        let mut player = crate::SemanticExecutionPlayer::from_live_session(
             self.lower_execution()?,
             std::rc::Rc::clone(self.scene.integration_store()),
             self.scene.root(),
             duration,
             transport_session,
-        )
+        )?;
+        // Do not change pre-existing input/callback admission for scenes with
+        // no drag declaration. A nonempty source declaration alone enables
+        // the drag policy on a freshly lowered player.
+        if !self.translation_drag_targets.is_empty() {
+            player.set_translation_drag_targets(&self.translation_drag_targets)?;
+        }
+        Ok(player)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn set_translation_drag_targets(
+        &mut self,
+        targets: Vec<noon::Mobject>,
+    ) -> Result<(), AuthoringFailure> {
+        let mut seen = BTreeSet::new();
+        for target in &targets {
+            if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+                return Err(noon::AuthoringError::ForeignStore.into());
+            }
+            target.validate().map_err(AuthoringFailure::from)?;
+            if !self.identities.contains_key(&target.node_id()) {
+                return Err("translation drag target is not bound to this canonical Scene".into());
+            }
+            if !seen.insert(target.node_id()) {
+                return Err("translation drag targets must be unique".into());
+            }
+        }
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        if self.player_ownership.is_unstarted() {
+            self.translation_drag_targets = targets;
+        } else {
+            self.active_live_player()?
+                .set_translation_drag_targets(&targets)
+                .map_err(AuthoringFailure::from)?;
+            // Keep the declaration with the canonical source owner as well as
+            // the currently borrowed runtime. A later explicit rebuild must
+            // receive the same source policy, never a stale pre-run list.
+            self.translation_drag_targets = targets;
+        }
+        Ok(())
     }
 
     /// Refresh a dormant presentation runtime only at an explicit run or lease
@@ -522,7 +890,7 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(
             handle,
             noon::Mobject::path_query,
-            crate::SemanticExecutionPlayer::live_effective_path_query,
+            crate::SemanticExecutionPlayer::effective_path_query,
         )
     }
 
@@ -662,6 +1030,25 @@ impl CanonicalAuthoringScene {
             );
         }
         Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn bind_click_indicate(
+        &mut self,
+        target: &noon::Mobject,
+        indication: noon::IndicateOptions,
+        options: noon_core::AnimationOptions,
+    ) -> Result<(), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        match self.player_ownership.local_mut() {
+            Some(player) => player.live_bind_click_indicate(target, indication, options),
+            None => self
+                .scene
+                .on_click_indicate(target, indication, options)
+                .map_err(AuthoringFailure::from),
+        }
     }
 
     /// Create one scalar signal in this context's shared semantic store.
@@ -883,6 +1270,49 @@ impl CanonicalAuthoringScene {
             .unwrap_or_else(|| self.scene.time())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn next_section(&mut self, name: String, skip: bool) -> Result<(), String> {
+        if self.player_ownership.is_transferred() {
+            return Err("section declaration cannot mutate while execution is transferred".into());
+        }
+        // Validate and commit the observed cursor plus section as one Scene
+        // operation so a rejected declaration cannot advance authored metadata.
+        let time = self
+            .live_handoff_duration()
+            .unwrap_or_else(|| self.scene.time());
+        self.scene
+            .next_section_at(
+                name,
+                if skip {
+                    noon::SectionType::Skip
+                } else {
+                    noon::SectionType::Normal
+                },
+                time,
+            )
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn sections_json(&self) -> Result<String, String> {
+        let rows = self
+            .scene
+            .sections()
+            .iter()
+            .map(|section| {
+                serde_json::json!({
+                    "name": section.name,
+                    "type": match section.section_type {
+                        noon::SectionType::Normal => "normal",
+                        noon::SectionType::Skip => "skip",
+                    },
+                    "time": section.time,
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_string(&rows).map_err(|error| error.to_string())
+    }
+
     /// Advance the shared Rust authoring cursor without declaring legacy timing.
     #[cfg(any(target_arch = "wasm32", test))]
     fn authored_wait(&mut self, duration: f64) -> Result<f64, String> {
@@ -931,6 +1361,7 @@ impl CanonicalAuthoringScene {
             // A wait has no animation extent, but the presentation clock still needs a
             // positive valid range before its session-derived deadline replaces it.
             let mut player = self.build_live_player(duration.max(1.0), 0)?;
+            player.begin_replay_retention()?;
             let end_time = player.live_wait(duration)?;
             // Shared admission is fallible. Publish the first runtime only once
             // it owns a valid segment; rejection leaves this context unstarted.
@@ -1123,6 +1554,24 @@ impl CanonicalAuthoringScene {
             );
         fn request(child: &OrdinaryCompositionChild) -> noon::AnimationCompositionRequest<'_> {
             match child {
+                OrdinaryCompositionChild::WorldTransform {
+                    target,
+                    transform,
+                    options,
+                } => noon::AnimationCompositionRequest::WorldTransform {
+                    target,
+                    transform: *transform,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::CameraProfile {
+                    target,
+                    profile,
+                    options,
+                } => noon::AnimationCompositionRequest::CameraProfile {
+                    target,
+                    profile: *profile,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FocusOn { focus, options } => {
                     noon::AnimationCompositionRequest::FocusOn {
                         focus: *focus,
@@ -1151,11 +1600,47 @@ impl CanonicalAuthoringScene {
                         request
                     })
                 }
+                OrdinaryCompositionChild::MoveAlongPath {
+                    target,
+                    path,
+                    options,
+                } => noon::AnimationCompositionRequest::MoveAlongPath {
+                    target,
+                    path,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::CallbackInterval {
+                    target,
+                    callback,
+                    options,
+                } => noon::AnimationCompositionRequest::CallbackInterval {
+                    target,
+                    callback: *callback,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::FamilyTransformTo {
                     source,
                     target_state,
                     options,
                 } => noon::AnimationCompositionRequest::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => noon::AnimationCompositionRequest::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options: *options,
+                },
+                OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => noon::AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
                     source,
                     target_state,
                     options: *options,
@@ -1319,6 +1804,12 @@ impl CanonicalAuthoringScene {
                     direction: *direction,
                     options: *options,
                 },
+                OrdinaryCompositionChild::FamilyArrowGrow { arrow, options, .. } => {
+                    noon::AnimationCompositionRequest::FamilyArrowGrow {
+                        target: arrow,
+                        options: *options,
+                    }
+                }
                 OrdinaryCompositionChild::Create {
                     target, options, ..
                 } => noon::AnimationCompositionRequest::Create {
@@ -1363,6 +1854,7 @@ impl CanonicalAuthoringScene {
         let end = if self.player_ownership.is_unstarted() {
             self.prepare_local_player_for_run()?;
             let mut player = self.build_live_player(bootstrap_duration, 0)?;
+            player.begin_replay_retention()?;
             if !allow_required_callbacks && player.has_required_callbacks() {
                 return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
             }
@@ -1381,6 +1873,10 @@ impl CanonicalAuthoringScene {
             output: &mut Vec<(ObjectId, &'a noon::Mobject)>,
         ) {
             match child {
+                OrdinaryCompositionChild::WorldTransform { .. }
+                | OrdinaryCompositionChild::CameraProfile { .. }
+                | OrdinaryCompositionChild::MoveAlongPath { .. }
+                | OrdinaryCompositionChild::CallbackInterval { .. } => {}
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
                     source,
@@ -1440,6 +1936,7 @@ impl CanonicalAuthoringScene {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::FamilyFade { entering, .. }
+                | OrdinaryCompositionChild::FamilyArrowGrow { entering, .. }
                 | OrdinaryCompositionChild::FamilyTextWrite { entering, .. }
                 | OrdinaryCompositionChild::FamilyReveal { entering, .. } => {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
@@ -1471,6 +1968,8 @@ impl CanonicalAuthoringScene {
                 | OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::FamilyTransformTo { .. }
+                | OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
+                | OrdinaryCompositionChild::MatchingSourceFamilyTransformTo { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
                 | OrdinaryCompositionChild::FamilyIndicate { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
@@ -1512,8 +2011,26 @@ impl CanonicalAuthoringScene {
             play_options,
         )
         .map_err(|error| error.to_string())?;
-        let mut ids = BTreeSet::new();
-        let mut entering_nodes = BTreeSet::new();
+        // Multiple retained channels may introduce the same detached wrapper in
+        // one composition (for example, Create plus Transform).  Those leaves
+        // share one derived wrapper identity; only conflicting id-to-node
+        // mappings are invalid.
+        let mut entering_bindings = BTreeMap::new();
+        let mut entering_identities = BTreeMap::new();
+        let mut register_entering = |id, node| {
+            let id_matches = entering_bindings
+                .get(&id)
+                .is_none_or(|bound_node| *bound_node == node);
+            let node_matches = entering_identities
+                .get(&node)
+                .is_none_or(|bound_id| *bound_id == id);
+            if !id_matches || !node_matches {
+                return false;
+            }
+            entering_bindings.insert(id, node);
+            entering_identities.insert(node, id);
+            true
+        };
         for child in children {
             let (entering_id, target, options) = match child {
                 // Value-only requests have no wrapper identity to validate. Shared
@@ -1548,6 +2065,64 @@ impl CanonicalAuthoringScene {
                         return Err(
                             "ordinary composition ValueTracker target must be finite".into()
                         );
+                    }
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    continue;
+                }
+                OrdinaryCompositionChild::MoveAlongPath {
+                    target,
+                    path,
+                    options,
+                } => {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) || !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        path.integration_store(),
+                    ) {
+                        return Err(
+                            "ordinary MoveAlongPath objects belong to another authoring store"
+                                .into(),
+                        );
+                    }
+                    target.validate().map_err(|error| error.to_string())?;
+                    path.validate().map_err(|error| error.to_string())?;
+                    if !self.identities.contains_key(&target.node_id())
+                        || !self.identities.contains_key(&path.node_id())
+                    {
+                        return Err(
+                            "ordinary MoveAlongPath target and path must belong to this Scene"
+                                .into(),
+                        );
+                    }
+                    noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    continue;
+                }
+                OrdinaryCompositionChild::CallbackInterval {
+                    target, options, ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
+                        return Err(
+                            "callback interval target belongs to another authoring store".into(),
+                        );
+                    }
+                    target.validate().map_err(|error| error.to_string())?;
+                    if !self.identities.contains_key(&target.node_id()) {
+                        return Err("callback interval target must belong to this Scene".into());
                     }
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
@@ -1611,8 +2186,7 @@ impl CanonicalAuthoringScene {
                         member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
-                            || !ids.insert(*id)
-                            || !entering_nodes.insert(member.node_id())
+                            || !register_entering(*id, member.node_id())
                         {
                             return Err(
                                 "ordinary subset-display entering identity is already bound".into(),
@@ -1622,6 +2196,12 @@ impl CanonicalAuthoringScene {
                     continue;
                 }
                 OrdinaryCompositionChild::FamilyFade {
+                    target,
+                    entering,
+                    options,
+                    ..
+                }
+                | OrdinaryCompositionChild::FamilyArrowGrow {
                     target,
                     entering,
                     options,
@@ -1669,6 +2249,16 @@ impl CanonicalAuthoringScene {
                                 .into(),
                         );
                     }
+                    if let OrdinaryCompositionChild::FamilyArrowGrow { arrow, options, .. } = child
+                    {
+                        if arrow.family().node_id() != target.node_id()
+                            || options.introducer != Some(true)
+                            || options.remover != Some(false)
+                            || options.path_arc != Some(0.0)
+                        {
+                            return Err("invalid shared Arrow growth target or lifecycle".into());
+                        }
+                    }
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
@@ -1697,8 +2287,7 @@ impl CanonicalAuthoringScene {
                         member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
-                            || !ids.insert(*id)
-                            || !entering_nodes.insert(member.node_id())
+                            || !register_entering(*id, member.node_id())
                         {
                             return Err("ordinary family entering identity is already bound".into());
                         }
@@ -1755,8 +2344,7 @@ impl CanonicalAuthoringScene {
                         member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
-                            || !ids.insert(*id)
-                            || !entering_nodes.insert(member.node_id())
+                            || !register_entering(*id, member.node_id())
                         {
                             return Err("ordinary family DrawBorderThenFill entering identity is already bound".into());
                         }
@@ -1764,6 +2352,16 @@ impl CanonicalAuthoringScene {
                     continue;
                 }
                 OrdinaryCompositionChild::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                }
+                | OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                }
+                | OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
                     source,
                     target_state,
                     options,
@@ -1781,7 +2379,13 @@ impl CanonicalAuthoringScene {
                     }
                     source.validate().map_err(|error| error.to_string())?;
                     target_state.validate().map_err(|error| error.to_string())?;
-                    noon_core::resolve_animation_options(
+                    if options.reverse_rate_function == Some(true) {
+                        return Err(
+                            noon_core::AnimationOptionsError::UnsupportedReverseRateFunction
+                                .to_string(),
+                        );
+                    }
+                    noon_core::resolve_transform_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
                         noon_core::AnimationOptions::new(),
@@ -1820,6 +2424,41 @@ impl CanonicalAuthoringScene {
                         noon_core::AnimationOptions::new(),
                     )?;
                     continue;
+                }
+                OrdinaryCompositionChild::WorldTransform {
+                    target, options, ..
+                } => (None, target, *options),
+                OrdinaryCompositionChild::CameraProfile {
+                    target,
+                    profile,
+                    options,
+                } => {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
+                        return Err(
+                            "ordinary camera profile target belongs to another authoring store"
+                                .into(),
+                        );
+                    }
+                    target.validate().map_err(|error| error.to_string())?;
+                    let state = target.state().map_err(|error| error.to_string())?;
+                    let clips = match state.camera_projection() {
+                        Some(noon_core::SemanticProjection3D::Perspective {
+                            near, far, ..
+                        }) => Some((near, far)),
+                        _ => None,
+                    };
+                    if state.role() != noon_core::SemanticObjectRole::Camera3D
+                        || state.camera_profile().is_none()
+                        || clips.is_none_or(|(near, far)| profile.camera(near, far).is_none())
+                    {
+                        return Err(
+                            "ordinary camera profile endpoint is invalid for this camera".into(),
+                        );
+                    }
+                    (None, target, *options)
                 }
                 OrdinaryCompositionChild::TransformTo {
                     entering_id,
@@ -1917,7 +2556,13 @@ impl CanonicalAuthoringScene {
                 );
             }
             target.validate().map_err(|error| error.to_string())?;
-            let resolved = if matches!(child, OrdinaryCompositionChild::Add { .. }) {
+            let resolved = if matches!(child, OrdinaryCompositionChild::TransformTo { .. }) {
+                noon_core::resolve_transform_animation_options(
+                    noon_core::AnimationDefaults::MANIM,
+                    options,
+                    noon_core::AnimationOptions::new(),
+                )
+            } else if matches!(child, OrdinaryCompositionChild::Add { .. }) {
                 noon_core::resolve_add_animation_options(
                     noon_core::AnimationDefaults::MANIM,
                     options,
@@ -1958,8 +2603,11 @@ impl CanonicalAuthoringScene {
                             }
                             _ => false,
                         };
-                    if !binding_available || !ids.insert(id) || !entering_nodes.insert(node) {
-                        return Err("ordinary composition requires unique detached targets and wrapper identities".into());
+                    if !binding_available || !register_entering(id, node) {
+                        return Err(
+                            "ordinary composition requires consistent detached target and wrapper identities"
+                                .into(),
+                        );
                     }
                 }
                 None if !self.identities.contains_key(&target.node_id()) => {
@@ -2107,6 +2755,42 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn live_create_manim_arrow(
+        &mut self,
+        options: noon::ManimArrowOptions,
+    ) -> Result<noon::ManimArrow, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_manim_arrow(options)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live Arrow construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn live_create_image(
+        &mut self,
+        options: noon::ImageMobjectOptions,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_image(options)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live image construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, AuthoringFailure> {
         match &mut self.player_ownership {
@@ -2163,6 +2847,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<(), AuthoringFailure> {
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: Some(id),
                 handle: handle.clone(),
@@ -2171,7 +2856,10 @@ impl CanonicalAuthoringScene {
         })
     }
 
-    fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), AuthoringFailure> {
+    fn validate_membership_bindings(
+        &self,
+        batch: &SceneMembershipBatch,
+    ) -> Result<Vec<(ObjectId, noon_core::SemanticNodeId)>, AuthoringFailure> {
         let mut new_bindings = Vec::new();
         let mut seen_ids = BTreeSet::new();
         let mut seen_nodes = BTreeSet::new();
@@ -2195,7 +2883,9 @@ impl CanonicalAuthoringScene {
                 (None, None)
                     if matches!(
                         batch.kind,
-                        SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
+                        SceneMembershipBatchKind::Add
+                            | SceneMembershipBatchKind::AddForeground
+                            | SceneMembershipBatchKind::Replace
                     ) =>
                 {
                     new_bindings.push((*wrapper_id, node));
@@ -2209,6 +2899,88 @@ impl CanonicalAuthoringScene {
                 }
             }
         }
+        Ok(new_bindings)
+    }
+
+    /// Associate callback-created language identities after the exact leased
+    /// player has committed its required callback phase.
+    ///
+    /// This is derived wrapper bookkeeping only. The batch may reserve bindings
+    /// for already-published direct-root objects, but cannot replay membership,
+    /// mutate semantic state, or advance either revision. The context remains
+    /// transferred while the rightful player performs this acknowledgement.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn associate_published_callback_mobjects(
+        &mut self,
+        player: &crate::SemanticExecutionPlayer,
+        batch: SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        self.validate_execution_player_return(player)
+            .map_err(|error| AuthoringFailure::from(error.to_string()))?;
+        if player.has_pending_callback_phase() {
+            return Err("published callback association cannot precede callback completion".into());
+        }
+        if player.scene_revision() != self.scene.revision() {
+            return Err(
+                "published callback association requires a coherent execution revision".into(),
+            );
+        }
+        self.associate_published_binding_reservations(batch)
+    }
+
+    /// Associate language identities with already-published membership, without
+    /// replaying a semantic edit or changing the retained execution session.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn associate_published_mobjects(
+        &mut self,
+        batch: SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        let player = self
+            .player_ownership
+            .local()
+            .ok_or("published association requires the local completed execution player")?;
+        if player.has_pending_live_segment() {
+            return Err("published association cannot precede segment completion".into());
+        }
+        if player.scene_revision() != self.scene.revision() {
+            return Err("published association requires a coherent execution revision".into());
+        }
+        self.associate_published_binding_reservations(batch)
+    }
+
+    /// Validate and atomically install derived bindings for already-published
+    /// direct-root Mobjects. Both local completed-segment and leased callback
+    /// acknowledgement paths share this proof.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn associate_published_binding_reservations(
+        &mut self,
+        batch: SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        if batch.kind != SceneMembershipBatchKind::Add || !batch.members.is_empty() {
+            return Err("published association accepts add binding reservations only".into());
+        }
+        let new_bindings = self.validate_membership_bindings(&batch)?;
+        for (_, handle) in &batch.bindings {
+            if !self.contains_mobject(handle)? {
+                return Err("published association target is not in this Scene".into());
+            }
+        }
+        // Every reservation and membership observation succeeded before either
+        // direction of the derived identity registry is changed.
+        for (id, node) in new_bindings {
+            self.bindings.insert(id, node);
+            self.identities.insert(node, id);
+        }
+        Ok(())
+    }
+
+    fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), AuthoringFailure> {
+        let new_bindings = self.validate_membership_bindings(&batch)?;
+        let mut seen_nodes = batch
+            .bindings
+            .iter()
+            .map(|(_, handle)| handle.node_id())
+            .collect::<BTreeSet<_>>();
         let mut borrowed = Vec::with_capacity(batch.members.len());
         for member in &batch.members {
             match member {
@@ -2238,7 +3010,9 @@ impl CanonicalAuthoringScene {
                         }
                     } else if matches!(
                         batch.kind,
-                        SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
+                        SceneMembershipBatchKind::Add
+                            | SceneMembershipBatchKind::AddForeground
+                            | SceneMembershipBatchKind::Replace
                     ) {
                         return Err(AuthoringFailure::new(
                             "invalid_input",
@@ -2247,6 +3021,12 @@ impl CanonicalAuthoringScene {
                         ));
                     }
                     borrowed.push(noon::MobjectTarget::Object(handle));
+                }
+                #[cfg(any(target_arch = "wasm32", test))]
+                OwnedSceneMembershipMember::CallbackProvisional { .. } => {
+                    return Err(
+                        "callback-local membership requires the pinned callback collector".into(),
+                    );
                 }
                 OwnedSceneMembershipMember::Family(family) => {
                     if !std::rc::Rc::ptr_eq(
@@ -2270,6 +3050,12 @@ impl CanonicalAuthoringScene {
         }
         let request = match batch.kind {
             SceneMembershipBatchKind::Add => noon::SceneMembershipRequest::Add(&borrowed),
+            SceneMembershipBatchKind::AddForeground => {
+                noon::SceneMembershipRequest::AddForeground(&borrowed)
+            }
+            SceneMembershipBatchKind::RemoveForeground => {
+                noon::SceneMembershipRequest::RemoveForeground(&borrowed)
+            }
             SceneMembershipBatchKind::Remove => noon::SceneMembershipRequest::Remove(&borrowed),
             SceneMembershipBatchKind::BringToBack => {
                 noon::SceneMembershipRequest::BringToBack(&borrowed)
@@ -2298,25 +3084,57 @@ impl CanonicalAuthoringScene {
                 }
             }
         };
-        #[cfg(not(any(target_arch = "wasm32", test)))]
-        self.scene
-            .edit_membership(request)
-            .map_err(AuthoringFailure::from)?;
-        #[cfg(any(target_arch = "wasm32", test))]
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
-                self.scene
-                    .edit_membership(request)
-                    .map_err(AuthoringFailure::from)?;
+        if let Some(domain) = batch.spatial_domain {
+            if batch.kind != SceneMembershipBatchKind::Add {
+                return Err(AuthoringFailure::new(
+                    "invalid_input",
+                    "spatial.membership_kind",
+                    "spatial composition requires an add membership batch",
+                ));
             }
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_edit_membership(request)?;
+            #[cfg(not(any(target_arch = "wasm32", test)))]
+            domain.apply_scene(&mut self.scene, &borrowed)?;
+            #[cfg(any(target_arch = "wasm32", test))]
+            match &mut self.player_ownership {
+                PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
+                    domain.apply_scene(&mut self.scene, &borrowed)?;
+                }
+                PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                    self.active_live_player()?
+                        .live_add_spatial_membership(&borrowed, domain)?;
+                }
+                PlayerOwnership::Unstarted => {
+                    return Err(
+                        "membership edit cannot follow pre-execution canonical timing".into(),
+                    );
+                }
+                PlayerOwnership::Transferred(_) => {
+                    return Err("live execution session is running in the semantic engine".into());
+                }
             }
-            PlayerOwnership::Unstarted => {
-                return Err("membership edit cannot follow pre-execution canonical timing".into());
-            }
-            PlayerOwnership::Transferred(_) => {
-                return Err("live execution session is running in the semantic engine".into());
+        } else {
+            #[cfg(not(any(target_arch = "wasm32", test)))]
+            self.scene
+                .edit_membership(request)
+                .map_err(AuthoringFailure::from)?;
+            #[cfg(any(target_arch = "wasm32", test))]
+            match &mut self.player_ownership {
+                PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
+                    self.scene
+                        .edit_membership(request)
+                        .map_err(AuthoringFailure::from)?;
+                }
+                PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                    self.active_live_player()?.live_edit_membership(request)?;
+                }
+                PlayerOwnership::Unstarted => {
+                    return Err(
+                        "membership edit cannot follow pre-execution canonical timing".into(),
+                    );
+                }
+                PlayerOwnership::Transferred(_) => {
+                    return Err("live execution session is running in the semantic engine".into());
+                }
             }
         }
         for (id, node) in new_bindings {
@@ -2339,6 +3157,23 @@ impl CanonicalAuthoringScene {
                     .collect()
             })
             .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn root_foreground_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
+        let store = self.scene.integration_store().borrow();
+        let root = store.node(self.scene.root()).ok_or_else(|| {
+            AuthoringFailure::new(
+                "state",
+                "scene.root_missing",
+                "semantic scene root is no longer live",
+            )
+        })?;
+        Ok(root
+            .foreground_members()
+            .iter()
+            .map(|node| format!("{}:{}", node.slot(), node.generation()))
+            .collect())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2367,6 +3202,7 @@ impl CanonicalAuthoringScene {
             .ok_or("live Mobject is not bound to this Scene")?;
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Remove,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: Some(id),
                 handle: handle.clone(),
@@ -2388,6 +3224,54 @@ impl CanonicalAuthoringScene {
         }
         self.active_live_player()?
             .live_replace_content(target, source)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn live_set_decimal_value(
+        &mut self,
+        target: &noon::Mobject,
+        compiler: &mut crate::WasmLatexCompiler,
+        value: f64,
+    ) -> Result<(), AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        let number = noon::DecimalNumber::from_mobject(target.clone())
+            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
+        self.active_live_player()?
+            .live_set_decimal_value(&number, compiler, value)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn live_increment_decimal_value(
+        &mut self,
+        target: &noon::Mobject,
+        compiler: &mut crate::WasmLatexCompiler,
+        delta: f64,
+    ) -> Result<(), AuthoringFailure> {
+        let number = noon::DecimalNumber::from_mobject(target.clone())
+            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
+        self.active_live_player()?
+            .live_increment_decimal_value(&number, compiler, delta)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn live_decimal_value(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        let number = noon::DecimalNumber::from_mobject(target.clone())
+            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
+        self.active_live_player()?.live_decimal_value(&number)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn live_decimal_font_size(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        let number = noon::DecimalNumber::from_mobject(target.clone())?;
+        self.active_live_player()?.live_decimal_font_size(&number)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2499,11 +3383,44 @@ fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    mod camera_profile;
+    mod matrix_family;
+    mod numbers;
+    mod sample_space;
+    mod spatial;
+    mod world_composition;
     use noon_core::{Color, Style, Transform2D, Vec2};
     use wasm_bindgen::prelude::*;
 
     use super::*;
     use crate::authoring_error::js_error as typed_js_error;
+
+    /// Opaque alias of one Rust-owned inset declaration. Both accessors return
+    /// ordinary semantic mobject handles; this wrapper owns no geometry state.
+    #[wasm_bindgen]
+    pub struct WasmAuthoringZoomedViewHandle {
+        view: noon::ZoomedView,
+    }
+
+    #[wasm_bindgen]
+    impl WasmAuthoringZoomedViewHandle {
+        #[wasm_bindgen(js_name = cameraFrame)]
+        pub fn camera_frame(&self) -> crate::WasmAuthoringMobjectHandle {
+            crate::WasmAuthoringMobjectHandle::from_semantic_mobject(
+                self.view.camera_frame().clone(),
+            )
+        }
+
+        #[wasm_bindgen(js_name = display)]
+        pub fn display(&self) -> crate::WasmAuthoringMobjectHandle {
+            crate::WasmAuthoringMobjectHandle::from_semantic_mobject(self.view.display().clone())
+        }
+
+        #[wasm_bindgen(js_name = zoomFactor)]
+        pub fn zoom_factor(&self) -> Result<f64, JsValue> {
+            self.view.zoom_factor().map_err(typed_js_error)
+        }
+    }
 
     /// A rejected ownership return retains the consumed WASM player wrapper.
     /// Its projected JS Error retains `takePlayer()` to recover that exact player;
@@ -2602,7 +3519,7 @@ mod wasm {
             _ => {
                 return Err(js_error(format!(
                     "ordinary fade translation must be \"shift\" or \"point\", got {translation:?}"
-                )))
+                )));
             }
         };
         Ok(noon::FadeEndpoint::new(scale_factor, translation))
@@ -2693,7 +3610,53 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
-        inner: CanonicalAuthoringScene,
+        pub(crate) inner: CanonicalAuthoringScene,
+    }
+
+    #[wasm_bindgen]
+    impl CanonicalAuthoringSceneContext {
+        pub(crate) fn publish_live_path_family(
+            &mut self,
+            paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
+        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+            self.inner.live_create_path_family(paths)
+        }
+
+        /// Reconcile wrapper IDs only after Rust has published the completion.
+        #[wasm_bindgen(js_name = associatePublishedMobjects)]
+        pub fn associate_published_mobjects(
+            &mut self,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .associate_published_mobjects(batch.into_inner().map_err(js_error)?)
+                .map_err(js_error)
+        }
+
+        /// Declare semantic drag targets before the player is transferred to
+        /// the browser execution worker. The inert batch retains original
+        /// typed handle provenance until Rust validates each object against
+        /// this context's store and membership table.
+        #[wasm_bindgen(js_name = setTranslationDragTargets)]
+        pub fn set_translation_drag_targets(
+            &mut self,
+            targets: WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            let values = targets
+                .copy_references()
+                .map_err(js_error)?
+                .into_iter()
+                .map(|target| match target {
+                    noon::MobjectTarget::Object(object) => Ok(object.clone()),
+                    noon::MobjectTarget::Family(_) => {
+                        Err(js_error("translation drag targets must be Mobjects"))
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            self.inner
+                .set_translation_drag_targets(values)
+                .map_err(js_error)
+        }
     }
 
     /// Inert typed language-wrapper batch. Appending handles performs no semantic
@@ -2704,6 +3667,24 @@ mod wasm {
     }
 
     impl WasmSceneMembershipBatch {
+        pub(crate) fn into_inner(self) -> Result<SceneMembershipBatch, String> {
+            if self.inner.members.iter().any(|member| {
+                matches!(
+                    member,
+                    OwnedSceneMembershipMember::CallbackProvisional { .. }
+                )
+            }) {
+                return Err(
+                    "callback-local membership batch requires the pinned callback collector".into(),
+                );
+            }
+            Ok(self.inner)
+        }
+
+        pub(crate) fn into_callback_batch(self) -> SceneMembershipBatch {
+            self.inner
+        }
+
         pub(crate) fn copy_references(&self) -> Result<Vec<noon::MobjectTarget<'_>>, String> {
             if self.inner.kind != SceneMembershipBatchKind::Add {
                 return Err("copy references require an add batch".into());
@@ -2733,23 +3714,66 @@ mod wasm {
         pub fn new(kind: &str) -> Result<WasmSceneMembershipBatch, JsValue> {
             let kind = match kind {
                 "add" => SceneMembershipBatchKind::Add,
+                "add_foreground" => SceneMembershipBatchKind::AddForeground,
+                "remove_foreground" => SceneMembershipBatchKind::RemoveForeground,
                 "remove" => SceneMembershipBatchKind::Remove,
                 "clear" => SceneMembershipBatchKind::Clear,
                 "replace" => SceneMembershipBatchKind::Replace,
                 "bring_to_back" => SceneMembershipBatchKind::BringToBack,
                 _ => {
                     return Err(js_error(format!(
-                        "membership batch kind must be add, remove, clear, replace, or bring_to_back; got {kind:?}"
-                    )))
+                        "membership batch kind must be add, add_foreground, remove_foreground, remove, clear, replace, or bring_to_back; got {kind:?}"
+                    )));
                 }
             };
             Ok(Self {
                 inner: SceneMembershipBatch {
                     kind,
+                    spatial_domain: None,
                     members: Vec::new(),
                     bindings: Vec::new(),
                 },
             })
+        }
+
+        /// Set one composition domain for this inert ordinary add batch.
+        #[wasm_bindgen(js_name = setSpatialDomain)]
+        pub fn set_spatial_domain(&mut self, domain: &str) -> Result<(), JsValue> {
+            if self.inner.kind != SceneMembershipBatchKind::Add {
+                return Err(js_error(
+                    "spatial composition requires an add membership batch",
+                ));
+            }
+            self.inner.spatial_domain = Some(match domain {
+                "world_default" => SpatialMembershipPolicy::DefaultWorld,
+                "world" => SpatialMembershipPolicy::Assign(
+                    noon_core::SemanticSpatialCompositionDomain::World,
+                ),
+                "fixed_frame" => SpatialMembershipPolicy::Assign(
+                    noon_core::SemanticSpatialCompositionDomain::FixedFrame,
+                ),
+                "fixed_orientation" => SpatialMembershipPolicy::Assign(
+                    noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
+                ),
+                _ => return Err(js_error("unknown spatial composition domain")),
+            });
+            Ok(())
+        }
+
+        /// Append one phase-local callback object to this existing typed batch.
+        /// The batch remains inert until the exact callback token consumes all
+        /// original and local references in one shared planner operation.
+        #[wasm_bindgen(js_name = appendCallbackProvisional)]
+        pub fn append_callback_provisional(
+            &mut self,
+            object: &crate::semantic_execution_player::WasmCallbackProvisionalMobject,
+        ) {
+            self.inner
+                .members
+                .push(OwnedSceneMembershipMember::CallbackProvisional {
+                    token: object.callback_token(),
+                    local: object.local_token(),
+                });
         }
 
         #[wasm_bindgen(js_name = appendMobject)]
@@ -2864,6 +3888,57 @@ mod wasm {
     pub struct WasmValueTrackerHandle {
         tracker: noon::ValueTracker,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    /// Opaque shared Variable composite. Label/equals/value layout and tracker
+    /// binding were authored in Rust; language wrappers only rebind its parts.
+    #[wasm_bindgen]
+    pub struct WasmVariableHandle {
+        variable: noon::Variable,
+        store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    impl WasmVariableHandle {
+        pub(crate) fn new(
+            variable: noon::Variable,
+            store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        ) -> Self {
+            Self { variable, store }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmVariableHandle {
+        #[wasm_bindgen(js_name = family)]
+        pub fn family(&self) -> crate::WasmAuthoringFamilyHandle {
+            crate::WasmAuthoringFamilyHandle::from_semantic_family(self.variable.family().clone())
+        }
+
+        #[wasm_bindgen(js_name = label)]
+        pub fn label(&self) -> crate::WasmLatexPartsHandle {
+            crate::WasmLatexPartsHandle::new(self.variable.label().clone())
+        }
+
+        #[wasm_bindgen(js_name = equals)]
+        pub fn equals(&self) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            self.variable
+                .equals()
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = value)]
+        pub fn value(&self) -> crate::WasmDecimalNumberHandle {
+            crate::WasmDecimalNumberHandle::from_number(self.variable.value().clone())
+        }
+
+        #[wasm_bindgen(js_name = tracker)]
+        pub fn tracker(&self) -> WasmValueTrackerHandle {
+            WasmValueTrackerHandle::from_tracker(
+                self.variable.tracker().clone(),
+                std::rc::Rc::clone(&self.store),
+            )
+        }
     }
 
     /// Opaque JS/Python identity for one canonical native vector source.
@@ -3036,6 +4111,8 @@ mod wasm {
             complete_priority: bool,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
+            reverse_rate_function: bool,
         ) -> Result<(), JsValue> {
             let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
                 .ok_or_else(|| {
@@ -3043,15 +4120,20 @@ mod wasm {
                         "unsupported animation rate function semantic ID {rate_function:?}"
                     ))
                 })?;
+            let mut options = noon_core::AnimationOptions::new()
+                .run_time(child_run_time)
+                .rate_func(rate_function)
+                .reverse_rate_function(reverse_rate_function);
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
             self.children.push(OrdinaryCompositionChild::TransformTo {
                 entering_id,
                 source: source.semantic_mobject().clone(),
                 target: target.semantic_mobject().clone(),
                 interpolation,
                 complete_priority,
-                options: noon_core::AnimationOptions::new()
-                    .run_time(child_run_time)
-                    .rate_func(rate_function),
+                options,
             });
             Ok(())
         }
@@ -3201,6 +4283,52 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAnimationCompositionBuilder {
+        #[wasm_bindgen(js_name = appendCallbackInterval)]
+        pub fn append_callback_interval(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            callback_id: &str,
+            child_run_time: f64,
+        ) -> Result<(), JsValue> {
+            let callback = parse_callback_id(callback_id)?;
+            if !child_run_time.is_finite() || child_run_time < 0.0 {
+                return Err(js_error(
+                    "callback interval duration must be finite and non-negative",
+                ));
+            }
+            self.children
+                .push(OrdinaryCompositionChild::CallbackInterval {
+                    target: target.semantic_mobject().clone(),
+                    callback,
+                    options: noon_core::AnimationOptions::new().run_time(child_run_time),
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendMoveAlongPath)]
+        pub fn append_move_along_path(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            path: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| {
+                    js_error(format!(
+                        "unsupported animation rate function semantic ID {rate_function:?}"
+                    ))
+                })?;
+            self.children.push(OrdinaryCompositionChild::MoveAlongPath {
+                target: target.semantic_mobject().clone(),
+                path: path.semantic_mobject().clone(),
+                options: noon_core::AnimationOptions::new()
+                    .run_time(child_run_time)
+                    .rate_func(rate_function),
+            });
+            Ok(())
+        }
+
         #[wasm_bindgen(js_name = setCompositionRateFunction)]
         pub fn set_composition_rate_function(
             &mut self,
@@ -3239,6 +4367,8 @@ mod wasm {
             point_correspondence: bool,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             let entering = entering_id
                 .as_deref()
@@ -3257,6 +4387,8 @@ mod wasm {
                 true,
                 child_run_time,
                 rate_function,
+                path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -3267,6 +4399,8 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 None,
@@ -3276,6 +4410,8 @@ mod wasm {
                 false,
                 child_run_time,
                 rate_function,
+                path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -3286,6 +4422,8 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 None,
@@ -3295,6 +4433,8 @@ mod wasm {
                 false,
                 child_run_time,
                 rate_function,
+                path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -3306,6 +4446,8 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 Some(parse_object_id("object ID", object_id)?),
@@ -3315,6 +4457,8 @@ mod wasm {
                 false,
                 child_run_time,
                 rate_function,
+                path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -3326,6 +4470,8 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 Some(parse_object_id("object ID", object_id)?),
@@ -3335,6 +4481,8 @@ mod wasm {
                 false,
                 child_run_time,
                 rate_function,
+                path_arc,
+                reverse_rate_function.unwrap_or(false),
             )
         }
 
@@ -3439,12 +4587,63 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
         ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
             self.children
                 .push(OrdinaryCompositionChild::FamilyTransformTo {
                     source: source.semantic_family()?,
                     target_state: target_state.semantic_family()?,
-                    options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendMatchingFamilyTransformTo)]
+        pub fn append_matching_family_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
+            self.children
+                .push(OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                    source: source.semantic_family()?,
+                    target_state: target_state.semantic_family()?,
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendMatchingSourceFamilyTransformTo)]
+        pub fn append_matching_source_family_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
+            self.children
+                .push(OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
+                    source: source.semantic_family()?,
+                    target_state: target_state.semantic_family()?,
+                    options,
                 });
             Ok(())
         }
@@ -3733,8 +4932,11 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            play_run_time: Option<f64>,
+            play_rate_function: Option<String>,
         ) -> Result<(), JsValue> {
             let options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .with_overrides(Self::optional_options(play_run_time, play_rate_function)?)
                 .introducer(introducer)
                 .remover(remover)
                 .reverse_rate_function(reverse_rate_function);
@@ -3766,8 +4968,11 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            play_run_time: Option<f64>,
+            play_rate_function: Option<String>,
         ) -> Result<(), JsValue> {
             let options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .with_overrides(Self::optional_options(play_run_time, play_rate_function)?)
                 .introducer(introducer)
                 .remover(remover)
                 .reverse_rate_function(reverse_rate_function);
@@ -3825,8 +5030,11 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            play_run_time: Option<f64>,
+            play_rate_function: Option<String>,
         ) -> Result<(), JsValue> {
-            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .with_overrides(Self::optional_options(play_run_time, play_rate_function)?);
             if let Some(introducer) = introducer {
                 options = options.introducer(introducer);
             }
@@ -3864,8 +5072,11 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            play_run_time: Option<f64>,
+            play_rate_function: Option<String>,
         ) -> Result<(), JsValue> {
-            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .with_overrides(Self::optional_options(play_run_time, play_rate_function)?);
             if let Some(introducer) = introducer {
                 options = options.introducer(introducer);
             }
@@ -4009,6 +5220,61 @@ mod wasm {
             Ok(())
         }
 
+        /// Append GrowArrow for one Arrow family. Rust validates the family
+        /// identity/admission and creates its ordered per-leaf lifecycle tracks.
+        #[wasm_bindgen(js_name = appendFamilyArrowGrow)]
+        pub fn append_family_arrow_grow(
+            &mut self,
+            target: &crate::WasmAuthoringArrowHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .introducer(true)
+                .remover(false)
+                .path_arc(0.0);
+            let arrow = target.arrow()?.clone();
+            let family = arrow.family().clone();
+            self.children
+                .push(OrdinaryCompositionChild::FamilyArrowGrow {
+                    target: family,
+                    arrow,
+                    entering: Vec::new(),
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyArrowGrowEntering)]
+        pub fn append_family_arrow_grow_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilyArrowGrow {
+                target, entering, ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error(
+                    "family entering member must follow FamilyArrowGrow",
+                ));
+            };
+            if !std::rc::Rc::ptr_eq(
+                target.integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
+                return Err(js_error(
+                    "Arrow grow entering member belongs to another authoring store",
+                ));
+            }
+            entering.push((
+                parse_object_id("Arrow grow object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
+            Ok(())
+        }
+
         #[wasm_bindgen(js_name = appendCreate)]
         pub fn append_create(
             &mut self,
@@ -4017,17 +5283,17 @@ mod wasm {
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
-            let options = Self::options(child_run_time, rate_function)?;
-            self.push_target(
-                object_id,
-                target,
-                options,
-                |entering_id, target, options| OrdinaryCompositionChild::Create {
-                    entering_id: Some(entering_id),
-                    target,
-                    options,
-                },
-            )
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("Create object ID", object_id)?)
+            };
+            self.children.push(OrdinaryCompositionChild::Create {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                options: Self::options(child_run_time, rate_function)?,
+            });
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = appendUncreate)]
@@ -4242,7 +5508,7 @@ mod wasm {
         #[wasm_bindgen(js_name = editMembership)]
         pub fn edit_membership(&mut self, batch: WasmSceneMembershipBatch) -> Result<(), JsValue> {
             self.inner
-                .edit_membership(batch.inner)
+                .edit_membership(batch.into_inner().map_err(typed_js_error)?)
                 .map_err(typed_js_error)
         }
 
@@ -4250,6 +5516,11 @@ mod wasm {
         #[wasm_bindgen(js_name = rootMembershipKeys)]
         pub fn root_membership_keys(&self) -> Result<Vec<String>, JsValue> {
             self.inner.root_membership_keys().map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = rootForegroundKeys)]
+        pub fn root_foreground_keys(&self) -> Result<Vec<String>, JsValue> {
+            self.inner.root_foreground_keys().map_err(typed_js_error)
         }
 
         /// Query authoritative recursive membership without enumerating the scene.
@@ -4445,6 +5716,219 @@ mod wasm {
                 })
                 .collect();
             serde_json::to_string(&rows).map_err(callback_codec_error)
+        }
+
+        /// Resolve an object or family layout anchor against this callback's
+        /// pinned semantic revision.
+        #[wasm_bindgen(js_name = callbackLayoutKeys)]
+        pub fn callback_layout_keys(
+            &self,
+            anchor: &crate::authoring_mobject::WasmLayoutAnchor,
+            revision: &str,
+        ) -> Result<Vec<u32>, JsValue> {
+            let store = self.inner.scene.integration_store();
+            if !anchor.anchor.belongs_to_store(store) {
+                return Err(js_error(
+                    "callback layout anchor belongs to another scene store",
+                ));
+            }
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
+            let node = anchor.anchor.resolve_checked().map_err(typed_js_error)?;
+            if matches!(
+                store.borrow().node(node).map(|item| item.kind()),
+                Some(noon_core::SemanticNodeKind::Family(_))
+            ) {
+                noon::MobjectFamily::from_node(std::rc::Rc::clone(store), node)
+                    .map_err(typed_js_error)?
+                    .callback_leaf_nodes(revision)
+                    .map(|nodes| {
+                        nodes
+                            .into_iter()
+                            .flat_map(|node| [node.slot(), node.generation()])
+                            .collect()
+                    })
+                    .map_err(typed_js_error)
+            } else {
+                if store.borrow().scene_revision() != revision {
+                    return Err(js_error(
+                        "callback layout anchor is from a stale scene revision",
+                    ));
+                }
+                Ok(vec![node.slot(), node.generation()])
+            }
+        }
+
+        /// Prepare one object/family replacement from phase-effective transform
+        /// and bounds rows. Rust owns scale, translation, and bounds projection.
+        #[wasm_bindgen(js_name = callbackLayoutReplace)]
+        pub fn callback_layout_replace(
+            &self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            revision: &str,
+            keys: Vec<u32>,
+            rows: Vec<f64>,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<Vec<f64>, JsValue> {
+            let store = self.inner.scene.integration_store();
+            if !source.anchor.belongs_to_store(store) || !target.anchor.belongs_to_store(store) {
+                return Err(js_error(
+                    "callback layout anchor belongs to another scene store",
+                ));
+            }
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
+            const STRIDE: usize = 12;
+            if keys.len() % 2 != 0 || rows.len() != (keys.len() / 2) * STRIDE {
+                return Err(js_error(
+                    "callback layout rows do not match typed semantic keys",
+                ));
+            }
+            let mut decoded = BTreeMap::new();
+            let mut seen = std::collections::BTreeSet::new();
+            let mut expected = std::collections::BTreeSet::new();
+            for anchor in [source, target] {
+                let node = anchor.anchor.resolve_checked().map_err(typed_js_error)?;
+                if matches!(
+                    store.borrow().node(node).map(|item| item.kind()),
+                    Some(noon_core::SemanticNodeKind::Family(_))
+                ) {
+                    expected.extend(
+                        noon::MobjectFamily::from_node(std::rc::Rc::clone(store), node)
+                            .map_err(typed_js_error)?
+                            .callback_leaf_nodes(revision)
+                            .map_err(typed_js_error)?,
+                    );
+                } else {
+                    if store.borrow().scene_revision() != revision {
+                        return Err(js_error(
+                            "callback layout anchor is from a stale scene revision",
+                        ));
+                    }
+                    expected.insert(node);
+                }
+            }
+            let decode_f32 = |value: f64, label: &str| -> Result<f32, JsValue> {
+                if !value.is_finite() {
+                    return Err(js_error(format!("{label} must be finite")));
+                }
+                let narrowed = value as f32;
+                if !narrowed.is_finite() {
+                    return Err(js_error(format!("{label} exceeds the supported range")));
+                }
+                Ok(narrowed)
+            };
+            for (index, pair) in keys.chunks_exact(2).enumerate() {
+                let node = noon_core::SemanticNodeId::new(pair[0], pair[1]);
+                if !seen.insert(node) {
+                    return Err(js_error(
+                        "callback layout keys contain a duplicate semantic node",
+                    ));
+                }
+                let row = &rows[index * STRIDE..(index + 1) * STRIDE];
+                let slot = row[0];
+                let generation = row[1];
+                if !slot.is_finite()
+                    || !generation.is_finite()
+                    || slot.fract() != 0.0
+                    || generation.fract() != 0.0
+                    || slot < 0.0
+                    || generation < 0.0
+                    || slot > f64::from(u32::MAX)
+                    || generation > f64::from(u32::MAX)
+                    || slot as u32 != pair[0]
+                    || generation as u32 != pair[1]
+                {
+                    return Err(js_error(
+                        "callback layout row has an invalid semantic identity",
+                    ));
+                }
+                let transform = Transform2D {
+                    translation: noon_core::Vec2::new(
+                        decode_f32(row[2], "callback layout translation.x")?,
+                        decode_f32(row[3], "callback layout translation.y")?,
+                    ),
+                    scale: noon_core::Vec2::new(
+                        decode_f32(row[4], "callback layout scale.x")?,
+                        decode_f32(row[5], "callback layout scale.y")?,
+                    ),
+                    rotation: decode_f32(row[6], "callback layout rotation")?,
+                };
+                if row[7] != 0.0 && row[7] != 1.0 {
+                    return Err(js_error("callback layout bounds flag must be zero or one"));
+                }
+                let bounds = if row[7] == 1.0 {
+                    let bounds = noon_core::Rect::new(
+                        noon_core::Vec2::new(
+                            decode_f32(row[8], "callback layout bounds.min.x")?,
+                            decode_f32(row[9], "callback layout bounds.min.y")?,
+                        ),
+                        noon_core::Vec2::new(
+                            decode_f32(row[10], "callback layout bounds.max.x")?,
+                            decode_f32(row[11], "callback layout bounds.max.y")?,
+                        ),
+                    );
+                    if bounds.min.x > bounds.max.x || bounds.min.y > bounds.max.y {
+                        return Err(js_error("callback layout bounds are inverted"));
+                    }
+                    Some(bounds)
+                } else {
+                    if row[8..].iter().any(|value| *value != 0.0) {
+                        return Err(js_error(
+                            "callback layout absent bounds must use zero coordinates",
+                        ));
+                    }
+                    None
+                };
+                decoded.insert(node, (transform, bounds));
+            }
+            if seen != expected {
+                return Err(js_error(
+                    "callback layout keys do not match the typed anchors",
+                ));
+            }
+            let changes = noon::prepare_callback_layout_replace(
+                &source.anchor,
+                &target.anchor,
+                revision,
+                noon::LayoutDimension::try_from(dimension).map_err(typed_js_error)?,
+                stretch,
+                |node| {
+                    decoded
+                        .get(&node)
+                        .copied()
+                        .ok_or(noon::ExecutionSessionCallbackError::UnknownObject(node))
+                },
+            )
+            .map_err(|error| js_error(error.to_string()))?;
+            let mut output = Vec::with_capacity(changes.len() * STRIDE);
+            for change in changes {
+                output.extend_from_slice(&[
+                    f64::from(change.node.slot()),
+                    f64::from(change.node.generation()),
+                    f64::from(change.transform.translation.x),
+                    f64::from(change.transform.translation.y),
+                    f64::from(change.transform.scale.x),
+                    f64::from(change.transform.scale.y),
+                    f64::from(change.transform.rotation),
+                ]);
+                if let Some(bounds) = change.bounds {
+                    output.extend_from_slice(&[
+                        1.0,
+                        f64::from(bounds.min.x),
+                        f64::from(bounds.min.y),
+                        f64::from(bounds.max.x),
+                        f64::from(bounds.max.y),
+                    ]);
+                } else {
+                    output.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0]);
+                }
+            }
+            Ok(output)
         }
 
         /// Apply shared Manim `set_color` semantics to callback-local paint.
@@ -4683,6 +6167,80 @@ mod wasm {
             self.inner
                 .create_camera_frame(id)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(typed_js_error)
+        }
+
+        /// Create a detached inset declaration. Placement and frame geometry are
+        /// calculated by Rust from typed options, never mirrored in Python.
+        #[wasm_bindgen(js_name = createZoomedView)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn create_zoomed_view(
+            &mut self,
+            camera_frame_id: &str,
+            display_id: &str,
+            display_height: f64,
+            display_width: f64,
+            display_center_x: Option<f64>,
+            display_center_y: Option<f64>,
+            display_corner_x: f64,
+            display_corner_y: f64,
+            display_corner_buff: f64,
+            camera_frame_start_x: f64,
+            camera_frame_start_y: f64,
+            zoom_factor: f64,
+            camera_frame_stroke_width: f64,
+            image_frame_stroke_width: f64,
+            capture_own_display: bool,
+        ) -> Result<WasmAuthoringZoomedViewHandle, JsValue> {
+            let display_center = match (display_center_x, display_center_y) {
+                (None, None) => None,
+                (Some(x), Some(y)) => Some(Vec2::new(x as f32, y as f32)),
+                _ => {
+                    return Err(js_error(
+                        "zoomed display center requires both x and y coordinates",
+                    ));
+                }
+            };
+            let options = noon::ZoomedSceneOptions {
+                display_height,
+                display_width,
+                display_center,
+                display_corner: Vec2::new(display_corner_x as f32, display_corner_y as f32),
+                display_corner_buff,
+                camera_frame_start: Vec2::new(
+                    camera_frame_start_x as f32,
+                    camera_frame_start_y as f32,
+                ),
+                zoom_factor,
+                camera_frame_stroke_width,
+                image_frame_stroke_width,
+                capture_own_display,
+            };
+            self.inner
+                .create_zoomed_view(
+                    parse_object_id("zoomed camera-frame object ID", camera_frame_id)?,
+                    parse_object_id("zoomed display object ID", display_id)?,
+                    options,
+                )
+                .map(|view| WasmAuthoringZoomedViewHandle { view })
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = zoomFactor)]
+        pub fn zoom_factor(
+            &mut self,
+            view: &WasmAuthoringZoomedViewHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner.zoom_factor(&view.view).map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = activateZooming)]
+        pub fn activate_zooming(
+            &mut self,
+            view: &WasmAuthoringZoomedViewHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .activate_zooming(&view.view)
                 .map_err(typed_js_error)
         }
 
@@ -4932,6 +6490,16 @@ mod wasm {
         #[wasm_bindgen(js_name = authoredDuration)]
         pub fn authored_duration(&self) -> f64 {
             self.inner.authored_duration()
+        }
+
+        #[wasm_bindgen(js_name = nextSection)]
+        pub fn next_section(&mut self, name: String, skip: bool) -> Result<(), JsValue> {
+            self.inner.next_section(name, skip).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = sectionsJson)]
+        pub fn sections_json(&self) -> Result<String, JsValue> {
+            self.inner.sections_json().map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = authoredWait)]
@@ -5591,6 +7159,37 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectDecimalValue)]
+        pub fn query_mobject_decimal_value(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .live_decimal_value(handle.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectIntegerValue)]
+        pub fn query_mobject_integer_value(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<i64, JsValue> {
+            self.inner
+                .live_decimal_value(handle.semantic_mobject())
+                .and_then(|value| noon::integer_value(value).map_err(AuthoringFailure::from))
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryMobjectDecimalFontSize)]
+        pub fn query_mobject_decimal_font_size(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .live_decimal_font_size(handle.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = declareLiveTransformTo)]
         pub fn declare_live_transform_to(
             &mut self,
@@ -5782,6 +7381,24 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_copy_family(
+                    &source,
+                    &references.copy_references().map_err(typed_js_error)?,
+                )
+                .map(crate::WasmFamilyCopy::from_copy)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveCyclicReplaceTarget)]
+        pub fn live_cyclic_replace_target(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            references: WasmSceneMembershipBatch,
+        ) -> Result<crate::WasmFamilyCopy, JsValue> {
+            let source = source.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_cyclic_replace_target(
                     &source,
                     &references.copy_references().map_err(typed_js_error)?,
                 )
@@ -6062,6 +7679,40 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        /// Publish a detached coordinate family through the same retained owner.
+        #[wasm_bindgen(js_name = liveCreateCoordinates)]
+        pub fn live_create_coordinates(
+            &mut self,
+            candidate: crate::WasmCoordinateOptions,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            use crate::authoring_coordinates::CoordinateRequest;
+            let family = match candidate.request {
+                CoordinateRequest::NumberLine(options) => self
+                    .inner
+                    .live_create_number_line(&options)
+                    .map(|line| line.family().clone()),
+                CoordinateRequest::Axes(options) => self
+                    .inner
+                    .live_create_axes(&options)
+                    .map(|axes| axes.family().clone()),
+                CoordinateRequest::NumberPlane(options) => self
+                    .inner
+                    .live_create_number_plane(&options)
+                    .map(|plane| plane.family().clone()),
+                CoordinateRequest::PolarPlane(options) => self
+                    .inner
+                    .live_create_polar_plane(&options)
+                    .map(|plane| plane.family().clone()),
+                CoordinateRequest::ThreeDAxes(options) => self
+                    .inner
+                    .live_create_three_d_axes(&options)
+                    .map(|axes| axes.family().clone()),
+            };
+            family
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(typed_js_error)
+        }
+
         /// Publish a fully configured geometry through the current live session.
         #[wasm_bindgen(js_name = liveCreateManimGeometry)]
         pub fn live_create_manim_geometry(
@@ -6070,6 +7721,31 @@ mod wasm {
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             self.inner
                 .live_create_manim_geometry(candidate.options)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(typed_js_error)
+        }
+
+        /// Publish one retained Arrow family through the current live session.
+        #[wasm_bindgen(js_name = liveCreateManimArrow)]
+        pub fn live_create_manim_arrow(
+            &mut self,
+            candidate: crate::WasmManimArrowOptions,
+        ) -> Result<crate::WasmAuthoringArrowHandle, JsValue> {
+            let options = candidate.into_live_arrow_options()?;
+            self.inner
+                .live_create_manim_arrow(options)
+                .map(crate::WasmAuthoringArrowHandle::from_manim_arrow)
+                .map_err(typed_js_error)
+        }
+
+        /// Publish a fully configured image through the current live session.
+        #[wasm_bindgen(js_name = liveCreateImage)]
+        pub fn live_create_image(
+            &mut self,
+            candidate: crate::WasmImageMobjectOptions,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            self.inner
+                .live_create_image(candidate.options)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
@@ -6089,17 +7765,60 @@ mod wasm {
             blue: f64,
             alpha: f64,
             opacity: f64,
+            colors: Option<crate::WasmTextColorBatch>,
+            font_face: Option<crate::WasmNativeFontFace>,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
-            let text =
-                crate::authoring_mobject::manim_text(source, font_family, font_size, line_spacing)
-                    .map_err(typed_js_error)?
-                    .color(Color::rgba(
-                        checked_f32("text red", red)?,
-                        checked_f32("text green", green)?,
-                        checked_f32("text blue", blue)?,
-                        checked_f32("text alpha", alpha)?,
-                    ))
-                    .set_opacity(checked_f32("text opacity", opacity)?);
+            let text = crate::authoring_mobject::manim_text(
+                source,
+                font_family,
+                font_size,
+                line_spacing,
+                font_face.map(|input| input.face),
+            )
+            .map_err(typed_js_error)?
+            .color(Color::rgba(
+                checked_f32("text red", red)?,
+                checked_f32("text green", green)?,
+                checked_f32("text blue", blue)?,
+                checked_f32("text alpha", alpha)?,
+            ))
+            .set_opacity(checked_f32("text opacity", opacity)?)
+            .with_text2color(colors.map_or_else(Vec::new, |batch| batch.colors));
+            self.inner
+                .live_create_text(text)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveCreateManimMarkupText)]
+        pub fn live_create_manim_markup_text(
+            &mut self,
+            source: &str,
+            font_family: &str,
+            font_size: f64,
+            line_spacing: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: f64,
+            font_face: Option<crate::WasmNativeFontFace>,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            let text = crate::authoring_mobject::manim_markup_text(
+                source,
+                font_family,
+                font_size,
+                line_spacing,
+                font_face.map(|input| input.face),
+            )
+            .map_err(typed_js_error)?
+            .color(Color::rgba(
+                checked_f32("text red", red)?,
+                checked_f32("text green", green)?,
+                checked_f32("text blue", blue)?,
+                checked_f32("text alpha", alpha)?,
+            ))
+            .set_opacity(checked_f32("text opacity", opacity)?);
             self.inner
                 .live_create_text(text)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
@@ -6108,6 +7827,46 @@ mod wasm {
 
         /// Compile and publish one detached Typst or MathTypst object through
         /// the current retained session.
+        #[wasm_bindgen(js_name = liveCreateLatex)]
+        pub fn live_create_latex(
+            &mut self,
+            options: crate::WasmLatexOptions,
+            compiler: &mut crate::WasmLatexCompiler,
+        ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_create_latex(options.text, compiler)
+                .map(crate::WasmLatexPartsHandle::new)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetLatexMemberColors)]
+        pub fn live_set_latex_member_colors(
+            &mut self,
+            handle: &crate::WasmLatexPartsHandle,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let colors = crate::authoring_latex::member_colors(values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_member_colors(handle.semantic_parts().family(), &colors)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveLatexFontSize)]
+        pub fn live_latex_font_size(
+            &mut self,
+            handle: &crate::WasmLatexPartsHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_latex_font_size(handle.semantic_parts())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveCreateManimTypst)]
         pub fn live_create_manim_typst(
             &mut self,
@@ -6211,6 +7970,43 @@ mod wasm {
             self.inner
                 .prepare_family_subset_display(&family.semantic_family()?)
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveBindClickIndicate)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_bind_click_indicate(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            scale_factor: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            run_time: f64,
+            rate_function: &str,
+            lag_ratio: f64,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(self.inner.scene.integration_store(), "click binding")?;
+            let color = callback_color(
+                "indication color",
+                Some(red),
+                Some(green),
+                Some(blue),
+                Some(alpha),
+            )?
+            .expect("all indication color channels were supplied");
+            let rate = noon_core::RateFunction::from_semantic_id(rate_function)
+                .ok_or_else(|| js_error("unsupported click indication rate function"))?;
+            self.inner
+                .bind_click_indicate(
+                    target.semantic_mobject(),
+                    noon::IndicateOptions::new(scale_factor, color),
+                    noon_core::AnimationOptions::new()
+                        .run_time(run_time)
+                        .rate_func(rate)
+                        .lag_ratio(lag_ratio),
+                )
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetTranslation)]
@@ -6385,6 +8181,21 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_set_fill_opacity(handle.semantic_mobject(), opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetImageSampling)]
+        pub fn live_set_image_sampling(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            value: &str,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.integration_store(), "live image sampling")?;
+            let sampling = crate::authoring_image::sampling(value)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_image_sampling(handle.semantic_mobject(), sampling)
                 .map_err(typed_js_error)
         }
 
@@ -6564,6 +8375,38 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetDecimalValue)]
+        pub fn live_set_decimal_value(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            compiler: &mut crate::WasmLatexCompiler,
+            value: f64,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .live_set_decimal_value(target.semantic_mobject(), compiler, value)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveIncrementDecimalValue)]
+        pub fn live_increment_decimal_value(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            compiler: &mut crate::WasmLatexCompiler,
+            delta: f64,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .live_increment_decimal_value(target.semantic_mobject(), compiler, delta)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveShift)]
         pub fn live_shift(
             &mut self,
@@ -6589,10 +8432,11 @@ mod wasm {
             batch: WasmSceneMembershipBatch,
             z_index: f64,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-            if batch.inner.kind != SceneMembershipBatchKind::Add {
+            let batch = batch.into_inner().map_err(typed_js_error)?;
+            if batch.kind != SceneMembershipBatchKind::Add {
                 return Err(typed_js_error("family creation requires an add batch"));
             }
-            let members = batch.inner.family_members().map_err(typed_js_error)?;
+            let members = batch.family_members().map_err(typed_js_error)?;
             self.inner
                 .live_family(&members, z_index)
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
@@ -6606,13 +8450,14 @@ mod wasm {
             handle: &crate::WasmAuthoringFamilyHandle,
             batch: WasmSceneMembershipBatch,
         ) -> Result<Vec<u8>, JsValue> {
-            let adding = match batch.inner.kind {
+            let batch = batch.into_inner().map_err(typed_js_error)?;
+            let adding = match batch.kind {
                 SceneMembershipBatchKind::Add => true,
                 SceneMembershipBatchKind::Remove => false,
                 _ => return Err(typed_js_error("family membership requires add or remove")),
             };
             let family = handle.semantic_family()?;
-            let members = batch.inner.family_members().map_err(typed_js_error)?;
+            let members = batch.family_members().map_err(typed_js_error)?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -6828,6 +8673,21 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFamilyFade)]
+        pub fn live_set_family_fade(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            darkness: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_fade(&family, darkness)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveArrangeFamilyInGrid)]
         pub fn live_arrange_family_in_grid(
             &mut self,
@@ -6884,6 +8744,34 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_set_scale(handle.semantic_mobject(), x, y)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveApplyMatrix)]
+        pub fn live_apply_matrix(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+            rows: u32,
+            columns: u32,
+            about_x: f64,
+            about_y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_apply_matrix(
+                    handle.semantic_mobject(),
+                    &values,
+                    rows as usize,
+                    columns as usize,
+                    about_x,
+                    about_y,
+                )
                 .map_err(typed_js_error)
         }
 
@@ -7173,12 +9061,75 @@ mod tests {
     }
 
     #[test]
+    fn translation_drag_targets_remain_with_the_canonical_scene_after_live_reconfiguration() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.5).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+
+        context
+            .set_translation_drag_targets(vec![circle.clone()])
+            .unwrap();
+        assert_eq!(
+            context
+                .translation_drag_targets
+                .iter()
+                .map(noon::Mobject::node_id)
+                .collect::<Vec<_>>(),
+            vec![circle.node_id()]
+        );
+
+        // Reconfiguration must affect the borrowed runtime and the canonical
+        // declaration used by a subsequent explicit execution rebuild.
+        context.live_player(1.0).unwrap();
+        context.set_translation_drag_targets(Vec::new()).unwrap();
+        assert!(context.translation_drag_targets.is_empty());
+    }
+
+    #[test]
+    fn translation_drag_target_declaration_rejects_foreign_stale_and_duplicate_handles() {
+        let mut context = CanonicalAuthoringScene::default();
+        let local = context.scene.circle(0.5).unwrap();
+        context.bind_mobject(ObjectId::new(0), &local).unwrap();
+        context
+            .set_translation_drag_targets(vec![local.clone()])
+            .unwrap();
+
+        // Store-local slots/generations can collide, so the declaration must
+        // retain the typed handle's store provenance rather than reconstructing
+        // a local handle from its identity fields.
+        let mut foreign_context = CanonicalAuthoringScene::default();
+        let foreign = foreign_context.scene.circle(0.5).unwrap();
+        foreign_context
+            .bind_mobject(ObjectId::new(0), &foreign)
+            .unwrap();
+        assert_eq!(local.node_id(), foreign.node_id());
+        assert!(context.set_translation_drag_targets(vec![foreign]).is_err());
+        assert_eq!(context.translation_drag_targets, vec![local.clone()]);
+
+        assert!(context
+            .set_translation_drag_targets(vec![local.clone(), local.clone()])
+            .is_err());
+        assert_eq!(context.translation_drag_targets, vec![local.clone()]);
+
+        let stale = context.scene.circle(0.25).unwrap();
+        context.bind_mobject(ObjectId::new(1), &stale).unwrap();
+        let mut removal = SemanticMutationTransaction::new();
+        removal.remove_node(stale.node_id());
+        removal
+            .apply(&mut context.scene.integration_store().borrow_mut())
+            .unwrap();
+        assert!(context.set_translation_drag_targets(vec![stale]).is_err());
+        assert_eq!(context.translation_drag_targets, vec![local]);
+    }
+
+    #[test]
     fn family_argument_batches_reject_scene_binding_metadata() {
-        let scene = noon::Scene::new();
+        let mut scene = noon::Scene::new();
         let object = scene.circle(0.2).unwrap();
         let revision = scene.integration_store().borrow().scene_revision();
         let mut batch = SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![OwnedSceneMembershipMember::Mobject {
                 wrapper_id: None,
                 handle: object.clone(),
@@ -7212,6 +9163,49 @@ mod tests {
     }
 
     #[test]
+    fn callback_membership_batch_keeps_original_handle_provenance() {
+        let mut local_scene = noon::Scene::new();
+        let local = local_scene.circle(0.25).unwrap();
+        let mut foreign_scene = noon::Scene::new();
+        let foreign = foreign_scene.circle(0.25).unwrap();
+        assert_eq!(local.node_id(), foreign.node_id());
+        let foreign_batch = SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: None,
+                handle: foreign,
+            }],
+            bindings: Vec::new(),
+        };
+        let error = foreign_batch
+            .with_existing_callback_membership(local_scene.integration_store(), |_| Ok(()))
+            .unwrap_err();
+        assert_eq!(error.category, "foreign_handle");
+        assert_eq!(error.code, "authoring.foreign_store");
+
+        let stale = local_scene.circle(0.5).unwrap();
+        let mut removal = SemanticMutationTransaction::new();
+        removal.remove_node(stale.node_id());
+        removal
+            .apply(&mut local_scene.integration_store().borrow_mut())
+            .unwrap();
+        let stale_batch = SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: None,
+                handle: stale,
+            }],
+            bindings: Vec::new(),
+        };
+        let error = stale_batch
+            .with_existing_callback_membership(local_scene.integration_store(), |_| Ok(()))
+            .unwrap_err();
+        assert_eq!(error.category, "stale_handle");
+    }
+
+    #[test]
     fn canonical_membership_batch_commits_bindings_only_after_atomic_shared_edit() {
         let mut context = CanonicalAuthoringScene::default();
         let first = context.scene.circle(0.5).unwrap();
@@ -7220,6 +9214,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
                 members: vec![
                     membership_mobject(0, &first),
                     membership_mobject(1, &second),
@@ -7252,6 +9247,7 @@ mod tests {
         let before = context.root_membership_keys().unwrap();
         let error = context.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Replace,
+            spatial_domain: None,
             members: vec![
                 membership_mobject(0, &first),
                 membership_mobject(0, &replacement),
@@ -7268,6 +9264,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Replace,
+                spatial_domain: None,
                 members: vec![
                     membership_mobject(0, &first),
                     membership_mobject(2, &replacement),
@@ -7296,11 +9293,143 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Clear,
+                spatial_domain: None,
                 members: Vec::new(),
                 bindings: Vec::new(),
             })
             .unwrap();
         assert!(context.root_membership_keys().unwrap().is_empty());
+    }
+
+    #[test]
+    fn canonical_foreground_batches_use_shared_membership_and_authoritative_query() {
+        let mut context = CanonicalAuthoringScene::default();
+        let first = context.scene.circle(0.5).unwrap();
+        let second = context.scene.square(0.5).unwrap();
+        let later = context.scene.rectangle(0.25, 0.75).unwrap();
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::AddForeground,
+                spatial_domain: None,
+                members: vec![
+                    membership_mobject(0, &first),
+                    membership_mobject(1, &second),
+                ],
+                bindings: vec![
+                    (ObjectId::new(0), first.clone()),
+                    (ObjectId::new(1), second.clone()),
+                ],
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_foreground_keys().unwrap(),
+            vec![
+                format!(
+                    "{}:{}",
+                    first.node_id().slot(),
+                    first.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    second.node_id().slot(),
+                    second.node_id().generation()
+                ),
+            ]
+        );
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
+                members: vec![membership_mobject(2, &later)],
+                bindings: vec![(ObjectId::new(2), later.clone())],
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_membership_keys().unwrap(),
+            vec![
+                format!(
+                    "{}:{}",
+                    later.node_id().slot(),
+                    later.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    first.node_id().slot(),
+                    first.node_id().generation()
+                ),
+                format!(
+                    "{}:{}",
+                    second.node_id().slot(),
+                    second.node_id().generation()
+                ),
+            ]
+        );
+        assert_eq!(context.root_foreground_keys().unwrap().len(), 2);
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::RemoveForeground,
+                spatial_domain: None,
+                members: vec![OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: first.clone(),
+                }],
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            context.root_foreground_keys().unwrap(),
+            vec![format!(
+                "{}:{}",
+                second.node_id().slot(),
+                second.node_id().generation()
+            )]
+        );
+        assert_eq!(context.root_membership_keys().unwrap().len(), 3);
+
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::BringToBack,
+                spatial_domain: None,
+                members: vec![OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: second.clone(),
+                }],
+                bindings: Vec::new(),
+            })
+            .unwrap();
+        assert!(context.root_foreground_keys().unwrap().is_empty());
+        assert_eq!(
+            context.root_membership_keys().unwrap().first(),
+            Some(&format!(
+                "{}:{}",
+                second.node_id().slot(),
+                second.node_id().generation()
+            ))
+        );
+    }
+
+    #[test]
+    fn foreground_add_requires_binding_before_publication() {
+        let mut context = CanonicalAuthoringScene::default();
+        let object = context.scene.circle(0.5).unwrap();
+        let before = context.scene.revision();
+        let error = context.edit_membership(SceneMembershipBatch {
+            kind: SceneMembershipBatchKind::AddForeground,
+            spatial_domain: None,
+            members: vec![OwnedSceneMembershipMember::Mobject {
+                wrapper_id: None,
+                handle: object.clone(),
+            }],
+            bindings: Vec::new(),
+        });
+        assert!(error.is_err());
+        assert_eq!(context.scene.revision(), before);
+        assert!(context.root_membership_keys().unwrap().is_empty());
+        assert!(context.root_foreground_keys().unwrap().is_empty());
+        assert!(!context.identities.contains_key(&object.node_id()));
     }
 
     #[test]
@@ -7327,6 +9456,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Clear,
+                spatial_domain: None,
                 members: Vec::new(),
                 bindings: Vec::new(),
             })
@@ -7378,7 +9508,7 @@ mod tests {
     #[test]
     fn typed_binding_rejects_cross_store_collisions_atomically() {
         let mut first = CanonicalAuthoringScene::default();
-        let second = CanonicalAuthoringScene::default();
+        let mut second = CanonicalAuthoringScene::default();
         let local = first.scene.circle(1.0).unwrap();
         let foreign = second.scene.circle(2.0).unwrap();
         assert_eq!(local.node_id(), foreign.node_id());
@@ -7563,6 +9693,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
+                spatial_domain: None,
                 members: vec![OwnedSceneMembershipMember::Family(family)],
                 bindings: vec![
                     (ObjectId::new(4), left.clone()),
@@ -7611,7 +9742,9 @@ mod tests {
         assert_eq!(text.source.as_ref(), "A\nB");
         assert_eq!(text.runs.len(), 2);
         assert_eq!(text.runs[0].font_size, 36.0);
-        assert!((text.runs[0].transform.ty - text.runs[1].transform.ty - 54.0).abs() < 1e-6);
+        // Manim's 11.25 SVG-unit step at 36pt and 50% extra spacing maps to
+        // 40.5 units in the shared point-sized shaping coordinates.
+        assert!((text.runs[0].transform.ty - text.runs[1].transform.ty - 40.5).abs() < 1e-6);
         assert_eq!(
             state.transform.scale.x,
             f64::from(noon::integration::NATIVE_POINT_TO_SCENE_SCALE)
@@ -7922,6 +10055,7 @@ mod tests {
             .unwrap();
         let batch = SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
+            spatial_domain: None,
             members: vec![
                 OwnedSceneMembershipMember::Mobject {
                     wrapper_id: None,
@@ -8195,7 +10329,8 @@ mod tests {
         context.bind_mobject(ObjectId::new(1), &right).unwrap();
         let child = AnimationOptions::new()
             .run_time(2.0)
-            .rate_func(RateFunction::Linear);
+            .rate_func(RateFunction::Linear)
+            .path_arc(std::f64::consts::FRAC_PI_2);
         let children = [
             bound_transform_child(&left, left_target, child),
             bound_transform_child(&right, right_target, child),
@@ -8265,6 +10400,7 @@ mod tests {
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Clear,
+                spatial_domain: None,
                 members: Vec::new(),
                 bindings: Vec::new(),
             })
@@ -8601,6 +10737,68 @@ mod tests {
             rejected.scene.integration_store().borrow().scene_revision(),
             revision
         );
+    }
+
+    #[test]
+    fn ordinary_arrow_grow_admits_all_leaves_only_after_lifecycle_validation() {
+        let mut context = CanonicalAuthoringScene::default();
+        let arrow = context
+            .scene
+            .manim_arrow(noon::ManimArrowOptions::vector(2.0, 1.0).unwrap())
+            .unwrap();
+        let child = |options| OrdinaryCompositionChild::FamilyArrowGrow {
+            target: arrow.family().clone(),
+            arrow: arrow.clone(),
+            entering: vec![
+                (ObjectId::new(0), arrow.shaft().clone()),
+                (ObjectId::new(1), arrow.end_tip().clone()),
+            ],
+            options,
+        };
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .introducer(true)
+            .remover(false)
+            .path_arc(0.0);
+        let before = context.scene.integration_store().borrow().scene_revision();
+        assert!(context
+            .ordinary_play_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &[child(options.remover(true))],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .is_err());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            before
+        );
+        assert!(context.bindings.is_empty());
+        assert!(context.player_ownership.is_unstarted());
+
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &[child(options)],
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            1.0
+        );
+        assert_eq!(context.bindings.len(), 2);
+        for leaf in [arrow.shaft(), arrow.end_tip()] {
+            assert!(context.contains_mobject(leaf).unwrap());
+            let effective = context
+                .active_live_player()
+                .unwrap()
+                .live_effective(leaf)
+                .unwrap();
+            assert_eq!(effective.transform.translation, noon_core::Vec2::ZERO);
+            assert_eq!(effective.transform.scale, noon_core::Vec2::new(1.0, 1.0));
+        }
     }
 
     #[test]
@@ -9012,7 +11210,7 @@ mod tests {
         assert!(context.live_contains_mobject(&lifecycle_target).unwrap());
 
         let revision = context.scene.integration_store().borrow().scene_revision();
-        let foreign = CanonicalAuthoringScene::default();
+        let mut foreign = CanonicalAuthoringScene::default();
         let foreign_target = foreign.scene.circle(0.2).unwrap();
         let invalid = [OrdinaryCompositionChild::Add {
             entering_id: ObjectId::new(9),
@@ -9034,6 +11232,95 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_composition_reuses_one_detached_wrapper_for_retained_channels() {
+        let mut context = CanonicalAuthoringScene::default();
+        let shape = context.scene.circle(0.4).unwrap();
+        // A changed geometry keeps this in Noon's retained morph-and-reveal
+        // channel, which is the paired browser fixture's admission shape.
+        let target = context.scene.square(0.8).unwrap();
+        let id = ObjectId::new(0);
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let children = [
+            OrdinaryCompositionChild::Create {
+                entering_id: Some(id),
+                target: shape.clone(),
+                options,
+            },
+            OrdinaryCompositionChild::TransformTo {
+                entering_id: Some(id),
+                source: shape.clone(),
+                target,
+                interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                complete_priority: false,
+                options,
+            },
+        ];
+
+        assert_eq!(
+            context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                    AnimationOptions::new(),
+                )
+                .unwrap(),
+            1.0
+        );
+        assert!(context.live_contains_mobject(&shape).unwrap());
+        assert_eq!(context.bindings.len(), 1);
+        assert_eq!(context.bindings.get(&id), Some(&shape.node_id()));
+        assert_eq!(context.identities.get(&shape.node_id()), Some(&id));
+    }
+
+    #[test]
+    fn ordinary_composition_rejects_conflicting_detached_wrapper_bindings_atomically() {
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
+        for (first_id, second_id, same_target) in [(0, 0, false), (0, 1, true)] {
+            let mut context = CanonicalAuthoringScene::default();
+            let first = context.scene.circle(0.4).unwrap();
+            let second = if same_target {
+                first.clone()
+            } else {
+                context.scene.square(0.4).unwrap()
+            };
+            let revision = context.scene.integration_store().borrow().scene_revision();
+            let children = [
+                OrdinaryCompositionChild::Create {
+                    entering_id: Some(ObjectId::new(first_id)),
+                    target: first,
+                    options,
+                },
+                OrdinaryCompositionChild::Create {
+                    entering_id: Some(ObjectId::new(second_id)),
+                    target: second,
+                    options,
+                },
+            ];
+            assert!(context
+                .ordinary_play_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    composition,
+                    AnimationOptions::new(),
+                )
+                .is_err());
+            assert!(context.bindings.is_empty());
+            assert!(context.identities.is_empty());
+            assert!(context.player_ownership.is_unstarted());
+            assert_eq!(
+                context.scene.integration_store().borrow().scene_revision(),
+                revision
+            );
+        }
+    }
+
+    #[test]
     fn canonical_family_composition_rejects_crosswrites_and_captures_between_segments() {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.square(0.5).unwrap();
@@ -9052,11 +11339,13 @@ mod tests {
             .scene
             .family(&[(&left_target).into(), (&right_target).into()])
             .unwrap();
-        let invalid_target = context.scene.family(&[(&left_target).into()]).unwrap();
+        let invalid_nested = context.scene.family(&[(&left_target).into()]).unwrap();
+        let invalid_target = context.scene.family(&[(&invalid_nested).into()]).unwrap();
         let transform_options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear)
-            .lag_ratio(0.25);
+            .lag_ratio(0.25)
+            .path_arc(std::f64::consts::FRAC_PI_2);
         let indicate_options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::ThereAndBack);
@@ -9066,6 +11355,19 @@ mod tests {
             options: transform_options,
         }];
         let revision = context.scene.integration_store().borrow().scene_revision();
+        let reversed = [OrdinaryCompositionChild::FamilyTransformTo {
+            source: source.clone(),
+            target_state: target.clone(),
+            options: transform_options.reverse_rate_function(true),
+        }];
+        assert!(context
+            .validate_ordinary_mixed_composition(
+                &reversed,
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap_err()
+            .contains("reverse_rate_function"));
         assert!(context
             .ordinary_play_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
@@ -11014,5 +13316,214 @@ mod tests {
         context.live_player(1.0).unwrap();
         assert!(context.pointer_position_signal().is_err());
         assert!(context.bind_opacity(&square, &opacity).is_err());
+    }
+
+    #[test]
+    fn canonical_illusion_rotation_forwards_cold_and_live_lifecycle() {
+        let profile = noon_core::ManimCamera3DProfile {
+            phi: 75_f64.to_radians(),
+            theta: 30_f64.to_radians(),
+            gamma: 0.1,
+            focal_distance: 5.0,
+            zoom: 1.0,
+            frame_height: 8.0,
+            frame_center: SemanticVec3::ZERO,
+        };
+        let camera_id = ObjectId::new(41);
+
+        let mut cold = CanonicalAuthoringScene::default();
+        let camera = cold
+            .create_camera_profile(camera_id, profile, 0.1, 100.0)
+            .unwrap();
+        cold.begin_3dillusion_camera_rotation(&camera, 2.0, None, None)
+            .unwrap();
+        cold.scene.wait(std::f64::consts::FRAC_PI_2).unwrap();
+        // Before execution starts, this query reads authored base state. Stop
+        // resolves the analytic endpoint from the authored motion interval.
+        assert_eq!(cold.effective_camera_profile(&camera).unwrap().0, profile);
+        let cold_endpoint = noon_core::ManimCamera3DProfile {
+            phi: profile.phi - 0.2,
+            ..profile
+        };
+        cold.stop_3dillusion_camera_rotation(&camera).unwrap();
+        let cold_state = camera.state().unwrap();
+        let actual_endpoint = cold_state.camera_profile().unwrap();
+        assert!((actual_endpoint.phi - cold_endpoint.phi).abs() < 1.0e-12);
+        assert_eq!(
+            noon_core::ManimCamera3DProfile {
+                phi: cold_endpoint.phi,
+                ..actual_endpoint
+            },
+            cold_endpoint
+        );
+        assert_eq!(
+            cold_state.camera_motions()[0].end(),
+            Some(std::f64::consts::FRAC_PI_2)
+        );
+
+        let mut live = CanonicalAuthoringScene::default();
+        let camera = live
+            .create_camera_profile(ObjectId::new(42), profile, 0.1, 100.0)
+            .unwrap();
+        assert_eq!(live.ordinary_wait(0.25).unwrap(), 0.25);
+        live.begin_3dillusion_camera_rotation(&camera, 1.5, Some(profile.phi), Some(profile.theta))
+            .unwrap();
+        assert_eq!(live.ordinary_wait(0.5).unwrap(), 0.75);
+        let live_endpoint = live.effective_camera_profile(&camera).unwrap().0;
+        live.stop_3dillusion_camera_rotation(&camera).unwrap();
+        let live_state = camera.state().unwrap();
+        assert_eq!(live_state.camera_profile(), Some(live_endpoint));
+        assert_eq!(live_state.camera_motions()[0].start(), 0.25);
+        assert_eq!(live_state.camera_motions()[0].end(), Some(0.75));
+        assert_eq!(live.active_live_player().unwrap().time(), 0.75);
+    }
+
+    #[test]
+    fn canonical_surface_checkerboard_forwards_to_scene_semantic_transaction() {
+        let mut context = CanonicalAuthoringScene::default();
+        let plan = noon_geometry::UvSurfacePlan::new([0.0, 1.0], [0.0, 1.0], [2, 2]).unwrap();
+        let samples = plan
+            .coordinates()
+            .map(|(u, v)| noon_geometry::SurfaceSample::position(SemanticVec3::new(u, v, 0.0)))
+            .collect::<Vec<_>>();
+        let surface = context
+            .scene
+            .surface_family(
+                plan.finish_samples(samples).unwrap(),
+                noon::SurfaceOptions::default(),
+            )
+            .unwrap();
+        context.scene.add_many(&[surface.family().into()]).unwrap();
+
+        context
+            .set_surface_checkerboard(&surface, [Color::RED, Color::GREEN], 0.4)
+            .unwrap();
+
+        assert_eq!(context.ordinary_wait(0.2).unwrap(), 0.2);
+        context
+            .set_surface_checkerboard(&surface, [Color::BLUE, Color::YELLOW], 0.6)
+            .unwrap();
+
+        let store = std::rc::Rc::clone(context.scene.integration_store());
+        let leaves = store
+            .borrow()
+            .ordered_leaf_nodes(surface.family().node_id())
+            .unwrap();
+        assert_eq!(leaves.len(), 4);
+        for leaf in &leaves {
+            let borrowed = store.borrow();
+            let state = borrowed.semantic_object_state_checked(*leaf).unwrap();
+            let [u, v] = state.surface_uv_cell().unwrap();
+            let expected = if (u + v) % 2 == 0 {
+                Color::BLUE
+            } else {
+                Color::YELLOW
+            };
+            assert_eq!(
+                state.style.fill,
+                Some(noon_core::SemanticPaint::Solid(expected))
+            );
+            assert_eq!(state.style.fill_opacity, 0.6);
+            drop(borrowed);
+
+            let leaf = noon::Mobject::from_node(std::rc::Rc::clone(&store), *leaf).unwrap();
+            let effective = context
+                .active_live_player()
+                .unwrap()
+                .live_effective(&leaf)
+                .unwrap();
+            assert_eq!(
+                effective.style.fill,
+                Some(Color {
+                    alpha: 0.6,
+                    ..expected
+                })
+            );
+            assert_eq!(effective.fill_opacity(), f64::from(0.6_f32));
+        }
+
+        let authored_revision = store.borrow().scene_revision();
+        let player = context.active_live_player().unwrap();
+        assert_eq!(player.scene_revision(), authored_revision);
+        assert_eq!(context.ordinary_wait(0.2).unwrap(), 0.4);
+        assert_eq!(
+            context.active_live_player().unwrap().scene_revision(),
+            authored_revision
+        );
+    }
+
+    #[test]
+    fn ordinary_sequence_admits_move_path_and_finite_callback_interval() {
+        let mut context = CanonicalAuthoringScene::default();
+        let camera = context.create_camera_frame(ObjectId::new(45)).unwrap();
+        let target = context
+            .scene
+            .geometry(noon::ManimGeometryOptions::dot(0.0, 0.0, 0.25).unwrap())
+            .unwrap();
+        let path = context
+            .scene
+            .path(
+                noon_core::VectorPath::new()
+                    .move_to(noon_core::Vec2::new(-1.0, 0.0))
+                    .line_to(noon_core::Vec2::new(1.0, 0.0)),
+                noon_core::SemanticStyle::default(),
+            )
+            .unwrap();
+        context.bind_mobject(ObjectId::new(43), &target).unwrap();
+        context.bind_mobject(ObjectId::new(44), &path).unwrap();
+        let callback = HostCallbackId::new(46);
+
+        let children = [
+            OrdinaryCompositionChild::MoveAlongPath {
+                target: target.clone(),
+                path,
+                options: AnimationOptions::new()
+                    .run_time(0.4)
+                    .rate_func(RateFunction::Linear),
+            },
+            OrdinaryCompositionChild::CallbackInterval {
+                target: camera,
+                callback,
+                options: AnimationOptions::new().run_time(0.6),
+            },
+        ];
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Sequence,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        assert_eq!(end, 1.0);
+        assert_eq!(context.live_execution_ownership(), "active");
+        let player = context.active_live_player().unwrap();
+        assert_eq!(player.time(), 0.0);
+        assert_eq!(player.live_handoff_duration(), Some(1.0));
+        assert!(player.has_required_callbacks());
+    }
+}
+
+#[cfg(test)]
+mod matching_family_selector_tests {
+    use super::*;
+
+    #[test]
+    fn matching_family_child_is_constructible_in_shared_rust_model() {
+        let mut scene = noon::Scene::new();
+        let source_leaf = scene.square(1.0).unwrap();
+        let target_leaf = scene.square(1.0).unwrap();
+        let source = scene.family(&[(&source_leaf).into()]).unwrap();
+        let target_state = scene.family(&[(&target_leaf).into()]).unwrap();
+        let child = OrdinaryCompositionChild::MatchingFamilyTransformTo {
+            source,
+            target_state,
+            options: noon_core::AnimationOptions::new(),
+        };
+        assert!(matches!(
+            child,
+            OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
+        ));
     }
 }

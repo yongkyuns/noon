@@ -1,13 +1,16 @@
 //! Structured failures produced by shared Rust authoring operations.
 //!
-//! Existing semantic, resource and transaction causes remain intact. These errors
-//! do not replace live publication, segment or activation errors, and never infer
-//! categories from diagnostics.
+//! Existing semantic, resource and transaction causes remain intact. Scene-owned
+//! running edits retain execution-publication causes explicitly; dedicated live
+//! segment and activation errors remain separate and no category is inferred from
+//! diagnostics.
 
 /// A concrete unsupported payload or operation in ordinary shared authoring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnsupportedAuthoringOperation {
+    /// This operation requires immutable raster-image content.
+    ImageContent,
     /// Point matching requires vector geometry on both operands.
     PointMatchContent,
     /// Persistent point editing requires retained vector geometry.
@@ -22,6 +25,8 @@ pub enum UnsupportedAuthoringOperation {
     EffectiveLineRenderOverride,
     /// Effective path observations require a queryable retained content version.
     EffectivePathRenderOverride,
+    /// Effective observations require Scene-owned execution to be running.
+    EffectiveStateUnavailable,
     /// Text and external content do not expose a vector path.
     PathQueryContent,
     /// effective layout queries currently support affine and style drivers only.
@@ -32,6 +37,12 @@ pub enum UnsupportedAuthoringOperation {
     CaptureRenderOverride,
     /// cannot capture a reactive binding into object state.
     CaptureReactiveBinding,
+    /// Surface checkerboard semantics require retained mesh leaves with UV roles.
+    SurfaceCellRole,
+    /// CairoSurface material requires a Cairo-sampled cell appearance payload.
+    CairoSurfaceAppearanceRequired,
+    /// Spatial path caps currently support opaque or fully transparent paint only.
+    SpatialPathOpacity,
     /// target editor cannot capture a runtime style backed by a paint resource.
     CaptureResourcePaint,
     /// Manim color queries do not support resource paints.
@@ -40,15 +51,28 @@ pub enum UnsupportedAuthoringOperation {
     ResourcePaintOpacityQuery,
     /// external geometry must resolve to an immutable semantic resource.
     ExternalGeometry,
+    /// 2D layout and boundary queries do not project spatial mesh geometry.
+    SpatialMeshBounds2D,
+    /// World edits currently require mesh, camera, or light content.
+    WorldAffineContent,
     /// Line.match_points requires an analytic Line source.
     LineMatchSourceContent,
     /// This operation cannot retain the requested world-axis deformation.
     RotatedDimensionStretch,
+    /// ApplyMatrix requires retained geometric content.
+    ApplyMatrixContent,
+    /// ApplyMatrix accepts only 2x2 or 3x3 matrices.
+    ApplyMatrixDimensions,
+    /// ApplyMatrix cannot produce Z geometry in the current 2D path domain.
+    ApplyMatrixNonPlanar,
+    /// CyclicReplace currently requires one non-empty flat family of object members.
+    CyclicReplaceFamilyTopology,
 }
 
 impl std::fmt::Display for UnsupportedAuthoringOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::ImageContent => "this operation requires raster-image content",
             Self::EffectiveFamilyLayoutRenderOverride => "effective family layout cannot use render-content overrides",
             Self::PlacementEffectiveAffineDriver => "move_to cannot compose with an active effective affine driver",
             Self::PlacementRenderOverride => "move_to cannot use an effective layout with render-content overrides",
@@ -57,16 +81,26 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::CaptureNonUnitAppearance => "object state capture cannot represent a non-unit effective appearance",
             Self::CaptureRenderOverride => "object state capture requires effective authored content without reveal or morph overrides",
             Self::CaptureReactiveBinding => "cannot capture a reactive binding into object state",
+            Self::SurfaceCellRole => "surface checkerboard requires retained mesh cells with UV roles",
+            Self::CairoSurfaceAppearanceRequired => "Cairo Surface shading requires retained per-cell Cairo appearance samples",
+            Self::SpatialPathOpacity => "spatial path caps require opaque or fully transparent paint",
             Self::CaptureResourcePaint => "target editor cannot capture a runtime style backed by a paint resource",
             Self::ResourcePaintColorQuery => "Manim color queries do not support resource paints",
             Self::ResourcePaintOpacityQuery => "Manim opacity queries do not support resource paints",
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
+            Self::EffectiveStateUnavailable => "effective state requires a running Scene",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
+            Self::SpatialMeshBounds2D => "2D bounds queries do not support spatial mesh geometry",
+            Self::WorldAffineContent => "world affine edits require vector, text, mesh, camera, or light content",
             Self::PathEditContent => "point editing requires retained vector geometry",
             Self::PointMatchContent => "match_points requires vector geometry on both operands",
             Self::LineMatchSourceContent => "Line.match_points requires an analytic Line source",
             Self::RotatedDimensionStretch => "this operation cannot represent the requested world-axis deformation",
+            Self::ApplyMatrixContent => "ApplyMatrix requires retained geometry",
+            Self::ApplyMatrixDimensions => "ApplyMatrix requires a 2x2 or 3x3 matrix",
+            Self::ApplyMatrixNonPlanar => "ApplyMatrix requires a 3x3 matrix that does not map XY coordinates into Z",
+            Self::CyclicReplaceFamilyTopology => "CyclicReplace requires one non-empty flat family of object members",
         })
     }
 }
@@ -81,8 +115,30 @@ impl std::error::Error for UnsupportedAuthoringOperation {}
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    EffectStateReplacementUnavailable,
+    GlowParameter(noon_core::GlowParameterError),
+    EffectNotFound {
+        owner: noon_core::SemanticNodeId,
+        name: String,
+    },
+    EffectOwnerMismatch {
+        effect: noon_core::SemanticNodeId,
+        owner: noon_core::SemanticNodeId,
+    },
+    #[cfg(feature = "image-decode")]
+    ImageDecode(crate::ImageDecodeError),
+    /// Immutable raster resource validation failed.
+    ImageResource(noon_core::RasterImageResourceError),
+    /// An object references a missing or stale raster image resource.
+    MissingImageResource(noon_core::RasterImageResourceHandle),
     /// The camera must be initialized before ordinary root content is added.
     CameraRequiresEmptyScene(noon_core::SemanticNodeId),
+    /// Camera auto-frame inputs cannot produce a finite representable viewport.
+    InvalidCameraAutoFrame(&'static str),
+    /// A camera-motion input or sampled endpoint is not representable.
+    InvalidCameraMotionInput(&'static str),
+    /// A second camera-motion interval cannot begin while the camera has an open owner.
+    CameraMotionAlreadyActive,
     /// A committed creation did not resolve its prepared local token.
     UnresolvedCreatedNode(noon_core::SemanticLocalNodeToken),
     /// Existing shared domain cause.
@@ -94,13 +150,25 @@ pub enum AuthoringError {
     /// An object references a missing or stale text resource.
     MissingTextResource(noon_core::TextResourceHandle),
     /// The named input is non-finite or cannot be represented as f32.
-    InvalidRenderNumber { name: String, value: f64 },
+    InvalidRenderNumber {
+        name: String,
+        value: f64,
+    },
     /// The named input must be strictly positive.
-    NonPositiveNumber { name: String, value: f64 },
+    NonPositiveNumber {
+        name: String,
+        value: f64,
+    },
     /// The named opacity is outside the inclusive unit interval.
-    InvalidOpacity { name: String, value: f64 },
+    InvalidOpacity {
+        name: String,
+        value: f64,
+    },
     /// At least one validated ellipse dimension is nonpositive.
-    InvalidEllipseDimensions { width: f64, height: f64 },
+    InvalidEllipseDimensions {
+        width: f64,
+        height: f64,
+    },
     /// Geometry contains non-finite values.
     NonFiniteGeometry,
     /// Flattened XY point input has an incomplete coordinate pair.
@@ -123,6 +191,11 @@ pub enum AuthoringError {
     NonFiniteDirection,
     /// A color gradient requires at least one reference color.
     EmptyColorGradient,
+    /// A member-indexed family operation supplied a value vector of the wrong length.
+    FamilyMemberValueCount {
+        expected: usize,
+        actual: usize,
+    },
     /// A layout direction has zero length.
     ZeroDirection,
     /// Line matching received non-finite endpoints.
@@ -159,6 +232,9 @@ pub enum AuthoringError {
     },
     /// Grid alignment, sizing or flow options are inconsistent.
     InvalidGridOption(&'static str),
+    /// Click indication has one restoring timing shape; other animation options
+    /// would imply a distinct authored action.
+    InvalidClickIndicateOptions,
     /// A planar flip needs a nonzero XY axis or a pure Z axis.
     InvalidFlipAxis,
     /// An internal arrangement plan has not observed all required bounds.
@@ -168,13 +244,22 @@ pub enum AuthoringError {
     /// A detached-only tracker operation was requested after association.
     AlreadyScopedTracker(noon_core::SemanticNodeId),
     /// A native input declaration received an empty name.
-    EmptyInputName { kind: String },
+    EmptyInputName {
+        kind: String,
+    },
     /// This operation requires an unsupported payload or capability.
     Unsupported(UnsupportedAuthoringOperation),
     /// The semantic operation rejected a node, family, or membership request.
     Semantic(noon_core::SemanticSceneOperationError),
     /// Transaction preflight failed before commit.
     Transaction(noon_core::SemanticMutationTransactionError),
+    /// Scene-owned running authoring failed during execution publication.
+    ExecutionPublication(crate::ExecutionSessionPublicationError),
+    /// Scene-owned running authoring failed while activating an execution operation.
+    ///
+    /// This keeps the exact runtime cause for operations such as live tracker
+    /// enrollment, whose failure set is broader than semantic publication.
+    ExecutionAnimation(crate::ExecutionSessionAnimationError),
     /// A high-precision value cannot lower to renderer coordinates.
     VectorLowering(noon_core::SemanticLoweringError),
     /// Immutable geometry resource validation failed.
@@ -204,8 +289,21 @@ pub enum AuthoringError {
 impl std::fmt::Display for AuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::GlowParameter(error) => error.fmt(f),
+            Self::EffectStateReplacementUnavailable => f.write_str("effect-bearing state replacement requires the effect lifecycle profile"),
+            Self::EffectNotFound { owner, name } => write!(f, "object {owner:?} has no effect named {name:?}"),
+            Self::EffectOwnerMismatch { effect, owner } => write!(f, "effect {effect:?} does not belong to object {owner:?}"),
+            #[cfg(feature = "image-decode")]
+            Self::ImageDecode(error) => error.fmt(f),
+            Self::ImageResource(error) => error.fmt(f),
+            Self::MissingImageResource(handle) => {
+                write!(f, "unknown or stale raster image resource {handle:?}")
+            }
             Self::CameraRequiresEmptyScene(_) => {
-                f.write_str("2D camera frame must be created before scene content")
+                f.write_str("camera must be created before scene content")
+            }
+            Self::InvalidCameraAutoFrame(reason) => {
+                write!(f, "invalid camera auto-frame: {reason}")
             }
             Self::UnresolvedCreatedNode(token) => {
                 write!(f, "committed creation did not resolve {token:?}")
@@ -234,6 +332,10 @@ impl std::fmt::Display for AuthoringError {
             Self::NonFiniteObjectState => {
                 f.write_str("geometry, transform, and style must be finite")
             }
+            Self::InvalidCameraMotionInput(message) => f.write_str(message),
+            Self::CameraMotionAlreadyActive => {
+                f.write_str("camera already has an open rotation; stop it before beginning another")
+            }
             Self::NonFiniteTransform => f.write_str("compact transform must be finite"),
             Self::NonFiniteStyle => f.write_str("compact style must be finite"),
             Self::NegativeStrokeWidth(_) => f.write_str("stroke width must be non-negative"),
@@ -244,6 +346,10 @@ impl std::fmt::Display for AuthoringError {
             Self::InvalidStrokeCap(_) => f.write_str("stroke_cap must be round, butt, or square"),
             Self::NonFiniteDirection => f.write_str("direction must be finite"),
             Self::EmptyColorGradient => f.write_str("a color gradient requires at least one color"),
+            Self::FamilyMemberValueCount { expected, actual } => write!(
+                f,
+                "family member value count {actual} does not match current leaf count {expected}"
+            ),
             Self::ZeroDirection => f.write_str("direction must be non-zero"),
             Self::NonFiniteLineEndpoints => {
                 f.write_str("Line.match_points endpoints must be finite")
@@ -274,6 +380,9 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("too few grid rows and columns to fit all members")
             }
             Self::InvalidGridOption(name) => write!(f, "invalid grid {name} option"),
+            Self::InvalidClickIndicateOptions => {
+                f.write_str("click Indicate only accepts there-and-back timing without lag, path arc, reversal, lifecycle options")
+            }
             Self::InvalidFlipAxis => {
                 f.write_str("flip axis must be nonzero and lie in the XY plane or along Z")
             }
@@ -287,6 +396,8 @@ impl std::fmt::Display for AuthoringError {
             Self::EmptyInputName { kind } => write!(f, "native input {kind} must not be empty"),
             Self::Semantic(error) => error.fmt(f),
             Self::Transaction(error) => error.fmt(f),
+            Self::ExecutionPublication(error) => error.fmt(f),
+            Self::ExecutionAnimation(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
             Self::PathQuery(error) => error.fmt(f),
@@ -307,9 +418,15 @@ impl std::fmt::Display for AuthoringError {
 impl std::error::Error for AuthoringError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            #[cfg(feature = "image-decode")]
+            Self::ImageDecode(error) => Some(error),
+            Self::GlowParameter(error) => Some(error),
+            Self::ImageResource(error) => Some(error),
             Self::FamilyPairing(error) => Some(error),
             Self::Semantic(error) => Some(error),
             Self::Transaction(error) => Some(error),
+            Self::ExecutionPublication(error) => Some(error),
+            Self::ExecutionAnimation(error) => Some(error),
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
             Self::PathQuery(error) => Some(error),
@@ -340,6 +457,18 @@ impl From<noon_core::SemanticMutationTransactionError> for AuthoringError {
     }
 }
 
+impl From<crate::ExecutionSessionPublicationError> for AuthoringError {
+    fn from(error: crate::ExecutionSessionPublicationError) -> Self {
+        Self::ExecutionPublication(error)
+    }
+}
+
+impl From<crate::ExecutionSessionAnimationError> for AuthoringError {
+    fn from(error: crate::ExecutionSessionAnimationError) -> Self {
+        Self::ExecutionAnimation(error)
+    }
+}
+
 impl From<noon_core::SemanticLoweringError> for AuthoringError {
     fn from(error: noon_core::SemanticLoweringError) -> Self {
         Self::VectorLowering(error)
@@ -349,6 +478,19 @@ impl From<noon_core::SemanticLoweringError> for AuthoringError {
 impl From<noon_core::GeometryResourceError> for AuthoringError {
     fn from(error: noon_core::GeometryResourceError) -> Self {
         Self::GeometryResource(error)
+    }
+}
+
+impl From<noon_core::RasterImageResourceError> for AuthoringError {
+    fn from(error: noon_core::RasterImageResourceError) -> Self {
+        Self::ImageResource(error)
+    }
+}
+
+#[cfg(feature = "image-decode")]
+impl From<crate::ImageDecodeError> for AuthoringError {
+    fn from(error: crate::ImageDecodeError) -> Self {
+        Self::ImageDecode(error)
     }
 }
 
@@ -409,5 +551,11 @@ impl From<noon_core::SemanticStoreError> for AuthoringError {
 impl From<noon_core::SemanticFamilyPairingError> for AuthoringError {
     fn from(error: noon_core::SemanticFamilyPairingError) -> Self {
         Self::FamilyPairing(error)
+    }
+}
+
+impl From<noon_core::GlowParameterError> for AuthoringError {
+    fn from(error: noon_core::GlowParameterError) -> Self {
+        Self::GlowParameter(error)
     }
 }

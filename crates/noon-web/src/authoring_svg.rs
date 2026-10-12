@@ -147,13 +147,17 @@ fn parse_width_or_defaults(value: JsValue) -> Result<SvgImportRequest, JsValue> 
         });
     }
     if !Array::is_array(&value) {
-        return Err(invalid_svg_transport("SVG width/default transport is invalid"));
+        return Err(invalid_svg_transport(
+            "SVG width/default transport is invalid",
+        ));
     }
     let transport = Array::from(&value);
     if transport.length() != 7
         || transport.get(0).as_string().as_deref() != Some(SVG_DEFAULT_TRANSPORT_TAG)
     {
-        return Err(invalid_svg_transport("SVG default transport has an invalid envelope"));
+        return Err(invalid_svg_transport(
+            "SVG default transport has an invalid envelope",
+        ));
     }
     Ok(SvgImportRequest {
         width: optional_f64(&transport, 1, "width")?,

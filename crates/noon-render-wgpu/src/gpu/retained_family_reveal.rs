@@ -1,6 +1,7 @@
 use noon_core::{
     FamilyAnimationMode, ObjectId, RetainedAnimationMember, RetainedFamilyAnimationEvaluationError,
     RetainedFamilyAnimationLeafFrame, RetainedFamilyAnimationPlan, TextAnimationGlyphRef,
+    TextAnimationVectorRef,
 };
 use noon_runtime::{RetainedFamilyFrame, RetainedFamilyFramePlanError};
 
@@ -20,10 +21,16 @@ pub enum RetainedFamilyRevealMember {
         glyph: TextAnimationGlyphRef,
         reveal: f32,
     },
+    TextVector {
+        object: ObjectId,
+        vector: TextAnimationVectorRef,
+        reveal: f32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RetainedFamilyRevealError {
+    UnsupportedImage(ObjectId),
     UnsupportedMode(FamilyAnimationMode),
     MissingPreparedMember { object: ObjectId, local_member: u32 },
     FramePlan(RetainedFamilyFramePlanError),
@@ -33,6 +40,9 @@ pub enum RetainedFamilyRevealError {
 impl std::fmt::Display for RetainedFamilyRevealError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedImage(object) => {
+                write!(formatter, "image {object:?} cannot use vector/glyph reveal")
+            }
             Self::UnsupportedMode(mode) => {
                 write!(
                     formatter,
@@ -127,7 +137,7 @@ impl Iterator for RetainedFamilyRevealMembers<'_> {
                 return Some(Err(RetainedFamilyRevealError::MissingPreparedMember {
                     object,
                     local_member,
-                }))
+                }));
             }
         };
         let reveal = match self.frame.member_progress(local_member) {
@@ -135,13 +145,22 @@ impl Iterator for RetainedFamilyRevealMembers<'_> {
             Err(error) => return Some(Err(error.into())),
         };
 
+        if member == RetainedAnimationMember::Image {
+            return Some(Err(RetainedFamilyRevealError::UnsupportedImage(object)));
+        }
         Some(Ok(match member {
+            RetainedAnimationMember::Image => unreachable!("image member rejected above"),
             RetainedAnimationMember::Geometry => {
                 RetainedFamilyRevealMember::Geometry { object, reveal }
             }
             RetainedAnimationMember::Text(member) => RetainedFamilyRevealMember::TextGlyph {
                 object,
                 glyph: member.glyph,
+                reveal,
+            },
+            RetainedAnimationMember::TextVector(vector) => RetainedFamilyRevealMember::TextVector {
+                object,
+                vector,
                 reveal,
             },
         }))
@@ -164,11 +183,12 @@ mod tests {
     use std::sync::Arc;
 
     use noon_core::{
-        FamilyAnimationState, FontFaceIdentity, GeometryRef, GlyphRun, ObjectContentRef, ObjectId,
-        PositionedGlyph, RateFunction, Rect, RetainedFamilyAnimationPlan,
-        RetainedFamilyAnimationPlanBuilder, SemanticNodeId, SemanticStore, Style,
-        TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem, TextResource,
-        TextResourceArena, TextSourceKind, TextSourceSpan, Transform2D, Vec2,
+        FamilyAnimationState, FontFaceIdentity, GeometryId, GeometryRef, GeometryResourceHandle,
+        GlyphRun, ObjectContentRef, ObjectId, PositionedGlyph, RateFunction, Rect,
+        RetainedFamilyAnimationPlan, RetainedFamilyAnimationPlanBuilder, SemanticNodeId,
+        SemanticStore, Style, TextAffineTransform, TextClusterIdentity, TextDirection,
+        TextRenderItem, TextResource, TextResourceArena, TextSourceKind, TextSourceSpan,
+        TextVectorItem, TextVectorStyle, Transform2D, Vec2,
     };
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -230,6 +250,8 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Text(text_handle),
@@ -239,6 +261,8 @@ mod tests {
             text_bounds: None,
         };
         let circle = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -270,6 +294,8 @@ mod tests {
         store.add_member(family, second).unwrap();
 
         let first_object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -279,6 +305,8 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(21),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -303,6 +331,8 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(20),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -312,6 +342,8 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(21),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -370,6 +402,80 @@ mod tests {
                 reveal: 0.0,
             }]
         );
+    }
+
+    #[test]
+    fn mathtex_vector_receives_its_own_global_member_progress() {
+        let mut store = SemanticStore::new();
+        let leaf = store.insert_authoring_object();
+        let family = store.insert_family();
+        store.add_member(family, leaf).unwrap();
+
+        let mut resource = text_resource();
+        resource.source = Arc::from("x+");
+        resource.kind = TextSourceKind::MathTex;
+        resource.runs = Arc::from([GlyphRun {
+            glyphs: Arc::from([glyph(TextSourceSpan::new(0, 1), 1, 0.0)]),
+            ..resource.runs[0].clone()
+        }]);
+        resource.vector_items = Arc::from([TextVectorItem {
+            geometry: GeometryResourceHandle {
+                arena: 0,
+                id: GeometryId::new(7),
+                version: 0,
+            },
+            transform: TextAffineTransform::IDENTITY,
+            style: TextVectorStyle::default(),
+            source_span: Some(TextSourceSpan::new(1, 2)),
+            semantic_key: None,
+        }]);
+        resource.render_items = Arc::from([TextRenderItem::GlyphRun(0), TextRenderItem::Vector(0)]);
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(resource).unwrap();
+        let object = FrameObjectState {
+            glow: None,
+            spatial: None,
+            z_index: 0.0,
+            id: ObjectId::new(13),
+            content: ObjectContentRef::Text(handle),
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
+        let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family).unwrap();
+        builder
+            .accept_leaf(leaf, object.id, &object.content, &texts)
+            .unwrap();
+        let plan = builder.finish().unwrap();
+        let members = retained_family_reveal_members(
+            plan.leaf_frame(
+                FamilyAnimationState {
+                    overall_progress: 0.75,
+                    ..state(false)
+                },
+                leaf,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+        assert!(matches!(
+            members.as_slice(),
+            [
+                RetainedFamilyRevealMember::TextGlyph { reveal: 1.0, .. },
+                RetainedFamilyRevealMember::TextVector {
+                    vector: noon_core::TextAnimationVectorRef {
+                        vector_index: 0,
+                        ..
+                    },
+                    reveal: 0.5,
+                    ..
+                }
+            ]
+        ));
     }
 
     #[test]

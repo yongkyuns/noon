@@ -15,6 +15,7 @@ impl FramePreparer {
         self.mega_path_vertex_instances.clear();
         self.mega_path_batches.clear();
         self.mega_path_segments.clear();
+        self.mega_path_offsets.clear();
         self.mega_path_detached.clear();
         self.mega_path_instance_dirty_ranges.clear();
         self.mega_path_index_dirty_ranges.clear();
@@ -26,8 +27,13 @@ impl FramePreparer {
         let eligible = self
             .path_batches
             .iter()
-            .map(|batch| {
-                batch.instance_range.end == batch.instance_range.start + 1
+            .enumerate()
+            .map(|(index, batch)| {
+                self.path_mesh_cache[self.path_batch_cache_indices[index]]
+                    .sampled
+                    .is_none()
+                    && !batch.polygon_coverage
+                    && batch.instance_range.end == batch.instance_range.start + 1
                     && !batch.index_range.is_empty()
             })
             .collect::<Vec<_>>();
@@ -73,7 +79,16 @@ impl FramePreparer {
                 .extend_from_slice(&self.path_indices[index_range]);
             let packed_end = u32::try_from(self.mega_path_indices.len())
                 .expect("mega path index count exceeds renderer limits");
-            self.mega_path_segments[path_batch_index] = Some(packed_start..packed_end);
+            let segment = packed_start..packed_end;
+            self.mega_path_segments[path_batch_index] = Some(segment.clone());
+            self.mega_path_offsets.push(packed_start);
+            // The painter traversal borrows render_batches; update disjoint cache fields.
+            self.zero_contribution[4].set(
+                segment,
+                !self.paths[path_batch.instance_range.start as usize]
+                    .style
+                    .may_contribute_color(),
+            );
         }
 
         self.rebuild_mega_render_batches();
@@ -101,6 +116,13 @@ impl FramePreparer {
         let Some(path_batch) = self.path_batches.get(path_batch_index).cloned() else {
             return false;
         };
+        if self.path_mesh_cache[self.path_batch_cache_indices[path_batch_index]]
+            .sampled
+            .is_some()
+            || path_batch.polygon_coverage
+        {
+            return false;
+        }
         if path_batch.instance_range.end != path_batch.instance_range.start + 1
             || path_batch.index_range.is_empty()
         {
@@ -127,6 +149,8 @@ impl FramePreparer {
             .expect("mega path index count exceeds renderer limits");
         let segment = segment_start..segment_end;
         self.mega_path_segments[path_batch_index] = Some(segment.clone());
+        self.mega_path_offsets.push(segment_start);
+        self.set_mega_zero_contribution(segment.clone(), packed.style);
         self.mega_path_detached[path_batch_index] = false;
         push_dirty_range(
             &mut self.mega_path_index_dirty_ranges,
@@ -250,7 +274,13 @@ impl FramePreparer {
         path_batch_index: usize,
         packed: PathInstance,
     ) {
+        // A non-detached path need not own a mega segment: sampled fills
+        // live only in the mutable path arena, whose vertex ranges can grow.
         if self.individual_path_draws
+            || !self
+                .mega_path_segments
+                .get(path_batch_index)
+                .is_some_and(Option::is_some)
             || self.mega_path_indices.is_empty()
             || self
                 .mega_path_detached
@@ -264,6 +294,10 @@ impl FramePreparer {
         {
             return;
         }
+        let segment = self.mega_path_segments[path_batch_index]
+            .clone()
+            .expect("checked mega segment");
+        self.set_mega_zero_contribution(segment, packed.style);
         let Some(vertex_range) = self.path_batch_vertex_ranges.get(path_batch_index) else {
             return;
         };

@@ -12,6 +12,8 @@ class FamilyReplacementTests(unittest.TestCase):
         self.calls = []
         self.source = object.__new__(noon.Group)
         self.target = object.__new__(noon.VGroup)
+        self.source._semantic_family_handle = object()
+        self.target._semantic_family_handle = object()
         self.source_anchor = types.SimpleNamespace(
             replaceLayout=lambda *args: self.calls.append(args))
         self.target_anchor = object()

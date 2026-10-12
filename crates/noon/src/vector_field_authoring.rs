@@ -37,7 +37,10 @@ impl fmt::Display for ArrowVectorFieldAuthoringError {
                 write!(formatter, "static vector-field authoring failed: {error}")
             }
             Self::InvalidColorConfiguration(reason) => {
-                write!(formatter, "invalid static vector-field color configuration: {reason}")
+                write!(
+                    formatter,
+                    "invalid static vector-field color configuration: {reason}"
+                )
             }
             Self::NonFiniteColorSchemeOutput { sample_index } => write!(
                 formatter,
@@ -267,6 +270,13 @@ impl ManimArrowVectorField {
 
     pub fn vectors(&self) -> &[ManimArrow] {
         &self.vectors
+    }
+
+    /// Rebuild this typed view from a family-copy mapping of its published
+    /// vector families. The mapping has already validated ownership and keeps
+    /// the copied semantic graph as the only identity authority.
+    pub(crate) fn from_copied_components(family: MobjectFamily, vectors: Vec<ManimArrow>) -> Self {
+        Self { family, vectors }
     }
 
     fn from_plan_with_coloring(

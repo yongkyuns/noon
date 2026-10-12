@@ -11,8 +11,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 GUARDS = ["layer-dependency-ratchet.sh", "noon-core-module-ownership-ratchet.sh",
-          "renderer-host-boundary-ratchet.sh", "active-perf-frontend-ratchet.sh",
-          "architecture-ratchet.sh"]
+          "renderer-host-boundary-ratchet.sh", "transient-presentation-ratchet.sh",
+          "active-perf-frontend-ratchet.sh", "architecture-ratchet.sh"]
+
+
+REFERENCE_CALL = "python reference"
 
 
 class EntrypointTests(unittest.TestCase):
@@ -34,9 +37,21 @@ class EntrypointTests(unittest.TestCase):
                 'git ls-files --error-unmatch untracked.rs >/dev/null\n'
                 'if [[ "${FAIL_GUARD:-}" == "$name" ]]; then exit 1; fi\n')
         (self.root / "scripts/build-web-demo.sh").write_text('echo web >> "$CALLS"\n')
+        reference = self.root / "tests/visual-effects/test_reference.py"
+        reference.parent.mkdir(parents=True)
+        # Observe orchestration without importing the real operator reference.
+        reference.write_text(
+            'import os\n'
+            'with open(os.environ["CALLS"], "a") as log: log.write("python reference\\n")\n'
+            'raise SystemExit(int(os.environ.get("FAIL_REFERENCE", "0")))\n'
+        )
         (self.outer / "bin").mkdir()
         fake = self.outer / "bin/cargo"
-        fake.write_text('#!/usr/bin/env bash\nprintf "cargo %s\\n" "$*" >> "$CALLS"\n')
+        fake.write_text(
+            '#!/usr/bin/env bash\n'
+            'printf "cargo %s\\n" "$*" >> "$CALLS"\n'
+            'if [[ "${FAIL_CARGO_ARGS:-}" == "$*" ]]; then exit 17; fi\n'
+        )
         fake.chmod(0o755)
         self.env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", CALLS=str(self.outer / "calls"),
                         SEEN_INDEX=str(self.outer / "seen-index"),
@@ -54,13 +69,15 @@ class EntrypointTests(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(["git", *args], cwd=self.root, env=self.env, text=True).strip()
 
-    def invoke(self, *args, failure=""):
+    def invoke(self, *args, failure="", cargo_failure="", reference_failure=0):
         index = (self.root / ".git/index").read_bytes()
         status = self.git("status", "--porcelain=v1")
         log = self.outer / "calls"
         log.write_text("")
         result = subprocess.run(["bash", str(self.root / "scripts/check.sh"), *args],
-                                cwd=self.outer, env=dict(self.env, FAIL_GUARD=failure),
+                                cwd=self.outer, env=dict(self.env, FAIL_GUARD=failure,
+                                                         FAIL_CARGO_ARGS=cargo_failure,
+                                                         FAIL_REFERENCE=str(reference_failure)),
                                 text=True, capture_output=True)
         self.assertEqual((self.root / ".git/index").read_bytes(), index)
         self.assertEqual(self.git("status", "--porcelain=v1"), status)
@@ -72,14 +89,56 @@ class EntrypointTests(unittest.TestCase):
     def test_all_modes_gate_before_compilation(self):
         lint = ["cargo fmt --all -- --check", "cargo check --workspace --all-targets --all-features",
                 "cargo clippy --workspace --all-targets --all-features -- -D warnings"]
-        tests = "cargo test --workspace --all-features --no-fail-fast"
-        expected = {"architecture": [], "fmt-lint": lint, "fast": lint + ["cargo test --workspace --all-features --lib --no-fail-fast"],
-                    "rust": lint + [tests], "full": lint + [tests, "web"], "test": [tests], "web": ["web"]}
+        tests = [
+            # Cargo --tests also selects explicitly testable example targets.
+            "cargo test --workspace --all-features --lib --tests --bins --no-fail-fast",
+            "cargo test --workspace --all-features --doc --no-fail-fast",
+        ]
+        expected = {"architecture": [], "fmt-lint": lint,
+                    "fast": lint + [REFERENCE_CALL, "cargo test --workspace --all-features --lib --no-fail-fast"],
+                    "rust": lint + [REFERENCE_CALL] + tests,
+                    "full": lint + [REFERENCE_CALL] + tests + ["web"],
+                    "test": [REFERENCE_CALL] + tests, "web": ["web"]}
         for mode, commands in expected.items():
             with self.subTest(mode=mode):
                 result, calls = self.invoke(mode, "HEAD")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(calls, GUARDS + commands)
+
+    def test_test_failure_stops_following_commands_including_web_after_docs(self):
+        test_command, doc_command = (
+            "cargo test --workspace --all-features --lib --tests --bins --no-fail-fast",
+            "cargo test --workspace --all-features --doc --no-fail-fast",
+        )
+        lint = ["cargo fmt --all -- --check",
+                "cargo check --workspace --all-targets --all-features",
+                "cargo clippy --workspace --all-targets --all-features -- -D warnings"]
+        for failing, expected_tail in (
+            (test_command, [f"cargo {test_command.removeprefix('cargo ')}"]),
+            (doc_command, [f"cargo {test_command.removeprefix('cargo ')}",
+                           f"cargo {doc_command.removeprefix('cargo ')}"]),
+        ):
+            with self.subTest(failing=failing):
+                result, calls = self.invoke("full", "HEAD", cargo_failure=failing.removeprefix("cargo "))
+                self.assertEqual(result.returncode, 17, result.stdout + result.stderr)
+                self.assertEqual(calls, GUARDS + lint + [REFERENCE_CALL] + expected_tail)
+
+    def test_reference_failure_stops_rust_tests_and_web(self):
+        for mode in ("fast", "rust", "full", "test"):
+            with self.subTest(mode=mode):
+                result, calls = self.invoke(mode, "HEAD", reference_failure=23)
+                self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
+                self.assertEqual(calls[:len(GUARDS)], GUARDS)
+                self.assertEqual(calls[-1], REFERENCE_CALL)
+                self.assertFalse(any(call.startswith("cargo test") for call in calls))
+                self.assertNotIn("web", calls)
+
+    def test_missing_reference_is_not_silently_skipped(self):
+        (self.root / "tests/visual-effects/test_reference.py").unlink()
+        result, calls = self.invoke("test", "HEAD")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("test_reference.py", result.stderr)
+        self.assertEqual(calls, GUARDS)
 
     def test_each_guard_stops_compilation_and_cleans_index(self):
         for position, guard in enumerate(GUARDS):

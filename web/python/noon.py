@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from typing import Any, Callable
+from enum import Enum
 
 from _noon_errors import (
     NoonError,
@@ -148,6 +149,12 @@ DEFAULT_MOBJECT_TO_EDGE_BUFFER = MED_LARGE_BUFF
 DEFAULT_MOBJECT_TO_MOBJECT_BUFFER = MED_SMALL_BUFF
 DEFAULT_FRAME_HEIGHT = 8.0
 DEFAULT_FRAME_WIDTH = DEFAULT_FRAME_HEIGHT * 16.0 / 9.0
+
+
+class SectionType(str, Enum):
+    NORMAL = "normal"
+    SKIP = "skip"
+
 
 
 def _hex_color(value: int) -> Color:
@@ -451,6 +458,30 @@ class Mobject:
     def set_color(self, color: Color) -> Mobject:
         return _callback_operations()._canonical_set_color(self, color)
 
+    def set_glow(self, *, color=None, radius=None, intensity=None, source=None, scope=None) -> Mobject:
+        from _noon_effects import set_glow
+        return set_glow(self, color=color, radius=radius, intensity=intensity, source=source, scope=scope)
+
+    def add_effect(self, definition, *, name, scope=None) -> Mobject:
+        from _noon_effects import add_effect
+        return add_effect(self, definition, name=name, scope=scope)
+
+    def get_effect(self, name):
+        from _noon_effects import get_effect
+        return get_effect(self, name)
+
+    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None) -> Mobject:
+        from _noon_effects import set_effect
+        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source)
+
+    def remove_effect(self, selector) -> Mobject:
+        from _noon_effects import remove_effect
+        return remove_effect(self, selector)
+
+    def remove_glow(self) -> Mobject:
+        from _noon_effects import remove_glow
+        return remove_glow(self)
+
     def set_fill(self, color: Color | None = None, opacity: float | None = None) -> Mobject:
         return _callback_operations()._canonical_set_fill(self, color, opacity)
 
@@ -509,6 +540,28 @@ class Mobject:
         call_updater: bool = False,
     ) -> Mobject:
         return _callback_operations().add_updater(self, update_function, index, call_updater)
+
+    def set_effective_circle(self, radius: float) -> Mobject:
+        """Replace this callback target's effective circle without editing authored content.
+
+        This first producer is supported only by the last updater in an ordered
+        callback phase. A later region cannot yet read the new geometry.
+        """
+        return _callback_operations().set_effective_circle(self, radius)
+
+    def set_effective_path(
+        self, points: list[tuple[float, float]], closed: bool = False
+    ) -> Mobject:
+        """Replace this callback target's effective content with a polygonal path.
+
+        Path output is limited to a finite list of at least two points and must
+        be produced by the final updater in its callback phase.
+        """
+        return _callback_operations().set_effective_path(self, points, closed)
+
+    def set_effective_text(self, source: Mobject) -> Mobject:
+        """Replace callback-effective content with a prebuilt Text resource."""
+        return _callback_operations().set_effective_text(self, source)
 
     def remove_updater(self, update_function: Callable[..., Any]) -> Mobject:
         return _callback_operations().remove_updater(self, update_function)
@@ -587,18 +640,41 @@ class Scene:
     def mobjects(self) -> list[object]:
         return _scene_operations()._canonical_scene_mobjects(self)
 
-    def _edit_membership(self, kind: str, values: tuple[object, ...] = (), *, key=None) -> None:
+    @property
+    def foreground_mobjects(self) -> list[object]:
+        return _scene_operations()._canonical_scene_foreground_mobjects(self)
+
+    def _edit_membership(
+        self, kind: str, values: tuple[object, ...] = (), *, key=None
+    ) -> None:
         _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
 
     def add(self, *mobjects: object, key: str | None = None) -> Mobject | Scene:
         if not mobjects:
             return self
-        self._edit_membership("add", mobjects, key=key)
-
-        # Python returns the wrapper for a single leaf, or the Scene for a batch.
+        # Validate the caller's ordinary facade contract before Rust publication.
         from _manim_compat import _leaf_mobjects
         leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
+        if key is not None and (len(mobjects) != 1 or not isinstance(mobjects[0], Mobject)):
+            raise ValueError("an explicit key requires one ordinary Mobject add")
+        self._edit_membership("add", mobjects, key=key)
         return leaves[0] if len(leaves) == 1 else self
+
+    def add_foreground_mobjects(self, *mobjects: object) -> Scene:
+        if mobjects:
+            self._edit_membership("add_foreground", mobjects)
+        return self
+
+    def add_foreground_mobject(self, mobject: object) -> Scene:
+        return self.add_foreground_mobjects(mobject)
+
+    def remove_foreground_mobjects(self, *mobjects: object) -> Scene:
+        if mobjects:
+            self._edit_membership("remove_foreground", mobjects)
+        return self
+
+    def remove_foreground_mobject(self, mobject: object) -> Scene:
+        return self.remove_foreground_mobjects(mobject)
 
     def bring_to_front(self, *mobjects: object) -> Scene:
         self.add(*mobjects)
@@ -636,6 +712,15 @@ class Scene:
     def time(self) -> float:
         return _scene_operations()._canonical_scene_time(self)
 
+    def next_section(
+        self, name: str = "", type: SectionType = SectionType.NORMAL
+    ) -> Scene:
+        return _scene_operations()._canonical_next_section(self, name, type)
+
+    @property
+    def sections(self) -> list[dict[str, object]]:
+        return _scene_operations()._canonical_sections(self)
+
     def value_tracker(self, value: float = 0.0) -> Any:
         return _scene_operations()._canonical_value_tracker(self, value)
 
@@ -644,6 +729,22 @@ class Scene:
         direction: object = None, offset: object = None,
     ) -> Scene:
         return _scene_operations()._canonical_bind_position(self, mobject, tracker, direction, offset)
+
+    def on_click(self, target: Mobject, animation: object) -> Scene:
+        """Run Indicate(target) in Rust on a primary click of a filled circle/rectangle.
+
+        Clicks during that target's indication are ignored. Completion restores
+        its appearance; script time stays unchanged. No Python callback is kept.
+        """
+        return _scene_operations()._on_click(self, target, animation)
+
+    def set_drag_targets(self, *mobjects: Mobject) -> Scene:
+        """Allow primary native translation dragging for these bound Mobjects.
+
+        Rust owns picking, capture, effective writes, authored reconciliation,
+        and cancellation. This declaration only selects semantic handles.
+        """
+        return _scene_operations()._set_translation_drag_targets(self, *mobjects)
 
     def pointer_position_signal(self) -> Any:
         return _scene_operations()._canonical_pointer_position_signal(self)
@@ -720,11 +821,87 @@ class Scene:
 Object = Mobject
 
 # Public wrappers resolve from their defining modules without startup mutation.
+def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
+    """Refresh one stable inline Mobject from a bounded visual producer.
+
+    The current bounded producer accepts Circle, Rectangle/Square, Line,
+    retained Path content, or prebuilt Text resources. Shape results replace
+    effective geometry, transform, and style together; Text results select an
+    existing text resource without shaping new text during the callback.
+    Authored content and object identity stay fixed. The producer runs during
+    construction and once per scheduled callback phase.
+    """
+    if not callable(producer):
+        raise TypeError("always_redraw producer must be callable")
+    from _manim_compat import Circle, Rectangle, Line, Path
+    from _manim_typst import Text
+    target = producer()
+    shape_types = (Circle, Rectangle, Line, Path)
+    text_producer = isinstance(target, Text)
+    if not (isinstance(target, shape_types) or text_producer):
+        raise NotImplementedError(
+            "always_redraw requires Circle, Rectangle, Square, Line, Path, or prebuilt Text"
+        )
+
+    def refresh(mobject: Mobject, _dt: float) -> None:
+        result = producer()
+        if text_producer:
+            if not isinstance(result, Text):
+                raise NotImplementedError(
+                    "Text always_redraw producer must return a prebuilt Text resource"
+                )
+            mobject.set_effective_text(result)
+            return
+        if not isinstance(result, shape_types):
+            raise NotImplementedError(
+                "always_redraw producer must return Circle, Rectangle, Square, Line, or Path"
+            )
+        from _manim_updaters import _canonical_provisional_context
+        if _canonical_provisional_context(result) is None:
+            raise RuntimeError(
+                "always_redraw producer must construct a fresh shape in its callback phase"
+            )
+        mobject.become(result)
+
+    target.add_updater(refresh)
+    return target
+
+
 _PUBLIC_EXPORTS = {
+    "SampleSpace": "_manim_sample_space",
+    "NumberLine": "_manim_plotting",
+    "UnitInterval": "_manim_plotting",
+    "BarChart": "_manim_plotting",
+    "NumberPlane": "_manim_number_plane",
+    "VectorScene": "_manim_vector_space",
+    "LinearTransformationScene": "_manim_vector_space",
+    "PolarPlane": "_manim_polar_plane",
+    "ComplexPlane": "_manim_complex_plane",
+    "Axes": "_manim_plotting",
+    "ThreeDAxes": "_manim_plotting",
+    "Surface": "_manim_spatial_geometry",
+    "Sphere": "_manim_spatial_geometry",
+    "Dot3D": "_manim_spatial_geometry",
+    "Cube": "_manim_spatial_geometry",
+    "Cylinder": "_manim_spatial_geometry",
+    "Prism": "_manim_spatial_geometry",
+    "Line3D": "_manim_spatial_geometry",
+    "Torus": "_manim_spatial_geometry",
+    "Cone": "_manim_spatial_geometry",
+    "FunctionGraph": "_manim_plotting",
+    "Graph": "_manim_graph",
+    "DiGraph": "_manim_graph",
+    "ImplicitFunction": "_manim_implicit",
+    "ParametricFunction": "_manim_plotting",
     "Transform": "_manim_animate",
+    "MoveAlongPath": "_manim_animate",
     "ReplacementTransform": "_manim_animate",
     "TransformFromCopy": "_manim_animate",
     "TransformMatchingShapes": "_manim_animate",
+    "TransformMatchingTex": "_manim_animate",
+    "ApplyMatrix": "_manim_animate",
+    "CyclicReplace": "_manim_animate",
+    "Swap": "_manim_animate",
     "Create": "_manim_animate",
     "Uncreate": "_manim_animate",
     "FadeIn": "_manim_animate",
@@ -744,6 +921,7 @@ _PUBLIC_EXPORTS = {
     "LaggedStartMap": "_manim_composition",
     "Succession": "_manim_composition",
     "Wait": "_manim_composition",
+    "UpdateFromFunc": "_manim_composition",
     "Rotate": "_manim_rotate",
     "Rotating": "_manim_rotate",
     "FocusOn": "_manim_rotate",
@@ -752,6 +930,7 @@ _PUBLIC_EXPORTS = {
     "GrowFromPoint": "_manim_growing",
     "GrowFromCenter": "_manim_growing",
     "GrowFromEdge": "_manim_growing",
+    "GrowArrow": "_manim_growing",
     "SpinInFromNothing": "_manim_growing",
     "DrawBorderThenFill": "_manim_draw_border_then_fill",
     "ShowPassingFlash": "_manim_indication",
@@ -760,10 +939,20 @@ _PUBLIC_EXPORTS = {
     "NativeBoolSignal": "_manim_reactive",
     "DashedLine": "_manim_dashed_line",
     "MovingCameraScene": "_manim_camera",
+    "ZoomedScene": "_manim_zoomed_scene",
     "Write": "_manim_family_creation",
     "Unwrite": "_manim_family_creation",
     "VMobject": "_manim_compat",
     "SVGMobject": "_manim_svg",
+    "ImageMobject": "_manim_image",
+    "Glow": "_noon_effects",
+    "Pixels": "_noon_effects",
+    "EffectHandle": "_noon_effects",
+    "Mesh3D": "_noon_spatial",
+    "SpatialScene": "_noon_spatial",
+    "ThreeDScene": "_noon_spatial",
+    "WorldTransformTo": "_noon_spatial",
+    "RESAMPLING_ALGORITHMS": "_manim_image",
     "Circle": "_manim_compat",
     "Rectangle": "_manim_compat",
     "Square": "_manim_compat",
@@ -772,12 +961,15 @@ _PUBLIC_EXPORTS = {
     "Group": "_manim_compat",
     "VGroup": "_manim_compat",
     "MoveToTarget": "_manim_compat",
+    "Restore": "_manim_compat",
     "OUT": "_manim_compat",
     "IN": "_manim_compat",
     "Arc": "_manim_arc",
     "ArcBetweenPoints": "_manim_arc",
     "Brace": "_manim_brace",
     "BraceBetweenPoints": "_manim_brace",
+    "BraceLabel": "_manim_brace",
+    "BraceText": "_manim_brace",
     "Arrow": "_manim_arrow",
     "Vector": "_manim_arrow",
     "DoubleArrow": "_manim_arrow",
@@ -786,6 +978,7 @@ _PUBLIC_EXPORTS = {
     "RoundedRectangle": "_manim_shared_geometry",
     "SurroundingRectangle": "_manim_shared_geometry",
     "BackgroundRectangle": "_manim_shared_geometry",
+    "Cross": "_manim_shared_geometry",
     "Underline": "_manim_shared_geometry",
     "Union": "_manim_shared_geometry",
     "Intersection": "_manim_shared_geometry",
@@ -803,8 +996,26 @@ _PUBLIC_EXPORTS = {
     "DEFAULT_DOT_RADIUS": "_manim_geometry",
     "PURE_YELLOW": "_manim_geometry",
     "Text": "_manim_typst",
+    "MarkupText": "_manim_typst",
+    "NativeFontFace": "_manim_typst",
     "Typst": "_manim_typst",
     "MathTypst": "_manim_typst",
+    "Table": "_manim_table",
+    "MathTable": "_manim_table",
+    "IntegerTable": "_manim_table",
+    "DecimalTable": "_manim_table",
+    "MobjectTable": "_manim_table",
+    "Matrix": "_manim_matrix",
+    "IntegerMatrix": "_manim_matrix",
+    "DecimalMatrix": "_manim_matrix",
+    "MobjectMatrix": "_manim_matrix",
+    "DecimalNumber": "_manim_numbers",
+    "Integer": "_manim_numbers",
+    "Variable": "_manim_numbers",
+    "Tex": "_manim_latex",
+    "MathTex": "_manim_latex",
+    "SingleStringMathTex": "_manim_latex",
+    "prepare_latex": "_manim_latex",
 }
 
 
@@ -821,6 +1032,9 @@ def __dir__():
 
 
 __all__ = [
+    "Glow",
+    "Pixels",
+    "EffectHandle",
     "NoonError",
     "NoonErrorCause",
     "NoonValueError",
@@ -911,6 +1125,7 @@ __all__ = [
     "YELLOW_D",
     "YELLOW_E",
     "color_from_hex",
+    "always_redraw",
     "SMALL_BUFF",
     "MED_SMALL_BUFF",
     "MED_LARGE_BUFF",

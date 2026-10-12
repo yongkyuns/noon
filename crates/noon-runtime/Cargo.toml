@@ -8,4 +8,5 @@ readme = "README.md"
 
 [dependencies]
 noon-core = { path = "../noon-core" }
+noon-geometry = { path = "../noon-geometry" }
 noon-compile = { path = "../noon-compile" }

@@ -1,5 +1,32 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
+#[cfg(target_arch = "wasm32")]
+mod brace;
+#[cfg(any(target_arch = "wasm32", test))]
+mod camera_profile;
+#[cfg(any(target_arch = "wasm32", test))]
+mod coordinates;
+#[cfg(any(target_arch = "wasm32", test))]
+mod effects;
+#[cfg(any(target_arch = "wasm32", test))]
+mod graph;
+#[cfg(target_arch = "wasm32")]
+mod matrix;
+#[cfg(target_arch = "wasm32")]
+mod numbers;
+#[cfg(any(target_arch = "wasm32", test))]
+mod pointer_input;
+mod provisional_geometry;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sample_space;
+#[cfg(any(target_arch = "wasm32", test))]
+mod spatial;
+#[cfg(target_arch = "wasm32")]
+mod table;
+#[cfg(any(target_arch = "wasm32", test))]
+mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::browser_pointer_input::BrowserPointerBinding;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
     RuntimeIdentity,
@@ -7,14 +34,17 @@ use noon::integration::{
 #[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::{CallbackReadRequest, CallbackReadValue, TimelineWakeState};
 use noon::ExecutionSession;
-use noon_core::{
-    ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
-    Transform2D,
-};
+#[cfg(any(target_arch = "wasm32", test))]
+use noon_core::SemanticObjectContent;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{
-    NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource, ReactiveValue,
-    Vec2,
+    stage_prepared_semantic_scene_membership, NativeEventOccurrence, NativeEventSource,
+    NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction,
+};
+use noon_core::{
+    ExecutionRevision, FrameEpoch, GeometryRef, GeometryResourceArena, GeometryResourceLookup,
+    ObjectContentRef, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style, Transform2D,
+    Vec2, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -105,20 +135,41 @@ impl WasmExecutionWake {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SemanticExecutionPlayer {
     session: ExecutionSession,
+    /// Producer scratch for callback paths. Reusing its slot increments the bare
+    /// geometry ID generation, so two live callback leases cannot alias ID 0.
+    callback_geometry_sources: GeometryResourceArena,
     clock: PlaybackClock,
     encoder: RetainedFamilyExecutionDeltaEncoder,
     /// Immutable text/font/vector dependencies transferred once at the genuine
     /// authoring-worker to render-worker boundary.
     resource_bundle: Vec<u8>,
     snapshot_sent: bool,
+    /// Last emitted presentation only. The session remains selection authority;
+    /// renderer acknowledgement and retry belong to the existing transport.
+    last_sent_selection_overlay: Option<noon::integration::PointerSelectionPresentation>,
     /// Exact phase metadata needed only to re-anchor presentation after the
     /// session atomically commits its own pending callback phase. The session
     /// remains the sole owner of callback progression and termination.
     pending_callback_phase: Option<(CallbackPhaseToken, f64)>,
+    /// One pinned callback may stage several authored membership operations.
+    /// The transaction remains unpublished until the existing callback commit
+    /// co-publishes it with the effective property batch.
+    #[cfg(any(target_arch = "wasm32", test))]
+    callback_membership_transaction: Option<CallbackMembershipCollector>,
+    /// Durable identities resolved by the one callback publication. A
+    /// provisional wrapper may redeem its own phase-local token exactly once
+    /// after that publication; neither pending nor foreign tokens can be
+    /// reconstructed as handles.
+    #[cfg(any(target_arch = "wasm32", test))]
+    committed_callback_provisionals: Option<CommittedCallbackProvisionals>,
     /// Present when the player came from canonical authoring. This is the one
     /// semantic store that produced `session`, not an execution mirror.
     #[cfg(any(target_arch = "wasm32", test))]
     semantics: Option<std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>>,
+    /// Most recent drag release receipt. This is one semantic undo command,
+    /// not a scene mirror or a general history stack.
+    #[cfg(any(target_arch = "wasm32", test))]
+    translation_drag_undo: Option<noon::TranslationDragUndo>,
     #[cfg(any(target_arch = "wasm32", test))]
     semantic_root: Option<noon_core::SemanticNodeId>,
     /// Continuation metadata for this one session-owned runtime, never a
@@ -133,6 +184,13 @@ pub struct SemanticExecutionPlayer {
     /// boundary. Returning and re-leasing this player preserves the sequence.
     #[cfg(any(target_arch = "wasm32", test))]
     next_native_event_sequence: u64,
+    /// Browser control-port pointer binding. The DOM adapter supplies CSS-pixel
+    /// surface coordinates and a monotonically changing view revision; the
+    /// shared session remains the admission/publication authority.
+    #[cfg(any(target_arch = "wasm32", test))]
+    browser_pointer_binding: Option<BrowserPointerBinding>,
+    #[cfg(any(target_arch = "wasm32", test))]
+    worker_pointer_presentation: crate::worker_pointer_presentation::WorkerPointerPresentation,
 }
 
 /// A host continuation receipt retains its endpoint after completion for renderer
@@ -142,6 +200,93 @@ pub struct SemanticExecutionPlayer {
 enum LiveSegmentReceipt {
     Pending(noon::ExecutionSegment),
     Completed(noon::ExecutionSegment),
+}
+
+/// Unpublished authored structure accumulated for one exact callback token.
+/// It has no store borrow, runtime, or host-side membership mirror.
+#[cfg(any(target_arch = "wasm32", test))]
+struct CallbackMembershipCollector {
+    token: CallbackPhaseToken,
+    transaction: SemanticMutationTransaction,
+    /// Transaction-local object names returned to the callback adapter. These
+    /// are phase-scoped capabilities, never semantic IDs or store handles.
+    provisional_objects: Vec<noon_core::SemanticLocalNodeToken>,
+    /// Only admitted local objects may materialize when the callback commits.
+    /// Unadmitted constructor temporaries are canceled with the transaction.
+    admitted_provisionals: Vec<noon_core::SemanticLocalNodeToken>,
+    stages: u16,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+struct CommittedCallbackProvisionals {
+    token: CallbackPhaseToken,
+    nodes: Vec<(noon_core::SemanticLocalNodeToken, SemanticNodeId)>,
+}
+
+/// A phase-bound name for one callback-local object declaration. It carries no
+/// semantic slot or generation, so it cannot be mistaken for a durable typed
+/// Mobject before the shared callback publication resolves it.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub struct WasmCallbackProvisionalMobject {
+    callback_token: CallbackPhaseToken,
+    local: noon_core::SemanticLocalNodeToken,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WasmCallbackProvisionalMobject {
+    pub(crate) const fn local_token(&self) -> noon_core::SemanticLocalNodeToken {
+        self.local
+    }
+
+    pub(crate) const fn callback_token(&self) -> CallbackPhaseToken {
+        self.callback_token
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+impl WasmCallbackProvisionalMobject {
+    /// An opaque callback-local key for transaction-local membership reads.
+    /// It is neither a semantic slot nor a generational object identity.
+    #[wasm_bindgen::prelude::wasm_bindgen(getter, js_name = localKey)]
+    pub fn local_key(&self) -> String {
+        callback_provisional_key(self.local)
+    }
+}
+
+/// One callback-local layout read. This is deliberately not a semantic handle:
+/// its values remain scoped to the same pending callback token.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub struct WasmCallbackProvisionalPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+impl WasmCallbackProvisionalPoint {
+    #[wasm_bindgen::prelude::wasm_bindgen(getter)]
+    pub fn x(&self) -> f64 {
+        self.x
+    }
+
+    #[wasm_bindgen::prelude::wasm_bindgen(getter)]
+    pub fn y(&self) -> f64 {
+        self.y
+    }
+}
+
+// Each stage re-preflights the accumulated transaction to preserve exact
+// rollback proof. Bound the callback-local operation count so this remains
+// local to the callback batch, never proportional to an unbounded host loop.
+#[cfg(any(target_arch = "wasm32", test))]
+const MAX_CALLBACK_MEMBERSHIP_STAGES: u16 = 128;
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn callback_provisional_key(local: noon_core::SemanticLocalNodeToken) -> String {
+    format!("callback-local:{local:?}")
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -163,6 +308,119 @@ pub(crate) struct ExecutionPlayerIdentity {
 }
 
 impl SemanticExecutionPlayer {
+    fn commit_callback_content(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        target: SemanticNodeId,
+        content: CallbackContentResult,
+    ) -> Result<(), AuthoringFailure> {
+        match content {
+            CallbackContentResult::Path(path) => {
+                let mut handle = self.callback_geometry_sources.insert_path(path);
+                // GeometryRef carries a bare ID, not the producer namespace. A
+                // newly constructed producer can otherwise claim the same ID as
+                // an authored path or another live callback target. Recycle the
+                // scratch slot to advance its generation until the ID is free.
+                while noon_core::GeometryResourceLookup::current_handle(
+                    self.session.geometry_resources(),
+                    handle.id,
+                )
+                .is_some()
+                {
+                    let resource = self
+                        .callback_geometry_sources
+                        .remove(handle.id)
+                        .expect("fresh callback geometry remains in its producer arena");
+                    handle = self.callback_geometry_sources.insert(resource);
+                }
+                let result = self
+                    .session
+                    .commit_required_callback_phase_with_owned_geometry(
+                        batch,
+                        target,
+                        handle,
+                        &self.callback_geometry_sources,
+                    );
+                // The published lease owns an immutable copy of the resource.
+                // Reclaim the producer slot on both success and failure, while
+                // preserving its incremented generation for the next callback.
+                self.callback_geometry_sources
+                    .remove(handle.id)
+                    .expect("fresh callback geometry remains in its producer arena");
+                result.map_err(AuthoringFailure::from)?;
+            }
+            CallbackContentResult::Geometry(geometry) => {
+                self.session
+                    .commit_required_callback_phase_with_owned_content(
+                        batch,
+                        target,
+                        ObjectContentRef::Geometry(geometry),
+                    )
+                    .map_err(AuthoringFailure::from)?;
+            }
+            CallbackContentResult::TextSource(source) => {
+                #[cfg(any(target_arch = "wasm32", test))]
+                self.commit_callback_text_content(batch, target, source)?;
+                #[cfg(not(any(target_arch = "wasm32", test)))]
+                {
+                    let _ = (batch, target, source);
+                    return Err("callback text replacement requires the live semantic store".into());
+                }
+            }
+            CallbackContentResult::Provisional(key) => {
+                return Err(format!(
+                    "callback provisional content {key} must be resolved before publication"
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn callback_text_source_handle(
+        &self,
+        source: SemanticNodeId,
+    ) -> Result<noon_core::TextResourceHandle, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .as_ref()
+            .ok_or("effective callback text requires the live semantic store")?
+            .clone();
+        let store = semantics.borrow();
+        let source_state = store
+            .node(source)
+            .and_then(|node| node.semantic_object_state())
+            .ok_or("effective callback text source is not a live semantic object")?;
+        let SemanticObjectContent::Text(handle) = source_state.content else {
+            return Err("effective callback text source must contain text".into());
+        };
+        Ok(handle)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn commit_callback_text_content(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        target: SemanticNodeId,
+        source: SemanticNodeId,
+    ) -> Result<(), AuthoringFailure> {
+        let handle = self.callback_text_source_handle(source)?;
+        let semantics = self.semantics.as_ref().unwrap().clone();
+        let store = semantics.borrow();
+        self.session
+            .commit_required_callback_phase_with_owned_text(
+                batch,
+                target,
+                handle,
+                store.text_resources(),
+                store.font_resources(),
+                store.geometry_resources(),
+            )
+            .map_err(AuthoringFailure::from)?;
+        Ok(())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn ownership_identity(&self) -> ExecutionPlayerIdentity {
         ExecutionPlayerIdentity {
@@ -209,6 +467,10 @@ impl SemanticExecutionPlayer {
             }
         };
         self.pending_callback_phase = Some((token, phase_time));
+        #[cfg(any(target_arch = "wasm32", test))]
+        {
+            self.committed_callback_provisionals = None;
+        }
         Ok(json)
     }
 
@@ -274,13 +536,21 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             session,
+            callback_geometry_sources: GeometryResourceArena::new(),
             clock,
             encoder,
             resource_bundle,
             snapshot_sent: false,
+            last_sent_selection_overlay: None,
             pending_callback_phase: None,
             #[cfg(any(target_arch = "wasm32", test))]
+            callback_membership_transaction: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            committed_callback_provisionals: None,
+            #[cfg(any(target_arch = "wasm32", test))]
             semantics: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            translation_drag_undo: None,
             #[cfg(any(target_arch = "wasm32", test))]
             semantic_root: None,
             #[cfg(any(target_arch = "wasm32", test))]
@@ -289,6 +559,10 @@ impl SemanticExecutionPlayer {
             live_wake_clock: BrowserExecutionWakeClock::default(),
             #[cfg(any(target_arch = "wasm32", test))]
             next_native_event_sequence: 0,
+            #[cfg(any(target_arch = "wasm32", test))]
+            browser_pointer_binding: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            worker_pointer_presentation: Default::default(),
         })
     }
 
@@ -311,17 +585,34 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             session,
+            callback_geometry_sources: GeometryResourceArena::new(),
             clock,
             encoder,
             resource_bundle,
             snapshot_sent: false,
+            last_sent_selection_overlay: None,
             pending_callback_phase: None,
+            callback_membership_transaction: None,
+            committed_callback_provisionals: None,
             semantics: Some(semantics),
+            translation_drag_undo: None,
             semantic_root: Some(semantic_root),
             live_segment: None,
             live_wake_clock: BrowserExecutionWakeClock::default(),
             next_native_event_sequence: 0,
+            browser_pointer_binding: None,
+            #[cfg(any(target_arch = "wasm32", test))]
+            worker_pointer_presentation: Default::default(),
         })
+    }
+
+    /// Request bounded history only for sequential source execution. Pre-authored
+    /// immutable plans already contain their complete timeline and need no journal.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn begin_replay_retention(&mut self) -> Result<(), String> {
+        self.session
+            .begin_replay_retention(noon_runtime::ReplayLimits::default())
+            .map_err(|error| error.to_string())
     }
 
     /// Change only derived transport framing while retaining the same runtime.
@@ -357,6 +648,7 @@ impl SemanticExecutionPlayer {
         self.clock = clock;
         self.resource_bundle = resource_bundle;
         self.encoder = encoder;
+        self.worker_pointer_presentation = Default::default();
         self.snapshot_sent = false;
         // A transport recovery reuses this runtime but begins a new host lease.
         // Re-anchor the derived wall conversion at its next wake so elapsed wall
@@ -389,6 +681,27 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn scene_revision(&self) -> noon_core::SceneRevision {
         self.session.publication_context().scene_revision()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_bind_click_indicate(
+        &mut self,
+        target: &noon::Mobject,
+        indication: noon::IndicateOptions,
+        options: noon_core::AnimationOptions,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .on_click_indicate(target, indication, options)
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -442,7 +755,26 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         points: &[noon_core::Vec2],
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_points_as_corners(source, points))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Corners {
+            object: source,
+            points,
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn publish_borrowed_path_edit(
+        &mut self,
+        edit: noon::integration::BorrowedPathEdit<'_>,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let root = self
+            .semantic_root
+            .expect("live semantic store has one scene root");
+        noon::integration::publish_borrowed_path_edit(&semantics, root, &mut self.session, edit)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -451,7 +783,10 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         point: noon_core::Vec2,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.start_new_path(source, point))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Start {
+            object: source,
+            point,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -460,7 +795,10 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         point: noon_core::Vec2,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.add_line_to(source, point))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Line {
+            object: source,
+            point,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -470,7 +808,11 @@ impl SemanticExecutionPlayer {
         control: noon_core::Vec2,
         anchor: noon_core::Vec2,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.add_quadratic_bezier_curve_to(source, control, anchor))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Quadratic {
+            object: source,
+            control,
+            anchor,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -481,8 +823,11 @@ impl SemanticExecutionPlayer {
         control2: noon_core::Vec2,
         anchor: noon_core::Vec2,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.add_cubic_bezier_curve_to(source, control1, control2, anchor)
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Cubic {
+            object: source,
+            control1,
+            control2,
+            anchor,
         })
     }
 
@@ -492,7 +837,10 @@ impl SemanticExecutionPlayer {
         object: &noon::Mobject,
         points: &[noon_core::Vec2],
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_points_smoothly(object, points))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SmoothCorners {
+            object,
+            points,
+        })
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_change_anchor_mode(
@@ -514,13 +862,13 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         smooth: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            if smooth {
-                live.make_family_smooth(family)
-            } else {
-                live.make_family_jagged(family)
-            }
-        })
+        if smooth {
+            self.with_live_session(|live| live.make_family_smooth(family))
+        } else {
+            self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyJagged {
+                family,
+            })
+        }
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_insert_n_curves(
@@ -528,7 +876,10 @@ impl SemanticExecutionPlayer {
         object: &noon::Mobject,
         additional: usize,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.insert_n_curves(object, additional))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Subdivide {
+            object,
+            additional,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -536,7 +887,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         object: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.reverse_direction(object))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Reverse { object })
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_subcurve(
@@ -553,7 +904,15 @@ impl SemanticExecutionPlayer {
         left: &noon::Mobject,
         right: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.align_points(left, right))
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let root = self
+            .semantic_root
+            .expect("live semantic store has one scene root");
+        noon::integration::publish_alignment(&semantics, root, &mut self.session, left, right)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -564,7 +923,12 @@ impl SemanticExecutionPlayer {
         a: f64,
         b: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.pointwise_become_partial(object, source, a, b))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Partial {
+            object,
+            source,
+            a,
+            b,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -572,7 +936,9 @@ impl SemanticExecutionPlayer {
         &mut self,
         source: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.close_path(source))
+        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Close {
+            object: source,
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -581,7 +947,15 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         target: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.match_points(source, target))
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let root = self
+            .semantic_root
+            .expect("live semantic store has one scene root");
+        noon::integration::publish_match_points(&semantics, root, &mut self.session, source, target)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -622,6 +996,25 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .create_manim_geometry(options)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_image(
+        &mut self,
+        options: noon::ImageMobjectOptions,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .create_image(options)
         .map_err(AuthoringFailure::from)
     }
 
@@ -680,6 +1073,22 @@ impl SemanticExecutionPlayer {
         )
         .create_math_typst(text)
         .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_latex(
+        &mut self,
+        text: crate::authoring_latex::AuthoredLatex,
+        compiler: &mut crate::WasmLatexCompiler,
+    ) -> Result<noon::LatexParts, AuthoringFailure> {
+        self.with_live_session(|live| match text {
+            crate::authoring_latex::AuthoredLatex::Text(text) => {
+                live.create_tex_parts(text, compiler)
+            }
+            crate::authoring_latex::AuthoredLatex::Math(text) => {
+                live.create_math_tex_parts(text, compiler)
+            }
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -771,6 +1180,24 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_member_colors(
+        &mut self,
+        family: &noon::MobjectFamily,
+        colors: &[Option<noon::Color>],
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_member_colors(family, colors))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_latex_font_size(
+        &mut self,
+        parts: &noon::LatexParts,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| live.latex_font_size(parts))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_fill(
         &mut self,
         family: &noon::MobjectFamily,
@@ -800,6 +1227,16 @@ impl SemanticExecutionPlayer {
         opacity: f64,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_family_opacity(family, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_fade(
+        &mut self,
+        family: &noon::MobjectFamily,
+        darkness: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.fade_family(family, darkness))
             .map(|_| ())
     }
 
@@ -846,6 +1283,15 @@ impl SemanticExecutionPlayer {
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_fill_opacity(mobject, opacity))
             .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_image_sampling(
+        &mut self,
+        mobject: &noon::Mobject,
+        sampling: noon::RasterImageSampling,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_image_sampling(mobject, sampling))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1077,6 +1523,17 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.copy_family_with_references(source, references))
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_cyclic_replace_target(
+        &mut self,
+        source: &noon::MobjectFamily,
+        references: &[noon::MobjectTarget<'_>],
+    ) -> Result<noon::FamilyCopy, AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.cyclic_replace_target_with_references(source, references)
+        })
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_family_layout(
         &mut self,
@@ -1154,6 +1611,45 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_apply_matrix(
+        &mut self,
+        mobject: &noon::Mobject,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .apply_matrix(mobject, values, rows, columns, about_x, about_y)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_apply_matrix_to_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.apply_matrix_to_family(family, values, rows, columns, about_x, about_y)
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_scale(
         &mut self,
         mobject: &noon::Mobject,
@@ -1223,7 +1719,12 @@ impl SemanticExecutionPlayer {
         &mut self,
         anchor: &noon::LayoutAnchor,
     ) -> Result<f64, AuthoringFailure> {
-        self.with_live_session(|live| live.z_index(anchor))
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_z_index(&semantics, &self.session, anchor)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1233,8 +1734,20 @@ impl SemanticExecutionPlayer {
         value: f64,
         family: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_z_index(anchor, value, family))
-            .map(|_| ())
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::publish_z_index(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+            anchor,
+            value,
+            family,
+        )
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1292,11 +1805,21 @@ impl SemanticExecutionPlayer {
         operation: noon::BooleanOperation,
         operands: &[noon::Mobject],
     ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
-        self.with_live_session(|live| live.boolean_geometry_options(operation, operands))
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_boolean_geometry_options(
+            &semantics,
+            &self.session,
+            operation,
+            operands,
+        )
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_path_query(
+    pub(crate) fn effective_path_query(
         &mut self,
         mobject: &noon::Mobject,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
@@ -1304,14 +1827,8 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .effective_path_query(mobject)
-        .map_err(AuthoringFailure::from)
+        noon::integration::effective_path_query(&semantics, &self.session, mobject)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1373,6 +1890,326 @@ impl SemanticExecutionPlayer {
         .edit_membership(request)
         .map(|_| ())
         .map_err(AuthoringFailure::from)
+    }
+
+    /// Stage one existing-handle root-membership operation beside an exact
+    /// required callback token. The collector owns one transaction across the
+    /// entire callback; every accepted operation remains unpublished until the
+    /// existing callback completion co-publishes it with effective writes.
+    /// A rejected staging operation restores the prior collector so a callback
+    /// may catch it and continue. A later final publication failure is terminal
+    /// because the shared runtime contract consumes the prepared proof.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn stage_required_callback_membership(
+        &mut self,
+        expected_token: CallbackPhaseToken,
+        batch: &crate::canonical_authoring_scene::SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        let token = self
+            .pending_callback_phase
+            .map(|(token, _)| token)
+            .ok_or("callback membership has no player pending phase")?;
+        if token != expected_token {
+            return Err("callback membership token is stale".into());
+        }
+        if batch.has_callback_provisionals() {
+            return self.stage_required_callback_mixed_addition(expected_token, batch);
+        }
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("callback membership requires a live semantic store")?;
+        let root = self
+            .semantic_root
+            .ok_or("callback membership requires one semantic scene root")?;
+        let mut collector = self.callback_membership_transaction.take();
+        if collector
+            .as_ref()
+            .is_some_and(|existing| existing.token != token)
+        {
+            self.callback_membership_transaction = collector;
+            return Err("callback membership collector token is stale".into());
+        }
+        let (transaction, provisional_objects, admitted_provisionals, stages) = collector
+            .take()
+            .map(|existing| {
+                (
+                    existing.transaction,
+                    existing.provisional_objects,
+                    existing.admitted_provisionals,
+                    existing.stages,
+                )
+            })
+            .unwrap_or_default();
+        if stages == MAX_CALLBACK_MEMBERSHIP_STAGES {
+            self.callback_membership_transaction = Some(CallbackMembershipCollector {
+                token,
+                transaction,
+                provisional_objects,
+                admitted_provisionals,
+                stages,
+            });
+            return Err("callback membership staging exceeded its bounded operation limit".into());
+        }
+
+        let mut transaction = Some(transaction);
+        let outcome = batch.with_existing_callback_membership(&semantics, |request| {
+            let current_transaction = transaction
+                .take()
+                .expect("callback membership transaction is retained across one stage");
+            let mut store = semantics.borrow_mut();
+            let prepared = match current_transaction.prepare_recoverable(&mut store) {
+                Ok(prepared) => prepared,
+                Err((recovered, error)) => {
+                    transaction = Some(recovered);
+                    return Err(AuthoringFailure::from(error));
+                }
+            };
+            match stage_prepared_semantic_scene_membership(prepared, root, request) {
+                Ok(prepared) => {
+                    transaction = Some(prepared.into_transaction());
+                    Ok(())
+                }
+                Err(error) => {
+                    let (prepared, cause) = error.into_parts();
+                    transaction = Some(prepared.into_transaction());
+                    Err(match cause {
+                        noon_core::PreparedSemanticMembershipErrorKind::Operation(error) => {
+                            AuthoringFailure::from(error)
+                        }
+                        noon_core::PreparedSemanticMembershipErrorKind::Transaction(error) => {
+                            AuthoringFailure::from(error)
+                        }
+                    })
+                }
+            }
+        });
+        let transaction = transaction.expect("callback membership stage restores its transaction");
+        self.callback_membership_transaction = Some(CallbackMembershipCollector {
+            token,
+            transaction,
+            provisional_objects,
+            admitted_provisionals,
+            stages: stages + u16::from(outcome.is_ok()),
+        });
+        outcome
+    }
+
+    /// Stage one ordered Scene.add containing original typed handles and
+    /// callback-local objects. Validation and planning cover the complete list
+    /// before this collector accepts any membership edge, so a caught bad
+    /// argument leaves earlier callback work untouched.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn stage_required_callback_mixed_addition(
+        &mut self,
+        expected_token: CallbackPhaseToken,
+        batch: &crate::canonical_authoring_scene::SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        let token = self
+            .pending_callback_phase
+            .map(|(token, _)| token)
+            .ok_or("callback membership has no player pending phase")?;
+        if token != expected_token {
+            return Err("callback membership token is stale".into());
+        }
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("callback membership requires a live semantic store")?;
+        let root = self
+            .semantic_root
+            .ok_or("callback membership requires one semantic scene root")?;
+        let Some(mut collector) = self.callback_membership_transaction.take() else {
+            return Err("callback provisional geometry is unknown".into());
+        };
+        if collector.token != token {
+            self.callback_membership_transaction = Some(collector);
+            return Err("callback membership collector token is stale".into());
+        }
+        if collector.stages == MAX_CALLBACK_MEMBERSHIP_STAGES {
+            self.callback_membership_transaction = Some(collector);
+            return Err("callback membership staging exceeded its bounded operation limit".into());
+        }
+        let transaction = std::mem::take(&mut collector.transaction);
+        let mut transaction = Some(transaction);
+        let outcome = batch.with_callback_mixed_addition(token, &semantics, |members| {
+            let provisionals = members
+                .iter()
+                .filter_map(|member| match member {
+                    noon_core::SemanticTransactionNodeRef::Pending(local) => Some(*local),
+                    noon_core::SemanticTransactionNodeRef::Existing(_) => None,
+                })
+                .collect::<Vec<_>>();
+            if provisionals.is_empty()
+                || provisionals.iter().any(|local| {
+                    !collector.provisional_objects.contains(local)
+                        || collector.admitted_provisionals.contains(local)
+                })
+            {
+                return Err(AuthoringFailure::new(
+                    "invalid_input",
+                    "callback.membership",
+                    "callback provisional geometry token is unknown, stale, or already admitted",
+                ));
+            }
+            let current = transaction
+                .take()
+                .expect("callback membership transaction is retained across one stage");
+            let mut store = semantics.borrow_mut();
+            let prepared = match current.prepare_recoverable(&mut store) {
+                Ok(prepared) => prepared,
+                Err((recovered, error)) => {
+                    transaction = Some(recovered);
+                    return Err(AuthoringFailure::from(error));
+                }
+            };
+            match noon_core::stage_prepared_semantic_scene_admission(prepared, root, &members) {
+                Ok(prepared) => {
+                    transaction = Some(prepared.into_transaction());
+                    Ok(())
+                }
+                Err(error) => {
+                    let (prepared, cause) = error.into_parts();
+                    transaction = Some(prepared.into_transaction());
+                    Err(match cause {
+                        noon_core::PreparedSemanticMembershipErrorKind::Operation(error) => {
+                            AuthoringFailure::from(error)
+                        }
+                        noon_core::PreparedSemanticMembershipErrorKind::Transaction(error) => {
+                            AuthoringFailure::from(error)
+                        }
+                    })
+                }
+            }
+        });
+        collector.transaction =
+            transaction.expect("callback membership stage restores its transaction");
+        if outcome.is_ok() {
+            collector.admitted_provisionals.extend(
+                batch
+                    .callback_provisionals()
+                    .expect("mixed batch retains local members"),
+            );
+            collector.stages += 1;
+        }
+        self.callback_membership_transaction = Some(collector);
+        outcome
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn take_committed_callback_provisional(
+        &mut self,
+        token: CallbackPhaseToken,
+        local: noon_core::SemanticLocalNodeToken,
+    ) -> Result<SemanticNodeId, AuthoringFailure> {
+        let Some(mut committed) = self.committed_callback_provisionals.take() else {
+            return Err(AuthoringFailure::new(
+                "stale_publication",
+                "callback.stale_provisional",
+                "callback provisional geometry has no committed phase",
+            ));
+        };
+        if committed.token != token {
+            self.committed_callback_provisionals = Some(committed);
+            return Err(AuthoringFailure::new(
+                "stale_publication",
+                "callback.stale_provisional",
+                "callback provisional geometry token is stale",
+            ));
+        }
+        let Some(index) = committed
+            .nodes
+            .iter()
+            .position(|(candidate, _)| *candidate == local)
+        else {
+            self.committed_callback_provisionals = Some(committed);
+            return Err(AuthoringFailure::new(
+                "stale_publication",
+                "callback.stale_provisional",
+                "callback provisional geometry token is unknown",
+            ));
+        };
+        let (_, node) = committed.nodes.remove(index);
+        if !committed.nodes.is_empty() {
+            self.committed_callback_provisionals = Some(committed);
+        }
+        Ok(node)
+    }
+
+    /// Read the callback collector's direct-root order without publishing it.
+    /// The temporary prepared view is consumed immediately, returning the exact
+    /// transaction to the pinned collector rather than cloning a scene mirror.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn callback_membership_root_keys(
+        &mut self,
+        expected_token: CallbackPhaseToken,
+    ) -> Result<Vec<String>, AuthoringFailure> {
+        let token = self
+            .pending_callback_phase
+            .map(|(token, _)| token)
+            .ok_or("callback membership has no player pending phase")?;
+        if token != expected_token {
+            return Err("callback membership token is stale".into());
+        }
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("callback membership requires a live semantic store")?;
+        let root = self
+            .semantic_root
+            .ok_or("callback membership requires one semantic scene root")?;
+        let Some(collector) = self.callback_membership_transaction.take() else {
+            return semantics
+                .borrow()
+                .semantic_family_members_checked(root)
+                .map(|members| {
+                    members
+                        .iter()
+                        .map(|node| format!("{}:{}", node.slot(), node.generation()))
+                        .collect()
+                })
+                .map_err(AuthoringFailure::from);
+        };
+        if collector.token != token {
+            self.callback_membership_transaction = Some(collector);
+            return Err("callback membership collector token is stale".into());
+        }
+        let mut store = semantics.borrow_mut();
+        let prepared = match collector.transaction.prepare_recoverable(&mut store) {
+            Ok(prepared) => prepared,
+            Err((transaction, error)) => {
+                self.callback_membership_transaction = Some(CallbackMembershipCollector {
+                    token,
+                    transaction,
+                    provisional_objects: collector.provisional_objects,
+                    admitted_provisionals: collector.admitted_provisionals,
+                    stages: collector.stages,
+                });
+                return Err(AuthoringFailure::from(error));
+            }
+        };
+        let members = prepared
+            .family_members(root)
+            .map_err(|error| AuthoringFailure::unclassified("callback.membership_read", &error));
+        let transaction = prepared.into_transaction();
+        self.callback_membership_transaction = Some(CallbackMembershipCollector {
+            token,
+            transaction,
+            provisional_objects: collector.provisional_objects,
+            admitted_provisionals: collector.admitted_provisionals,
+            stages: collector.stages,
+        });
+        members?
+            .into_iter()
+            .map(|member| match member {
+                noon_core::SemanticTransactionNodeRef::Existing(node) => {
+                    Ok(format!("{}:{}", node.slot(), node.generation()))
+                }
+                noon_core::SemanticTransactionNodeRef::Pending(local) => {
+                    Ok(callback_provisional_key(local))
+                }
+            })
+            .collect()
     }
 
     /// Route callback declarations through the same shared semantic publication
@@ -1454,8 +2291,9 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
+        // This is another interval in the same active source. Internal
+        // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -1486,8 +2324,9 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
+        // This is another interval in the same active source. Internal
+        // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -1539,8 +2378,9 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
+        // This is another interval in the same active source. Internal
+        // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -1555,13 +2395,13 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
+        noon::integration::publish_value_tracker_creation(
             &semantics,
             self.semantic_root
                 .expect("live semantic store has one scene root"),
             &mut self.session,
+            initial,
         )
-        .value_tracker(initial)
         .map_err(AuthoringFailure::from)
     }
 
@@ -1576,13 +2416,13 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
+        noon::integration::publish_value_tracker_association(
             &semantics,
             self.semantic_root
                 .expect("live semantic store has one scene root"),
             &mut self.session,
+            tracker,
         )
-        .associate_value_tracker(tracker)
         .map_err(AuthoringFailure::from)
     }
 
@@ -1644,13 +2484,14 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
+        noon::integration::publish_family_creation(
             &semantics,
             self.semantic_root
                 .expect("live semantic store has one scene root"),
             &mut self.session,
+            members,
+            z_index,
         )
-        .family_with_z_index(members, z_index)
         .map_err(AuthoringFailure::from)
     }
 
@@ -1697,8 +2538,9 @@ impl SemanticExecutionPlayer {
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
             .expect("validated execution segment must produce a valid presentation clock");
+        // This is another interval in the same active source. Internal
+        // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(end_time)
     }
 
@@ -1715,6 +2557,13 @@ impl SemanticExecutionPlayer {
         matches!(self.live_segment, Some(LiveSegmentReceipt::Pending(_)))
     }
 
+    /// Callback wrapper finalizers may associate their resolved handles only
+    /// after the session-owned callback phase has committed.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn has_pending_callback_phase(&self) -> bool {
+        self.pending_callback_phase.is_some()
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn reject_required_callback_segment(&self) -> Result<(), String> {
         if self.session.has_required_callbacks() {
@@ -1727,6 +2576,10 @@ impl SemanticExecutionPlayer {
     }
 
     /// Observe browser wake mechanics for the active shared continuation segment.
+    ///
+    /// The monotonic epoch is owned by this retained source lease. Source
+    /// play/wait completion, exact callback phases and Python continuation
+    /// handoffs retain it; rebinding a genuinely new transport lease resets it.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_segment_wake(
         &mut self,
@@ -1761,15 +2614,7 @@ impl SemanticExecutionPlayer {
     ) -> Result<WasmExecutionWake, String> {
         let callback_blocked =
             self.pending_callback_phase.is_some() || self.session.callback_termination().is_some();
-        let mut wake = self.session.wake_state();
-        if callback_blocked || !self.clock.is_playing() {
-            wake = wake.without_timeline_wake();
-        } else if let Some(loop_duration) = self.clock.loop_duration() {
-            if self.session.has_replay_timeline_work() {
-                wake = wake.with_additional_timeline(TimelineWakeState::Deadline(loop_duration));
-            }
-        }
-        let plan = BrowserExecutionWakePlan::from_runtime(wake);
+        let plan = self.execution_wake_plan();
         let timer_after_milliseconds = if callback_blocked {
             None
         } else {
@@ -1790,22 +2635,70 @@ impl SemanticExecutionPlayer {
         Ok(WasmExecutionWake::from_plan(plan, timer_after_milliseconds))
     }
 
-    /// Begin the next browser wall-time interval after required host work.
-    ///
-    /// The endpoint calls this only after retrying the callback-bearing drive
-    /// with its captured timestamp. The session's published time is therefore
-    /// unchanged while this resets the derived wall-time conversion.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn reanchor_live_segment_wake(
-        &mut self,
-        wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, AuthoringFailure> {
-        self.require_callback_progression_available()?;
-        self.live_segment()?;
-        self.live_wake_clock
-            .reanchor(wall_time_ms, self.session.frame().time)
-            .ok_or("invalid browser wall timestamp or authored continuation time")?;
-        self.live_segment_wake(wall_time_ms)
+    fn execution_wake_plan(&self) -> BrowserExecutionWakePlan {
+        let callback_blocked =
+            self.pending_callback_phase.is_some() || self.session.callback_termination().is_some();
+        let mut wake = self.session.wake_state();
+        if callback_blocked || !self.clock.is_playing() {
+            wake = wake.without_timeline_wake();
+        } else if let Some(loop_duration) = self.clock.loop_duration() {
+            // A completed authored wait has duration even without animated
+            // channels. An un-authored static scene still remains fully idle.
+            let authored_interval = self
+                .live_segment
+                .is_some_and(|receipt| receipt.segment().end_time() > 0.0);
+            if self.session.has_replay_timeline_work() || authored_interval {
+                wake = wake.with_additional_timeline(TimelineWakeState::Deadline(loop_duration));
+            }
+        }
+        if !callback_blocked && self.session.interactions_active() {
+            wake = wake.with_additional_timeline(TimelineWakeState::Continuous);
+        }
+        BrowserExecutionWakePlan::from_runtime(wake)
+    }
+
+    /// Observe elapsed playback during a visually static interval without evaluating
+    /// a frame, publishing a delta, invoking callbacks or changing either clock.
+    /// Active animation/callback work stays pinned to its coherent runtime sample.
+    /// Sleeping waits project the existing Rust clock only up to the next runtime
+    /// barrier; they cannot speculate past a source segment or a loop boundary.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn playback_time_at(&self, wall_time_ms: f64) -> Result<f64, String> {
+        if !wall_time_ms.is_finite() {
+            return Err("playback observation requires a finite wall timestamp".to_owned());
+        }
+        let current = self.time();
+        if !self.clock.is_playing()
+            || self.pending_callback_phase.is_some()
+            || self.session.callback_termination().is_some()
+        {
+            return Ok(current);
+        }
+        if let Some(LiveSegmentReceipt::Pending(segment)) = self.live_segment {
+            return Ok(match self.session.segment_state(segment).timeline() {
+                TimelineWakeState::Deadline(deadline) => self
+                    .live_wake_clock
+                    .scene_time_at(wall_time_ms)
+                    .unwrap_or(current)
+                    .min(deadline)
+                    .max(current),
+                TimelineWakeState::Continuous | TimelineWakeState::Quiescent => current,
+            });
+        }
+        let BrowserExecutionCadence::TimerAtSceneTime(deadline) =
+            self.execution_wake_plan().cadence()
+        else {
+            return Ok(current);
+        };
+        // Project through the same loop-aware deadline conversion used by wake
+        // delivery. A copy keeps observation from starting/reanchoring playback.
+        let remaining = self
+            .clock
+            .clone()
+            .timer_delay_milliseconds(deadline, wall_time_ms, current)
+            .map_err(|error| error.to_string())?;
+        Ok((deadline - remaining / 1_000.0).min(deadline).max(current))
     }
 
     /// Drive the current segment from one Rust-derived browser wall-time mapping.
@@ -1919,8 +2812,9 @@ impl SemanticExecutionPlayer {
         .complete_segment(segment)
         .map_err(AuthoringFailure::from)?;
         self.clock = clock;
+        // The source may immediately activate another interval after this
+        // completion. Only a genuinely new/rebound source resets the epoch.
         self.live_segment = Some(LiveSegmentReceipt::Completed(segment));
-        self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
 
@@ -1977,6 +2871,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn set_translation_drag_targets(
+        &mut self,
+        targets: &[noon::Mobject],
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_translation_drag_targets(targets.iter()))
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn set_native_state_input(
         &mut self,
         source: NativeStateSource,
@@ -2007,16 +2910,46 @@ impl SemanticExecutionPlayer {
     }
 
     fn resource_bundle_for(session: &ExecutionSession) -> Result<RetainedResourceBundle, String> {
-        RetainedResourceBundle::capture(
+        let geometry_handles = session
+            .frame()
+            .objects
+            .iter()
+            .filter_map(|object| object.content.geometry())
+            .filter_map(|geometry| match geometry {
+                noon_core::GeometryRef::External(id) => Some(*id),
+                _ => None,
+            })
+            .map(|id| {
+                session
+                    .geometry_resources()
+                    .current_handle(id)
+                    .ok_or_else(|| format!("missing live geometry resource {id:?}"))
+            })
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        RetainedResourceBundle::capture_additions_with_geometries(
             session
                 .frame()
                 .objects
                 .iter()
-                .filter_map(|object| object.text()),
+                // Text resources travel with the immutable content regardless of
+                // whether the row is rendered by the ordinary 2D or spatial lane.
+                .filter_map(|object| object.content.text()),
+            geometry_handles,
             session.text_resources(),
             session.geometry_resources(),
             session.font_resources(),
+            &crate::RetainedResourceInventory::default(),
         )
+        .and_then(|bundle| {
+            bundle.with_images(
+                session
+                    .frame()
+                    .objects
+                    .iter()
+                    .filter_map(|object| object.content.image().map(|image| image.resource())),
+                session.raster_image_resources(),
+            )
+        })
         .map_err(|error| error.to_string())
     }
 
@@ -2024,94 +2957,167 @@ impl SemanticExecutionPlayer {
         &mut self,
         snapshot: bool,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
-        let camera = self.session.camera().map_err(|e| e.to_string())?;
-        let changes = self.session.take_frame_changes();
-        if snapshot || changes.is_all() || !self.snapshot_sent {
-            let indices = self
-                .session
-                .painter_order()
+        let presentation = self.session.pointer_selection_presentation();
+        let overlay = presentation
+            .as_ref()
+            .map(crate::SelectionOverlayPresentation::from_presentation)
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let camera = self
+            .session
+            .inspection_camera()
+            .map_err(|e| e.to_string())?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        let pointer_frame = self.worker_pointer_presentation.capture(&self.session)?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        let pointer_refresh = self.worker_pointer_presentation.needs_delta(&self.session);
+        #[cfg(not(any(target_arch = "wasm32", test)))]
+        let pointer_refresh = false;
+        let inset_2d_views = self.session.inset_2d_views().map_err(|e| e.to_string())?;
+        let publication = self.session.take_renderer_publication();
+        let mut changes = publication.changes().clone();
+        if changes.is_empty()
+            && (presentation != self.last_sent_selection_overlay || pointer_refresh)
+        {
+            // Presentation-only transport work, not authored/runtime dirtiness.
+            // Reuse the existing sequence and backpressure; never invent a row.
+            changes = noon_runtime::FrameChanges::presentation_redraw();
+        }
+        let frame = publication.frame();
+        let publication_context = publication.context();
+        let planned = publication.planned_family_frame();
+        let plans = publication.family_animation_plans();
+        let painter_order = publication.painter_order();
+
+        let mut delta = if snapshot || changes.is_all() || !self.snapshot_sent {
+            let indices = painter_order
                 .iter()
                 .map(|&index| index as usize)
                 .collect::<Vec<_>>();
             let text_handles = indices
                 .iter()
-                .filter_map(|&index| self.session.frame().objects[index].text())
+                .filter_map(|&index| frame.objects[index].content.text())
                 .collect::<Vec<_>>();
             let mut delta = self
                 .encoder
-                .encode_planned_snapshot_indices(
-                    &self.session.planned_family_frame(),
-                    self.session.family_animation_plans(),
+                .encode_planned_snapshot_indices_with_context(
+                    &planned,
+                    plans,
                     camera,
+                    publication_context,
                     indices,
                 )
                 .map_err(|e| e.to_string())?;
-            self.attach_resource_additions(&mut delta, text_handles)?;
+            self.encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    text_handles,
+                    publication.text_resources(),
+                    publication.geometry_resources(),
+                    publication.font_resources(),
+                    publication.raster_image_resources(),
+                )
+                .map_err(|error| error.to_string())?;
             self.snapshot_sent = true;
-            Ok(Some(delta))
+            delta
         } else if changes.is_structural() || changes.has_painter_order_change() {
             let text_handles = changes
                 .object_indices()
                 .iter()
-                .filter_map(|&index| self.session.frame().objects.get(index)?.text())
+                .filter_map(|&index| frame.objects.get(index)?.content.text())
                 .collect::<Vec<_>>();
             let Some(mut delta) = self
                 .encoder
-                .encode_planned_incremental_with_painter_order(
-                    &self.session.planned_family_frame(),
-                    self.session.family_animation_plans(),
+                .encode_planned_incremental_with_painter_order_and_context(
+                    &planned,
+                    plans,
                     &changes,
                     camera,
-                    self.session.painter_order(),
+                    publication_context,
+                    painter_order,
                 )
                 .map_err(|e| e.to_string())?
             else {
                 return Ok(None);
             };
-            self.attach_resource_additions(&mut delta, text_handles)?;
-            Ok(Some(delta))
+            self.encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    text_handles,
+                    publication.text_resources(),
+                    publication.geometry_resources(),
+                    publication.font_resources(),
+                    publication.raster_image_resources(),
+                )
+                .map_err(|error| error.to_string())?;
+            delta
         } else {
             let text_handles = changes
                 .object_indices()
                 .iter()
-                .filter_map(|&index| self.session.frame().objects.get(index)?.text())
+                .filter_map(|&index| frame.objects.get(index)?.content.text())
                 .collect::<Vec<_>>();
             let Some(mut delta) = self
                 .encoder
-                .encode_planned_incremental(
-                    &self.session.planned_family_frame(),
-                    self.session.family_animation_plans(),
+                .encode_planned_incremental_with_context(
+                    &planned,
+                    plans,
                     &changes,
                     camera,
+                    publication_context,
                 )
                 .map_err(|e| e.to_string())?
             else {
                 return Ok(None);
             };
-            self.attach_resource_additions(&mut delta, text_handles)?;
-            Ok(Some(delta))
+            self.encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    text_handles,
+                    publication.text_resources(),
+                    publication.geometry_resources(),
+                    publication.font_resources(),
+                    publication.raster_image_resources(),
+                )
+                .map_err(|error| error.to_string())?;
+            delta
+        };
+        debug_assert_eq!(delta.retained.publication_context, publication_context);
+        delta.retained.inset_2d_views = inset_2d_views;
+        delta
+            .replace_transient_presentations(frame, publication.transient_presentations())
+            .map_err(|error| error.to_string())?;
+        delta.selection_overlay = overlay;
+        #[cfg(any(target_arch = "wasm32", test))]
+        {
+            delta.pointer_view = self
+                .worker_pointer_presentation
+                .view()
+                .filter(|view| view.drawable());
+            self.worker_pointer_presentation.issue(
+                delta.retained.session,
+                delta.retained.sequence,
+                pointer_frame,
+            );
         }
+        self.last_sent_selection_overlay = presentation;
+        Ok(Some(delta))
     }
 
-    fn attach_resource_additions(
+    fn compact_delta(
         &mut self,
-        delta: &mut RetainedFamilyExecutionDeltaEnvelope,
-        text_handles: impl IntoIterator<Item = noon_core::TextResourceHandle>,
-    ) -> Result<(), String> {
-        self.encoder
-            .attach_resource_additions(
-                delta,
-                text_handles,
-                self.session.text_resources(),
-                self.session.geometry_resources(),
-                self.session.font_resources(),
-            )
-            .map_err(|error| error.to_string())
+        snapshot: bool,
+    ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
+        let Some(mut delta) = self.delta(snapshot)? else {
+            return Ok(None);
+        };
+        self.encoder.compact_dense_rows(&mut delta);
+        Ok(Some(delta))
     }
 
     fn encoded_delta(&mut self, snapshot: bool) -> Result<Option<String>, String> {
-        self.delta(snapshot)?
-            .map(|delta| serde_json::to_string(&delta).map_err(|e| e.to_string()))
+        self.compact_delta(snapshot)?
+            .map(|delta| serde_json::to_string(&delta).map_err(|error| error.to_string()))
             .transpose()
     }
 }
@@ -2193,13 +3199,68 @@ impl TryFrom<CallbackTokenWire> for CallbackPhaseToken {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct CallbackPhaseObjectWire {
     node: CallbackNodeWire,
+    #[serde(serialize_with = "serialize_callback_transform")]
     transform: Transform2D,
     style: Style,
     appearance: f32,
     presence: bool,
     reveal: f32,
     morph: f32,
+    #[serde(serialize_with = "serialize_callback_bounds")]
     bounds: Option<Rect>,
+}
+
+// JSON is a genuine worker boundary here. Python reads its numbers as f64;
+// preserve the exact runtime f32 values rather than their shorter f32 decimal
+// representation before callback arithmetic promotes them to f64.
+fn serialize_callback_transform<S: serde::Serializer>(
+    transform: &Transform2D,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct TransformWire {
+        translation: CallbackPointWire,
+        scale: CallbackPointWire,
+        rotation: f64,
+    }
+    TransformWire {
+        translation: transform.translation.into(),
+        scale: transform.scale.into(),
+        rotation: f64::from(transform.rotation),
+    }
+    .serialize(serializer)
+}
+
+fn serialize_callback_bounds<S: serde::Serializer>(
+    bounds: &Option<Rect>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct BoundsWire {
+        min: CallbackPointWire,
+        max: CallbackPointWire,
+    }
+    bounds
+        .map(|bounds| BoundsWire {
+            min: bounds.min.into(),
+            max: bounds.max.into(),
+        })
+        .serialize(serializer)
+}
+
+#[derive(Serialize)]
+struct CallbackPointWire {
+    x: f64,
+    y: f64,
+}
+
+impl From<Vec2> for CallbackPointWire {
+    fn from(point: Vec2) -> Self {
+        Self {
+            x: f64::from(point.x),
+            y: f64::from(point.y),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -2212,6 +3273,7 @@ struct CallbackInvocationWire {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct CallbackPhaseWire {
     token: CallbackTokenWire,
+    region: u32,
     time: f64,
     delta_time: f64,
     objects: Vec<CallbackPhaseObjectWire>,
@@ -2270,12 +3332,144 @@ enum CallbackWriteWire {
         object: CallbackNodeWire,
         style: Style,
     },
+    Translation {
+        object: CallbackNodeWire,
+        translation: noon_core::Vec2,
+    },
+    Rotation {
+        object: CallbackNodeWire,
+        rotation: f32,
+    },
+    Scale {
+        object: CallbackNodeWire,
+        scale: noon_core::Vec2,
+    },
+    Fill {
+        object: CallbackNodeWire,
+        fill: Option<noon_core::Color>,
+    },
+    Stroke {
+        object: CallbackNodeWire,
+        stroke: Option<noon_core::Color>,
+    },
+    StrokeWidth {
+        object: CallbackNodeWire,
+        stroke_width: f32,
+    },
+    Opacity {
+        object: CallbackNodeWire,
+        opacity: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 struct CallbackBatchWire {
     token: CallbackTokenWire,
+    #[serde(default)]
+    region: u32,
     writes: Vec<CallbackWriteWire>,
+    #[serde(default)]
+    content: Option<CallbackContentBatchWire>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(untagged)]
+enum CallbackContentBatchWire {
+    One(CallbackContentWire),
+    Many(Vec<CallbackContentWire>),
+}
+
+impl CallbackContentBatchWire {
+    fn into_vec(self) -> Vec<CallbackContentWire> {
+        match self {
+            Self::One(content) => vec![content],
+            Self::Many(contents) => contents,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct CallbackContentWire {
+    object: CallbackNodeWire,
+    #[serde(default)]
+    geometry: Option<CallbackAnalyticGeometryWire>,
+    #[serde(default)]
+    path: Option<CallbackPathWire>,
+    #[serde(default)]
+    text_source: Option<CallbackNodeWire>,
+    #[serde(default)]
+    provisional: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct CallbackPathWire {
+    points: Vec<[f32; 2]>,
+    #[serde(default)]
+    closed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CallbackAnalyticGeometryWire {
+    Circle { radius: f32 },
+}
+
+impl CallbackAnalyticGeometryWire {
+    fn into_geometry(self) -> GeometryRef {
+        match self {
+            Self::Circle { radius } => GeometryRef::circle(radius),
+        }
+    }
+}
+
+impl CallbackContentWire {
+    fn into_result(self) -> Result<CallbackContentResult, String> {
+        let variant_count = usize::from(self.geometry.is_some())
+            + usize::from(self.path.is_some())
+            + usize::from(self.text_source.is_some())
+            + usize::from(self.provisional.is_some());
+        if variant_count != 1 {
+            return Err(
+                "callback content must name exactly one geometry, path, text_source, or provisional".into(),
+            );
+        }
+        if let Some(key) = self.provisional {
+            return Ok(CallbackContentResult::Provisional(key));
+        }
+        if let Some(path) = self.path {
+            if path.points.len() < 2 || path.points.len() > 4096 {
+                return Err("callback path must contain between 2 and 4096 points".into());
+            }
+            if !path.points.iter().flatten().all(|value| value.is_finite()) {
+                return Err("callback path points must be finite".into());
+            }
+            let mut points = path.points.iter();
+            let first = points.next().expect("length checked");
+            let mut result = VectorPath::new().move_to(Vec2::new(first[0], first[1]));
+            for point in points {
+                result = result.line_to(Vec2::new(point[0], point[1]));
+            }
+            if path.closed {
+                result = result.close();
+            }
+            return Ok(CallbackContentResult::Path(result));
+        }
+        if let Some(geometry) = self.geometry {
+            return Ok(CallbackContentResult::Geometry(geometry.into_geometry()));
+        }
+        Ok(CallbackContentResult::TextSource(
+            self.text_source
+                .expect("exactly one content variant checked")
+                .into(),
+        ))
+    }
+}
+
+enum CallbackContentResult {
+    Geometry(GeometryRef),
+    Path(VectorPath),
+    TextSource(SemanticNodeId),
+    Provisional(String),
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -2344,7 +3538,15 @@ fn validate_callback_style(style: Style) -> Result<(), String> {
     Ok(())
 }
 
-fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
+fn decode_callback_batch(
+    json: &str,
+) -> Result<
+    (
+        EffectivePropertyBatch,
+        Vec<(SemanticNodeId, CallbackContentWire)>,
+    ),
+    String,
+> {
     let wire: CallbackBatchWire = serde_json::from_str(json)
         .map_err(|error| format!("invalid callback batch JSON: {error}"))?;
     let token = CallbackPhaseToken::try_from(wire.token)?;
@@ -2366,9 +3568,60 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
                     style,
                 })
             }
+            CallbackWriteWire::Translation {
+                object,
+                translation,
+            } => Ok(EffectiveSemanticPropertyWrite::Translation {
+                object: object.into(),
+                translation,
+            }),
+            CallbackWriteWire::Rotation { object, rotation } => {
+                Ok(EffectiveSemanticPropertyWrite::Rotation {
+                    object: object.into(),
+                    rotation,
+                })
+            }
+            CallbackWriteWire::Scale { object, scale } => {
+                Ok(EffectiveSemanticPropertyWrite::Scale {
+                    object: object.into(),
+                    scale,
+                })
+            }
+            CallbackWriteWire::Fill { object, fill } => Ok(EffectiveSemanticPropertyWrite::Fill {
+                object: object.into(),
+                fill,
+            }),
+            CallbackWriteWire::Stroke { object, stroke } => {
+                Ok(EffectiveSemanticPropertyWrite::Stroke {
+                    object: object.into(),
+                    stroke,
+                })
+            }
+            CallbackWriteWire::StrokeWidth {
+                object,
+                stroke_width,
+            } => Ok(EffectiveSemanticPropertyWrite::StrokeWidth {
+                object: object.into(),
+                stroke_width,
+            }),
+            CallbackWriteWire::Opacity { object, opacity } => {
+                Ok(EffectiveSemanticPropertyWrite::Opacity {
+                    object: object.into(),
+                    opacity,
+                })
+            }
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(EffectivePropertyBatch::new(token, writes))
+    let content = wire
+        .content
+        .map_or_else(Vec::new, CallbackContentBatchWire::into_vec)
+        .into_iter()
+        .map(|content| (content.object.clone().into(), content))
+        .collect();
+    Ok((
+        EffectivePropertyBatch::new(token, writes).with_region(wire.region),
+        content,
+    ))
 }
 
 // Keep the shared callback failures typed until the actual JS boundary. The
@@ -2444,21 +3697,282 @@ impl SemanticExecutionPlayer {
         serde_json::to_string(&wire).map_err(|error| AuthoringFailure::from(error.to_string()))
     }
 
-    pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), AuthoringFailure> {
-        let batch = decode_callback_batch(batch_json)?;
+    pub fn commit_callback_phase_json(
+        &mut self,
+        batch_json: &str,
+    ) -> Result<Option<String>, AuthoringFailure> {
+        let (batch, content) = decode_callback_batch(batch_json)?;
         let token = batch.token();
-        let (_, time) = self
-            .pending_callback_phase
-            .filter(|(pending, _)| *pending == token)
-            .ok_or("callback batch does not match the player pending phase")?;
-        self.session
-            .commit_required_callback_phase(batch)
-            .map_err(AuthoringFailure::from)?;
+        let time = match self.pending_callback_phase {
+            Some((pending, time)) if pending == token => time,
+            Some((pending, _)) => {
+                return Err(noon::ExecutionSessionCallbackError::StaleToken {
+                    expected: pending,
+                    actual: token,
+                }
+                .into());
+            }
+            None => return Err(noon::ExecutionSessionCallbackError::NoPendingPhase.into()),
+        };
+        let content = content
+            .into_iter()
+            .map(|(target, content)| {
+                content
+                    .into_result()
+                    .map(|result| (target, result))
+                    .map_err(AuthoringFailure::from)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if content.len() > 1
+            && content.iter().any(|(_, content)| {
+                !matches!(
+                    content,
+                    CallbackContentResult::Provisional(_) | CallbackContentResult::Geometry(_)
+                )
+            })
+        {
+            return Err(
+                "multi-target callback content currently supports inline geometry only".into(),
+            );
+        }
+        #[cfg(any(target_arch = "wasm32", test))]
+        let (batch, content, provisional_effective) = match content {
+            contents
+                if !contents.is_empty()
+                    && contents.iter().all(|(_, content)| {
+                        matches!(
+                            content,
+                            CallbackContentResult::Provisional(_)
+                                | CallbackContentResult::Geometry(_)
+                        )
+                    }) =>
+            {
+                let mut writes = batch.writes().to_vec();
+                let mut resolved = Vec::with_capacity(contents.len());
+                let mut has_provisional = false;
+                for (target, content) in contents {
+                    match content {
+                        CallbackContentResult::Provisional(key) => {
+                            has_provisional = true;
+                            let (transform, style, result) =
+                                self.callback_provisional_visual(token, &key)?;
+                            writes.push(EffectiveSemanticPropertyWrite::Transform {
+                                object: target,
+                                transform,
+                            });
+                            writes.push(EffectiveSemanticPropertyWrite::Style {
+                                object: target,
+                                style,
+                            });
+                            resolved.push((target, result));
+                        }
+                        CallbackContentResult::Geometry(geometry) => {
+                            resolved.push((target, CallbackContentResult::Geometry(geometry)))
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                (
+                    EffectivePropertyBatch::new(token, writes).with_region(batch.region()),
+                    resolved,
+                    has_provisional,
+                )
+            }
+            other => (batch, other, false),
+        };
+        if content.len() > 1
+            && content
+                .iter()
+                .any(|(_, content)| matches!(content, CallbackContentResult::Path(_)))
+        {
+            return Err("multi-target callback content currently requires inline geometry; retained paths remain supported for one target".into());
+        }
+        if !content.is_empty() {
+            #[cfg(any(target_arch = "wasm32", test))]
+            if self.callback_membership_transaction.is_some() && !provisional_effective {
+                return Err("callback effective content and authored membership cannot share this publication yet".into());
+            }
+            self.session
+                .require_terminal_callback_content_region(token, batch.region())
+                .map_err(AuthoringFailure::from)?;
+        }
+        #[cfg(any(target_arch = "wasm32", test))]
+        for (_, content) in &content {
+            if let CallbackContentResult::TextSource(source) = content {
+                // Resolve/validate the source before admitting this region, so a bad
+                // source leaves the exact callback region available for retry.
+                self.callback_text_source_handle(*source)?;
+            }
+        }
+        let advance = match self.session.submit_required_callback_region(batch) {
+            Ok(advance) => advance,
+            Err(error) => {
+                // A collector may own provisional identities whose combined
+                // publication cannot be retried after an invalid effective
+                // write. Stale region replies, however, leave it intact.
+                #[cfg(any(target_arch = "wasm32", test))]
+                if self.callback_membership_transaction.is_some()
+                    && matches!(
+                        error,
+                        noon::ExecutionSessionCallbackError::UnknownObject(_)
+                            | noon::ExecutionSessionCallbackError::InvalidEffectiveWrite(_)
+                            | noon::ExecutionSessionCallbackError::Commit(_)
+                    )
+                {
+                    self.callback_membership_transaction = None;
+                    self.pending_callback_phase = None;
+                    let _ = self.session.fail_required_callback_phase(token);
+                }
+                return Err(AuthoringFailure::from(error));
+            }
+        };
+        let batch = match advance {
+            noon::integration::CallbackRegionAdvance::HostRequired {
+                invocations,
+                overlay,
+            } => {
+                debug_assert!(content.is_empty(), "content region was proven terminal");
+                return self
+                    .retain_callback_phase(invocations, overlay)
+                    .map(Some)
+                    .map_err(AuthoringFailure::from);
+            }
+            noon::integration::CallbackRegionAdvance::Complete(batch) => batch,
+        };
+        #[cfg(any(target_arch = "wasm32", test))]
+        {
+            if content.len() > 1 {
+                let replacements = content
+                    .into_iter()
+                    .map(|(target, content)| match content {
+                        CallbackContentResult::Geometry(geometry) => {
+                            Ok((target, ObjectContentRef::Geometry(geometry)))
+                        }
+                        _ => Err(AuthoringFailure::from(
+                            "multi-target callback content requires inline geometry",
+                        )),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.session
+                    .commit_required_callback_phase_with_owned_contents(batch, replacements)
+                    .map_err(AuthoringFailure::from)?;
+                self.callback_membership_transaction = None;
+            } else if provisional_effective {
+                if content.len() == 1 {
+                    let (target, content) = content.into_iter().next().expect("one item checked");
+                    self.commit_callback_content(batch, target, content)?;
+                }
+                self.callback_membership_transaction = None;
+            } else if content.len() == 1 {
+                let (target, content) = content.into_iter().next().expect("one item checked");
+                self.commit_callback_content(batch, target, content)?;
+            } else if let Some(collector) = self.callback_membership_transaction.take() {
+                if collector.token != token {
+                    self.callback_membership_transaction = Some(collector);
+                    return Err("callback membership collector token is stale".into());
+                }
+                let semantics = self
+                    .semantics
+                    .clone()
+                    .ok_or("callback membership requires a live semantic store")?;
+                let order_root = self.semantic_root;
+                let mut store = semantics.borrow_mut();
+                let prepared = match collector.transaction.prepare_recoverable(&mut store) {
+                    Ok(prepared) => prepared,
+                    Err((transaction, error)) => {
+                        self.callback_membership_transaction = Some(CallbackMembershipCollector {
+                            token,
+                            transaction,
+                            provisional_objects: collector.provisional_objects,
+                            admitted_provisionals: collector.admitted_provisionals,
+                            stages: collector.stages,
+                        });
+                        return Err(AuthoringFailure::from(error));
+                    }
+                };
+                let unadmitted = collector
+                    .provisional_objects
+                    .iter()
+                    .copied()
+                    .filter(|local| !collector.admitted_provisionals.contains(local))
+                    .collect::<Vec<_>>();
+                let prepared = if unadmitted.is_empty() {
+                    prepared
+                } else {
+                    match prepared.with_pending_object_update(|transaction| {
+                        for local in unadmitted {
+                            transaction.remove_node(local);
+                        }
+                    }) {
+                        Ok(prepared) => prepared,
+                        Err((prepared, error)) => {
+                            self.callback_membership_transaction =
+                                Some(CallbackMembershipCollector {
+                                    token,
+                                    transaction: prepared.into_transaction(),
+                                    provisional_objects: collector.provisional_objects,
+                                    admitted_provisionals: collector.admitted_provisionals,
+                                    stages: collector.stages,
+                                });
+                            return Err(AuthoringFailure::from(error));
+                        }
+                    }
+                };
+                // Once the prepared transaction enters the shared publication
+                // contract it cannot be recovered: lowering may have consumed
+                // its proof before reporting a runtime failure. Treat that
+                // final combined-commit failure as an exact callback failure,
+                // rather than leaving a retryable token whose collector has
+                // already been consumed.
+                let result = match self
+                    .session
+                    .commit_prepared_required_callback_transaction(batch, prepared, order_root)
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        self.callback_membership_transaction = None;
+                        self.pending_callback_phase = None;
+                        let _ = self.session.fail_required_callback_phase(token);
+                        return Err(AuthoringFailure::from(error));
+                    }
+                };
+                if !collector.admitted_provisionals.is_empty() {
+                    let nodes = collector
+                        .admitted_provisionals
+                        .into_iter()
+                        .map(|local| {
+                            let node = result.resolve(local).expect(
+                                "a committed callback provisional object must resolve its exact token",
+                            );
+                            (local, node)
+                        })
+                        .collect();
+                    self.committed_callback_provisionals =
+                        Some(CommittedCallbackProvisionals { token, nodes });
+                }
+            } else {
+                if let Some((target, content)) = content.into_iter().next() {
+                    self.commit_callback_content(batch, target, content)?;
+                } else {
+                    self.session
+                        .commit_required_callback_phase(batch)
+                        .map_err(AuthoringFailure::from)?;
+                }
+            }
+        }
+        #[cfg(not(any(target_arch = "wasm32", test)))]
+        if let Some((target, content)) = content.into_iter().next() {
+            self.commit_callback_content(batch, target, content)?;
+        } else {
+            self.session
+                .commit_required_callback_phase(batch)
+                .map_err(AuthoringFailure::from)?;
+        }
         // The callback phase time is session-owned. Re-anchoring presentation
         // only after its commit avoids a host-side progression cursor.
         self.clock.seek(time).map_err(|error| error.to_string())?;
         self.pending_callback_phase = None;
-        Ok(())
+        Ok(None)
     }
 
     pub fn fail_callback_phase_json(&mut self, phase_json: &str) -> Result<(), AuthoringFailure> {
@@ -2466,6 +3980,10 @@ impl SemanticExecutionPlayer {
         self.session
             .fail_required_callback_phase(token)
             .map_err(AuthoringFailure::from)?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        {
+            self.callback_membership_transaction = None;
+        }
         self.pending_callback_phase = None;
         Ok(())
     }
@@ -2478,6 +3996,10 @@ impl SemanticExecutionPlayer {
         self.session
             .interrupt_required_callback_phase(token)
             .map_err(AuthoringFailure::from)?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        {
+            self.callback_membership_transaction = None;
+        }
         self.pending_callback_phase = None;
         Ok(())
     }
@@ -2491,6 +4013,7 @@ impl SemanticExecutionPlayer {
     ) -> Result<String, String> {
         let phase = CallbackPhaseWire {
             token: overlay.token().into(),
+            region: overlay.region(),
             time: overlay.time(),
             delta_time: overlay.delta_time(),
             objects: overlay
@@ -2565,6 +4088,9 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())?;
         let phase = self.advance_to_callback_phase(requested)?;
         if phase.is_none() {
+            self.session
+                .advance_interactions(timestamp_ms / 1_000.0)
+                .map_err(|error| error.to_string())?;
             self.clock = clock;
         }
         Ok(phase)
@@ -2620,15 +4146,11 @@ impl SemanticExecutionPlayer {
         self.execution_wake(wall_time_ms)
     }
 
-    /// Reanchor the next browser interval after a required callback completes.
-    #[cfg(target_arch = "wasm32")]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reanchorLiveSegmentWake))]
-    pub fn reanchor_live_segment_wake_wasm(
-        &mut self,
-        wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
-        self.reanchor_live_segment_wake(wall_time_ms)
-            .map_err(crate::authoring_error::js_error)
+    /// Current playback position during a static wait, without a new runtime frame.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = playbackTimeAt))]
+    pub fn playback_time_at_wasm(&self, wall_time_ms: f64) -> Result<f64, String> {
+        self.playback_time_at(wall_time_ms)
     }
 
     /// Advance one active ordinary continuation segment from an anchored browser timestamp.
@@ -2679,12 +4201,191 @@ impl SemanticExecutionPlayer {
             .map_err(crate::authoring_error::js_error)
     }
 
+    /// Extend the current required callback's one shared authored transaction
+    /// with an inert, original-handle membership request. This only stages;
+    /// `commitCallbackPhaseJson` remains the sole callback publication.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = stageCallbackMembership)]
+    pub fn stage_callback_membership_wasm(
+        &mut self,
+        token_json: &str,
+        batch: crate::canonical_authoring_scene::WasmSceneMembershipBatch,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        let batch = batch.into_callback_batch();
+        let token =
+            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
+        self.stage_required_callback_membership(token, &batch)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    /// Read the pending callback's staged direct-root membership in painter
+    /// order. This is a transaction-local Rust read, never a Python mirror.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = callbackMembershipRootKeys)]
+    pub fn callback_membership_root_keys_wasm(
+        &mut self,
+        token_json: &str,
+    ) -> Result<Vec<String>, wasm_bindgen::JsValue> {
+        let token =
+            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
+        self.callback_membership_root_keys(token)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    /// Stage one provisional geometry declaration in the exact pending callback
+    /// transaction. Inline and retained-path constructors remain phase-local until
+    /// the callback's final shared publication.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = stageCallbackProvisionalGeometry)]
+    pub fn stage_callback_provisional_geometry_wasm(
+        &mut self,
+        token_json: &str,
+        options: crate::WasmManimGeometryOptions,
+    ) -> Result<WasmCallbackProvisionalMobject, wasm_bindgen::JsValue> {
+        let token =
+            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
+        let local = self
+            .stage_required_callback_provisional_geometry(token, options.options)
+            .map_err(crate::authoring_error::js_error)?;
+        Ok(WasmCallbackProvisionalMobject {
+            callback_token: token,
+            local,
+        })
+    }
+
+    /// Apply one authored translation while the object still has only a
+    /// callback-local name. This is typed construction staging, not an
+    /// execution-frame property write.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = stageCallbackProvisionalShift)]
+    pub fn stage_callback_provisional_shift_wasm(
+        &mut self,
+        token_json: &str,
+        object: &WasmCallbackProvisionalMobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        let token =
+            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
+        if object.callback_token != token {
+            return Err(crate::authoring_error::js_error(
+                "callback provisional geometry token is stale",
+            ));
+        }
+        self.stage_required_callback_provisional_shift(token, object.local, x, y)
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    /// Apply one authored fill while the object still has only a callback-local
+    /// name. The final callback publication materializes this style with the
+    /// object declaration in one semantic transaction.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = stageCallbackProvisionalFill)]
+    pub fn stage_callback_provisional_fill_wasm(
+        &mut self,
+        token_json: &str,
+        object: &WasmCallbackProvisionalMobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        opacity: Option<f64>,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        let token =
+            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
+        if object.callback_token != token {
+            return Err(crate::authoring_error::js_error(
+                "callback provisional geometry token is stale",
+            ));
+        }
+        self.stage_required_callback_provisional_fill(
+            token,
+            object.local,
+            [red, green, blue, alpha],
+            opacity,
+        )
+        .map_err(crate::authoring_error::js_error)
+    }
+
+    /// Read a phase-local center from the prepared declaration. This returns
+    /// coordinates only and never manufactures a permanent semantic identity.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = callbackProvisionalCenter)]
+    pub fn callback_provisional_center_wasm(
+        &mut self,
+        token_json: &str,
+        object: &WasmCallbackProvisionalMobject,
+    ) -> Result<WasmCallbackProvisionalPoint, wasm_bindgen::JsValue> {
+        let token =
+            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
+        if object.callback_token != token {
+            return Err(crate::authoring_error::js_error(
+                "callback provisional geometry token is stale",
+            ));
+        }
+        let (x, y) = self
+            .callback_provisional_center(token, object.local)
+            .map_err(crate::authoring_error::js_error)?;
+        Ok(WasmCallbackProvisionalPoint { x, y })
+    }
+
+    /// Associate delayed Python wrapper bindings with callback-published
+    /// Mobjects through the still-leased canonical context. This consumes only
+    /// inert add binding reservations and never replays semantic membership.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = associatePublishedCallbackMobjects)]
+    pub fn associate_published_callback_mobjects_wasm(
+        &self,
+        context: &mut crate::CanonicalAuthoringSceneContext,
+        batch: crate::WasmSceneMembershipBatch,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        context
+            .inner
+            .associate_published_callback_mobjects(
+                self,
+                batch
+                    .into_inner()
+                    .map_err(crate::authoring_error::js_error)?,
+            )
+            .map_err(crate::authoring_error::js_error)
+    }
+
+    /// Redeem a callback-local name only after that exact callback committed.
+    /// The returned ordinary typed handle comes from the original store and can
+    /// be bound by Python's delayed wrapper finalizer.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = resolveCallbackProvisionalMobject)]
+    pub fn resolve_callback_provisional_mobject_wasm(
+        &mut self,
+        token_json: &str,
+        object: &WasmCallbackProvisionalMobject,
+    ) -> Result<crate::WasmAuthoringMobjectHandle, wasm_bindgen::JsValue> {
+        let token =
+            Self::callback_token_from_json(token_json).map_err(crate::authoring_error::js_error)?;
+        if object.callback_token != token {
+            return Err(crate::authoring_error::js_error(
+                "callback provisional geometry token is stale",
+            ));
+        }
+        let node = self
+            .take_committed_callback_provisional(token, object.local)
+            .map_err(crate::authoring_error::js_error)?;
+        let store = self.semantics.clone().ok_or_else(|| {
+            crate::authoring_error::js_error(
+                "callback provisional geometry requires a live semantic store",
+            )
+        })?;
+        noon::Mobject::from_node(store, node)
+            .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+            .map_err(crate::authoring_error::js_error)
+    }
+
     #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = commitCallbackPhaseJson))]
     pub fn commit_callback_phase_json_wasm(
         &mut self,
         batch_json: &str,
-    ) -> Result<(), wasm_bindgen::JsValue> {
+    ) -> Result<Option<String>, wasm_bindgen::JsValue> {
         self.commit_callback_phase_json(batch_json)
             .map_err(crate::authoring_error::js_error)
     }
@@ -2736,6 +4437,181 @@ impl SemanticExecutionPlayer {
         self.set_native_state_input(input.source, input.value.into())
     }
 
+    /// Configure session/editor fill selection, never an authored interaction binding.
+    /// Configuration is ordered with native input and is not replayed into a new scene.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPointerFillSelection))]
+    pub fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), String> {
+        match max_movement {
+            Some(value) => self.session.enable_pointer_fill_selection(value),
+            None => self.session.disable_pointer_fill_selection(),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    /// Decode one contextual browser pointer occurrence at the genuine worker
+    /// control-port boundary. Coordinates are CSS pixels relative to the content
+    /// viewport. The immutable collection-time receipt selects the issued shared
+    /// snapshot; delayed input is never projected with a newer execution camera.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
+    pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
+        let envelope: pointer_input::WorkerPointerInput = serde_json::from_str(json)
+            .map_err(|error| format!("invalid browser pointer input JSON: {error}"))?;
+        let Self {
+            session,
+            semantics,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            translation_drag_undo,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.as_ref(),
+            translation_drag_undo,
+        };
+        worker_pointer_presentation.submit(
+            &mut target,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            envelope.input,
+            envelope.presentation,
+        )
+    }
+
+    /// Whether the preview can undo its most recent authored translation drag.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = canUndoTranslationDrag))]
+    pub fn can_undo_translation_drag(&self) -> bool {
+        if self.session.translation_drag_active() {
+            return false;
+        }
+        let Some(undo) = self.translation_drag_undo.as_ref() else {
+            return false;
+        };
+        self.semantics
+            .as_ref()
+            .is_some_and(|store| undo.is_current(&self.session, &store.borrow()))
+    }
+
+    /// Apply the one retained drag receipt through its guarded semantic transaction.
+    /// Returns false and retires stale receipts so the UI cannot offer an impossible retry.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = undoTranslationDrag))]
+    pub fn undo_translation_drag(&mut self) -> Result<bool, String> {
+        if self.session.translation_drag_active() {
+            return Ok(false);
+        }
+        let undo = self
+            .translation_drag_undo
+            .take()
+            .ok_or_else(|| "there is no translation drag to undo".to_owned())?;
+        let semantics = self
+            .semantics
+            .as_ref()
+            .ok_or_else(|| "translation drag undo requires canonical semantics".to_owned())?;
+        match undo.undo(&mut self.session, &mut semantics.borrow_mut()) {
+            Ok(()) => Ok(true),
+            Err(noon::TranslationDragError::StaleUndo) => Ok(false),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = clearTranslationDragUndo))]
+    /// Retire the preview command when its execution player is torn down or rebased.
+    pub fn clear_translation_drag_undo(&mut self) {
+        self.translation_drag_undo = None;
+    }
+
+    /// Admit one collection-time inspection occurrence through the same owned
+    /// session and retained presentation path as pointer input.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = scrollInspectionViewJson))]
+    pub fn scroll_inspection_view_json(&mut self, json: &str) -> Result<Option<bool>, String> {
+        let input = serde_json::from_str(json)
+            .map_err(|error| format!("invalid inspection scroll JSON: {error}"))?;
+        let Self {
+            session,
+            semantics,
+            translation_drag_undo,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.as_ref(),
+            translation_drag_undo,
+        };
+        worker_pointer_presentation.scroll(&mut target, browser_pointer_binding, input)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setBrowserPointerViewJson))]
+    pub fn set_browser_pointer_view_json(&mut self, json: &str) -> Result<(), String> {
+        let view =
+            serde_json::from_str(json).map_err(|e| format!("invalid pointer view JSON: {e}"))?;
+        let Self {
+            session,
+            semantics,
+            translation_drag_undo,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.as_ref(),
+            translation_drag_undo,
+        };
+        worker_pointer_presentation.set_view(
+            &mut target,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            view,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = notePointerPresentationJson))]
+    pub fn note_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
+        let receipt =
+            serde_json::from_str(json).map_err(|e| format!("invalid pointer receipt JSON: {e}"))?;
+        self.worker_pointer_presentation
+            .note_presented(&mut self.session, receipt)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = invalidatePointerPresentationJson))]
+    pub fn invalidate_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
+        let receipt =
+            serde_json::from_str(json).map_err(|e| format!("invalid pointer receipt JSON: {e}"))?;
+        let Self {
+            session,
+            semantics,
+            translation_drag_undo,
+            worker_pointer_presentation,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            ..
+        } = self;
+        let mut target = pointer_input::PlayerPointerTarget {
+            session,
+            semantics: semantics.as_ref(),
+            translation_drag_undo,
+        };
+        worker_pointer_presentation.invalidate(
+            &mut target,
+            browser_pointer_binding,
+            next_native_event_sequence,
+            receipt,
+        )
+    }
+
     /// Decode one ordered native event at the genuine worker control-port boundary.
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = emitNativeEventJson))]
@@ -2748,6 +4624,46 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaJson))]
     pub fn drain_delta_json(&mut self) -> Result<Option<String>, String> {
         self.encoded_delta(false)
+    }
+
+    /// Atomically serialize one canonical worker publication and its bounded
+    /// metadata header. The host forwards the body unchanged; the receiving
+    /// transport still validates it. This avoids parsing every object in JS
+    /// merely to rediscover metadata already known by the Rust encoder.
+    /// Native/direct execution never uses this derived worker carrier.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaTransportJson))]
+    pub fn drain_delta_transport_json(&mut self) -> Result<Option<String>, String> {
+        #[derive(Serialize)]
+        struct Header<'a> {
+            channel: &'a str,
+            session: u32,
+            sequence: u64,
+            snapshot: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pointer_view: Option<crate::worker_pointer_presentation::PointerPresentationView>,
+        }
+
+        let Some(delta) = self.compact_delta(false)? else {
+            return Ok(None);
+        };
+        let header = Header {
+            channel: &delta.retained.channel,
+            session: delta.retained.session,
+            sequence: delta.retained.sequence,
+            snapshot: delta.retained.snapshot,
+            pointer_view: delta.pointer_view,
+        };
+        // One serialization buffer; no duplicated body or retained metadata.
+        let mut bytes = serde_json::to_vec(&header).map_err(|error| error.to_string())?;
+        if bytes.len() > 512 {
+            return Err("worker publication metadata exceeds its bounded header".into());
+        }
+        bytes.push(b'\n');
+        serde_json::to_writer(&mut bytes, &delta).map_err(|error| error.to_string())?;
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
 
     /// Drain one callback-published retained delta together with an exact,
@@ -2800,6 +4716,24 @@ impl SemanticExecutionPlayer {
             .ok_or_else(|| "initial snapshot missing".into())
     }
 
+    /// Validate completed replay in Rust, before the host exposes seeking/looping.
+    /// A failed capability leaves the final coherent frame and semantic scene intact.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sealReplay))]
+    pub fn seal_replay(&mut self) -> Result<(), String> {
+        if self.session.replay_scope_active() {
+            // A wait has no animation completion barrier in the runtime, but its
+            // live receipt still owns an unfinished authored interval.
+            #[cfg(any(target_arch = "wasm32", test))]
+            if self.has_pending_live_segment() {
+                return Err(noon_runtime::ReplayError::Incomplete.to_string());
+            }
+            self.session
+                .seal_replay()
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Explicit read-only diagnostics; never used to drive or reconstruct execution.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = debugFrameJson))]
     pub fn debug_frame_json(&self) -> String {
@@ -2816,8 +4750,40 @@ impl SemanticExecutionPlayer {
         let mut clock = self.clock.clone();
         let time = clock.scene_time(timestamp_ms).map_err(|e| e.to_string())?;
         self.session.evaluate(time).map_err(|e| e.to_string())?;
+        self.session
+            .advance_interactions(timestamp_ms / 1_000.0)
+            .map_err(|error| error.to_string())?;
         self.clock = clock;
         self.encoded_delta(false)
+    }
+
+    /// Advance only a transient native interaction for an externally sampled
+    /// continuation. Authored time is owned by `sampleToAuthoredTime` and must
+    /// not move when the browser wakes an active click effect.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = advanceInteractionsDeltaJson))]
+    pub fn advance_interactions_delta_json(
+        &mut self,
+        timestamp_ms: f64,
+    ) -> Result<Option<String>, String> {
+        if !timestamp_ms.is_finite() || timestamp_ms < 0.0 {
+            return Err("interaction tick requires a finite non-negative timestamp".into());
+        }
+        if !self.session.interactions_active() {
+            return Ok(None);
+        }
+        self.session
+            .advance_interactions(timestamp_ms / 1_000.0)
+            .map_err(|error| error.to_string())?;
+        self.encoded_delta(false)
+    }
+
+    /// Read the session-owned interaction state so external-sample hosts can
+    /// schedule transient ticks without consulting authored timeline cadence.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = interactionsActive))]
+    pub fn interactions_active_wasm(&self) -> bool {
+        self.session.interactions_active()
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
@@ -2832,6 +4798,8 @@ impl SemanticExecutionPlayer {
         clock.seek(time).map_err(|e| e.to_string())?;
         self.session.seek(time).map_err(|e| e.to_string())?;
         self.clock = clock;
+        #[cfg(any(target_arch = "wasm32", test))]
+        self.clear_translation_drag_undo();
         self.encoded_delta(false)
     }
 
@@ -2865,1235 +4833,9 @@ impl SemanticExecutionPlayer {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
-    use noon_core::{
-        AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
-        SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState,
-        SemanticStore, StoredGeometry,
-    };
-
-    fn callback_batch_with_y_and_opacity(phase: &serde_json::Value) -> String {
-        let row = &phase["objects"][0];
-        let mut transform = row["transform"].clone();
-        transform["translation"]["y"] = serde_json::json!(1.0);
-        let mut style = row["style"].clone();
-        style["opacity"] = serde_json::json!(0.5);
-        serde_json::json!({
-            "token": phase["token"].clone(),
-            "writes": [
-                {
-                    "kind": "transform",
-                    "object": row["node"].clone(),
-                    "transform": transform,
-                },
-                {
-                    "kind": "style",
-                    "object": row["node"].clone(),
-                    "style": style,
-                },
-            ],
-        })
-        .to_string()
-    }
-
-    #[test]
-    fn live_advance_projection_preserves_clock_frame_and_retry() {
-        let mut scene = noon::Scene::new();
-        let object = scene.circle(0.5).unwrap();
-        scene.add(&object).unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            scene.execution_session().unwrap(),
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            1.0,
-            41,
-        )
-        .unwrap();
-        player.live_wait(0.25).unwrap();
-        player.delta(true).unwrap().unwrap();
-        let frame = player.debug_frame_json();
-        let publication = player.session.publication_context();
-        let resources = player.resource_bundle_bytes();
-        let authored = object.state().unwrap();
-        let clock = player.clock.clone();
-        for time in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let error = player.live_advance_segment_to(time).unwrap_err();
-            assert_eq!(error.category, "invalid_input");
-            assert_eq!(error.code, "advance.evaluation");
-            let cause = error.cause.as_ref().unwrap();
-            assert_eq!(cause.code, "evaluation.invalid_time");
-            assert_eq!(
-                cause.message,
-                noon_runtime::EvaluationError::InvalidTime(time).to_string()
-            );
-            assert!(cause.cause.is_none());
-            let error = player.live_evaluate(time).unwrap_err();
-            assert_eq!(error.category, "invalid_input");
-            assert_eq!(error.code, "clock.invalid_scene_time");
-            assert_eq!(player.clock, clock);
-            assert_eq!(player.debug_frame_json(), frame);
-            assert_eq!(player.session.publication_context(), publication);
-            assert_eq!(player.resource_bundle_bytes(), resources);
-            assert_eq!(object.state().unwrap(), authored);
-            assert!(player.delta(false).unwrap().is_none());
-        }
-        for (time, code) in [
-            (-0.25, "clock.invalid_scene_time"),
-            (2.0, "clock.time_outside_loop"),
-        ] {
-            let error = player.live_evaluate(time).unwrap_err();
-            assert_eq!(error.category, "invalid_input");
-            assert_eq!(error.code, code);
-            assert_eq!(player.clock, clock);
-            assert_eq!(player.debug_frame_json(), frame);
-            assert_eq!(player.session.publication_context(), publication);
-            assert!(player.delta(false).unwrap().is_none());
-        }
-        // Segment advancement clamps, deterministic evaluation can seek backward.
-        player.live_advance_segment_to(-1.0).unwrap();
-        assert_eq!(player.time(), 0.0);
-        player.live_advance_segment_to(0.125).unwrap();
-        player.live_advance_segment_to(0.0625).unwrap();
-        assert_eq!(player.time(), 0.125);
-        player.live_evaluate(0.0625).unwrap();
-        assert_eq!(player.time(), 0.0625);
-        player.live_advance_segment_to(9.0).unwrap();
-        assert_eq!(player.time(), 0.25);
-        player.live_complete_segment().unwrap();
-        assert_eq!(object.state().unwrap(), authored);
-        assert_eq!(player.resource_bundle_bytes(), resources);
-    }
-
-    #[test]
-    fn live_advance_projection_preserves_callback_guard_and_recovery() {
-        let mut scene = noon::Scene::new();
-        let object = scene.circle(0.5).unwrap();
-        scene.add(&object).unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(object.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction
-            .apply(&mut scene.integration_store().borrow_mut())
-            .unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            scene.execution_session().unwrap(),
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            1.0,
-            41,
-        )
-        .unwrap();
-        player.live_wait(0.25).unwrap();
-        player.delta(true).unwrap().unwrap();
-        let resources = player.resource_bundle_bytes();
-        let error = player.live_evaluate(0.125).unwrap_err();
-        assert_eq!(error.category, "unsupported_operation");
-        assert_eq!(error.code, "evaluation.callback_barrier");
-        let phase = player.initial_callback_phase_json().unwrap().unwrap();
-        let frame = player.debug_frame_json();
-        let clock = player.clock.clone();
-        let pending = player.pending_callback_phase;
-        let publication = player.session.publication_context();
-        let error = player.live_evaluate(0.125).unwrap_err();
-        assert_eq!(error.category, "pending_work");
-        assert_eq!(error.code, "evaluation.callback_pending");
-        // Clock admission still precedes the runtime callback guard.
-        assert_eq!(
-            player.live_evaluate(f64::NAN).unwrap_err().code,
-            "clock.invalid_scene_time"
-        );
-        assert_eq!(player.pending_callback_phase, pending);
-        assert_eq!(player.clock, clock);
-        assert_eq!(player.debug_frame_json(), frame);
-        assert_eq!(player.session.publication_context(), publication);
-        assert_eq!(player.resource_bundle_bytes(), resources);
-        assert!(player.delta(false).unwrap().is_none());
-        let acknowledge = |player: &mut SemanticExecutionPlayer, phase: &str| {
-            let phase: serde_json::Value = serde_json::from_str(phase).unwrap();
-            player
-                .commit_callback_phase_json(
-                    &serde_json::json!({
-                        "token": phase["token"], "writes": [],
-                    })
-                    .to_string(),
-                )
-                .unwrap();
-        };
-        acknowledge(&mut player, &phase);
-        let drive = player.live_drive_segment_to_authored_time(0.25).unwrap();
-        acknowledge(&mut player, drive.callback_phase_json.as_ref().unwrap());
-        assert!(player
-            .live_drive_segment_to_authored_time(0.25)
-            .unwrap()
-            .reached_endpoint());
-        player.live_complete_segment().unwrap();
-        assert_eq!(player.time(), 0.25);
-        assert_eq!(player.resource_bundle_bytes(), resources);
-    }
-
-    #[test]
-    fn live_transform_projection_preserves_atomic_rejection_and_local_retry() {
-        type Edit =
-            fn(&mut SemanticExecutionPlayer, &noon::Mobject, f64) -> Result<(), AuthoringFailure>;
-        let edits: [(Edit, SemanticObjectProperty); 4] = [
-            (
-                |player, object, value| player.live_set_translation(object, value, -1.0),
-                SemanticObjectProperty::Translation,
-            ),
-            (
-                |player, object, value| player.live_shift(object, value, -1.0),
-                SemanticObjectProperty::Translation,
-            ),
-            (
-                |player, object, value| player.live_set_scale(object, value, 0.5),
-                SemanticObjectProperty::Scale,
-            ),
-            (
-                |player, object, value| player.live_set_rotation(object, value),
-                SemanticObjectProperty::RotationZ,
-            ),
-        ];
-        for (edit, property) in edits {
-            let mut scene = noon::Scene::new();
-            let object = scene.circle(0.5).unwrap();
-            scene.add(&object).unwrap();
-            let session = scene.execution_session().unwrap();
-            let mut player = SemanticExecutionPlayer::from_live_session(
-                session,
-                std::rc::Rc::clone(scene.integration_store()),
-                scene.root(),
-                1.0,
-                41,
-            )
-            .unwrap();
-            player.delta(true).unwrap().unwrap();
-            let authored = object.state().unwrap();
-            let publication = player.session.publication_context();
-            let frame = player.debug_frame_json();
-            let resources = player.resource_bundle_bytes();
-            for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-                let error = edit(&mut player, &object, value).unwrap_err();
-                assert_eq!(error.category, "invalid_input");
-                assert_eq!(error.code, "live.publication");
-                let cause = error.cause.as_ref().unwrap();
-                assert_eq!(cause.category, "invalid_input");
-                assert_eq!(cause.code, "publication.semantic");
-                let leaf = cause.cause.as_ref().unwrap();
-                assert_eq!(leaf.code, "transaction.non_finite_property_value");
-                assert!(leaf.cause.is_none());
-                let expected = SemanticMutationTransactionError::NonFinitePropertyValue {
-                    index: 0,
-                    object: object.node_id(),
-                    property,
-                };
-                assert_eq!(leaf.message, expected.to_string());
-                assert_eq!(object.state().unwrap(), authored);
-                assert_eq!(player.session.publication_context(), publication);
-                assert_eq!(player.debug_frame_json(), frame);
-                assert_eq!(player.resource_bundle_bytes(), resources);
-                assert!(player.delta(false).unwrap().is_none());
-            }
-            edit(&mut player, &object, 2.0).unwrap();
-            let delta = player.delta(false).unwrap().unwrap();
-            assert!(!delta.retained.snapshot);
-            assert_eq!(delta.retained.objects.len(), 1);
-            assert!(delta.retained.removed_slots.is_empty());
-            assert!(player.delta(false).unwrap().is_none());
-            assert_eq!(player.resource_bundle_bytes(), resources);
-            assert_ne!(object.state().unwrap(), authored);
-            assert_ne!(player.session.publication_context(), publication);
-        }
-    }
-
-    #[test]
-    fn live_content_and_observation_errors_keep_atomicity_and_local_retry() {
-        let mut scene = noon::Scene::new();
-        let target = scene.circle(0.5).unwrap();
-        let source = scene.circle(0.75).unwrap();
-        let other = noon::Scene::new();
-        let foreign = other.circle(0.5).unwrap();
-        scene.add(&target).unwrap();
-        let session = scene.execution_session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            session,
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            1.0,
-            41,
-        )
-        .unwrap();
-        player.delta(true).unwrap().unwrap();
-        let authored = target.state().unwrap();
-        let original_source = source.state().unwrap();
-        let publication = player.session.publication_context();
-        let frame = player.debug_frame_json();
-        let resources = player.resource_bundle_bytes();
-        for (invalid_target, invalid_source) in [(&foreign, &source), (&target, &foreign)] {
-            let error = player
-                .live_replace_content(invalid_target, invalid_source)
-                .unwrap_err();
-            assert_eq!(error.category, "foreign_handle");
-            assert_eq!(error.code, "live.foreign_store");
-            assert_eq!(target.state().unwrap(), authored);
-            assert_eq!(source.state().unwrap(), original_source);
-            assert_eq!(player.session.publication_context(), publication);
-            assert_eq!(player.debug_frame_json(), frame);
-            assert_eq!(player.resource_bundle_bytes(), resources);
-            assert!(player.delta(false).unwrap().is_none());
-        }
-        // A valid detached semantic object is not an effective execution row.
-        let error = player.live_effective(&source).unwrap_err();
-        assert_eq!(error.category, "stale_handle");
-        assert_eq!(error.code, "live.publication");
-        let cause = error.cause.as_ref().unwrap();
-        assert_eq!(cause.code, "publication.unknown_object");
-        assert!(cause.cause.is_none());
-        assert_eq!(player.session.publication_context(), publication);
-        assert_eq!(player.debug_frame_json(), frame);
-        assert_eq!(player.resource_bundle_bytes(), resources);
-        assert!(player.delta(false).unwrap().is_none());
-
-        player.live_replace_content(&target, &source).unwrap();
-        let after = target.state().unwrap();
-        assert_eq!(after.content, original_source.content);
-        assert_ne!(after.content, authored.content);
-        assert_eq!(after.transform, authored.transform);
-        assert_eq!(after.style, authored.style);
-        assert_eq!(source.state().unwrap(), original_source);
-        player.live_effective(&target).unwrap();
-        let delta = player.delta(false).unwrap().unwrap();
-        assert!(!delta.retained.snapshot);
-        assert_eq!(delta.retained.objects.len(), 1);
-        assert!(delta.retained.removed_slots.is_empty());
-        assert!(player.delta(false).unwrap().is_none());
-        assert_eq!(player.resource_bundle_bytes(), resources);
-    }
-
-    #[test]
-    fn membership_deltas_omit_unchanged_rows_and_preserve_incremental_order() {
-        let mut scene = noon::Scene::new();
-        let anchor = scene.circle(0.5).unwrap();
-        let toggled = scene.circle(1.0).unwrap();
-        scene.add(&anchor).unwrap();
-        scene.add(&toggled).unwrap();
-        let session = scene.execution_session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            session,
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            1.0,
-            1,
-        )
-        .unwrap();
-        let mut mirror = RetainedExecutionFrameMirror::default();
-        let initial = player.delta(true).unwrap().unwrap();
-        assert_eq!(initial.retained.objects[1].slot.generation, 0);
-        mirror.apply(initial.retained).unwrap();
-        player
-            .live_edit_membership(noon::SceneMembershipRequest::Remove(&[(&toggled).into()]))
-            .unwrap();
-        let retired = player.delta(false).unwrap().unwrap();
-        assert!(!retired.retained.snapshot);
-        assert!(retired.retained.objects.is_empty());
-        assert_eq!(retired.retained.removed_slots.len(), 1);
-        mirror.apply(retired.retained).unwrap();
-        player
-            .live_edit_membership(noon::SceneMembershipRequest::Add(&[(&toggled).into()]))
-            .unwrap();
-        assert!(player.session.execution_slot_for_frame_index(1).is_some());
-        let snapshot = player.delta(false).unwrap().unwrap();
-        assert!(!snapshot.retained.snapshot);
-        assert_eq!(snapshot.retained.objects.len(), 1);
-        assert_eq!(snapshot.retained.objects[0].order, 1);
-        mirror.apply(snapshot.retained).unwrap();
-        player.live_set_translation(&toggled, 2.0, -1.0).unwrap();
-        let delta = player.delta(false).unwrap().unwrap();
-        assert!(!delta.retained.snapshot);
-        assert_eq!(delta.retained.objects.len(), 1);
-        assert_eq!(delta.retained.objects[0].order, 1);
-        mirror.apply(delta.retained).unwrap();
-        assert_eq!(
-            mirror.frame().unwrap().objects[1].transform.translation,
-            noon_core::Vec2::new(2.0, -1.0)
-        );
-    }
-
-    fn animated_player() -> SemanticExecutionPlayer {
-        let mut scene = noon::Scene::new();
-        let mut circle = scene.circle(1.0).unwrap();
-        circle.shift(2.0, -1.0).unwrap();
-        circle.scale(1.5, 0.5).unwrap();
-        circle.set_fill(0.0, 0.0, 1.0, 0.4).unwrap();
-        circle.set_stroke_join("miter").unwrap();
-        circle.set_stroke_cap("butt").unwrap();
-        scene.add(&circle).unwrap();
-        let static_circle = scene.circle(0.25).unwrap();
-        scene.add(&static_circle).unwrap();
-        let mut target = circle.target_editor().unwrap();
-        target.shift(4.0, 0.0).unwrap();
-        let animation = scene
-            .integration_store()
-            .borrow_mut()
-            .insert_semantic_transform_animation(
-                circle.node_id(),
-                target.node_id(),
-                AnimationOptions::new(),
-            )
-            .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session
-            .activate_animation(
-                &scene.integration_store().borrow(),
-                animation,
-                AnimationOptions::new()
-                    .run_time(1.0)
-                    .rate_func(RateFunction::Linear),
-            )
-            .unwrap();
-        SemanticExecutionPlayer::from_session(session, 2.0, 42).unwrap()
-    }
-
-    #[test]
-    fn native_input_codec_reaches_one_session_and_keeps_event_occurrences_ordered() {
-        let mut store = SemanticStore::new();
-        let opacity = store.insert_semantic_input_signal(0.25_f64).unwrap();
-        let clicks = store.insert_semantic_input_signal(0.0_f64).unwrap();
-        store
-            .bind_semantic_native_state_input(
-                opacity,
-                NativeStateSource::Control {
-                    name: "opacity".to_owned(),
-                },
-            )
-            .unwrap();
-        store
-            .bind_semantic_native_event_input(clicks, NativeEventSource::PointerDown { button: 0 })
-            .unwrap();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(object).unwrap();
-        store
-            .bind_semantic_signal(opacity, object, SemanticObjectProperty::ObjectOpacity)
-            .unwrap();
-        store
-            .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
-            .unwrap();
-        let session = ExecutionSession::from_semantic_store(&store).unwrap();
-        let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 61).unwrap();
-
-        player
-            .set_native_state_input_json(
-                r#"{"source":{"kind":"control","name":"opacity"},"value":{"kind":"scalar","value":0.75}}"#,
-            )
-            .unwrap();
-        let event = r#"{"source":{"kind":"pointer_down","button":0}}"#;
-        player.emit_native_event_json(event).unwrap();
-        player.emit_native_event_json(event).unwrap();
-
-        assert_eq!(player.session.frame().objects[0].style.opacity, 0.75);
-        assert_eq!(player.session.frame().objects[0].transform.rotation, 2.0);
-        assert_eq!(player.next_native_event_sequence, 2);
-    }
-
-    #[test]
-    fn rejected_native_input_keeps_frame_and_player_event_sequence_unchanged() {
-        let mut store = SemanticStore::new();
-        let clicks = store.insert_semantic_input_signal(0.0_f64).unwrap();
-        store
-            .bind_semantic_native_event_input(clicks, NativeEventSource::PointerDown { button: 0 })
-            .unwrap();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(object).unwrap();
-        store
-            .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
-            .unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(object, HostCallbackId::new(9), 0.0, None);
-        transaction.apply(&mut store).unwrap();
-        let session = ExecutionSession::from_semantic_store(&store).unwrap();
-        let mut player = SemanticExecutionPlayer::from_session(session, 2.0, 62).unwrap();
-        let frame = player.session.frame().clone();
-
-        let error = player
-            .emit_native_event_json(r#"{"source":{"kind":"pointer_down","button":0}}"#)
-            .unwrap_err();
-
-        assert!(error.contains("unsupported while required callbacks are configured"));
-        assert_eq!(player.session.frame(), &frame);
-        assert_eq!(player.next_native_event_sequence, 0);
-    }
-
-    #[test]
-    fn live_segment_wake_drives_one_leased_session_without_a_host_timeline() {
-        let mut scene = noon::Scene::new();
-        let circle = scene.circle(0.4).unwrap();
-        scene.add(&circle).unwrap();
-        let mut target = circle.target_editor().unwrap();
-        target.set_translation(2.0, -1.0).unwrap();
-        let session = scene.execution_session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            session,
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            2.0,
-            63,
-        )
-        .unwrap();
-
-        let endpoint = player
-            .live_declare_and_activate_composition(
-                &noon::AnimationCompositionRequest::TransformTo(noon::TransformToRequest::new(
-                    &circle,
-                    &target,
-                    AnimationOptions::new()
-                        .run_time(2.0)
-                        .rate_func(RateFunction::Linear),
-                )),
-                noon_core::AnimationOptions::new(),
-            )
-            .unwrap();
-        assert_eq!(endpoint, 2.0);
-        assert_eq!(
-            player.time(),
-            0.0,
-            "begin must not fast-forward the segment"
-        );
-
-        let wake = player.live_segment_wake(1_000.0).unwrap();
-        assert_eq!(wake.cadence(), "animation_frame");
-        assert_eq!(wake.timer_after_milliseconds(), None);
-        assert!(!player
-            .live_drive_segment_from_wall_time(2_000.0)
-            .unwrap()
-            .reached_endpoint());
-        assert_eq!(
-            player
-                .live_effective(&circle)
-                .unwrap()
-                .transform
-                .translation,
-            Vec2::new(1.0, -0.5)
-        );
-
-        assert!(player
-            .live_drive_segment_from_wall_time(4_000.0)
-            .unwrap()
-            .reached_endpoint());
-        assert_eq!(player.time(), endpoint);
-        player.live_complete_segment().unwrap();
-        assert_eq!(
-            player
-                .live_effective(&circle)
-                .unwrap()
-                .transform
-                .translation,
-            Vec2::new(2.0, -1.0)
-        );
-
-        assert_eq!(player.live_wait(1.0).unwrap(), 3.0);
-        assert_eq!(player.time(), 2.0, "beginning a wait must not advance it");
-        let wait_wake = player.live_segment_wake(5_000.0).unwrap();
-        assert_eq!(wait_wake.cadence(), "timer");
-        assert_eq!(wait_wake.timer_after_milliseconds(), Some(1_000.0));
-        assert!(player
-            .live_drive_segment_from_wall_time(6_000.0)
-            .unwrap()
-            .reached_endpoint());
-        player.live_complete_segment().unwrap();
-        assert_eq!(player.time(), 3.0);
-    }
-
-    #[test]
-    fn external_authored_samples_are_monotonic_and_reuse_the_live_player() {
-        let mut scene = noon::Scene::new();
-        let circle = scene.circle(0.4).unwrap();
-        scene.add(&circle).unwrap();
-        let mut target = circle.target_editor().unwrap();
-        target.set_translation(2.0, 0.0).unwrap();
-        let session = scene.execution_session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            session,
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            4.0,
-            67,
-        )
-        .unwrap();
-
-        player
-            .live_declare_and_activate_composition(
-                &noon::AnimationCompositionRequest::TransformTo(noon::TransformToRequest::new(
-                    &circle,
-                    &target,
-                    AnimationOptions::new()
-                        .run_time(2.0)
-                        .rate_func(RateFunction::Linear),
-                )),
-                noon_core::AnimationOptions::new(),
-            )
-            .unwrap();
-        let midpoint = player.live_drive_segment_to_authored_time(1.25).unwrap();
-        assert!(midpoint.callback_phase_json().is_none());
-        assert!(!midpoint.reached_endpoint());
-        assert_eq!(player.time(), 1.25);
-
-        let frame = player.session.frame().clone();
-        let error = player.live_drive_segment_to_authored_time(1.0).unwrap_err();
-        // This legacy guard is not a settled R2 producer yet.
-        assert_eq!(error.category, "unclassified");
-        assert_eq!(error.code, "unclassified");
-        assert_eq!(
-            error.message,
-            "external continuation sample requires time at or after 1.25, got 1"
-        );
-        assert_eq!(player.session.frame(), &frame);
-
-        assert!(player
-            .live_drive_segment_to_authored_time(3.0)
-            .unwrap()
-            .reached_endpoint());
-        assert_eq!(
-            player.time(),
-            2.0,
-            "Rust clamps the external sample at the segment boundary"
-        );
-        player.live_complete_segment().unwrap();
-        assert!(player.live_drive_segment_to_authored_time(3.0).is_err());
-
-        player.live_wait(1.0).unwrap();
-        assert!(player
-            .live_drive_segment_to_authored_time(3.0)
-            .unwrap()
-            .reached_endpoint());
-        assert_eq!(player.time(), 3.0);
-    }
-
-    #[test]
-    fn callback_segment_drive_pins_time_until_exact_phase_commit() {
-        let mut scene = noon::Scene::new();
-        let circle = scene.circle(0.4).unwrap();
-        scene.add(&circle).unwrap();
-        let mut target = circle.target_editor().unwrap();
-        target.set_translation(2.0, 0.0).unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(circle.node_id(), HostCallbackId::new(7), 0.0, None);
-        transaction.add_updater(circle.node_id(), HostCallbackId::new(8), 0.0, None);
-        transaction
-            .apply(&mut scene.integration_store().borrow_mut())
-            .unwrap();
-        let session = scene.execution_session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            session,
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            1.0,
-            64,
-        )
-        .unwrap();
-        player
-            .live_declare_and_activate_composition(
-                &noon::AnimationCompositionRequest::TransformTo(noon::TransformToRequest::new(
-                    &circle,
-                    &target,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Linear),
-                )),
-                noon_core::AnimationOptions::new(),
-            )
-            .unwrap();
-
-        assert_eq!(
-            player.live_segment_wake(1_000.0).unwrap().cadence(),
-            "animation_frame"
-        );
-        let initial = player.live_drive_segment_from_wall_time(1_000.0).unwrap();
-        assert!(!initial.reached_endpoint());
-        let initial_phase: serde_json::Value =
-            serde_json::from_str(&initial.callback_phase_json().unwrap()).unwrap();
-        assert_eq!(initial_phase["time"], serde_json::json!(0.0));
-        assert_eq!(
-            initial_phase["invocations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|entry| entry["callback_id"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            vec!["7", "8"]
-        );
-        assert_eq!(player.time(), 0.0);
-        assert!(player.live_drive_segment_from_wall_time(1_000.0).is_err());
-
-        player
-            .commit_callback_phase_json(&callback_batch_with_y_and_opacity(&initial_phase))
-            .unwrap();
-        let ready = player.live_drive_segment_from_wall_time(1_000.0).unwrap();
-        assert!(ready.callback_phase_json().is_none());
-        assert!(!ready.reached_endpoint());
-        assert_eq!(player.time(), 0.0);
-
-        // A mid-segment sample stays pinned while its host callback is
-        // outstanding. Retrying the same sample reaches exactly 0.5 rather
-        // than charging callback latency into authored time.
-        let midpoint = player.live_drive_segment_from_wall_time(1_500.0).unwrap();
-        let midpoint_phase: serde_json::Value =
-            serde_json::from_str(&midpoint.callback_phase_json().unwrap()).unwrap();
-        assert_eq!(midpoint_phase["time"], serde_json::json!(0.5));
-        assert_eq!(player.time(), 0.0);
-        player
-            .commit_callback_phase_json(&callback_batch_with_y_and_opacity(&midpoint_phase))
-            .unwrap();
-        let ready = player.live_drive_segment_from_wall_time(1_500.0).unwrap();
-        assert!(ready.callback_phase_json().is_none());
-        assert!(!ready.reached_endpoint());
-        assert_eq!(player.time(), 0.5);
-
-        // Simulate an opaque callback host taking 7.5 seconds after the
-        // midpoint commit. Reanchoring at actual completion keeps the next
-        // 16 ms wake to exactly 16 ms of authored progress.
-        let wake = player.reanchor_live_segment_wake(9_000.0).unwrap();
-        assert_eq!(wake.cadence(), "animation_frame");
-        let after_slow_callback = player.live_drive_segment_from_wall_time(9_016.0).unwrap();
-        let after_slow_callback_phase: serde_json::Value =
-            serde_json::from_str(&after_slow_callback.callback_phase_json().unwrap()).unwrap();
-        assert!((after_slow_callback_phase["time"].as_f64().unwrap() - 0.516).abs() < 1.0e-9);
-        assert_eq!(player.time(), 0.5);
-        player
-            .commit_callback_phase_json(&callback_batch_with_y_and_opacity(
-                &after_slow_callback_phase,
-            ))
-            .unwrap();
-        let ready = player.live_drive_segment_from_wall_time(9_016.0).unwrap();
-        assert!(ready.callback_phase_json().is_none());
-        assert!(!ready.reached_endpoint());
-        assert!((player.time() - 0.516).abs() < 1.0e-9);
-        player.reanchor_live_segment_wake(12_000.0).unwrap();
-
-        // The endpoint follows the same phase/commit protocol before reporting
-        // readiness for completion and source resumption.
-        let endpoint = player.live_drive_segment_from_wall_time(12_484.0).unwrap();
-        let endpoint_phase: serde_json::Value =
-            serde_json::from_str(&endpoint.callback_phase_json().unwrap()).unwrap();
-        assert_eq!(endpoint_phase["time"], serde_json::json!(1.0));
-        assert!((player.time() - 0.516).abs() < 1.0e-9);
-        player
-            .commit_callback_phase_json(&callback_batch_with_y_and_opacity(&endpoint_phase))
-            .unwrap();
-        let ready = player.live_drive_segment_from_wall_time(12_484.0).unwrap();
-        assert!(ready.callback_phase_json().is_none());
-        assert!(ready.reached_endpoint());
-        assert_eq!(player.time(), 1.0);
-        player.live_complete_segment().unwrap();
-        assert_eq!(
-            player.session.frame().objects[0].transform.translation.x,
-            2.0
-        );
-        assert_eq!(
-            player.session.frame().objects[0].transform.translation.y,
-            1.0
-        );
-        assert_eq!(player.session.frame().objects[0].style.opacity, 0.5);
-    }
-
-    #[test]
-    fn shared_authoring_to_transport_preserves_style_and_emits_only_dirty_rows() {
-        let mut player = animated_player();
-        let mut mirror = RetainedExecutionFrameMirror::default();
-        let initial: RetainedExecutionDeltaEnvelope =
-            serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
-        assert_eq!(
-            (initial.session, initial.sequence, initial.snapshot),
-            (42, 0, true)
-        );
-        assert_eq!(initial.objects.len(), 2);
-        assert_eq!(
-            initial.objects[0].transform.translation,
-            noon_core::Vec2::new(2.0, -1.0)
-        );
-        assert_eq!(
-            initial.objects[0].style.stroke_join,
-            noon_core::StrokeJoin::Miter
-        );
-        assert_eq!(
-            initial.objects[0].style.stroke_cap,
-            noon_core::StrokeCap::Butt
-        );
-        assert_eq!(initial.objects[0].style.fill.unwrap().alpha, 0.4);
-        mirror.apply(initial).unwrap();
-        player.tick_delta_json(0.0).unwrap();
-        let halfway: RetainedExecutionDeltaEnvelope =
-            serde_json::from_str(&player.tick_delta_json(500.0).unwrap().unwrap()).unwrap();
-        assert!(!halfway.snapshot);
-        assert_eq!(halfway.objects.len(), 1);
-        assert_eq!(halfway.objects[0].transform.translation.x, 4.0);
-        mirror.apply(halfway).unwrap();
-        assert_eq!(
-            mirror.frame().unwrap().objects[0].transform.translation.x,
-            4.0
-        );
-        let end: RetainedExecutionDeltaEnvelope =
-            serde_json::from_str(&player.tick_delta_json(1000.0).unwrap().unwrap()).unwrap();
-        assert_eq!(end.objects[0].transform.translation.x, 6.0);
-    }
-
-    #[test]
-    fn callback_phase_wire_pins_runtime_publication_and_orders_effective_writes() {
-        let mut scene = noon::Scene::new();
-        let source = scene.circle(1.0).unwrap();
-        let drift = scene.circle(0.25).unwrap();
-        scene.add(&source).unwrap();
-        scene.add(&drift).unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(source.node_id(), HostCallbackId::new(9), 0.0, None);
-        transaction.add_updater(source.node_id(), HostCallbackId::new(4), 0.0, None);
-        transaction.add_updater(drift.node_id(), HostCallbackId::new(2), 0.0, None);
-        transaction
-            .apply(&mut scene.integration_store().borrow_mut())
-            .unwrap();
-        let session = scene.execution_session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            session,
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            2.0,
-            12,
-        )
-        .unwrap();
-
-        let phase: serde_json::Value = serde_json::from_str(
-            &player
-                .initial_callback_phase_json()
-                .unwrap()
-                .expect("time-zero callbacks require one phase"),
-        )
-        .unwrap();
-        assert_eq!(phase["objects"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            phase["invocations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|entry| entry["callback_id"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            vec!["9", "4", "2"]
-        );
-        for field in ["runtime", "sequence"] {
-            assert!(phase["token"][field].is_string());
-        }
-        for field in ["scene_revision", "execution_revision", "frame_epoch"] {
-            assert!(phase["token"]["publication"][field].is_string());
-        }
-        let pending_wake = player.execution_wake(1_000.0).unwrap();
-        assert_eq!(pending_wake.cadence(), "idle");
-        assert_eq!(pending_wake.timer_after_milliseconds(), None);
-
-        let source_row = phase["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| {
-                entry["node"]["slot"].as_u64() == Some(u64::from(source.node_id().slot()))
-            })
-            .unwrap();
-        let mut source_transform = source_row["transform"].clone();
-        source_transform["translation"]["y"] = serde_json::json!(1.0);
-        let mut source_style = source_row["style"].clone();
-        source_style["opacity"] = serde_json::json!(0.5);
-        let batch = serde_json::json!({
-            "token": phase["token"].clone(),
-            "writes": [
-                {
-                    "kind": "transform",
-                    "object": source_row["node"].clone(),
-                    "transform": source_transform,
-                },
-                {
-                    "kind": "style",
-                    "object": source_row["node"].clone(),
-                    "style": source_style,
-                },
-            ],
-        });
-        player
-            .commit_callback_phase_json(&batch.to_string())
-            .unwrap();
-        let committed_wake = player.execution_wake(9_000.0).unwrap();
-        assert_eq!(committed_wake.cadence(), "animation_frame");
-        assert_eq!(
-            player.session.frame().objects[0].transform.translation.y,
-            1.0
-        );
-        assert_eq!(player.session.frame().objects[0].style.opacity, 0.5);
-        let publication: serde_json::Value = serde_json::from_str(
-            &player
-                .drain_renderer_observation_publication_json(
-                    &phase.to_string(),
-                    source.node_id().slot(),
-                    source.node_id().generation(),
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(publication["delta"]["session"], 12);
-        assert_eq!(publication["delta"]["sequence"], 0);
-        assert_eq!(publication["observation"]["publication"]["session"], 12);
-        assert_eq!(publication["observation"]["publication"]["sequence"], 0);
-        assert_eq!(
-            publication["observation"]["slot"],
-            publication["delta"]["objects"][0]["slot"]
-        );
-        assert_eq!(
-            publication["observation"]["committed"]["transform"]["translation"]["y"],
-            1.0
-        );
-        assert_eq!(publication["observation"]["committed"]["dirty"], "all");
-    }
-
-    #[test]
-    fn callback_sparse_read_accepts_the_raw_pending_token_and_rejects_a_foreign_one() {
-        let mut scene = noon::Scene::new();
-        let circle = scene.circle(1.0).unwrap();
-        scene.add(&circle).unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction
-            .apply(&mut scene.integration_store().borrow_mut())
-            .unwrap();
-        let session = scene.execution_session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            session,
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            1.0,
-            13,
-        )
-        .unwrap();
-
-        let phase: serde_json::Value = serde_json::from_str(
-            &player
-                .initial_callback_phase_json()
-                .unwrap()
-                .expect("time-zero callbacks require one phase"),
-        )
-        .unwrap();
-        let raw_token = phase["token"].to_string();
-        let object_request = serde_json::json!({
-            "kind": "object",
-            "node": phase["objects"][0]["node"].clone(),
-        })
-        .to_string();
-
-        let response: serde_json::Value = serde_json::from_str(
-            &player
-                .required_callback_read_json(&raw_token, &object_request)
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(response["kind"], "object");
-        assert_eq!(response["object"]["node"], phase["objects"][0]["node"]);
-        assert!(player.pending_callback_phase.is_some());
-
-        let mut foreign_token = phase["token"].clone();
-        foreign_token["sequence"] = serde_json::json!("999");
-        assert!(player
-            .required_callback_read_json(&foreign_token.to_string(), &object_request)
-            .is_err());
-        assert!(player.pending_callback_phase.is_some());
-    }
-
-    #[test]
-    fn interrupted_callback_phase_stays_terminal_after_player_recovery() {
-        let mut scene = noon::Scene::new();
-        let circle = scene.circle(1.0).unwrap();
-        scene.add(&circle).unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction
-            .apply(&mut scene.integration_store().borrow_mut())
-            .unwrap();
-        let session = scene.execution_session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            session,
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            2.0,
-            13,
-        )
-        .unwrap();
-        let phase = player.initial_callback_phase_json().unwrap().unwrap();
-        player.interrupt_callback_phase_json(&phase).unwrap();
-        let termination: serde_json::Value =
-            serde_json::from_str(&player.callback_termination_json().unwrap().unwrap()).unwrap();
-        assert_eq!(termination["kind"], "interrupted");
-        assert!(player.tick_callback_phase_json(16.0).is_err());
-    }
-
-    #[test]
-    fn forward_callback_control_uses_authored_time_without_a_browser_timestamp() {
-        let mut scene = noon::Scene::new();
-        let circle = scene.circle(1.0).unwrap();
-        scene.add(&circle).unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction
-            .apply(&mut scene.integration_store().borrow_mut())
-            .unwrap();
-        let session = scene.execution_session().unwrap();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            session,
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            2.0,
-            14,
-        )
-        .unwrap();
-
-        let initial: serde_json::Value = serde_json::from_str(
-            &player
-                .initial_callback_phase_json()
-                .unwrap()
-                .expect("time-zero callback phase"),
-        )
-        .unwrap();
-        player
-            .commit_callback_phase_json(
-                &serde_json::json!({ "token": initial["token"].clone(), "writes": [] }).to_string(),
-            )
-            .unwrap();
-
-        let phase: serde_json::Value = serde_json::from_str(
-            &player
-                .advance_forward_to_callback_phase_json(1.0)
-                .unwrap()
-                .expect("active callback requires one authored-time phase"),
-        )
-        .unwrap();
-        assert_eq!(phase["time"], serde_json::json!(1.0));
-        player
-            .commit_callback_phase_json(
-                &serde_json::json!({ "token": phase["token"].clone(), "writes": [] }).to_string(),
-            )
-            .unwrap();
-        assert_eq!(player.time(), 1.0);
-        assert!(player.advance_forward_to_callback_phase_json(0.5).is_err());
-    }
-
-    #[test]
-    fn invalid_controls_leave_the_clock_frame_and_delta_sequence_unchanged() {
-        let mut player = animated_player();
-        player.initial_delta_json().unwrap();
-        assert!(player.seek_delta_json(f64::NAN).is_err());
-        assert!(player.tick_delta_json(f64::INFINITY).is_err());
-        assert_eq!(player.time(), 0.0);
-        let delta: RetainedExecutionDeltaEnvelope =
-            serde_json::from_str(&player.seek_delta_json(0.5).unwrap().unwrap()).unwrap();
-        assert_eq!(delta.sequence, 1);
-        assert_eq!(delta.objects[0].transform.translation.x, 4.0);
-    }
-
-    #[test]
-    fn unchanged_static_ticks_do_not_retransmit_geometry() {
-        let mut scene = noon::Scene::new();
-        scene.add(&scene.circle(1.0).unwrap()).unwrap();
-        let mut player =
-            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 1)
-                .unwrap();
-        player.initial_delta_json().unwrap();
-        assert!(player.tick_delta_json(0.0).unwrap().is_none());
-        assert!(player.tick_delta_json(500.0).unwrap().is_none());
-        assert_eq!(player.time(), 0.5);
-    }
-
-    #[test]
-    fn generic_wake_settles_a_playing_static_session() {
-        let mut scene = noon::Scene::new();
-        scene.add(&scene.circle(1.0).unwrap()).unwrap();
-        let mut player =
-            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 1)
-                .unwrap();
-        player.initial_delta_json().unwrap();
-
-        let wake = player.execution_wake(8_000.0).unwrap();
-        assert!(player.is_playing());
-        assert_eq!(wake.cadence(), "idle");
-        assert_eq!(wake.timer_after_milliseconds(), None);
-        assert!(!wake.present_now());
-        assert!(!player.session.has_replay_timeline_work());
-    }
-
-    #[test]
-    fn generic_wake_uses_runtime_activity_then_the_real_loop_boundary() {
-        let mut player = animated_player();
-        player.initial_delta_json().unwrap();
-        assert!(player.session.has_replay_timeline_work());
-
-        let active = player.execution_wake(10_000.0).unwrap();
-        assert_eq!(active.cadence(), "animation_frame");
-        assert!(player.tick_callback_phase_json(11_000.0).unwrap().is_none());
-        player.drain_delta_json().unwrap();
-
-        let settled = player.execution_wake(11_250.0).unwrap();
-        assert_eq!(settled.cadence(), "timer");
-        assert_eq!(settled.timer_after_milliseconds(), Some(750.0));
-
-        let overdue = player.execution_wake(12_100.0).unwrap();
-        assert_eq!(overdue.cadence(), "timer");
-        assert_eq!(overdue.timer_after_milliseconds(), Some(0.0));
-        assert!(player.tick_callback_phase_json(12_100.0).unwrap().is_none());
-        let replaying = player.execution_wake(12_100.0).unwrap();
-        assert_eq!(replaying.cadence(), "animation_frame");
-    }
-
-    #[test]
-    fn generic_wake_suppresses_timeline_cadence_while_paused() {
-        let mut player = animated_player();
-        player.pause();
-        let paused = player.execution_wake(1_000.0).unwrap();
-        assert_eq!(paused.cadence(), "idle");
-
-        player.resume();
-        let resumed = player.execution_wake(9_000.0).unwrap();
-        assert_eq!(resumed.cadence(), "animation_frame");
-        assert!(player.tick_callback_phase_json(9_250.0).unwrap().is_none());
-        assert_eq!(player.time(), 0.25);
-    }
-
-    #[test]
-    fn opaque_callback_history_is_explicitly_non_looping() {
-        let mut scene = noon::Scene::new();
-        let circle = scene.circle(1.0).unwrap();
-        scene.add(&circle).unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction.remove_updater(circle.node_id(), HostCallbackId::new(1), 0.5);
-        transaction
-            .apply(&mut scene.integration_store().borrow_mut())
-            .unwrap();
-        let mut player =
-            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7)
-                .unwrap();
-
-        assert_eq!(player.clock.loop_duration(), None);
-        assert!(!player.session.has_replay_timeline_work());
-        let before = player.clock.clone();
-        assert!(player.set_loop_duration(2.0).is_err());
-        assert_eq!(player.clock, before);
-    }
-
-    #[test]
-    fn text_created_after_empty_wait_publishes_resources_once_on_admission() {
-        assert_late_text_resource_admission(|player| {
-            player.live_create_text(noon::Text::new("LATE"))
-        });
-        assert_late_text_resource_admission(|player| {
-            player.live_create_typst(noon::Typst::new("LATE"))
-        });
-        assert_late_text_resource_admission(|player| {
-            player.live_create_math_typst(noon::MathTypst::new("x^2"))
-        });
-    }
-
-    fn assert_late_text_resource_admission(
-        create: impl FnOnce(&mut SemanticExecutionPlayer) -> Result<noon::Mobject, AuthoringFailure>,
-    ) {
-        let scene = noon::Scene::new();
-        let mut player = SemanticExecutionPlayer::from_live_session(
-            scene.execution_session().unwrap(),
-            std::rc::Rc::clone(scene.integration_store()),
-            scene.root(),
-            2.0,
-            81,
-        )
-        .unwrap();
-        let mut mirror = crate::InstalledRetainedExecutionMirror::from_bundle_bytes(
-            &player.resource_bundle_bytes(),
-        )
-        .unwrap();
-        let initial = player.delta(true).unwrap().unwrap();
-        assert!(initial.retained.objects.is_empty());
-        assert!(initial.resource_additions.is_none());
-        mirror.apply_family(initial).unwrap();
-
-        player.live_wait(0.5).unwrap();
-        player.live_drive_segment_to_authored_time(0.5).unwrap();
-        player.live_complete_segment().unwrap();
-        if let Some(wait_delta) = player.delta(false).unwrap() {
-            assert!(wait_delta.retained.objects.is_empty());
-            assert!(wait_delta.resource_additions.is_none());
-            mirror.apply_family(wait_delta).unwrap();
-        }
-        let label = create(&mut player).unwrap();
-        assert!(!player.live_contains(&label).unwrap());
-        if let Some(detached_delta) = player.delta(false).unwrap() {
-            assert!(detached_delta.retained.objects.is_empty());
-            assert!(detached_delta.resource_additions.is_none());
-            mirror.apply_family(detached_delta).unwrap();
-        }
-
-        assert_eq!(
-            player
-                .live_declare_and_activate_composition(
-                    &noon::AnimationCompositionRequest::Fade {
-                        target: &label,
-                        direction: noon_core::SemanticFadeDirection::In,
-                        endpoint: noon::FadeEndpoint::default(),
-                        options: AnimationOptions::new()
-                            .run_time(1.0)
-                            .rate_func(RateFunction::Linear)
-                    },
-                    noon_core::AnimationOptions::new()
-                )
-                .unwrap(),
-            1.5,
-        );
-        let admitted = player.delta(false).unwrap().unwrap();
-        assert!(!admitted.retained.snapshot);
-        assert_eq!(admitted.retained.objects.len(), 1);
-        let additions = admitted.resource_additions.as_ref().unwrap();
-        assert_eq!(additions.text_count(), 1);
-        assert!(additions.font_count() + additions.geometry_count() > 0);
-        mirror.apply_family(admitted).unwrap();
-        let installed = mirror.frame().unwrap().objects[0].text().unwrap();
-        assert!(mirror.resources().texts().get(installed).is_some());
-        assert!(player.delta(false).unwrap().is_none());
-
-        player.live_drive_segment_to_authored_time(1.5).unwrap();
-        player.live_complete_segment().unwrap();
-        let completed = player.delta(false).unwrap().unwrap();
-        assert!(completed.resource_additions.is_none());
-        mirror.apply_family(completed).unwrap();
-        assert_eq!(mirror.frame().unwrap().objects[0].text(), Some(installed));
-        assert!(player.delta(false).unwrap().is_none());
-    }
-
-    #[test]
-    fn shared_session_text_uses_the_mixed_resource_boundary() {
-        let mut scene = noon::Scene::new();
-        let label = scene
-            .text(noon::Text::new("Noon").with_font_size(48.0))
-            .unwrap();
-        scene.add(&label).unwrap();
-        let mut player =
-            SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 8)
-                .unwrap();
-
-        let bundle =
-            RetainedResourceBundle::decode_binary(&player.resource_bundle_bytes()).unwrap();
-        assert_eq!(bundle.text_count(), 1);
-        let initial: RetainedExecutionDeltaEnvelope =
-            serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
-        assert!(matches!(
-            initial.objects[0].content,
-            TransportObjectContent::Text { .. }
-        ));
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod callback_error_tests;
+#[cfg(test)]
+mod graph_transport_tests;

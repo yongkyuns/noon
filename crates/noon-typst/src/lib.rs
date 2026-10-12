@@ -27,7 +27,8 @@ use typst_library::{
 use typst_svg::{svg, SvgOptions};
 
 pub const TYPST_BACKEND_VERSION: &str = "0.15.1";
-const TEMPLATE_VERSION: &str = "noon-typst-page-v2";
+/// Deterministic identity of Noon's Typst normalization template.
+pub const TYPST_TEMPLATE_VERSION: &str = "noon-typst-page-v2";
 const TEMPLATE_PREFIX: &str =
     "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(size: 10pt)\n";
 
@@ -272,7 +273,13 @@ where
     })
 }
 
-fn bundled_fonts() -> impl Iterator<Item = &'static [u8]> {
+/// Immutable bundled font buffers, in the compiler's deterministic fallback order.
+///
+/// Native text and Typst share this source when both backends are enabled. Keep
+/// the asset access out of line so cross-crate callers do not embed another copy
+/// of the full font set in WASM. This does not parse or allocate font data.
+#[inline(never)]
+pub fn bundled_fonts() -> impl Iterator<Item = &'static [u8]> {
     #[cfg(feature = "bundled-fonts")]
     {
         typst_assets::fonts()
@@ -329,13 +336,13 @@ fn one_page(document: &PagedDocument) -> Result<&typst_layout::Page, TypstBacken
 
 fn layout_artifact(prepared_source: &str) -> TextLayoutArtifact {
     let artifact_identity =
-        format!("{TYPST_BACKEND_VERSION}\0{TEMPLATE_VERSION}\0{prepared_source}");
+        format!("{TYPST_BACKEND_VERSION}\0{TYPST_TEMPLATE_VERSION}\0{prepared_source}");
     TextLayoutArtifact {
         backend: TextLayoutBackend {
             kind: TextLayoutBackendKind::Typst,
             version: Arc::from(TYPST_BACKEND_VERSION),
         },
-        template_fingerprint: Arc::from(fingerprint_hex(TEMPLATE_VERSION.as_bytes())),
+        template_fingerprint: Arc::from(fingerprint_hex(TYPST_TEMPLATE_VERSION.as_bytes())),
         artifact_fingerprint: Arc::from(fingerprint_hex(artifact_identity.as_bytes())),
         backend_payload_key: None,
     }
@@ -539,12 +546,14 @@ impl FrameNormalizer {
             .map(inherited_color)
             .transpose()?
             .flatten();
-        let (stroke, stroke_width) = match &shape.stroke {
+        let (stroke, stroke_width, stroke_cap, stroke_join) = match &shape.stroke {
             Some(stroke) => (
                 inherited_color(&stroke.paint)?,
                 stroke.thickness.to_pt() as f32,
+                typst_line_cap(stroke.cap),
+                typst_line_join(stroke.join),
             ),
-            None => (None, 0.0),
+            None => (None, 0.0, StrokeCap::Butt, StrokeJoin::Miter),
         };
         let transform = state.then(self.page_to_noon);
         // Manim's mobject bounds come from vector points and do not expand for stroke.
@@ -559,12 +568,30 @@ impl FrameNormalizer {
                 fill,
                 stroke,
                 stroke_width,
+                stroke_cap,
+                stroke_join,
             },
             source_span: None,
             semantic_key,
         });
         self.render_items.push(TextRenderItem::Vector(vector_index));
         Ok(())
+    }
+}
+
+fn typst_line_cap(cap: TypstLineCap) -> StrokeCap {
+    match cap {
+        TypstLineCap::Butt => StrokeCap::Butt,
+        TypstLineCap::Round => StrokeCap::Round,
+        TypstLineCap::Square => StrokeCap::Square,
+    }
+}
+
+fn typst_line_join(join: TypstLineJoin) -> StrokeJoin {
+    match join {
+        TypstLineJoin::Miter => StrokeJoin::Miter,
+        TypstLineJoin::Round => StrokeJoin::Round,
+        TypstLineJoin::Bevel => StrokeJoin::Bevel,
     }
 }
 
@@ -655,16 +682,8 @@ fn text_glyph_stroke(stroke: &FixedStroke) -> Result<TextGlyphStroke, TypstBacke
     Ok(TextGlyphStroke {
         paint: inherited_color(&stroke.paint)?,
         width: stroke.thickness.to_pt() as f32,
-        cap: match stroke.cap {
-            TypstLineCap::Butt => StrokeCap::Butt,
-            TypstLineCap::Round => StrokeCap::Round,
-            TypstLineCap::Square => StrokeCap::Square,
-        },
-        join: match stroke.join {
-            TypstLineJoin::Miter => StrokeJoin::Miter,
-            TypstLineJoin::Round => StrokeJoin::Round,
-            TypstLineJoin::Bevel => StrokeJoin::Bevel,
-        },
+        cap: typst_line_cap(stroke.cap),
+        join: typst_line_join(stroke.join),
         dash_array,
         dash_phase,
         miter_limit: stroke.miter_limit.get() as f32,
@@ -825,7 +844,28 @@ mod tests {
                 artifact.geometry.get(item.geometry),
                 Some(GeometryResource::VectorPath(_))
             ));
+            assert_eq!(item.style.stroke_cap, StrokeCap::Butt);
+            assert_eq!(item.style.stroke_join, StrokeJoin::Miter);
         }
+    }
+
+    #[test]
+    fn authored_shape_cap_and_join_survive_normalization() {
+        let artifact = compile_typst_resource(
+            "#line(length: 20pt, stroke: (paint: red, thickness: 2pt, cap: \"round\", join: \"bevel\"))",
+            TypstMode::Markup,
+        )
+        .unwrap();
+        let style = artifact
+            .resource
+            .vector_items
+            .iter()
+            .find(|item| item.style.stroke_width > 0.0)
+            .expect("authored line should normalize to a stroked vector")
+            .style;
+        assert_eq!(style.stroke_cap, StrokeCap::Round);
+        assert_eq!(style.stroke_join, StrokeJoin::Bevel);
+        assert_eq!(style.stroke_width, 2.0);
     }
 
     #[test]

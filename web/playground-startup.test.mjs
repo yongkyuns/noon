@@ -101,11 +101,26 @@ const preparationCall = runSceneBody.indexOf(
 const authoringCall = runSceneBody.indexOf("authored = await client.run(source,");
 const ensureRuntimeCall = runSceneBody.indexOf("result = await ensureRuntimeReady({");
 const ensureExecutionCall = runSceneBody.indexOf("await ensureExecutionReady();");
-const reconcileCall = runSceneBody.indexOf("await player.reconcileSemanticExecution(semanticExecution,");
+const reconcileCall = runSceneBody.indexOf("player.reconcileSemanticExecution(semanticExecution,");
 assert.ok(authoringCall >= 0, "Run must author the selected Python source");
 assert.ok(
   preparationCall >= 0 && preparationCall < authoringCall,
   "cold authored Run must kick render/WASM preparation before awaiting Python authoring",
+);
+assert.match(
+  runtimeReadyBody,
+  /await prepared\.ready;\s*if \(runPhaseMetrics !== null\) \{\s*runPhaseMetrics\.renderPreparation = \{\s*startedAtMs: prepared\.startedAtMs,\s*readyAtMs: prepared\.readyAtMs,/,
+  "cold authored Run must retain render-preparation boundaries alongside its source-run interval",
+);
+assert.match(
+  preparationBody,
+  /const startedAtMs = performance\.now\(\);\s*const ready = candidate\.prepare\(\);\s*const preparation = \{ candidate, ready, startedAtMs, readyAtMs: null \};/,
+  "render-preparation timestamps must bracket the actual candidate.prepare() call",
+);
+assert.match(
+  preparationBody,
+  /preparation\.readyAtMs = performance\.now\(\);/,
+  "render-preparation ready time must be recorded when candidate preparation resolves",
 );
 assert.ok(
   ensureRuntimeCall > authoringCall,
@@ -131,6 +146,11 @@ assert.notEqual(bootStart, -1, "playground boot boundary must exist");
 const bootCatch = main.indexOf("} catch (error) {\n  showError(error);\n}", bootStart);
 assert.ok(bootCatch > bootStart, "playground boot boundary must terminate cleanly");
 const bootBody = main.slice(bootStart, bootCatch);
+assert.match(
+  bootBody,
+  /window\.__noonExampleGallery\s*=\s*\{[\s\S]*?performance\.mark\("noon-playground-source-ready"\);/,
+  "initial source and public gallery API readiness must be timestamped before preload starts",
+);
 assert.doesNotMatch(
   bootBody,
   /ensureAuthoringClient\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
@@ -197,8 +217,13 @@ assert.match(
 assert.match(main, /const METRICS_POLL_MS = 500;/, "runtime metrics polling must be rate-limited");
 assert.match(
   main,
-  /metricsTimer = setTimeout\(poll, METRICS_POLL_MS\);/,
-  "runtime metrics must use the bounded polling cadence",
+  /metricsTimer = setTimeout\(poll, PLAYBACK_POLL_MS\);/,
+  "first metrics observation must use the bounded playback cadence",
+);
+assert.match(
+  main,
+  /const delay = status\.dataset\.playbackPlaying === "true" \? PLAYBACK_POLL_MS : METRICS_POLL_MS;\s*metricsTimer = setTimeout\(poll, delay\);/,
+  "playing and settled metrics must keep their bounded polling cadences",
 );
 assert.doesNotMatch(
   main,

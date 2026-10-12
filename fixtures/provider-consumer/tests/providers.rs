@@ -46,7 +46,7 @@ fn assert_shared_resource_path(mut scene: Scene, label: noon::Mobject) {
 #[cfg(feature = "native-text")]
 #[test]
 fn native_text_with_explicit_font_uses_the_shared_store() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let face = noon::NativeFontFace::new("Host font", host_font(), 0).unwrap();
     let text = noon::Text::new("Noon").with_font_face(face);
     assert_eq!(text.font_family(), "Host font");
@@ -100,7 +100,7 @@ fn missing_native_fonts_do_not_mutate_resources_or_identity() {
 #[cfg(feature = "typst")]
 #[test]
 fn typst_with_explicit_fonts_uses_the_shared_store() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let text = noon::Typst::new("#set text(font: \"DejaVu Sans\")\nNoon").with_fonts([host_font()]);
     let label = scene.typst(text).unwrap();
     assert_shared_resource_path(scene, label);
@@ -109,7 +109,7 @@ fn typst_with_explicit_fonts_uses_the_shared_store() {
 #[cfg(feature = "typst")]
 #[test]
 fn invalid_or_empty_explicit_typst_fonts_never_fall_back() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let revision = scene.integration_store().borrow().scene_revision();
     let stats = scene.integration_store().borrow().text_resources().stats();
     let error = scene
@@ -177,7 +177,7 @@ fn unavailable_typst_fonts_leave_the_live_session_usable() {
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 #[test]
 fn convenience_native_fonts_still_work() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let label = scene.text("Noon").unwrap();
     assert_shared_resource_path(scene, label);
 }
@@ -185,10 +185,10 @@ fn convenience_native_fonts_still_work() {
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 #[test]
 fn convenience_typst_and_math_still_work() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let label = scene.typst(noon::Typst::new("Noon")).unwrap();
     assert_shared_resource_path(scene, label);
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let equation = scene
         .math_typst(noon::MathTypst::new("frac(x, 2)"))
         .unwrap();

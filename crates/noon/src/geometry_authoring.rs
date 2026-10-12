@@ -5,7 +5,6 @@ use crate::{
     AuthoringError, LayoutAnchor, ManimGeometryOptions, Mobject, Scene,
 };
 use noon_core::{Bounds2D64, SemanticNodeKind, SemanticTransform2_5D, Vec2, VectorPath, TAU};
-use std::rc::Rc;
 
 const BRACE_DEFAULT_MIN_WIDTH: f64 = 0.90552;
 
@@ -35,9 +34,7 @@ impl ManimGeometryOptions {
         buff: f64,
         sharpness: f64,
     ) -> Result<Self, AuthoringError> {
-        let angle = brace_angle(direction)?;
-        let projected = projected_layout_bounds(target, -angle)?;
-        brace_options(projected, angle, buff, sharpness)
+        Ok(prepare_brace_geometry(target, direction, buff, sharpness)?.options)
     }
 
     /// Construct ManimCE v0.21 BraceBetweenPoints without allocating a temporary Line.
@@ -68,26 +65,71 @@ impl ManimGeometryOptions {
     }
 }
 
+/// Prepared retained Brace geometry for composite authoring.
+///
+/// The path, its tip, and its outward direction are derived together from the
+/// same immutable target observation.  Composite wrappers use this request to
+/// place a label without a temporary published Brace identity.
+pub(crate) struct PreparedBraceGeometry {
+    pub(crate) options: ManimGeometryOptions,
+    pub(crate) tip: (f64, f64),
+    pub(crate) direction: (f64, f64),
+}
+
+pub(crate) fn prepare_brace_geometry(
+    target: &LayoutAnchor,
+    direction: (f64, f64),
+    buff: f64,
+    sharpness: f64,
+) -> Result<PreparedBraceGeometry, AuthoringError> {
+    prepare_brace_geometry_with_transform(target, direction, buff, sharpness, |_, state| {
+        state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)
+    })
+}
+
+pub(crate) fn prepare_brace_geometry_with_transform(
+    target: &LayoutAnchor,
+    direction: (f64, f64),
+    buff: f64,
+    sharpness: f64,
+    transform: impl FnMut(
+        noon_core::SemanticNodeId,
+        &noon_core::SemanticObjectState,
+    ) -> Result<SemanticTransform2_5D, AuthoringError>,
+) -> Result<PreparedBraceGeometry, AuthoringError> {
+    let angle = brace_angle(direction)?;
+    let projected = projected_layout_bounds(target, -angle, transform)?;
+    brace_options_with_tip(projected, angle, buff, sharpness)
+}
+
 impl Scene {
     /// Construct a detached Brace in this scene's semantic store.
     pub fn brace(
-        &self,
+        &mut self,
         target: &LayoutAnchor,
         direction: (f64, f64),
         buff: f64,
         sharpness: f64,
     ) -> Result<Mobject, AuthoringError> {
-        if !Rc::ptr_eq(self.integration_store(), target.integration_store()) {
-            return Err(AuthoringError::ForeignStore);
-        }
-        self.geometry(ManimGeometryOptions::brace(
-            target, direction, buff, sharpness,
-        )?)
+        let prepared = self.prepare_brace_geometry(
+            target,
+            None,
+            crate::BraceOptions {
+                direction,
+                buff,
+                sharpness,
+                ..Default::default()
+            },
+        )?;
+        self.geometry(prepared.options)
     }
 
     /// Construct a detached BraceBetweenPoints in this scene's semantic store.
     pub fn brace_between_points(
-        &self,
+        &mut self,
         point_1: (f64, f64),
         point_2: (f64, f64),
         direction: (f64, f64),
@@ -106,6 +148,15 @@ fn brace_options(
     buff: f64,
     sharpness: f64,
 ) -> Result<ManimGeometryOptions, AuthoringError> {
+    Ok(brace_options_with_tip(projected_target, angle, buff, sharpness)?.options)
+}
+
+fn brace_options_with_tip(
+    projected_target: Bounds2D64,
+    angle: f64,
+    buff: f64,
+    sharpness: f64,
+) -> Result<PreparedBraceGeometry, AuthoringError> {
     let buff = authoring_render_f64("brace buff", buff)?;
     let sharpness = authoring_render_f64("brace sharpness", sharpness)?;
     let target_width = authoring_render_f64("brace target width", projected_target.width())?;
@@ -182,10 +233,58 @@ fn brace_options(
         };
     }
 
+    let (tip, direction) = brace_tip_and_direction(&path)?;
     let mut options = ManimGeometryOptions::path(path)?;
     options.set_fill_opacity(1.0)?;
     options.set_stroke_width(0.0)?;
-    Ok(options)
+    Ok(PreparedBraceGeometry {
+        options,
+        tip,
+        direction,
+    })
+}
+
+type BraceTipAndDirection = ((f64, f64), (f64, f64));
+
+fn brace_tip_and_direction(path: &VectorPath) -> Result<BraceTipAndDirection, AuthoringError> {
+    let mut anchors = Vec::new();
+    let mut current = None;
+    for command in path.commands() {
+        match *command {
+            noon_core::PathCommand::MoveTo { to } => current = Some(to),
+            noon_core::PathCommand::LineTo { to }
+            | noon_core::PathCommand::QuadraticTo { to, .. }
+            | noon_core::PathCommand::CubicTo { to, .. } => {
+                let from = current.ok_or(AuthoringError::NonFiniteGeometry)?;
+                anchors.push(from);
+                current = Some(to);
+            }
+            noon_core::PathCommand::Close => {}
+        }
+    }
+    let tip = anchors
+        .get(7)
+        .copied()
+        .ok_or(AuthoringError::NonFiniteGeometry)?;
+    let bounds = path
+        .conservative_bounds()
+        .ok_or(AuthoringError::NonFiniteGeometry)?;
+    let center = (
+        (bounds.min.x + bounds.max.x) * 0.5,
+        (bounds.min.y + bounds.max.y) * 0.5,
+    );
+    let direction = (
+        f64::from(tip.x) - f64::from(center.0),
+        f64::from(tip.y) - f64::from(center.1),
+    );
+    let length = direction.0.hypot(direction.1);
+    if length == 0.0 || !length.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok((
+        (f64::from(tip.x), f64::from(tip.y)),
+        (direction.0 / length, direction.1 / length),
+    ))
 }
 
 fn lower_brace_point(
@@ -212,6 +311,10 @@ fn lower_brace_point(
 fn projected_layout_bounds(
     target: &LayoutAnchor,
     rotation: f64,
+    mut transform: impl FnMut(
+        noon_core::SemanticNodeId,
+        &noon_core::SemanticObjectState,
+    ) -> Result<SemanticTransform2_5D, AuthoringError>,
 ) -> Result<Bounds2D64, AuthoringError> {
     let node = target.resolve()?;
     let store_rc = target.integration_store();
@@ -235,7 +338,7 @@ fn projected_layout_bounds(
         let state = store
             .semantic_object_state_checked(leaf)
             .map_err(AuthoringError::from)?;
-        let transform = rotate_transform_about_origin(state.transform, rotation)?;
+        let transform = rotate_transform_about_origin(transform(leaf, state)?, rotation)?;
         union_bounds(
             &mut bounds,
             layout_for_content(&store, state.content, transform)?,
@@ -426,7 +529,7 @@ mod tests {
 
     #[test]
     fn brace_matches_default_square_width_and_buffer_without_mutating_target() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(2.0).unwrap();
         let before = square.state().unwrap();
 
@@ -450,7 +553,7 @@ mod tests {
 
     #[test]
     fn brace_observes_family_bounds_once_without_changing_members() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut left = scene.square(1.0).unwrap();
         let mut right = scene.square(1.0).unwrap();
         left.shift(-1.0, 0.0).unwrap();
@@ -477,7 +580,7 @@ mod tests {
 
     #[test]
     fn brace_between_points_auto_direction_matches_line_normal() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let brace = scene
             .brace_between_points((-1.0, 0.0), (1.0, 0.0), (0.0, 0.0), 0.2, 2.0)
             .unwrap();
@@ -488,7 +591,7 @@ mod tests {
 
     #[test]
     fn right_facing_brace_uses_projected_target_extent() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let target = scene.rectangle(2.0, 3.0).unwrap();
         let brace = scene
             .brace(
@@ -503,7 +606,7 @@ mod tests {
 
     #[test]
     fn brace_rejects_non_finite_inputs_before_object_creation() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(2.0).unwrap();
         let revision = scene.revision();
         let error = scene
@@ -515,8 +618,8 @@ mod tests {
 
     #[test]
     fn brace_rejects_foreign_target_without_observing_it() {
-        let scene = Scene::new();
-        let other = Scene::new();
+        let mut scene = Scene::new();
+        let mut other = Scene::new();
         let target = other.square(1.0).unwrap();
         assert_eq!(
             scene

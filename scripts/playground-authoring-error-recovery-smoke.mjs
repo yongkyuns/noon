@@ -86,8 +86,26 @@ async function snapshot(page) {
       objectCount: document.querySelector("#metric-objects")?.value ?? "",
       playhead: document.querySelector("#metric-time")?.value ?? "",
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
+      hasExecution: window.__noonExampleGallery?.executionMode != null,
+      playing: status?.dataset.playbackPlaying === "true",
+      canvasHidden: getComputedStyle(document.querySelector("canvas")).visibility === "hidden",
+      traceback: document.querySelector("#python-traceback")?.textContent ?? "",
     };
   });
+}
+
+async function assertStoppedPreview(page, observed) {
+  assert.equal(observed.playing, false, "invalid edits must pause the previous execution");
+  if (!observed.hasExecution) return;
+  assert.equal(observed.canvasHidden, true, "a retained renderer must not display stale source");
+  // Allow any already submitted frame to finish, then prove that retaining the
+  // worker does not keep the old animation presenting in the background.
+  await page.waitForTimeout(100);
+  const frames = () => page.evaluate(async () =>
+    (await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames);
+  const before = await frames();
+  await page.waitForTimeout(250);
+  assert.equal(await frames(), before, "paused source must settle with no further presentations");
 }
 
 async function waitForInitialScene(page) {
@@ -101,7 +119,6 @@ async function waitForInitialScene(page) {
       const patch = document.querySelector("#patch-status");
       return (
         status?.dataset.liveAuthoring === "ready" &&
-        status?.dataset.state === "running" &&
         status?.dataset.rendererBackend === "WebGL2" &&
         Number(status?.dataset.presentedFrames ?? "0") > 0 &&
         patch?.dataset.state === "applied" &&
@@ -148,7 +165,7 @@ async function setEditorSource(page, source) {
   );
 }
 
-async function waitForAutomaticRun(page, { expectedState, expectedObjectCount = null }) {
+async function waitForRunResult(page, { expectedState, expectedObjectCount = null }) {
   await page.waitForFunction(
     ({ state, objectCount }) => {
       const patch = document.querySelector("#patch-status");
@@ -161,6 +178,10 @@ async function waitForAutomaticRun(page, { expectedState, expectedObjectCount = 
     { timeout: 60_000 },
   );
   return snapshot(page);
+}
+
+async function runEditedSource(page, options) {
+  return waitForRunResult(page, options);
 }
 
 async function waitForObjectCount(page, count) {
@@ -221,7 +242,7 @@ try {
 
   phase = "baseline";
   diagnostics.snapshots.baseline = await snapshot(page);
-  assert.equal(diagnostics.snapshots.baseline.runtimeState, "running");
+  assert.notEqual(diagnostics.snapshots.baseline.runtimeState, "error");
   assert.equal(diagnostics.snapshots.baseline.liveAuthoring, "ready");
   assert.equal(diagnostics.snapshots.baseline.rendererBackend, "WebGL2");
   assert.equal(diagnostics.snapshots.baseline.exampleId, "parity-create-circle");
@@ -230,9 +251,12 @@ try {
 
   phase = "syntax-error";
   await setEditorSource(page, SOURCES.syntaxError);
-  diagnostics.snapshots.syntaxError = await waitForAutomaticRun(page, { expectedState: "error" });
+  let edited = await snapshot(page);
+  assert.match(edited.patchText, /restarting/);
+  assert.equal(edited.objectCount, diagnostics.snapshots.baseline.objectCount);
+  diagnostics.snapshots.syntaxError = await runEditedSource(page, { expectedState: "error" });
   assert.match(diagnostics.snapshots.syntaxError.patchText, /Python failed:/);
-  assert.equal(diagnostics.snapshots.syntaxError.runtimeState, "running");
+  assert.notEqual(diagnostics.snapshots.syntaxError.runtimeState, "error");
   assert.equal(diagnostics.snapshots.syntaxError.rendererBackend, diagnostics.snapshots.baseline.rendererBackend);
   assert.equal(
     diagnostics.snapshots.syntaxError.patchSequence,
@@ -242,25 +266,32 @@ try {
   assert.equal(
     diagnostics.snapshots.syntaxError.objectCount,
     diagnostics.snapshots.baseline.objectCount,
-    "syntax failure must leave the last good scene visible",
+    "syntax failure must retain the last successful object-count diagnostic",
   );
+  await assertStoppedPreview(page, diagnostics.snapshots.syntaxError);
+  assert.match(diagnostics.snapshots.syntaxError.traceback, /SyntaxError/);
   await page.screenshot({ path: path.join(artifactDir, "syntax-error.png"), fullPage: true });
 
   phase = "syntax-recovery";
   await setEditorSource(page, SOURCES.twoObjects);
-  diagnostics.snapshots.syntaxRecovered = await waitForAutomaticRun(page, {
+  edited = await snapshot(page);
+  assert.match(edited.patchText, /restarting/);
+  diagnostics.snapshots.syntaxRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 2,
   });
   assert.match(diagnostics.snapshots.syntaxRecovered.patchText, /2 objects/);
-  assert.equal(diagnostics.snapshots.syntaxRecovered.runtimeState, "running");
+  assert.notEqual(diagnostics.snapshots.syntaxRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.syntaxRecovered.rendererBackend, "WebGL2");
 
   phase = "runtime-error";
   await setEditorSource(page, SOURCES.runtimeError);
-  diagnostics.snapshots.runtimeError = await waitForAutomaticRun(page, { expectedState: "error" });
+  edited = await snapshot(page);
+  assert.match(edited.patchText, /restarting/);
+  assert.equal(edited.objectCount, "2");
+  diagnostics.snapshots.runtimeError = await runEditedSource(page, { expectedState: "error" });
   assert.match(diagnostics.snapshots.runtimeError.patchText, /Python failed:/);
-  assert.equal(diagnostics.snapshots.runtimeError.runtimeState, "running");
+  assert.notEqual(diagnostics.snapshots.runtimeError.runtimeState, "error");
   assert.equal(diagnostics.snapshots.runtimeError.rendererBackend, "WebGL2");
   assert.equal(
     diagnostics.snapshots.runtimeError.patchSequence,
@@ -270,18 +301,22 @@ try {
   assert.equal(
     diagnostics.snapshots.runtimeError.objectCount,
     "2",
-    "execution-time authoring failure must preserve the last successful two-object scene",
+    "authoring failure must retain the last successful object-count diagnostic",
   );
+  await assertStoppedPreview(page, diagnostics.snapshots.runtimeError);
+  assert.match(diagnostics.snapshots.runtimeError.traceback, /MissingShape/);
   await page.screenshot({ path: path.join(artifactDir, "runtime-error.png"), fullPage: true });
 
   phase = "runtime-recovery";
   await setEditorSource(page, SOURCES.oneObject);
-  diagnostics.snapshots.runtimeRecovered = await waitForAutomaticRun(page, {
+  edited = await snapshot(page);
+  assert.match(edited.patchText, /restarting/);
+  diagnostics.snapshots.runtimeRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 1,
   });
   assert.match(diagnostics.snapshots.runtimeRecovered.patchText, /1 objects/);
-  assert.equal(diagnostics.snapshots.runtimeRecovered.runtimeState, "running");
+  assert.notEqual(diagnostics.snapshots.runtimeRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.runtimeRecovered.rendererBackend, "WebGL2");
   await page.screenshot({ path: path.join(artifactDir, "recovered.png"), fullPage: true });
 

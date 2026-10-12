@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">TransformMatchingShapes</title>
+  <desc id="desc">Source and target families contain the same pink triangle and blue kite in reordered positions.</desc>
+  <rect width="640" height="360" fill="#10141d"/>
+  <g stroke="#8390a8" stroke-width="2" stroke-dasharray="7 8" opacity=".55">
+    <path d="M150 90v180M490 90v180"/>
+  </g>
+  <g stroke="#f7d96f" stroke-width="3" fill="none" opacity=".8" stroke-linecap="round">
+    <path d="M270 182 C300 105 340 105 370 182"/>
+    <path d="M370 178l-12 2 7 10"/>
+  </g>
+  <path d="M105 264 L190 174 L73 126 Z" fill="#ef88b8" stroke="#ffd5e8" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M205 112 L273 180 L205 248 L171 180 Z" fill="#58c4dd" stroke="#c9f3ff" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M435 112 L503 180 L435 248 L401 180 Z" fill="#58c4dd" stroke="#c9f3ff" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M535 264 L620 174 L503 126 Z" fill="#ef88b8" stroke="#ffd5e8" stroke-width="4" stroke-linejoin="round"/>
+  <g fill="#dbe2ef" font-family="ui-monospace,monospace" font-size="17">
+    <text x="103" y="310">source family</text><text x="399" y="310">target family</text>
+    <text x="206" y="54" fill="#f7d96f">same shapes · reordered members</text>
+  </g>
+</svg>

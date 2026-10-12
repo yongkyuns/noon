@@ -40,17 +40,12 @@ fn family_constructor_priority_is_root_only_and_failure_does_not_allocate() {
     assert_eq!(scene.integration_store().borrow().len(), count);
     assert_eq!(scene.revision(), revision);
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
     let revision = scene.revision();
     assert!(scene
-        .live(&mut session)
         .family_with_z_index(&[(&a).into()], f64::INFINITY)
         .is_err());
     assert_eq!(scene.revision(), revision);
-    let empty = scene
-        .live(&mut session)
-        .family_with_z_index(&[], 7.5)
-        .unwrap();
+    let empty = scene.family_with_z_index(&[], 7.5).unwrap();
     assert_eq!(empty.z_index().unwrap(), 7.5);
     assert_eq!(a.z_index().unwrap(), 2.5);
 }

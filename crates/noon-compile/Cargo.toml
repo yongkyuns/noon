@@ -9,3 +9,4 @@ readme = "README.md"
 [dependencies]
 noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }
+serde = { version = "1", features = ["derive"] }

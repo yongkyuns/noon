@@ -32,11 +32,16 @@ pub fn session() -> Result<ExecutionSession, String> {
         ])?;
         scene.add(&polygon)?;
         let mut session = scene.execution_session()?;
-        let mut live = scene.live(&mut session);
-        live.set_points_as_corners(
-            &path,
-            &[Vec2::new(-3., -1.), Vec2::new(-2., 0.), Vec2::new(-1., -1.)],
+        crate::integration::publish_borrowed_path_edit(
+            scene.integration_store(),
+            scene.root(),
+            &mut session,
+            crate::integration::BorrowedPathEdit::Corners {
+                object: &path,
+                points: &[Vec2::new(-3., -1.), Vec2::new(-2., 0.), Vec2::new(-1., -1.)],
+            },
         )?;
+        let mut live = scene.live(&mut session);
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;

@@ -1,49 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use noon_compile::{
-    CompilePatchError, CompiledChannelKey, ExecutionMutationTransaction, ExecutionPatch,
-};
-use noon_core::{ObjectId, PublicationContext, Style, Transform2D};
+use noon_compile::{CompilePatchError, CompiledChannelKey, ExecutionMutationTransaction};
+use noon_core::PublicationContext;
 use noon_core::{ReactiveValue, SignalId};
 
+use crate::numeric_text::PreparedNumericTextUpdate;
 use crate::{
     apply_effective_property_to_row, apply_group_to_row, apply_reactive_value_to_row,
-    effective_object_conservative_bounds, upper_bound_start, EffectiveBoundsBasis,
-    EffectiveObjectProperties, FrameRowState, FrameState, RuntimeIdentity, SceneInstance,
-    TrackGroup, PROPERTY_ORDER,
+    effective_object_conservative_bounds_with_resources, upper_bound_start, EffectiveBoundsBasis,
+    EffectiveObjectProperties, EffectivePropertyWrite, FrameRowState, FrameState, RuntimeIdentity,
+    SceneInstance, TrackGroup, PROPERTY_ORDER,
 };
 use crate::{EvaluationError, EvaluationStats, TimelineSchedulerStats};
-
-/// One transient host-driver value. These writes affect only the effective frame;
-/// they never modify the compiled base or authored scene revision.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum EffectivePropertyWrite {
-    Transform {
-        object: ObjectId,
-        transform: Transform2D,
-    },
-    Style {
-        object: ObjectId,
-        style: Style,
-    },
-}
-
-impl EffectivePropertyWrite {
-    const fn object(self) -> ObjectId {
-        match self {
-            Self::Transform { object, .. } | Self::Style { object, .. } => object,
-        }
-    }
-
-    fn as_execution_patch(self) -> ExecutionPatch {
-        match self {
-            Self::Transform { object, transform } => {
-                ExecutionPatch::SetTransform { object, transform }
-            }
-            Self::Style { object, style } => ExecutionPatch::SetStyle { object, style },
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 struct PreparedFrameRow {
@@ -66,6 +34,9 @@ pub struct PreparedFrameEvaluation {
     scheduler_stats: TimelineSchedulerStats,
     prior_driver_rows: usize,
     reactive: Option<crate::PreparedReactiveRuntimeUpdate>,
+    deferred_reactive_bindings: Vec<(noon_core::ObjectId, noon_core::Property)>,
+    numeric_text: Vec<PreparedNumericTextUpdate>,
+    pub(crate) authored_scalar_inputs: bool,
 }
 
 impl PreparedFrameEvaluation {
@@ -77,7 +48,7 @@ impl PreparedFrameEvaluation {
         self.expected
     }
 
-    fn staged_row(&self, object_index: usize) -> Option<&FrameRowState> {
+    pub(crate) fn staged_row(&self, object_index: usize) -> Option<&FrameRowState> {
         self.rows
             .binary_search_by_key(&object_index, |row| row.object_index)
             .ok()
@@ -98,6 +69,10 @@ impl PreparedFrameEvaluation {
 
     pub const fn prior_driver_rows(&self) -> usize {
         self.prior_driver_rows
+    }
+
+    pub fn deferred_reactive_bindings(&self) -> &[(noon_core::ObjectId, noon_core::Property)] {
+        &self.deferred_reactive_bindings
     }
 }
 
@@ -122,6 +97,7 @@ impl PreparedEffectivePropertyBatch {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedFrameCommitError {
+    ReplaySealed,
     ForeignRuntime {
         expected: RuntimeIdentity,
         actual: RuntimeIdentity,
@@ -140,6 +116,9 @@ pub enum PreparedFrameCommitError {
 impl std::fmt::Display for PreparedFrameCommitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReplaySealed => {
+                formatter.write_str("sealed replay cannot publish a live prepared frame")
+            }
             Self::ForeignRuntime { expected, actual } => write!(
                 formatter,
                 "prepared runtime identity {actual:?} does not match {expected:?}"
@@ -162,6 +141,56 @@ impl std::fmt::Display for PreparedFrameCommitError {
 impl std::error::Error for PreparedFrameCommitError {}
 
 impl SceneInstance {
+    /// Publish already-validated transient effective writes without advancing the
+    /// authored timeline or touching replay retention.  This is deliberately
+    /// narrower than `commit_prepared_frame`: interaction drivers use it while a
+    /// replay is sealed, but cannot mutate scheduler state, replay inputs, or the
+    /// authored frame time.
+    pub(crate) fn commit_transient_effective_properties(
+        &mut self,
+        effective: PreparedEffectivePropertyBatch,
+    ) -> Result<&FrameState, PreparedFrameCommitError> {
+        if effective.runtime != self.identity {
+            return Err(PreparedFrameCommitError::ForeignRuntime {
+                expected: self.identity,
+                actual: effective.runtime,
+            });
+        }
+        if effective.expected != self.publication {
+            return Err(PreparedFrameCommitError::StalePublication {
+                expected: effective.expected,
+                actual: self.publication,
+            });
+        }
+        if effective.writes.is_empty() {
+            return Ok(&self.frame);
+        }
+        let next = self.publication.frame_epoch().checked_next().ok_or(
+            PreparedFrameCommitError::FrameEpochExhausted(self.publication.frame_epoch()),
+        )?;
+        let mut changed = false;
+        for (object_index, write) in effective.writes {
+            let mut row = FrameRowState::from_frame(&self.frame, object_index);
+            apply_effective_property_to_row(
+                row.as_mut(&self.frame.objects[object_index].content),
+                write,
+            );
+            if row.differs_from_frame(&self.frame, object_index) {
+                let priority_changed = row.z_index != self.frame.objects[object_index].z_index;
+                row.write_to_frame(&mut self.frame, object_index);
+                if priority_changed {
+                    self.reposition_painter_row(object_index);
+                }
+                self.mark_changed(object_index);
+                changed = true;
+            }
+        }
+        if changed {
+            self.publication = self.publication.with_frame_epoch(next);
+        }
+        Ok(&self.frame)
+    }
+
     /// Atomically advance timeline channels, then apply one already-lowered reactive
     /// input batch before publishing the resulting frame.
     pub fn advance_to_with_reactive_inputs(
@@ -196,24 +225,32 @@ impl SceneInstance {
         let bounds = if row.spatially_differs_from_frame(&self.frame, object_index) {
             let object = &self.frame.objects[object_index];
             let content = row.content_override.as_ref().unwrap_or(&object.content);
-            effective_object_conservative_bounds(
+            let local_bounds = object
+                .text_bounds
+                .or_else(|| content.image().map(|image| image.local_bounds()));
+            effective_object_conservative_bounds_with_resources(
                 row.render_geometry
                     .as_deref()
                     .or_else(|| content.geometry()),
-                object.text_bounds,
+                local_bounds,
                 row.render_transform.unwrap_or(row.transform),
                 row.style,
+                self.geometry_resources(),
             )
         } else {
             cached_bounds
+                .or_else(|| self.effective_object_bounds(self.frame.objects[object_index].id))
         };
         let object = &self.frame.objects[object_index];
         let content = row.content_override.as_ref().unwrap_or(&object.content);
+        let local_bounds = object
+            .text_bounds
+            .or_else(|| content.image().map(|image| image.local_bounds()));
         let bounds_basis = EffectiveBoundsBasis::from_content(
             row.render_geometry
                 .as_deref()
                 .or_else(|| content.geometry()),
-            object.text_bounds,
+            local_bounds,
         );
         Some(row.properties(bounds, bounds_basis))
     }
@@ -248,6 +285,20 @@ impl SceneInstance {
         time: f64,
         reactive_inputs: &[(SignalId, ReactiveValue)],
     ) -> Result<PreparedFrameEvaluation, EvaluationError> {
+        self.prepare_advance_to_with_reactive_inputs_deferred(time, reactive_inputs, false)
+    }
+
+    /// Prepare reactive signal values while leaving selected binding writes for
+    /// an ordered callback region to apply after its preceding host updaters.
+    pub fn prepare_advance_to_with_reactive_inputs_deferred(
+        &mut self,
+        time: f64,
+        reactive_inputs: &[(SignalId, ReactiveValue)],
+        defer_reactive_bindings: bool,
+    ) -> Result<PreparedFrameEvaluation, EvaluationError> {
+        if self.replay_is_sealed() {
+            return Err(EvaluationError::ReplaySealed);
+        }
         if !time.is_finite() {
             return Err(EvaluationError::InvalidTime(time));
         }
@@ -297,6 +348,7 @@ impl SceneInstance {
                     time,
                     object.base_transform,
                     object.base_style,
+                    &self.path_motion_plans,
                 );
                 cursor_updates.insert(channel, cursor);
                 stats.groups_evaluated += 1;
@@ -335,16 +387,24 @@ impl SceneInstance {
                 time,
                 object.base_transform,
                 object.base_style,
+                &self.path_motion_plans,
             );
             cursor_updates.insert(channel, cursor);
             stats.groups_evaluated += 1;
         }
 
+        let mut deferred = HashSet::new();
         for (&object_index, row) in &mut rows {
-            self.reapply_reactive_to_row(
-                object_index,
-                row.as_mut(&self.frame.objects[object_index].content),
-            );
+            if defer_reactive_bindings {
+                for property in self.reactive_properties_for_object(object_index) {
+                    deferred.insert((object_index, property));
+                }
+            } else {
+                self.reapply_reactive_to_row(
+                    object_index,
+                    row.as_mut(&self.frame.objects[object_index].content),
+                );
+            }
         }
 
         let reactive = if reactive_inputs.is_empty() {
@@ -367,6 +427,10 @@ impl SceneInstance {
                 if !self.object_slot_is_live(*object_index) {
                     continue;
                 }
+                if defer_reactive_bindings {
+                    deferred.insert((*object_index, *property));
+                    continue;
+                }
                 let row = rows
                     .entry(*object_index)
                     .or_insert_with(|| FrameRowState::from_frame(&self.frame, *object_index));
@@ -377,6 +441,28 @@ impl SceneInstance {
                 );
             }
         }
+
+        // Pointer translation leases join after ordinary timeline/reactive
+        // evaluation. They own only Position, retaining the rest of the row's
+        // current effective channels and requiring no frame tick while idle.
+        for (&object_index, &translation) in &self.translation_drag_rows {
+            if !self.object_slot_is_live(object_index) {
+                continue;
+            }
+            let row = rows
+                .entry(object_index)
+                .or_insert_with(|| FrameRowState::from_frame(&self.frame, object_index));
+            row.transform.translation = translation;
+        }
+
+        let numeric_text = match reactive.as_ref() {
+            Some(reactive) => self
+                .prepare_changed_numeric_text(reactive)
+                .map_err(EvaluationError::NumericText)?,
+            None => Vec::new(),
+        };
+
+        self.refresh_prepared_graph_dependencies(&mut rows);
 
         Ok(PreparedFrameEvaluation {
             runtime: self.identity,
@@ -397,6 +483,12 @@ impl SceneInstance {
             scheduler_stats: preview.stats(),
             prior_driver_rows,
             reactive,
+            deferred_reactive_bindings: deferred
+                .into_iter()
+                .map(|(index, property)| (self.compiled.objects()[index].id, property))
+                .collect(),
+            numeric_text,
+            authored_scalar_inputs: false,
         })
     }
 
@@ -418,10 +510,10 @@ impl SceneInstance {
         let mut seen = HashSet::new();
         let mut retained = Vec::with_capacity(writes.len());
         for write in writes.iter().copied().rev() {
-            let property_tag = match write {
-                EffectivePropertyWrite::Transform { .. } => 0_u8,
-                EffectivePropertyWrite::Style { .. } => 1_u8,
-            };
+            // Whole-domain and component writes overlap. Preserve their supplied
+            // order, coalescing only later writes of the exact same shape.
+            // Even superseded writes have already passed validation above.
+            let property_tag = std::mem::discriminant(&write);
             if !seen.insert((write.object(), property_tag)) {
                 continue;
             }
@@ -447,6 +539,9 @@ impl SceneInstance {
         prepared: &PreparedFrameEvaluation,
         effective: &PreparedEffectivePropertyBatch,
     ) -> Result<(), PreparedFrameCommitError> {
+        if self.replay_is_sealed() {
+            return Err(PreparedFrameCommitError::ReplaySealed);
+        }
         if prepared.runtime != self.identity {
             return Err(PreparedFrameCommitError::ForeignRuntime {
                 expected: self.identity,
@@ -477,14 +572,7 @@ impl SceneInstance {
                 actual: self.frame.time,
             });
         }
-        let may_publish = prepared.time != self.frame.time
-            || !prepared.rows.is_empty()
-            || !prepared.requested_family_animations.is_empty()
-            || prepared
-                .reactive
-                .as_ref()
-                .is_some_and(|update| !update.is_empty())
-            || !effective.writes.is_empty();
+        let may_publish = self.prepared_frame_may_change(prepared) || !effective.writes.is_empty();
         if may_publish && self.publication.frame_epoch().checked_next().is_none() {
             return Err(PreparedFrameCommitError::FrameEpochExhausted(
                 self.publication.frame_epoch(),
@@ -493,20 +581,45 @@ impl SceneInstance {
         Ok(())
     }
 
+    pub(crate) fn prepared_frame_may_change(&self, prepared: &PreparedFrameEvaluation) -> bool {
+        prepared.time != self.frame.time
+            || !prepared.rows.is_empty()
+            || !prepared.requested_family_animations.is_empty()
+            || !self.pending_family_endpoint_expirations.is_empty()
+            || prepared
+                .reactive
+                .as_ref()
+                .is_some_and(|update| !update.is_empty())
+            || !prepared.numeric_text.is_empty()
+    }
+
     pub fn commit_prepared_frame(
         &mut self,
         prepared: PreparedFrameEvaluation,
         effective: PreparedEffectivePropertyBatch,
     ) -> Result<&FrameState, PreparedFrameCommitError> {
+        self.commit_prepared_frame_inner(prepared, effective, true)?;
+        Ok(&self.frame)
+    }
+
+    /// The caller holds the complete authored-publication proof and publishes
+    /// its final context in the same exclusive call. Never expose this suffix.
+    pub(crate) fn commit_prepared_frame_unpublished(
+        &mut self,
+        prepared: PreparedFrameEvaluation,
+        effective: PreparedEffectivePropertyBatch,
+    ) -> Result<bool, PreparedFrameCommitError> {
+        self.commit_prepared_frame_inner(prepared, effective, false)
+    }
+
+    pub(crate) fn commit_prepared_frame_inner(
+        &mut self,
+        prepared: PreparedFrameEvaluation,
+        effective: PreparedEffectivePropertyBatch,
+        publish: bool,
+    ) -> Result<bool, PreparedFrameCommitError> {
         self.preflight_prepared_frame_commit(&prepared, &effective)?;
-        let may_publish = prepared.time != self.frame.time
-            || !prepared.rows.is_empty()
-            || !prepared.requested_family_animations.is_empty()
-            || prepared
-                .reactive
-                .as_ref()
-                .is_some_and(|update| !update.is_empty())
-            || !effective.writes.is_empty();
+        let may_publish = self.prepared_frame_may_change(&prepared) || !effective.writes.is_empty();
         let next_frame = if may_publish {
             Some(self.publication.frame_epoch().checked_next().ok_or(
                 PreparedFrameCommitError::FrameEpochExhausted(self.publication.frame_epoch()),
@@ -514,6 +627,18 @@ impl SceneInstance {
         } else {
             None
         };
+
+        // Preparing an input is speculative. Classify only a validated commit,
+        // and do not poison finite history for an unchanged input/no-op frame.
+        let reactive_changed = prepared
+            .reactive
+            .as_ref()
+            .is_some_and(|update| !update.is_empty());
+        if reactive_changed && !prepared.authored_scalar_inputs {
+            self.invalidate_replay_input();
+        } else if !effective.is_empty() || !self.effective_driver_rows.is_empty() {
+            self.invalidate_replay_domain();
+        }
 
         self.timeline_scheduler.advance(prepared.time);
         debug_assert_eq!(
@@ -543,6 +668,11 @@ impl SceneInstance {
             .map(|row| (row.object_index, row.state))
             .collect::<BTreeMap<_, _>>();
         let mut next_drivers = BTreeSet::new();
+        next_drivers.extend(
+            self.numeric_text
+                .object_indices()
+                .filter(|&object_index| self.object_slot_is_live(object_index)),
+        );
         for (object_index, write) in effective.writes {
             let row = final_rows
                 .entry(object_index)
@@ -568,27 +698,31 @@ impl SceneInstance {
                 changed = true;
             }
         }
+        self.flush_spatial_anchor_changes();
         self.effective_driver_rows = next_drivers;
+        self.commit_numeric_text_updates(prepared.numeric_text, true);
         self.last_stats = prepared.stats;
-        if time_changed || changed {
+        let changed = time_changed || changed || reactive_changed;
+        if publish && changed {
             self.publication = self.publication.with_frame_epoch(
                 next_frame.expect("a changed prepared frame reserved a frame epoch"),
             );
         }
-        Ok(&self.frame)
+        Ok(changed)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use noon_compile::{
-        lower_semantic_execution, CompilePatchError, CompiledObject, CompiledScene,
+        lower_semantic_execution, CompilePatchError, CompiledObject, CompiledScene, ExecutionPatch,
         SemanticExecutionIndex,
     };
     use noon_core::{
-        CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, SemanticObjectProperty,
+        CompositionTimeMap, GeometryRef, GeometryResourceArena, ObjectId, Property,
+        RasterImageResourceArena, RateFunction, SemanticImageContent, SemanticObjectProperty,
         SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Style, TrackDefinition,
-        TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+        TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
     };
 
     use super::*;
@@ -613,6 +747,76 @@ mod tests {
             time_map: CompositionTimeMap::default(),
         };
         CompiledScene::compile_objects(vec![compiled], &[track]).expect("scene must compile")
+    }
+
+    #[test]
+    fn prepared_bounds_resolve_leased_path_and_image_for_staged_transform() {
+        let object = ObjectId::new(1);
+        let compiled = CompiledObject::new(
+            object,
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let track = TrackDefinition {
+            id: TrackId::new(1),
+            object,
+            property: Property::Position,
+            values: TrackValues::Vec2 {
+                from: Vec2::ZERO,
+                to: Vec2::new(10.0, 0.0),
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::default(),
+        };
+        let mut instance =
+            SceneInstance::new(CompiledScene::compile_objects(vec![compiled], &[track]).unwrap());
+        let mut source = GeometryResourceArena::new();
+        let handle = source.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::new(-2.0, -1.0))
+                .line_to(Vec2::new(2.0, 3.0)),
+        );
+        let replacement = instance
+            .prepare_effective_geometry_replacement(object, handle, &source, None)
+            .unwrap();
+        let lease = instance
+            .commit_effective_content_replacement(replacement)
+            .unwrap();
+
+        let prepared = instance.prepare_advance_to(1.0).unwrap();
+        let properties = instance.prepared_properties_at(&prepared, 0, None).unwrap();
+        assert_eq!(
+            properties.bounds,
+            Some(noon_core::Rect {
+                min: Vec2::new(3.0, -1.0),
+                max: Vec2::new(7.0, 3.0),
+            })
+        );
+
+        instance.release_effective_content(lease).unwrap();
+        let mut images = RasterImageResourceArena::new();
+        let image = images.intern_rgba8(2, 1, vec![255; 8]).unwrap();
+        let replacement = instance
+            .prepare_effective_image_replacement(
+                object,
+                SemanticImageContent::new(image),
+                &images,
+                None,
+            )
+            .unwrap();
+        instance
+            .commit_effective_content_replacement(replacement)
+            .unwrap();
+        let prepared = instance.prepare_advance_to(1.0).unwrap();
+        let properties = instance.prepared_properties_at(&prepared, 0, None).unwrap();
+        assert_eq!(
+            properties.bounds,
+            Some(noon_core::Rect {
+                min: Vec2::new(4.0, -0.5),
+                max: Vec2::new(6.0, 0.5),
+            })
+        );
     }
 
     #[test]

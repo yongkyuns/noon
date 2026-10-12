@@ -74,7 +74,7 @@ fn colored_circle(scene: &Scene, x: f64, y: f64, color: Color) -> Result<Mobject
 }
 
 pub fn program() -> Result<LiveProgram<OrdinarySubsetDisplay>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let increasing_members = [
         colored_circle(&scene, -1.0, 0.7, Color::RED)?,
         colored_circle(&scene, 0.0, 0.7, Color::GREEN)?,

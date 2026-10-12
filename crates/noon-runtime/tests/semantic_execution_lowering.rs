@@ -159,7 +159,7 @@ fn canonical_lowering_preserves_painter_order_transform_and_paint() {
     let mut semantic_store = SemanticStore::new();
     let mut semantic_circle = SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
     semantic_circle.transform.translation = SemanticVec3::new(4.5, -3.25, 0.0);
-    semantic_circle.transform.rotation_z = 0.75;
+    semantic_circle.transform.orientation = noon_core::SemanticOrientation::Planar(0.75);
     semantic_circle.transform.scale = SemanticVec3::new(2.0, 0.5, 1.0);
     semantic_circle.style.fill = Some(SemanticPaint::Solid(Color::rgba(0.2, 0.4, 0.6, 1.0)));
     semantic_circle.style.fill_opacity = 0.25;

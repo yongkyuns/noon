@@ -5,9 +5,9 @@
 //! transient input to shared preparation and coherent publication.
 use crate::{state_replacement::prepare_become, AuthoringError, ManimBecomeOptions};
 use noon_core::{
-    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectContent,
-    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
+    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticLocalNodeToken,
+    SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
+    SemanticObjectContent, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
     SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
     Transform2D, Vec2, VectorPath,
 };
@@ -17,9 +17,12 @@ mod layout;
 mod manim_geometry;
 mod style;
 use bounds::transform_layout_xy;
-pub(crate) use bounds::{boundary_for_content, layout_for_content};
+pub(crate) use bounds::{
+    boundary_for_content, layout_for_content, transformed_path_layout_bounds,
+    transformed_rect_layout_bounds,
+};
 pub(crate) use style::{
-    edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
+    edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fill, edit_fill_color,
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
     edit_stroke_opacity, edit_stroke_width, manim_color_from_effective, opaque_paint_color,
     PaintStyleEdit,
@@ -43,8 +46,8 @@ pub struct ManimLineEndpoints {
 
 /// Inert, fully typed input for one ordinary Manim geometry object.
 ///
-/// This owns no semantic identity, store, execution state, or clock. A live
-/// session consumes it in one semantic transaction after every requested
+/// This owns no semantic identity, store, execution state, or clock. A Scene or
+/// borrowed live session consumes it in one semantic transaction after every requested
 /// constructor option has been validated against the shared semantic state.
 #[derive(Clone, Debug)]
 pub struct ManimGeometryOptions {
@@ -52,9 +55,15 @@ pub struct ManimGeometryOptions {
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
     z_index: f64,
+    role: noon_core::SemanticObjectRole,
 }
 
 impl ManimGeometryOptions {
+    /// Attach shared semantic query metadata before this inert request is published.
+    pub fn set_semantic_role(&mut self, role: noon_core::SemanticObjectRole) {
+        self.role = role;
+    }
+
     pub fn circle(radius: f64) -> Result<Self, AuthoringError> {
         Ok(Self::new(
             GeometryRef::circle(positive_f32("radius", radius)?),
@@ -104,6 +113,14 @@ impl ManimGeometryOptions {
         ))
     }
 
+    /// Prepare one path with an explicit authored style for Scene-owned publication.
+    ///
+    /// This preserves the ordinary `Scene::path` defaults exactly: an identity
+    /// transform and priority zero, with the caller's complete semantic style.
+    pub(crate) fn path_with_style(path: VectorPath, style: SemanticStyle) -> Self {
+        Self::new(GeometryRef::path(path), style)
+    }
+
     pub fn surrounding_rectangle(
         bounds: Bounds2D64,
         buff_x: f64,
@@ -138,12 +155,61 @@ impl ManimGeometryOptions {
         Ok(options)
     }
 
+    /// Prepare the two ordinary Line leaves that make up ManimCE v0.21 Cross.
+    ///
+    /// The public Cross wrapper is a VGroup of these two independent semantic
+    /// objects. Rust owns target-bound observation and endpoint geometry; language
+    /// adapters only wrap the returned inert options and create the semantic family.
+    pub fn cross_lines(
+        bounds: Option<Bounds2D64>,
+        scale_factor: f64,
+    ) -> Result<[Self; 2], AuthoringError> {
+        let scale_factor = authoring_render_f64("cross scale_factor", scale_factor)?;
+        let (center_x, center_y, half_width, half_height) = match bounds {
+            Some(bounds) => {
+                for (name, value) in [
+                    ("bounds.min_x", bounds.min_x),
+                    ("bounds.min_y", bounds.min_y),
+                    ("bounds.max_x", bounds.max_x),
+                    ("bounds.max_y", bounds.max_y),
+                ] {
+                    authoring_render_f64(name, value)?;
+                }
+                if bounds.max_x < bounds.min_x || bounds.max_y < bounds.min_y {
+                    return Err(AuthoringError::UnorderedBounds(bounds));
+                }
+                (
+                    (bounds.min_x + bounds.max_x) * 0.5,
+                    (bounds.min_y + bounds.max_y) * 0.5,
+                    bounds.width() * 0.5 * scale_factor,
+                    bounds.height() * 0.5 * scale_factor,
+                )
+            }
+            None => (0.0, 0.0, scale_factor, scale_factor),
+        };
+        Ok([
+            Self::line(
+                center_x - half_width,
+                center_y + half_height,
+                center_x + half_width,
+                center_y - half_height,
+            )?,
+            Self::line(
+                center_x + half_width,
+                center_y + half_height,
+                center_x - half_width,
+                center_y - half_height,
+            )?,
+        ])
+    }
+
     fn new(geometry: GeometryRef, style: SemanticStyle) -> Self {
         Self {
             geometry,
             transform: SemanticTransform2_5D::default(),
             style,
             z_index: 0.0,
+            role: noon_core::SemanticObjectRole::Ordinary,
         }
     }
 
@@ -307,10 +373,56 @@ impl ManimGeometryOptions {
         edit_object_opacity(&mut self.style, opacity)
     }
 
-    pub(crate) fn into_state(
+    /// Build one semantic object state while scoping any newly interned path to
+    /// the publication that consumes it. If the publication rejects, the store
+    /// removes the unpublished path before returning the same error.
+    pub(crate) fn with_state<T>(
         self,
         store: &mut SemanticStore,
-    ) -> Result<SemanticObjectState, AuthoringError> {
+        publish: impl FnOnce(&mut SemanticStore, SemanticObjectState) -> Result<T, AuthoringError>,
+    ) -> Result<T, AuthoringError> {
+        if let Some(state) = self.inline_state()? {
+            return publish(store, state);
+        }
+        let Self {
+            geometry,
+            transform,
+            style,
+            z_index,
+            role,
+        } = self;
+        match geometry {
+            GeometryRef::Circle { .. }
+            | GeometryRef::Rectangle { .. }
+            | GeometryRef::Line { .. } => {
+                unreachable!("inline geometry returned from inline_state")
+            }
+            GeometryRef::VectorPath(path) => store.with_geometry_path(path, |store, handle| {
+                publish(
+                    store,
+                    manim_geometry_state(
+                        StoredGeometry::Resource(handle),
+                        transform,
+                        style,
+                        z_index,
+                        role,
+                    ),
+                )
+            }),
+            GeometryRef::External(_) => Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ExternalGeometry,
+            )),
+        }
+    }
+
+    /// Stage a retained vector-path declaration in one unpublished semantic
+    /// transaction. The path payload remains transaction-owned until the
+    /// prepared transaction's final scoped resource publication; the returned
+    /// local node token is never a durable semantic identity.
+    pub fn stage_pending_path_object(
+        self,
+        transaction: &mut SemanticMutationTransaction,
+    ) -> Result<SemanticLocalNodeToken, AuthoringError> {
         if !self.geometry.is_finite()
             || !self.transform.translation.is_finite()
             || !self.transform.scale.is_finite()
@@ -320,13 +432,112 @@ impl ManimGeometryOptions {
         {
             return Err(AuthoringError::NonFiniteObjectState);
         }
-        let geometry = import_geometry(store, self.geometry)?;
-        let mut state = SemanticObjectState::new(geometry);
-        state.transform = self.transform;
-        state.style = self.style;
-        state.set_z_index(self.z_index);
-        Ok(state)
+        let Self {
+            geometry,
+            transform,
+            style,
+            z_index,
+            role,
+        } = self;
+        let GeometryRef::VectorPath(path) = geometry else {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::PathQueryContent,
+            ));
+        };
+        let resource = transaction.stage_geometry_path(path)?;
+        // This transaction-only creation declaration is resolved by the shared
+        // prepared resource suffix. It cannot enter durable object content with
+        // a local token in place of a store-owned resource handle.
+        Ok(
+            transaction.create_node(SemanticNodeCreation::pending_path_object(
+                resource, transform, style, z_index, role,
+            )),
+        )
     }
+
+    /// Materialize analytic geometry without admitting an arena resource.
+    ///
+    /// The callback collector uses this narrow split for provisional Circle,
+    /// Rectangle, and Line nodes: their state can be prepared and inspected
+    /// before the callback publishes. Vector paths deliberately return `None`
+    /// so their payload remains owned by the later scoped resource-admission
+    /// boundary rather than entering the store before the whole callback can
+    /// commit.
+    pub fn inline_state(&self) -> Result<Option<SemanticObjectState>, AuthoringError> {
+        if !self.geometry.is_finite()
+            || !self.transform.translation.is_finite()
+            || !self.transform.scale.is_finite()
+            || !self.transform.rotation_z.is_finite()
+            || !self.style.is_finite()
+            || !self.z_index.is_finite()
+        {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        let geometry = match &self.geometry {
+            GeometryRef::Circle { radius } => StoredGeometry::Circle { radius: *radius },
+            GeometryRef::Rectangle { size } => StoredGeometry::Rectangle { size: *size },
+            GeometryRef::Line { start, end } => StoredGeometry::Line {
+                start: *start,
+                end: *end,
+            },
+            GeometryRef::VectorPath(_) => return Ok(None),
+            GeometryRef::External(_) => {
+                return Err(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::ExternalGeometry,
+                ));
+            }
+        };
+        Ok(Some(manim_geometry_state(
+            geometry,
+            self.transform,
+            self.style.clone(),
+            self.z_index,
+            self.role,
+        )))
+    }
+
+    /// State-only materialization for remaining callers tracked by #1603.
+    /// Geometry constructors must use `with_state` so path admission stays
+    /// inside their fallible publication boundary.
+    pub(crate) fn into_state(
+        self,
+        store: &mut SemanticStore,
+    ) -> Result<SemanticObjectState, AuthoringError> {
+        self.with_state(store, |_store, state| Ok(state))
+    }
+}
+
+fn manim_geometry_state(
+    geometry: StoredGeometry,
+    transform: SemanticTransform2_5D,
+    style: SemanticStyle,
+    z_index: f64,
+    role: noon_core::SemanticObjectRole,
+) -> SemanticObjectState {
+    let mut state = SemanticObjectState::new(geometry);
+    state.transform = transform.into();
+    state.style = style;
+    state.set_z_index(z_index);
+    state.set_role(role);
+    state
+}
+
+/// Build the ordinary state used by `ManimGeometryOptions::path` after the
+/// caller has admitted its immutable path in a shared batch scope.
+///
+/// Composite authoring uses this to keep several paths and their containing
+/// family in one semantic transaction; individual callers should keep using
+/// `ManimGeometryOptions::with_state`.
+pub(crate) fn manim_path_resource_state(
+    handle: noon_core::GeometryResourceHandle,
+) -> SemanticObjectState {
+    manim_geometry_state(
+        StoredGeometry::Resource(handle),
+        SemanticTransform2_5D::default(),
+        manim_style(Color::WHITE),
+        0.0,
+        noon_core::SemanticObjectRole::Ordinary,
+    )
 }
 
 /// An aliasing handle to one node. Use `copy_handle` for an independent object.
@@ -417,7 +628,16 @@ impl Mobject {
     }
 
     pub fn copy_handle(&self) -> Result<Self, AuthoringError> {
-        Self::new(Rc::clone(&self.store), self.state()?)
+        let mut transaction = SemanticMutationTransaction::new();
+        let copied = transaction.create_node(SemanticNodeCreation::object(self.state()?));
+        self.store
+            .borrow()
+            .copy_effects_into(self.id, copied, &mut transaction)?;
+        let result = transaction.apply(&mut self.store.borrow_mut())?;
+        let id = result
+            .resolve(copied)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(copied))?;
+        Self::from_node(Rc::clone(&self.store), id)
     }
     pub fn target_editor(&self) -> Result<Self, AuthoringError> {
         self.copy_handle()
@@ -434,8 +654,20 @@ impl Mobject {
         store: Rc<RefCell<SemanticStore>>,
         options: ManimGeometryOptions,
     ) -> Result<Self, AuthoringError> {
-        let state = options.into_state(&mut store.borrow_mut())?;
-        Self::new(store, state)
+        let id = {
+            let mut store_ref = store.borrow_mut();
+            options.with_state(&mut store_ref, |store, state| {
+                validate_content(store, state.content)?;
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.add_node(SemanticNodeCreation::object(state));
+                let result = transaction.apply(store).map_err(AuthoringError::from)?;
+                let [SemanticMutationImpact::NodeAdded { node: id }] = result.impacts() else {
+                    unreachable!("one object creation produces one identity")
+                };
+                Ok(*id)
+            })?
+        };
+        Ok(Self { store, id })
     }
 
     fn from_geometry_state(
@@ -451,6 +683,7 @@ impl Mobject {
                 transform,
                 style,
                 z_index: 0.0,
+                role: noon_core::SemanticObjectRole::Ordinary,
             },
         )
     }
@@ -509,7 +742,13 @@ impl Mobject {
         Ok((t.x as f64, t.y as f64))
     }
     pub fn wire_rotation(&self) -> Result<f64, AuthoringError> {
-        Ok(finite_f32("rotation", self.state()?.transform.rotation_z)? as f64)
+        Ok(finite_f32(
+            "rotation",
+            self.state()?
+                .transform
+                .planar_rotation()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )? as f64)
     }
     pub fn wire_fill(&self) -> Result<Option<(f64, f64, f64, f64)>, AuthoringError> {
         let s = self.state()?.style;
@@ -529,7 +768,14 @@ impl Mobject {
     /// Return world-space endpoints, including geometry replaced by point matching.
     pub fn manim_line_endpoints(&self) -> Result<ManimLineEndpoints, AuthoringError> {
         let state = self.state()?;
-        line_endpoints_for_state(&self.store.borrow(), &state, state.transform)
+        line_endpoints_for_state(
+            &self.store.borrow(),
+            &state,
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )
     }
 
     /// Return visible fill RGB, falling back to stroke RGB, independently of opacity.
@@ -545,7 +791,13 @@ impl Mobject {
         line_endpoints_for_state(
             &self.store.borrow(),
             &state,
-            semantic_transform_with_effective_affine(state.transform, transform),
+            semantic_transform_with_effective_affine(
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
+                transform,
+            ),
         )
     }
 
@@ -554,7 +806,14 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(AuthoringError::from)?;
-        boundary_for_content(&store, state.content, state.transform)
+        boundary_for_content(
+            &store,
+            state.content,
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )
     }
 
     pub(crate) fn boundary_bounds_at(
@@ -568,7 +827,13 @@ impl Mobject {
         boundary_for_content(
             &store,
             state.content,
-            semantic_transform_with_effective_affine(state.transform, transform),
+            semantic_transform_with_effective_affine(
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
+                transform,
+            ),
         )
     }
 
@@ -579,7 +844,14 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(AuthoringError::from)?;
-        layout_for_content(&store, state.content, state.transform)
+        layout_for_content(
+            &store,
+            state.content,
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )
     }
 
     /// Resolve authored content through an effective renderer-independent
@@ -593,18 +865,39 @@ impl Mobject {
         let state = store
             .semantic_object_state_checked(self.id)
             .map_err(AuthoringError::from)?;
-        let semantic_transform =
-            semantic_transform_with_effective_affine(state.transform, transform);
+        let semantic_transform = semantic_transform_with_effective_affine(
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+            transform,
+        );
         layout_for_content(&store, state.content, semantic_transform)
     }
 
     pub fn center(&self) -> Result<(f64, f64), AuthoringError> {
-        if let Some(b) = self.boundary_bounds()? {
-            Ok(((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
-        } else {
-            let t = self.state()?.transform.translation;
-            Ok((t.x, t.y))
-        }
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(AuthoringError::from)?;
+        let mut transform = state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?;
+        let translation = transform.translation;
+        // Measure around the origin, then translate the center once. Translating
+        // both extrema before averaging can lose a small authored translation or
+        // introduce platform-dependent rounding even for centrally symmetric content.
+        transform.translation.x = 0.0;
+        transform.translation.y = 0.0;
+        let center =
+            boundary_for_content(&store, state.content, transform)?.map_or((0.0, 0.0), |bounds| {
+                (
+                    (bounds.min_x + bounds.max_x) * 0.5,
+                    (bounds.min_y + bounds.max_y) * 0.5,
+                )
+            });
+        Ok((center.0 + translation.x, center.1 + translation.y))
     }
     pub fn width(&self) -> Result<f64, AuthoringError> {
         Ok(self.layout_bounds()?.map_or(0.0, Bounds2D64::width))
@@ -621,7 +914,14 @@ impl Mobject {
         self.require_same_store(other)?;
         let source = self.state()?;
         let target = other.state()?;
-        let prepared = prepare_become(&self.store.borrow(), self.id, &source, target, options)?;
+        let prepared = prepare_become(
+            &self.store.borrow(),
+            self.id,
+            other.id,
+            &source,
+            target,
+            options,
+        )?;
         prepared.publish(&mut self.store.borrow_mut(), |store, transaction| {
             transaction
                 .apply(store)
@@ -736,7 +1036,11 @@ impl Mobject {
     pub fn set_rotation(&mut self, angle: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
-        state.transform.rotation_z = authoring_render_f64("rotation", angle)?;
+        if state.transform.planar_rotation().is_none() {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        state.transform.orientation =
+            noon_core::SemanticOrientation::Planar(authoring_render_f64("rotation", angle)?);
         self.commit_state(state)
     }
 
@@ -770,13 +1074,16 @@ impl Mobject {
         let mut state = self.state()?;
         let ((translation_x, translation_y), rotation) = rotate_affine_about_point(
             (state.transform.translation.x, state.transform.translation.y),
-            state.transform.rotation_z,
+            state
+                .transform
+                .planar_rotation()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
             angle,
             (point_x, point_y),
         )?;
         state.transform.translation.x = translation_x;
         state.transform.translation.y = translation_y;
-        state.transform.rotation_z = rotation;
+        state.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
         self.commit_state(state)
     }
 }
@@ -820,22 +1127,8 @@ pub(crate) fn stage_state_changes(
     if previous.content != next.content {
         transaction.replace_content(target, next.content);
     }
-    if previous.transform.translation != next.transform.translation {
-        transaction.set_property(
-            target,
-            SemanticObjectProperty::Translation,
-            next.transform.translation,
-        );
-    }
-    if previous.transform.scale != next.transform.scale {
-        transaction.set_property(target, SemanticObjectProperty::Scale, next.transform.scale);
-    }
-    if previous.transform.rotation_z != next.transform.rotation_z {
-        transaction.set_property(
-            target,
-            SemanticObjectProperty::RotationZ,
-            next.transform.rotation_z,
-        );
+    if previous.transform != next.transform {
+        transaction.set_object_transform(target, next.transform);
     }
     if previous.style != next.style {
         transaction.replace_style(target, next.style.clone());
@@ -846,14 +1139,21 @@ pub(crate) fn state_center(
     store: &SemanticStore,
     state: &SemanticObjectState,
 ) -> Result<(f64, f64), AuthoringError> {
-    Ok(boundary_for_content(store, state.content, state.transform)?
-        .map(|bounds| {
-            (
-                (bounds.min_x + bounds.max_x) * 0.5,
-                (bounds.min_y + bounds.max_y) * 0.5,
-            )
-        })
-        .unwrap_or((state.transform.translation.x, state.transform.translation.y)))
+    Ok(boundary_for_content(
+        store,
+        state.content,
+        state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?,
+    )?
+    .map(|bounds| {
+        (
+            (bounds.min_x + bounds.max_x) * 0.5,
+            (bounds.min_y + bounds.max_y) * 0.5,
+        )
+    })
+    .unwrap_or((state.transform.translation.x, state.transform.translation.y)))
 }
 
 pub(crate) fn scale_state_about_center(
@@ -1077,6 +1377,8 @@ pub(crate) fn import_geometry(
 }
 
 #[cfg(test)]
+mod publication_atomicity_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) fn validate_content(
@@ -1091,6 +1393,13 @@ pub(crate) fn validate_content(
                     .get(handle)
                     .ok_or(AuthoringError::MissingGeometryResource(handle))?;
             }
+        }
+        SemanticObjectContent::Image(image) => {
+            let handle = image.resource();
+            store
+                .raster_image_resources()
+                .get(handle)
+                .ok_or(AuthoringError::MissingImageResource(handle))?;
         }
         SemanticObjectContent::Text(handle) => {
             store

@@ -1,8 +1,12 @@
 //! Direct Rust authoring and coherent live execution for Noon.
 //!
-//! Start with [`Scene`] and [`Mobject`]. Before execution, their edits author the
-//! scene. After lowering, use [`Scene::live`] for edits and effective observations:
-//! it publishes through the existing [`ExecutionSession`], not a second scene.
+//! Start with [`Scene`] and [`Mobject`]. Scene-owned persistent operations such as
+//! geometry creation, family translation and linear/grid arrangement use the same
+//! route before and after execution bootstrap. Raw handle edits remain authored
+//! operations; they do not publish to an already running execution.
+//!
+//! [`Scene::live`] is for explicit borrowed-execution integration. Continuations
+//! also receive a [`LiveSession`] for their segment and callback capabilities.
 //!
 //! # Public surface
 //!
@@ -12,8 +16,8 @@
 //!   renderer observations. These are advanced facilities, not ordinary authoring.
 //! - `diagnostics` (feature gated) provides explicit debug/export observations.
 //!
-//! Use [`LiveSession::authored`] for base state and [`LiveSession::effective`] for
-//! the current published value. Complete a segment with
+//! Use [`Scene::authored`] for base state and [`Scene::effective`] for the current
+//! published value; a cold scene has no effective observation. Complete a segment with
 //! [`LiveSession::complete_segment`] before resuming dependent authoring. Ordinary
 //! completion is not a GPU-retirement fence. See the `shared_authoring` example.
 //!
@@ -50,6 +54,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod animated_number_line_example;
 mod animation_authoring;
 mod arc_authoring;
 mod arrow_authoring;
@@ -58,12 +64,32 @@ mod arrow_queries;
 mod arrow_scale;
 mod authoring_error;
 mod boolean_authoring;
+mod brace_authoring;
 mod camera_authoring;
+mod camera_motion_authoring;
+mod camera_profile_authoring;
 mod compact_value_authoring;
+mod composite_entry;
+mod coordinate_authoring;
+/// Paired plotting scene shared by native and direct WASM qualification.
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod coordinate_plotting_example;
+mod cyclic_replace;
 mod dashed_line_authoring;
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
 mod dimension_fit;
+mod effect_authoring;
+mod effective_capture;
+
+/// Checked leaf effects. Finite glow playback supports filled, unstroked planar
+/// circles/rectangles through ordinary Scene execution and live publication.
+pub mod effects {
+    pub use crate::effect_authoring::{EffectHandle, EffectSelector};
+    pub use noon_core::{
+        EffectDefinition, Glow, GlowParameterError, GlowRadius, GlowSource, GlowUpdate, Pixels,
+    };
+}
 mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;
@@ -71,43 +97,88 @@ mod execution_session;
 mod family_affine;
 mod family_arrangement;
 mod family_authoring;
+mod family_callback_layout;
 mod family_callback_paint;
 mod family_callback_translation;
 mod family_copy;
 mod family_gradient;
 mod family_grid;
 mod family_layout;
+#[cfg(test)]
+mod family_layout_migration_tests;
 mod family_style;
+#[cfg(test)]
+mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
+mod graph_authoring;
+mod spatial_authoring;
+mod spatial_composition;
+mod world_affine;
+pub use graph_authoring::{
+    DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphLayout,
+    GraphLayoutOptions, GraphMutationResult, GraphOptions, DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
+    DEFAULT_GRAPH_VERTEX_RADIUS, DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
+};
+pub use spatial_composition::SpatialCompositionError;
+mod implicit_plotting;
+pub use implicit_plotting::ImplicitPlotOptions;
 mod host_callbacks;
+mod image_authoring;
+#[cfg(feature = "image-decode")]
+mod image_decode;
+mod inspection_view;
 pub mod integration;
+#[cfg(feature = "latex")]
+mod latex_authoring;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod live_coordinate_plotting_example;
 mod live_program;
 mod live_session;
+mod matrix_authoring;
+#[cfg(feature = "latex")]
+mod matrix_display;
 mod native_signal_authoring;
+#[cfg(feature = "latex")]
+mod numeric_authoring;
 mod path_alignment;
 mod path_editing;
 mod path_queries;
 mod path_smoothing;
+mod plot_authoring;
+pub mod plot_presentation;
 mod point_matching;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
+mod sample_space;
 mod scalar_authoring;
 mod scene;
 mod scene_membership;
 mod scene_ordering;
 mod sector_authoring;
 mod semantic_mobject;
+mod source_reconciliation;
 mod state_replacement;
 mod svg_authoring;
 mod svg_default_style;
+pub mod synchronized_plot_presentation;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod synchronized_plotting_example;
+#[cfg(any(feature = "native-text", feature = "latex"))]
+mod table_display;
 mod tangent_line_authoring;
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 mod text_authoring;
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 mod text_part_authoring;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod time_series_plotting_example;
+#[cfg(feature = "latex")]
+mod variable_authoring;
 mod vector_field_authoring;
+mod vector_space_authoring;
 mod z_index;
+mod zoomed_scene;
 
 pub use animation_authoring::DeclaredAnimation;
 pub use arc_authoring::ArcAuthoringError;
@@ -122,6 +193,18 @@ pub use arrow_endpoints::{
 pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
+pub use brace_authoring::{Brace, BraceLabel, BraceOptions, BraceText};
+pub use camera_authoring::CameraAutoFrame;
+pub use composite_entry::CompositeEntryHandle;
+#[cfg(all(feature = "native-text", feature = "latex"))]
+pub use coordinate_authoring::BarLabelOptions;
+pub use coordinate_authoring::{
+    CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimBarChart,
+    ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, ManimNumberPlane,
+    ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, ManimThreeDAxes,
+    ManimThreeDAxesFrame, ManimThreeDAxesOptions, ManimThreeDAxisOverrides, PolarAzimuthDirection,
+    RiemannRectangleOptions, RiemannRectanglePlan, RiemannSample,
+};
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
 pub use elbow_authoring::ElbowAuthoringError;
@@ -131,85 +214,170 @@ pub use execution_segment::{
 pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
-    ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
-    ExecutionSessionPublicationError, SignalTimelineAppendError,
+    ExecutionSessionContentError, ExecutionSessionCreateError, ExecutionSessionFadeError,
+    ExecutionSessionInputError, ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
+    ExecutionSessionPublicationError, InspectionNavigationError, PointerHoverTransition,
+    SignalTimelineAppendError, TranslationDragError, TranslationDragReceipt, TranslationDragUndo,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};
+pub use family_callback_layout::{
+    prepare_callback_layout_replace, CallbackLayoutChange, CallbackLayoutError,
+};
 pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
 pub use family_copy::FamilyCopy;
 pub use family_grid::{FamilyGridOptions, GridFlow};
-pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor};
+pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LiveLayoutTarget};
 pub use family_style::StyleUpdate;
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
+pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
+#[cfg(feature = "image-decode")]
+pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
+pub use inspection_view::{InspectionView2D, InspectionViewError};
+#[cfg(feature = "latex")]
+pub use latex_authoring::{
+    DviFontResource, LatexBackend, LatexDocument, LatexFormat, LatexParts, MathTex, Tex,
+    DEFAULT_LATEX_FONT_SIZE, LATEX_POINT_TO_SCENE_SCALE,
+};
 pub use live_program::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
 };
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
-    FadeTranslation, IndicateOptions, LiveLayoutTarget, LiveSession, LiveSessionError,
-    SubsetDisplayMode, TransformToRequest,
+    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,
+    TransformToRequest,
+};
+#[cfg(feature = "latex")]
+pub use matrix_display::{
+    DecimalMatrix, IntegerMatrix, Matrix, MatrixAuthoringError, MatrixOptions, MobjectMatrix,
+    DEFAULT_MATRIX_BRACKET_H_BUFF, DEFAULT_MATRIX_BRACKET_V_BUFF, DEFAULT_MATRIX_H_BUFF,
+    DEFAULT_MATRIX_V_BUFF,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
+pub use noon_core::RasterImageSampling;
+#[cfg(feature = "latex")]
+pub use noon_core::{format_decimal, DecimalFormat, NumericFormatError};
 pub use noon_core::{
-    AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, PathCommand,
-    PublicationContext, RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind,
-    SemanticFadeDirection, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
-    SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
-    SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin,
-    StrokeWidthMode, Style, TextPart, TextPartQueryError, TextSourceSpan, Transform2D, Vec2,
-    VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT,
-    DEFAULT_FRAME_WIDTH, DEFAULT_MOBJECT_TO_EDGE_BUFFER, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-    DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E, GREY,
-    LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK,
-    PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D,
-    RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE,
-    YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
+    AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, GraphEdge,
+    GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId, PathCommand, PublicationContext,
+    RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    SemanticFunctionPlotRole, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticNodeId,
+    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle,
+    SemanticTransform2_5D, SemanticTransformInterpolation, SemanticVec3, SourceIdentity,
+    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Style, TextPart, TextPartQueryError,
+    TextSourceFill, TextSourceSpan, TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK,
+    BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
+    DEFAULT_MOBJECT_TO_EDGE_BUFFER, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD,
+    GRAY, GREEN, GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK,
+    MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B,
+    PURPLE_C, PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU,
+    TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B,
+    YELLOW_C, YELLOW_D, YELLOW_E,
 };
+pub use noon_core::{
+    CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile, MeshResource, SemanticCamera3D,
+    SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
+    SemanticSpatialMaterial, SemanticWorldTransform3D,
+};
+pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{
-    StaticVectorFieldError, VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint,
-    VectorFieldRanges2D, DEFAULT_VECTOR_FIELD_STEP,
+    cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,
+    torus_mesh, triangular_polyhedron_mesh, CairoSurfaceGrid, SurfaceError, SurfaceGrid,
+    SurfaceSample, UvSurfacePlan,
 };
-pub use noon_runtime::EvaluationError;
+pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame, PolarFrame};
+pub use noon_geometry::{
+    PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
+    VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
+    DEFAULT_VECTOR_FIELD_STEP,
+};
+pub use noon_runtime::{
+    EffectiveContentError, EffectiveContentLease, EvaluationError,
+    PreparedEffectiveContentReplacement,
+};
+#[cfg(feature = "latex")]
+pub use numeric_authoring::{integer_value, DecimalNumber, Integer, NumericAuthoringError};
 pub use path_queries::PathQuery;
+pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
+pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
-pub use scene::Scene;
+pub use scene::{Scene, SceneSection, SectionType};
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
+pub use source_reconciliation::{
+    SourceCandidate, SourceCandidateError, SourceGeneration, SourceObjectDeclaration,
+    SourceReconciler, SourceReconciliationError, SourceReconciliationResult,
+};
+pub use spatial_authoring::{MeshOptions, SpatialPathOptions, SurfaceFamily, SurfaceOptions};
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
 pub use svg_default_style::SvgDefaultStyle;
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(feature = "latex")]
+pub use table_display::{DecimalTable, IntegerTable, MathTable};
+#[cfg(any(feature = "native-text", feature = "latex"))]
+pub use table_display::{
+    MobjectTable, Table, TableAuthoringError, TableOptions, DEFAULT_TABLE_H_BUFF,
+    DEFAULT_TABLE_LABEL_BUFF, DEFAULT_TABLE_V_BUFF,
+};
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_authoring::TextAuthoringError;
-#[cfg(feature = "typst")]
-pub use text_authoring::{MathTypst, Typst, TypstBackendError, DEFAULT_TYPST_FONT_SIZE};
 #[cfg(feature = "native-text")]
 pub use text_authoring::{
-    NativeFontFace, Text, DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
+    bundled_native_font_face, MarkupText, NativeFontFace, Text, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+    DEFAULT_NATIVE_TEXT_FONT_SIZE,
 };
-#[cfg(any(feature = "native-text", feature = "typst"))]
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
+pub use text_authoring::{compiler::text_compiler_diagnostics, TextCompilerDiagnostics};
+#[cfg(feature = "typst")]
+pub use text_authoring::{MathTypst, Typst, TypstBackendError, DEFAULT_TYPST_FONT_SIZE};
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
 pub use text_part_authoring::TextPartAuthoringError;
+#[cfg(feature = "latex")]
+pub use variable_authoring::{Variable, VariableAuthoringError};
 pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
+pub use vector_space_authoring::{
+    linear_transformation_path_arc, LinearTransformationAuthoring, LinearTransformationOptions,
+};
+pub use world_affine::WorldAffineEdit;
+pub use zoomed_scene::{ZoomedSceneOptions, ZoomedView};
 
 /// Common imports for direct typed semantic authoring and live publication.
 /// Host integration and mutable arena access must be imported explicitly.
 pub mod prelude {
+    pub use crate::WorldAffineEdit;
+    pub use crate::{
+        cone_mesh, cube_mesh, cylinder_mesh, prism_mesh, sphere_mesh, surface_mesh, torus_mesh,
+        CairoSurfaceGrid, CameraAngularMotion, CameraRotationAxis, ManimCamera3DProfile,
+        MeshOptions, MeshResource, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D,
+        SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticVec3,
+        SemanticWorldTransform3D, SurfaceFamily, SurfaceGrid, SurfaceOptions, SurfaceSample,
+        UvSurfacePlan,
+    };
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
-        BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions,
-        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
-        LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
-        ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget, NativeBoolSignal,
-        NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
+        BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DiGraph,
+        DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
+        FadeTranslation, Graph, GraphAuthoringError, GraphEdgeMobject, GraphOptions,
+        LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
+        ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
+        NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
+        RateFunction, Scene, SemanticObjectState, SemanticStyle, SpatialCompositionError,
         StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle, SvgImportOptions,
         SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
         VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
+    pub use crate::{
+        CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
+        ManimNumberLineOptions,
+    };
+    #[cfg(feature = "image-decode")]
+    pub use crate::{ImageDecodeError, ImageDecodeLimits};
+    pub use crate::{ImageMobjectOptions, RasterImageSampling, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
 }
 
 pub use family_gradient::color_gradient;

@@ -89,7 +89,7 @@ impl LiveContinuation for UncreateOptions {
 }
 
 pub fn program() -> Result<LiveProgram<UncreateOptions>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut first = scene.square(0.6).map_err(|error| error.to_string())?;
     let mut kept = scene.circle(0.25).map_err(|error| error.to_string())?;
     let mut forward = scene.square(0.4).map_err(|error| error.to_string())?;

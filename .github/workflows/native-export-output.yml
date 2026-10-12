@@ -1,0 +1,101 @@
+name: Native export file qualification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-export-output.yml'
+      - 'scripts/verify-native-export.py'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - 'crates/noon-export/**'
+      - 'crates/noon/**'
+      - 'crates/noon-core/**'
+      - 'crates/noon-runtime/**'
+      - 'crates/noon-compile/**'
+      - 'crates/noon-render-wgpu/**'
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/native-export-output.yml'
+      - 'scripts/verify-native-export.py'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - 'crates/noon-export/**'
+      - 'crates/noon/**'
+      - 'crates/noon-core/**'
+      - 'crates/noon-runtime/**'
+      - 'crates/noon-compile/**'
+      - 'crates/noon-render-wgpu/**'
+
+permissions:
+  contents: read
+
+jobs:
+  output:
+    name: Native MP4 and PNG output without a display server
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      WGPU_BACKEND: vulkan
+      NOON_OUTPUT_PROOF_DIR: ${{ github.workspace }}/output-proof/media
+    steps:
+      - uses: actions/checkout@v7
+      - name: Pin toolchain and evidence identity
+        run: |
+          rustup install
+          mkdir -p output-proof
+          git rev-parse HEAD > output-proof/tested-commit.txt
+          rustc --version --verbose > output-proof/rustc.txt
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-output-cargo-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-output-cargo-
+            ${{ runner.os }}-capture-cargo-sources-
+      - name: Install encoder and software Vulkan, not a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg mesa-vulkan-drivers libvulkan1
+          ffmpeg -version > output-proof/ffmpeg.txt
+          ffprobe -version > output-proof/ffprobe.txt
+      - name: Verify media checker rejects corrupted proofs in all Python modes
+        run: |
+          python3 scripts/test_verify_native_export.py
+          python3 -O scripts/test_verify_native_export.py
+          python3 -OO scripts/test_verify_native_export.py
+      - name: Test capture and output, including process failures
+        run: |
+          set -o pipefail
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+            --lib --tests -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee output-proof/tests.log
+      - name: Independently decode videos and compare PNGs and timestamps
+        run: |
+          set -o pipefail
+          python3 scripts/verify-native-export.py output-proof/media 2>&1 | tee output-proof/verification.log
+      - name: Format and lint without weakening existing gates
+        run: |
+          set -o pipefail
+          cargo fmt --all -- --check 2>&1 | tee output-proof/format.log
+          cargo clippy -p noon-export --all-features --all-targets -- -D warnings 2>&1 | tee output-proof/clippy.log
+      - name: Retain exact source and pinned formatter patch for diagnosis
+        if: always()
+        run: |
+          mkdir -p output-proof/source
+          cp -r crates/noon-export output-proof/source/
+          cp scripts/verify-native-export.py output-proof/source/
+          cargo fmt --all
+          git diff --binary > output-proof/rustfmt.patch
+      - name: Retain evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-export-output
+          path: output-proof/
+          retention-days: 14

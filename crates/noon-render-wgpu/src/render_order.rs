@@ -80,12 +80,19 @@ impl FramePreparer {
             .all(|&object_index| (object_index as usize) < frame.objects.len()));
         self.painter_order_indices.clear();
         self.painter_order_indices.extend_from_slice(order);
+        self.painter_order_positions.clear();
+        self.painter_order_positions
+            .resize(frame.objects.len(), None);
+        for (position, &index) in order.iter().enumerate() {
+            self.painter_order_positions[index as usize] = Some(position);
+        }
         self.painter_order_installed = true;
     }
 
     /// Return to storage order when a parent switches to compact scratch rows.
     pub(crate) fn clear_painter_order(&mut self) {
         self.painter_order_indices.clear();
+        self.painter_order_positions.clear();
         self.painter_order_installed = false;
     }
 
@@ -103,6 +110,16 @@ impl FramePreparer {
             .all(|&object_index| (object_index as usize) < frame.objects.len()));
         let old_end = range.end.min(self.painter_order_indices.len());
         let new_end = range.end.min(order.len());
+        self.painter_order_positions
+            .resize(frame.objects.len(), None);
+        for &index in &self.painter_order_indices[range.start.min(old_end)..old_end] {
+            if let Some(position) = self.painter_order_positions.get_mut(index as usize) {
+                *position = None;
+            }
+        }
+        for (offset, &index) in order[range.start..new_end].iter().enumerate() {
+            self.painter_order_positions[index as usize] = Some(range.start + offset);
+        }
         self.painter_order_indices.splice(
             range.start.min(old_end)..old_end,
             order[range.start..new_end].iter().copied(),
@@ -136,12 +153,14 @@ impl FramePreparer {
             }
         }
 
+        self.visible_submission_slots = seen;
         let mut stats = self.prepare_incremental(frame, changes).stats;
 
         if !self.visible_projection_matches(visible_object_indices) {
             self.visible_projection_key.clear();
             for &object_index in visible_object_indices {
                 let slot = self.slots[object_index];
+                let present = self.slot_presences[object_index];
                 let (mega_path_segment, mega_path_detached) = match slot {
                     PreparedSlot::Path { batch, .. } => (
                         self.mega_path_segments.get(batch).cloned().flatten(),
@@ -151,6 +170,7 @@ impl FramePreparer {
                 };
                 self.visible_projection_key.push(VisibleProjectionKey {
                     object_index,
+                    present,
                     slot,
                     mega_path_segment,
                     mega_path_detached,
@@ -160,7 +180,9 @@ impl FramePreparer {
             let mut raw_render_batches = std::mem::take(&mut self.visible_raw_render_batches);
             raw_render_batches.clear();
             for &object_index in visible_object_indices {
-                push_slot_batches(&mut raw_render_batches, self.slots[object_index]);
+                if self.slot_presences[object_index] {
+                    push_slot_batches(&mut raw_render_batches, self.slots[object_index]);
+                }
             }
             let mut render_batches = std::mem::take(&mut self.visible_render_batches);
             let mut mega_path_batches = std::mem::take(&mut self.visible_mega_path_batches);
@@ -212,6 +234,7 @@ impl FramePreparer {
                 .zip(visible_object_indices)
                 .all(|(cached, &object_index)| {
                     if cached.object_index != object_index
+                        || cached.present != self.slot_presences[object_index]
                         || cached.slot != self.slots[object_index]
                     {
                         return false;
@@ -243,16 +266,25 @@ impl FramePreparer {
 
         if self.painter_order_installed {
             for &object_index in &self.painter_order_indices {
-                if let Some(slot) = self.slots.get(object_index as usize).copied() {
-                    push_slot_batches(&mut self.render_batches, slot);
+                if self
+                    .slot_presences
+                    .get(object_index as usize)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    if let Some(slot) = self.slots.get(object_index as usize).copied() {
+                        push_slot_batches(&mut self.render_batches, slot);
+                    }
                 }
             }
             return;
         }
 
         // Low-level scratch frames without a runtime permutation use storage order.
-        for slot in self.slots.iter().copied() {
-            push_slot_batches(&mut self.render_batches, slot);
+        for (object_index, slot) in self.slots.iter().copied().enumerate() {
+            if self.slot_presences[object_index] {
+                push_slot_batches(&mut self.render_batches, slot);
+            }
         }
     }
 
@@ -323,8 +355,15 @@ impl FramePreparer {
                     .painter_order_indices
                     .get(position)
                     .map_or(position, |&index| index as usize);
-                if let Some(slot) = self.slots.get(object_index).copied() {
-                    push_slot_batches(&mut raw, slot);
+                if self
+                    .slot_presences
+                    .get(object_index)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    if let Some(slot) = self.slots.get(object_index).copied() {
+                        push_slot_batches(&mut raw, slot);
+                    }
                 }
             }
             let mut render_batches = Vec::new();
@@ -490,6 +529,8 @@ fn projected_frame<'a>(
         path_vertices: &preparer.path_vertices,
         path_indices: &preparer.path_indices,
         path_batches: &preparer.path_batches,
+        path_mesh_cache: &preparer.path_mesh_cache,
+        path_batch_cache_indices: &preparer.path_batch_cache_indices,
         mega_path_indices: &preparer.mega_path_indices,
         mega_path_vertex_instances: &preparer.mega_path_vertex_instances,
         mega_path_batches,
@@ -509,7 +550,189 @@ fn projected_frame<'a>(
         path_geometry_dirty: preparer.path_geometry_dirty,
         stats,
         slots: &preparer.slots,
+        slot_presences: &preparer.slot_presences,
         complete_submission: false,
+        submitted_source_slots: Some(&preparer.visible_submission_slots),
+        zero_contribution: &preparer.zero_contribution,
+        mega_path_offsets: &preparer.mega_path_offsets,
+    }
+}
+
+/// Disposable index of zero-paint spans in one packed buffer. Source paint is
+/// authoritative; only uploaded dirty rows update this cache. Coalesced spans
+/// make an all-transparent batch O(log spans), not a per-frame instance scan.
+#[derive(Debug, Default)]
+pub(crate) struct ZeroContributionRanges {
+    ranges: std::collections::BTreeMap<u32, u32>,
+}
+
+impl ZeroContributionRanges {
+    pub(crate) fn set(&mut self, mut span: Range<u32>, zero: bool) {
+        if span.is_empty() {
+            return;
+        }
+        let previous = self
+            .ranges
+            .range(..=span.start)
+            .next_back()
+            .map(|(&a, &b)| (a, b));
+        if zero {
+            if let Some((start, end)) = previous {
+                if end >= span.end {
+                    return;
+                }
+                if end >= span.start {
+                    self.ranges.remove(&start);
+                    span.start = start;
+                }
+            }
+            while let Some((&start, &end)) = self.ranges.range(span.start..).next() {
+                if start > span.end {
+                    break;
+                }
+                self.ranges.remove(&start);
+                span.end = span.end.max(end);
+            }
+            self.ranges.insert(span.start, span.end);
+        } else {
+            if let Some((start, end)) =
+                previous.filter(|&(start, end)| start < span.start && end > span.start)
+            {
+                *self
+                    .ranges
+                    .get_mut(&start)
+                    .expect("retained preceding span") = span.start;
+                if end > span.end {
+                    self.ranges.insert(span.end, end);
+                    return;
+                }
+            }
+            while let Some((&start, &end)) = self.ranges.range(span.start..span.end).next() {
+                self.ranges.remove(&start);
+                if end > span.end {
+                    self.ranges.insert(span.end, end);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn visible_ranges(
+        zero: Option<&Self>,
+        span: Range<u32>,
+    ) -> impl Iterator<Item = Range<u32>> + '_ {
+        let mut cursor = span.start;
+        let end = span.end;
+        let start = zero
+            .and_then(|zero| {
+                zero.ranges
+                    .range(..=cursor)
+                    .next_back()
+                    .map(|(&start, _)| start)
+            })
+            .unwrap_or(cursor);
+        let mut ranges = zero
+            .into_iter()
+            .flat_map(move |zero| zero.ranges.range(start..end));
+        std::iter::from_fn(move || {
+            for (&start, &stop) in ranges.by_ref() {
+                let visible_start = cursor;
+                let visible_end = start.min(end);
+                cursor = cursor.max(stop.min(end));
+                if visible_start < visible_end {
+                    return Some(visible_start..visible_end);
+                }
+            }
+            let start = cursor;
+            cursor = end;
+            (start < end).then_some(start..end)
+        })
+    }
+}
+
+impl FramePreparer {
+    /// Only already-dirty packed rows are visited. A clean frame does no work;
+    /// opacity changes never erase source painter anchors or rebuild their order.
+    pub(crate) fn sync_zero_contribution(&mut self) {
+        for range in &self.circle_dirty_ranges {
+            for index in range.clone() {
+                self.zero_contribution[0].set(
+                    packed_row_span(index),
+                    !self.circles[index].style.may_contribute_color(),
+                );
+            }
+        }
+        for range in &self.rectangle_dirty_ranges {
+            for index in range.clone() {
+                self.zero_contribution[1].set(
+                    packed_row_span(index),
+                    !self.rectangles[index].style.may_contribute_color(),
+                );
+            }
+        }
+        for range in &self.line_dirty_ranges {
+            for index in range.clone() {
+                self.zero_contribution[2].set(
+                    packed_row_span(index),
+                    !self.lines[index].style.may_contribute_color(),
+                );
+            }
+        }
+        for range in &self.path_dirty_ranges {
+            for index in range.clone() {
+                self.zero_contribution[3].set(
+                    packed_row_span(index),
+                    !self.paths[index].style.may_contribute_color(),
+                );
+            }
+        }
+    }
+
+    pub(crate) fn set_mega_zero_contribution(
+        &mut self,
+        range: Range<u32>,
+        style: crate::PackedStyle,
+    ) {
+        self.zero_contribution[4].set(range, !style.may_contribute_color());
+    }
+}
+
+fn packed_row_span(index: usize) -> Range<u32> {
+    u32::try_from(index).expect("packed instance index exceeds renderer limits")
+        ..u32::try_from(index + 1).expect("packed instance count exceeds renderer limits")
+}
+
+impl PreparedFrame<'_> {
+    /// Preserve source descriptors (including transient anchors), but submit
+    /// only contributing instance spans at the shared GPU draw boundary.
+    pub(crate) fn contributing_instance_ranges(
+        &self,
+        batch: &OrderedRenderBatch,
+    ) -> impl Iterator<Item = Range<u32>> + '_ {
+        let zero = match batch.primitive {
+            RenderPrimitive::Circle => Some(&self.zero_contribution[0]),
+            RenderPrimitive::Rectangle => Some(&self.zero_contribution[1]),
+            RenderPrimitive::Line => Some(&self.zero_contribution[2]),
+            RenderPrimitive::Path { .. } => Some(&self.zero_contribution[3]),
+            // Packed mega draws are filtered in index units, below.
+            RenderPrimitive::MegaPath { .. } => None,
+        };
+        ZeroContributionRanges::visible_ranges(zero, batch.instance_range.clone())
+    }
+
+    pub(crate) fn contributing_mega_index_ranges(
+        &self,
+        span: Range<u32>,
+    ) -> impl Iterator<Item = (Range<u32>, usize)> + '_ {
+        ZeroContributionRanges::visible_ranges(Some(&self.zero_contribution[4]), span).map(|span| {
+            let start = self
+                .mega_path_offsets
+                .partition_point(|&offset| offset < span.start);
+            let end = self
+                .mega_path_offsets
+                .partition_point(|&offset| offset < span.end);
+            (span, end - start)
+        })
     }
 }
 
@@ -560,6 +783,332 @@ fn push_batch(batches: &mut Vec<OrderedRenderBatch>, primitive: RenderPrimitive,
 
 #[cfg(test)]
 mod tests {
+    fn eligible_geometry_count(prepared: &PreparedFrame<'_>) -> usize {
+        prepared
+            .ordered_render_batches()
+            .map(|ordered| {
+                if let Some(mega) = ordered.mega_path_batch {
+                    prepared
+                        .contributing_mega_index_ranges(mega.index_range.clone())
+                        .map(|(_, count)| count)
+                        .sum::<usize>()
+                } else {
+                    prepared
+                        .contributing_instance_ranges(ordered.batch)
+                        .map(|range| range.len())
+                        .sum::<usize>()
+                }
+            })
+            .sum()
+    }
+
+    #[test]
+    fn zero_contribution_keeps_camera_and_painter_anchors_without_order_rebuilds() {
+        let mut frame = frame(
+            (0..8192)
+                .map(|id| object(id, GeometryRef::rectangle(14.222222, 8.0)))
+                .collect(),
+        );
+        let camera = 4096;
+        frame.objects[camera].style.opacity = 0.0;
+        let mut preparer = FramePreparer::new();
+        let cold = preparer.prepare(&frame);
+        assert_eq!(cold.rectangles.len(), 8192);
+        assert_eq!(
+            cold.observe_object(camera).unwrap().submission_membership,
+            Some(false)
+        );
+        assert_eq!(
+            cold.ordered_render_batches()
+                .map(|b| b.batch.instance_range.len())
+                .sum::<usize>(),
+            8192
+        );
+        assert_eq!(eligible_geometry_count(&cold), 8191);
+        for opacity in [0.25, 1.0, 0.0, f32::MIN_POSITIVE, 0.0] {
+            frame.objects[camera].style.opacity = opacity;
+            frame.objects[camera].transform.translation.x += 0.125;
+            let prepared =
+                preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![camera]));
+            assert_eq!(prepared.stats.full_rebuilds, 0);
+            assert_eq!(prepared.stats.instances_repacked, 1);
+            assert_eq!(prepared.stats.geometry_cache_misses, 0);
+            assert_eq!(prepared.stats.render_order_positions_visited, 0);
+            assert_eq!(prepared.stats.render_order_chunks_rebuilt, 0);
+            assert_eq!(
+                prepared
+                    .observe_object(camera)
+                    .unwrap()
+                    .submission_membership,
+                Some(opacity != 0.0)
+            );
+            assert_eq!(prepared.rectangles.len(), 8192);
+            assert_eq!(prepared.rectangle_ids[camera], frame.objects[camera].id);
+            assert_eq!(
+                prepared.rectangles[camera].transform.translation[0],
+                frame.objects[camera].transform.translation.x
+            );
+            assert_eq!(
+                eligible_geometry_count(&prepared),
+                8191 + usize::from(opacity != 0.0)
+            );
+            assert_eq!(
+                prepared.zero_contribution[1].ranges.len(),
+                usize::from(opacity == 0.0)
+            );
+        }
+        let clean = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        assert_eq!(clean.stats.instances_repacked, 0);
+        assert_eq!(clean.stats.render_order_positions_visited, 0);
+        assert_eq!(clean.stats.render_order_chunks_rebuilt, 0);
+        assert!(clean.rectangle_dirty_ranges.is_empty());
+        assert!(frame.presences[camera]);
+    }
+
+    #[test]
+    fn zero_contribution_is_exact_and_preserves_stroke_and_flag_semantics() {
+        use noon_core::{Color, StrokeWidthMode};
+        let mut state = object(0, GeometryRef::rectangle(2.0, 2.0));
+        let mut preparer = FramePreparer::new();
+        for (fill, stroke, opacity, expected) in [
+            (None, None, 1.0, false),
+            (Some(Color::rgba(1.0, 0.5, 0.3, 0.0)), None, 1.0, false),
+            (None, Some(Color::WHITE), 1.0, true),
+            (
+                Some(Color::rgba(1.0, 1.0, 1.0, 0.0)),
+                Some(Color::WHITE),
+                1.0,
+                true,
+            ),
+            (Some(Color::WHITE), Some(Color::WHITE), 0.0, false),
+            (Some(Color::WHITE), None, -0.0, false),
+            (Some(Color::WHITE), None, f32::MIN_POSITIVE, true),
+            (
+                Some(Color::rgba(1.0, 1.0, 1.0, f32::MIN_POSITIVE)),
+                None,
+                1.0,
+                true,
+            ),
+            (None, None, f32::NAN, true),
+            (Some(Color::rgba(f32::NAN, 0.0, 0.0, 0.0)), None, 0.0, true),
+        ] {
+            state.style.fill = fill;
+            state.style.stroke = stroke;
+            state.style.opacity = opacity;
+            state.style.stroke_width = 0.1;
+            state.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
+            let prepared = preparer.prepare(&frame(vec![state.clone()]));
+            assert_eq!(
+                eligible_geometry_count(&prepared) != 0,
+                expected,
+                "style: {:?}",
+                state.style
+            );
+        }
+    }
+
+    #[test]
+    fn zero_contribution_appearance_restores_without_rebuilding_visibility_projection() {
+        let mut frame = frame(vec![object(0, GeometryRef::rectangle(2.0, 2.0))]);
+        let mut preparer = FramePreparer::new();
+        for appearance in [0.0, 0.5, 1.0, 0.0, 1.0] {
+            frame.objects[0].appearance = appearance;
+            let prepared = preparer
+                .prepare_incremental_visible(&frame, &FrameChanges::objects(vec![0]), &[0])
+                .unwrap();
+            assert_eq!(
+                eligible_geometry_count(&prepared),
+                usize::from(appearance != 0.0)
+            );
+            assert_eq!(prepared.rectangles.len(), 1);
+            assert_eq!(
+                prepared.observe_object(0).unwrap().submission_membership,
+                None
+            );
+            assert_eq!(preparer.visible_projection_stats().projections, 1);
+        }
+    }
+
+    #[test]
+    fn zero_contribution_batched_holes_keep_painter_anchors_and_independent_rows() {
+        let mut frame = frame(
+            (0..5)
+                .map(|id| object(id, GeometryRef::rectangle(2.0, 2.0)))
+                .collect(),
+        );
+        frame.objects[1].style.opacity = 0.0;
+        frame.objects[3].style.opacity = 0.0;
+        let mut preparer = FramePreparer::new();
+        let prepared = preparer.prepare(&frame);
+        assert_eq!(prepared.render_batches[0].instance_range, 0..5);
+        assert_eq!(
+            prepared
+                .contributing_instance_ranges(&prepared.render_batches[0])
+                .collect::<Vec<_>>(),
+            vec![0..1, 2..3, 4..5]
+        );
+        preparer.set_painter_order(&frame, &[4, 3, 2, 1, 0]);
+        let prepared = preparer.prepare(&frame);
+        assert_eq!(prepared.ordered_render_batches().count(), 5);
+        let ranges = prepared
+            .ordered_render_batches()
+            .flat_map(|b| prepared.contributing_instance_ranges(b.batch))
+            .collect::<Vec<_>>();
+        assert_eq!(ranges, vec![4..5, 2..3, 0..1]);
+    }
+
+    #[test]
+    fn zero_contribution_reveal_primitive_transitions_agree_with_fresh_preparation() {
+        use noon_core::Color;
+        let mut state = object(0, GeometryRef::rectangle(2.0, 1.0));
+        state.style.stroke = Some(Color::WHITE);
+        state.style.stroke_width = 0.1;
+        let mut frame = frame(vec![state]);
+        let mut preparer = FramePreparer::new();
+        for (reveal, opacity) in [
+            (1.0, 0.0),
+            (0.25, 0.0),
+            (0.5, 0.5),
+            (1.0, 1.0),
+            (1.0, 0.0),
+            (0.75, 1.0),
+        ] {
+            frame.reveals[0] = reveal;
+            frame.objects[0].style.opacity = opacity;
+            let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+            let mut fresh = FramePreparer::new();
+            let reference = fresh.prepare(&frame);
+            assert_eq!(
+                prepared.observe_object(0).unwrap().primitive,
+                reference.observe_object(0).unwrap().primitive
+            );
+            assert_eq!(
+                prepared.observe_object(0).unwrap().submission_membership,
+                Some(opacity != 0.0)
+            );
+            assert_eq!(
+                eligible_geometry_count(&prepared),
+                eligible_geometry_count(&reference)
+            );
+            assert!(frame.presences[0]);
+        }
+    }
+
+    #[test]
+    fn zero_contribution_interval_edits_match_dense_reference_and_coalesce() {
+        let mut zero = ZeroContributionRanges::default();
+        let mut expected = [false; 64];
+        let mut seed = 0x1653_u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for _ in 0..1000 {
+            let a = next() as usize % 65;
+            let b = next() as usize % 65;
+            let hidden = next() & 1 != 0;
+            let span = a.min(b)..a.max(b);
+            expected[span.clone()].fill(hidden);
+            zero.set(span.start as u32..span.end as u32, hidden);
+            let mut previous_end = None;
+            for (&start, &end) in &zero.ranges {
+                assert!(start < end);
+                assert!(previous_end.is_none_or(|previous| previous < start));
+                previous_end = Some(end);
+            }
+            for query_start in [0, a.min(b), a.max(b), 64] {
+                let query = query_start..64;
+                let actual = ZeroContributionRanges::visible_ranges(
+                    Some(&zero),
+                    query.start as u32..query.end as u32,
+                )
+                .flatten()
+                .map(|index| index as usize)
+                .collect::<Vec<_>>();
+                let reference = query.filter(|&index| !expected[index]).collect::<Vec<_>>();
+                assert_eq!(actual, reference);
+            }
+        }
+        let mut huge = ZeroContributionRanges::default();
+        huge.set(100..2_000_000_000, true);
+        huge.set(1000..2000, false);
+        assert_eq!(huge.ranges.len(), 2);
+        assert_eq!(
+            ZeroContributionRanges::visible_ranges(Some(&huge), 0..u32::MAX).collect::<Vec<_>>(),
+            vec![0..100, 1000..2000, 2_000_000_000..u32::MAX]
+        );
+    }
+
+    #[test]
+    fn zero_contribution_mega_paths_restore_append_and_reorder_without_mesh_rebuild() {
+        use noon_core::{Color, Vec2, VectorPath};
+        let path_object = |id| {
+            let y = id as f32 * 0.02;
+            let mut state = object(
+                id,
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, y))
+                        .line_to(Vec2::new(0.5, y)),
+                ),
+            );
+            state.style.fill = None;
+            state.style.stroke = Some(Color::WHITE);
+            state.style.stroke_width = 0.01;
+            state
+        };
+        let mut frame = frame((0..5).map(path_object).collect());
+        frame.objects[1].style.opacity = 0.0;
+        frame.objects[3].style.opacity = 0.0;
+        let mut preparer = FramePreparer::new();
+        let cold = preparer.prepare(&frame);
+        assert_eq!(cold.stats.mega_path_count, 5);
+        assert_eq!(eligible_geometry_count(&cold), 3);
+        let vertices = cold.path_vertices.to_vec();
+        let indices = cold.mega_path_indices.to_vec();
+        for opacity in [1.0, 0.0, 0.5] {
+            frame.objects[1].style.opacity = opacity;
+            let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+            assert_eq!(prepared.stats.full_rebuilds, 0);
+            assert_eq!(prepared.stats.render_order_positions_visited, 0);
+            assert_eq!(prepared.stats.geometry_cache_misses, 0);
+            assert_eq!(
+                eligible_geometry_count(&prepared),
+                3 + usize::from(opacity != 0.0)
+            );
+            assert_eq!(prepared.path_vertices, vertices);
+            assert_eq!(prepared.mega_path_indices, indices);
+            assert!(prepared.mega_path_index_dirty_ranges.is_empty());
+        }
+        let mut appended = path_object(5);
+        appended.style.opacity = 0.0;
+        frame.objects.push(appended);
+        frame.presences.push(true);
+        frame.reveals.push(1.0);
+        frame.morphs.push(0.0);
+        frame.render_geometries.push(None);
+        frame.render_transforms.push(None);
+        let prepared =
+            preparer.prepare_incremental(&frame, &FrameChanges::structural(vec![5], Vec::new()));
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(eligible_geometry_count(&prepared), 4);
+        assert_eq!(prepared.mega_path_offsets.len(), 6);
+        frame.objects[5].style.opacity = 1.0;
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![5]));
+        assert_eq!(eligible_geometry_count(&prepared), 5);
+        assert!(prepared.mega_path_index_dirty_ranges.is_empty());
+        preparer.set_painter_order(&frame, &[5, 4, 3, 2, 1, 0]);
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..6));
+        assert_eq!(eligible_geometry_count(&prepared), 5);
+        assert!(prepared.mega_path_index_dirty_ranges.is_empty());
+        frame.presences[2] = false;
+        let prepared =
+            preparer.prepare_incremental(&frame, &FrameChanges::structural(Vec::new(), vec![2]));
+        assert_eq!(eligible_geometry_count(&prepared), 4);
+    }
+
     use noon_core::{GeometryRef, ObjectId, Style, Transform2D};
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -567,6 +1116,8 @@ mod tests {
 
     fn object(id: u64, geometry: GeometryRef) -> FrameObjectState {
         FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
             content: noon_core::ObjectContentRef::Geometry(geometry),
@@ -801,5 +1352,728 @@ mod tests {
             );
         }
         assert_eq!(preparer.visible_projection_stats().projections, 2);
+    }
+}
+
+/// Geometry source selected for one identity-free transient vector path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DerivedPathGeometrySource {
+    /// Vertices and indices are publication-local and live in transient GPU buffers.
+    Transient,
+    /// Indices address the stable preparer's already-resident path geometry buffers.
+    Retained,
+}
+
+/// Packed primitive kind for one identity-free derived display occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DerivedDisplayPrimitive {
+    Circle,
+    Rectangle,
+    Line,
+    Path {
+        batch: usize,
+        source: DerivedPathGeometrySource,
+    },
+}
+
+/// One lookup row into the transient derived-instance buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedDerivedDisplaySlot {
+    pub anchor_object_index: u32,
+    pub anchor_side: noon_runtime::TransientAnchorSide,
+    pub occurrence_index: u32,
+    pub primitive: DerivedDisplayPrimitive,
+    pub instance_index: usize,
+}
+
+/// Sparse painter descriptor for transient presentation.
+///
+/// New preparation emits only `Derived` rows. Stable ordering remains owned by the
+/// retained `PreparedFrame`; `Stable` remains as a compatibility spelling for older
+/// callers that may construct descriptors directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayPainterItem {
+    Stable { object_index: u32 },
+    Derived { occurrence_index: u32 },
+}
+
+/// Explicit transient-locality work counters. They deliberately exclude stable draw
+/// traversal: that work is already owned by the retained prepared frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransientPresentationPrepareStats {
+    pub occurrences_packed: usize,
+    pub painter_positions_visited: usize,
+    pub path_vertices_repacked: usize,
+    pub path_indices_repacked: usize,
+    pub resident_path_reuses: usize,
+}
+
+/// Transient packed geometry for one renderer publication.
+///
+/// These arrays deliberately contain no `ObjectId` side tables. `painter_items` is
+/// sparse: it contains only transient insertions. The stable prepared frame keeps
+/// canonical painter ordering and is never recopied merely because a transient row
+/// changed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PreparedDerivedDisplay {
+    pub circles: Vec<crate::CircleInstance>,
+    pub rectangles: Vec<crate::RectangleInstance>,
+    pub lines: Vec<crate::LineInstance>,
+    pub paths: Vec<crate::PathInstance>,
+    pub path_vertices: Vec<crate::PathVertex>,
+    pub path_indices: Vec<u32>,
+    pub path_batches: Vec<crate::PathBatch>,
+    pub slots: Vec<PreparedDerivedDisplaySlot>,
+    pub painter_items: Vec<DisplayPainterItem>,
+    pub stats: TransientPresentationPrepareStats,
+}
+
+impl PreparedDerivedDisplay {
+    /// Lookup is logarithmic because preparation sorts the identity-free occurrence
+    /// index once. The hot draw path resolves all slots into one O(D) hash table and
+    /// does not call this method per painter item.
+    pub fn slot_for_occurrence(&self, occurrence_index: u32) -> Option<PreparedDerivedDisplaySlot> {
+        self.slots
+            .binary_search_by_key(&occurrence_index, |slot| slot.occurrence_index)
+            .ok()
+            .map(|index| self.slots[index])
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DerivedDisplayRenderError {
+    MissingAnchorInPainterOrder(u32),
+    ZIndexDiffersFromAnchor(u32),
+    DerivedObjectNotPresent(u32),
+    UnsupportedContent(u32),
+    UnsupportedGeometry(u32),
+}
+
+impl std::fmt::Display for DerivedDisplayRenderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::MissingAnchorInPainterOrder(anchor) => write!(
+                formatter,
+                "derived display anchor {anchor} is absent from the stable painter order"
+            ),
+            Self::ZIndexDiffersFromAnchor(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} changes z-index relative to its source anchor"
+            ),
+            Self::DerivedObjectNotPresent(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} is not present"
+            ),
+            Self::UnsupportedContent(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} requires non-geometry content packing"
+            ),
+            Self::UnsupportedGeometry(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} could not be prepared as transient geometry"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DerivedDisplayRenderError {}
+
+/// Pack transient presentation rows without duplicating stable painter descriptors.
+pub fn prepare_derived_display(
+    publication: &noon_runtime::RendererPublication<'_>,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    prepare_derived_display_inner(
+        publication.frame(),
+        publication.painter_order(),
+        publication.transient_presentations(),
+        None,
+        None,
+    )
+}
+
+/// Pack identity-free transient rows already recovered at a genuine transport
+/// boundary. Stable painter order and the real source-anchor indices remain
+/// authoritative; no stable renderer identity is allocated for the occurrences.
+pub fn prepare_transient_presentation_rows(
+    frame: &FrameState,
+    painter_order: &[u32],
+    presentations: &[noon_runtime::TransientPresentationOccurrence],
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    prepare_derived_display_inner(frame, painter_order, presentations, None, None)
+}
+
+pub(crate) fn prepare_transient_presentation_rows_cached(
+    frame: &FrameState,
+    painter_order: &[u32],
+    presentations: &[noon_runtime::TransientPresentationOccurrence],
+    path_preparer: &mut crate::FramePreparer,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    prepare_derived_display_inner(
+        frame,
+        painter_order,
+        presentations,
+        None,
+        Some(path_preparer),
+    )
+}
+
+/// Prepare only transient occurrences whose real source anchor participates in this
+/// viewport projection. Stable ordering stays resident in the prepared frame.
+pub fn prepare_derived_display_visible(
+    publication: &noon_runtime::RendererPublication<'_>,
+    visible_object_indices: &[usize],
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    let visible = visible_object_indices
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    prepare_derived_display_inner(
+        publication.frame(),
+        publication.painter_order(),
+        publication.transient_presentations(),
+        Some(&visible),
+        None,
+    )
+}
+
+pub(crate) fn prepare_derived_display_visible_cached(
+    publication: &noon_runtime::RendererPublication<'_>,
+    visible_object_indices: &[usize],
+    path_preparer: &mut crate::FramePreparer,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    let visible = visible_object_indices
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    prepare_derived_display_inner(
+        publication.frame(),
+        publication.painter_order(),
+        publication.transient_presentations(),
+        Some(&visible),
+        Some(path_preparer),
+    )
+}
+
+fn prepare_derived_display_inner(
+    frame: &FrameState,
+    _painter_order: &[u32],
+    transient_presentations: &[noon_runtime::TransientPresentationOccurrence],
+    visible: Option<&std::collections::HashSet<usize>>,
+    mut path_preparer: Option<&mut crate::FramePreparer>,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    let mut by_anchor =
+        std::collections::BTreeMap::<u32, Vec<&noon_runtime::DerivedDisplayObject>>::new();
+    for object in transient_presentations {
+        if visible
+            .is_some_and(|visible| !visible.contains(&(object.anchor_object_index() as usize)))
+        {
+            continue;
+        }
+        let anchor = object.anchor_object_index();
+        let state = object.state();
+        if state.z_index != frame.objects[anchor as usize].z_index {
+            return Err(DerivedDisplayRenderError::ZIndexDiffersFromAnchor(
+                object.occurrence_index(),
+            ));
+        }
+        by_anchor.entry(anchor).or_default().push(object);
+    }
+    for objects in by_anchor.values_mut() {
+        objects.sort_unstable_by_key(|object| (object.anchor_side(), object.occurrence_index()));
+    }
+
+    let mut prepared = PreparedDerivedDisplay::default();
+    // RendererPublication validates source-anchor membership/presence before this
+    // layer is entered. Re-scanning the stable painter permutation here would turn a
+    // one-occurrence transient update into O(total scene) work, so preparation keeps
+    // only the sparse anchor indices carried by the transient rows themselves.
+    for objects in by_anchor.values() {
+        for &object in objects {
+            pack_derived_display_object(object, &mut prepared, path_preparer.as_deref_mut())?;
+            prepared.painter_items.push(DisplayPainterItem::Derived {
+                occurrence_index: object.occurrence_index(),
+            });
+            prepared.stats.occurrences_packed += 1;
+        }
+    }
+    prepared
+        .slots
+        .sort_unstable_by_key(|slot| slot.occurrence_index);
+    Ok(prepared)
+}
+
+fn pack_derived_display_object(
+    object: &noon_runtime::DerivedDisplayObject,
+    prepared: &mut PreparedDerivedDisplay,
+    path_preparer: Option<&mut crate::FramePreparer>,
+) -> Result<(), DerivedDisplayRenderError> {
+    let state = object.state();
+    let occurrence = object.occurrence_index();
+    if !state.presence {
+        return Err(DerivedDisplayRenderError::DerivedObjectNotPresent(
+            occurrence,
+        ));
+    }
+    let geometry = state
+        .effective_render_geometry()
+        .ok_or(DerivedDisplayRenderError::UnsupportedContent(occurrence))?;
+    let render_transform = state.effective_render_transform();
+    let transform: crate::PackedTransform = render_transform.into();
+    let style = pack_derived_display_style(state);
+    let (primitive, instance_index) = match geometry {
+        noon_core::GeometryRef::Circle { radius } => {
+            let index = prepared.circles.len();
+            prepared.circles.push(crate::CircleInstance {
+                transform,
+                style,
+                radius: *radius,
+                padding: [state.reveal.clamp(0.0, 1.0), 0.0, 0.0],
+            });
+            (DerivedDisplayPrimitive::Circle, index)
+        }
+        noon_core::GeometryRef::Rectangle { size } => {
+            let index = prepared.rectangles.len();
+            prepared.rectangles.push(crate::RectangleInstance {
+                transform,
+                style,
+                size: [size.x, size.y],
+                padding: [0.0; 2],
+            });
+            (DerivedDisplayPrimitive::Rectangle, index)
+        }
+        noon_core::GeometryRef::Line { start, end } => {
+            let index = prepared.lines.len();
+            let mut transform = transform;
+            transform.padding = state.reveal.clamp(0.0, 1.0);
+            let mut style = style;
+            style.stroke_enabled |= match state.style.stroke_cap {
+                noon_core::StrokeCap::Round => 0,
+                noon_core::StrokeCap::Butt => 1 << 2,
+                noon_core::StrokeCap::Square => 2 << 2,
+            };
+            prepared.lines.push(crate::LineInstance {
+                transform,
+                style,
+                start: [start.x, start.y],
+                end: [end.x, end.y],
+            });
+            (DerivedDisplayPrimitive::Line, index)
+        }
+        noon_core::GeometryRef::VectorPath(path) => {
+            let owner = crate::sampled_morph::SampledMeshOwner::Derived {
+                anchor: object.anchor_object_index(),
+                occurrence,
+            };
+            if let Some(path_preparer) = path_preparer {
+                let (cache_index, _) = path_preparer
+                    .cache_path_mesh_at_progress(
+                        path,
+                        state.style,
+                        render_transform,
+                        owner,
+                        state.morph,
+                    )
+                    .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
+                let resident_indices = path_preparer.path_mesh_cache[cache_index]
+                    .resident
+                    .as_ref()
+                    .map(|resident| resident.indices.clone());
+                if let Some(indices) = resident_indices {
+                    prepared.stats.resident_path_reuses += 1;
+                    let polygon_coverage = crate::single_filled_convex_polygon(
+                        &path_preparer.path_mesh_cache[cache_index].mesh,
+                    )
+                    .is_some();
+                    pack_derived_path_instance(
+                        prepared,
+                        indices,
+                        state,
+                        render_transform,
+                        style,
+                        DerivedPathGeometrySource::Retained,
+                        polygon_coverage,
+                    )
+                } else {
+                    let (mesh, _) = path_preparer
+                        .cached_path_mesh(path, state.style, render_transform, owner, state.morph)
+                        .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
+                    pack_derived_path_mesh(prepared, mesh, state, render_transform, style)
+                }
+            } else {
+                let mesh = crate::sampled_morph::tessellate_path_at_progress(
+                    path,
+                    state.style,
+                    render_transform,
+                    state.morph,
+                )
+                .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
+                pack_derived_path_mesh(prepared, &mesh, state, render_transform, style)
+            }
+        }
+        noon_core::GeometryRef::External(_) => {
+            return Err(DerivedDisplayRenderError::UnsupportedGeometry(occurrence));
+        }
+    };
+    prepared.slots.push(PreparedDerivedDisplaySlot {
+        anchor_object_index: object.anchor_object_index(),
+        anchor_side: object.anchor_side(),
+        occurrence_index: occurrence,
+        primitive,
+        instance_index,
+    });
+    Ok(())
+}
+
+fn pack_derived_path_mesh(
+    prepared: &mut PreparedDerivedDisplay,
+    mesh: &noon_geometry::TessellatedPath,
+    state: &noon_runtime::DerivedDisplayObjectState,
+    render_transform: noon_core::Transform2D,
+    style: crate::PackedStyle,
+) -> (DerivedDisplayPrimitive, usize) {
+    let vertex_start = u32::try_from(prepared.path_vertices.len())
+        .expect("transient path vertex count exceeds renderer limits");
+    let (packed_vertices, local_indices) = crate::pack_path_mesh(mesh);
+    prepared.path_vertices.extend_from_slice(&packed_vertices);
+    prepared.stats.path_vertices_repacked += packed_vertices.len();
+    let index_start = u32::try_from(prepared.path_indices.len())
+        .expect("transient path index count exceeds renderer limits");
+    prepared
+        .path_indices
+        .extend(local_indices.iter().map(|index| {
+            index
+                .checked_add(vertex_start)
+                .expect("transient path index exceeds renderer limits")
+        }));
+    prepared.stats.path_indices_repacked += local_indices.len();
+    let index_end = u32::try_from(prepared.path_indices.len())
+        .expect("transient path index count exceeds renderer limits");
+    pack_derived_path_instance(
+        prepared,
+        index_start..index_end,
+        state,
+        render_transform,
+        style,
+        DerivedPathGeometrySource::Transient,
+        crate::single_filled_convex_polygon(mesh).is_some(),
+    )
+}
+
+fn pack_derived_path_instance(
+    prepared: &mut PreparedDerivedDisplay,
+    index_range: Range<u32>,
+    state: &noon_runtime::DerivedDisplayObjectState,
+    render_transform: noon_core::Transform2D,
+    style: crate::PackedStyle,
+    source: DerivedPathGeometrySource,
+    polygon_coverage: bool,
+) -> (DerivedDisplayPrimitive, usize) {
+    let index = prepared.paths.len();
+    prepared.paths.push(crate::PathInstance {
+        transform: crate::packed_path_transform(state.style, render_transform),
+        style,
+        path_params: [state.reveal.clamp(0.0, 1.0), state.morph.clamp(0.0, 1.0)],
+    });
+    let instance_start =
+        u32::try_from(index).expect("transient path instance count exceeds renderer limits");
+    let batch = prepared.path_batches.len();
+    prepared.path_batches.push(crate::PathBatch {
+        index_range,
+        instance_range: instance_start..instance_start + 1,
+        polygon_coverage,
+    });
+    (DerivedDisplayPrimitive::Path { batch, source }, index)
+}
+
+fn pack_derived_display_style(
+    state: &noon_runtime::DerivedDisplayObjectState,
+) -> crate::PackedStyle {
+    let mut style: crate::PackedStyle = state.style.into();
+    style.opacity *= state.appearance.clamp(0.0, 1.0);
+    style
+}
+
+#[cfg(test)]
+mod derived_display_tests {
+    use noon_compile::{CompiledObject, CompiledScene};
+    use noon_core::{GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D, Vec2};
+    use noon_runtime::{DerivedDisplayObject, DerivedDisplayObjectState, SceneInstance};
+
+    use super::*;
+
+    fn runtime(geometries: Vec<GeometryRef>) -> SceneInstance {
+        let objects = geometries
+            .into_iter()
+            .enumerate()
+            .map(|(index, geometry)| {
+                CompiledObject::new(
+                    ObjectId::new(index as u64 + 1),
+                    geometry,
+                    Transform2D::IDENTITY,
+                    Style::default(),
+                )
+            })
+            .collect();
+        SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap())
+    }
+
+    fn state(geometry: GeometryRef) -> DerivedDisplayObjectState {
+        DerivedDisplayObjectState {
+            z_index: 0.0,
+            content: ObjectContentRef::Geometry(geometry),
+            text_bounds: None,
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            presence: true,
+            reveal: 1.0,
+            morph: 0.0,
+            render_geometry: None,
+            render_transform: None,
+        }
+    }
+
+    #[test]
+    fn derived_circle_is_packed_without_object_id_storage() {
+        let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
+        let mut derived_state = state(GeometryRef::circle(0.5));
+        derived_state.appearance = 0.25;
+        derived_state.reveal = 0.5;
+        derived_state.transform.translation = Vec2::new(2.0, -1.0);
+        let derived = [DerivedDisplayObject::new(0, 7, derived_state)];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+
+        let prepared = prepare_derived_display(&publication).unwrap();
+        assert_eq!(prepared.circles.len(), 1);
+        assert_eq!(prepared.circles[0].transform.translation, [2.0, -1.0]);
+        assert_eq!(prepared.circles[0].style.opacity, 0.25);
+        assert_eq!(prepared.circles[0].padding[0], 0.5);
+        assert_eq!(prepared.stats.occurrences_packed, 1);
+        assert_eq!(
+            prepared.slot_for_occurrence(7),
+            Some(PreparedDerivedDisplaySlot {
+                anchor_object_index: 0,
+                anchor_side: noon_runtime::TransientAnchorSide::After,
+                occurrence_index: 7,
+                primitive: DerivedDisplayPrimitive::Circle,
+                instance_index: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn painter_projection_keeps_only_sparse_transient_descriptors() {
+        let mut runtime = runtime(vec![
+            GeometryRef::circle(1.0),
+            GeometryRef::rectangle(1.0, 1.0),
+        ]);
+        let derived = [
+            DerivedDisplayObject::new(0, 4, state(GeometryRef::circle(0.4))),
+            DerivedDisplayObject::new(0, 2, state(GeometryRef::circle(0.2))),
+            DerivedDisplayObject::new(1, 8, state(GeometryRef::rectangle(0.5, 0.5))),
+        ];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+
+        let prepared = prepare_derived_display(&publication).unwrap();
+        assert_eq!(
+            prepared.painter_items,
+            vec![
+                DisplayPainterItem::Derived {
+                    occurrence_index: 2
+                },
+                DisplayPainterItem::Derived {
+                    occurrence_index: 4
+                },
+                DisplayPainterItem::Derived {
+                    occurrence_index: 8
+                },
+            ]
+        );
+        assert_eq!(prepared.stats.painter_positions_visited, 0);
+        assert_eq!(prepared.stats.occurrences_packed, 3);
+    }
+
+    #[test]
+    fn transient_renderer_packs_nonresident_path_without_synthetic_id() {
+        let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
+        let path = noon_core::VectorPath::new()
+            .move_to(Vec2::new(-0.5, -0.5))
+            .line_to(Vec2::new(0.5, -0.5))
+            .line_to(Vec2::new(0.0, 0.5))
+            .close();
+        let mut path_state = state(GeometryRef::path(path));
+        path_state.style.fill = Some(noon_core::Color::WHITE);
+        path_state.style.stroke = None;
+        path_state.morph = 0.25;
+        let derived = [DerivedDisplayObject::new(0, 3, path_state)];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+
+        let prepared = prepare_derived_display(&publication).unwrap();
+        assert_eq!(prepared.paths.len(), 1);
+        assert!(!prepared.path_vertices.is_empty());
+        assert!(!prepared.path_indices.is_empty());
+        assert_eq!(prepared.path_batches.len(), 1);
+        assert_eq!(prepared.paths[0].path_params, [1.0, 0.25]);
+        assert_eq!(
+            prepared.slot_for_occurrence(3),
+            Some(PreparedDerivedDisplaySlot {
+                anchor_object_index: 0,
+                anchor_side: noon_runtime::TransientAnchorSide::After,
+                occurrence_index: 3,
+                primitive: DerivedDisplayPrimitive::Path {
+                    batch: 0,
+                    source: DerivedPathGeometrySource::Transient,
+                },
+                instance_index: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn cached_transient_path_reuses_resident_mesh_without_geometry_repack() {
+        let path = noon_core::VectorPath::new()
+            .move_to(Vec2::new(-1.0, -0.5))
+            .line_to(Vec2::new(0.0, 0.75))
+            .line_to(Vec2::new(1.0, -0.5))
+            .close();
+        let geometry = GeometryRef::path(path);
+        let mut runtime = runtime(vec![geometry.clone()]);
+        let derived = [DerivedDisplayObject::new(0, 7, state(geometry.clone()))];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+        let mut preparer = crate::FramePreparer::for_individual_path_draws();
+        preparer
+            .preload_paths(&[crate::PathMeshPreload {
+                geometry: &geometry,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            }])
+            .unwrap();
+        assert_eq!(preparer.path_mesh_cache_len(), 1);
+        preparer.set_painter_order(publication.frame(), publication.painter_order());
+        {
+            let stable = preparer.prepare(publication.frame());
+            assert_eq!(stable.stats.full_rebuilds, 1);
+        }
+
+        let first =
+            prepare_derived_display_visible_cached(&publication, &[0], &mut preparer).unwrap();
+        assert!(first.path_vertices.is_empty());
+        assert!(first.path_indices.is_empty());
+        assert_eq!(first.stats.path_vertices_repacked, 0);
+        assert_eq!(first.stats.path_indices_repacked, 0);
+        assert_eq!(first.stats.resident_path_reuses, 1);
+        assert_eq!(first.stats.painter_positions_visited, 0);
+        assert_eq!(
+            first.slot_for_occurrence(7).unwrap().primitive,
+            DerivedDisplayPrimitive::Path {
+                batch: 0,
+                source: DerivedPathGeometrySource::Retained,
+            }
+        );
+
+        let second =
+            prepare_derived_display_visible_cached(&publication, &[0], &mut preparer).unwrap();
+        assert!(second.path_vertices.is_empty());
+        assert!(second.path_indices.is_empty());
+        assert_eq!(second.stats.resident_path_reuses, 1);
+        assert_eq!(preparer.path_mesh_cache_len(), 1);
+
+        let stable = preparer
+            .prepare_incremental(publication.frame(), &noon_runtime::FrameChanges::default());
+        assert_eq!(stable.stats.full_rebuilds, 0);
+        assert_eq!(stable.stats.instances_repacked, 0);
+        assert_eq!(stable.stats.geometry_cache_misses, 0);
+    }
+
+    #[test]
+    fn single_transient_does_not_reconstruct_large_stable_painter_stream() {
+        const STABLE_COUNT: usize = 20_000;
+        let mut runtime = runtime(
+            (0..STABLE_COUNT)
+                .map(|_| GeometryRef::circle(1.0))
+                .collect(),
+        );
+        let anchor = (STABLE_COUNT / 2) as u32;
+        let derived = [DerivedDisplayObject::new(
+            anchor,
+            1,
+            state(GeometryRef::circle(0.25)),
+        )];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+
+        let stateless = prepare_derived_display(&publication).unwrap();
+        assert_eq!(stateless.stats.painter_positions_visited, 0);
+        assert_eq!(stateless.stats.occurrences_packed, 1);
+        assert_eq!(stateless.painter_items.len(), 1);
+
+        let mut preparer = crate::FramePreparer::new();
+        preparer.set_painter_order(publication.frame(), publication.painter_order());
+        preparer.prepare(publication.frame());
+        let cached =
+            prepare_derived_display_visible_cached(&publication, &[anchor as usize], &mut preparer)
+                .unwrap();
+        assert_eq!(cached.stats.painter_positions_visited, 0);
+        assert_eq!(cached.stats.occurrences_packed, 1);
+        assert_eq!(cached.painter_items.len(), 1);
+        assert_eq!(cached.slots.len(), 1);
+    }
+
+    #[test]
+    fn occurrence_lookup_is_indexed_after_one_preparation_sort() {
+        const COUNT: u32 = 4_096;
+        let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
+        let derived = (0..COUNT)
+            .rev()
+            .map(|occurrence| {
+                DerivedDisplayObject::new(0, occurrence, state(GeometryRef::circle(0.25)))
+            })
+            .collect::<Vec<_>>();
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+        let prepared = prepare_derived_display(&publication).unwrap();
+
+        assert_eq!(prepared.slots.len(), COUNT as usize);
+        for occurrence in 0..COUNT {
+            assert_eq!(
+                prepared
+                    .slot_for_occurrence(occurrence)
+                    .map(|slot| slot.occurrence_index),
+                Some(occurrence)
+            );
+        }
+    }
+
+    #[test]
+    fn painter_anchor_requires_source_z_index_and_stable_order_membership() {
+        let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
+        let mut different_z = state(GeometryRef::circle(0.5));
+        different_z.z_index = 1.0;
+        let derived = [DerivedDisplayObject::new(0, 9, different_z)];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+
+        assert_eq!(
+            prepare_derived_display(&publication).unwrap_err(),
+            DerivedDisplayRenderError::ZIndexDiffersFromAnchor(9)
+        );
     }
 }

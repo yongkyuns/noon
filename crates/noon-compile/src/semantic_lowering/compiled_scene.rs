@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use noon_core::{
     GeometryRef, GeometryResource, GeometryResourceHandle, ObjectContentRef, Rect, SemanticNodeId,
@@ -6,15 +6,19 @@ use noon_core::{
 };
 
 use crate::{
-    CompiledObject, CompiledResourceError, CompiledResources, CompiledScene, DynamicProperties,
+    CompiledGraphEdgeDependency, CompiledGraphEdgeKind, CompiledNumericTextDriver, CompiledObject,
+    CompiledResourceError, CompiledResources, CompiledScene, DynamicProperties,
 };
 
-use super::SemanticExecutionProjection;
+use super::{
+    SemanticExecutionGraphEdgeKind, SemanticExecutionProjection, SemanticReactiveProjection,
+};
 
 /// Failure while materializing the object-value projection into compiled slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticCompiledSceneError {
     TooManyObjects(usize),
+    TooManyGraphDependencies(usize),
     InvalidPresentation {
         node: SemanticNodeId,
     },
@@ -33,15 +37,31 @@ pub enum SemanticCompiledSceneError {
         node: SemanticNodeId,
         error: CompiledResourceError,
     },
+    UnknownNumericSignal {
+        node: SemanticNodeId,
+        signal: SemanticNodeId,
+    },
 }
 
 impl std::fmt::Display for SemanticCompiledSceneError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidPresentation { node } => write!(formatter,"semantic object {}:{} contains a non-finite z-index",node.slot(),node.generation()),
+            Self::InvalidPresentation { node } => write!(
+                formatter,
+                "semantic object {}:{} contains a non-finite z-index",
+                node.slot(),
+                node.generation()
+            ),
             Self::TooManyObjects(count) => {
-                write!(formatter, "semantic projection contains too many objects: {count}")
+                write!(
+                    formatter,
+                    "semantic projection contains too many objects: {count}"
+                )
             }
+            Self::TooManyGraphDependencies(count) => write!(
+                formatter,
+                "semantic projection contains too many graph endpoint dependencies: {count}"
+            ),
             Self::UnsupportedSignalBindings { node, count } => write!(
                 formatter,
                 "semantic object {}:{} carries {count} native-reactive signal binding(s) before compiled execution slots consume semantic bindings",
@@ -68,6 +88,14 @@ impl std::fmt::Display for SemanticCompiledSceneError {
                 node.slot(),
                 node.generation()
             ),
+            Self::UnknownNumericSignal { node, signal } => write!(
+                formatter,
+                "semantic numeric object {}:{} references unlowered scalar signal {}:{}",
+                node.slot(),
+                node.generation(),
+                signal.slot(),
+                signal.generation()
+            ),
         }
     }
 }
@@ -92,7 +120,7 @@ impl CompiledScene {
     pub fn from_semantic_projection(
         projection: &SemanticExecutionProjection,
     ) -> Result<Self, SemanticCompiledSceneError> {
-        materialize_semantic_projection(projection, false, None)
+        materialize_semantic_projection(projection, false, None, None)
     }
 
     /// Materialize object values after the canonical A1.6 entry point has
@@ -102,8 +130,9 @@ impl CompiledScene {
     pub(crate) fn from_semantic_projection_after_reactive_lowering(
         projection: &SemanticExecutionProjection,
         store: &SemanticStore,
+        reactive: &SemanticReactiveProjection,
     ) -> Result<Self, SemanticCompiledSceneError> {
-        materialize_semantic_projection(projection, true, Some(store))
+        materialize_semantic_projection(projection, true, Some(store), Some(reactive))
     }
 }
 
@@ -111,6 +140,7 @@ fn materialize_semantic_projection(
     projection: &SemanticExecutionProjection,
     reactive_bindings_lowered: bool,
     store: Option<&SemanticStore>,
+    reactive: Option<&SemanticReactiveProjection>,
 ) -> Result<CompiledScene, SemanticCompiledSceneError> {
     let mut ordered = projection.objects().iter().collect::<Vec<_>>();
     // Root/family traversal already carries the authoritative same-z painter order.
@@ -137,6 +167,7 @@ fn materialize_semantic_projection(
     let mut objects = Vec::with_capacity(count);
     let mut object_indices = BTreeMap::new();
     let mut resources = CompiledResources::default();
+    let mut numeric_text_drivers = Vec::new();
 
     for (index, object) in ordered.into_iter().enumerate() {
         if !reactive_bindings_lowered && !object.signal_bindings.is_empty() {
@@ -151,15 +182,54 @@ fn materialize_semantic_projection(
         let (content, text_bounds) =
             lower_content(object.semantic_id, object.content, store, &mut resources)?;
         objects.push(CompiledObject {
+            glow: object.glow.clone(),
             id: object.execution_id,
             content,
             text_bounds,
             base_transform: object.base_transform,
+            spatial: object.spatial.clone().map(Box::new),
             base_style: object.base_style,
             base_z_index: object.presentation.z_index,
             dynamic: DynamicProperties::default(),
             live: true,
         });
+        if let Some(number) = object.decimal_number.as_ref() {
+            if let Some(binding) = number.binding() {
+                let reactive =
+                    reactive.ok_or(SemanticCompiledSceneError::UnknownNumericSignal {
+                        node: object.semantic_id,
+                        signal: binding.signal(),
+                    })?;
+                let signal = reactive.execution_signal_id(binding.signal()).ok_or(
+                    SemanticCompiledSceneError::UnknownNumericSignal {
+                        node: object.semantic_id,
+                        signal: binding.signal(),
+                    },
+                )?;
+                for (_, handle) in binding.token_resources() {
+                    resources
+                        .capture_text(store.expect("bound numeric lowering has store"), *handle)
+                        .map_err(|error| SemanticCompiledSceneError::Resource {
+                            node: object.semantic_id,
+                            error,
+                        })?;
+                }
+                numeric_text_drivers.push(CompiledNumericTextDriver {
+                    signal,
+                    object_index,
+                    format: noon_core::DecimalFormat {
+                        decimal_places: number.decimal_places(),
+                        include_sign: number.include_sign(),
+                        group_with_commas: number.group_with_commas(),
+                        show_ellipsis: number.show_ellipsis(),
+                        unit: number.unit().map(str::to_owned),
+                    },
+                    font_size: number.font_size(),
+                    point_to_scene_scale: binding.point_to_scene_scale(),
+                    token_resources: binding.token_resources().to_vec().into(),
+                });
+            }
+        }
         object_indices.insert(object.execution_id, object_index);
     }
 
@@ -173,7 +243,110 @@ fn materialize_semantic_projection(
     for (rank, &index) in family_order.iter().enumerate() {
         family_ranks[index as usize] = Some(rank as u32);
     }
-    Ok(CompiledScene {
+
+    let mut graph_edge_dependencies = Vec::with_capacity(projection.graph_edges().len());
+    let mut graph_incident_dependencies = HashMap::<u32, Vec<u32>>::new();
+    let mut graph_dirty_dependencies = HashMap::<u32, Vec<u32>>::new();
+    let mut graph_authored_content = HashMap::<u32, ObjectContentRef>::new();
+    for dependency in projection.graph_edges() {
+        let dependency_index = u32::try_from(graph_edge_dependencies.len()).map_err(|_| {
+            SemanticCompiledSceneError::TooManyGraphDependencies(projection.graph_edges().len())
+        })?;
+        let start_vertex_index = object_indices[&dependency.start_vertex];
+        let end_vertex_index = object_indices[&dependency.end_vertex];
+        let line_index = object_indices[&dependency.line];
+        let kind = match dependency.kind {
+            SemanticExecutionGraphEdgeKind::Line => CompiledGraphEdgeKind::Line,
+            SemanticExecutionGraphEdgeKind::Arrow {
+                end_tip,
+                start_tip,
+                policy,
+            } => CompiledGraphEdgeKind::Arrow {
+                end_tip_index: object_indices[&end_tip],
+                start_tip_index: start_tip.map(|tip| object_indices[&tip]),
+                policy,
+            },
+        };
+        graph_authored_content
+            .entry(line_index)
+            .or_insert_with(|| objects[line_index as usize].content.clone());
+        objects[line_index as usize].content = crate::graph_line_execution_content();
+        if let CompiledGraphEdgeKind::Arrow {
+            end_tip_index,
+            start_tip_index,
+            ..
+        } = kind
+        {
+            graph_authored_content
+                .entry(end_tip_index)
+                .or_insert_with(|| objects[end_tip_index as usize].content.clone());
+            objects[end_tip_index as usize].content = crate::graph_tip_execution_content();
+            if let Some(start_tip_index) = start_tip_index {
+                graph_authored_content
+                    .entry(start_tip_index)
+                    .or_insert_with(|| objects[start_tip_index as usize].content.clone());
+                objects[start_tip_index as usize].content = crate::graph_tip_execution_content();
+            }
+        }
+        graph_edge_dependencies.push(CompiledGraphEdgeDependency::new(
+            dependency.owner,
+            dependency.edge,
+            start_vertex_index,
+            end_vertex_index,
+            line_index,
+            kind,
+        ));
+        graph_incident_dependencies
+            .entry(start_vertex_index)
+            .or_default()
+            .push(dependency_index);
+        graph_dirty_dependencies
+            .entry(start_vertex_index)
+            .or_default()
+            .push(dependency_index);
+        if end_vertex_index != start_vertex_index {
+            graph_incident_dependencies
+                .entry(end_vertex_index)
+                .or_default()
+                .push(dependency_index);
+            graph_dirty_dependencies
+                .entry(end_vertex_index)
+                .or_default()
+                .push(dependency_index);
+        }
+        for owned_row in std::iter::once(line_index).chain(match kind {
+            CompiledGraphEdgeKind::Line => [None, None].into_iter().flatten(),
+            CompiledGraphEdgeKind::Arrow {
+                end_tip_index,
+                start_tip_index,
+                ..
+            } => [Some(end_tip_index), start_tip_index].into_iter().flatten(),
+        }) {
+            graph_dirty_dependencies
+                .entry(owned_row)
+                .or_default()
+                .push(dependency_index);
+        }
+    }
+
+    let graph_dependency_indices = projection
+        .graph_edges()
+        .iter()
+        .enumerate()
+        .map(|(index, dependency)| ((dependency.owner, dependency.edge), index as u32))
+        .collect();
+    let graph_owner_dependencies = graph_edge_dependencies.iter().enumerate().fold(
+        HashMap::<_, Vec<_>>::new(),
+        |mut owners, (index, dependency)| {
+            owners
+                .entry(dependency.owner())
+                .or_default()
+                .push(index as u32);
+            owners
+        },
+    );
+
+    let mut compiled = CompiledScene {
         family_order,
         family_ranks,
         live_object_count: objects.len(),
@@ -187,8 +360,40 @@ fn materialize_semantic_projection(
         track_locators: BTreeMap::new(),
         family_animation_plans: Vec::new(),
         family_animations: Vec::new(),
+        graph_edge_dependencies,
+        graph_dependency_indices,
+        free_graph_dependency_indices: Vec::new(),
+        graph_owner_dependencies,
+        graph_incident_dependencies,
+        graph_dirty_dependencies,
+        graph_authored_content,
+        numeric_text_drivers,
+        spatial_anchor_groups: Vec::new(),
+        spatial_anchor_group_indices: HashMap::new(),
+        spatial_anchor_row_groups: HashMap::new(),
+        spatial_anchor_bounds_row_groups: HashMap::new(),
+        spatial_anchor_local_bounds: HashMap::new(),
+        cairo_path_control_points: HashMap::new(),
+        cairo_path_points_by_resource: Default::default(),
         resources,
-    })
+    };
+    compiled.rebuild_spatial_anchor_groups();
+    if let Some(store) = store {
+        let anchors = compiled.spatial_anchor_families();
+        for anchor in anchors {
+            let members = store
+                .ordered_leaf_nodes(anchor)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|node| {
+                    let execution_id = super::membership::semantic_execution_object_id(node);
+                    compiled.object_index(execution_id)
+                })
+                .collect::<Vec<_>>();
+            compiled.set_spatial_anchor_group_bounds_members(anchor, &members);
+        }
+    }
+    Ok(compiled)
 }
 
 pub(super) fn lower_content(
@@ -198,16 +403,42 @@ pub(super) fn lower_content(
     resources: &mut CompiledResources,
 ) -> Result<(ObjectContentRef, Option<Rect>), SemanticCompiledSceneError> {
     match content {
-        SemanticObjectContent::Geometry(content) => lower_semantic_geometry_value(content, store)
-            .map(|geometry| (ObjectContentRef::Geometry(geometry), None))
-            .map_err(|error| match error {
-                SemanticGeometryValueError::InvalidAnalyticGeometry => {
-                    SemanticCompiledSceneError::InvalidAnalyticGeometry { node }
+        SemanticObjectContent::Geometry(content) => {
+            if let (StoredGeometry::Resource(handle), Some(store)) = (content, store) {
+                if matches!(
+                    store.geometry_resources().get(handle),
+                    Some(GeometryResource::Mesh(_))
+                ) {
+                    resources
+                        .capture_geometry_from_arena(store.geometry_resources(), handle)
+                        .map_err(|error| SemanticCompiledSceneError::Resource { node, error })?;
+                    return Ok((
+                        ObjectContentRef::Geometry(GeometryRef::External(handle.id)),
+                        None,
+                    ));
                 }
-                SemanticGeometryValueError::UnsupportedGeometryResource(resource) => {
-                    SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource }
-                }
-            }),
+            }
+            lower_semantic_geometry_value(content, store)
+                .map(|geometry| (ObjectContentRef::Geometry(geometry), None))
+                .map_err(|error| match error {
+                    SemanticGeometryValueError::InvalidAnalyticGeometry => {
+                        SemanticCompiledSceneError::InvalidAnalyticGeometry { node }
+                    }
+                    SemanticGeometryValueError::UnsupportedGeometryResource(resource) => {
+                        SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource }
+                    }
+                })
+        }
+        SemanticObjectContent::Image(image) => {
+            let store = store.ok_or(SemanticCompiledSceneError::Resource {
+                node,
+                error: CompiledResourceError::MissingImage(image.resource()),
+            })?;
+            let content = resources
+                .capture_image(store, image)
+                .map_err(|error| SemanticCompiledSceneError::Resource { node, error })?;
+            Ok((ObjectContentRef::Image(content), None))
+        }
         SemanticObjectContent::Text(text) => {
             let store = store.ok_or(SemanticCompiledSceneError::Resource {
                 node,
@@ -266,6 +497,7 @@ pub(crate) fn lower_semantic_geometry_value(
                 Some(GeometryResource::VectorPath(path)) => {
                     Ok(GeometryRef::path(path.as_ref().clone()))
                 }
+                Some(GeometryResource::Mesh(_)) => Ok(GeometryRef::External(resource.id)),
                 None => Err(SemanticGeometryValueError::UnsupportedGeometryResource(
                     resource,
                 )),

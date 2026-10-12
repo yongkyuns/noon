@@ -74,7 +74,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family_animation<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -84,7 +83,7 @@ impl RetainedFramePreparer {
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyAnimationPrepareError> {
         let changes = FrameChanges::all();
         self.prepare_family_animation_with_changes(
-            device, queue, frame, plan, &changes, texts, fonts, geometries, metrics,
+            device, frame, plan, &changes, texts, fonts, geometries, metrics,
         )
     }
 
@@ -92,7 +91,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family_animation_with_changes<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         changes: &FrameChanges,
@@ -104,18 +102,17 @@ impl RetainedFramePreparer {
         match active_family_mode(frame, plan)? {
             Some(FamilyAnimationMode::Reveal) => self
                 .prepare_family_with_changes(
-                    device, queue, frame, plan, changes, texts, fonts, geometries, metrics,
+                    device, frame, plan, changes, texts, fonts, geometries, metrics,
                 )
                 .map_err(Into::into),
             Some(FamilyAnimationMode::DrawBorderThenFill) => self
                 .prepare_family_draw_border_then_fill_with_changes(
-                    device, queue, frame, plan, changes, texts, fonts, geometries, metrics,
+                    device, frame, plan, changes, texts, fonts, geometries, metrics,
                 )
                 .map_err(Into::into),
             None => self
                 .prepare_with_changes(
                     device,
-                    queue,
                     frame.retained,
                     changes,
                     texts,
@@ -158,6 +155,52 @@ fn active_family_mode(
     Ok(selected.map(|(_, mode)| mode))
 }
 
+impl RetainedFramePreparer {
+    /// Append immutable path residency without replacing the retained preparer.
+    /// Only newly admitted mesh keys are tessellated and only the resident suffix
+    /// is uploaded unless GPU capacity growth requires rewriting the prefix.
+    pub fn append_preload_path_meshes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &mut GpuRenderer,
+        requests: &[crate::PathMeshPreload<'_>],
+    ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
+        let plan = self.geometry.prepare_path_mesh_append(requests)?;
+        if plan.is_empty() {
+            return Ok(crate::PathMeshPreloadStats {
+                geometry: self.geometry.commit_path_mesh_append(plan),
+                upload: UploadStats::default(),
+            });
+        }
+
+        let limit = device.limits().max_buffer_size;
+        super::super::validate_preload_allocation(
+            "path vertices",
+            plan.next_vertex_count()
+                .saturating_mul(std::mem::size_of::<crate::PathVertex>()),
+            renderer.path_vertex_capacity_bytes(),
+            limit,
+        )?;
+        super::super::validate_preload_allocation(
+            "path indices",
+            plan.next_index_count()
+                .saturating_mul(std::mem::size_of::<u32>()),
+            renderer.path_index_capacity_bytes(),
+            limit,
+        )?;
+
+        let geometry = self.geometry.commit_path_mesh_append(plan);
+        self.prepared_generation_ready = false;
+        let frame = self.geometry.resident_upload_frame(geometry);
+        let upload = renderer.upload_preloaded_paths(device, queue, &frame)?;
+        Ok(crate::PathMeshPreloadStats {
+            geometry: frame.stats,
+            upload,
+        })
+    }
+}
+
 #[cfg(test)]
 mod operation_selection_tests {
     use noon_core::{
@@ -192,6 +235,8 @@ mod operation_selection_tests {
         semantics.add_member(family, second).unwrap();
 
         let first_object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -201,6 +246,8 @@ mod operation_selection_tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -225,6 +272,8 @@ mod operation_selection_tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -234,6 +283,8 @@ mod operation_selection_tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -243,6 +294,8 @@ mod operation_selection_tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(99),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
@@ -313,6 +366,82 @@ mod operation_selection_tests {
         );
     }
     #[test]
+    fn family_preparation_keeps_changed_path_upload_ranges() {
+        for planned_set in [false, true] {
+            let (plan, mut retained, mut states) = fixture();
+            states[0].as_mut().unwrap().overall_progress = 1.0;
+            states[1] = None;
+            states[2] = None;
+            retained.objects[2].style.fill = None;
+            retained.objects[2].style.stroke = Some(noon_core::Color::WHITE);
+            retained.objects[2].style.stroke_width = 0.05;
+            let texts = TextResourceArena::new();
+            let fonts = FontResourceArena::new();
+            let geometries = GeometryResourceArena::new();
+            let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+            let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+            let mut preparer = RetainedFramePreparer::new();
+            let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            let mut previous_vertices = Vec::new();
+            for y in [0.0, 0.5] {
+                retained.objects[2].content = ObjectContentRef::Geometry(GeometryRef::path(
+                    noon_core::VectorPath::new()
+                        .move_to(noon_core::Vec2::new(-1.0, y))
+                        .line_to(noon_core::Vec2::new(1.0, y)),
+                ));
+                let frame = RetainedFamilyFrame {
+                    retained: &retained,
+                    family_animations: &states,
+                };
+                let prepared = if planned_set {
+                    let planned = noon_runtime::RetainedPlannedFamilyFrame {
+                        retained: &retained,
+                        family_animations: &states,
+                        family_plan_indices: &[Some(0), None, None],
+                    };
+                    preparer
+                        .prepare_family_plan_set_with_changes(
+                            &device,
+                            &planned,
+                            std::slice::from_ref(&plan),
+                            &FrameChanges::all(),
+                            &texts,
+                            &fonts,
+                            &geometries,
+                            metrics,
+                        )
+                        .unwrap()
+                } else {
+                    preparer
+                        .prepare_family_with_changes(
+                            &device,
+                            &frame,
+                            &plan,
+                            &FrameChanges::all(),
+                            &texts,
+                            &fonts,
+                            &geometries,
+                            metrics,
+                        )
+                        .unwrap()
+                };
+                let mut writes = Vec::new();
+                renderer.upload_with_trace(&device, &queue, &prepared.geometry, &mut writes);
+                if !previous_vertices.is_empty() {
+                    assert_ne!(prepared.geometry.path_vertices, previous_vertices);
+                    assert!(
+                        writes
+                            .iter()
+                            .any(|write| write.buffer == "compact_path_vertex"),
+                        "a warm family frame must upload changed path vertices"
+                    );
+                }
+                previous_vertices = prepared.geometry.path_vertices.to_vec();
+            }
+        }
+    }
+
+    #[test]
     fn family_reveal_keeps_fixed_morph_frame_and_warm_geometry() {
         let (plan, mut retained, mut states) = fixture();
         states[1] = None;
@@ -343,7 +472,7 @@ mod operation_selection_tests {
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
         let frame = RetainedFamilyFrame {
             retained: &retained,
@@ -352,7 +481,6 @@ mod operation_selection_tests {
         let first = preparer
             .prepare_family_animation_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &plan,
                 &FrameChanges::all(),
@@ -379,7 +507,6 @@ mod operation_selection_tests {
         let warm = preparer
             .prepare_family_animation_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &plan,
                 &FrameChanges::objects(vec![0]),
@@ -406,9 +533,6 @@ mod operation_selection_tests {
         assert_eq!(upload.geometry.bytes_uploaded, expected);
         assert_eq!(upload.geometry.buffer_reallocations, 0);
 
-        // A same-slot structural replacement must retain its structural marker
-        // through the family baseline. Reusing the old scratch/source identity
-        // would draw object 99 instead of the replacement object 100.
         retained.objects[2].id = ObjectId::new(100);
         let frame = RetainedFamilyFrame {
             retained: &retained,
@@ -417,7 +541,6 @@ mod operation_selection_tests {
         let replacement = preparer
             .prepare_family_animation_with_changes(
                 &device,
-                &queue,
                 &frame,
                 &plan,
                 &FrameChanges::structural(vec![2], vec![2]),
@@ -460,6 +583,7 @@ mod operation_selection_tests {
             }
         )));
     }
+
     #[test]
     fn compiled_morph_budget_keeps_inactive_phase_meshes_warm() {
         const PER_PHASE: usize = 300;
@@ -493,7 +617,7 @@ mod operation_selection_tests {
         let fonts = FontResourceArena::new();
         let geometries = GeometryResourceArena::new();
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
         preparer.set_scene_path_mesh_cache_budget(resources.len(), 0);
         for (visit, phase) in [0, 0, 1, 1, 0, 0, 1].into_iter().enumerate() {
@@ -505,7 +629,6 @@ mod operation_selection_tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &retained,
                     &FrameChanges::all(),
                     &texts,
@@ -525,13 +648,10 @@ mod operation_selection_tests {
         }
         assert_eq!(preparer.geometry.cached_path_mesh_count(), 2 * PER_PHASE);
 
-        // Installing a smaller resource set resets the allowance; visible paths
-        // remain pinned while now-stale meshes return to the bounded cache policy.
         preparer.set_scene_path_mesh_cache_budget(0, 0);
         preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::all(),
                 &texts,
@@ -546,6 +666,7 @@ mod operation_selection_tests {
             crate::DEFAULT_PATH_MESH_CACHE_LIMIT
         );
     }
+
     #[test]
     fn preload_replacement_resets_prepared_state_and_failure_preserves_installation() {
         let (_, retained, _) = fixture();
@@ -555,7 +676,7 @@ mod operation_selection_tests {
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         preparer.set_scene_path_mesh_cache_budget(10, 400);
         let path = GeometryRef::path(
             noon_core::VectorPath::new()
@@ -573,7 +694,6 @@ mod operation_selection_tests {
         let generation = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::all(),
                 &texts,
@@ -600,7 +720,6 @@ mod operation_selection_tests {
         let reused = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::default(),
                 &texts,
@@ -619,7 +738,6 @@ mod operation_selection_tests {
         let rebuilt = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::default(),
                 &texts,
@@ -629,8 +747,6 @@ mod operation_selection_tests {
             )
             .unwrap();
         assert_eq!(rebuilt.geometry_stats().full_rebuilds, 1);
-        // This fixture is geometry-only. Reinstalling path residency rebuilds
-        // geometry, but it must not manufacture a text upload generation.
         assert_eq!(rebuilt.text_generation, generation);
         assert!(rebuilt.geometry_only);
         assert_eq!(
@@ -645,6 +761,7 @@ mod operation_selection_tests {
         assert_eq!(preparer.geometry.resident_vertex_count, 0);
         assert_eq!(preparer.geometry.resident_index_count, 0);
     }
+
     #[test]
     fn oversized_preload_preserves_previous_cpu_and_gpu_installation() {
         let (_, mut retained, _) = fixture();
@@ -681,7 +798,7 @@ mod operation_selection_tests {
             },
             ..Default::default()
         });
-        let mut renderer = GpuRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut preparer = RetainedFramePreparer::new();
         preparer
             .preload_path_meshes(&device, &queue, &mut renderer, &requests[..2])
@@ -694,7 +811,6 @@ mod operation_selection_tests {
         let first = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &retained,
                 &FrameChanges::all(),
                 &texts,
@@ -723,7 +839,6 @@ mod operation_selection_tests {
             let prepared = preparer
                 .prepare_with_changes(
                     &device,
-                    &queue,
                     &retained,
                     &FrameChanges::all(),
                     &texts,

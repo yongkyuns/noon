@@ -24,8 +24,20 @@ pub(super) fn final_value_writes(
         match patch {
             ExecutionPatch::SetContent { object, .. }
             | ExecutionPatch::SetTransform { object, .. }
-            | ExecutionPatch::SetStyle { object, .. } => {
-                if !final_writes.insert((*object, std::mem::discriminant(patch))) {
+            | ExecutionPatch::SetSemanticTransform { object, .. }
+            | ExecutionPatch::SetSpatialState { object, .. }
+            | ExecutionPatch::SetStyle { object, .. }
+            | ExecutionPatch::SetGlow { object, .. } => {
+                let lane = match patch {
+                    ExecutionPatch::SetContent { .. } => 0,
+                    ExecutionPatch::SetTransform { .. }
+                    | ExecutionPatch::SetSemanticTransform { .. } => 1,
+                    ExecutionPatch::SetSpatialState { .. } => 1,
+                    ExecutionPatch::SetStyle { .. } => 2,
+                    ExecutionPatch::SetGlow { .. } => 3,
+                    _ => unreachable!(),
+                };
+                if !final_writes.insert((*object, lane)) {
                     continue;
                 }
             }
@@ -64,6 +76,7 @@ pub struct PreparedAuthoredPlanChange {
     scene_revision: SceneRevision,
     execution_revision: ExecutionRevision,
     frame_epoch: FrameEpoch,
+    scalar_timeline: bool,
 }
 
 /// A fully validated authored plan revision plus a sparse reactive update at the
@@ -125,6 +138,7 @@ impl SceneInstance {
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<PreparedAuthoredPlanChange, AuthoredPublicationError> {
+        self.require_replay_writable()?;
         let current = self.publication_context();
         if expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -150,6 +164,7 @@ impl SceneInstance {
             scene_revision,
             execution_revision,
             frame_epoch,
+            scalar_timeline: false,
         })
     }
 
@@ -157,6 +172,7 @@ impl SceneInstance {
         &mut self,
         prepared: PreparedAuthoredPlanChange,
     ) -> Result<&FrameState, AuthoredPublicationError> {
+        self.require_replay_writable()?;
         let current = self.publication_context();
         if prepared.runtime != self.runtime_identity() || prepared.expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -164,12 +180,57 @@ impl SceneInstance {
                 actual: current,
             });
         }
+        if !prepared.scalar_timeline {
+            self.invalidate_replay_domain();
+        }
         self.publication = PublicationContext::new(
             prepared.scene_revision,
             prepared.execution_revision,
             prepared.frame_epoch,
         );
         Ok(&self.frame)
+    }
+
+    /// A scalar extension is proven by the compiler-derived, runtime-pinned schedule append.
+    pub fn prepare_scalar_timeline_plan_change(
+        &self,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+        timeline: &crate::PreparedSignalTimelineAppend,
+    ) -> Result<PreparedAuthoredPlanChange, AuthoredPublicationError> {
+        if timeline.runtime != self.runtime_identity() || timeline.current != self.frame.time {
+            return Err(AuthoredPublicationError::StaleEffectiveCarryForward);
+        }
+        let mut plan = self.prepare_authored_plan_change(expected, scene_revision)?;
+        plan.scalar_timeline = true;
+        Ok(plan)
+    }
+
+    /// Only current-time authored Holds can authorize a persistent scalar input update.
+    pub fn prepare_scalar_timeline_value_change(
+        &mut self,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+        timeline: &crate::PreparedSignalTimelineAppend,
+    ) -> Result<PreparedAuthoredReactivePlanChange, AuthoredPublicationError> {
+        let plan = self.prepare_scalar_timeline_plan_change(expected, scene_revision, timeline)?;
+        let inputs = timeline
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                noon_compile::CompiledScalarSignalTimelineEntry::Hold(hold)
+                    if hold.start_time() == self.frame.time =>
+                {
+                    Ok((hold.execution_signal(), ReactiveValue::Scalar(hold.value())))
+                }
+                _ => Err(AuthoredPublicationError::StaleEffectiveCarryForward),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut prepared =
+            self.prepare_authored_reactive_plan_change(expected, scene_revision, &inputs)?;
+        prepared.plan = plan;
+        prepared.frame.authored_scalar_inputs = true;
+        Ok(prepared)
     }
 
     /// Prepare one current-time reactive value change and the authored plan
@@ -284,6 +345,7 @@ impl SceneInstance {
         additional_objects: usize,
         structural_change_possible: bool,
     ) -> Result<(), AuthoredPublicationError> {
+        self.require_replay_writable()?;
         let current = self.publication_context();
         if expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -330,6 +392,7 @@ impl SceneInstance {
         &mut self,
         transaction: &ExecutionMutationTransaction,
     ) -> Result<&FrameState, CompilePatchError> {
+        self.require_replay_writable()?;
         self.compiled.preflight_execution_transaction(transaction)?;
         let changed = self.apply_preflighted_transaction(transaction);
         if changed {
@@ -372,6 +435,29 @@ impl SceneInstance {
         expected: PublicationContext,
         scene_revision: SceneRevision,
     ) -> Result<&FrameState, AuthoredPublicationError> {
+        self.apply_authored_execution_transaction_with_frame(
+            transaction,
+            resource_additions,
+            effective,
+            None,
+            expected,
+            scene_revision,
+        )
+    }
+
+    /// Publish a prepared callback/input frame, persistent semantic changes and
+    /// final effective writes under one context. Both proofs are checked before
+    /// any scheduler, resource, frame or compiled state changes.
+    pub fn apply_authored_execution_transaction_with_frame(
+        &mut self,
+        transaction: &ExecutionMutationTransaction,
+        resource_additions: CompiledResources,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        frame: Option<PreparedFrameEvaluation>,
+        expected: PublicationContext,
+        scene_revision: SceneRevision,
+    ) -> Result<&FrameState, AuthoredPublicationError> {
+        self.require_replay_writable()?;
         let current = self.publication_context();
         if expected != current {
             return Err(AuthoredPublicationError::StalePublication {
@@ -393,6 +479,15 @@ impl SceneInstance {
         if let Some(effective) = effective.as_ref() {
             self.preflight_effective_carry_forward(effective, current)?;
         }
+        let empty = PreparedEffectivePropertyBatch {
+            runtime: self.identity,
+            expected: current,
+            writes: Vec::new(),
+        };
+        if let Some(frame) = frame.as_ref() {
+            self.preflight_prepared_frame_commit(frame, &empty)
+                .map_err(AuthoredPublicationError::PreparedFrame)?;
+        }
         let execution_changed = final_value_writes(transaction)
             .into_iter()
             .any(|patch| self.compiled.patch_changes_execution(patch));
@@ -404,8 +499,12 @@ impl SceneInstance {
             None
         };
         let effective_changed = effective.as_ref().is_some_and(|batch| !batch.is_empty());
-        let frame_changed = scene_changed || execution_changed || effective_changed;
-        let next_frame = if frame_changed {
+        let mut frame_changed = scene_changed || execution_changed || effective_changed;
+        let next_frame = if frame_changed
+            || frame
+                .as_ref()
+                .is_some_and(|frame| self.prepared_frame_may_change(frame))
+        {
             Some(current.frame_epoch().checked_next().ok_or(
                 AuthoredPublicationError::FrameEpochExhausted(current.frame_epoch()),
             )?)
@@ -413,13 +512,25 @@ impl SceneInstance {
             None
         };
 
+        if let Some(frame) = frame {
+            frame_changed |= self
+                .commit_prepared_frame_unpublished(frame, empty)
+                .expect("prepared frame remains valid during synchronous authored commit");
+        }
+        if effective_changed {
+            self.invalidate_replay_domain();
+        }
         let mut affected = HashSet::new();
         if effective.is_some() {
             for patch in transaction.mutations() {
                 let object = match patch {
                     ExecutionPatch::SetContent { object, .. }
                     | ExecutionPatch::SetTransform { object, .. }
+                    | ExecutionPatch::SetSemanticTransform { object, .. }
+                    | ExecutionPatch::SetSpatialState { object, .. }
                     | ExecutionPatch::SetStyle { object, .. }
+                    | ExecutionPatch::SetGlow { object, .. }
+                    | ExecutionPatch::SetGlowAttachment { object, .. }
                     | ExecutionPatch::ReconcileTrack { object, .. } => Some(*object),
                     _ => None,
                 };
@@ -449,6 +560,12 @@ impl SceneInstance {
         debug_assert_eq!(applied_execution_change, execution_changed);
         if let Some(effective) = effective {
             for (object_index, write) in effective.writes {
+                // A structural removal wins over the phase's earlier effective
+                // assignment. Never revive a retired row or transfer a write to
+                // a newly admitted incarnation of the same execution identity.
+                if self.compiled.object_index(write.object()) != Some(object_index as u32) {
+                    continue;
+                }
                 apply_effective_property_to_row(
                     frame_row_mut(&mut self.frame, object_index),
                     write,
@@ -641,6 +758,98 @@ mod tests {
         );
         assert_eq!(instance.frame(), &before_frame);
         assert_eq!(instance.publication_context(), before_publication);
+    }
+
+    #[test]
+    fn callback_frame_and_authored_values_publish_once_and_keep_effective_override() {
+        let (mut instance, [authored, driven]) = semantic_instances([1.0, 0.5]);
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+        let frame = instance.prepare_advance_to(0.25).unwrap();
+        let effective = instance
+            .prepare_effective_property_batch(&[crate::EffectivePropertyWrite::Translation {
+                object: driven,
+                translation: Vec2::new(4.0, 2.0),
+            }])
+            .unwrap();
+        let transaction =
+            ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+                object: authored,
+                style: Style {
+                    opacity: 0.25,
+                    ..Style::default()
+                },
+            }]);
+        instance
+            .apply_authored_execution_transaction_with_frame(
+                &transaction,
+                CompiledResources::default(),
+                Some(effective),
+                Some(frame),
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            )
+            .unwrap();
+        let after = instance.publication_context();
+        assert_eq!(
+            after.frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+        assert_eq!(
+            after.execution_revision(),
+            before.execution_revision().checked_next().unwrap()
+        );
+        assert_eq!(instance.frame().time, 0.25);
+        assert_eq!(instance.frame().objects[0].style.opacity, 0.25);
+        assert_eq!(
+            instance.frame().objects[1].transform.translation,
+            Vec2::new(4.0, 2.0)
+        );
+        assert_eq!(instance.take_frame_changes().object_indices(), &[0, 1]);
+    }
+
+    #[test]
+    fn callback_authored_failure_preserves_unpublished_time_and_all_rows() {
+        let (mut instance, object) = semantic_instance();
+        instance.take_frame_changes();
+        let before = instance.publication_context();
+        let before_frame = instance.frame().clone();
+        let frame = instance.prepare_advance_to(0.5).unwrap();
+        let invalid = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+            object,
+            style: Style {
+                opacity: f32::NAN,
+                ..Style::default()
+            },
+        }]);
+        assert!(instance
+            .apply_authored_execution_transaction_with_frame(
+                &invalid,
+                CompiledResources::default(),
+                None,
+                Some(frame.clone()),
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            )
+            .is_err());
+        assert_eq!(instance.publication_context(), before);
+        assert_eq!(instance.frame(), &before_frame);
+        assert!(instance.take_frame_changes().is_empty());
+        instance
+            .apply_authored_execution_transaction_with_frame(
+                &ExecutionMutationTransaction::default(),
+                CompiledResources::default(),
+                None,
+                Some(frame),
+                before,
+                before.scene_revision(),
+            )
+            .unwrap();
+        assert_eq!(instance.frame().time, 0.5);
+        assert_eq!(
+            instance.publication_context().frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
     }
 
     #[test]

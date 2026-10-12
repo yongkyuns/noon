@@ -1,5 +1,9 @@
 import dataclasses
 import unittest
+import types
+from unittest.mock import patch
+
+import _manim_latex as latex
 
 import _manim_typst as typst
 
@@ -53,6 +57,19 @@ class _Handle:
 
 
 class ManimTextSourcePartTests(unittest.TestCase):
+    def test_appended_tex_leaf_keeps_its_own_source(self):
+        owner = types.SimpleNamespace(source="x", _font_size=48.0)
+        handle = types.SimpleNamespace(textSource=lambda: "=")
+        part = typst.TextSourcePart(0, 1, 0, 1, 0, 0, None)
+
+        def initialize(leaf, source, *_args, **_kwargs):
+            leaf._source = source
+
+        with patch.object(latex.MathTexPart, "_initialize_text", initialize):
+            equals = latex.MathTexPart(owner, part, handle)
+        self.assertEqual(equals.tex_string, "=")
+        self.assertEqual(owner.source, "x")
+
     def test_python_copies_typed_rust_part_observations_without_rematching_source(self):
         handle = _Handle(
             [
