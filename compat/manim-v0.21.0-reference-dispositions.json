@@ -166,8 +166,8 @@
     },
     {
       "id": "reference-a94100a9012221c9",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Angle. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Angle/RightAngle exports now reach shared Rust planar paths and nominal values. Exact source/options qualification, dot children and remaining method breadth are still owned; export presence does not establish parity.",
       "owners": [
         "#77",
         "#83",
@@ -183,11 +183,7 @@
         "directive_line": 167,
         "name": "MovingAngle",
         "source_sha256": "c183d5e9090f08d3147418b888ec1e7f7b9ebf81d4ceb7d0d902dde55ceea35b"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Angle"
-      ]
+      }
     },
     {
       "id": "reference-e63dc5d1f12beac7",
@@ -3556,8 +3552,8 @@
     },
     {
       "id": "reference-2f5817a3631c16f8",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Angle. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Angle/RightAngle exports now reach shared Rust planar paths and nominal values. Exact source/options qualification, dot children and remaining method breadth are still owned; export presence does not establish parity.",
       "owners": [
         "#77",
         "#89",
@@ -3571,16 +3567,12 @@
         "directive_line": 913,
         "name": "RightArcAngleExample",
         "source_sha256": "069bc5d67600d4a094b29bfc795d4a7d3afc1223fac27d6e3ef7cb34881719e1"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Angle"
-      ]
+      }
     },
     {
       "id": "reference-709f91066f411b5d",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Angle. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Angle/RightAngle exports now reach shared Rust planar paths and nominal values. Exact source/options qualification, dot children and remaining method breadth are still owned; export presence does not establish parity.",
       "owners": [
         "#77",
         "#89",
@@ -3594,16 +3586,12 @@
         "directive_line": 933,
         "name": "AngleExample",
         "source_sha256": "26ed7c90a29db63a342628e2f483e40b9ea98646856fe8bff6874053548c6478"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Angle"
-      ]
+      }
     },
     {
       "id": "reference-463c87c4cc18b8fc",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Angle. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Angle/RightAngle exports now reach shared Rust planar paths and nominal values. Exact source/options qualification, dot children and remaining method breadth are still owned; export presence does not establish parity.",
       "owners": [
         "#77",
         "#89",
@@ -3617,16 +3605,12 @@
         "directive_line": 957,
         "name": "FilledAngle",
         "source_sha256": "47c1251c73b7c2e6ce8ceaa6d823a873cac2c2be1b5978af6898e60c045e8198"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Angle"
-      ]
+      }
     },
     {
       "id": "reference-4ba1933bd6d678e2",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Angle. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Angle/RightAngle exports now reach shared Rust planar paths and nominal values. Exact source/options qualification, dot children and remaining method breadth are still owned; export presence does not establish parity.",
       "owners": [
         "#70",
         "#77",
@@ -3641,16 +3625,12 @@
         "directive_line": 1131,
         "name": "GetValueExample",
         "source_sha256": "e1a8efd7544061e981a46bd596df5743a7ebfc918ee1952733dfba631ec74993"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Angle"
-      ]
+      }
     },
     {
       "id": "reference-00dcd2159059ae6d",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Angle. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Angle/RightAngle exports now reach shared Rust planar paths and nominal values. Exact source/options qualification, dot children and remaining method breadth are still owned; export presence does not establish parity.",
       "owners": [
         "#77",
         "#89",
@@ -3663,16 +3643,12 @@
         "directive_line": 1177,
         "name": "AngleFromThreePointsExample",
         "source_sha256": "ed537fdf82cfb7d08c5c8063fa32555b85e121181dd813aab711d57f09fd7239"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Angle"
-      ]
+      }
     },
     {
       "id": "reference-ec302ca0ce127001",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks RightAngle. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Angle/RightAngle exports now reach shared Rust planar paths and nominal values. Exact source/options qualification, dot children and remaining method breadth are still owned; export presence does not establish parity.",
       "owners": [
         "#77",
         "#89",
@@ -3686,11 +3662,7 @@
         "directive_line": 1205,
         "name": "RightAngleExample",
         "source_sha256": "6bb8e42e39b2cbf16a9a78e2c658367076d027b9196944abf53a54409b1a00c6"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "RightAngle"
-      ]
+      }
     },
     {
       "id": "reference-b298d19b6a0542aa",
@@ -5893,8 +5865,8 @@
     },
     {
       "id": "reference-648197f2ccf5f745",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Angle. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Angle/RightAngle exports now reach shared Rust planar paths and nominal values. Exact source/options qualification, dot children and remaining method breadth are still owned; export presence does not establish parity.",
       "owners": [
         "#77",
         "#89",
@@ -5908,11 +5880,7 @@
         "directive_line": 2321,
         "name": "AngleMidPoint",
         "source_sha256": "b5e1d0d6c370952a144063ac8e881788bba6b807a7f397c758f65a0f7e50fd86"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Angle"
-      ]
+      }
     },
     {
       "id": "reference-bb2867ad7a9d5dae",
@@ -6233,8 +6201,8 @@
     },
     {
       "id": "reference-db7986987849924b",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Angle. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Angle/RightAngle exports now reach shared Rust planar paths and nominal values. Exact source/options qualification, dot children and remaining method breadth are still owned; export presence does not establish parity.",
       "owners": [
         "#77",
         "#89",
@@ -6248,11 +6216,7 @@
         "directive_line": 660,
         "name": "AngleMidPoint",
         "source_sha256": "b5e1d0d6c370952a144063ac8e881788bba6b807a7f397c758f65a0f7e50fd86"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Angle"
-      ]
+      }
     },
     {
       "id": "reference-3be756f118be6d0e",

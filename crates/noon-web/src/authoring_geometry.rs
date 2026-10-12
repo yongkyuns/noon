@@ -215,6 +215,41 @@ impl WasmManimGeometryOptions {
             .map_err(js_error)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn angle(
+        coordinates: &[f64],
+        radius: Option<f64>,
+        quadrant_x: f64,
+        quadrant_y: f64,
+        other_angle: bool,
+        elbow: bool,
+        num_components: u32,
+    ) -> Result<Self, JsValue> {
+        if coordinates.len() != 8 {
+            return Err(js_error(noon::AuthoringError::InvalidAngleOptions(
+                "Angle requires two XY line endpoint pairs",
+            )));
+        }
+        let first = [
+            (coordinates[0], coordinates[1]),
+            (coordinates[2], coordinates[3]),
+        ];
+        let second = [
+            (coordinates[4], coordinates[5]),
+            (coordinates[6], coordinates[7]),
+        ];
+        let options = noon::ManimAngleOptions {
+            radius,
+            quadrant: (quadrant_x, quadrant_y),
+            other_angle,
+            elbow,
+            num_components,
+        };
+        noon::ManimGeometryOptions::angle_from_endpoints(first, second, options)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
     pub fn ellipse(width: f64, height: f64) -> Result<Self, JsValue> {
         noon::ManimGeometryOptions::ellipse(width, height)
             .map(Self::from_options)
@@ -410,6 +445,18 @@ pub async fn create_polygon_constructors_renderer(
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
     let program =
         noon::polygon_example::program().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name=createAngleConstructorsRenderer)]
+pub async fn create_angle_constructors_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::angle_example::program().map_err(|e| JsValue::from_str(&e.to_string()))?;
     crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 

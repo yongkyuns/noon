@@ -1,7 +1,5 @@
 //! Paired polygon constructors on the ordinary native/direct-WASM path.
-use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, ManimGeometryOptions, Scene,
-};
+use crate::{LiveProgram, ManimGeometryOptions, Scene};
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -46,20 +44,7 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     Ok(scene)
 }
 
-pub struct PolygonPlayback(bool);
-impl LiveContinuation for PolygonPlayback {
-    type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
-        if self.0 {
-            return Ok(ContinuationStep::Finished);
-        }
-        self.0 = true;
-        Ok(ContinuationStep::Await(
-            live.wait_segment(0.2).map_err(|e| e.to_string())?,
-        ))
-    }
-}
-
-pub fn program() -> Result<LiveProgram<PolygonPlayback>, Box<dyn std::error::Error>> {
-    Ok(scene()?.into_live_program(PolygonPlayback(false))?)
+pub fn program(
+) -> Result<LiveProgram<crate::example_scenes::static_hold::Hold>, Box<dyn std::error::Error>> {
+    Ok(crate::example_scenes::static_hold::program(scene()?, 0.2)?)
 }

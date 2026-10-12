@@ -1717,6 +1717,11 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = angleValue)]
+        pub fn angle_value(&self, degrees: bool) -> Result<f64, JsValue> {
+            self.handle.angle_value(degrees).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = manimLineEndpoints)]
         pub fn manim_line_endpoints(&self) -> Result<WasmManimLineEndpoints, JsValue> {
             self.handle
