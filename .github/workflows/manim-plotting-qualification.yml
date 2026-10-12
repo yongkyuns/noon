@@ -11,6 +11,7 @@ on:
       - 'web/number-label-smoke.js'
       - 'web/manim-compat-smoke.html'
       - 'scripts/plotting-qualification.mjs'
+      - 'scripts/polygon-qualification.mjs'
       - 'scripts/paired-authoring-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
       - 'scripts/live-coordinate-checks.mjs'
@@ -83,6 +84,10 @@ jobs:
           npx playwright install chromium
       - name: Qualify paired plotting and resumed Python authoring
         run: node scripts/plotting-qualification.mjs
+      - name: Qualify paired polygon constructors
+        env:
+          NOON_POLYGON_ARTIFACTS: plotting-artifacts/polygons
+        run: node scripts/polygon-qualification.mjs
       - name: Qualify animated axes and graph reveals
         run: node scripts/time-series-plotting-qualification.mjs coordinates
       - name: Qualify animated NumberLine and transformed live queries

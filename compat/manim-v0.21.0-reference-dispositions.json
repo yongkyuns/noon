@@ -342,8 +342,8 @@
     },
     {
       "id": "reference-e8223b3769d932af",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Polygon. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#70",
         "#77",
@@ -360,11 +360,7 @@
         "directive_line": 410,
         "name": "PolygonOnAxes",
         "source_sha256": "a273761386be0759a31de24ef7bd1868df2731185627237d7086f806b3610996"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Polygon"
-      ]
+      }
     },
     {
       "id": "reference-6974a3ae2e237af1",
@@ -1927,8 +1923,8 @@
     },
     {
       "id": "reference-ac9b49fca5e90280",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Star. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#80",
@@ -1945,11 +1941,7 @@
         "directive_line": 3,
         "name": "Growing",
         "source_sha256": "4978ea05750a5da523bcb13922a563e7c5e6da198f8868e4c568e0f9586713e9"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Star"
-      ]
+      }
     },
     {
       "id": "reference-cffcd95cc1032b53",
@@ -2068,8 +2060,7 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "DARK_GRAY",
-        "RegularPolygon"
+        "DARK_GRAY"
       ]
     },
     {
@@ -2577,8 +2568,8 @@
     },
     {
       "id": "reference-d46a79f2a68ea0f5",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Star. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#82",
@@ -2593,11 +2584,7 @@
         "directive_line": 724,
         "name": "CyclicReplaceExample",
         "source_sha256": "f98cd238bbec24b9db528523444ca1bb3f2436944fe99860de29e2ddf4625664"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Star"
-      ]
+      }
     },
     {
       "id": "reference-032112ead5674b41",
@@ -3359,8 +3346,7 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "LabeledPolygram",
-        "Polygon"
+        "LabeledPolygram"
       ]
     },
     {
@@ -3708,8 +3694,8 @@
     },
     {
       "id": "reference-b298d19b6a0542aa",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Polygram. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#80",
@@ -3725,16 +3711,12 @@
         "directive_line": 65,
         "name": "PolygramExample",
         "source_sha256": "d36dc5520f4f357dca60a2e461afbb9f2154e874e9c727f874f806783bcaf32c"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Polygram"
-      ]
+      }
     },
     {
       "id": "reference-4c997e579fe82a3d",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Star. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#89",
@@ -3748,16 +3730,12 @@
         "directive_line": 213,
         "name": "PolygramRoundCorners",
         "source_sha256": "14aef6ecae69455a94e9dd79dde45870abcf88c2665928bf165d59f709877850"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Star"
-      ]
+      }
     },
     {
       "id": "reference-c9ed340307d64511",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Polygon. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#89",
@@ -3770,16 +3748,12 @@
         "directive_line": 323,
         "name": "PolygonExample",
         "source_sha256": "c20d6d51a773246860d93f32af1635f29035b5bd23e740264e6432b7e2dcb64b"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Polygon"
-      ]
+      }
     },
     {
       "id": "reference-1d16b9d26e7d208f",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks RegularPolygram. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#89",
@@ -3792,16 +3766,12 @@
         "directive_line": 368,
         "name": "RegularPolygramExample",
         "source_sha256": "69202ca212f78272481c26b11cb64d168488c7e9477e4f30124b57a4c5d9d386"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "RegularPolygram"
-      ]
+      }
     },
     {
       "id": "reference-e27cfd86934783f7",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks RegularPolygon. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#89",
@@ -3815,16 +3785,12 @@
         "directive_line": 448,
         "name": "RegularPolygonExample",
         "source_sha256": "86b2c7d428e812497c3036dc4e3f378d9cbcba2b71a429d848c23d37b69d3540"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "RegularPolygon"
-      ]
+      }
     },
     {
       "id": "reference-e0b2e012f427f37c",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks RegularPolygram, Star. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#89",
@@ -3837,17 +3803,12 @@
         "directive_line": 500,
         "name": "StarExample",
         "source_sha256": "e989b69b4d9c03dad746acdd44f47a99b1a5aafac6843109d1e4a38d59188a53"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "RegularPolygram",
-        "Star"
-      ]
+      }
     },
     {
       "id": "reference-017d5a0e3ceb806a",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Star. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#89",
@@ -3861,11 +3822,7 @@
         "directive_line": 511,
         "name": "DifferentDensitiesExample",
         "source_sha256": "58fb4e0a56b002c53fbaa982e8bde5e10f603d064cca182d63ce22f53901a0d6"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Star"
-      ]
+      }
     },
     {
       "id": "reference-f3f6ab98dcb6db90",
@@ -3962,8 +3919,7 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "Cutout",
-        "RegularPolygon"
+        "Cutout"
       ]
     },
     {
@@ -5401,8 +5357,8 @@
     },
     {
       "id": "reference-582cd0d9483b9b5a",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Star. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#83",
@@ -5419,11 +5375,7 @@
         "directive_line": 6,
         "name": "MatrixExamples",
         "source_sha256": "e51dd4753529f9d1ea2fad0884f9a5618644d87730805bb96186a96e75c6eb19"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Star"
-      ]
+      }
     },
     {
       "id": "reference-b1b83df518352ea5",
@@ -5605,8 +5557,8 @@
     },
     {
       "id": "reference-1140f4091f99c75c",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Star. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#83",
@@ -5622,11 +5574,7 @@
         "directive_line": 556,
         "name": "MobjectMatrixExample",
         "source_sha256": "0153430f0c60ea540b44df66828ca85eb339b0ed6378006edcbd28ec8cb6d902"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Star"
-      ]
+      }
     },
     {
       "id": "reference-5fb8a5ef4f254c1b",
@@ -6571,8 +6519,8 @@
     },
     {
       "id": "reference-c664295c49784370",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks RegularPolygon. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#89",
@@ -6586,11 +6534,7 @@
         "directive_line": 743,
         "name": "ChangeOfDirection",
         "source_sha256": "a12b86e126e6f59f128f28f25e195d67e78f119c8d461ad048cbe847715ef263"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "RegularPolygon"
-      ]
+      }
     },
     {
       "id": "reference-30e4622d2e1d6b85",
@@ -6674,8 +6618,7 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "DashedVMobject",
-        "RegularPolygon"
+        "DashedVMobject"
       ]
     },
     {
@@ -6780,8 +6723,8 @@
     },
     {
       "id": "reference-618c21e01a2f6ac2",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks Star. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#83",
@@ -6797,11 +6740,7 @@
         "directive_line": 134,
         "name": "TableExamples",
         "source_sha256": "11cf414c6f2f114bf660d34bab88715187c72c1bcf4e96d8fce60caa807ddce8"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "Star"
-      ]
+      }
     },
     {
       "id": "reference-b795affdbe321a21",
@@ -8439,8 +8378,8 @@
     },
     {
       "id": "reference-0406d21266997002",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks RegularPolygon. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Polygon/star constructor exports now reach shared Rust retained paths. Exact pinned source, broader options and method qualification remain owned; export presence alone is not parity.",
       "owners": [
         "#77",
         "#89",
@@ -8454,11 +8393,7 @@
         "directive_line": 2148,
         "name": "ChangeOfDirection",
         "source_sha256": "a12b86e126e6f59f128f28f25e195d67e78f119c8d461ad048cbe847715ef263"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "RegularPolygon"
-      ]
+      }
     },
     {
       "id": "reference-e533256547036528",
