@@ -111,18 +111,6 @@ def _dot_init(
     self.radius = radius_value
 
 
-def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
-    if _shared._create_geometry_handle is None:
-        raise RuntimeError("Geometry construction requires the shared Rust authoring host")
-
-    options = dict(kwargs)
-    color = options.pop("color", None)
-    candidate = engine_call(_shared._geometry_options.triangle)
-    _shared._apply_shared_constructor_options(candidate, options)
-    _apply_candidate_color(candidate, color)
-    _shared._attach_geometry_options(self, candidate, "Triangle")
-
-
 def _ellipse_init(
     self: _geometry.Ellipse,
     width: float = 2.0,

@@ -7,5 +7,8 @@ await qualifyPairedAuthoring({
     duration: 0.2, sampleTime: 0.2, playback: "live" },
     { id: "angle-constructors", sourcePath: "parity/manim-v0.21/core-examples/angle_constructors.py",
       scene: "AngleConstructors", factory: "createAngleConstructorsRenderer", objectCount: 18,
+      duration: 0.2, sampleTime: 0.2, playback: "live" },
+    { id: "triangle-options", sourcePath: "parity/manim-v0.21/core-examples/triangle_options.py",
+      scene: "TriangleOptions", factory: "createTriangleOptionsRenderer", objectCount: 3,
       duration: 0.2, sampleTime: 0.2, playback: "live" }],
 });

@@ -460,6 +460,19 @@ pub async fn create_angle_constructors_renderer(
     crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createTriangleOptionsRenderer)]
+pub async fn create_triangle_options_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::triangle_example::program().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 #[wasm_bindgen]
 impl WasmAuthoringVectorPath {
     #[wasm_bindgen(constructor)]

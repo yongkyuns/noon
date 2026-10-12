@@ -1,26 +1,12 @@
-//! Shared retained geometry authoring, including the canonical Manim Triangle and Brace paths.
+//! Shared retained geometry authoring, including the canonical Manim Brace paths.
 use crate::{
     family_layout::union_bounds,
     semantic_mobject::{authoring_render_f64, layout_for_content},
     AuthoringError, LayoutAnchor, ManimGeometryOptions, Mobject, Scene,
 };
-use noon_core::{Bounds2D64, SemanticNodeKind, SemanticTransform2_5D, Vec2, VectorPath, TAU};
+use noon_core::{Bounds2D64, SemanticNodeKind, SemanticTransform2_5D, Vec2, VectorPath};
 
 const BRACE_DEFAULT_MIN_WIDTH: f64 = 0.90552;
-
-pub(crate) fn manim_triangle_path() -> VectorPath {
-    let vertices: Vec<_> = (0..3)
-        .map(|index| {
-            let angle = TAU / 4.0 + index as f32 * (TAU / 3.0);
-            Vec2::new(angle.cos(), angle.sin())
-        })
-        .collect();
-    VectorPath::new()
-        .move_to(vertices[0])
-        .line_to(vertices[1])
-        .line_to(vertices[2])
-        .close()
-}
 
 impl ManimGeometryOptions {
     /// Construct the ManimCE v0.21 Brace path around an authored object or family.

@@ -1372,6 +1372,13 @@
       "expected_duration": 0.2
     },
     {
+      "id": "triangle-options",
+      "scene": "TriangleOptions",
+      "source": "parity/manim-v0.21/core-examples/triangle_options.py",
+      "expected_duration": 0.2,
+      "notes": "Triangle inherits regular-polygon defaults, radius/start-angle options and vertex queries; unchanged raster thresholds apply."
+    },
+    {
       "id": "angle-constructors",
       "scene": "AngleConstructors",
       "source": "parity/manim-v0.21/core-examples/angle_constructors.py",
