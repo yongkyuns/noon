@@ -30,6 +30,9 @@ on:
       - 'scripts/test_pinned_python_helpers.py'
       - 'web/python/_manim_iterables.py'
       - 'web/python/test_manim_iterable_utilities.py'
+      - 'scripts/manim-config-utilities.py'
+      - 'web/python/_manim_config_utils.py'
+      - 'web/python/test_manim_config_utilities.py'
       - 'web/python/_manim_namespace.py'
       - 'web/python/test_manim_namespace.py'
   workflow_dispatch:
@@ -70,6 +73,7 @@ jobs:
           python3 noon/scripts/manim-iterable-utilities.py manim-v0.21.0
           python3 noon/scripts/manim-rate-intervals.py manim-v0.21.0
           python3 noon/scripts/test_pinned_python_helpers.py
+          python3 noon/scripts/manim-config-utilities.py manim-v0.21.0
       - name: Extract and validate reference inventory
         shell: bash
         run: |

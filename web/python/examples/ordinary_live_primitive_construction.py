@@ -10,7 +10,7 @@ from noon import Circle, Color, Scene, Square
 
 class OrdinaryLivePrimitiveConstruction(Scene):
     async def construct(self):
-        anchor = Circle(radius=0.2, color=Color(1.0, 1.0, 1.0)).set_fill(
+        anchor = Circle(radius=0.2).set_fill(
             Color(1.0, 1.0, 1.0), opacity=1.0
         )
         self.add(anchor)
@@ -18,22 +18,24 @@ class OrdinaryLivePrimitiveConstruction(Scene):
         await self.wait(1.0)
         assert self.time == 1.0
 
-        circle = Circle(
-            radius=0.3,
-            position=(2.0, -1.0),
-            scale=(1.5, 1.5),
-            fill=Color(0.0, 0.4, 1.0, 0.6),
-            stroke_width=8.0,
-            stroke_opacity=0.9,
-        )
-        square = Square(
-            side_length=0.5,
-            position=(-2.0, 1.0),
-            rotation=0.25,
-            color=Color(0.2, 0.9, 0.3),
-            fill_opacity=0.7,
-            opacity=0.75,
-        )
+        Circle.set_default(radius=0.3, stroke_width=8.0)
+        Square.set_default(side_length=0.5, color=Color(0.2, 0.9, 0.3))
+        try:
+            circle = Circle(
+                position=(2.0, -1.0),
+                scale=(1.5, 1.5),
+                fill=Color(0.0, 0.4, 1.0, 0.6),
+                stroke_opacity=0.9,
+            )
+            square = Square(
+                position=(-2.0, 1.0),
+                rotation=0.25,
+                fill_opacity=0.7,
+                opacity=0.75,
+            )
+        finally:
+            Circle.set_default()
+            Square.set_default()
         self.add(circle, square)
 
         assert circle.get_center() == (2.0, -1.0)
