@@ -1465,7 +1465,28 @@ impl GpuRenderer {
         } = options;
         let scene_view = self.presentation.scene_view(view);
         let sample_count = self.scene_render_sample_count(prepared, derived);
-        let spatial_stats = self.encode_spatial(encoder, scene_view, clear_color, sample_count);
+        let spatial_only = self.spatial.is_active() && !has_painter_instances(prepared, derived);
+        let spatial_stats = self.encode_spatial(
+            encoder,
+            scene_view,
+            clear_color,
+            sample_count,
+            query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: spatial_only.then_some(1),
+            }),
+        );
+        // Pure spatial content is already complete, including its resolve. Avoid
+        // loading/storing the same target in an empty painter pass. Resident
+        // planar rows conservatively retain the existing composition path.
+        if spatial_only {
+            let mut stats = spatial_stats;
+            if finalize {
+                stats += self.finalize_frame(encoder, view, overlay);
+            }
+            return stats;
+        }
         let load = if self.spatial.is_active() {
             wgpu::LoadOp::Load
         } else {
@@ -1486,7 +1507,7 @@ impl GpuRenderer {
             })];
             let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
                 query_set,
-                beginning_of_pass_write_index: Some(0),
+                beginning_of_pass_write_index: (!self.spatial.is_active()).then_some(0),
                 end_of_pass_write_index: Some(1),
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1516,7 +1537,7 @@ impl GpuRenderer {
             })];
             let timestamp_writes = query_set.map(|query_set| wgpu::RenderPassTimestampWrites {
                 query_set,
-                beginning_of_pass_write_index: Some(0),
+                beginning_of_pass_write_index: (!self.spatial.is_active()).then_some(0),
                 end_of_pass_write_index: Some(1),
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1546,12 +1567,20 @@ impl GpuRenderer {
         scene: &wgpu::TextureView,
         clear: wgpu::Color,
         samples: u32,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) -> DrawStats {
         if samples == 1 {
-            self.spatial.encode(encoder, scene, None, clear, samples)
-        } else {
             self.spatial
-                .encode(encoder, &self.path_msaa_view, Some(scene), clear, samples)
+                .encode(encoder, scene, None, clear, samples, timestamp_writes)
+        } else {
+            self.spatial.encode(
+                encoder,
+                &self.path_msaa_view,
+                Some(scene),
+                clear,
+                samples,
+                timestamp_writes,
+            )
         }
     }
 
@@ -2146,6 +2175,20 @@ fn validate_empty_preload_frame(
     Ok(())
 }
 
+// Check resident slices rather than walking painter chunks or semantic objects.
+// Hidden planar instances may keep the painter pass; an empty slice cannot draw.
+fn has_painter_instances(
+    prepared: &PreparedFrame<'_>,
+    derived: Option<&PreparedDerivedDisplay>,
+) -> bool {
+    !prepared.circles.is_empty()
+        || !prepared.rectangles.is_empty()
+        || !prepared.lines.is_empty()
+        || !prepared.paths.is_empty()
+        || !prepared.mega_path_vertex_instances.is_empty()
+        || derived.is_some_and(|derived| !derived.slots.is_empty())
+}
+
 fn create_path_msaa_target(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
@@ -2445,6 +2488,40 @@ mod tests {
             render_geometries: vec![None; 2],
             render_transforms: vec![None; 2],
         }
+    }
+
+    #[test]
+    fn painter_pass_detection_keeps_resident_hidden_geometry() {
+        let mut frame = test_frame();
+        frame.presences.fill(false);
+        let mut preparer = FramePreparer::new();
+        let hidden = preparer.prepare(&frame);
+        assert!(has_painter_instances(&hidden, None));
+
+        let empty = FrameState {
+            time: 0.0,
+            objects: Vec::new(),
+            presences: Vec::new(),
+            reveals: Vec::new(),
+            morphs: Vec::new(),
+            render_geometries: Vec::new(),
+            render_transforms: Vec::new(),
+            family_animations: Vec::new(),
+            family_animation_plan_indices: Vec::new(),
+        };
+        let mut empty_preparer = FramePreparer::new();
+        let prepared = empty_preparer.prepare(&empty);
+        assert!(!has_painter_instances(&prepared, None));
+        let mut derived = PreparedDerivedDisplay::default();
+        assert!(!has_painter_instances(&prepared, Some(&derived)));
+        derived.slots.push(crate::PreparedDerivedDisplaySlot {
+            anchor_object_index: 0,
+            anchor_side: noon_runtime::TransientAnchorSide::After,
+            occurrence_index: 0,
+            primitive: crate::DerivedDisplayPrimitive::Circle,
+            instance_index: 0,
+        });
+        assert!(has_painter_instances(&prepared, Some(&derived)));
     }
 
     #[test]

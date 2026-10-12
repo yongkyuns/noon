@@ -151,6 +151,21 @@ fn build_scene(
     noon_core::SemanticNodeId,
     noon_core::SemanticNodeId,
 ) {
+    build_scene_with_overlay_opacity(with_overlay, projection_kind, huge_vertex, 1.0)
+}
+
+fn build_scene_with_overlay_opacity(
+    with_overlay: bool,
+    projection_kind: bool,
+    huge_vertex: bool,
+    overlay_opacity: f64,
+) -> (
+    SceneInstance,
+    SemanticExecutionIndex,
+    noon_core::SemanticNodeId,
+    noon_core::SemanticNodeId,
+    noon_core::SemanticNodeId,
+) {
     let mut store = SemanticStore::new();
     let payload = if huge_vertex {
         MeshResource::new(
@@ -197,6 +212,7 @@ fn build_scene(
         let mut overlay = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.42 });
         overlay.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
         overlay.style = opaque_style(Color::GREEN);
+        overlay.style.object_opacity = overlay_opacity;
         attach(&mut store, overlay);
     }
 
@@ -451,6 +467,18 @@ fn render(
     scene: &mut SceneInstance,
     target: &Target,
 ) -> Result<(noon_render_wgpu::SpatialUploadStats, Vec<u8>), SpatialPrepareError> {
+    render_with_query(device, queue, renderer, frame_preparer, scene, target, None)
+}
+
+fn render_with_query(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    renderer: &mut GpuRenderer,
+    frame_preparer: &mut FramePreparer,
+    scene: &mut SceneInstance,
+    target: &Target,
+    query: Option<&wgpu::QuerySet>,
+) -> Result<(noon_render_wgpu::SpatialUploadStats, Vec<u8>), SpatialPrepareError> {
     let publication = scene.take_renderer_publication();
     let stats = renderer.prepare_spatial(device, queue, &publication)?;
     let retry = renderer.prepare_spatial(device, queue, &publication)?;
@@ -463,8 +491,54 @@ fn render(
     let prepared = frame_preparer.prepare_incremental(publication.frame(), publication.changes());
     renderer.upload(device, queue, &prepared);
     let mut encoder = device.create_command_encoder(&Default::default());
-    renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);
-    Ok((stats, target.read(device, queue, encoder)))
+    let timestamp_readback = if let Some(query) = query {
+        renderer.encode_profiled(
+            &mut encoder,
+            &target.view,
+            &prepared,
+            wgpu::Color::BLACK,
+            query,
+        );
+        let resolved = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spatial timestamp validation"),
+            size: 16,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        encoder.resolve_query_set(query, 0..2, &resolved, 0);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spatial timestamp readback"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&resolved, 0, &readback, 0, 16);
+        Some(readback)
+    } else {
+        renderer.encode(&mut encoder, &target.view, &prepared, wgpu::Color::BLACK);
+        None
+    };
+    let pixels = target.read(device, queue, encoder);
+    if let Some(readback) = timestamp_readback {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).unwrap()
+            });
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        receiver.recv().unwrap().unwrap();
+        let bytes = readback.slice(..).get_mapped_range().unwrap();
+        let begin = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let end = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        assert!(
+            end > begin,
+            "both spatial/mixed GPU timestamps must be written: {begin}..{end}"
+        );
+        drop(bytes);
+        readback.unmap();
+    }
+    Ok((stats, pixels))
 }
 
 fn pixel(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -701,6 +775,10 @@ fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
 }
 
 fn cairo_path_scene() -> SceneInstance {
+    cairo_path_scene_with_invisible_overlay(false)
+}
+
+fn cairo_path_scene_with_invisible_overlay(invisible_overlay: bool) -> SceneInstance {
     let mut store = SemanticStore::new();
     let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
     camera.set_role(SemanticObjectRole::Camera3D);
@@ -748,6 +826,12 @@ fn cairo_path_scene() -> SceneInstance {
     light.style = opaque_style(Color::RED);
     light.transform.translation = SemanticVec3::new(-1.0, 1.0, 0.0);
     let light_node = attach(&mut store, light);
+    if invisible_overlay {
+        let mut overlay = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.42 });
+        overlay.style = opaque_style(Color::GREEN);
+        overlay.style.object_opacity = 0.0;
+        attach(&mut store, overlay);
+    }
     let mut index = SemanticExecutionIndex::new();
     let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
         .unwrap()
@@ -1561,6 +1645,88 @@ fn spatial_renderer_rejects_an_older_publication_after_advancing() {
             renderer.prepare_spatial(&device, &queue, &older_publication),
             Err(SpatialPrepareError::StalePublication)
         );
+    });
+}
+
+#[test]
+fn spatial_only_and_invisible_planar_composition_have_identical_pixels_when_seeking() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping spatial pass GPU qualification: no adapter is available");
+            return;
+        };
+        let timestamps = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: if timestamps {
+                    wgpu::Features::TIMESTAMP_QUERY
+                } else {
+                    wgpu::Features::empty()
+                },
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let query = timestamps.then(|| {
+            device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("spatial-only and mixed pass timestamps"),
+                ty: wgpu::QueryType::Timestamp,
+                count: 2,
+            })
+        });
+        let target = Target::new(&device);
+        for profile in 0..3 {
+            let scene = |invisible| {
+                if profile == 2 {
+                    cairo_path_scene_with_invisible_overlay(invisible)
+                } else {
+                    build_scene_with_overlay_opacity(invisible, profile == 1, false, 0.0).0
+                }
+            };
+            let mut spatial = scene(false);
+            let mut mixed = scene(true);
+            let mut spatial_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+            let mut mixed_renderer = GpuRenderer::new(&device, &queue, FORMAT);
+            spatial_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            mixed_renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            let mut spatial_preparer = FramePreparer::new();
+            let mut mixed_preparer = FramePreparer::new();
+            for time in [0.0, 0.5, 1.5, 0.0] {
+                spatial.seek(time).unwrap();
+                mixed.seek(time).unwrap();
+                let (spatial_stats, expected) = render_with_query(
+                    &device,
+                    &queue,
+                    &mut spatial_renderer,
+                    &mut spatial_preparer,
+                    &mut spatial,
+                    &target,
+                    query.as_ref(),
+                )
+                .unwrap();
+                let (mixed_stats, actual) = render_with_query(
+                    &device,
+                    &queue,
+                    &mut mixed_renderer,
+                    &mut mixed_preparer,
+                    &mut mixed,
+                    &target,
+                    query.as_ref(),
+                )
+                .unwrap();
+                assert_eq!(
+                    actual, expected,
+                    "profile {profile} at {time}: painter pass must not change spatial pixels"
+                );
+                assert!(expected
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[..3].iter().any(|channel| *channel > 0)));
+                assert_eq!(spatial_stats.resident_meshes, mixed_stats.resident_meshes);
+            }
+        }
     });
 }
 
