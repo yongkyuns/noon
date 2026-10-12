@@ -76,6 +76,29 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         self.assertIn("Write", coverage.noon_public_exports())
         self.assertIn("Unwrite", coverage.noon_public_exports())
 
+    def test_static_export_audit_captures_installed_namespace(self) -> None:
+        exports = coverage.noon_public_exports()
+        for name in (
+            "np", "PURE_RED", "PURE_GREEN", "PURE_BLUE", "PURE_CYAN",
+            "PURE_MAGENTA", "PURE_YELLOW",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, exports)
+
+    def test_temporary_export_list_does_not_leak_between_scopes(self) -> None:
+        tree = coverage.ast.parse(
+            "def install():\n"
+            "    exports = list(module.__all__)\n"
+            "    for name, value in {'Public': object()}.items():\n"
+            "        exports.append(name)\n"
+            "    module.__all__ = exports\n"
+            "def internal():\n"
+            "    exports = []\n"
+            "    for name, value in {'Internal': object()}.items():\n"
+            "        exports.append(name)\n"
+        )
+        self.assertEqual(coverage._dynamic_public_mapping_exports(tree, {}), {"Public"})
+
     def test_static_export_audit_ignores_internal_mapping_loops(self) -> None:
         tree = coverage.ast.parse(
             "for name, value in {'Internal': object()}.items():\n"

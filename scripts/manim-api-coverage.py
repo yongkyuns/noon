@@ -50,16 +50,20 @@ def _dict_string_keys(node: ast.AST) -> set[str]:
     return result
 
 
-def _public_mapping_keys(node: ast.AST) -> set[str]:
+def _public_mapping_keys(
+    node: ast.AST, bindings: dict[str, set[str]] | None = None
+) -> set[str]:
     """Recover keys from a literal public mapping or its ``.items()`` view."""
 
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         if node.func.attr == "items" and not node.args and not node.keywords:
-            return _dict_string_keys(node.func.value)
-    return _dict_string_keys(node)
+            return _literal_strings(node.func.value, bindings)
+    return _literal_strings(node, bindings)
 
 
-def _loop_registers_public_name(node: ast.For) -> bool:
+def _loop_registers_public_name(
+    node: ast.For, export_lists: set[str] | None = None
+) -> bool:
     """Require a mapping loop to append its name into the public export list."""
 
     if not isinstance(node.target, ast.Tuple):
@@ -75,12 +79,50 @@ def _loop_registers_public_name(node: ast.For) -> bool:
         receiver = ast.unparse(child.func.value)
         argument = child.args[0]
         if (
-            (receiver.endswith(".__all__") or receiver == "__all__")
+            (receiver.endswith(".__all__") or receiver == "__all__"
+             or receiver in (export_lists or set()))
             and isinstance(argument, ast.Name)
             and argument.id in target_names
         ):
             return True
     return False
+
+
+def _dynamic_public_mapping_exports(
+    tree: ast.Module, bindings: dict[str, set[str]]
+) -> set[str]:
+    """Recover mapping keys appended to a locally assembled public export list.
+
+    Namespace installation copies ``__all__``, appends aliases/colors, and publishes
+    the list at the end. Keep each lexical scope separate so an unrelated helper's
+    same-named local list cannot become public evidence.
+    """
+    exports: set[str] = set()
+    for scope in ast.walk(tree):
+        if not isinstance(scope, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        nodes = []
+        pending = list(scope.body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            nodes.append(node)
+            pending.extend(ast.iter_child_nodes(node))
+        export_lists = {
+            node.value.id
+            for node in nodes
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name)
+            and any(
+                (isinstance(target, ast.Name) and target.id == "__all__")
+                or (isinstance(target, ast.Attribute) and target.attr == "__all__")
+                for target in node.targets
+            )
+        }
+        for node in nodes:
+            if isinstance(node, ast.For) and _loop_registers_public_name(node, export_lists):
+                exports.update(_public_mapping_keys(node.iter, bindings))
+    return exports
 
 
 def noon_public_exports() -> set[str]:
@@ -101,6 +143,7 @@ def noon_public_exports() -> set[str]:
                 for target in declaration.targets:
                     if isinstance(target, ast.Name):
                         bindings[target.id] = _literal_strings(declaration.value, bindings)
+        exports.update(_dynamic_public_mapping_exports(tree, bindings))
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 for target in node.targets:
@@ -108,18 +151,6 @@ def noon_public_exports() -> set[str]:
                         exports.update(_literal_strings(node.value, bindings))
                     if isinstance(target, ast.Name) and target.id == "public":
                         exports.update(_public_mapping_keys(node.value))
-            if isinstance(node, ast.For):
-                # Some adapters register a small public mapping directly in a
-                # ``for name, value in {...}.items()`` loop rather than assigning
-                # it to ``public`` first (notably retained Write/Unwrite).
-                target = node.target
-                if (
-                    isinstance(target, ast.Tuple)
-                    and len(target.elts) == 2
-                    and all(isinstance(item, ast.Name) for item in target.elts)
-                    and _loop_registers_public_name(node)
-                ):
-                    exports.update(_public_mapping_keys(node.iter))
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 if node.func.attr == "append" and len(node.args) == 1:
                     arg = node.args[0]
