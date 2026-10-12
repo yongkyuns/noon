@@ -1759,6 +1759,7 @@ pub enum SemanticStoreError {
         family: SemanticNodeId,
         member: SemanticNodeId,
     },
+    FamilyMultiplicityOverflow(SemanticNodeId),
     DuplicateSourceIdentity(SourceIdentity),
 }
 
@@ -1799,6 +1800,12 @@ impl std::fmt::Display for SemanticStoreError {
             ),
             Self::DuplicateSourceIdentity(source) => {
                 write!(formatter, "duplicate semantic source identity {source:?}")
+            }
+            Self::FamilyMultiplicityOverflow(root) => {
+                write!(
+                    formatter,
+                    "family {root:?} has more than u64::MAX paths to a member"
+                )
             }
         }
     }

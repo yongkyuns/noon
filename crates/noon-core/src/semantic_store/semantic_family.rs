@@ -180,6 +180,59 @@ impl SemanticStore {
         self.ordered_nodes(root, false)
     }
 
+    /// Unique leaves in first-occurrence order, with the number of membership
+    /// paths to each leaf. Recursive Manim fade visits aliases once per path,
+    /// unlike animation/family queries that de-duplicate the same descendants.
+    /// Topological accumulation visits each node/edge once instead of expanding
+    /// every path through a shared DAG. An unrepresentable count fails explicitly.
+    pub fn ordered_leaf_multiplicities(
+        &self,
+        root: SemanticNodeId,
+    ) -> Result<Vec<(SemanticNodeId, u64)>, SemanticStoreError> {
+        fn postorder(
+            store: &SemanticStore,
+            node: SemanticNodeId,
+            seen: &mut HashSet<SemanticNodeId>,
+            order: &mut Vec<SemanticNodeId>,
+        ) -> Result<(), SemanticStoreError> {
+            let entry = store
+                .node(node)
+                .ok_or(SemanticStoreError::UnknownNode(node))?;
+            if !seen.insert(node) {
+                return Ok(());
+            }
+            if matches!(entry.kind(), SemanticNodeKind::Family(_)) {
+                for member in entry.members() {
+                    postorder(store, member, seen, order)?;
+                }
+            }
+            order.push(node);
+            Ok(())
+        }
+        let leaves = self.ordered_leaf_nodes(root)?;
+        let mut order = Vec::new();
+        postorder(self, root, &mut HashSet::new(), &mut order)?;
+        let mut counts = HashMap::from([(root, 1u64)]);
+        for node in order.into_iter().rev() {
+            let entry = self
+                .node(node)
+                .ok_or(SemanticStoreError::UnknownNode(node))?;
+            if matches!(entry.kind(), SemanticNodeKind::Family(_)) {
+                let count = counts[&node];
+                for member in entry.members() {
+                    let accumulated = counts.entry(member).or_default();
+                    *accumulated = accumulated
+                        .checked_add(count)
+                        .ok_or(SemanticStoreError::FamilyMultiplicityOverflow(root))?;
+                }
+            }
+        }
+        Ok(leaves
+            .into_iter()
+            .map(|node| (node, counts[&node]))
+            .collect())
+    }
+
     /// Return root and descendants once in family order, including family roots.
     pub fn ordered_authoring_nodes(
         &self,
@@ -302,6 +355,47 @@ mod tests {
         let mut store = SemanticStore::new();
         let family = store.insert_family();
         assert!(store.ordered_leaf_nodes(family).unwrap().is_empty());
+    }
+
+    #[test]
+    fn recursive_leaf_multiplicities_preserve_order_and_bound_shared_dag_work() {
+        let mut store = SemanticStore::new();
+        let a = store.insert_authoring_object();
+        let b = store.insert_authoring_object();
+        let nested = store.insert_family();
+        let root = store.insert_family();
+        store.add_member(nested, a).unwrap();
+        store.add_member(nested, b).unwrap();
+        store.add_member(root, nested).unwrap();
+        store.add_member(root, a).unwrap();
+        assert_eq!(
+            store.ordered_leaf_multiplicities(root).unwrap(),
+            vec![(a, 2), (b, 1)]
+        );
+        assert_eq!(store.ordered_leaf_nodes(root).unwrap(), vec![a, b]);
+
+        let mut previous = a;
+        for level in 1..=64 {
+            let left = store.insert_family();
+            let right = store.insert_family();
+            let next = store.insert_family();
+            store.add_member(left, previous).unwrap();
+            store.add_member(right, previous).unwrap();
+            store.add_member(next, left).unwrap();
+            store.add_member(next, right).unwrap();
+            if level < 64 {
+                assert_eq!(
+                    store.ordered_leaf_multiplicities(next).unwrap(),
+                    vec![(a, 1u64 << level)]
+                );
+            } else {
+                assert_eq!(
+                    store.ordered_leaf_multiplicities(next),
+                    Err(SemanticStoreError::FamilyMultiplicityOverflow(next))
+                );
+            }
+            previous = next;
+        }
     }
 
     #[test]

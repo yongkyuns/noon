@@ -287,7 +287,25 @@ pub(crate) fn edit_fade<S: PaintStyleEdit>(
     style: &mut S,
     darkness: f64,
 ) -> Result<(), AuthoringError> {
-    let factor = 1.0 - unit_opacity("darkness", darkness)?;
+    edit_fade_occurrences(style, darkness, 1)
+}
+
+pub(crate) fn edit_fade_occurrences<S: PaintStyleEdit>(
+    style: &mut S,
+    darkness: f64,
+    mut occurrences: u64,
+) -> Result<(), AuthoringError> {
+    let mut power = 1.0 - unit_opacity("darkness", darkness)?;
+    // Preserve tiny nonzero factors without subtracting the result from one.
+    // Bounded exponentiation also avoids expanding a shared family DAG.
+    let mut factor = 1.0;
+    while occurrences > 0 {
+        if occurrences & 1 != 0 {
+            factor *= power;
+        }
+        power *= power;
+        occurrences >>= 1;
+    }
     if style.has_fill() {
         style.scale_fill_opacity(factor);
     }
@@ -503,6 +521,13 @@ impl Mobject {
         self.validate()?;
         let mut state = self.state()?;
         edit_manim_opacity(&mut state.style, opacity)?;
+        self.commit_state(state)
+    }
+
+    /// Multiply enabled fill/stroke alpha while preserving whole-object opacity.
+    pub fn fade(&mut self, darkness: f64) -> Result<(), AuthoringError> {
+        let mut state = self.state()?;
+        edit_fade(&mut state.style, darkness)?;
         self.commit_state(state)
     }
 }

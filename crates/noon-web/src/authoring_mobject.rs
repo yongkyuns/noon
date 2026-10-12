@@ -2139,6 +2139,11 @@ mod wasm {
             self.handle.set_opacity(opacity).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = fade)]
+        pub fn fade(&mut self, darkness: f64) -> Result<(), JsValue> {
+            self.handle.fade(darkness).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = becomeHandle)]
         pub fn become_handle(
             &self,

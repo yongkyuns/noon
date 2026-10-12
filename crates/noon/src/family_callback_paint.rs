@@ -18,6 +18,7 @@ pub enum FamilyPaint {
         opacity: Option<f64>,
     },
     Opacity(f64),
+    Fade(f64),
 }
 
 impl FamilyPaint {
@@ -37,6 +38,7 @@ impl FamilyPaint {
                 opacity,
             } => crate::family_style::stroke(style, color, width, opacity),
             Self::Opacity(value) => crate::semantic_mobject::edit_manim_opacity(style, value),
+            Self::Fade(value) => crate::semantic_mobject::edit_fade(style, value),
         }
     }
 }
@@ -111,6 +113,16 @@ impl MobjectFamily {
         mut read: impl FnMut(SemanticNodeId) -> Result<Style, ExecutionSessionCallbackError>,
     ) -> Result<Vec<(SemanticNodeId, Style)>, FamilyCallbackPaintError> {
         let leaves = self.callback_leaf_nodes(revision)?;
+        let multiplicities = if matches!(operation, FamilyPaint::Fade(_)) {
+            self.integration_store()
+                .borrow()
+                .ordered_leaf_multiplicities(self.node_id())
+                .map_err(FamilyCallbackPaintError::Store)?
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>()
+        } else {
+            std::collections::HashMap::new()
+        };
         operation
             .apply(&mut Style::default())
             .map_err(FamilyCallbackPaintError::InvalidPaint)?;
@@ -118,9 +130,18 @@ impl MobjectFamily {
         for node in leaves {
             let previous = read(node).map_err(FamilyCallbackPaintError::Callback)?;
             let mut next = previous;
-            operation
-                .apply(&mut next)
+            if let FamilyPaint::Fade(darkness) = operation {
+                crate::semantic_mobject::edit_fade_occurrences(
+                    &mut next,
+                    darkness,
+                    multiplicities[&node],
+                )
                 .map_err(FamilyCallbackPaintError::InvalidPaint)?;
+            } else {
+                operation
+                    .apply(&mut next)
+                    .map_err(FamilyCallbackPaintError::InvalidPaint)?;
+            }
             if next != previous {
                 changes.push((node, next));
             }
