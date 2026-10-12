@@ -871,6 +871,10 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "RendererType": "_manim_enums",
+    "LineJointType": "_manim_enums",
+    "CapStyleType": "_manim_enums",
+    "DefaultSectionType": "_manim_enums",
     "SampleSpace": "_manim_sample_space",
     "NumberLine": "_manim_plotting",
     "UnitInterval": "_manim_plotting",
