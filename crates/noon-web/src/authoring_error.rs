@@ -614,6 +614,9 @@ impl From<SemanticStoreError> for AuthoringFailure {
             E::NotFamilyMember { .. } => ("invalid_input", "store.not_family_member"),
             E::FamilyCycle { .. } => ("invalid_input", "store.family_cycle"),
             E::DuplicateSourceIdentity(_) => ("invalid_input", "store.duplicate_source_identity"),
+            E::FamilyMultiplicityOverflow(_) => {
+                ("invalid_input", "store.family_multiplicity_overflow")
+            }
         };
         Self::new(category, code, error)
     }

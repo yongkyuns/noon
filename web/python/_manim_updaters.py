@@ -1147,6 +1147,15 @@ class _CanonicalCallbackContext:
         return (_phase_callback_paint_color(result, "fill"),
                 _phase_callback_paint_color(result, "stroke"))
 
+    def paint_fade(self, style: _PhaseStyle, darkness: float):
+        from _noon_errors import engine_call
+        result = engine_call(self._operations.callbackPaintFade,
+            *_phase_optional_color_args(style.fill),
+            *_phase_optional_color_args(style.stroke), darkness,
+            operation="Mobject.fade")
+        return (_phase_callback_paint_color(result, "fill"),
+                _phase_callback_paint_color(result, "stroke"))
+
     def paint_set_fill(
         self,
         style: _PhaseStyle,
@@ -1759,6 +1768,26 @@ def _canonical_vmobject_set_opacity(
         context.style_changed(key, before, row)
         return self
     return _base._semantic_operations()._set_opacity(self, opacity, family=family)
+
+
+def _canonical_fade(self, darkness=0.5, family=True):
+    from _manim_compat import _opacity, _is_shared_family
+    darkness = _opacity("darkness", darkness)
+    if not family and _is_shared_family(self):
+        raise NotImplementedError("non-recursive Group fade requires shared family style state")
+    context = (_ACTIVE_CANONICAL_CONTEXT.get() if _is_shared_family(self)
+               else _canonical_phase_context(self))
+    if context is None:
+        return _base._semantic_operations()._fade(self, darkness, family)
+    if _is_shared_family(self):
+        context.paint_family(self._semantic_family_handle, "Fade", (darkness,))
+    else:
+        key, row = context.row(self)
+        before = row.style
+        fill, stroke = context.paint_fade(before, darkness)
+        row.style = replace(before, fill=fill, stroke=stroke)
+        context.style_changed(key, before, row)
+    return self
 
 
 def _carry_callback_region_state(

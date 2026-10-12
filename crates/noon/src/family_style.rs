@@ -2,8 +2,9 @@
 use crate::AuthoringError;
 use crate::{
     semantic_mobject::{
-        edit_color, edit_fade, edit_fill_color, edit_fill_opacity, edit_manim_opacity,
-        edit_stroke_color, edit_stroke_opacity, edit_stroke_width, PaintStyleEdit,
+        edit_color, edit_fade, edit_fade_occurrences, edit_fill_color, edit_fill_opacity,
+        edit_manim_opacity, edit_stroke_color, edit_stroke_opacity, edit_stroke_width,
+        PaintStyleEdit,
     },
     Color, Mobject, MobjectFamily,
 };
@@ -252,7 +253,20 @@ impl MobjectFamily {
         &self,
         darkness: f64,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
-        self.style_transaction(|style| edit_fade(style, darkness))
+        self.validate()?;
+        edit_fade(&mut SemanticStyle::default(), darkness)?;
+        let store = self.integration_store().borrow();
+        let leaves = store.ordered_leaf_multiplicities(self.node_id())?;
+        let mut transaction = SemanticMutationTransaction::new();
+        for (leaf, occurrences) in leaves {
+            let previous = &store.semantic_object_state_checked(leaf)?.style;
+            let mut next = previous.clone();
+            edit_fade_occurrences(&mut next, darkness, occurrences)?;
+            if next != *previous {
+                transaction.replace_style(leaf, next);
+            }
+        }
+        Ok(transaction)
     }
 
     fn edit_style(
@@ -304,6 +318,50 @@ impl MobjectFamily {
 mod tests {
     use super::*;
     use crate::Scene;
+
+    #[test]
+    fn recursive_fade_counts_alias_paths_but_reads_and_publishes_unique_leaves() {
+        let mut scene = Scene::new();
+        let mut a = scene.square(0.6).unwrap();
+        let mut b = scene.square(0.6).unwrap();
+        for object in [&mut a, &mut b] {
+            object.set_fill(1.0, 0.0, 0.0, 0.8).unwrap();
+            object.set_stroke_opacity(0.4).unwrap();
+            object.set_object_opacity(0.3).unwrap();
+        }
+        let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+        let family = scene.family(&[(&nested).into(), (&a).into()]).unwrap();
+        family.fade(0.5).unwrap();
+        assert_eq!(a.fill_opacity().unwrap(), 0.2);
+        assert_eq!(b.fill_opacity().unwrap(), 0.4);
+        assert_eq!(a.stroke_opacity().unwrap(), 0.1);
+        assert_eq!(b.stroke_opacity().unwrap(), 0.2);
+        assert_eq!(a.state().unwrap().style.object_opacity, 0.3);
+        let before = (a.state().unwrap(), b.state().unwrap());
+        assert!(family.fade(f64::NAN).is_err());
+        assert_eq!((a.state().unwrap(), b.state().unwrap()), before);
+
+        let revision = scene.integration_store().borrow().scene_revision();
+        let mut reads = Vec::new();
+        let phase_style = noon_core::Style {
+            fill: Some(Color::rgba(1.0, 0.0, 0.0, 0.5)),
+            stroke: Some(Color::rgba(0.0, 0.0, 1.0, 0.75)),
+            opacity: 0.3,
+            ..Default::default()
+        };
+        let changes = family
+            .prepare_callback_paint(revision, crate::FamilyPaint::Fade(0.5), |node| {
+                reads.push(node);
+                Ok(phase_style)
+            })
+            .unwrap();
+        assert_eq!(reads, vec![a.node_id(), b.node_id()]);
+        assert_eq!(changes[0].1.fill.unwrap().alpha, 0.125);
+        assert_eq!(changes[1].1.fill.unwrap().alpha, 0.25);
+        assert_eq!(changes[0].1.stroke.unwrap().alpha, 0.1875);
+        assert_eq!(changes[0].1.opacity, phase_style.opacity);
+        assert_eq!((a.state().unwrap(), b.state().unwrap()), before);
+    }
 
     #[test]
     fn member_colors_validate_count_before_atomic_publication() {

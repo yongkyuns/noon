@@ -5640,6 +5640,9 @@ mod wasm {
                 "Opacity" => noon::FamilyPaint::Opacity(
                     opacity.ok_or_else(|| js_error("family opacity is required"))?,
                 ),
+                "Fade" => noon::FamilyPaint::Fade(
+                    opacity.ok_or_else(|| js_error("family darkness is required"))?,
+                ),
                 _ => return Err(js_error("unknown family paint operation")),
             };
             let revision = noon_core::SceneRevision::new(
@@ -6005,6 +6008,36 @@ mod wasm {
             Ok(callback_paint_result(
                 noon::integration::effective_style_with_paint_opacity(style, opacity)
                     .map_err(js_error)?,
+            ))
+        }
+
+        /// Fade the callback's current paint without publishing authored state.
+        #[wasm_bindgen(js_name = callbackPaintFade)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_paint_fade(
+            &self,
+            fill_red: Option<f64>,
+            fill_green: Option<f64>,
+            fill_blue: Option<f64>,
+            fill_alpha: Option<f64>,
+            stroke_red: Option<f64>,
+            stroke_green: Option<f64>,
+            stroke_blue: Option<f64>,
+            stroke_alpha: Option<f64>,
+            darkness: f64,
+        ) -> Result<WasmCallbackPaint, JsValue> {
+            let style = callback_paint_style(
+                callback_color("callback fill", fill_red, fill_green, fill_blue, fill_alpha)?,
+                callback_color(
+                    "callback stroke",
+                    stroke_red,
+                    stroke_green,
+                    stroke_blue,
+                    stroke_alpha,
+                )?,
+            );
+            Ok(callback_paint_result(
+                noon::integration::effective_style_with_fade(style, darkness).map_err(js_error)?,
             ))
         }
 
@@ -8318,6 +8351,23 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_set_opacity(handle.semantic_mobject(), opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveFade)]
+        pub fn live_fade(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            darkness: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_fade(handle.semantic_mobject(), darkness)
                 .map_err(typed_js_error)
         }
 

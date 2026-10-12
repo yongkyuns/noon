@@ -491,6 +491,9 @@ class Mobject:
     def set_opacity(self, opacity: float) -> Mobject:
         return _callback_operations()._canonical_set_opacity(self, opacity)
 
+    def fade(self, darkness: float = 0.5, family: bool = True) -> Mobject:
+        return _callback_operations()._canonical_fade(self, darkness, family)
+
     def set_object_opacity(self, opacity: float) -> Mobject:
         """Set whole-object opacity independently of fill/stroke paint alpha."""
         return _callback_operations()._canonical_set_opacity(self, opacity)

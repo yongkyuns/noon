@@ -193,6 +193,11 @@ class ImageMobject(_base.Mobject):
             engine_call(context.liveSetImageSampling, handle, sampler)
         return self
 
+    def fade(self, darkness=0.5, family=True):
+        # Manim resets opacity from original image alpha; vector fade multiplies
+        # current paint alpha. Keep the image contract explicit until #79 owns it.
+        raise NotImplementedError("ImageMobject.fade requires the shared image alpha reset operation")
+
     def set_color(self, *args, **kwargs):
         raise NotImplementedError("image pixels are immutable; construct a new image to replace colors")
 

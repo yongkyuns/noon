@@ -427,6 +427,15 @@ pub fn effective_style_with_paint_opacity(
     Ok(style)
 }
 
+/// Fade callback-local paint, including earlier writes in the same phase.
+pub fn effective_style_with_fade(
+    mut style: Style,
+    darkness: f64,
+) -> Result<Style, crate::AuthoringError> {
+    crate::semantic_mobject::edit_fade(&mut style, darkness)?;
+    Ok(style)
+}
+
 /// Apply shared Manim opacity-only fill semantics to an effective runtime style.
 pub fn effective_style_with_fill_opacity(
     mut style: Style,
@@ -1044,6 +1053,38 @@ mod tests {
             effective_style_with_paint_opacity(unpainted, 0.4).unwrap(),
             unpainted
         );
+    }
+
+    #[test]
+    fn callback_fade_matches_authored_alpha_and_preserves_unpainted_layers() {
+        let mut scene = Scene::new();
+        let mut object = scene.square(0.5).unwrap();
+        object.set_fill(1.0, 0.0, 0.0, 0.8).unwrap();
+        object.set_stroke_opacity(0.5).unwrap();
+        object.set_object_opacity(0.3).unwrap();
+        scene.add(&object).unwrap();
+        let before = scene.execution_session().unwrap().frame().objects[0].style;
+        let next = effective_style_with_fade(before, 0.5).unwrap();
+        object.fade(0.5).unwrap();
+        assert_eq!(
+            next,
+            scene.execution_session().unwrap().frame().objects[0].style
+        );
+        assert_eq!(next.fill.unwrap().alpha, 0.4);
+        assert_eq!(next.stroke.unwrap().alpha, 0.25);
+        assert_eq!(next.opacity, before.opacity);
+        let unpainted = Style {
+            fill: None,
+            stroke: None,
+            ..before
+        };
+        assert_eq!(
+            effective_style_with_fade(unpainted, 1.0).unwrap(),
+            unpainted
+        );
+        for darkness in [-1.0, 2.0, f64::NAN, f64::INFINITY] {
+            assert!(effective_style_with_fade(before, darkness).is_err());
+        }
     }
 
     #[test]
