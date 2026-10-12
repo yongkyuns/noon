@@ -43,6 +43,7 @@ pub struct TessellatedPath {
     pub stroke_length: f32,
     /// True when vertices contain distinct source/target morph endpoints.
     pub morphing: bool,
+    polygonal_stroke: bool,
     // Cached centerline measure used to place a procedural Create reveal head.
     // It is built only when geometry is tessellated, never per animation frame.
     reveal_points: Vec<RevealPoint>,
@@ -67,6 +68,10 @@ pub struct TessellatedScreenStroke {
 }
 
 impl TessellatedPath {
+    /// Whether the retained stroke has straight centerlines and polygonal caps/joins.
+    pub fn has_polygonal_stroke(&self) -> bool {
+        self.polygonal_stroke
+    }
     pub fn revealed_stroke_length(&self, reveal: f32) -> f32 {
         if !reveal.is_finite() {
             return 0.0;
@@ -785,6 +790,14 @@ fn tessellate_styled_with_fill_impl(
         bounds,
         stroke_length,
         morphing: false,
+        polygonal_stroke: stroke_join != StrokeJoin::Round
+            && stroke_cap != StrokeCap::Round
+            && path.commands().iter().all(|command| {
+                matches!(
+                    command,
+                    PathCommand::MoveTo { .. } | PathCommand::LineTo { .. } | PathCommand::Close
+                )
+            }),
         reveal_points,
     })
 }
@@ -1206,6 +1219,7 @@ fn tessellate_morph_path(
             bounds,
             stroke_length: 0.0,
             morphing: true,
+            polygonal_stroke: false,
             reveal_points: source_reveal_points,
         });
     }
@@ -1391,6 +1405,7 @@ fn tessellate_morph_path(
         bounds,
         stroke_length,
         morphing: true,
+        polygonal_stroke: false,
         reveal_points,
     })
 }

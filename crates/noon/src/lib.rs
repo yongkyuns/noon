@@ -84,6 +84,7 @@ pub mod diagnostics;
 mod dimension_fit;
 mod effect_authoring;
 mod effective_capture;
+pub mod number_line_example;
 
 /// Checked leaf effects. Finite glow playback supports filled, unstroked planar
 /// circles/rectangles through ordinary Scene execution and live publication.

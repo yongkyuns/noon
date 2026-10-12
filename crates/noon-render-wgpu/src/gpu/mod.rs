@@ -432,6 +432,7 @@ enum GeometryBinding {
     Path,
     Polygon,
     MegaPath,
+    MegaPolygon,
 }
 
 #[derive(Clone, Debug)]
@@ -504,6 +505,7 @@ pub struct GpuRenderer {
     /// Transient presentation paths also retain this full format.
     full_path_pipeline: wgpu::RenderPipeline,
     mega_path_pipeline: wgpu::RenderPipeline,
+    mega_full_path_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -743,6 +745,8 @@ impl GpuRenderer {
             create_full_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let mega_path_pipeline =
             create_mega_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
+        let mega_full_path_pipeline =
+            create_mega_full_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let quad_buffer = create_buffer_with_data(
             device,
             queue,
@@ -791,6 +795,7 @@ impl GpuRenderer {
             path_pipeline,
             full_path_pipeline,
             mega_path_pipeline,
+            mega_full_path_pipeline,
             quad_buffer,
             camera_buffer,
             camera_bind_group,
@@ -1786,10 +1791,27 @@ impl GpuRenderer {
                 {
                     return DrawStats::default();
                 }
+                let polygon = resolved
+                    .mega
+                    .as_ref()
+                    .expect("resolved mega metadata")
+                    .polygon_coverage;
                 (
-                    GeometryBinding::MegaPath,
-                    &self.mega_path_pipeline,
-                    &self.compact_path_vertex_buffer,
+                    if polygon {
+                        GeometryBinding::MegaPolygon
+                    } else {
+                        GeometryBinding::MegaPath
+                    },
+                    if polygon {
+                        &self.mega_full_path_pipeline
+                    } else {
+                        &self.mega_path_pipeline
+                    },
+                    if polygon {
+                        &self.path_vertex_buffer
+                    } else {
+                        &self.compact_path_vertex_buffer
+                    },
                     &self.mega_path_vertex_instance_buffer,
                     Some(&self.mega_path_index_buffer),
                 )
@@ -2040,6 +2062,27 @@ fn create_full_path_pipeline(
         PathPipelineDescriptor {
             instance_layout: path_instance_layout(),
             label: "Noon full path pipeline",
+            vertex_layout: polygon_path_vertex_layout(),
+            vertex_entry: "vs_path",
+            fragment_entry: "fs_path",
+        },
+    )
+}
+
+fn create_mega_full_path_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    create_path_pipeline_with_instance_layout(
+        device,
+        layout,
+        shader,
+        target_format,
+        PathPipelineDescriptor {
+            instance_layout: mega_path_instance_layout(),
+            label: "Noon packed covered-path pipeline",
             vertex_layout: polygon_path_vertex_layout(),
             vertex_entry: "vs_path",
             fragment_entry: "fs_path",

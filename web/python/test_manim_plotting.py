@@ -42,6 +42,24 @@ class Plan:
 
 
 class PlottingAdapterTests(unittest.TestCase):
+    def test_number_line_default_and_two_value_range_delegate_without_python_defaults(self):
+        for values, expected in ((None, []), ([-2, 2], [-2, 2]), ([-2, 2, .5], [-2, 2, .5])):
+            with self.subTest(values=values), \
+                 patch.object(plotting, "_coordinate_constructor_context", return_value=None), \
+                 patch.object(plotting, "_coordinate_options") as factory, \
+                 patch.object(plotting, "_array", side_effect=list), \
+                 patch.object(plotting, "_create_coordinates", return_value=object()), \
+                 patch.object(plotting, "_attach_number_line"):
+                plotting.NumberLine(values)
+                self.assertEqual(factory.numberLine.call_args.args[0], expected)
+
+    def test_number_line_rejects_explicit_empty_or_malformed_range_before_host_admission(self):
+        with patch.object(plotting, "_coordinate_constructor_context") as context:
+            for values in ([], [0], [0, 1, 2, 3]):
+                with self.subTest(values=values), self.assertRaises(ValueError):
+                    plotting.NumberLine(values)
+            context.assert_not_called()
+
     def test_two_dimensional_axes_keep_the_existing_plotting_method_set(self):
         for name in (
             "plot",

@@ -85,6 +85,41 @@ fn number_line_range_and_ticks_live_in_the_semantic_family() {
 }
 
 #[test]
+fn number_line_constructor_defaults_and_partial_ranges_are_shared() {
+    let mut scene = Scene::new();
+    let defaults = ManimNumberLineOptions::from_range(None).unwrap();
+    assert_eq!(defaults.range, [-7.0, 7.0, 1.0]);
+    let line = scene.number_line(&defaults).unwrap();
+    near(
+        line.authored_frame().unwrap().number_to_point(0.0).unwrap(),
+        [0.0, 0.0],
+    );
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .semantic_family_members_checked(line.ticks().unwrap().node_id())
+            .unwrap()
+            .len(),
+        15
+    );
+    let partial = ManimNumberLineOptions::from_range(Some(&[-2.0, 2.0])).unwrap();
+    assert_eq!(partial.range, [-2.0, 2.0, 1.0]);
+    assert_eq!(
+        scene.number_line(&partial).unwrap().range().unwrap(),
+        partial.range
+    );
+    for values in [
+        &[][..],
+        &[1.0][..],
+        &[0.0, 1.0, 0.0][..],
+        &[0.0, f64::NAN][..],
+    ] {
+        assert!(ManimNumberLineOptions::from_range(Some(values)).is_err());
+    }
+}
+
+#[test]
 fn axes_positive_negative_ranges_use_numerical_midpoints() {
     let mut scene = Scene::new();
     let axes = scene

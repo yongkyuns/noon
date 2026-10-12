@@ -351,7 +351,7 @@ impl FramePreparer {
                 index_range: ranges.indices,
                 instance_range: u32::try_from(start).expect("path instance limit")
                     ..u32::try_from(self.paths.len()).expect("path instance limit"),
-                polygon_coverage: crate::single_filled_convex_polygon(&entry.mesh).is_some(),
+                polygon_coverage: crate::path_uses_exact_coverage(&entry.mesh),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
