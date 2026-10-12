@@ -175,12 +175,20 @@ impl PathVertex {
     }
 }
 
+/// Disposable GPU coverage specialization derived from a retained path mesh.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PathCoverage {
+    #[default]
+    Tessellated,
+    ConvexFill,
+    PolygonalStroke,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PathBatch {
     pub index_range: Range<u32>,
     pub instance_range: Range<u32>,
-    /// Use the renderer-local exact convex-polygon vertex stream for this draw.
-    pub polygon_coverage: bool,
+    pub coverage: PathCoverage,
 }
 
 /// One ordered draw slice in the packed unique-path index stream.
@@ -188,7 +196,7 @@ pub struct PathBatch {
 pub struct MegaPathBatch {
     pub index_range: Range<u32>,
     pub path_count: usize,
-    pub polygon_coverage: bool,
+    pub coverage: PathCoverage,
 }
 
 /// A bounded painter-order partition with independently coalesced draw metadata.
@@ -1258,7 +1266,7 @@ impl FramePreparer {
         self.path_batches.push(PathBatch {
             index_range,
             instance_range: instance_start..instance_start + 1,
-            polygon_coverage: path_uses_exact_coverage(&self.path_mesh_cache[cache_index].mesh),
+            coverage: path_coverage(&self.path_mesh_cache[cache_index].mesh),
         });
         self.path_batch_cache_indices.push(cache_index);
         if !self.individual_path_draws {
@@ -1485,8 +1493,7 @@ impl FramePreparer {
         };
         self.path_batch_cache_indices[batch] = cache_index;
         self.transient_path_groups_packed = false;
-        self.path_batches[batch].polygon_coverage =
-            path_uses_exact_coverage(&self.path_mesh_cache[cache_index].mesh);
+        self.path_batches[batch].coverage = path_coverage(&self.path_mesh_cache[cache_index].mesh);
         if let PreparedSlot::Path {
             analytic_reveal,
             partial_reveal_bits,
@@ -1788,7 +1795,7 @@ impl FramePreparer {
                 instance_range: u32::try_from(instance_start)
                     .expect("path instance count exceeds renderer limits")
                     ..instance_end,
-                polygon_coverage: path_uses_exact_coverage(mesh),
+                coverage: path_coverage(mesh),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
@@ -2794,8 +2801,14 @@ pub(crate) fn pack_path_mesh(mesh: &TessellatedPath) -> (Vec<PathVertex>, Vec<u3
     )
 }
 
-pub(crate) fn path_uses_exact_coverage(mesh: &TessellatedPath) -> bool {
-    single_filled_convex_polygon(mesh).is_some() || stroke_coverage::eligible(mesh)
+pub(crate) fn path_coverage(mesh: &TessellatedPath) -> PathCoverage {
+    if single_filled_convex_polygon(mesh).is_some() {
+        PathCoverage::ConvexFill
+    } else if stroke_coverage::eligible(mesh) {
+        PathCoverage::PolygonalStroke
+    } else {
+        PathCoverage::Tessellated
+    }
 }
 
 pub(crate) fn single_filled_convex_polygon(mesh: &TessellatedPath) -> Option<[[[f32; 2]; 2]; 4]> {

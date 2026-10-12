@@ -175,8 +175,7 @@ impl FramePreparer {
         if let Some(ordered) = self.render_batches.last_mut() {
             if let RenderPrimitive::MegaPath { batch } = ordered.primitive {
                 let mega = &mut self.mega_path_batches[batch];
-                if mega.index_range.end == segment.start {
-                    mega.polygon_coverage |= path_batch.polygon_coverage;
+                if mega.index_range.end == segment.start && mega.coverage == path_batch.coverage {
                     mega.index_range.end = segment.end;
                     mega.path_count += 1;
                     ordered.instance_range.end += 1;
@@ -189,7 +188,7 @@ impl FramePreparer {
         self.mega_path_batches.push(MegaPathBatch {
             index_range: segment,
             path_count: 1,
-            polygon_coverage: path_batch.polygon_coverage,
+            coverage: path_batch.coverage,
         });
         self.render_batches.push(OrderedRenderBatch {
             primitive: RenderPrimitive::MegaPath { batch },
@@ -239,8 +238,9 @@ impl FramePreparer {
 
             if let Some(mega_index) = active_mega {
                 let mega = &mut self.mega_path_batches[mega_index];
-                if mega.index_range.end == segment.start {
-                    mega.polygon_coverage |= self.path_batches[path_batch_index].polygon_coverage;
+                if mega.index_range.end == segment.start
+                    && mega.coverage == self.path_batches[path_batch_index].coverage
+                {
                     mega.index_range.end = segment.end;
                     mega.path_count += 1;
                     let ordered = self
@@ -256,7 +256,7 @@ impl FramePreparer {
             self.mega_path_batches.push(MegaPathBatch {
                 index_range: segment,
                 path_count: 1,
-                polygon_coverage: self.path_batches[path_batch_index].polygon_coverage,
+                coverage: self.path_batches[path_batch_index].coverage,
             });
             self.render_batches.push(OrderedRenderBatch {
                 primitive: RenderPrimitive::MegaPath { batch: mega_index },
