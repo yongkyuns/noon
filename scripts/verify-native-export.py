@@ -54,11 +54,16 @@ def verify(root: Path) -> list[dict]:
         require((stream['width'], stream['height']) == (width, height), "video proof failed: (stream['width'], stream['height']) == (width, height)")
         require(stream['pix_fmt'] == 'yuv420p', "video proof failed: stream['pix_fmt'] == 'yuv420p'")
         require(Fraction(stream['r_frame_rate']) == Fraction(p, q), "video proof failed: Fraction(stream['r_frame_rate']) == Fraction(p, q)")
-        require(Fraction(stream['avg_frame_rate']) == Fraction(p, q), "video proof failed: Fraction(stream['avg_frame_rate']) == Fraction(p, q)")
+        # The final sample may be shorter than the grid interval; average FPS
+        # uses exact authored duration, whereas the nominal rate stays p/q.
+        duration_ticks = min(count * q, 3 * p)
+        require(Fraction(stream['avg_frame_rate']) == Fraction(count * p, duration_ticks),
+                'video proof failed: average rate does not match exact terminal duration')
         require(Fraction(stream['time_base']) == Fraction(1, p), "video proof failed: Fraction(stream['time_base']) == Fraction(1, p)")
         require(int(stream['nb_read_frames']) == count, "video proof failed: int(stream['nb_read_frames']) == count")
         require(int(stream['start_pts']) == 0, "video proof failed: int(stream['start_pts']) == 0")
-        require(int(stream['duration_ts']) == count * q, "video proof failed: int(stream['duration_ts']) == count * q")
+        require(int(stream['duration_ts']) == duration_ticks,
+                'video proof failed: encoded duration does not match authored terminal time')
         require([int(f['pts']) for f in probe['frames']] == [i * q for i in range(count)], "video proof failed: [int(f['pts']) for f in probe['frames']] == [i * q for i in range(count)]")
         require(stream['color_range'] == 'tv', "video proof failed: stream['color_range'] == 'tv'")
         require(stream['color_space'] == 'bt709', "video proof failed: stream['color_space'] == 'bt709'")
@@ -111,7 +116,7 @@ def verify(root: Path) -> list[dict]:
             require(not (directory.parent / '.incomplete').exists(), "video proof failed: not (directory.parent / '.incomplete').exists()")
             png_identical = True
         report = {'name': name, 'frames': count, 'fps': f'{p}/{q}', 'time_base': f'1/{p}',
-            'duration_ticks': count * q, 'decoded_all_frames': True, 'max_rgba_mean_error': max(errors),
+            'duration_ticks': duration_ticks, 'decoded_all_frames': True, 'max_rgba_mean_error': max(errors),
             'max_foreground_rgb_mean_error': max(active_errors), 'png_byte_identical': png_identical,
             'reference_sha256': hashlib.sha256(reference).hexdigest(), 'frame_sha256': hashes,
             'mp4_sha256': hashlib.sha256(video.read_bytes()).hexdigest()}
