@@ -7,6 +7,7 @@ owns authoring syntax, argument conversion, and wrapper identity.
 from __future__ import annotations
 
 import math
+from functools import partialmethod
 from typing import Any, Callable
 from enum import Enum
 
@@ -253,6 +254,17 @@ class Mobject:
 
     def __init__(self) -> None:
         raise TypeError("Mobject is a base type; construct a Circle, Rectangle, Line, or Path")
+
+    _original__init__ = __init__
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls._original__init__ = cls.__init__
+
+    @classmethod
+    def set_default(cls, **kwargs: Any) -> None:
+        """Change future Python constructor defaults, or restore this class's original constructor."""
+        cls.__init__ = partialmethod(cls.__init__, **kwargs) if kwargs else cls._original__init__
 
     @property
     def geometry(self) -> dict[str, Any]:
@@ -883,6 +895,9 @@ _PUBLIC_EXPORTS = {
     "make_even_by_cycling": "_manim_iterables",
     "remove_list_redundancies": "_manim_iterables",
     "remove_nones": "_manim_iterables",
+    "DictAsObject": "_manim_config_utils",
+    "merge_dicts_recursively": "_manim_config_utils",
+    "update_dict_recursively": "_manim_config_utils",
     "RendererType": "_manim_enums",
     "LineJointType": "_manim_enums",
     "CapStyleType": "_manim_enums",
