@@ -151,14 +151,14 @@ fn build_scene(
     noon_core::SemanticNodeId,
     noon_core::SemanticNodeId,
 ) {
-    build_scene_with_overlay_opacity(with_overlay, projection_kind, huge_vertex, 1.0)
+    build_scene_with_overlay_position(with_overlay, projection_kind, huge_vertex, 4.0)
 }
 
-fn build_scene_with_overlay_opacity(
+fn build_scene_with_overlay_position(
     with_overlay: bool,
     projection_kind: bool,
     huge_vertex: bool,
-    overlay_opacity: f64,
+    overlay_x: f64,
 ) -> (
     SceneInstance,
     SemanticExecutionIndex,
@@ -210,9 +210,8 @@ fn build_scene_with_overlay_opacity(
 
     if with_overlay {
         let mut overlay = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.42 });
-        overlay.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        overlay.transform.translation = SemanticVec3::new(overlay_x, 0.0, 0.0);
         overlay.style = opaque_style(Color::GREEN);
-        overlay.style.object_opacity = overlay_opacity;
         attach(&mut store, overlay);
     }
 
@@ -775,10 +774,10 @@ fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
 }
 
 fn cairo_path_scene() -> SceneInstance {
-    cairo_path_scene_with_invisible_overlay(false)
+    cairo_path_scene_with_offscreen_overlay(false)
 }
 
-fn cairo_path_scene_with_invisible_overlay(invisible_overlay: bool) -> SceneInstance {
+fn cairo_path_scene_with_offscreen_overlay(offscreen_overlay: bool) -> SceneInstance {
     let mut store = SemanticStore::new();
     let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
     camera.set_role(SemanticObjectRole::Camera3D);
@@ -826,10 +825,10 @@ fn cairo_path_scene_with_invisible_overlay(invisible_overlay: bool) -> SceneInst
     light.style = opaque_style(Color::RED);
     light.transform.translation = SemanticVec3::new(-1.0, 1.0, 0.0);
     let light_node = attach(&mut store, light);
-    if invisible_overlay {
+    if offscreen_overlay {
         let mut overlay = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.42 });
         overlay.style = opaque_style(Color::GREEN);
-        overlay.style.object_opacity = 0.0;
+        overlay.transform.translation.x = 1e6;
         attach(&mut store, overlay);
     }
     let mut index = SemanticExecutionIndex::new();
@@ -1649,13 +1648,14 @@ fn spatial_renderer_rejects_an_older_publication_after_advancing() {
 }
 
 #[test]
-fn spatial_only_and_invisible_planar_composition_have_identical_pixels_when_seeking() {
+fn spatial_only_and_offscreen_planar_composition_have_identical_pixels_when_seeking() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();
         let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
             eprintln!("skipping spatial pass GPU qualification: no adapter is available");
             return;
         };
+        eprintln!("spatial pass adapter: {:?}", adapter.get_info());
         let timestamps = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -1677,11 +1677,11 @@ fn spatial_only_and_invisible_planar_composition_have_identical_pixels_when_seek
         });
         let target = Target::new(&device);
         for profile in 0..3 {
-            let scene = |invisible| {
+            let scene = |offscreen| {
                 if profile == 2 {
-                    cairo_path_scene_with_invisible_overlay(invisible)
+                    cairo_path_scene_with_offscreen_overlay(offscreen)
                 } else {
-                    build_scene_with_overlay_opacity(invisible, profile == 1, false, 0.0).0
+                    build_scene_with_overlay_position(offscreen, profile == 1, false, 1e6).0
                 }
             };
             let mut spatial = scene(false);
@@ -1695,6 +1695,8 @@ fn spatial_only_and_invisible_planar_composition_have_identical_pixels_when_seek
             for time in [0.0, 0.5, 1.5, 0.0] {
                 spatial.seek(time).unwrap();
                 mixed.seek(time).unwrap();
+                assert!(spatial_preparer.prepare(spatial.frame()).circles.is_empty());
+                assert!(!mixed_preparer.prepare(mixed.frame()).circles.is_empty());
                 let (spatial_stats, expected) = render_with_query(
                     &device,
                     &queue,

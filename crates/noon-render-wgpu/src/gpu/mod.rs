@@ -2492,10 +2492,12 @@ mod tests {
 
     #[test]
     fn painter_pass_detection_keeps_resident_hidden_geometry() {
-        let mut frame = test_frame();
-        frame.presences.fill(false);
+        let frame = test_frame();
         let mut preparer = FramePreparer::new();
-        let hidden = preparer.prepare(&frame);
+        let hidden = preparer
+            .prepare_incremental_visible(&frame, &FrameChanges::all(), &[])
+            .unwrap();
+        assert_eq!(hidden.ordered_render_batches().count(), 0);
         assert!(has_painter_instances(&hidden, None));
 
         let empty = FrameState {
