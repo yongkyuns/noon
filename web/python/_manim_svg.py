@@ -1,8 +1,8 @@
 """Partial ManimCE-compatible static SVG authoring over shared Rust resources.
 
-Python owns file/string loading and wrapper identity. Shared Rust owns SVG parsing,
-compatibility normalization, retained path resources, styles, family identity and
-all later semantic mutations.
+Python owns file/string loading, Manim argument coercion and wrapper identity. Shared
+Rust owns SVG parsing, inherited fallback normalization, retained path resources,
+styles, family identity and all later semantic mutations.
 """
 
 from __future__ import annotations
@@ -20,8 +20,10 @@ from _manim_semantic_handles import (
 )
 
 try:
+    from js import noonAuthoringGeometryOptions as _svg_transport_options
     from js import noonCreateAuthoringSvgHandle as _create_svg_handle
 except ImportError:  # Native CPython tests do not have the browser bridge.
+    _svg_transport_options = None
     _create_svg_handle = None
 
 
@@ -34,6 +36,7 @@ _MANIM_DEFAULT_SVG_STYLE = {
     "stroke_color": None,
     "stroke_opacity": None,
 }
+_SVG_DEFAULT_KEYS = tuple(_MANIM_DEFAULT_SVG_STYLE)
 
 
 def _read_svg_file(file_name: object) -> tuple[Path, str]:
@@ -52,15 +55,74 @@ def _read_svg_file(file_name: object) -> tuple[Path, str]:
     raise FileNotFoundError(f"SVG file not found: {path}")
 
 
-def _validate_parser_options(svg_default: object, path_string_config: object) -> None:
-    if svg_default is not None:
-        raise NotImplementedError(
-            "custom SVGMobject svg_default requires shared Rust default-style configuration"
-        )
+def _validate_parser_options(path_string_config: object) -> None:
     if path_string_config not in (None, {}):
         raise NotImplementedError(
             "SVGMobject path_string_config is not yet supported by retained SVG import"
         )
+
+
+def _normalize_svg_default(svg_default: object | None) -> tuple[dict[str, object], bool]:
+    if svg_default is None:
+        return dict(_MANIM_DEFAULT_SVG_STYLE), False
+    try:
+        values = dict(svg_default)
+    except (TypeError, ValueError) as error:
+        raise TypeError("SVGMobject svg_default must be a dictionary") from error
+    # Manim v0.21 indexes all seven names directly while generating parser style.
+    # Preserve that observable missing-key failure while ignoring extra keys.
+    for key in _SVG_DEFAULT_KEYS:
+        if key not in values:
+            raise KeyError(key)
+    return values, True
+
+
+def _effective_default(values: dict[str, object], specific: str, generic: str) -> object:
+    value = values[specific]
+    return values[generic] if value is None else value
+
+
+def _rgb24(name: str, value: object) -> int | None:
+    if value is None:
+        return None
+    color = _compat._as_color(name, value)
+    channels = []
+    for component_name, component in (
+        ("red", color.red),
+        ("green", color.green),
+        ("blue", color.blue),
+    ):
+        channel = _base._ir._unit_interval(f"{name}.{component_name}", component)
+        # ManimColor.to_hex() truncates each float channel after scaling by 255.
+        channels.append(int(channel * 255.0))
+    return (channels[0] << 16) | (channels[1] << 8) | channels[2]
+
+
+def _optional_number(name: str, value: object) -> float | None:
+    if value is None:
+        return None
+    return _base._ir._finite_number(name, value)
+
+
+def _svg_default_transport(
+    width: float | None,
+    values: dict[str, object],
+) -> object:
+    if _svg_transport_options is None:
+        raise RuntimeError("custom SVGMobject svg_default requires the shared Rust authoring host")
+    fill_color = _effective_default(values, "fill_color", "color")
+    fill_opacity = _effective_default(values, "fill_opacity", "opacity")
+    stroke_color = _effective_default(values, "stroke_color", "color")
+    stroke_opacity = _effective_default(values, "stroke_opacity", "opacity")
+    return engine_call(
+        _svg_transport_options.svgDefaultTransport,
+        width,
+        _rgb24("svg_default.fill_color", fill_color),
+        _optional_number("svg_default.fill_opacity", fill_opacity),
+        _rgb24("svg_default.stroke_color", stroke_color),
+        _optional_number("svg_default.stroke_opacity", stroke_opacity),
+        _optional_number("svg_default.stroke_width", values["stroke_width"]),
+    )
 
 
 def _wrap_imported_family(owner: "SVGMobject", family: object) -> None:
@@ -77,8 +139,9 @@ def _wrap_imported_family(owner: "SVGMobject", family: object) -> None:
 class SVGMobject(_compat.VGroup):
     """Static SVG imported as one retained semantic family.
 
-    Direct filesystem paths and :meth:`from_string` are supported in this partial
-    slice. Browser URL/blob loading, non-default parser configuration, cache-policy
+    Direct filesystem paths, :meth:`from_string`, inherited ``svg_default`` paint
+    and ordinary constructor paint overrides are supported in this partial slice.
+    Browser URL/blob loading, non-default path-string tuning, cache-policy
     compatibility and construction after live execution starts remain explicit gaps.
     """
 
@@ -112,7 +175,8 @@ class SVGMobject(_compat.VGroup):
             raise NotImplementedError(
                 "live SVGMobject construction requires atomic retained-resource publication"
             )
-        _validate_parser_options(svg_default, path_string_config)
+        _validate_parser_options(path_string_config)
+        normalized_svg_default, has_custom_svg_default = _normalize_svg_default(svg_default)
         if not use_svg_cache:
             # Cache choice is not a visual semantic. Noon currently relies on the
             # shared immutable resource arena rather than Manim's wrapper cache.
@@ -138,16 +202,19 @@ class SVGMobject(_compat.VGroup):
         self.stroke_color = stroke_color
         self.stroke_opacity = stroke_opacity
         self.stroke_width = 0 if stroke_width is None else float(stroke_width)
-        self.svg_default = dict(_MANIM_DEFAULT_SVG_STYLE)
+        self.svg_default = normalized_svg_default
         self.path_string_config = {} if path_string_config is None else path_string_config
         self.id_to_vgroup_dict = {}
 
+        width_or_defaults = self.svg_width
+        if has_custom_svg_default:
+            width_or_defaults = _svg_default_transport(self.svg_width, self.svg_default)
         family = engine_call(
             _create_svg_handle,
             source,
             self.should_center,
             self.svg_height,
-            self.svg_width,
+            width_or_defaults,
         )
         _wrap_imported_family(self, family)
 

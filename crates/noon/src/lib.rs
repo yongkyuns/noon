@@ -160,6 +160,7 @@ mod semantic_mobject;
 mod source_reconciliation;
 mod state_replacement;
 mod svg_authoring;
+mod svg_default_style;
 pub mod synchronized_plot_presentation;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod synchronized_plotting_example;
@@ -315,6 +316,7 @@ pub use source_reconciliation::{
 pub use spatial_authoring::{MeshOptions, SpatialPathOptions, SurfaceFamily, SurfaceOptions};
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
+pub use svg_default_style::SvgDefaultStyle;
 #[cfg(feature = "latex")]
 pub use table_display::{DecimalTable, IntegerTable, MathTable};
 #[cfg(any(feature = "native-text", feature = "latex"))]
@@ -365,9 +367,9 @@ pub mod prelude {
         ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
         NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
         RateFunction, Scene, SemanticObjectState, SemanticStyle, SpatialCompositionError,
-        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature,
-        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
-        VectorFieldRanges2D, VectorPath,
+        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle, SvgImportOptions,
+        SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
+        VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
     pub use crate::{
         CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
