@@ -113,7 +113,8 @@ fn capture_movie(path: &Path, p: u32, q: u32, delayed: bool) -> Vec<u8> {
     let expected = (2 * u64::from(p)).div_ceil(u64::from(q));
     assert_eq!(summary.sampling.source_end, Some(2.0));
     assert_eq!(summary.sampling.frames, expected);
-    sink.finish(expected).unwrap();
+    sink.finish_with_source_end(expected, summary.sampling.source_end)
+        .unwrap();
     raw
 }
 
@@ -152,7 +153,8 @@ fn verify_movie(path: &Path, p: u32, q: u32) -> Vec<u8> {
     assert_eq!(value("nb_read_frames").parse::<u64>().unwrap(), frames);
     assert_eq!(
         value("duration_ts").parse::<u64>().unwrap(),
-        frames * u64::from(q)
+        2 * u64::from(p),
+        "the MP4 must end at the authored two-second terminal timestamp",
     );
     let pts: Vec<u64> = probe
         .lines()
@@ -163,9 +165,46 @@ fn verify_movie(path: &Path, p: u32, q: u32) -> Vec<u8> {
         pts,
         (0..frames).map(|n| n * u64::from(q)).collect::<Vec<_>>()
     );
-    let encoded_seconds = frames as f64 * f64::from(q) / f64::from(p);
-    assert!(encoded_seconds >= 2.0);
-    assert!(encoded_seconds - 2.0 < f64::from(q) / f64::from(p));
+    let packets = command_output(
+        Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_packets",
+                "-show_entries",
+                "packet=pts,duration",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(path),
+    );
+    let packets = String::from_utf8(packets).unwrap();
+    let packet_times: Vec<(u64, u64)> = packets
+        .lines()
+        .map(|line| {
+            let (pts, duration) = line.split_once(',').unwrap();
+            (pts.parse().unwrap(), duration.parse().unwrap())
+        })
+        .collect();
+    assert_eq!(packet_times.len() as u64, frames);
+    for (index, (pts, duration)) in packet_times.iter().copied().enumerate() {
+        assert_eq!(pts, index as u64 * u64::from(q));
+        assert_eq!(
+            duration,
+            if index + 1 == packet_times.len() {
+                2 * u64::from(p) - pts
+            } else {
+                u64::from(q)
+            },
+            "only the last packet may have a partial display duration"
+        );
+    }
+    assert_eq!(
+        packet_times.last().map(|(pts, duration)| pts + duration),
+        Some(2 * u64::from(p))
+    );
     let pixels = command_output(
         Command::new("ffmpeg")
             .args(["-v", "error", "-nostdin", "-i"])
