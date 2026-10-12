@@ -3,6 +3,8 @@ name: Static SVG Manim raster qualification
 on:
   pull_request:
     paths:
+      - "scripts/ci-setup-rust.sh"
+      - "scripts/test_ci_setup_rust.py"
       - "crates/noon/src/svg_authoring.rs"
       - "crates/noon/src/svg_default_style.rs"
       - "crates/noon-web/src/authoring_svg.rs"
@@ -54,9 +56,8 @@ jobs:
 
       - name: Use repository-pinned Rust and WASM target
         run: |
-          rustup install
-          rustup show active-toolchain
-          rustc --version --verbose
+          python3 scripts/test_ci_setup_rust.py
+          source scripts/ci-setup-rust.sh
           rustup target add wasm32-unknown-unknown
 
       - name: Install pinned wasm-pack
