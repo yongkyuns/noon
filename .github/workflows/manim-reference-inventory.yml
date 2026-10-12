@@ -8,6 +8,7 @@ on:
       - '.github/workflows/manim-reference-inventory.yml'
       - 'compat/manim-v0.21.0-reference-inventory-lock.json'
       - 'compat/manim-v0.21.0-reference-coverage-lock.json'
+      - 'compat/manim-v0.21.0-reference-dispositions.json'
       - 'parity/manim-v0.21/upstream-examples/**'
       - 'web/python/examples/manim_tutorial_manifest.json'
       - 'scripts/manim-reference-inventory.mjs'
@@ -18,6 +19,8 @@ on:
       - 'scripts/manim-reference-coverage.test.mjs'
       - 'scripts/manim-reference-classification-lock.mjs'
       - 'scripts/manim-reference-classification-lock.test.mjs'
+      - 'scripts/manim-reference-dispositions.py'
+      - 'scripts/test_manim_reference_dispositions.py'
   workflow_dispatch:
 
 permissions:
@@ -104,13 +107,19 @@ jobs:
             noon/web/python/examples/manim_tutorial_manifest.json \
             noon/compat/manim-v0.21.0-reference-coverage-lock.json \
             noon \
+            noon/compat/manim-v0.21.0-reference-dispositions.json \
             > noon/artifacts/manim-v0.21.0-reference-coverage.json
           cat noon/artifacts/manim-v0.21.0-reference-coverage.json
           node - <<'NODE'
           const fs = require("node:fs");
           const report = JSON.parse(fs.readFileSync("noon/artifacts/manim-v0.21.0-reference-coverage.json", "utf8"));
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\nReconciled ${report.reconciled_examples}/${report.inventory_examples} pinned reference directives with exact-source canonical manifest entries; ${report.unclassified_inventory_examples} remain to classify.\n`);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\nReconciled ${report.reconciled_examples}/${report.inventory_examples} pinned reference directives with exact-source canonical manifest entries; ${report.dispositioned_examples} have provenance and ownership, ${report.undispositioned_inventory_examples} remain untracked. Pending dispositions: ${JSON.stringify(report.pending_disposition_statuses)}. These are not new parity passes.\n`);
           NODE
+      - name: Check namespace blockers and disposition regressions
+        working-directory: noon
+        run: |
+          python3 -m unittest discover -s scripts -p test_manim_reference_dispositions.py -v
+          python3 scripts/manim-reference-dispositions.py
       - name: Upload reference inventory
         if: always()
         uses: actions/upload-artifact@v7

@@ -10,6 +10,7 @@ const CLASSIFIED_STATUSES = new Set([
   "intentional-divergence",
 ]);
 const PROVENANCE_ONLY_STATUSES = new Set(["blocked", "deferred"]);
+const DISPOSITION_STATUSES = new Set(["blocked", "unqualified", "deferred", "intentional-divergence"]);
 const EXACT_SOURCE_REUSE = "source-equivalent-manim-v0.21";
 const MANIM_IMPORT_PRELUDE = "from manim import *";
 
@@ -109,13 +110,17 @@ function validateInputs(inventory, manifest, lock) {
       "coverage lock minimum_classified_examples must be at least minimum_reconciled_examples",
     );
   }
+  if (lock.require_complete_dispositions !== undefined
+      && typeof lock.require_complete_dispositions !== "boolean") {
+    throw new Error("coverage lock require_complete_dispositions must be a boolean");
+  }
 }
 
 export async function reconcileReferenceCoverage(
   inventory,
   manifest,
   lock,
-  { readSource = readFile, repositoryRoot = process.cwd() } = {},
+  { readSource = readFile, repositoryRoot = process.cwd(), dispositions = null } = {},
 ) {
   validateInputs(inventory, manifest, lock);
 
@@ -238,6 +243,51 @@ export async function reconcileReferenceCoverage(
     );
   }
 
+  const dispositionedIndices = new Set(matchedInventoryIndices);
+  const pendingDispositions = [];
+  if (dispositions !== null) {
+    assertObject(dispositions, "reference dispositions");
+    if (dispositions.schema_version !== 1 || !Array.isArray(dispositions.entries)) {
+      throw new Error("reference dispositions must use schema 1 with an entries array");
+    }
+    if (JSON.stringify(dispositions.upstream) !== JSON.stringify(inventory.upstream)) {
+      throw new Error("reference dispositions upstream does not match pinned inventory");
+    }
+    const ids = new Set(manifest.entries.map((entry) => entry.id));
+    for (const entry of dispositions.entries) {
+      assertObject(entry, "reference disposition");
+      if (typeof entry.id !== "string" || !entry.id || ids.has(entry.id)) {
+        throw new Error(`missing or duplicate reference disposition id ${entry.id}`);
+      }
+      ids.add(entry.id);
+      if (!DISPOSITION_STATUSES.has(entry.status)) {
+        throw new Error(`reference disposition ${entry.id} cannot claim ${entry.status}`);
+      }
+      if (typeof entry.reason !== "string" || !entry.reason.trim()
+          || !Array.isArray(entry.owners) || entry.owners.length === 0
+          || entry.owners.some((owner) => typeof owner !== "string" || !/^#[1-9]\d*$/u.test(owner))) {
+        throw new Error(`reference disposition ${entry.id} requires a reason and issue owners`);
+      }
+      validateProvenance(entry.reference_provenance, `reference disposition ${entry.id}`);
+      const matched = byProvenance.get(provenanceKey(entry.reference_provenance));
+      if (matched === undefined) {
+        throw new Error(`reference disposition ${entry.id} has stale pinned provenance`);
+      }
+      if (dispositionedIndices.has(matched.index)) {
+        throw new Error(`reference disposition ${entry.id} duplicates a manifest or disposition claim`);
+      }
+      dispositionedIndices.add(matched.index);
+      pendingDispositions.push({ ...entry, inventory: inventoryProjection(matched.example) });
+    }
+  }
+  if (lock.require_complete_dispositions === true && dispositionedIndices.size !== inventory.examples.length) {
+    throw new Error(`reference disposition coverage incomplete: ${dispositionedIndices.size}/${inventory.examples.length}`);
+  }
+  const dispositionCounts = {};
+  for (const entry of pendingDispositions) {
+    dispositionCounts[entry.status] = (dispositionCounts[entry.status] ?? 0) + 1;
+  }
+
   return {
     schema_version: 2,
     upstream: inventory.upstream,
@@ -246,18 +296,23 @@ export async function reconcileReferenceCoverage(
     reconciled_examples: reconciled.length,
     provenance_classified_examples: provenanceClassified.length,
     classified_examples: matchedInventoryIndices.size,
+    dispositioned_examples: dispositionedIndices.size,
+    pending_disposition_examples: pendingDispositions.length,
+    pending_disposition_statuses: dispositionCounts,
     classified_without_exact_source: classifiedWithoutExactSource,
     unclassified_inventory_examples: inventory.examples.length - matchedInventoryIndices.size,
+    undispositioned_inventory_examples: inventory.examples.length - dispositionedIndices.size,
+    pending_dispositions: pendingDispositions,
     provenance_classified: provenanceClassified,
     reconciled,
   };
 }
 
 async function main() {
-  const [inventoryPath, manifestPath, lockPath, repositoryRoot = "."] = process.argv.slice(2);
+  const [inventoryPath, manifestPath, lockPath, repositoryRoot = ".", dispositionsPath] = process.argv.slice(2);
   if (!inventoryPath || !manifestPath || !lockPath) {
     throw new Error(
-      "usage: node scripts/manim-reference-coverage.mjs INVENTORY_JSON MANIFEST_JSON COVERAGE_LOCK_JSON [REPOSITORY_ROOT]",
+      "usage: node scripts/manim-reference-coverage.mjs INVENTORY_JSON MANIFEST_JSON COVERAGE_LOCK_JSON [REPOSITORY_ROOT] [DISPOSITIONS_JSON]",
     );
   }
   const [inventory, manifest, lock] = await Promise.all(
@@ -265,6 +320,7 @@ async function main() {
   );
   const report = await reconcileReferenceCoverage(inventory, manifest, lock, {
     repositoryRoot: path.resolve(repositoryRoot),
+    dispositions: dispositionsPath ? JSON.parse(await readFile(dispositionsPath, "utf8")) : null,
   });
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
