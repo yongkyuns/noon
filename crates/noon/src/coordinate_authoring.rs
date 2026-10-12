@@ -185,6 +185,24 @@ pub struct ManimNumberLineOptions {
 }
 
 impl ManimNumberLineOptions {
+    /// Manim's ordinary frame defaults give a centered -7..7 linear range.
+    /// Range/default preparation remains shared by all language frontends.
+    pub fn manim_default() -> Self {
+        let radius = (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5).round();
+        Self::new([-radius, radius, 1.0])
+    }
+
+    /// Normalize the optional two- or three-value Manim constructor range.
+    pub fn from_range(range: Option<&[f64]>) -> Result<Self, CoordinateAuthoringError> {
+        if range.is_some_and(<[f64]>::is_empty) {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "number line range requires two or three values",
+            ));
+        }
+        let defaults = Self::manim_default();
+        Ok(Self::new(normalize_axes_range(range, defaults.range)?))
+    }
+
     pub fn new(range: [f64; 3]) -> Self {
         Self {
             range,
@@ -220,6 +238,12 @@ impl ManimNumberLineOptions {
             length,
             self.rotation,
         )?)
+    }
+}
+
+impl Default for ManimNumberLineOptions {
+    fn default() -> Self {
+        Self::manim_default()
     }
 }
 

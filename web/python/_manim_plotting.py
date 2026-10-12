@@ -238,17 +238,20 @@ def _three_d_axis_label_object(label):
 
 
 class NumberLine(_compat.Group):
-    """Explicit-range, tipless linear number line with Rust-owned ticks/range."""
+    """Tipless linear number line with Rust-owned defaults, ticks and range."""
 
-    def __init__(self, x_range, *, length=None, unit_size=1.0, rotation=0.0,
+    def __init__(self, x_range=None, *, length=None, unit_size=1.0, rotation=0.0,
                  include_ticks=True, tick_size=0.1, exclude_origin_tick=False,
                  include_tip=False, numbers_with_elongated_ticks=None,
                  longer_tick_multiple=2, color=None, **kwargs):
+        values = () if x_range is None else tuple(x_range)
+        if x_range is not None and len(values) not in (2, 3):
+            raise ValueError("NumberLine x_range requires two or three values")
         context = _coordinate_constructor_context()
         if include_tip:
             raise NotImplementedError("NumberLine tips are not yet supported")
         options = engine_call(
-            _coordinate_options.numberLine, _array(x_range),
+            _coordinate_options.numberLine, _array(values),
             None if length is None else float(length), float(unit_size), float(rotation),
         )
         try:

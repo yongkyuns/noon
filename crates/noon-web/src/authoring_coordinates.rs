@@ -81,7 +81,10 @@ impl WasmCoordinateOptions {
         unit_size: f64,
         rotation: f64,
     ) -> Result<Self, JsValue> {
-        let mut options = ManimNumberLineOptions::new(range3(range)?);
+        let mut options =
+            ManimNumberLineOptions::from_range(if range.is_empty() { None } else { Some(range) })
+                .map_err(coordinate_failure)
+                .map_err(js_error)?;
         options.length = length;
         options.unit_size = unit_size;
         options.rotation = rotation;
@@ -893,6 +896,20 @@ pub async fn create_coordinate_plotting_renderer(
     let session = noon::coordinate_plotting_example::session()
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// The native and direct-WASM qualification paths use the same typed builder.
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createNumberLineDefaultsRenderer)]
+pub async fn create_number_line_defaults_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::number_line_example::program()
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 /// The animated gallery uses the same typed program as the native example.
