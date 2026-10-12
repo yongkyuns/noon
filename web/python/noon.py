@@ -883,6 +883,9 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "DictAsObject": "_manim_config_utils",
+    "merge_dicts_recursively": "_manim_config_utils",
+    "update_dict_recursively": "_manim_config_utils",
     "RendererType": "_manim_enums",
     "LineJointType": "_manim_enums",
     "CapStyleType": "_manim_enums",
