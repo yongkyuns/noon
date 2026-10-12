@@ -197,7 +197,10 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 liveCreateManimArrow=lambda options: (
                     calls.append(("live_publish", options.kind))
                     or FakeCreatedArrow(options.kind == "double")
-                )
+                ),
+                liveScaleArrow=lambda handle, factor, scale_tips: calls.append(
+                    ("live_arrow_scale", handle, float(factor), bool(scale_tips))
+                ),
             )
             arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: (
                 live_context if kind == "Arrow" else None
@@ -266,6 +269,26 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert arrow.scale(0.5, scale_tips=True) is arrow
             assert ("arrow_scale", 2.0, False) in calls
             assert ("arrow_scale", 0.5, True) in calls
+
+            # Live scaling uses its owning context once and cannot fall back to
+            # an authored write when that context lacks the live operation.
+            arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: live_context
+            static_scales = sum(call[0] == "arrow_scale" for call in calls)
+            assert live_arrow.scale(2.0) is live_arrow
+            assert live_arrow.scale(0.5, scale_tips=True) is live_arrow
+            assert ("live_arrow_scale", live_arrow._semantic_arrow_handle, 2.0, False) in calls
+            assert ("live_arrow_scale", live_arrow._semantic_arrow_handle, 0.5, True) in calls
+            assert sum(call[0] == "arrow_scale" for call in calls) == static_scales
+            del live_context.liveScaleArrow
+            before_missing_live_host = list(calls)
+            try:
+                live_arrow.scale(2.0)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("missing live Arrow host unexpectedly succeeded")
+            assert calls == before_missing_live_host
+            arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: None
 
             # Unsupported ManimCE semantic breadth rejects rather than being approximated.
             before = list(calls)
