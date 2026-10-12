@@ -35,20 +35,18 @@ const MANIM_PANGO_LAYOUT_PIXEL: f32 = 3.6;
 /// preserves Swash's existing size/variation behavior and Q/C control points;
 /// it performs no Cairo-grid or platform-dependent coordinate substitution.
 #[doc(hidden)]
-pub fn unhinted_glyph_outline(
-    context: &mut ScaleContext,
-    font: FontRef<'_>,
-    glyph_id: GlyphId,
+pub fn unhinted_glyph_scaler<'a>(
+    context: &'a mut ScaleContext,
+    font: FontRef<'a>,
     size: f32,
     variations: &[([u8; 4], f32)],
-) -> Option<swash::scale::outline::Outline> {
+) -> swash::scale::Scaler<'a> {
     context
         .builder(font)
         .size(size)
         .hint(false)
         .variations(variations.iter())
         .build()
-        .scale_outline(glyph_id)
 }
 
 /// Convert Swash/Zeno geometry without changing curve degree or coordinates.
@@ -517,6 +515,12 @@ impl NativeTextCompiler {
         if let Some(error) = boundary_error {
             return Err(error);
         }
+        let mut scaler = unhinted_glyph_scaler(
+            &mut self.scale_context,
+            font_ref,
+            options.font_size,
+            variations,
+        );
         let mut glyph_bounds = HashMap::<GlyphId, Option<Rect>>::new();
         let runs = projected
             .into_iter()
@@ -527,14 +531,7 @@ impl NativeTextCompiler {
                     .filter_map(|glyph| {
                         let glyph_id = GlyphId::try_from(glyph.glyph_id).ok()?;
                         let bounds = *glyph_bounds.entry(glyph_id).or_insert_with(|| {
-                            unhinted_glyph_outline(
-                                &mut self.scale_context,
-                                font_ref,
-                                glyph_id,
-                                options.font_size,
-                                variations,
-                            )
-                            .and_then(|outline| {
+                            scaler.scale_outline(glyph_id).and_then(|outline| {
                                 let b = outline.bounds();
                                 (!b.is_empty()).then(|| {
                                     Rect::new(
@@ -1319,7 +1316,9 @@ mod tests {
                         .iter()
                         .map(|p| Vec2::new(p.x, p.y))
                         .collect();
-                    let outline = unhinted_glyph_outline(&mut shared, font, id, size, &[]).unwrap();
+                    let outline = unhinted_glyph_scaler(&mut shared, font, size, &[])
+                        .scale_outline(id)
+                        .unwrap();
                     let path = outline_commands_to_path(outline.path().commands());
                     let actual: Vec<_> = path
                         .commands()
@@ -1356,9 +1355,9 @@ mod tests {
             .compile_plain("oooo oooo", &font, &NativeTextOptions::new(42.0))
             .unwrap();
         for glyph in artifact.resource.runs[0].glyphs.iter() {
-            let outline =
-                unhinted_glyph_outline(&mut context, face, glyph.glyph_id as GlyphId, 42.0, &[])
-                    .unwrap();
+            let outline = unhinted_glyph_scaler(&mut context, face, 42.0, &[])
+                .scale_outline(glyph.glyph_id as GlyphId)
+                .unwrap();
             let path = outline_commands_to_path(outline.path().commands());
             if let Some(bounds) = path
                 .conservative_bounds()

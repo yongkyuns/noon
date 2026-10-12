@@ -24,7 +24,7 @@ use noon_core::{
 #[cfg(test)]
 use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena, TextVectorStyle};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RendererPublication};
-use noon_text::shaping::{outline_commands_to_path, unhinted_glyph_outline};
+use noon_text::shaping::{outline_commands_to_path, unhinted_glyph_scaler};
 #[cfg(test)]
 use noon_typst::{compile_typst_resource, TypstMode};
 use swash::{
@@ -980,15 +980,10 @@ impl GlyphOutlineCache {
             .iter()
             .map(|setting| (setting.tag, setting.value))
             .collect();
-        let path = unhinted_glyph_outline(
-            &mut self.scale_context,
-            font,
-            glyph_id,
-            run.font_size,
-            &variations,
-        )
-        .map(|outline| outline_commands_to_path(outline.path().commands()))
-        .unwrap_or_default();
+        let path = unhinted_glyph_scaler(&mut self.scale_context, font, run.font_size, &variations)
+            .scale_outline(glyph_id)
+            .map(|outline| outline_commands_to_path(outline.path().commands()))
+            .unwrap_or_default();
         let path = Arc::new(path);
         self.admit_outline(key, path.clone());
         Ok((key, path))
