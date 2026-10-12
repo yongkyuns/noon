@@ -386,7 +386,16 @@ impl RetainedFramePreparer {
             .get_mut(scratch_slot)
             .ok_or(RetainedFamilyPrepareError::MissingScratchObject(object.id))?;
         scratch.transform = object.transform;
-        scratch.style = draw_border_style(resolved_text_vector_style(object.style, vector), phase);
+        let style = resolved_text_vector_style(object.style, vector);
+        // Stroke-only decorations are already outlines: reveal their authored
+        // stroke without inventing a fill transition. Their widths are in text
+        // coordinates and scale with the object, unlike the screen-space border
+        // used to outline filled glyphs. Mixing those units makes rules swell.
+        scratch.style = if style.fill.is_none() && style.stroke.is_some() {
+            style
+        } else {
+            draw_border_style(style, phase)
+        };
         scratch.appearance = object.appearance;
         self.scratch.presences[scratch_slot] = true;
         self.scratch.reveals[scratch_slot] = match phase {

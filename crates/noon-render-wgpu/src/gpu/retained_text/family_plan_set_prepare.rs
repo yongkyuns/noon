@@ -1081,7 +1081,10 @@ mod tests {
         let fonts = std::mem::take(&mut artifact.fonts);
         let geometries = std::mem::take(&mut artifact.geometry);
         let images = noon_core::RasterImageResourceArena::new();
-        let object = semantic_object(10, ObjectContentRef::Text(text));
+        let mut object = semantic_object(10, ObjectContentRef::Text(text));
+        // Public text objects convert point coordinates to scene units. Unequal
+        // axes also protect the authored stroke from scalar unit approximations.
+        object.transform.scale = Vec2::new(1.0 / 96.0, 1.0 / 64.0);
         let mut semantics = SemanticStore::new();
         let leaf = semantics.insert_authoring_object();
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, leaf).unwrap();
@@ -1185,6 +1188,13 @@ mod tests {
                 );
                 if progress < 0.5 {
                     assert_eq!(scratch.style.fill, None);
+                }
+                if vector.style.fill.is_none() && vector.style.stroke_width > 0.0 {
+                    assert_eq!(
+                        scratch.style,
+                        resolved_text_vector_style(retained.objects[0].style, vector),
+                        "stroke-only rules keep their width, units, cap and join throughout Write"
+                    );
                 }
                 if progress == 1.0 {
                     assert_eq!(
