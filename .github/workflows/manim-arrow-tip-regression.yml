@@ -3,6 +3,8 @@ name: Arrow tip Manim regression
 on:
   pull_request:
     paths:
+      - "scripts/ci-setup-rust.sh"
+      - "scripts/test_ci_setup_rust.py"
       - "crates/noon/src/arrow_*.rs"
       - "crates/noon/tests/arrow_tip_regression.rs"
       - "crates/noon-render-wgpu/**"
@@ -67,13 +69,8 @@ jobs:
         run: python scripts/manim-arrow-tip-reference.py
       - name: Use repository-pinned Rust and WASM target
         run: |
-          # Avoid unowned Clippy binaries in the runner-provided toolchain.
-          noon_rustup_home="$(mktemp -d "$RUNNER_TEMP/noon-arrow-rustup.XXXXXX")"
-          export RUSTUP_HOME="$noon_rustup_home"
-          printf 'RUSTUP_HOME=%s\n' "$RUSTUP_HOME" >> "$GITHUB_ENV"
-          rustup install
-          rustup show active-toolchain
-          rustc --version --verbose
+          python3 scripts/test_ci_setup_rust.py
+          source scripts/ci-setup-rust.sh
           rustup target add wasm32-unknown-unknown
       - uses: actions/cache@v6
         with:
