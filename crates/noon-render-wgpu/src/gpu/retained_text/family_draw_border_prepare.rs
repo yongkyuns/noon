@@ -386,16 +386,7 @@ impl RetainedFramePreparer {
             .get_mut(scratch_slot)
             .ok_or(RetainedFamilyPrepareError::MissingScratchObject(object.id))?;
         scratch.transform = object.transform;
-        let style = resolved_text_vector_style(object.style, vector);
-        // Stroke-only decorations are already outlines: reveal their authored
-        // stroke without inventing a fill transition. Their widths are in text
-        // coordinates and scale with the object, unlike the screen-space border
-        // used to outline filled glyphs. Mixing those units makes rules swell.
-        scratch.style = if style.fill.is_none() && style.stroke.is_some() {
-            style
-        } else {
-            draw_border_style(style, phase)
-        };
+        scratch.style = draw_border_style(resolved_text_vector_style(object.style, vector), phase);
         scratch.appearance = object.appearance;
         self.scratch.presences[scratch_slot] = true;
         self.scratch.reveals[scratch_slot] = match phase {
@@ -551,6 +542,24 @@ pub(super) fn draw_border_style(
         .stroke
         .filter(|_| object_style.stroke_width > 0.0);
     let outline_color = final_stroke.or(final_fill).unwrap_or(Color::WHITE);
+
+    // An authored local-space stroke is already the object's outline. Keep its
+    // width, scaling mode, caps and joins while revealing it, then introduce the
+    // fill. Interpolating its width with a screen-space border mixes units and
+    // cannot preserve nonuniform transforms. Unstroked glyphs and screen-space
+    // strokes retain the ordinary Manim border transition below.
+    if final_stroke.is_some() && object_style.stroke_width_mode == StrokeWidthMode::ScaleWithObject
+    {
+        return Style {
+            fill: match phase {
+                RetainedDrawBorderThenFillPhase::Outline { .. } => None,
+                RetainedDrawBorderThenFillPhase::Fill { progress } => {
+                    final_fill.map(|color| scale_color_alpha(color, progress.clamp(0.0, 1.0)))
+                }
+            },
+            ..object_style
+        };
+    }
 
     match phase {
         RetainedDrawBorderThenFillPhase::Outline { .. } => Style {
@@ -846,5 +855,45 @@ mod draw_border_tests {
         assert_eq!(style.stroke, Some(Color::rgba(1.0, 1.0, 1.0, 0.5)));
         assert_eq!(style.stroke_width, DEFAULT_DRAW_BORDER_STROKE_WIDTH * 0.5);
         assert_eq!(style.stroke_width_mode, StrokeWidthMode::ScreenSpace);
+    }
+
+    #[test]
+    fn scaled_strokes_keep_authored_units_and_outline_while_fill_is_introduced() {
+        for fill in [None, Some(Color::rgba(0.2, 0.4, 0.8, 0.6))] {
+            let authored = Style {
+                fill,
+                stroke: Some(Color::rgba(0.9, 0.3, 0.2, 0.7)),
+                stroke_width: 0.6,
+                stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+                stroke_join: StrokeJoin::Round,
+                stroke_cap: StrokeCap::Round,
+                opacity: 0.4,
+            };
+            let outline = draw_border_style(
+                authored,
+                RetainedDrawBorderThenFillPhase::Outline { reveal: 0.5 },
+            );
+            assert_eq!(
+                outline,
+                Style {
+                    fill: None,
+                    ..authored
+                }
+            );
+            for progress in [0.0, 0.25, 0.5, 0.99, 1.0, 0.25] {
+                let actual =
+                    draw_border_style(authored, RetainedDrawBorderThenFillPhase::Fill { progress });
+                let expected_fill = fill.map(|color| {
+                    Color::rgba(color.red, color.green, color.blue, color.alpha * progress)
+                });
+                assert_eq!(
+                    actual,
+                    Style {
+                        fill: expected_fill,
+                        ..authored
+                    }
+                );
+            }
+        }
     }
 }

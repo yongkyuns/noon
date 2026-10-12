@@ -1071,10 +1071,22 @@ mod tests {
 
     #[test]
     fn compiled_math_write_preserves_vector_style_and_cached_rows_when_seeking() {
-        let mut artifact = compile_typst_resource("x^2+frac(1,2)", TypstMode::Math).unwrap();
+        assert_compiled_write_vector_style_and_cached_rows("x^2+frac(1,2)", TypstMode::Math);
+    }
+
+    #[test]
+    fn compiled_filled_stroked_shape_write_preserves_style_and_cached_rows_when_seeking() {
+        assert_compiled_write_vector_style_and_cached_rows(
+            "A #rect(width: 18pt, height: 12pt, fill: blue, stroke: 0.6pt)",
+            TypstMode::Markup,
+        );
+    }
+
+    fn assert_compiled_write_vector_style_and_cached_rows(source: &str, mode: TypstMode) {
+        let mut artifact = compile_typst_resource(source, mode).unwrap();
         assert!(
             !artifact.resource.vector_items.is_empty(),
-            "fraction rule is retained"
+            "compiled vector decoration is retained"
         );
         let mut texts = TextResourceArena::new();
         let text = texts.insert(artifact.resource).unwrap();
@@ -1189,11 +1201,24 @@ mod tests {
                 if progress < 0.5 {
                     assert_eq!(scratch.style.fill, None);
                 }
-                if vector.style.fill.is_none() && vector.style.stroke_width > 0.0 {
+                if vector.style.stroke_width > 0.0 {
+                    let mut expected =
+                        resolved_text_vector_style(retained.objects[0].style, vector);
+                    expected.fill = if progress < 0.5 {
+                        None
+                    } else {
+                        expected.fill.map(|color| {
+                            Color::rgba(
+                                color.red,
+                                color.green,
+                                color.blue,
+                                color.alpha * (progress * 2.0 - 1.0),
+                            )
+                        })
+                    };
                     assert_eq!(
-                        scratch.style,
-                        resolved_text_vector_style(retained.objects[0].style, vector),
-                        "stroke-only rules keep their width, units, cap and join throughout Write"
+                        scratch.style, expected,
+                        "compiled outlines keep their width, units, cap and join throughout Write"
                     );
                 }
                 if progress == 1.0 {
