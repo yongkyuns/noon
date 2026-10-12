@@ -145,6 +145,45 @@ class TypstAnimation(Scene):
 `;
 
 let browser = null;
+
+function fractionRuleThicknesses(images, completedIndex) {
+  const completed = images[completedIndex];
+  const painted = (image, x, y) => {
+    const offset = (y * image.width + x) * 4;
+    return image.data[offset] + image.data[offset + 1] + image.data[offset + 2] > 150;
+  };
+  let minX = completed.width, maxX = -1;
+  for (let y = 0; y < completed.height; y++) {
+    for (let x = 0; x < completed.width; x++) {
+      if (painted(completed, x, y)) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
+    }
+  }
+  // The fixture ends in a fraction. Its bar is the longest horizontal run
+  // in the rightmost third, away from the preceding plus sign and exponent.
+  const left = Math.floor(minX + (maxX - minX) * 2 / 3);
+  let bar = { length: 0, x: 0, y: 0 };
+  for (let y = 0; y < completed.height; y++) {
+    let start = -1;
+    for (let x = left; x <= maxX + 1; x++) {
+      if (x <= maxX && painted(completed, x, y)) {
+        if (start < 0) start = x;
+      } else if (start >= 0) {
+        if (x - start > bar.length) bar = { length: x - start, x: start, y };
+        start = -1;
+      }
+    }
+  }
+  assert.ok(bar.length >= 8, "completed fraction rule must be visible");
+  const x = bar.x + Math.max(1, Math.floor(bar.length * 0.15));
+  return images.map(image => {
+    if (!painted(image, x, bar.y)) return 0;
+    let top = bar.y, bottom = bar.y;
+    while (top > 0 && painted(image, x, top - 1)) top--;
+    while (bottom + 1 < image.height && painted(image, x, bottom + 1)) bottom++;
+    return bottom - top + 1;
+  });
+}
+
 try {
   await waitForServer();
   browser = await chromium.launch({
@@ -204,27 +243,33 @@ class MathReveal(Scene):
           await mathPage.waitForFunction(() => window.noonHostRaster);
           await mathPage.evaluate(source => window.noonHostRaster.load(source, 3.25), source);
           assert.equal(await mathPage.evaluate(() => window.__noonNoJspiWorkerWrapped), true);
-          const times = [0, 0.5, 1, 2, 2.5, 3, 3.25], counts = [];
+          const times = [0, 0.5, 1, 1.5, 1.8, 1.99, 2, 2.5, 3, 3.25], counts = [], images = [];
           let final;
           for (let index = 0; index < times.length; index++) {
             final = await mathPage.evaluate(({ index, times }) => window.noonHostRaster.renderThrough(index, times), { index, times });
             const image = PNG.sync.read(await mathPage.locator("#scene").screenshot());
+            images.push(image);
             let foreground = 0;
             for (let pixel = 0; pixel < image.data.length; pixel += 4) {
               if (image.data[pixel] + image.data[pixel + 1] + image.data[pixel + 2] > 30) foreground++;
             }
             counts.push(foreground);
           }
+          const countAt = time => counts[times.indexOf(time)];
+          const completedIndex = times.indexOf(2);
+          const thicknesses = fractionRuleThicknesses(images, completedIndex);
+          assert.ok(thicknesses.every(width => width <= thicknesses[completedIndex] + 2),
+            `${kind}/${forward}: fraction rule swelled before settling: ${JSON.stringify(thicknesses)}`);
           assert.equal(counts[0], 0, `${kind}/${forward}: equation must start hidden`);
-          assert.ok(counts[1] > 0 && counts[2] > counts[1] && counts[3] > counts[1],
+          assert.ok(countAt(0.5) > 0 && countAt(1) > countAt(0.5) && countAt(2) > countAt(0.5),
             `${kind}/${forward}: partial glyph/rule stages missing: ${JSON.stringify(counts)}`);
-          assert.ok(counts[4] > 0 && counts[4] < counts[3], `${kind}/${reverse}: partial erasure missing`);
-          assert.equal(counts[5], 0, `${kind}/${reverse}: equation was not erased`);
-          assert.equal(counts[6], 0, `${kind}/${reverse}: removed equation reappeared`);
+          assert.ok(countAt(2.5) > 0 && countAt(2.5) < countAt(2), `${kind}/${reverse}: partial erasure missing`);
+          assert.equal(countAt(3), 0, `${kind}/${reverse}: equation was not erased`);
+          assert.equal(countAt(3.25), 0, `${kind}/${reverse}: removed equation reappeared`);
           assert.equal(final.authoredDuration, 3.25);
           assert.equal(final.objectCount, 0);
           assert.deepEqual(mathErrors, []);
-          console.log(`${kind} ${forward}/${reverse} progressive pixels passed without JSPI: ${JSON.stringify(counts)}`);
+          console.log(`${kind} ${forward}/${reverse} progressive pixels passed without JSPI: ${JSON.stringify(counts)}; fraction widths: ${JSON.stringify(thicknesses)}`);
         } finally { await mathPage.close(); }
       }
     }

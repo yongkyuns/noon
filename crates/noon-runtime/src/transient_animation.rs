@@ -58,6 +58,7 @@ impl SceneInstance {
         let channels = lower_indicate_channels_with_bindings(
             &[],
             EffectiveAnimationProperties {
+                glow: row.glow.as_deref().copied(),
                 z_index: row.z_index,
                 transform: row.transform,
                 style: row.style,

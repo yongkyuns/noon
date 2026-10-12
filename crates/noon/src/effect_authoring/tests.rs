@@ -130,22 +130,27 @@ fn detach_readd_and_wrapper_drop_preserve_authored_attachment() {
 }
 
 #[test]
-fn effect_declarations_fail_closed_at_execution_bootstrap() {
+fn unsupported_source_profile_fails_without_blocking_detached_copies() {
     let mut scene = Scene::new();
-    let dot = scene.circle(0.08).unwrap();
+    let mut dot = scene.circle(0.08).unwrap();
+    // Ordinary stroked or unfilled geometry is supported; a singular source
+    // transform remains outside the retained glow profile.
+    dot.set_scale(0.0, 1.0).unwrap();
     scene.add(&dot).unwrap();
     let plain = scene.execution_session().unwrap();
     drop(plain);
-    // Even neutral attachments are semantic declarations; no runtime support
-    // can be inferred by silently discarding them. This conservative M0 gate
-    // includes detached target copies and is replaced by M1 lowering.
+    // Neutral attachments still require a supported source profile. This
+    // singularly transformed circle must not silently lose its declaration.
     scene
         .set_glow(&dot, GlowUpdate::default().intensity(0.0))
         .unwrap();
     assert!(scene.execution_session().is_err());
     let mut target = dot.target_editor().unwrap();
     scene.remove_glow(&dot).unwrap();
-    assert!(scene.execution_session().is_err());
+    assert!(
+        scene.execution_session().is_ok(),
+        "detached targets are not execution members"
+    );
     target.remove_glow().unwrap();
     assert!(scene.execution_session().is_ok());
 }
@@ -153,7 +158,8 @@ fn effect_declarations_fail_closed_at_execution_bootstrap() {
 #[test]
 fn rejected_live_attachment_preserves_both_scene_and_runtime() {
     let mut scene = Scene::new();
-    let dot = scene.circle(0.08).unwrap();
+    let mut dot = scene.circle(0.08).unwrap();
+    dot.set_scale(0.0, 1.0).unwrap();
     scene.add(&dot).unwrap();
     let mut session = scene.execution_session().unwrap();
     let before = scene.revision();

@@ -1,0 +1,186 @@
+name: Physical A/A original precision acquisition (manual; never PR acceptance)
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/perf-physical-aa.yml"
+      - "benchmarks/perf-physical-aa-study.json"
+      - "scripts/perf-physical-aa-*.mjs"
+      - "scripts/perf-physical-aa-*.py"
+      - "docs/perf-physical-aa.md"
+  workflow_dispatch:
+    inputs:
+      consent:
+        description: "Type RUN_PHYSICAL_AA_ONCE; no automatic retries or qualification"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: physical-aa-1933-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  protocol:
+    name: Test frozen manual A/A topology (no GPU samples)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - name: Checkout the frozen nonproduction pair/host harness for provenance tests
+        uses: actions/checkout@v7
+        with:
+          ref: 439c4c4d33096665afa68bb070baaba52bd20f43
+          path: frozen-harness
+          persist-credentials: false
+      - name: Check physical acquisition and source integrity contracts
+        run: |
+          node --check scripts/perf-physical-aa-product.mjs
+          node --check scripts/perf-physical-aa-overlay.mjs
+          node --check scripts/perf-physical-aa-host-derive.mjs
+          python3 -m py_compile scripts/perf-physical-aa-archive.py
+          python3 scripts/perf-physical-aa-archive.test.py
+          node --test scripts/perf-physical-aa-protocol.test.mjs
+
+  physical:
+    name: Dedicated physical macOS A/A; NOT code qualification
+    needs: protocol
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && github.event.inputs.consent == 'RUN_PHYSICAL_AA_ONCE' && github.run_attempt == 1 }}
+    runs-on: [self-hosted, macOS, noon-physical]
+    timeout-minutes: 240
+    env:
+      NOON_PRODUCT_BASE_SHA: 0473399d1cba9fc1f217c8b88b93c73c69991597
+      NOON_PRODUCT_CANDIDATE_SHA: e11ed3046f9b282331214aca8ffdda765cf7b172
+      NOON_PRODUCT_HEAD_SHA: 0be750b77eb98711ca869423a0944841c832e8ad
+      NOON_PRODUCT_EVENT_BASE_SHA: 0473399d1cba9fc1f217c8b88b93c73c69991597
+      NOON_WASM_PROFILE: release
+      NOON_WASM_SKIP_OPT: '0'
+      NOON_RENDERER_SMOKE: '0'
+      NOON_PRODUCT_PREFLIGHT_SKIPPED: '1'
+    steps:
+      - name: Checkout exact manual protocol
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Archive one-shot dispatch identity even if prerequisites fail
+        run: |
+          mkdir -p evidence/inputs
+          printf '%s\n' "${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" > evidence/inputs/attempt.txt
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_REF" = refs/heads/master
+          test "$RUNNER_OS" = macOS
+          case "$RUNNER_ARCH" in ARM64|X64) ;; *) exit 1 ;; esac
+      - name: Checkout source-pinned original measurement harness
+        uses: actions/checkout@v7
+        with:
+          ref: 439c4c4d33096665afa68bb070baaba52bd20f43
+          path: harness
+          persist-credentials: false
+      - name: Checkout original baseline source
+        uses: actions/checkout@v7
+        with:
+          ref: 0473399d1cba9fc1f217c8b88b93c73c69991597
+          path: baseline
+          persist-credentials: false
+      - name: Checkout independent identical baseline for Python host
+        uses: actions/checkout@v7
+        with:
+          ref: 0473399d1cba9fc1f217c8b88b93c73c69991597
+          path: baseline-peer
+          persist-credentials: false
+      - name: Checkout original tested candidate merge source
+        uses: actions/checkout@v7
+        with:
+          ref: e11ed3046f9b282331214aca8ffdda765cf7b172
+          # The frozen verifier reads both parents of this synthetic merge.
+          fetch-depth: 2
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - name: Verify preregistered study and immutable harness source
+        run: |
+          node --input-type=module -e 'import {readFileSync} from "node:fs"; import {validatePlan} from "./control/scripts/perf-physical-aa-product.mjs"; validatePlan(JSON.parse(readFileSync("./control/benchmarks/perf-physical-aa-study.json")));'
+          node control/scripts/perf-physical-aa-overlay.mjs --apply harness
+          node control/scripts/perf-physical-aa-overlay.mjs --verify harness
+      - name: Install pinned browser tools on both isolated sources
+        run: |
+          (cd control && npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0)
+          (cd harness && npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0)
+          (cd harness && npx playwright install chromium)
+          node --version
+          python3 harness/scripts/product-aa-apple-http-server.py --self-test
+      - name: Require real physical GPU and stable source GPU identity
+        run: |
+          node control/scripts/perf-physical-readiness.mjs evidence/inputs/physical-readiness.json
+          node --input-type=module -e '
+          import {readFileSync,appendFileSync} from "node:fs";
+          import assert from "node:assert/strict";
+          const r=JSON.parse(readFileSync("evidence/inputs/physical-readiness.json"));
+          assert.equal(r.decision.status,"eligible-for-separate-aa-diagnostic");
+          assert.equal(r.decision.qualification,false);
+          const gpu=r.observed.webgl?.unmaskedRenderer??"";
+          assert.ok(gpu.trim().length > 0,"physical renderer identity missing");
+          assert.doesNotMatch(gpu,/paravirtual|virtual device|swiftshader|llvmpipe|softpipe|software|microsoft basic render|[\r\n]/i);
+          appendFileSync(process.env.GITHUB_ENV,"NOON_PHYSICAL_AA_EXPECTED_RENDERER="+gpu+"\n");
+          '
+      - name: Download and authenticate original immutable production releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 control/scripts/perf-physical-aa-archive.py \
+            control/benchmarks/perf-physical-aa-study.json "$GITHUB_WORKSPACE" evidence/inputs
+      - name: Acquire every original product A/A pair exactly once
+        run: |
+          node control/scripts/perf-physical-aa-product.mjs \
+            control/benchmarks/perf-physical-aa-study.json \
+            "$GITHUB_WORKSPACE/harness" "$GITHUB_WORKSPACE/baseline" \
+            "$GITHUB_WORKSPACE/candidate" "$GITHUB_WORKSPACE/evidence/product/study"
+      - name: Derive identical-source host A/A driver from frozen scorer
+        run: |
+          node control/scripts/perf-physical-aa-host-derive.mjs \
+            harness/scripts/python-host-perf.mjs harness/scripts/python-host-perf-aa.mjs
+          node --check harness/scripts/python-host-perf-aa.mjs
+      - name: Acquire all 63 original warmed Python host A/A pairs
+        env:
+          NOON_PERF_BASELINE_ROOT: ${{ github.workspace }}/baseline
+          NOON_PERF_CANDIDATE_ROOT: ${{ github.workspace }}/baseline-peer
+        working-directory: harness
+        run: node scripts/python-host-perf-aa.mjs
+      - name: Recheck original production package identity after measurement
+        run: |
+          node control/scripts/perf-physical-aa-overlay.mjs --verify harness
+          node --input-type=module -e '
+          import {verifyProductArtifact} from "./harness/.github/ci/product-artifact.mjs";
+          import assert from "node:assert/strict";
+          for (const [root,role] of [["baseline","baseline"],["baseline-peer","baseline"],["candidate","candidate"]]) {
+            const manifest=await verifyProductArtifact(root,{...process.env,GITHUB_SHA:process.env.NOON_PRODUCT_CANDIDATE_SHA},role);
+            assert.ok(manifest.source,"source manifest missing");
+          }'
+      - name: Audit complete original strict A/A evidence without replacing scores
+        run: |
+          node control/scripts/perf-aa-precision-audit.mjs \
+            evidence/inputs/registered-plan.json \
+            evidence/product/study/summary.json \
+            evidence/product/study/acquisition.jsonl \
+            baseline-peer/browser-smoke-artifacts/product-gate/host-cost/comparison.json \
+            evidence/precision-audit.json
+      - name: Retain all raw and partial diagnostic evidence including blocked results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: physical-aa-1933-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            evidence/
+            baseline-peer/browser-smoke-artifacts/product-gate/host-cost/
+          if-no-files-found: error
+          retention-days: 30

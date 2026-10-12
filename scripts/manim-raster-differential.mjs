@@ -11,6 +11,7 @@ import pngjs from "pngjs";
 import {
   browserArgs,
   compareEffective3DCamera,
+  compareEffectiveInsetCameras,
   dominantImageRgba,
   directStaticObservation,
   rasterFixtureSource,
@@ -98,6 +99,9 @@ for (const fixture of manifest.fixtures) {
   assert.ok(fixture.camera_profile_observation === undefined
     || typeof fixture.camera_profile_observation === "boolean",
   `${fixture.id}: camera_profile_observation must be boolean when specified`);
+  assert.ok(fixture.inset_camera_observation === undefined
+    || typeof fixture.inset_camera_observation === "boolean",
+  `${fixture.id}: inset_camera_observation must be boolean when specified`);
   assert.ok(
     fixtureSourceFor(fixture).includes("from manim import *"),
     `${fixture.id}: canonical source must import real Manim`,
@@ -430,12 +434,20 @@ async function renderManimReferences() {
 
     const samples = sampleFrames(frameTimes, fixture, semanticFixture, frameFiles.length);
     for (const sample of samples) {
-      if (fixture.camera_profile_observation === true) {
+      if (fixture.camera_profile_observation === true || fixture.inset_camera_observation === true) {
         const semanticFrame = sample.referenceKind === "terminal"
           ? semanticFixture.terminal_state : semanticFixture.frames[sample.frameIndex];
-        assert.ok(semanticFrame?.camera_3d,
-          `${fixture.id}/${sample.label}: missing exact-frame Manim camera_3d observation`);
-        sample.camera3dOracle = semanticFrame.camera_3d;
+        if (fixture.camera_profile_observation === true) {
+          assert.ok(semanticFrame?.camera_3d,
+            `${fixture.id}/${sample.label}: missing exact-frame Manim camera_3d observation`);
+          sample.camera3dOracle = semanticFrame.camera_3d;
+        }
+        if (fixture.inset_camera_observation === true) {
+          assert.ok(semanticFrame?.camera && Array.isArray(semanticFrame.inset_2d_views),
+            `${fixture.id}/${sample.label}: missing exact-frame Manim inset observation`);
+          sample.insetCameraOracle = { camera: semanticFrame.camera,
+            inset_2d_views: semanticFrame.inset_2d_views };
+        }
       }
       const outputPath = path.join(frameDir, `${sample.label}.png`);
       const image = sample.referenceKind === "terminal"
@@ -862,6 +874,7 @@ async function compareAll(references, backendResults) {
         const noonStats = pixelStats(actualBuffer);
         let foregroundCoverage;
         let cameraProfileObservation = null;
+        let insetCameraObservation = null;
         let semanticObservationError = null;
         try {
           if (fixture.id.startsWith("vector-space-lts-")) {
@@ -885,6 +898,11 @@ async function compareAll(references, backendResults) {
               `${fixture.id}: missing selected Manim camera_3d reference frame`);
             cameraProfileObservation = compareEffective3DCamera(
               capture.debugFrame, capture.camera3dOracle,
+            );
+          }
+          if (fixture.inset_camera_observation === true) {
+            insetCameraObservation = compareEffectiveInsetCameras(
+              capture.debugFrame, capture.insetCameraOracle,
             );
           }
         } catch (error) {
@@ -914,6 +932,8 @@ async function compareAll(references, backendResults) {
           noon: noonStats,
           debugFrame: capture.debugFrame,
           effectiveCameraProfile: cameraProfileObservation,
+          ...(fixture.inset_camera_observation === true
+            ? { effectiveInsetCameras: insetCameraObservation } : {}),
           semanticObservationError,
           foregroundCoverage,
           boundsDelta: bboxDelta(referenceStats, noonStats),

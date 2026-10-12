@@ -217,6 +217,7 @@ pub struct RendererPublication<'a> {
     raster_image_resources: &'a dyn noon_core::RasterImageResourceLookup,
     family_animation_plans: &'a [RetainedFamilyAnimationPlan],
     active_family_animation_indices: &'a BTreeSet<usize>,
+    planned_family_frame: RetainedPlannedFamilyFrame<'a>,
     painter_order: &'a [u32],
     derived_display_objects: &'a [DerivedDisplayObject],
 }
@@ -251,11 +252,7 @@ impl RendererPublication<'_> {
     }
 
     pub fn planned_family_frame(&self) -> RetainedPlannedFamilyFrame<'_> {
-        RetainedPlannedFamilyFrame {
-            retained: self.frame,
-            family_animations: &self.frame.family_animations,
-            family_plan_indices: &self.frame.family_animation_plan_indices,
-        }
+        self.planned_family_frame
     }
 
     pub fn family_animation_plans(&self) -> &[RetainedFamilyAnimationPlan] {
@@ -313,6 +310,43 @@ impl<'a> RendererPublication<'a> {
         self.with_transient_presentations(derived_display_objects)
     }
 
+    /// Reconstitute the exact borrowed renderer publication at the genuine
+    /// retained execution-worker transport boundary. The caller must have
+    /// atomically validated and installed the typed transport envelope, resource
+    /// identities, epoch, and painter order using the normal worker mirror.
+    ///
+    /// This borrows the worker's *existing* effective frame and resources. It is
+    /// neither an authoring entry point nor a second execution engine or state.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_validated_transport_frame(
+        context: PublicationContext,
+        planned_family_frame: RetainedPlannedFamilyFrame<'a>,
+        changes: FrameChanges,
+        text_resources: &'a dyn TextResourceLookup,
+        font_resources: &'a dyn FontResourceLookup,
+        geometry_resources: &'a dyn GeometryResourceLookup,
+        raster_image_resources: &'a dyn noon_core::RasterImageResourceLookup,
+        family_animation_plans: &'a [RetainedFamilyAnimationPlan],
+        active_family_animation_indices: &'a BTreeSet<usize>,
+        painter_order: &'a [u32],
+    ) -> Self {
+        let mut publication = Self::new(
+            context,
+            planned_family_frame.retained,
+            changes,
+            text_resources,
+            font_resources,
+            geometry_resources,
+            raster_image_resources,
+            family_animation_plans,
+            active_family_animation_indices,
+            painter_order,
+        );
+        publication.planned_family_frame = planned_family_frame;
+        publication
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         context: PublicationContext,
@@ -336,6 +370,11 @@ impl<'a> RendererPublication<'a> {
             raster_image_resources,
             family_animation_plans,
             active_family_animation_indices,
+            planned_family_frame: RetainedPlannedFamilyFrame {
+                retained: frame,
+                family_animations: &frame.family_animations,
+                family_plan_indices: &frame.family_animation_plan_indices,
+            },
             painter_order,
             derived_display_objects: &[],
         }
@@ -460,6 +499,7 @@ mod derived_display_tests {
         FrameState {
             time: 0.0,
             objects: vec![FrameObjectState {
+                glow: None,
                 id: ObjectId::new(1),
                 z_index: 0.0,
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),

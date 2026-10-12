@@ -787,6 +787,7 @@
       "id": "zoomed-scene",
       "scene": "RetainedZoom",
       "source": "parity/manim-v0.21/core-examples/zoomed_scene.py",
+      "inset_camera_observation": true,
       "expected_duration": 1.0
     },
     {

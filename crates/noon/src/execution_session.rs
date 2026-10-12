@@ -1600,6 +1600,7 @@ impl ExecutionSession {
             let frame = self.runtime.frame();
             let row = frame.objects.get(index)?;
             Some(EffectiveAnimationProperties {
+                glow: row.glow.as_deref().copied(),
                 z_index: row.z_index,
                 transform: row.transform,
                 style: row.style,
@@ -1623,9 +1624,12 @@ impl ExecutionSession {
                 })
             })?;
         tracks.append(path_tracks);
-        let family_animations =
-            noon_compile::lower_semantic_text_glyph_animations(store, &schedule)
-                .map_err(ExecutionSessionAnimationError::TextGlyph)?;
+        let family_animations = noon_compile::lower_semantic_text_glyph_animations_with_tracks(
+            store,
+            &schedule,
+            tracks.tracks(),
+        )
+        .map_err(ExecutionSessionAnimationError::TextGlyph)?;
         if tracks.is_empty() && family_animations.is_empty() {
             return Ok(segment);
         }
@@ -1704,6 +1708,7 @@ impl ExecutionSession {
     ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
         let mut declaration = SemanticMutationTransaction::new();
+        self.stage_neutral_glow_attachment(store, &mut declaration, source, target_state)?;
         let target_state =
             self.stage_animation_target_state(store, &mut declaration, target_state)?;
         let root = declaration.create_transform_animation(source, target_state, options);
@@ -2248,6 +2253,7 @@ impl ExecutionSession {
                 if !(reuse_compatible_admission && admitted.seen.contains(&(*source).into())) {
                     admit(*source, admitted)?;
                 }
+                self.stage_neutral_glow_attachment(store, declaration, *source, *target_state)?;
                 let target_state =
                     self.stage_animation_target_state(store, declaration, *target_state)?;
                 let animation = declaration.create_transform_animation_with_interpolation(
@@ -2796,7 +2802,9 @@ impl ExecutionSession {
                 let introducer = options.introducer.unwrap_or(!reverse_member_order);
                 let remover = options.remover.unwrap_or(*reverse_member_order);
                 if introducer {
-                    admit(*target, admitted)?;
+                    if !(reuse_compatible_admission && admitted.seen.contains(&(*target).into())) {
+                        admit(*target, admitted)?;
+                    }
                 } else {
                     self.require_present_draw_border_target(store, root, *target)?;
                 }
@@ -2844,7 +2852,10 @@ impl ExecutionSession {
                     self.require_create_target(store, *target)?;
                     true
                 };
-                if admitted_target && !admitted.insert((*target).into()) {
+                if admitted_target
+                    && !(reuse_compatible_admission && admitted.seen.contains(&(*target).into()))
+                    && !admitted.insert((*target).into())
+                {
                     return Err(ExecutionSessionAnimationError::CreateTarget {
                         target: *target,
                         error: ExecutionSessionCreateError::DuplicateTarget,
@@ -2980,18 +2991,36 @@ impl ExecutionSession {
                         error: ExecutionSessionCreateError::EmptyParallel,
                     });
                 }
-                // A content-morph Transform and Create own disjoint morph and reveal
-                // drivers in Noon's retained-channel extension. They share one detached
-                // source in a Parallel play, so membership is admitted once while both
-                // animations retain their own semantic identities. Competing Create
-                // introductions remain an atomic preflight error.
+                // Reveal and effect-only target edits own disjoint drivers, as
+                // does the existing Create/content-morph extension. Admit one
+                // detached source once while preserving each animation identity.
+                // Competing introductions or other edits still reject atomically.
                 let mut introductions = HashMap::<SemanticNodeId, usize>::new();
                 let mut morphs = HashMap::<SemanticNodeId, usize>::new();
+                let mut effect_edits = HashMap::<SemanticNodeId, usize>::new();
+                let mut creates = HashSet::new();
                 let mut occurrences = HashMap::<SemanticNodeId, usize>::new();
                 if *kind == SemanticAnimationCompositionKind::Parallel {
                     for child in children {
                         match child {
                             SemanticCompositionRequest::Create { target, .. } => {
+                                creates.insert(*target);
+                                *introductions.entry(*target).or_default() += 1;
+                                *occurrences.entry(*target).or_default() += 1;
+                            }
+                            SemanticCompositionRequest::TextReveal {
+                                target,
+                                reverse: false,
+                                ..
+                            } => {
+                                *introductions.entry(*target).or_default() += 1;
+                                *occurrences.entry(*target).or_default() += 1;
+                            }
+                            SemanticCompositionRequest::TextWrite {
+                                target,
+                                reverse_member_order,
+                                options,
+                            } if options.introducer.unwrap_or(!reverse_member_order) => {
                                 *introductions.entry(*target).or_default() += 1;
                                 *occurrences.entry(*target).or_default() += 1;
                             }
@@ -3000,22 +3029,46 @@ impl ExecutionSession {
                                 target_state,
                                 ..
                             } => {
-                                let source_content = store
-                                    .semantic_object_state_checked(*source)
-                                    .map_err(|error| ExecutionSessionAnimationError::TargetState {
-                                        target: *source,
-                                        error,
-                                    })?
-                                    .content;
-                                let target_content = store
-                                    .semantic_object_state_checked(*target_state)
-                                    .map_err(|error| ExecutionSessionAnimationError::TargetState {
-                                        target: *target_state,
-                                        error,
-                                    })?
-                                    .content;
-                                if source_content != target_content {
+                                let source_state =
+                                    store.semantic_object_state_checked(*source).map_err(
+                                        |error| ExecutionSessionAnimationError::TargetState {
+                                            target: *source,
+                                            error,
+                                        },
+                                    )?;
+                                let target_state_value =
+                                    store.semantic_object_state_checked(*target_state).map_err(
+                                        |error| ExecutionSessionAnimationError::TargetState {
+                                            target: *target_state,
+                                            error,
+                                        },
+                                    )?;
+                                if source_state.content != target_state_value.content {
                                     *morphs.entry(*source).or_default() += 1;
+                                } else if source_state.transform == target_state_value.transform
+                                    && source_state.style == target_state_value.style
+                                    && source_state.z_index() == target_state_value.z_index()
+                                    && source_state.spatial_properties()
+                                        == target_state_value.spatial_properties()
+                                    && store
+                                        .animation_effect_snapshot(*source)
+                                        .ok()
+                                        .zip(store.animation_effect_snapshot(*target_state).ok())
+                                        .is_some_and(|(source_effects, target_effects)| {
+                                            match (
+                                                source_effects.as_slice(),
+                                                target_effects.as_slice(),
+                                            ) {
+                                                ([], [_]) => true,
+                                                ([source], [target]) => {
+                                                    source.name == target.name
+                                                        && source.definition != target.definition
+                                                }
+                                                _ => false,
+                                            }
+                                        })
+                                {
+                                    *effect_edits.entry(*source).or_default() += 1;
                                 }
                                 *occurrences.entry(*source).or_default() += 1;
                             }
@@ -3030,11 +3083,14 @@ impl ExecutionSession {
                 let mut compatible = HashSet::new();
                 for (&target, &count) in &introductions {
                     let valid = count == 1
-                        && morphs.get(&target) == Some(&1)
+                        && (effect_edits.get(&target) == Some(&1)
+                            || (creates.contains(&target) && morphs.get(&target) == Some(&1)))
                         && occurrences.get(&target) == Some(&2);
                     if valid {
                         compatible.insert(target);
-                    } else if occurrences.get(&target).copied().unwrap_or_default() > 1 {
+                    } else if creates.contains(&target)
+                        && occurrences.get(&target).copied().unwrap_or_default() > 1
+                    {
                         return Err(ExecutionSessionAnimationError::CreateTarget {
                             target,
                             error: ExecutionSessionCreateError::DuplicateTarget,
@@ -3077,6 +3133,7 @@ impl ExecutionSession {
                 if !self.reachability.is_object_reachable(*source) {
                     return Err(ExecutionSessionAnimationError::CreateTarget { target: *source, error: ExecutionSessionCreateError::TargetIsNotDetached });
                 }
+                self.stage_neutral_glow_attachment(store, declaration, *source, *target_state)?;
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
                 Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *complete_priority, *options))
             }
@@ -3809,6 +3866,50 @@ impl ExecutionSession {
         Ok(())
     }
 
+    /// One shared activation rule for direct Transform and nested/ordinary
+    /// compositions.  An absent glow exists only on the detached target until
+    /// activation; the same semantic transaction reserves the real source's
+    /// attachment generation at zero intensity before any execution track.
+    ///
+    /// Keep this in Rust staging (not the Python adapter or renderer). Failed
+    /// preparation commits neither the new semantic identity nor a runtime row.
+    fn stage_neutral_glow_attachment(
+        &self,
+        store: &SemanticStore,
+        declaration: &mut SemanticMutationTransaction,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        let neutral = match (
+            store.animation_effect_snapshot(source),
+            store.animation_effect_snapshot(target_state),
+        ) {
+            (Ok(source_effects), Ok(target_effects)) if source_effects.is_empty() => {
+                match target_effects.as_slice() {
+                    [effect] if effect.name.as_ref() == "glow" => {
+                        let noon_core::EffectDefinition::Glow(destination) = effect.definition;
+                        Some(
+                            noon_core::GlowUpdate::default()
+                                .intensity(0.0)
+                                .apply_to(destination)
+                                .map_err(|error| {
+                                    ExecutionSessionAnimationError::InvalidComposition(
+                                        error.to_string(),
+                                    )
+                                })?,
+                        )
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(neutral) = neutral {
+            declaration.create_effect(source, "glow", neutral);
+        }
+        Ok(())
+    }
+
     fn stage_animation_target_state(
         &self,
         store: &SemanticStore,
@@ -3819,7 +3920,14 @@ impl ExecutionSession {
             .semantic_object_state_checked(target)
             .map_err(|error| ExecutionSessionAnimationError::TargetState { target, error })?
             .clone();
-        Ok(declaration.create_node(SemanticNodeCreation::object(state)))
+        let copy = declaration.create_node(SemanticNodeCreation::object(state));
+        store
+            .copy_effects_into(target, copy, declaration)
+            .map_err(|error| ExecutionSessionAnimationError::TargetState {
+                target,
+                error: error.into(),
+            })?;
+        Ok(copy)
     }
 
     fn validate_indicate_options(
@@ -3978,6 +4086,7 @@ impl ExecutionSession {
                 let frame = self.runtime.frame();
                 let row = frame.objects.get(index)?;
                 Some(EffectiveAnimationProperties {
+                    glow: row.glow.as_deref().copied(),
                     z_index: row.z_index,
                     transform: row.transform,
                     style: row.style,
@@ -4036,6 +4145,7 @@ impl ExecutionSession {
                             let frame = self.runtime.frame();
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
+                                glow: row.glow.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,
                                 style: row.style,
@@ -4081,6 +4191,7 @@ impl ExecutionSession {
                             let frame = self.runtime.frame();
                             let row = frame.objects.get(index)?;
                             Some(EffectiveAnimationProperties {
+                                glow: row.glow.as_deref().copied(),
                                 z_index: row.z_index,
                                 transform: row.transform,
                                 style: row.style,
@@ -4283,23 +4394,56 @@ impl ExecutionSession {
             next_track_id = raw_id.checked_add(1);
         }
 
-        if lifecycle
+        // Staged effect enrollment is not yet resident while this preflight
+        // runs. Pass only the exact allocator-proven new attachment generations
+        // of this prepared transaction; the combined publication still
+        // validates SetGlowAttachment before AddTrack and commits atomically.
+        let mut staged_glow = BTreeMap::new();
+        for mutation in prepared.candidate_mutations() {
+            let noon_core::SemanticMutation::AddNode {
+                token,
+                creation:
+                    SemanticNodeCreation::Effect {
+                        owner,
+                        definition: noon_core::EffectDefinition::Glow(definition),
+                        ..
+                    },
+            } = mutation
+            else {
+                continue;
+            };
+            if let (Some(owner), Some(attachment)) =
+                (owner.existing(), prepared.planned_node_id(*token))
+            {
+                if let Some(object) = self.execution_index.execution_object_id(owner) {
+                    staged_glow.insert(
+                        object,
+                        noon_compile::CompiledGlow {
+                            attachment,
+                            definition: *definition,
+                        },
+                    );
+                }
+            }
+        }
+        let candidate_tracks = if lifecycle
             .as_ref()
             .is_some_and(PreparedAnimationLifecycle::admits)
         {
-            let existing_tracks = definitions
+            definitions
                 .iter()
                 .filter(|definition| self.runtime.contains_object(definition.object))
                 .cloned()
-                .collect::<Vec<_>>();
-            self.runtime
-                .preflight_reconcilable_track_additions(&existing_tracks)
-                .map_err(ExecutionSessionAnimationError::Publication)?;
+                .collect::<Vec<_>>()
         } else {
-            self.runtime
-                .preflight_reconcilable_track_additions(&definitions)
-                .map_err(ExecutionSessionAnimationError::Publication)?;
-        }
+            definitions.clone()
+        };
+        self.runtime
+            .preflight_reconcilable_track_additions_with_staged_glow(
+                &candidate_tracks,
+                &staged_glow,
+            )
+            .map_err(ExecutionSessionAnimationError::Publication)?;
 
         let (token, next_segment_sequence) = if definitions.is_empty()
             && projection.family_animations().is_empty()

@@ -155,6 +155,12 @@ impl RetainedFramePreparer {
         let geometry = self.geometry.prepare(&self.scratch);
         self.render_items.clear();
         rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
+        reorder_mixed_items(
+            &mut self.render_items,
+            frame.retained,
+            &self.painter_order_indices,
+        );
+        rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         self.incremental_stats.mixed_order_rebuilds = self
             .incremental_stats
             .mixed_order_rebuilds
@@ -212,6 +218,10 @@ impl RetainedFramePreparer {
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,
+            capture_items: Some(PreparedSourceItems {
+                items: &self.render_items,
+                ranges: &self.render_item_ranges,
+            }),
         };
         prepared.commit_images(images, None);
         Ok(prepared)
@@ -555,6 +565,7 @@ mod tests {
         store.add_member(family, first).unwrap();
         store.add_member(family, second).unwrap();
         let first_object = noon_runtime::FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(10),
@@ -565,6 +576,7 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(11),
@@ -589,6 +601,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(10),
@@ -599,6 +612,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
@@ -673,6 +687,7 @@ mod tests {
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
@@ -692,6 +707,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                glow: None,
                 spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(20),

@@ -4,7 +4,15 @@ use bytemuck::{Pod, Zeroable};
 use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};
 
+mod analytic_glow;
 mod derived_display;
+mod source_capture;
+pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats, PublishedAnalyticGlowRequest};
+mod glow_filter;
+pub use glow_filter::{
+    GlowCapture, GlowCaptureTile, GlowFilter, GlowParameters, GlowPixelBounds, GlowPrepareError,
+    GlowRasterStats, GlowScope,
+};
 mod overlay;
 mod path_batching;
 mod presentation;
@@ -339,6 +347,7 @@ pub enum SecondaryViewportError {
     EmptyDestination,
     DestinationOutOfBounds,
     MultisampledContentUnsupported,
+    GlowSecondaryViewUnsupported,
 }
 
 impl std::fmt::Display for SecondaryViewportError {
@@ -347,6 +356,9 @@ impl std::fmt::Display for SecondaryViewportError {
             Self::EmptyDestination => "secondary viewport destination must be non-empty",
             Self::DestinationOutOfBounds => {
                 "secondary viewport destination must fit inside the output viewport"
+            }
+            Self::GlowSecondaryViewUnsupported => {
+                "glow captures for secondary views are not prepared"
             }
             Self::MultisampledContentUnsupported => {
                 "secondary viewport currently supports single-sample analytic content only"
@@ -478,6 +490,8 @@ impl std::error::Error for PathPreloadUploadError {}
 
 #[derive(Debug)]
 pub struct GpuRenderer {
+    analytic_glows: Option<Box<analytic_glow::AnalyticGlowGpu>>,
+    retained_glow: retained_text::glow_publication::RetainedGlowPublication,
     spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
@@ -501,6 +515,9 @@ pub struct GpuRenderer {
     inset_camera_by_display: std::collections::HashMap<noon_core::ObjectId, usize>,
     camera: Camera2D,
     viewport_size: [u32; 2],
+    // Logical presentation dimensions may differ from integer backing pixels.
+    // This is view metadata, not an effect or semantic scene authority.
+    logical_viewport_size: Vec2,
     target_format: wgpu::TextureFormat,
     presentation: PresentationBridge,
     path_msaa_texture: wgpu::Texture,
@@ -785,6 +802,7 @@ impl GpuRenderer {
             inset_camera_by_display: std::collections::HashMap::new(),
             camera,
             viewport_size,
+            logical_viewport_size: Vec2::new(viewport_size[0] as f32, viewport_size[1] as f32),
             target_format,
             presentation,
             path_msaa_texture,
@@ -801,6 +819,8 @@ impl GpuRenderer {
             mega_path_vertex_instance_buffer,
             derived_display,
             images: None,
+            analytic_glows: None,
+            retained_glow: Default::default(),
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
             line_capacity_bytes: 0,
@@ -884,6 +904,7 @@ impl GpuRenderer {
         height: u32,
     ) {
         let viewport_size = [width.max(1), height.max(1)];
+        self.logical_viewport_size = Vec2::new(viewport_size[0] as f32, viewport_size[1] as f32);
         if self.viewport_size != viewport_size {
             self.viewport_size = viewport_size;
             (self.path_msaa_texture, self.path_msaa_view) =
@@ -891,6 +912,25 @@ impl GpuRenderer {
             self.presentation.resize(device, self.viewport_size);
         }
         self.write_camera_uniform(queue);
+    }
+
+    /// Set physical backing pixels together with the logical view used by the
+    /// camera and pointer projection. Browser CSS bounds need not have exactly
+    /// the backing aspect after borders, fractional layout and DPR rounding.
+    /// Validation precedes any GPU or renderer mutation. Ordinary set_viewport
+    /// restores the default mapping of one logical unit per backing pixel.
+    pub fn set_viewport_with_logical_size(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        logical_size: Vec2,
+    ) -> Result<(), CameraError> {
+        Camera2D::new(Vec2::ZERO, logical_size)?;
+        self.set_viewport(device, queue, width, height);
+        self.logical_viewport_size = logical_size;
+        Ok(())
     }
 
     fn write_camera_uniform(&self, queue: &wgpu::Queue) {
@@ -1276,6 +1316,9 @@ impl GpuRenderer {
             query_set,
         } = composition;
 
+        if !secondary_viewports.is_empty() && self.has_analytic_glows() {
+            return Err(SecondaryViewportError::GlowSecondaryViewUnsupported);
+        }
         for secondary in secondary_viewports {
             SecondaryViewport::new(secondary.camera, secondary.destination, self.viewport_size)?;
         }
@@ -1590,6 +1633,26 @@ impl GpuRenderer {
         single_sample_analytics: bool,
         binding: &mut Option<GeometryBinding>,
     ) -> DrawStats {
+        if let Some(stats) = self.draw_analytic_glow_batch(
+            pass,
+            prepared,
+            resolved,
+            single_sample_analytics,
+            binding,
+        ) {
+            return stats;
+        }
+        self.draw_plain_ordered_batch(pass, prepared, resolved, single_sample_analytics, binding)
+    }
+
+    fn draw_plain_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+    ) -> DrawStats {
         let mut stats = DrawStats::default();
         for instance_range in prepared.contributing_instance_ranges(&resolved.batch) {
             let segment = ResolvedOrderedBatch {
@@ -1617,6 +1680,25 @@ impl GpuRenderer {
         resolved: &ResolvedOrderedBatch,
         single_sample_analytics: bool,
         binding: &mut Option<GeometryBinding>,
+    ) -> DrawStats {
+        self.draw_isolated_ordered_batch(
+            pass,
+            prepared,
+            resolved,
+            single_sample_analytics,
+            binding,
+            None,
+        )
+    }
+
+    fn draw_isolated_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+        isolated: Option<wgpu::BufferSlice<'a>>,
     ) -> DrawStats {
         let batch = &resolved.batch;
         let (next, pipeline, vertices, instances, indices) = match batch.primitive {
@@ -1695,10 +1777,10 @@ impl GpuRenderer {
                 )
             }
         };
-        if *binding != Some(next) {
+        if isolated.is_some() || *binding != Some(next) {
             pass.set_pipeline(pipeline);
             pass.set_vertex_buffer(0, vertices.slice(..));
-            pass.set_vertex_buffer(1, instances.slice(..));
+            pass.set_vertex_buffer(1, isolated.unwrap_or_else(|| instances.slice(..)));
             if let Some(indices) = indices {
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             }
@@ -2271,6 +2353,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
@@ -2281,6 +2364,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(3),
@@ -2294,6 +2378,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),
@@ -2325,6 +2410,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::path(path)),
@@ -2342,6 +2428,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
                     spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),

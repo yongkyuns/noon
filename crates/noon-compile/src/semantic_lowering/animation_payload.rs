@@ -1,4 +1,6 @@
 mod affine;
+mod glow_target;
+pub use glow_target::GlowTargetLoweringError;
 mod family_transform;
 mod family_transform_activation;
 mod family_transform_channels;

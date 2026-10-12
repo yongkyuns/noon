@@ -3,6 +3,28 @@
 Development qualification and CI evidence tooling, not another architecture or
 roadmap. The engine contract remains `docs/architecture.md`.
 
+## Qualification cadence
+
+The exhaustive pinned Manim raster oracle runs nightly at 06:17 UTC and on
+explicit dispatch. Relevant PRs run its policy/manifest/capture preflight; the
+full oracle is no longer a PR merge gate. Dispatch it against the exact candidate
+for Manim parity, renderer rasterization or camera semantics changes, and triage
+nightly failures as regressions. Its sources, thresholds and full stages remain
+unchanged.
+
+Every PR still runs the CI contracts and web unit tests in PR Fast Gate. Edits to
+the cadence policy, timing reporter, physical-adapter tests or CI README do not
+also select the heavyweight browser/Product Gate suites. Gallery topology checks
+select browser CI, while web `*.test.mjs` edits use preflight. Runtime, artifact,
+product protocol and mixed production changes keep their existing qualification.
+Unknown CI helpers still select the heavyweight suites; exclusions are explicit.
+
+Master CI reads the complete before/after Git diff and skips its compiled/browser
+jobs only for documentation, named preflight-only policies or web unit tests.
+Unknown inputs, mixed changes, missing history and classification failures retain
+full qualification. PR and manual runs remain full when selected. Recovery and
+playback workflows keep isolated web unit-test edits in preflight as well.
+
 ## Local architecture and iteration gate
 
 The #1272 R3/R4 guardrails are owned by #961. The ordinary local command remains
@@ -250,8 +272,19 @@ raster-image transforms (3.4–6.4 s), and vector-path construction/reveal (Béz
 These are representative product cases, not a dense-scene or live-allocation proof.
 All five workloads reuse the same downloaded packages and three-pair protocol,
 with no per-workload builds: 60 runs and ten comparisons across the two source
-cohorts. The comparison job has a 55-minute execution allowance; this does not
-change any latency/FPS/visual threshold.
+cohorts. The adjacent-base and cumulative pinned-anchor cohorts run concurrently
+on **different GitHub-hosted runners** to avoid GPU/CPU contention. Each
+30-run cohort still runs its unchanged B/C, C/B, B/C pairs serially, in the
+prescribed order, and uploads its full evidence under a distinct artifact ID.
+The original required **Runtime, visual, latency, and FPS regression** job
+downloads these exact same-run evidence IDs, re-verifies the immutable product
+packages, and performs all ten unchanged comparisons. It fails closed unless
+the producer and both complete measurement jobs succeeded; missing or failed
+cohorts are never treated as skipped/passing evidence. The two measurement jobs
+retain their 55-minute execution allowance; the aggregation/comparison job
+has a 20-minute allowance. No latency/FPS/visual acceptance threshold changes.
+Compiler cache remains job-local; release executables are not reused from
+untrusted prior PR runs.
 The preview stays visible during measurement. The sampler sends read-only queries
 through the existing renderer metrics channel, consumes only its test-owned replies,
 and never adds aggregate source-owner queries to the callback lane. Replayable

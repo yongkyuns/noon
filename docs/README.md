@@ -7,6 +7,9 @@ For a code-reading view of the current implementation, use [`type-map.md`](type-
 Additional focused documentation:
 
 - [`mobile-web-rendering.md`](mobile-web-rendering.md) — mobile/browser rendering constraints and decisions.
-- [`phase-a-parallel-work-tracks.md`](phase-a-parallel-work-tracks.md), [`phase-b-parallel-work-tracks.md`](phase-b-parallel-work-tracks.md), and [`phase-c-parallel-work-tracks.md`](phase-c-parallel-work-tracks.md) — scoped development work-track notes. For Phase D, use [`architecture.md`](architecture.md) and the owning issues [#1879](https://github.com/yongkyuns/noon/issues/1879), [#254](https://github.com/yongkyuns/noon/issues/254), and [#1653](https://github.com/yongkyuns/noon/issues/1653).
+
+Current implementation and qualification work is tracked in [3D capability #1879](https://github.com/yongkyuns/noon/issues/1879), [camera dispositions #254](https://github.com/yongkyuns/noon/issues/254), and [performance #1653](https://github.com/yongkyuns/noon/issues/1653). Completed [Phase A #953](https://github.com/yongkyuns/noon/issues/953), [Phase B #954](https://github.com/yongkyuns/noon/issues/954), and [Phase C #955](https://github.com/yongkyuns/noon/issues/955) retain their integration records.
+
+Retired phase scheduling notes and the October 2 Phase C evidence ledger remain in [Git history](https://github.com/yongkyuns/noon/tree/fb2ac928336b2b5c9e91d39c9912e3e826e30663/docs).
 
 Reader diagrams in this directory keep the `.d2` source beside the checked-in `.svg` preview. Update the D2 source first when implementation types or crate handoffs move.

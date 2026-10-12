@@ -66,21 +66,54 @@ impl RetainedFramePreparer {
         visible_object_indices: &[usize],
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        self.prepare_planned_publication_impl(
+            device,
+            publication,
+            Some(visible_object_indices),
+            metrics,
+        )
+    }
+
+    /// Prepare a coherent publication while applying its typed family plans
+    /// without projecting rows to a viewport candidate set.
+    pub fn prepare_planned_publication<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        publication: &RendererPublication<'_>,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        self.prepare_planned_publication_impl(device, publication, None, metrics)
+    }
+
+    fn prepare_planned_publication_impl<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        publication: &RendererPublication<'_>,
+        visible_object_indices: Option<&[usize]>,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
         let received = publication.context();
         if let Some(applied) = self.last_applied_publication {
             if publication_is_stale(received, applied) {
                 return Err(RetainedPrepareError::StalePublication { received, applied }.into());
             }
         }
-        validate_visible_object_indices(publication.frame(), visible_object_indices)
-            .map_err(RetainedPrepareError::from)?;
+        if let Some(visible) = visible_object_indices {
+            validate_visible_object_indices(publication.frame(), visible)
+                .map_err(RetainedPrepareError::from)?;
+        }
 
         let frame = publication.planned_family_frame();
         if publication.active_family_animation_indices().is_empty() {
             self.release_planned_family_realization();
-            return self
-                .prepare_publication_visible(device, publication, visible_object_indices, metrics)
-                .map_err(Into::into);
+            return match visible_object_indices {
+                Some(visible) => self
+                    .prepare_publication_visible(device, publication, visible, metrics)
+                    .map_err(Into::into),
+                None => self
+                    .prepare_publication(device, publication, metrics)
+                    .map_err(Into::into),
+            };
         }
 
         if self.last_applied_publication.is_none() || publication.changes().is_all() {
@@ -104,10 +137,10 @@ impl RetainedFramePreparer {
             publication.font_resources(),
             publication.geometry_resources(),
             metrics,
-            Some(visible_object_indices),
+            visible_object_indices,
             Some(publication.active_family_animation_indices()),
         )?;
-        prepared.commit_images(images, Some(visible_object_indices));
+        prepared.commit_images(images, visible_object_indices);
         *prepared.applied_publication = Some(received);
         Ok(prepared)
     }
@@ -282,6 +315,11 @@ impl RetainedFramePreparer {
         let geometry = self.geometry.prepare(&self.scratch);
         self.render_items.clear();
         rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
+        reorder_mixed_items(
+            &mut self.render_items,
+            frame.retained,
+            &self.painter_order_indices,
+        );
         rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         if let Some(indices) = visible_object_indices {
             if let Some(projected) = project_mixed_visibility_cached(
@@ -355,6 +393,10 @@ impl RetainedFramePreparer {
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,
+            capture_items: Some(PreparedSourceItems {
+                items: &self.render_items,
+                ranges: &self.render_item_ranges,
+            }),
         })
     }
 
@@ -847,6 +889,19 @@ impl RetainedFramePreparer {
         let geometry = self
             .geometry
             .prepare_incremental(&self.scratch, &scratch_changes);
+        if let Some(range) = changes.painter_order_range() {
+            reorder_mixed_items_range(
+                &mut self.render_items,
+                &mut self.render_item_ranges,
+                frame.retained,
+                &self.painter_order_indices,
+                range,
+            );
+            self.incremental_stats.mixed_order_rebuilds = self
+                .incremental_stats
+                .mixed_order_rebuilds
+                .saturating_add(1);
+        }
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
             image_objects: self.images.objects.len(),
@@ -893,6 +948,10 @@ impl RetainedFramePreparer {
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,
+            capture_items: Some(PreparedSourceItems {
+                items: &self.render_items,
+                ranges: &self.render_item_ranges,
+            }),
         })
     }
 }
@@ -987,6 +1046,7 @@ mod tests {
 
     fn semantic_object(id: u64, content: ObjectContentRef) -> FrameObjectState {
         FrameObjectState {
+            glow: None,
             spatial: None,
             z_index: 0.0,
             id: ObjectId::new(id),
@@ -1021,7 +1081,10 @@ mod tests {
         let fonts = std::mem::take(&mut artifact.fonts);
         let geometries = std::mem::take(&mut artifact.geometry);
         let images = noon_core::RasterImageResourceArena::new();
-        let object = semantic_object(10, ObjectContentRef::Text(text));
+        let mut object = semantic_object(10, ObjectContentRef::Text(text));
+        // Public text objects convert point coordinates to scene units. Unequal
+        // axes also protect the authored stroke from scalar unit approximations.
+        object.transform.scale = Vec2::new(1.0 / 96.0, 1.0 / 64.0);
         let mut semantics = SemanticStore::new();
         let leaf = semantics.insert_authoring_object();
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, leaf).unwrap();
@@ -1125,6 +1188,13 @@ mod tests {
                 );
                 if progress < 0.5 {
                     assert_eq!(scratch.style.fill, None);
+                }
+                if vector.style.fill.is_none() && vector.style.stroke_width > 0.0 {
+                    assert_eq!(
+                        scratch.style,
+                        resolved_text_vector_style(retained.objects[0].style, vector),
+                        "stroke-only rules keep their width, units, cap and join throughout Write"
+                    );
                 }
                 if progress == 1.0 {
                     assert_eq!(
@@ -1248,11 +1318,16 @@ mod tests {
         let mut preparer = RetainedFramePreparer::new();
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let mut text_state = renderer.create_retained_text_state(&device, &queue);
-        let expected_order = std::iter::once(ObjectId::new(10))
+        let canonical_order = std::iter::once(ObjectId::new(10))
             .chain(std::iter::once(ObjectId::new(11)))
             .chain((12..17).map(ObjectId::new))
             .chain((0..STATIC_TAIL).map(|index| ObjectId::new(100 + index)))
             .collect::<Vec<_>>();
+        let mut expected_order = canonical_order.clone();
+        expected_order.swap(0, 1);
+        let mut painter_order = (0..object_count as u32).collect::<Vec<_>>();
+        painter_order.swap(0, 1);
+        preparer.set_painter_order(&painter_order);
         let mut active_path_ids = None;
         let mut active_order = None;
         let mut order_rebuilds = 0;
@@ -1271,6 +1346,11 @@ mod tests {
             };
             let changes = if frame_index == 0 {
                 FrameChanges::all()
+            } else if frame_index == 1 {
+                painter_order.swap(0, 1);
+                expected_order.swap(0, 1);
+                preparer.set_painter_order_range(&painter_order, 0..2);
+                FrameChanges::objects((0..7).collect()).with_painter_order(0..2)
             } else {
                 FrameChanges::objects((0..7).collect())
             };
@@ -1324,6 +1404,12 @@ mod tests {
                 order_rebuilds = current_order_rebuilds;
                 assert_eq!(order_rebuilds, 1);
             } else {
+                if frame_index == 1 {
+                    assert_eq!(item_order, expected_order);
+                    active_order = Some(item_order.clone());
+                    assert_eq!(current_order_rebuilds, order_rebuilds + 1);
+                    order_rebuilds = current_order_rebuilds;
+                }
                 assert_eq!(path_ids, active_path_ids.as_deref().unwrap());
                 assert_eq!(prepared_circle_ids, circle_ids.as_deref().unwrap());
                 assert_eq!(item_order, active_order.as_deref().unwrap());

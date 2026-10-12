@@ -454,9 +454,56 @@ export function compareEffectiveFrames(actual, expected) {
   return maximumAbsoluteError;
 }
 
+/** Observe active retained inset relations, independently of image similarity. */
+export function compareEffectiveInsetCameras(debugFrame, expected) {
+  if (!Array.isArray(debugFrame?.inset_2d_views) || !Array.isArray(expected?.inset_2d_views)
+      || !Array.isArray(debugFrame.objects)) {
+    throw new Error("inset camera: missing or invalid active-view observation");
+  }
+  const point = (value, label) => {
+    const components = [value?.x, value?.y];
+    requireFiniteVector(components, 2, label);
+    return components;
+  };
+  const camera = (value, label, main = false) => {
+    if (typeof value?.height !== "number" || !Number.isFinite(value.height) || value.height <= 0) {
+      throw new Error(`${label}: expected a positive finite camera height`);
+    }
+    if (main) requireFiniteVector(value.center, 2, label);
+    return { center: main ? value.center : point(value.center, label), height: value.height };
+  };
+  const views = rows => rows.map(row => {
+    const size = point(row.display_size, "inset display size");
+    if (size.some(value => value <= 0) || typeof row.capture_own_display !== "boolean") {
+      throw new Error("inset camera: invalid display size or capture policy");
+    }
+    return { camera: camera(row.camera, "inset camera"),
+      display_center: point(row.display_center, "inset display center"),
+      display_size: size, capture_own_display: row.capture_own_display };
+  });
+  const objects = new Map(debugFrame.objects.map(row => [row.id, row]));
+  const displays = new Set();
+  for (const view of debugFrame.inset_2d_views) {
+    const frame = objects.get(view.camera_frame);
+    const display = objects.get(view.display);
+    if (!frame || display?.present !== true || frame === display || displays.has(view.display)) {
+      throw new Error("inset camera: missing, aliased or duplicate effective object relation");
+    }
+    displays.add(view.display);
+  }
+  const maximumAbsoluteError = compareEffectiveFrames({
+    camera: camera(debugFrame.camera, "Noon main camera", true),
+    views: views(debugFrame.inset_2d_views),
+  }, {
+    camera: camera(expected.camera, "Manim main camera", true),
+    views: views(expected.inset_2d_views),
+  });
+  return { maximumAbsoluteError, insetCount: displays.size, mainCameraObserved: true };
+}
 const EFFECTIVE_CAMERA_3D_FIELDS = [
   "phi", "theta", "gamma", "focal_distance", "zoom", "frame_height", "frame_center",
 ];
+
 const DEFAULT_MANIM_POINT_LIGHT = [-7, -9, 10];
 
 function requireFiniteVector(value, length, label) {
@@ -466,11 +513,40 @@ function requireFiniteVector(value, length, label) {
   }
 }
 
-/** Compare one exact Manim 3D semantic frame to one Noon debug frame. */
-export function compareEffective3DCamera(debugFrame, expectedCamera3d) {
+/** Read the one effective profiled camera from a shared-runtime observation. */
+export function effective3DCameraProfile(debugFrame) {
   if (!debugFrame || !Array.isArray(debugFrame.objects)) {
     throw new Error("camera profile: missing Noon debug-frame objects");
   }
+  const cameraRows = debugFrame.objects.filter(row => row.present
+    && row.spatial?.camera_profile != null);
+  if (cameraRows.length !== 1) {
+    throw new Error(`camera profile: expected one present profiled camera row; found ${cameraRows.length}`);
+  }
+  const actual = cameraRows[0].spatial.camera_profile;
+  if (!actual || typeof actual !== "object") throw new Error("camera profile: malformed Noon observation");
+  const near = actual.near;
+  const far = actual.far;
+  if (typeof near !== "number" || !Number.isFinite(near)
+      || typeof far !== "number" || !Number.isFinite(far) || near <= 0 || near >= far) {
+    throw new Error("camera profile: Noon clipping planes must be finite, positive and ordered");
+  }
+  for (const field of EFFECTIVE_CAMERA_3D_FIELDS) {
+    const value = actual[field];
+    if (field === "frame_center") requireFiniteVector(value, 3, `Noon camera ${field}`);
+    else if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`Noon camera ${field}: expected a finite number`);
+    }
+  }
+  for (const field of ["focal_distance", "zoom", "frame_height"]) {
+    if (actual[field] <= 0) throw new Error(`Noon camera ${field}: expected a positive number`);
+  }
+  return actual;
+}
+
+/** Compare one exact Manim 3D semantic frame to one Noon debug frame. */
+export function compareEffective3DCamera(debugFrame, expectedCamera3d) {
+  const actual = effective3DCameraProfile(debugFrame);
   if (!expectedCamera3d || typeof expectedCamera3d !== "object") {
     throw new Error("camera profile: missing exact Manim camera_3d observation");
   }
@@ -482,27 +558,6 @@ export function compareEffective3DCamera(debugFrame, expectedCamera3d) {
     }
   }
   requireFiniteVector(expectedCamera3d.light_source, 3, "Manim camera light_source");
-
-  const cameraRows = debugFrame.objects.filter(row => row.present
-    && row.spatial?.camera_profile != null);
-  if (cameraRows.length !== 1) {
-    throw new Error(`camera profile: expected one present profiled camera row; found ${cameraRows.length}`);
-  }
-  const actual = cameraRows[0].spatial.camera_profile;
-  if (!actual || typeof actual !== "object") throw new Error("camera profile: malformed Noon observation");
-  const near = actual.near;
-  const far = actual.far;
-  if (typeof near !== "number" || !Number.isFinite(near)
-      || typeof far !== "number" || !Number.isFinite(far) || near >= far) {
-    throw new Error("camera profile: Noon clipping planes must be finite and ordered");
-  }
-  for (const field of EFFECTIVE_CAMERA_3D_FIELDS) {
-    const value = actual[field];
-    if (field === "frame_center") requireFiniteVector(value, 3, `Noon camera ${field}`);
-    else if (typeof value !== "number" || !Number.isFinite(value)) {
-      throw new Error(`Noon camera ${field}: expected a finite number`);
-    }
-  }
   const expectedProfile = Object.fromEntries(
     EFFECTIVE_CAMERA_3D_FIELDS.map(field => [field, expectedCamera3d[field]]),
   );

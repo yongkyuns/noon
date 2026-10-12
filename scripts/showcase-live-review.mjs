@@ -9,6 +9,7 @@ import { replayOracle, assertOracleImage, assertReplaySample } from "./showcase-
 import { waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { layoutReplayViewport, replayViewport, qualifyReplayViewport } from "./showcase-viewport.mjs";
 import { NONREPLAYABLE_SHOWCASE_CAPABILITIES } from "../web/showcase-gallery.js";
+import { qualifyGlowViewport } from "./showcase-glow-viewport.mjs";
 
 const REVIEW_CANVAS_VIEWPORT = { width: 960, height: 540 };
 
@@ -181,6 +182,16 @@ async function main() {
     const identity = await context.request.get(`${base}/runtime-build-identity.json`);
     assert.ok(identity.ok(), "served build identity is missing");
     report.servedBuildIdentity = await identity.json();
+    if (manifest.entries.some(entry => entry.id === "showcase-gpu-glow")) {
+      try {
+        report.glowViewportQualification = { outcome: "pass", ...await qualifyGlowViewport(
+          browser, base, path.join(output, "production-viewport"), backend, cache,
+        ) };
+      } catch (error) {
+        report.glowViewportQualification = { outcome: "fail", error: String(error.stack ?? error) };
+      }
+    }
+
     // The capture job runs immediately before this one against the same build.
     // Missing/invalid evidence fails each lesson but must not prevent collecting
     // ordinary-playback videos and existing endpoint diagnostics for the rest.
@@ -369,6 +380,7 @@ async function main() {
         await writeFile(path.join(output, "report.json"), json(report));
       }
     }
+    assert.notEqual(report.glowViewportQualification?.outcome, "fail", "production-layout glow projection failed");
     report.runtimeResources = cache.stats();
     report.summary = summarizeLiveReview(report.results);
     assert.equal(report.viewportQualification.outcome, "pass", "browser capture layout fixture failed");

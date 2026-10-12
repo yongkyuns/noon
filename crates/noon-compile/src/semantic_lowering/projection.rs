@@ -277,12 +277,9 @@ impl SemanticExecutionIndex {
         store: &SemanticStore,
         roots: impl IntoIterator<Item = SemanticNodeId>,
     ) -> Result<SemanticExecutionProjection, SemanticLoweringError> {
-        // M0 supports authored effect declarations, not effect execution yet.
-        // Include detached target copies so Transform cannot silently drop their
-        // appearance. M1 replaces this O(1) profile gate with typed effect lowering.
-        if store.has_effect_attachments() {
-            return Err(SemanticLoweringError::EffectExecutionUnavailable);
-        }
+        // Static attachment values lower with their owners. The orchestrated
+        // Scene entrypoint retains its admission guard until effect animation,
+        // live publication and every host consumer support this column (#1897).
         let roots = roots.into_iter().collect::<Vec<_>>();
         let mut pending = Vec::new();
         let mut seen = HashSet::new();
@@ -298,7 +295,13 @@ impl SemanticExecutionIndex {
                     .ok_or(SemanticLoweringError::MissingSemanticObjectState(
                         semantic_id,
                     ))?;
-                pending.push((semantic_id, lower_object_state(semantic_id, state, store)?));
+                let mut lowered = lower_object_state(semantic_id, state, store)?;
+                // Attachment topology belongs to this committed scene projection,
+                // not the shared value-lowering helper. Prepared transactions also
+                // lower provisional IDs which intentionally do not exist in the
+                // committed store yet.
+                lowered.glow = lower_glow_attachment(semantic_id, state, store)?;
+                pending.push((semantic_id, lowered));
             }
         }
 
@@ -316,6 +319,7 @@ impl SemanticExecutionIndex {
             .into_iter()
             .map(|(semantic_id, state)| SemanticExecutionObject {
                 semantic_id,
+                glow: state.glow,
                 execution_id: self.ensure_object(semantic_id),
                 content: state.content,
                 base_transform: state.base_transform,
@@ -404,6 +408,8 @@ pub struct SemanticExecutionGraphEdgeDependency {
 /// One execution-facing object lowered from authoritative semantic state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticExecutionObject {
+    /// Same immutable definition and generational attachment as the compiled row.
+    pub glow: Option<std::sync::Arc<crate::CompiledGlow>>,
     /// Authoritative scene-global semantic identity.
     pub semantic_id: SemanticNodeId,
     /// Temporary key accepted by the existing compiled/runtime object domain.
@@ -466,7 +472,9 @@ impl std::fmt::Display for SemanticExecutionField {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticLoweringError {
-    EffectExecutionUnavailable,
+    UnsupportedGlowProfile {
+        owner: SemanticNodeId,
+    },
     Store(SemanticStoreError),
     SceneOperation(noon_core::SemanticSceneOperationError),
     /// A visible object leaf came from a migration-only legacy/state-less path
@@ -528,7 +536,12 @@ impl From<noon_core::SemanticSceneOperationError> for SemanticLoweringError {
 impl std::fmt::Display for SemanticLoweringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EffectExecutionUnavailable => formatter.write_str("effect declarations cannot execute before the effect rendering profile is implemented"),
+            Self::UnsupportedGlowProfile { owner } => write!(
+                formatter,
+                "glow on {}:{} requires one attachment on ordinary planar 2D content",
+                owner.slot(),
+                owner.generation()
+            ),
             Self::Store(error) => error.fmt(formatter),
             Self::SceneOperation(error) => error.fmt(formatter),
             Self::MissingSemanticObjectState(id) => write!(
@@ -809,6 +822,7 @@ fn lower_graph_dependencies(
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LoweredObjectState {
+    pub(super) glow: Option<std::sync::Arc<crate::CompiledGlow>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
     pub(super) base_style: Style,
@@ -843,6 +857,87 @@ pub(super) fn object_requires_spatial_lowering(
             state.transform.orientation,
             noon_core::SemanticOrientation::Spatial(_)
         )
+}
+
+fn lower_glow_attachment(
+    owner: SemanticNodeId,
+    state: &SemanticObjectState,
+    store: &SemanticStore,
+) -> Result<Option<std::sync::Arc<crate::CompiledGlow>>, SemanticLoweringError> {
+    let effects = store
+        .node(owner)
+        .ok_or(SemanticStoreError::UnknownNode(owner))?
+        .effect_ids();
+    if effects.is_empty() {
+        return Ok(None);
+    }
+    let unsupported = || SemanticLoweringError::UnsupportedGlowProfile { owner };
+    let [attachment] = effects else {
+        return Err(unsupported());
+    };
+    validate_glow_source_profile(owner, state, store)?;
+    let effect = store.semantic_effect_state(*attachment)?;
+    if effect.owner() != owner {
+        return Err(unsupported());
+    }
+    let noon_core::EffectDefinition::Glow(definition) = effect.definition();
+    Ok(Some(std::sync::Arc::new(crate::CompiledGlow {
+        attachment: *attachment,
+        definition,
+    })))
+}
+
+pub(super) fn validate_glow_source_profile(
+    owner: SemanticNodeId,
+    state: &SemanticObjectState,
+    store: &SemanticStore,
+) -> Result<(), SemanticLoweringError> {
+    let unsupported = || SemanticLoweringError::UnsupportedGlowProfile { owner };
+    let geometry_supported = match state.content {
+        SemanticObjectContent::Geometry(noon_core::StoredGeometry::Circle { radius }) => {
+            radius.is_finite() && radius > 0.0
+        }
+        SemanticObjectContent::Geometry(noon_core::StoredGeometry::Rectangle { size }) => {
+            size.x.is_finite() && size.y.is_finite() && size.x > 0.0 && size.y > 0.0
+        }
+        SemanticObjectContent::Geometry(noon_core::StoredGeometry::Line { start, end }) => {
+            start.x.is_finite()
+                && start.y.is_finite()
+                && end.x.is_finite()
+                && end.y.is_finite()
+                && (start.x != end.x || start.y != end.y)
+        }
+        SemanticObjectContent::Geometry(noon_core::StoredGeometry::Resource(handle)) => {
+            matches!(
+                store.geometry_resources().get(handle),
+                Some(noon_core::GeometryResource::VectorPath(path))
+                    if path.is_finite() && path.has_drawable_segments()
+            )
+        }
+        SemanticObjectContent::Text(handle) => {
+            store.text_resources().get(handle).is_some_and(|resource| {
+                resource.bounds.min.x.is_finite()
+                    && resource.bounds.min.y.is_finite()
+                    && resource.bounds.max.x.is_finite()
+                    && resource.bounds.max.y.is_finite()
+                    && resource.bounds.max.x > resource.bounds.min.x
+                    && resource.bounds.max.y > resource.bounds.min.y
+            })
+        }
+        _ => false,
+    };
+    lower_semantic_style(owner, state)?;
+    if !geometry_supported
+        || object_requires_spatial_lowering(state, store)
+        || state.role() != SemanticObjectRole::Ordinary
+        || !state.transform.is_valid()
+        || state.transform.planar_rotation().is_none()
+        || state.transform.scale.x == 0.0
+        || state.transform.scale.y == 0.0
+    {
+        return Err(unsupported());
+    }
+    Ok(())
 }
 
 pub(super) fn lower_object_state(
@@ -931,6 +1026,7 @@ pub(super) fn lower_object_state(
         return Err(SemanticLoweringError::UnsupportedSpatialOrientation { node: semantic_id });
     };
     Ok(LoweredObjectState {
+        glow: None,
         content: state.content,
         base_transform,
         base_style: lower_semantic_style(semantic_id, state)?,
@@ -1272,6 +1368,52 @@ mod tests {
         assert_eq!(object_state.base_style.opacity, 0.6);
         assert_eq!(object_state.presentation.z_index, 9.0);
         assert_eq!(object_state.presentation.insertion_order, 0);
+    }
+
+    #[test]
+    fn glow_profile_admits_path_and_text_with_strokes_and_unfilled_paint() {
+        use noon_core::{
+            FontResourceArena, GeometryResourceArena, Rect, TextResource, TextSourceKind,
+            VectorPath,
+        };
+        use std::sync::Arc;
+
+        let mut store = SemanticStore::new();
+        let path = store
+            .insert_geometry_path(
+                VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(1.0, 1.0)),
+            )
+            .unwrap();
+        let mut path_state = SemanticObjectState::new(StoredGeometry::Resource(path));
+        path_state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        path_state.style.fill = None;
+        let path_id = store.insert_semantic_object(path_state.clone());
+        validate_glow_source_profile(path_id, &path_state, &store).unwrap();
+
+        let text = store
+            .import_text_resource(
+                TextResource {
+                    source: Arc::from("text"),
+                    kind: TextSourceKind::MathTypst,
+                    runs: Arc::from([]),
+                    vector_items: Arc::from([]),
+                    render_items: Arc::from([]),
+                    parts: Arc::from([]),
+                    bounds: Rect::new(Vec2::ZERO, Vec2::new(2.0, 1.0)),
+                    baseline: 0.0,
+                    layout_artifact: None,
+                },
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+        let mut text_state = SemanticObjectState::new(text);
+        text_state.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        text_state.style.fill = None;
+        let text_id = store.insert_semantic_object(text_state.clone());
+        validate_glow_source_profile(text_id, &text_state, &store).unwrap();
     }
 
     #[test]

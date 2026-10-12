@@ -190,6 +190,12 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
         "engine": "noon", "time": frame.time,
         "publication": session.publication_context(),
         "camera": camera,
+        // Resolve the renderer's existing typed inset relation only on this
+        // opt-in diagnostic path. Invalid state must not look like no insets.
+        "inset_2d_views": match session.inset_2d_views() {
+            Ok(views) => json!(views),
+            Err(error) => json!({ "error": error.to_string() }),
+        },
         "present_object_count": objects.iter().filter(|object| object["present"] == true).count(),
         "objects": objects,
     })
@@ -245,6 +251,30 @@ mod tests {
             .iter()
             .any(|row| row["spatial"]["camera_projection"]["far"] == 30.0));
         assert_eq!(session.publication_context(), before);
+    }
+
+    #[test]
+    fn debug_capture_observes_effective_insets_without_mutating_publication() {
+        let mut session = crate::example_scenes::zoomed_scene::session().unwrap();
+        for time in [0.0, 0.5, 1.0] {
+            session.seek(time).unwrap();
+            let before = session.publication_context();
+            let expected = session.inset_2d_views().unwrap();
+            assert_eq!(expected.len(), 1);
+            let capture = execution_frame_value(&session);
+            assert_eq!(capture["inset_2d_views"], json!(expected));
+            assert_eq!(session.publication_context(), before);
+        }
+
+        let mut scene = Scene::new();
+        let view = scene
+            .zoomed_view(crate::ZoomedSceneOptions::default())
+            .unwrap();
+        scene.activate_zooming(&view).unwrap();
+        let mut display = view.display().clone();
+        display.set_rotation(0.125).unwrap();
+        let session = scene.execution_session().unwrap();
+        assert!(execution_frame_value(&session)["inset_2d_views"]["error"].is_string());
     }
 
     #[test]
