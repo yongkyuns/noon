@@ -2799,8 +2799,8 @@
     },
     {
       "id": "reference-ab96a9e83f889f7f",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks LineJointType. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned enum tokens are now exported. Exact constructor/setter/style/rendering and documentation-scene behavior remain unqualified; namespace admission is not parity evidence.",
       "owners": [
         "#83",
         "#89",
@@ -2814,16 +2814,12 @@
         "directive_line": 287,
         "name": "LineJointVariants",
         "source_sha256": "566a609136210d8151d6b18993b1b5b8a45dcc207802b0fccac2dd284e0a6f5b"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "LineJointType"
-      ]
+      }
     },
     {
       "id": "reference-d3d1e96f2bdd4e9c",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks CapStyleType. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned enum tokens are now exported. Exact constructor/setter/style/rendering and documentation-scene behavior remain unqualified; namespace admission is not parity evidence.",
       "owners": [
         "#77",
         "#83",
@@ -2839,11 +2835,7 @@
         "directive_line": 323,
         "name": "CapStyleVariants",
         "source_sha256": "3ea7de685f5409174b8c63560f11a925c4fbb53cd70aff762de90872174059e1"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "CapStyleType"
-      ]
+      }
     },
     {
       "id": "reference-8f7372e0aba5ba2c",
@@ -8303,24 +8295,21 @@
     },
     {
       "id": "reference-891e6b110196157b",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks CapStyleType. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "Pinned enum tokens are now exported. Exact constructor/setter/style/rendering and documentation-scene behavior remain unqualified; namespace admission is not parity evidence.",
       "owners": [
         "#89",
         "#185",
         "#256",
-        "#2011"
+        "#2011",
+        "#2016"
       ],
       "reference_provenance": {
         "source_path": "manim/mobject/types/vectorized_mobject.py",
         "directive_line": 379,
         "name": "CapStyleExample",
         "source_sha256": "d0f3580d783e4c43882825e928a3439e8f07c034a6dabda36ba2f4b9e2b739ab"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "CapStyleType"
-      ]
+      }
     },
     {
       "id": "reference-08d031f37ea84329",
