@@ -56,7 +56,6 @@ except ImportError:  # Import remains possible for source-only CPython tests.
 
 
 _DEFAULT_NATIVE_FONT = "DejaVu Sans Mono"
-_USE_TEXT_DEFAULT = object()
 
 
 class NativeFontFace:
@@ -572,27 +571,12 @@ class Text(_RetainedTextMobject):
     """Deterministic native plain text compiled and rendered entirely by Rust."""
 
     _markup = False
-    _default_font: str | NativeFontFace = _DEFAULT_NATIVE_FONT
-
-    @classmethod
-    def set_default(cls, font=_USE_TEXT_DEFAULT) -> None:
-        """Set this class's Python constructor default, or restore its built-in default.
-
-        This affects only future calls that omit ``font``. It does not change
-        engine defaults or existing Text objects.
-        """
-        if font is _USE_TEXT_DEFAULT:
-            cls._default_font = _DEFAULT_NATIVE_FONT
-            return
-        family, _font_face = _native_font_input(font)
-        _validated_native_text_options("", family, 48.0, -1.0)
-        cls._default_font = font
 
     def __init__(
         self,
         text: str,
         *,
-        font: str | NativeFontFace | object = _USE_TEXT_DEFAULT,
+        font: str | NativeFontFace = _DEFAULT_NATIVE_FONT,
         font_size: float = 48.0,
         line_spacing: float = -1.0,
         color: _base.Color = _base.WHITE,
@@ -606,8 +590,6 @@ class Text(_RetainedTextMobject):
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
             raise NotImplementedError(f"unsupported Text option(s): {unsupported}")
-        if font is _USE_TEXT_DEFAULT:
-            font = type(self)._default_font
         font_family, font_face = _native_font_input(font)
         text, font_family, font_size, line_spacing = _validated_native_text_options(
             text, font_family, font_size, line_spacing
@@ -727,4 +709,3 @@ class MarkupText(Text):
     """Native text whose authored source is decoded as markup by Rust."""
 
     _markup = True
-    _default_font: str | NativeFontFace = _DEFAULT_NATIVE_FONT

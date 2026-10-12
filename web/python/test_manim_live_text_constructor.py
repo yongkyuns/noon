@@ -411,8 +411,8 @@ class NativeFontFaceConstructorTests(unittest.TestCase):
             finally:
                 text.Text.set_default()
                 text.MarkupText.set_default()
-            assert text.Text._default_font == "DejaVu Sans Mono"
-            assert text.MarkupText._default_font == "DejaVu Sans Mono"
+            assert noon.Text("reset").font == "DejaVu Sans Mono"
+            assert noon.MarkupText("<b>reset</b>").font == "DejaVu Sans Mono"
         ''')
         completed = subprocess.run(
             [sys.executable, "-c", source], cwd=python_dir,
