@@ -85,9 +85,7 @@ pub fn publish_borrowed_path_edit(
         BorrowedPathEdit::SmoothCorners { object, points } => {
             (object, PathEdit::SmoothCorners(points))
         }
-        BorrowedPathEdit::AnchorMode { object, smooth } => {
-            (object, PathEdit::AnchorMode(smooth))
-        }
+        BorrowedPathEdit::AnchorMode { object, smooth } => (object, PathEdit::AnchorMode(smooth)),
         BorrowedPathEdit::Corners { object, points } => (object, PathEdit::Corners(points)),
         BorrowedPathEdit::Line { object, point } => (object, PathEdit::Line(point)),
         BorrowedPathEdit::Close { object } => (object, PathEdit::Close),

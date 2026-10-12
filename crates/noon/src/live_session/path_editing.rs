@@ -80,7 +80,6 @@ impl LiveSession<'_> {
         )
         .map_err(LiveSessionError::from)
     }
-
 }
 
 impl From<noon_core::GeometryResourceError> for LiveSessionError {
@@ -88,4 +87,3 @@ impl From<noon_core::GeometryResourceError> for LiveSessionError {
         crate::AuthoringError::from(error).into()
     }
 }
-
