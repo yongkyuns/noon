@@ -146,10 +146,13 @@ class TypstAnimation(Scene):
 
 let browser = null;
 
-function fractionRuleThicknesses(images, completedIndex) {
+function horizontalStrokeThicknesses(images, completedIndex, whiteStrokeOnly) {
   const completed = images[completedIndex];
   const painted = (image, x, y) => {
     const offset = (y * image.width + x) * 4;
+    if (whiteStrokeOnly) {
+      return image.data[offset] > 150 && image.data[offset + 1] > 150 && image.data[offset + 2] > 150;
+    }
     return image.data[offset] + image.data[offset + 1] + image.data[offset + 2] > 150;
   };
   let minX = completed.width, maxX = -1;
@@ -158,8 +161,9 @@ function fractionRuleThicknesses(images, completedIndex) {
       if (painted(completed, x, y)) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
     }
   }
-  // The fixture ends in a fraction. Its bar is the longest horizontal run
-  // in the rightmost third, away from the preceding plus sign and exponent.
+  // In the rightmost third, the equation's fraction bar and the rectangle's
+  // top edge are the longest stroke runs. This excludes preceding glyphs and
+  // probes away from corners where a thick border can join opposite edges.
   const left = Math.floor(minX + (maxX - minX) * 2 / 3);
   let bar = { length: 0, x: 0, y: 0 };
   for (let y = 0; y < completed.height; y++) {
@@ -173,7 +177,7 @@ function fractionRuleThicknesses(images, completedIndex) {
       }
     }
   }
-  assert.ok(bar.length >= 8, "completed fraction rule must be visible");
+  assert.ok(bar.length >= 8, "completed horizontal stroke must be visible");
   const x = bar.x + Math.max(1, Math.floor(bar.length * 0.15));
   return images.map(image => {
     if (!painted(image, x, bar.y)) return 0;
@@ -224,13 +228,16 @@ try {
   await cache.install(mathContext);
   await disableAuthoringJspi(mathContext);
   try {
-    for (const kind of ["MathTex", "MathTypst"]) {
+    for (const kind of ["MathTex", "MathTypst", "Typst"]) {
       for (const [forward, reverse] of [["Create", "Uncreate"], ["Write", "Unwrite"]]) {
+        const constructor = kind === "Typst"
+          ? 'Typst(r\'#rect(width: 18pt, height: 12pt, fill: rgb("2266bb"), stroke: (paint: white, thickness: 0.6pt))\', font_size=88)'
+          : `${kind}(r"${kind === "MathTex" ? "x^2+\\frac{1}{2}" : "x^2+frac(1, 2)"}", font_size=88, color=BLUE)`;
         const source = `from noon import *
 class MathReveal(Scene):
     async def construct(self):
         ${kind === "MathTex" ? "await prepare_latex()" : "pass"}
-        equation = ${kind}(r"${kind === "MathTex" ? "x^2+\\frac{1}{2}" : "x^2+frac(1, 2)"}", font_size=88, color=BLUE)
+        equation = ${constructor}
         await self.play(${forward}(equation), run_time=2.0, rate_func=linear)
         await self.play(${reverse}(equation), run_time=1.0, rate_func=linear)
         await self.wait(0.25)
@@ -257,9 +264,9 @@ class MathReveal(Scene):
           }
           const countAt = time => counts[times.indexOf(time)];
           const completedIndex = times.indexOf(2);
-          const thicknesses = fractionRuleThicknesses(images, completedIndex);
+          const thicknesses = horizontalStrokeThicknesses(images, completedIndex, kind === "Typst");
           assert.ok(thicknesses.every(width => width <= thicknesses[completedIndex] + 2),
-            `${kind}/${forward}: fraction rule swelled before settling: ${JSON.stringify(thicknesses)}`);
+            `${kind}/${forward}: stroke swelled before settling: ${JSON.stringify(thicknesses)}`);
           assert.equal(counts[0], 0, `${kind}/${forward}: equation must start hidden`);
           assert.ok(countAt(0.5) > 0 && countAt(1) > countAt(0.5) && countAt(2) > countAt(0.5),
             `${kind}/${forward}: partial glyph/rule stages missing: ${JSON.stringify(counts)}`);
@@ -269,7 +276,7 @@ class MathReveal(Scene):
           assert.equal(final.authoredDuration, 3.25);
           assert.equal(final.objectCount, 0);
           assert.deepEqual(mathErrors, []);
-          console.log(`${kind} ${forward}/${reverse} progressive pixels passed without JSPI: ${JSON.stringify(counts)}; fraction widths: ${JSON.stringify(thicknesses)}`);
+          console.log(`${kind} ${forward}/${reverse} progressive pixels passed without JSPI: ${JSON.stringify(counts)}; stroke widths: ${JSON.stringify(thicknesses)}`);
         } finally { await mathPage.close(); }
       }
     }
