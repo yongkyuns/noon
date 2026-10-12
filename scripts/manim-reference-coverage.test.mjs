@@ -87,6 +87,57 @@ test("normalizes line endings and trailing whitespace before provenance hashing"
   assert.equal(normalizedSourceHash("a\r\nb\r\n"), normalizedSourceHash("a\nb"));
 });
 
+function pendingDisposition(value, overrides = {}) {
+  return {
+    id: "pending-reference",
+    status: "unqualified",
+    reason: "Exact source awaits runtime qualification",
+    owners: ["#256", "#185"],
+    reference_provenance: provenanceFor(value),
+    ...overrides,
+  };
+}
+
+test("tracks remaining provenance without promoting execution or parity", async () => {
+  const a = example("DotExample", DIRECTIVE_A);
+  const b = example("OtherExample", DIRECTIVE_B);
+  const pinned = inventory([a, b]);
+  const report = await reconcileReferenceCoverage(
+    pinned, manifest([exactEntry()]), { ...coverageLock(1, 1), require_complete_dispositions: true },
+    { readSource: sourceReader({ "dot.py": FIXTURE_A }), repositoryRoot: "/repo",
+      dispositions: { schema_version: 1, upstream: pinned.upstream, entries: [pendingDisposition(b)] } },
+  );
+  assert.equal(report.classified_examples, 1);
+  assert.equal(report.dispositioned_examples, 2);
+  assert.equal(report.undispositioned_inventory_examples, 0);
+  assert.equal(report.pending_disposition_statuses.unqualified, 1);
+});
+
+test("complete-disposition ratchet rejects missing records", async () => {
+  await assert.rejects(
+    reconcileReferenceCoverage(inventory([example("DotExample", DIRECTIVE_A)]), manifest([]),
+      { ...coverageLock(), require_complete_dispositions: true }),
+    /reference disposition coverage incomplete/u,
+  );
+});
+
+test("pending dispositions reject readiness, stale identity, missing owners and duplicate claims", async () => {
+  const value = example("DotExample", DIRECTIVE_A);
+  const pinned = inventory([value]);
+  for (const entry of [
+    pendingDisposition(value, { status: "ready" }),
+    pendingDisposition(value, { owners: [] }),
+    pendingDisposition(value, { reference_provenance: { ...provenanceFor(value), directive_line: 999 } }),
+  ]) {
+    await assert.rejects(reconcileReferenceCoverage(pinned, manifest([]), coverageLock(), {
+      dispositions: { schema_version: 1, upstream: pinned.upstream, entries: [entry] },
+    }));
+  }
+  await assert.rejects(reconcileReferenceCoverage(pinned, manifest([classifiedEntry(value)]), coverageLock(), {
+    dispositions: { schema_version: 1, upstream: pinned.upstream, entries: [pendingDisposition(value)] },
+  }), /duplicates a manifest or disposition claim/u);
+});
+
 test("removes only the runnable Manim import prelude before directive matching", () => {
   assert.equal(directiveSourceFromFixture(FIXTURE_A), DIRECTIVE_A);
   assert.equal(directiveSourceFromFixture(DIRECTIVE_A), DIRECTIVE_A);

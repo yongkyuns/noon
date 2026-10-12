@@ -26,5 +26,6 @@
     "manim-shrink-to-center-text",
     "manim-dashed-line-reference",
     "manim-tangent-line-reference"
-  ]
+  ],
+  "require_complete_dispositions": true
 }
