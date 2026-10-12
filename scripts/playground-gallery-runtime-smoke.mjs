@@ -123,15 +123,26 @@ try {
     // The production parser below validates the semantic descriptor and duration;
     // semantic_execution is an object, not the boolean true.
     // Renderer time may precede completion of an authored static wait.
-    await context.addInitScript(({ channel, protocolVersion }) => {
+    await context.addInitScript(({ channel, protocolVersion, profilePublications }) => {
       window.__galleryAuthoringResults = [];
       window.__galleryWorkerMessages = [];
+      const profilingRequestId = Number.MAX_SAFE_INTEGER;
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
           const workerArgs = [...args];
           const workerScriptUrl = new URL(workerArgs[0], window.location.href).href;
           const worker = Reflect.construct(target, workerArgs, newTarget);
-          worker.addEventListener('message', ({ data }) => {
+          worker.addEventListener('message', event => {
+            const { data } = event;
+            if (data?.channel === 'noon.render' && data.requestId === profilingRequestId) {
+              // This ID is outside the product client's request range. Consume
+              // only our initial diagnostic reply before its normal listener.
+              event.stopImmediatePropagation();
+              if (data.type !== 'metrics' || data.metrics?.publicationStageProfiling !== true) {
+                throw new Error('gallery publication profiling did not start');
+              }
+              return;
+            }
             window.__galleryWorkerMessages.push({
               workerScriptUrl: workerScriptUrl.slice(0, 500),
               channel: typeof data?.channel === "string" ? data.channel.slice(0, 100) : null,
@@ -147,10 +158,17 @@ try {
               }
             }
           });
+          if (profilePublications && new URL(workerScriptUrl).pathname.endsWith('/execution-render-worker.js')) {
+            // Enable the existing bounded renderer trace before the caller can
+            // initialize playback. A later gallery query can miss publication 1.
+            worker.postMessage({ channel: 'noon.render', protocolVersion: 1,
+              type: 'metrics', requestId: profilingRequestId, profilePublicationStages: true });
+          }
           return worker;
         },
       });
-    }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION });
+    }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION,
+      profilePublications: Object.hasOwn(liveMathAnimations, entry.id) });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [], presentations: [] };
