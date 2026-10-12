@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "studyId": "1933-physical-aa-20261010-01",
+  "kind": "diagnostic-only",
+  "issue": 1933,
+  "qualification": false,
+  "performanceAcceptance": false,
+  "mergeApproval": false,
+  "intent": "Manual one-shot physical macOS hardware WebGL2 same-source A/A precision control (Intel x64 or Apple Silicon arm64), not a release approval or candidate-versus-baseline run.",
+  "sourcePair": {
+    "schema": 1,
+    "baseline": "0473399d1cba9fc1f217c8b88b93c73c69991597",
+    "candidate": "e11ed3046f9b282331214aca8ffdda765cf7b172",
+    "head": "0be750b77eb98711ca869423a0944841c832e8ad",
+    "eventBase": "0473399d1cba9fc1f217c8b88b93c73c69991597"
+  },
+  "producerRun": 38078042785,
+  "builds": [
+    {
+      "name": "baseline",
+      "source": "0473399d1cba9fc1f217c8b88b93c73c69991597",
+      "artifactId": 11680476116,
+      "zipSha256": "01148252e04015e801ee7ae404239fc534e0ea9080ca1a35590d3766db34428c",
+      "buildId": "8e4ec892e0a7a6f7d4603b1928757cd2ec1dcb9862475d7eabfca3314602fd01"
+    },
+    {
+      "name": "candidate",
+      "source": "e11ed3046f9b282331214aca8ffdda765cf7b172",
+      "artifactId": 11680486084,
+      "zipSha256": "88dc597497c1cf39d45bf3d4539e3429c51caac6c897825d7de6d044eac05004",
+      "buildId": "4064dafee633fd636a2f907309334a1e02a63fb316cf5f6f4a5e6f22807ba71b"
+    }
+  ],
+  "harnessSha": "439c4c4d33096665afa68bb070baaba52bd20f43",
+  "harnessTree": "3cc0f65789861939992bf5e42b0095a4f71b74a1",
+  "harnessOverlay": {
+    "originalPairBlob": "8322d5e626070b027d56d1bfb7580fc57eda4714",
+    "physicalPairBlob": "6b580ee791418598581388a8cc3fd383a14101a3"
+  },
+  "authoredSourceHashes": {
+    "parity-square-and-circle": "554ac4dbf786c030896747bf3f21021ad850cffa1090098bae000bee8f7547bc",
+    "showcase-camera-follows-path": "c56944687b2a12d61b2a7ad8b74dd349cafd53132182b14c62b6397d5ee90e5a",
+    "showcase-first-scene": "1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8",
+    "showcase-raster-images": "7901ef5acf95d33125c853c7aef65f6b12e8cc659441c13d4a7c26b6c507492d",
+    "showcase-bezier-paths": "60e5708b4a235f68c8b0788fd57fb219fdc4a2949aa61573d1aa0cef267ff84b"
+  },
+  "cohorts": [
+    {
+      "name": "seven-pair",
+      "pairs": 7
+    },
+    {
+      "name": "three-pair",
+      "pairs": 3
+    }
+  ],
+  "workloads": [
+    "parity-square-and-circle",
+    "showcase-camera-follows-path",
+    "showcase-first-scene",
+    "showcase-raster-images",
+    "showcase-bezier-paths"
+  ],
+  "plannedPairCommands": 100,
+  "plannedObservations": 200,
+  "retries": 0,
+  "stopOnTrialError": true,
+  "pairRunner": "scripts/playground-product-pair.mjs",
+  "comparator": "scripts/playground-product-compare.mjs",
+  "scorer": "scripts/paired-product-metrics.mjs",
+  "environment": {
+    "runner": "self-hosted-macOS-noon-physical",
+    "node": "22.23.3",
+    "playwright": "1.62.1",
+    "pngjs": "7.0.0",
+    "browserVersion": "151.0.7922.34",
+    "renderer": "WebGL2",
+    "browserMode": "hardware-WebGL",
+    "port": 4205,
+    "headless": false,
+    "expectedUnmaskedRenderer": ""
+  },
+  "execution": {
+    "event": "workflow_dispatch",
+    "allowedRunAttempt": 1,
+    "pairDeadlineSeconds": 420,
+    "termGraceSeconds": 5,
+    "jobDeadlineMinutes": 240
+  },
+  "host": {
+    "baselineSource": "0473399d1cba9fc1f217c8b88b93c73c69991597",
+    "originalDriverBlob": "30d766b4f9c0b87d9994adb707c47d5dbb84fe4c",
+    "pairCount": 63,
+    "metrics": 27,
+    "role": "baseline"
+  },
+  "operational": {
+    "readyWorkflow": ".github/workflows/perf-physical-readiness.yml",
+    "requiredRunnerLabels": [
+      "self-hosted",
+      "macOS",
+      "noon-physical"
+    ],
+    "gpuIdentity": "pinned by pre-score readiness, same for every product pair and host probe",
+    "qualification": false
+  }
+}

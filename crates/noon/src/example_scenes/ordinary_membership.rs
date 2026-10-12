@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
-    MobjectFamilyMember::{Family, Mobject as Leaf},
+    MobjectTarget::{Family, Object as Leaf},
     Scene, SemanticNodeId,
 };
 use noon_core::SemanticStore;
@@ -83,7 +83,7 @@ impl LiveContinuation for OrdinaryMembership {
 }
 
 pub fn program() -> Result<LiveProgram<OrdinaryMembership>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut red = scene.square(2.0).map_err(|error| error.to_string())?;
     red.set_fill(1.0, 0.0, 0.0, 1.0)
         .map_err(|error| error.to_string())?;

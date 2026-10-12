@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "contract": "glow-encoded-ldr-v1",
+  "provenance": "Hand-derived: sigma=1/sqrt(2*ln(2)), exp(-k^2/(2*sigma^2))=2^(-k^2), support=3. No shader or reference.py generated these integers.",
+  "kernel_numerators": [1, 32, 256, 512, 256, 32, 1],
+  "kernel_denominator": 1090,
+  "impulse_center_numerator": 262144,
+  "impulse_denominator": 1188100,
+  "linear_samples": [[0, 0.35], [0.5, 0.775], [1, 1.2]],
+  "pulse_samples": [[0, 0.35], [0.25, 1.175], [0.5, 2.0], [0.75, 1.175], [1, 0.35]],
+  "composite": {
+    "source": [0.25, 0.0, 0.0, 0.5],
+    "mask": 0.25,
+    "tint": [0.0, 0.0, 1.0, 1.0],
+    "intensity": 2.0,
+    "opacity": 0.5,
+    "expected": [0.125, 0.0, 0.125, 0.375]
+  },
+  "supersession": {
+    "captured": {"intensity": 0.35, "radius": 0.15},
+    "current": {"intensity": 0.9, "radius": 0.4},
+    "still_owned": ["radius"],
+    "expected": {"intensity": 0.9, "radius": 0.15}
+  }
+}

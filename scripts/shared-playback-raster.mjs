@@ -5,18 +5,25 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import pngjs from "pngjs";
-import { browserArgs, rasterFixtureSource, compareEffectiveFrames, MAX_EFFECTIVE_ABSOLUTE_ERROR } from "./manim-raster-support.mjs";
+import {
+  browserArgs, rasterFixtureSource, compareEffectiveFrames, MAX_EFFECTIVE_ABSOLUTE_ERROR,
+  resolveSharedPlaybackSamples,
+} from "./manim-raster-support.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const manifest = JSON.parse(await readFile(path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8"));
+const manifestPath = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json");
+const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const artifactRoot = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts");
 const baseline = JSON.parse(await readFile(path.join(artifactRoot, "report.json"), "utf8"));
 const reference = JSON.parse(await readFile(path.join(artifactRoot, "semantic/manim-all-frames.json"), "utf8"));
 const backends = (process.env.NOON_MANIM_RASTER_BACKENDS ?? "webgpu,webgl").split(",").map((s) => s.trim());
 const selectedIds = process.env.NOON_SHARED_PLAYBACK_FIXTURES?.split(",").map((s) => s.trim());
-const fixtures = selectedIds ? manifest.fixtures.filter((f) => selectedIds.includes(f.id)) : manifest.fixtures;
+// Direct Rust factories have their own typed seek/forward qualification in the
+// raster harness. This pass executes source through the Python worker only.
+const workerFixtures = manifest.fixtures.filter((f) => !f.direct_factory);
+const fixtures = selectedIds ? workerFixtures.filter((f) => selectedIds.includes(f.id)) : workerFixtures;
 if (selectedIds) assert.equal(fixtures.length, new Set(selectedIds).size, "unknown playback fixture");
 assert.ok(backends.length > 0 && backends.every((b) => ["webgpu", "webgl"].includes(b)), "invalid backend");
 assert.deepEqual(baseline.reference, manifest.reference, "dense raster reference configuration changed");
@@ -28,8 +35,8 @@ assert.equal(reference.frame_rate, manifest.reference.frame_rate);
 // The existing raster pass is dense playback. This pass changes only the host
 // sample cadence and reuses its actual pixels/current-runtime diagnostics.
 const port = Number(process.env.NOON_SHARED_PLAYBACK_PORT ?? "4194");
-const baseUrl = `http://127.0.0.1:${port}`;
-const server = await serveRepository(repoRoot, port);
+const server = await serveRepository(repoRoot, port, { crossOriginIsolated: true });
+const { baseUrl } = server;
 
 function effectiveFrame(frame) {
   assert.equal(frame?.engine, "noon", "missing shared-runtime capture");
@@ -48,14 +55,16 @@ async function qualifyFixture(page, fixture, backend) {
   assert.ok(dense && !dense.error && dense.samples.length > 0, "missing successful dense capture");
   const manim = reference.fixtures.find((f) => f.id === fixture.id);
   assert.equal(manim?.frame_count, manim?.frames.length, "invalid reference frame map");
-  const times = dense.samples.map((sample) => {
-    assert.equal(sample.time, manim.frames[sample.frameIndex]?.time, "dense sample is not a pinned frame");
-    return sample.time;
+  const samples = resolveSharedPlaybackSamples({
+    fixture, denseSamples: dense.samples, semanticFixture: manim,
+    pngFrameCount: denseFixture.manim.frameCount, sampleFractions: manifest.sample_fractions,
   });
-  times.push(fixture.expected_duration);
-  const source = await readFile(path.join(repoRoot, fixture.source ?? manifest.reference.source), "utf8");
-  const selected = rasterFixtureSource(source, fixture.scene);
+  const times = [...samples.map(sample => sample.time), fixture.expected_duration];
+  const source = await readFile(path.join(repoRoot, fixture.noon_source ?? fixture.source ?? manifest.reference.source), "utf8");
+  const selected = rasterFixtureSource(source, fixture.scene, fixture);
   await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
+  assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true,
+    "sparse raster capture requires the isolated shared test server");
   await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonHostRaster.ready());
   const loaded = await page.evaluate(({ source, duration }) => window.noonHostRaster.load(source, duration),
@@ -64,9 +73,9 @@ async function qualifyFixture(page, fixture, backend) {
   assert.equal(loaded.rendererBackend, backend === "webgpu" ? "WebGPU" : "WebGL2");
   const output = path.join(artifactRoot, "shared-playback", backend, fixture.id);
   await mkdir(output, { recursive: true });
-  const samples = [];
-  for (const [index, sample] of dense.samples.entries()) {
-    const label = `frame-${String(sample.frameIndex).padStart(4, "0")}`;
+  const captures = [];
+  for (const [index, sample] of samples.entries()) {
+    const label = sample.label;
     const metrics = await page.evaluate(({ index, times }) => window.noonHostRaster.renderThrough(index, times),
       { index, times });
     assert.equal(metrics.presented, true);
@@ -75,17 +84,21 @@ async function qualifyFixture(page, fixture, backend) {
     await page.locator("#scene").screenshot({ path: sparsePath });
     const sparse = await page.evaluate(() => window.noonHostRaster.debugFrame());
     await writeFile(path.join(output, `${label}.json`), `${JSON.stringify(sparse, null, 2)}\n`);
-    const maximumAbsoluteError = compareEffectiveFrames(effectiveFrame(sparse), effectiveFrame(sample.debugFrame));
+    const maximumAbsoluteError = compareEffectiveFrames(
+      effectiveFrame(sparse), effectiveFrame(dense.samples[index].debugFrame),
+    );
     const expected = PNG.sync.read(await readFile(path.join(artifactRoot, backend, fixture.id, `${label}.png`)));
     const actual = PNG.sync.read(await readFile(sparsePath));
     assert.equal(actual.width, expected.width);
     assert.equal(actual.height, expected.height);
     assert.ok(actual.data.equals(expected.data), `${fixture.id}/${label}: pixels depend on sample cadence`);
-    samples.push({ frameIndex: sample.frameIndex, time: sample.time, effectiveStateEqual: maximumAbsoluteError === 0, maximumAbsoluteError, rasterPixelsEqual: true });
+    captures.push({ frameIndex: sample.frameIndex, referenceKind: sample.referenceKind,
+      time: sample.time, materializedTime: sample.materializedTime,
+      effectiveStateEqual: maximumAbsoluteError === 0, maximumAbsoluteError, rasterPixelsEqual: true });
   }
   const completed = await page.evaluate((times) => window.noonHostRaster.renderThrough(times.length - 1, times), times);
   assert.equal(completed.authoredDuration, fixture.expected_duration);
-  return { id: fixture.id, scene: fixture.scene, samples };
+  return { id: fixture.id, scene: fixture.scene, samples: captures };
 }
 
 const results = [];

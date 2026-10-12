@@ -1,9 +1,10 @@
 use super::*;
 use noon_compile::semantic_execution_object_id;
 use noon_core::{
-    AnimationOptions, RateFunction, SemanticAnimationIntent, SemanticAnimationState,
-    SemanticMutationImpact, SemanticNodeCreation, SemanticObjectProperty, SemanticObjectState,
-    SemanticStyle, SemanticVec3, StoredGeometry,
+    AnimationOptions, GeometryRef, GeometryResourceLookup, MeshResource, RateFunction,
+    SemanticAnimationIntent, SemanticAnimationState, SemanticMutationImpact, SemanticNodeCreation,
+    SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticOrientation,
+    SemanticRotation3D, SemanticStyle, SemanticTransform, SemanticVec3, StoredGeometry,
 };
 
 fn fixture(count: usize) -> (SemanticStore, ExecutionSession, Vec<SemanticNodeId>) {
@@ -47,8 +48,11 @@ fn one_local_batch_publishes_one_coherent_context_and_only_affected_row() {
     let (mut store, mut session, nodes) = fixture(100_000);
     let node = nodes[123];
     let before = session.publication_context();
-    let mut tx = translation(node, 4.0);
-    tx.set_property(node, SemanticObjectProperty::RotationZ, 0.5);
+    let mut transform = store.semantic_object_state_checked(node).unwrap().transform;
+    transform.translation.x = 4.0;
+    transform.orientation = SemanticOrientation::Planar(0.5);
+    let mut tx = SemanticMutationTransaction::new();
+    tx.set_object_transform(node, transform);
     tx.replace_style(
         node,
         SemanticStyle {
@@ -79,6 +83,174 @@ fn one_local_batch_publishes_one_coherent_context_and_only_affected_row() {
     assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
     assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
+}
+
+#[test]
+fn one_spatial_transform_publishes_one_mesh_row_and_invalid_batch_is_atomic() {
+    let mut store = SemanticStore::new();
+    let mesh = MeshResource::new(
+        vec![
+            SemanticVec3::new(-1.0, -1.0, 0.0),
+            SemanticVec3::new(1.0, -1.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ],
+        None,
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    let resource = store.insert_geometry_mesh(mesh);
+    let first =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(resource)));
+    let second =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(resource)));
+    store.attach_to_scene(first).unwrap();
+    store.attach_to_scene(second).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+
+    let rotation =
+        SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.4).unwrap();
+    let mut transform = store
+        .semantic_object_state_checked(first)
+        .unwrap()
+        .transform;
+    transform.translation = SemanticVec3::new(2.0, 3.0, 4.0);
+    transform.orientation = SemanticOrientation::Spatial(rotation);
+    let expected_world = transform.world_transform().unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_object_transform(first, transform);
+    session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+
+    let effective = session.effective_semantic_object(&store, first).unwrap();
+    assert_eq!(effective.object.world_transform(), Some(expected_world));
+    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(session.runtime.last_patch_stats().objects_recomputed, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
+
+    let mut component_edit = SemanticMutationTransaction::new();
+    component_edit.set_property(
+        first,
+        SemanticObjectProperty::Translation,
+        SemanticVec3::new(5.0, 6.0, 7.0),
+    );
+    session
+        .apply_semantic_transaction(&mut store, component_edit)
+        .unwrap();
+    assert_eq!(
+        session
+            .effective_semantic_object(&store, first)
+            .unwrap()
+            .object
+            .world_transform()
+            .unwrap()
+            .translation,
+        SemanticVec3::new(5.0, 6.0, 7.0)
+    );
+    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+
+    let before_publication = session.publication_context();
+    let before_first = store
+        .semantic_object_state_checked(first)
+        .unwrap()
+        .transform;
+    let mut invalid = store
+        .semantic_object_state_checked(second)
+        .unwrap()
+        .transform;
+    invalid.orientation = SemanticOrientation::Planar(f64::NAN);
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_object_transform(first, SemanticTransform::default());
+    transaction.set_object_transform(second, invalid);
+    assert!(session
+        .apply_semantic_transaction(&mut store, transaction)
+        .is_err());
+    assert_eq!(session.publication_context(), before_publication);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(first)
+            .unwrap()
+            .transform,
+        before_first
+    );
+    assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
+fn live_mesh_admission_publishes_spatial_pose_and_resource_and_rejects_domain_change_atomically() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    store.attach_to_scene(root).unwrap();
+    let mesh = MeshResource::new(
+        vec![
+            SemanticVec3::new(-1.0, -1.0, 0.0),
+            SemanticVec3::new(1.0, -1.0, 0.0),
+            SemanticVec3::new(0.0, 1.0, 0.0),
+        ],
+        None,
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    let handle = store.insert_geometry_mesh(mesh.clone());
+    let rotation =
+        SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.4).unwrap();
+    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    state.transform.translation = SemanticVec3::new(2.0, 3.0, 4.0);
+    state.transform.orientation = SemanticOrientation::Spatial(rotation);
+    let expected_world = state.transform.world_transform().unwrap();
+    let object = store.insert_semantic_object(state);
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+
+    let mut admission = SemanticMutationTransaction::new();
+    admission.add_member(root, object);
+    session
+        .apply_semantic_transaction(&mut store, admission)
+        .unwrap();
+
+    let effective = session.effective_semantic_object(&store, object).unwrap();
+    assert_eq!(effective.object.world_transform(), Some(expected_world));
+    let GeometryRef::External(resource_id) = session.frame().objects[0].content.geometry().unwrap()
+    else {
+        panic!("spatial mesh admission must retain its geometry resource reference")
+    };
+    let retained_handle = session
+        .geometry_resources()
+        .current_handle(*resource_id)
+        .expect("admitted mesh resource handle");
+    assert_eq!(
+        session.geometry_resources().get(retained_handle),
+        Some(&noon_core::GeometryResource::Mesh(std::sync::Arc::new(
+            mesh
+        )))
+    );
+    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(
+        session.last_structural_publication_stats().entered_objects,
+        1
+    );
+    assert_eq!(session.runtime.last_patch_stats().objects_recomputed, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_seeks, 0);
+    assert_eq!(session.runtime.last_patch_stats().full_group_rebuilds, 0);
+
+    let before_context = session.publication_context();
+    let before_frame = session.frame().clone();
+    let before_state = store.semantic_object_state_checked(object).unwrap().clone();
+    let mut cross_domain = SemanticMutationTransaction::new();
+    cross_domain.replace_content(object, StoredGeometry::Circle { radius: 1.0 });
+    assert!(matches!(
+        session.apply_semantic_transaction(&mut store, cross_domain),
+        Err(ExecutionSessionPublicationError::Lowering(_))
+    ));
+    assert_eq!(session.publication_context(), before_context);
+    assert_eq!(session.frame(), &before_frame);
+    assert_eq!(
+        store.semantic_object_state_checked(object).unwrap(),
+        &before_state
+    );
+    assert!(session.take_frame_changes().is_empty());
 }
 
 #[test]
@@ -665,15 +837,41 @@ fn live_updater_removal_replacement_and_freeze_keep_one_runtime() {
     assert_eq!(session.frame().objects[0].transform.translation.x, 1.0);
     let mut clear = SemanticMutationTransaction::new();
     clear.clear_updaters(node, 3.0);
+    clear.set_property(
+        node,
+        SemanticObjectProperty::Scale,
+        SemanticVec3::new(0.75, 1.0, 1.0),
+    );
     session
         .apply_semantic_transaction(&mut store, clear)
         .unwrap();
+    assert_eq!(
+        store
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .transform
+            .scale
+            .x,
+        0.75,
+        "an explicit authored channel in the same transaction takes precedence"
+    );
+    assert_eq!(
+        store
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        1.0,
+        "the released callback translation is reconciled through authored state"
+    );
     callbacks.advance_to(&mut session, 4.0).unwrap();
     assert_eq!(
         session.frame().objects[0].transform.translation.x,
         1.0,
         "removal must freeze the last effective value, not restore authored state"
     );
+    assert_eq!(session.frame().objects[0].transform.scale.x, 0.75);
     assert_eq!(session.runtime_identity(), runtime);
     assert_eq!(
         session.wake_state().timeline(),
@@ -689,6 +887,220 @@ fn live_updater_removal_replacement_and_freeze_keep_one_runtime() {
 }
 
 #[test]
+fn callback_release_persists_owned_camera_channels_and_leaves_active_targets_alone() {
+    use crate::RustHostCallbackTable;
+    use noon_core::HostCallbackId;
+
+    let mut store = SemanticStore::new();
+    let mut camera_state = SemanticObjectState::new(StoredGeometry::Rectangle {
+        size: noon_core::Vec2::new(8.0, 4.0),
+    });
+    camera_state.style.object_opacity = 0.0;
+    camera_state.set_role(SemanticObjectRole::Camera2D);
+    let camera = store.insert_semantic_object(camera_state);
+    let other = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 0.5,
+    }));
+    store.attach_to_scene(camera).unwrap();
+    store.attach_to_scene(other).unwrap();
+
+    let camera_callback = HostCallbackId::new(31);
+    let other_callback = HostCallbackId::new(32);
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks
+        .insert(camera_callback, |context| {
+            let mut transform = context.target_state().transform;
+            transform.translation.x += 2.0 * context.delta_time() as f32;
+            transform.scale.x = 0.5;
+            transform.scale.y = 0.5;
+            context.set_target_transform(transform)
+        })
+        .unwrap();
+    callbacks
+        .insert(other_callback, |context| {
+            let mut transform = context.target_state().transform;
+            transform.translation.x += 3.0 * context.delta_time() as f32;
+            context.set_target_transform(transform)
+        })
+        .unwrap();
+    callbacks
+        .add_updater(&mut store, camera, camera_callback, 0.0, None)
+        .unwrap();
+    callbacks
+        .add_updater(&mut store, other, other_callback, 0.0, None)
+        .unwrap();
+
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    callbacks.advance_to(&mut session, 1.0).unwrap();
+    let effective_before_release = session.frame().clone();
+    let revision_before_rejected_release = store.scene_revision();
+
+    let mut rejected = SemanticMutationTransaction::new();
+    rejected.remove_updater(camera, camera_callback, 1.0);
+    rejected.set_property(camera, SemanticObjectProperty::ObjectOpacity, f64::NAN);
+    assert!(session
+        .apply_semantic_transaction(&mut store, rejected)
+        .is_err());
+    assert_eq!(store.scene_revision(), revision_before_rejected_release);
+    assert_eq!(session.frame(), &effective_before_release);
+    assert_eq!(
+        store
+            .semantic_object_state_checked(camera)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        0.0,
+        "a rejected release must not partially reconcile authored state"
+    );
+
+    let mut remove_camera = SemanticMutationTransaction::new();
+    remove_camera.remove_updater(camera, camera_callback, 1.0);
+    session
+        .apply_semantic_transaction(&mut store, remove_camera)
+        .unwrap();
+    let authored_camera = store
+        .semantic_object_state_checked(camera)
+        .unwrap()
+        .transform;
+    assert_eq!(authored_camera.translation.x, 2.0);
+    assert_eq!(authored_camera.scale.x, 0.5);
+    assert_eq!(authored_camera.planar_rotation(), Some(0.0));
+    assert_eq!(
+        store
+            .semantic_object_state_checked(other)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        0.0,
+        "an unrelated callback that remains active keeps its authored baseline"
+    );
+
+    callbacks.advance_to(&mut session, 1.5).unwrap();
+    let camera_frame = session
+        .effective_semantic_object(&store, camera)
+        .unwrap()
+        .object
+        .transform;
+    assert_eq!(camera_frame.translation.x, 2.0);
+    assert_eq!(camera_frame.scale.x, 0.5);
+    assert_eq!(
+        session.camera().unwrap().center,
+        noon_core::Vec2::new(2.0, 0.0)
+    );
+    assert_eq!(session.camera().unwrap().height, 2.0);
+    assert_eq!(
+        session
+            .effective_semantic_object(&store, other)
+            .unwrap()
+            .object
+            .transform
+            .translation
+            .x,
+        4.5,
+        "the still-active callback continues advancing its own target"
+    );
+
+    let mut add_restore_target = SemanticMutationTransaction::new();
+    add_restore_target.add_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Rectangle {
+            size: noon_core::Vec2::new(8.0, 4.0),
+        },
+    )));
+    let result = session
+        .apply_semantic_transaction(&mut store, add_restore_target)
+        .unwrap();
+    let [SemanticMutationImpact::NodeAdded {
+        node: restore_target,
+    }] = result.impacts()
+    else {
+        panic!("Restore target allocation")
+    };
+    let restore_options = AnimationOptions::new()
+        .run_time(1.0)
+        .rate_func(RateFunction::Linear);
+    let mut add_restore = SemanticMutationTransaction::new();
+    add_restore.add_animation(SemanticAnimationState::new(
+        SemanticAnimationIntent::TransformTo {
+            target: camera,
+            target_state: *restore_target,
+            interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            complete_priority: false,
+        },
+        restore_options,
+    ));
+    let result = session
+        .apply_semantic_transaction(&mut store, add_restore)
+        .unwrap();
+    let [SemanticMutationImpact::AnimationAdded {
+        animation: restore_animation,
+    }] = result.impacts()
+    else {
+        panic!("Restore animation declaration")
+    };
+    let segment = session
+        .activate_animation_segment(&store, *restore_animation, restore_options)
+        .unwrap();
+    callbacks
+        .advance_segment_to(&mut session, segment, segment.start_time())
+        .unwrap();
+    let restore_start = session
+        .effective_semantic_object(&store, camera)
+        .unwrap()
+        .object
+        .transform;
+    assert_eq!(restore_start.translation.x, 2.0);
+    assert_eq!(restore_start.scale.x, 0.5);
+    assert_eq!(restore_start.rotation, 0.0);
+}
+
+#[test]
+fn removing_one_duplicate_callback_registration_does_not_release_its_driver() {
+    use crate::RustHostCallbackTable;
+    use noon_core::HostCallbackId;
+
+    let (mut store, _, nodes) = fixture(1);
+    let node = nodes[0];
+    let callback = HostCallbackId::new(41);
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks
+        .insert(callback, |context| {
+            let mut transform = context.target_state().transform;
+            transform.translation.x += context.delta_time() as f32;
+            context.set_target_transform(transform)
+        })
+        .unwrap();
+    callbacks
+        .add_updater(&mut store, node, callback, 0.0, None)
+        .unwrap();
+    callbacks
+        .add_updater(&mut store, node, callback, 0.0, None)
+        .unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    callbacks.advance_to(&mut session, 1.0).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 2.0);
+
+    let mut remove_one = SemanticMutationTransaction::new();
+    remove_one.remove_updater(node, callback, 1.0);
+    session
+        .apply_semantic_transaction(&mut store, remove_one)
+        .unwrap();
+    assert_eq!(
+        store
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        0.0,
+        "the second active occurrence still owns this callback target"
+    );
+    callbacks.advance_to(&mut session, 1.5).unwrap();
+    assert_eq!(session.frame().objects[0].transform.translation.x, 2.5);
+}
+
+#[test]
 fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_atomically() {
     use crate::execution_session::CallbackAdvance;
     use noon_core::HostCallbackId;
@@ -700,7 +1112,6 @@ fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_
     let other = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
         radius: 1.0,
     }));
-    store.attach_to_scene(other).unwrap();
     let mut initial = SemanticMutationTransaction::new();
     initial.add_updater(node, HostCallbackId::new(1), 0.0, None);
     initial.apply(&mut store).unwrap();
@@ -731,12 +1142,28 @@ fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_
         .commit_required_callback_phase(overlay.finish())
         .unwrap();
     let before = session.publication_context();
+    let before_authored_transform = store.semantic_object_state_checked(node).unwrap().transform;
+    let before_effective_transform = session.frame().objects[0].transform;
     for (target, time) in [(node, 0.5), (other, 1.0)] {
         let mut tx = SemanticMutationTransaction::new();
+        // A rejected callback revision also rolls back unrelated authored edits.
+        tx.set_property(
+            node,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(3.0, 0.0, 0.0),
+        );
         tx.add_updater(target, HostCallbackId::new(2), time, None);
         assert!(session.apply_semantic_transaction(&mut store, tx).is_err());
         assert_eq!(session.publication_context(), before);
         assert_eq!(store.scene_revision(), before.scene_revision());
+        assert_eq!(
+            store.semantic_object_state_checked(node).unwrap().transform,
+            before_authored_transform
+        );
+        assert_eq!(
+            session.frame().objects[0].transform,
+            before_effective_transform
+        );
     }
     let mut remove = SemanticMutationTransaction::new();
     remove.clear_updaters(node, 1.0);

@@ -22,6 +22,7 @@ fn raster_key(glyph_id: u16) -> GlyphRasterKey {
         glyph_id,
         pixel_size_bits: 32.0f32.to_bits(),
         variation_fingerprint: 0,
+        phase: noon_text::raster::GlyphRasterPhase::ZERO,
     }
 }
 
@@ -63,29 +64,31 @@ fn prepared_mask_frame<'a>(
 ) -> PreparedRetainedTextFrame<'a> {
     PreparedRetainedTextFrame {
         time: 0.0,
+        layout_rebuilt: true,
         mask_quads: quads,
         color_quads: &[],
         items,
+        object_glyph_slots: &[],
         stats: Default::default(),
     }
 }
 
 #[test]
 fn empty_glyphs_do_not_accumulate_gpu_atlas_metadata() {
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
 
     for glyph_id in 1..=1_024_u16 {
         assert_eq!(
             atlas
-                .insert(&device, &queue, raster_key(glyph_id), &GlyphRaster::Empty)
+                .insert(&device, raster_key(glyph_id), &GlyphRaster::Empty)
                 .unwrap(),
             GlyphAtlasEntry::Empty
         );
     }
     assert_eq!(
         atlas
-            .insert(&device, &queue, raster_key(2_000), &mask_raster(0, 3, 255))
+            .insert(&device, raster_key(2_000), &mask_raster(0, 3, 255))
             .unwrap(),
         GlyphAtlasEntry::Empty
     );
@@ -109,7 +112,7 @@ fn renderer_extends_bindings_when_persistent_atlas_grows() {
     let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
 
     let GlyphAtlasEntry::Image(page_zero) = atlas
-        .insert(&device, &queue, raster_key(1), &mask_raster(4, 2, 101))
+        .insert(&device, raster_key(1), &mask_raster(4, 2, 101))
         .unwrap()
     else {
         panic!("visible glyph must allocate an atlas image");
@@ -136,7 +139,7 @@ fn renderer_extends_bindings_when_persistent_atlas_grows() {
     assert_eq!(first_upload.bytes_uploaded, size_of::<GlyphQuadInstance>());
 
     let GlyphAtlasEntry::Image(page_zero_second) = atlas
-        .insert(&device, &queue, raster_key(2), &mask_raster(4, 2, 102))
+        .insert(&device, raster_key(2), &mask_raster(4, 2, 102))
         .unwrap()
     else {
         panic!("visible glyph must allocate an atlas image");
@@ -144,7 +147,7 @@ fn renderer_extends_bindings_when_persistent_atlas_grows() {
     assert_eq!(page_zero_second.page, 0);
 
     let GlyphAtlasEntry::Image(page_one) = atlas
-        .insert(&device, &queue, raster_key(3), &mask_raster(1, 1, 255))
+        .insert(&device, raster_key(3), &mask_raster(1, 1, 255))
         .unwrap()
     else {
         panic!("visible glyph must allocate an atlas image");
@@ -180,6 +183,7 @@ fn renderer_extends_bindings_when_persistent_atlas_grows() {
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    atlas.encode_pending_uploads(&mut encoder);
     let attachments = [Some(wgpu::RenderPassColorAttachment {
         view: &view,
         depth_slice: None,
@@ -201,6 +205,7 @@ fn renderer_extends_bindings_when_persistent_atlas_grows() {
         renderer.draw_item(&mut pass, &second_items[0], 1).unwrap()
     };
     queue.submit(Some(encoder.finish()));
+    atlas.acknowledge_pending_uploads();
 
     assert_eq!(stats.draw_calls, 1);
     assert_eq!(stats.instances_drawn, 1);

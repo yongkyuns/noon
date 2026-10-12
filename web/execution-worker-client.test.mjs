@@ -10,7 +10,7 @@ globalThis.HTMLCanvasElement = FakeCanvas;
 globalThis.Worker = FakeWorker;
 globalThis.window = { devicePixelRatio: 1 };
 
-const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+const { ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
 const { resetRenderHostSelectionForTests } = await import("./render-host-selection.js");
 
 
@@ -124,6 +124,27 @@ function requestMessage(worker, type) {
   return entry.message ?? entry;
 }
 
+test("forward advance timings are explicitly opted in and invalid flags send no request", async () => {
+  const { client, engine } = await startClient();
+  try {
+    const before = engine.messages.length;
+    await assert.rejects(client.advanceTo(0.5, { collectTimings: "true" }), /must be a boolean/);
+    assert.equal(engine.messages.length, before);
+    for (const collectTimings of [false, true]) {
+      const pending = client.advanceTo(0.5, { collectTimings });
+      const message = await waitForRequest(engine, "advance_to", collectTimings ? 2 : 1);
+      assert.equal(message.time, 0.5);
+      assert.equal(message.collectTimings, collectTimings ? true : undefined);
+      const sampleTiming = collectTimings ? { endpointMs: 3 } : undefined;
+      engine.emitMessage(engineMessage("advance_to", {
+        requestId: message.requestId, time: 0.5, playing: false,
+        ...(collectTimings ? { sampleTiming } : {}),
+      }));
+      assert.equal((await pending).sampleTiming, sampleTiming);
+    }
+  } finally { client.terminate(); }
+});
+
 async function waitForRequest(worker, type, occurrence = 1) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const entries = worker.messages.filter(entry => (entry.message ?? entry).type === type);
@@ -187,6 +208,11 @@ test("engine and render requests use independent issuance spaces", async () => {
   await Promise.resolve();
   const engineMetrics = requestMessage(engine, "metrics");
   const renderMetrics = requestMessage(render, "metrics");
+  assert.deepEqual(renderMetrics, {
+    channel: "noon.render", protocolVersion: 1, type: "metrics", requestId: 2,
+    profilePublicationStages: false, profileRenderSubstages: false,
+    profileGpuCompletion: false, includeGpuIdentity: false,
+  });
   assert.equal(engineMetrics.requestId, 0);
   assert.equal(renderMetrics.requestId, 2);
 
@@ -214,6 +240,25 @@ test("engine and render requests use independent issuance spaces", async () => {
     },
   });
   assert.deepEqual(errors, []);
+  client.terminate();
+});
+
+test("render metrics options, including one-shot GPU identity, are explicit", async () => {
+  const errors = [];
+  const { client, engine, render } = await startClient(errors);
+  await assert.rejects(client.metrics({ profileGpuCompletion: 1 }), /must be booleans/);
+  const metricsPromise = client.metrics({ profileRenderSubstages: true,
+    profileGpuCompletion: true, includeGpuIdentity: true });
+  await Promise.resolve();
+  const engineMetrics = requestMessage(engine, "metrics");
+  const renderMetrics = requestMessage(render, "metrics");
+  assert.equal(renderMetrics.profilePublicationStages, false);
+  assert.equal(renderMetrics.profileRenderSubstages, true);
+  assert.equal(renderMetrics.profileGpuCompletion, true);
+  assert.equal(renderMetrics.includeGpuIdentity, true);
+  engine.emitMessage(engineMessage("metrics", { requestId: engineMetrics.requestId, metrics: {} }));
+  render.emitMessage(renderMessage("metrics", { requestId: renderMetrics.requestId, metrics: {} }));
+  await metricsPromise;
   client.terminate();
 });
 
@@ -410,4 +455,425 @@ test("render constructor failure rolls back transferred canvas and semantic star
   const { ready } = await finishStartup(retry, authoring, offset);
   assert.equal(ready.session, 1, "no session was published by failed render preparation");
   client.terminate();
+});
+
+
+const observeResult = (promise) => promise.then(
+  value => ({ value }), error => ({ error }),
+);
+
+function nativeInputCall(client, index) {
+  switch (index % 3) {
+    case 0: return client.setNativeStateInput(
+      { kind: "control", name: "gain" }, { kind: "scalar", value: index },
+    );
+    case 1: return client.emitNativeEvent({ kind: "control_commit", name: `edge-${index}` });
+    default: return client.submitBrowserPointerInput({
+      kind: "move", surface_x: index, surface_y: 0,
+      viewport_width: 800, viewport_height: 400, view_revision: 1,
+    });
+  }
+}
+
+test("native input bounds reservations before readiness and leaves control requests available", async () => {
+  const { client, engine } = await startClient();
+  const count = MAX_IN_FLIGHT_NATIVE_INPUTS;
+  const results = [];
+  try {
+    // Same-turn submission exercises reservations before the first ready() await.
+    for (let i = 0; i < count; i += 1) results.push(observeResult(nativeInputCall(client, i)));
+    const excess = observeResult(nativeInputCall(client, count));
+    await new Promise(resolve => setImmediate(resolve));
+    const sent = engine.messages.filter(message => /^(native_|browser_pointer)/.test(message.type));
+    assert.equal(sent.length, count, "overflow must not allocate a request or post a message");
+    assert.match((await excess).error?.message ?? "", /native input.*full/i);
+    assert.equal(client.diagnostics.engine.nextRequestId, count);
+    assert.equal(client.diagnostics.engine.pendingRequests, count);
+
+    const state = client.state();
+    const stateRequest = await waitForRequest(engine, "state");
+    engine.emitMessage(engineMessage("state", { requestId: stateRequest.requestId, time: 0 }));
+    await state;
+    engine.emitMessage(engineMessage(sent[0].type, { requestId: sent[0].requestId, time: 0 }));
+    assert.ok((await results[0]).value);
+    results.push(observeResult(nativeInputCall(client, count + 1)));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(client.diagnostics.engine.pendingRequests, count);
+  } finally {
+    client.terminate();
+    await Promise.all(results);
+  }
+  assert.equal(client.diagnostics.engine.pendingRequests, 0);
+});
+
+test("native input snapshots occurrence data before its readiness await", async () => {
+  const { client, engine } = await startClient();
+  const input = { kind: "press", surface_x: 10, surface_y: 20, button: 0, view_revision: 3 };
+  const expected = { ...input };
+  const outcome = observeResult(client.submitBrowserPointerInput(input));
+  input.surface_x = 90;
+  input.kind = "release";
+  input.button = 2;
+  try {
+    const sent = await waitForRequest(engine, "browser_pointer_input");
+    const { channel, protocolVersion, requestId, type, ...body } = sent;
+    assert.deepEqual(body, { input: expected, presentation: null });
+    engine.emitMessage(engineMessage(type, { requestId, time: 0 }));
+    assert.ok((await outcome).value);
+  } finally { client.terminate(); await outcome; }
+});
+
+test("native input transport metadata cannot override its issued request identity", async () => {
+  const { client, engine } = await startClient();
+  const outcome = observeResult(client.submitBrowserPointerInput({
+    kind: "move", surface_x: 1, surface_y: 2,
+    channel: "wrong", protocolVersion: 77, requestId: 987, type: "seek", time: 3,
+  }));
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    const sent = engine.messages.at(-1);
+    assert.equal(sent.channel, "noon.engine");
+    assert.equal(sent.protocolVersion, 1);
+    assert.equal(sent.type, "browser_pointer_input");
+    assert.equal(sent.requestId, 0);
+    engine.emitMessage(engineMessage(sent.type, { requestId: 0 }));
+    assert.ok((await outcome).value);
+  } finally { client.terminate(); await outcome; }
+});
+
+test("native input releases capacity and pending requests after synchronous post failures", async () => {
+  const { client, engine } = await startClient();
+  const post = engine.postMessage.bind(engine);
+  engine.postMessage = message => {
+    if (message.type === "native_event") throw new Error("cannot clone input");
+    post(message);
+  };
+  try {
+    for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS * 2; i += 1) {
+      await assert.rejects(client.emitNativeEvent({ kind: "wheel" }), /cannot clone input/);
+      assert.equal(client.diagnostics.engine.pendingRequests, 0);
+    }
+  } finally { client.terminate(); }
+});
+
+test("failed pointer view reservation stays unregistered and the same revision can retry", async () => {
+  const { client, engine } = await startClient();
+  const held = [];
+  try {
+    for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) {
+      held.push(observeResult(client.emitNativeEvent({ kind: "control_commit", name: `held-${i}` })));
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    const failed = observeResult(client.setBrowserPointerView(9, 800, 400));
+    assert.match((await failed).error?.message ?? "", /native input.*full/i);
+    assert.equal(client.pointerPresentation, null);
+
+    const first = await waitForRequest(engine, "native_event", 1);
+    engine.emitMessage(engineMessage(first.type, { requestId: first.requestId }));
+    await held[0];
+
+    const retry = client.setBrowserPointerView(9, 800, 400);
+    const registration = await waitForRequest(engine, "browser_pointer_view", 1);
+    assert.deepEqual(registration.view, { revision: 9, width: 800, height: 400 });
+    engine.emitMessage(engineMessage(registration.type, { requestId: registration.requestId }));
+    await retry;
+  } finally {
+    client.terminate();
+    await Promise.all(held);
+  }
+});
+
+test("duplicate pointer view registration shares the pending bounded delivery", async () => {
+  const { client, engine } = await startClient();
+  try {
+    const first = client.setBrowserPointerView(11, 800, 400);
+    const duplicate = client.setBrowserPointerView(11, 800, 400);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(engine.messages.filter(message => message.type === "browser_pointer_view").length, 1);
+    const registration = await waitForRequest(engine, "browser_pointer_view", 1);
+    engine.emitMessage(engineMessage(registration.type, { requestId: registration.requestId }));
+    await Promise.all([first, duplicate]);
+  } finally { client.terminate(); }
+});
+
+test("native input cannot cross a scene switch during its readiness await", async () => {
+  const { client, engine: oldEngine, render } = await startClient();
+  const input = observeResult(client.submitBrowserPointerInput({ kind: "cancel", view_revision: 1 }));
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.switchToSemanticExecution("replacement", replacement);
+  try {
+    const rebuild = await waitForRequest(render, "rebuild_engine");
+    replyRender(render, rebuild, "engine_rebuilt");
+    await switching;
+    assert.match((await input).error?.message ?? "", /retired|transition/i);
+    const newEngine = replacement.attachments.at(-1).controlPort.peer;
+    assert.equal(oldEngine.messages.some(message => message.type === "browser_pointer_input"), false);
+    assert.equal(newEngine.messages.some(message => message.type === "browser_pointer_input"), false);
+  } finally { client.terminate(); await input; }
+});
+
+test("native input releases every reservation after remote rejection and termination", async () => {
+  const { client, engine, authoring } = await startClient();
+  const count = MAX_IN_FLIGHT_NATIVE_INPUTS;
+  let outcomes = Array.from({ length: count }, (_, i) => observeResult(nativeInputCall(client, i)));
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    for (const message of engine.messages) {
+      engine.emitMessage(engineMessage("error", { requestId: message.requestId, message: "input rejected" }));
+    }
+    assert.ok((await Promise.all(outcomes)).every(result => result.error));
+    assert.equal(client.diagnostics.engine.pendingRequests, 0);
+    outcomes = Array.from({ length: count }, (_, i) => observeResult(nativeInputCall(client, i)));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(client.diagnostics.engine.pendingRequests, count);
+    client.terminate({ preserveHostConfiguration: true });
+    assert.ok((await Promise.all(outcomes)).every(result => result.error));
+    const offset = FakeWorker.instances.length;
+    const restarting = client.restart();
+    const { engine: restarted } = await finishStartup(restarting, authoring, offset);
+    const input = observeResult(client.emitNativeEvent({ kind: "wheel" }));
+    const sent = await waitForRequest(restarted, "native_event");
+    restarted.emitMessage(engineMessage(sent.type, { requestId: sent.requestId }));
+    assert.ok((await input).value);
+  } finally { client.terminate(); await Promise.all(outcomes); }
+});
+
+
+test("uncloneable native input releases its reservation without allocating a transport ID", async () => {
+  const { client, engine } = await startClient();
+  try {
+    for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS * 2; i += 1) {
+      await assert.rejects(client.submitBrowserPointerInput({ kind: "move", invalid: () => {} }));
+    }
+    assert.equal(client.diagnostics.engine.nextRequestId, 0);
+    assert.equal(client.diagnostics.engine.pendingRequests, 0);
+    assert.equal(engine.messages.length, 0);
+    const accepted = observeResult(client.emitNativeEvent({ kind: "wheel" }));
+    const message = await waitForRequest(engine, "native_event");
+    engine.emitMessage(engineMessage(message.type, { requestId: message.requestId }));
+    assert.ok((await accepted).value);
+  } finally { client.terminate(); }
+});
+
+test("selection policy uses the bounded input lane and validates before reservation", async () => {
+  const { client, engine } = await startClient();
+  const pending = [];
+  try {
+    for (const invalid of [undefined, -1, NaN, Infinity, "4", {}, true]) {
+      await assert.rejects(client.setPointerFillSelection(invalid), /selection tolerance/);
+    }
+    assert.equal(client.diagnostics.engine.pendingRequests, 0);
+    assert.equal(client.diagnostics.engine.nextRequestId, 0);
+    pending.push(observeResult(client.setPointerFillSelection(4)));
+    for (let i = 1; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) {
+      pending.push(observeResult(nativeInputCall(client, i)));
+    }
+    await assert.rejects(client.setPointerFillSelection(null), /native input.*full/i);
+    const configuration = await waitForRequest(engine, "pointer_fill_selection");
+    assert.equal(configuration.maxMovement, 4);
+    assert.equal(client.diagnostics.engine.pendingRequests, MAX_IN_FLIGHT_NATIVE_INPUTS);
+    engine.emitMessage(engineMessage(configuration.type, { requestId: configuration.requestId, time: 0 }));
+    assert.equal((await pending[0]).value.time, 0);
+    pending.push(observeResult(client.setPointerFillSelection(null)));
+    await new Promise(resolve => setImmediate(resolve));
+    const clear = engine.messages.filter(m => m.type === "pointer_fill_selection").at(-1);
+    assert.equal(clear.maxMovement, null);
+    engine.emitMessage(engineMessage(clear.type, { requestId: clear.requestId, time: 0 }));
+    assert.equal((await pending.at(-1)).value.time, 0);
+  } finally { client.terminate(); await Promise.all(pending); }
+});
+
+test("selection configuration is not replayed through a replacement scene", async () => {
+  const { client, engine: oldEngine, render } = await startClient();
+  const configuration = observeResult(client.setPointerFillSelection(4));
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.switchToSemanticExecution("replacement", replacement);
+  try {
+    const rebuild = await waitForRequest(render, "rebuild_engine");
+    replyRender(render, rebuild, "engine_rebuilt");
+    await switching;
+    assert.match((await configuration).error?.message ?? "", /retired|transition/i);
+    const currentEngine = replacement.attachments.at(-1).controlPort.peer;
+    assert.equal(oldEngine.messages.some(m => m.type === "pointer_fill_selection"), false);
+    assert.equal(currentEngine.messages.some(m => m.type === "pointer_fill_selection"), false);
+  } finally { client.terminate(); await configuration; }
+});
+
+// Collection-time receipt contract: real client, existing readiness yield and
+// ownership gates. These do not claim that the fake render owner draws pixels.
+async function registerPointerView(client, engine, revision = 3) {
+  const delivery = client.setBrowserPointerView(revision, 800, 400);
+  const sent = await waitForRequest(engine, "browser_pointer_view");
+  engine.emitMessage(engineMessage("browser_pointer_view", { requestId: sent.requestId }));
+  await delivery;
+}
+const pointerReceipt = (presentation = 1, sequence = 0, view_revision = 3, session = 1) =>
+  ({ session, sequence, presentation, view_revision });
+const pointerInput = { kind: "press", source_id: 1, pointer_id: 7, view_revision: 3,
+  surface_x: 400, surface_y: 200, viewport_width: 800, viewport_height: 400, button: 0 };
+
+test("pointer input pins receipt before readiness yields, despite a newer repaint", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    const a = pointerReceipt(), b = pointerReceipt(2, 1);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: a }));
+    const pending = client.submitBrowserPointerInput(pointerInput);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: b }));
+    const sent = await waitForRequest(engine, "browser_pointer_input");
+    assert.deepEqual(sent.presentation, a, "already collected input must keep frame A");
+    assert.deepEqual(client.pointerPresentation, b);
+    engine.emitMessage(engineMessage(sent.type, { requestId: sent.requestId, pointerInputAccepted: false }));
+    assert.equal((await pending).pointerInputAccepted, false);
+  } finally { client.terminate(); }
+});
+
+test("input collected without receipt is not relabelled by a later acknowledgement", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    const pending = client.submitBrowserPointerInput(pointerInput);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt() }));
+    const sent = await waitForRequest(engine, "browser_pointer_input");
+    assert.equal(sent.presentation, null);
+    engine.emitMessage(engineMessage(sent.type, { requestId: sent.requestId, pointerInputAccepted: false }));
+    assert.equal((await pending).pointerInputAccepted, false);
+  } finally { client.terminate(); }
+});
+
+test("worker receipt is immutable and neither transport consumption nor future view authorizes it", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    engine.emitMessage(engineMessage("execution_presented", { receipt: pointerReceipt() }));
+    assert.equal(client.pointerPresentation, null);
+    for (const receipt of [pointerReceipt(1, 0, 4), pointerReceipt(1, 0, 3, 2)]) {
+      engine.emitMessage(engineMessage("pointer_presented", { receipt }));
+      assert.equal(client.pointerPresentation, null);
+    }
+    const receipt = pointerReceipt();
+    engine.emitMessage(engineMessage("pointer_presented", { receipt }));
+    receipt.sequence = 90;
+    assert.equal(client.pointerPresentation.sequence, 0);
+    assert.ok(Object.isFrozen(client.pointerPresentation));
+  } finally { client.terminate(); }
+});
+
+test("view registration clears receipt before any asynchronous delivery", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt() }));
+    const view = client.setBrowserPointerView(4, 800, 400);
+    assert.equal(client.pointerPresentation, null);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt(2) }));
+    assert.equal(client.pointerPresentation, null, "old view feedback cannot restore mapping");
+    await new Promise(resolve => setImmediate(resolve));
+    const sent = requestMessage(engine, "browser_pointer_view");
+    engine.emitMessage(engineMessage(sent.type, { requestId: sent.requestId }));
+    await view;
+  } finally { client.terminate(); }
+});
+
+test("same view is a no-op and reused revision cannot replace its geometry", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    const r = pointerReceipt(); engine.emitMessage(engineMessage("pointer_presented", { receipt: r }));
+    await client.setBrowserPointerView(3, 800, 400);
+    assert.deepEqual(client.pointerPresentation, r);
+    assert.throws(() => client.setBrowserPointerView(3, 801, 400), /revision reused/);
+    assert.deepEqual(client.pointerPresentation, r);
+  } finally { client.terminate(); }
+});
+
+test("late invalidation cannot clear a newer successful presentation", async () => {
+  const { client, engine } = await startClient();
+  try {
+    await registerPointerView(client, engine);
+    const a=pointerReceipt(), b=pointerReceipt(2);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: b }));
+    engine.emitMessage(engineMessage("pointer_presentation_invalidated", { receipt: a }));
+    assert.deepEqual(client.pointerPresentation, b);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: a }));
+    assert.deepEqual(client.pointerPresentation, b);
+    engine.emitMessage(engineMessage("pointer_presentation_invalidated", { receipt: b }));
+    assert.equal(client.pointerPresentation, null);
+  } finally { client.terminate(); }
+});
+
+for (const operation of ["engine-restart", "semantic-replacement"]) {
+  test(`${operation} must re-register an unchanged view without reusing its receipt`, async () => {
+    const { client, authoring, engine: oldEngine, render } = await startClient();
+    let pending;
+    try {
+      await registerPointerView(client, oldEngine);
+      oldEngine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt() }));
+      const replacing = operation === "engine-restart"
+        ? client.restart({ failedOwner: "engine" })
+        : client.switchToSemanticExecution("replacement", authoring);
+      const renderRequest = await waitForRequest(render, "rebuild_engine");
+      replyRender(render, renderRequest, "engine_rebuilt");
+      const ready = await replacing;
+      assert.equal(ready.session, 2);
+      const engine = authoring.attachments.at(-1).controlPort.peer;
+      assert.equal(client.pointerPresentation, null);
+      const currentReceipt = pointerReceipt(2, 0, 3, 2);
+      engine.emitMessage(engineMessage("pointer_presented", { receipt: currentReceipt }));
+      assert.equal(client.pointerPresentation, null, "replacement needs its own platform registration");
+      pending = client.setBrowserPointerView(3, 800, 400);
+      const registration = await waitForRequest(engine, "browser_pointer_view");
+      assert.deepEqual(registration.view, { revision: 3, width: 800, height: 400 });
+      engine.emitMessage(engineMessage(registration.type, { requestId: registration.requestId }));
+      await pending;
+      assert.equal(client.pointerPresentation, null, "registration is not presentation");
+      oldEngine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt(10) }));
+      assert.equal(client.pointerPresentation, null);
+      engine.emitMessage(engineMessage("pointer_presented", { receipt: currentReceipt }));
+      assert.deepEqual(client.pointerPresentation, currentReceipt);
+    } finally { client.terminate(); await pending?.catch(() => {}); }
+  });
+}
+
+const inspectionInput = { view_revision: 3, viewport_width: 800, viewport_height: 400,
+  surface_x: 500, surface_y: 200, delta_pixels: -100 };
+
+for (const collected of [null, pointerReceipt()]) {
+  test(`inspection pins its receipt and normalized cursor before yielding (${collected === null ? "unpresented" : "presented"})`, async () => {
+    const { client, engine } = await startClient();
+    try {
+      await registerPointerView(client, engine);
+      if (collected) engine.emitMessage(engineMessage("pointer_presented", { receipt: collected }));
+      const input = { ...inspectionInput };
+      const pending = client.scrollInspectionView(input);
+      input.surface_x = 9;
+      engine.emitMessage(engineMessage("pointer_presented", { receipt: pointerReceipt(2, 1) }));
+      const sent = await waitForRequest(engine, "inspection_scroll");
+      assert.deepEqual(sent.input, inspectionInput);
+      assert.deepEqual(sent.presentation, collected);
+      engine.emitMessage(engineMessage(sent.type, { requestId: sent.requestId, inspectionScrollChanged: null }));
+      assert.equal((await pending).inspectionScrollChanged, null);
+    } finally { client.terminate(); }
+  });
+}
+
+test("inspection shares native ingress capacity and never evicts pending pointer input", async () => {
+  const { client, engine } = await startClient(); const pending = [];
+  try {
+    for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i++) {
+      pending.push(observeResult(client.scrollInspectionView(inspectionInput)));
+    }
+    await assert.rejects(client.submitBrowserPointerInput(pointerInput), /in-flight capacity is full/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(engine.messages.filter(m => m.type === "inspection_scroll").length, MAX_IN_FLIGHT_NATIVE_INPUTS);
+    assert.equal(engine.messages.filter(m => m.type === "browser_pointer_input").length, 0);
+  } finally { client.terminate(); await Promise.all(pending); }
+});
+
+test("inspection reserved before termination is never delivered to a retired endpoint", async () => {
+  const { client, engine } = await startClient();
+  const pending = observeResult(client.scrollInspectionView(inspectionInput));
+  client.terminate();
+  assert.match((await pending).error?.message ?? "", /retired|transition|terminated/i);
+  assert.equal(engine.messages.filter(m => m.type === "inspection_scroll").length, 0);
 });

@@ -6,6 +6,89 @@ pub(super) fn plan(
     target: &VectorPath,
     options: MorphOptions,
 ) -> Result<MorphPlan, MorphError> {
+    Ok(plan_with_authored_progress(source, target, options)?.plan)
+}
+
+/// Ordered morph samples together with their authored global curve parameters.
+/// The progress rows belong to preparation, not a frame, and let retained meshes
+/// preserve VMobject partial-path semantics regardless of adaptive sample counts.
+pub(crate) struct AuthoredProgressMorphPlan {
+    pub plan: MorphPlan,
+    pub contours: Vec<AuthoredContourProgress>,
+}
+
+pub(crate) struct AuthoredContourProgress {
+    pub point_progress: Vec<f32>,
+    pub end_progress: f32,
+}
+
+pub(crate) fn plan_with_authored_progress(
+    source: &VectorPath,
+    target: &VectorPath,
+    options: MorphOptions,
+) -> Result<AuthoredProgressMorphPlan, MorphError> {
+    let pairs = aligned_contours(source, target)?;
+    let total_curves = pairs
+        .iter()
+        .map(|(source, _)| source.curves.len())
+        .sum::<usize>()
+        .max(1);
+    let mut contours = Vec::with_capacity(pairs.len());
+    let mut progress_contours = Vec::with_capacity(pairs.len());
+    let mut global_curve = 0_usize;
+    for (source, target) in pairs {
+        let samples = options.samples_per_contour.div_ceil(source.curves.len());
+        let minimum_depth = samples.clamp(1, 1 << 16).next_power_of_two().ilog2();
+        let mut result = MorphContourPlan {
+            source_points: Vec::new(),
+            target_points: Vec::new(),
+            closed: source.closed,
+        };
+        let mut point_progress = Vec::new();
+        let endpoints = (
+            source.curves.last().unwrap()[3],
+            target.curves.last().unwrap()[3],
+        );
+        let curve_count = source.curves.len();
+        for (curve, (a, b)) in source.curves.into_iter().zip(target.curves).enumerate() {
+            let start_progress = (global_curve + curve) as f32 / total_curves as f32;
+            let end_progress = (global_curve + curve + 1) as f32 / total_curves as f32;
+            flatten_pair(
+                [a, b],
+                options.flatten_tolerance,
+                minimum_depth,
+                0,
+                &mut result,
+                &mut point_progress,
+                start_progress..end_progress,
+            );
+        }
+        let end_progress = (global_curve + curve_count) as f32 / total_curves as f32;
+        if !result.closed {
+            // flatten_pair records each interval's start. Preserve the final
+            // endpoint for open contours without duplicating a closed seam.
+            result.source_points.push(endpoints.0);
+            result.target_points.push(endpoints.1);
+            point_progress.push(end_progress);
+        }
+        debug_assert_eq!(result.source_points.len(), point_progress.len());
+        contours.push(result);
+        progress_contours.push(AuthoredContourProgress {
+            point_progress,
+            end_progress,
+        });
+        global_curve += curve_count;
+    }
+    Ok(AuthoredProgressMorphPlan {
+        plan: MorphPlan { contours },
+        contours: progress_contours,
+    })
+}
+
+fn aligned_contours(
+    source: &VectorPath,
+    target: &VectorPath,
+) -> Result<Vec<(crate::partial::CubicContour, crate::partial::CubicContour)>, MorphError> {
     let (source, target) = crate::align_paths(source, target).map_err(MorphError::PathAlignment)?;
     let source = crate::partial::cubic_contours(&source);
     let target = crate::partial::cubic_contours(&target);
@@ -15,46 +98,89 @@ pub(super) fn plan(
             target: target.len(),
         });
     }
-    let mut contours = Vec::with_capacity(source.len());
-    for (index, (source, target)) in source.into_iter().zip(target).enumerate() {
-        if source.closed != target.closed {
-            return Err(MorphError::ClosureMismatch {
-                contour: index,
-                source_closed: source.closed,
-                target_closed: target.closed,
-            });
+    source
+        .into_iter()
+        .zip(target)
+        .enumerate()
+        .map(|(index, (source, target))| {
+            if source.closed != target.closed {
+                return Err(MorphError::ClosureMismatch {
+                    contour: index,
+                    source_closed: source.closed,
+                    target_closed: target.closed,
+                });
+            }
+            debug_assert_eq!(source.curves.len(), target.curves.len());
+            Ok((source, target))
+        })
+        .collect()
+}
+
+/// Prepared canonical cubic correspondence for a path whose fill topology can change.
+///
+/// Preparation is independent of playback time. Sampling preserves the same point,
+/// contour and closure ordering used by ordinary path transforms; no endpoint fan
+/// triangulation is assumed. The renderer can tessellate the current filled path
+/// without mutating or retransmitting its immutable execution resource.
+#[derive(Clone, Debug)]
+pub struct PreparedPathInterpolation {
+    contours: Vec<PreparedContourInterpolation>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedContourInterpolation {
+    curves: Vec<([Vec2; 4], [Vec2; 4])>,
+    closed: bool,
+}
+
+impl PreparedPathInterpolation {
+    pub fn new(source: &VectorPath, target: &VectorPath) -> Result<Self, MorphError> {
+        if !source.is_finite() || !target.is_finite() {
+            return Err(GeometryError::NonFinitePoint.into());
         }
-        debug_assert_eq!(source.curves.len(), target.curves.len());
-        let samples = options.samples_per_contour.div_ceil(source.curves.len());
-        let minimum_depth = samples.clamp(1, 1 << 16).next_power_of_two().ilog2();
-        let mut result = MorphContourPlan {
-            source_points: Vec::new(),
-            target_points: Vec::new(),
-            closed: source.closed,
-        };
-        let endpoints = (
-            source.curves.last().unwrap()[3],
-            target.curves.last().unwrap()[3],
-        );
-        for (a, b) in source.curves.into_iter().zip(target.curves) {
-            flatten_pair(
-                a,
-                b,
-                options.flatten_tolerance,
-                minimum_depth,
-                0,
-                &mut result,
-            );
-        }
-        if !result.closed {
-            // flatten_pair records each interval's start. Preserve the final
-            // endpoint for open contours without duplicating a closed seam.
-            result.source_points.push(endpoints.0);
-            result.target_points.push(endpoints.1);
-        }
-        contours.push(result);
+        let contours = aligned_contours(source, target)?
+            .into_iter()
+            .map(|(source, target)| PreparedContourInterpolation {
+                curves: source.curves.into_iter().zip(target.curves).collect(),
+                closed: source.closed,
+            })
+            .collect();
+        Ok(Self { contours })
     }
-    Ok(MorphPlan { contours })
+
+    pub fn interpolate(&self, progress: f32) -> Result<VectorPath, MorphError> {
+        if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
+            return Err(MorphError::PathAlignment(
+                crate::PathProportionError::InvalidProportion(progress),
+            ));
+        }
+        let mut path = VectorPath::new();
+        for contour in &self.contours {
+            for (index, (a, b)) in contour.curves.iter().enumerate() {
+                let p: [Vec2; 4] =
+                    std::array::from_fn(|index| a[index] * (1.0 - progress) + b[index] * progress);
+                if index == 0 {
+                    path = path.move_to(p[0]);
+                }
+                path = path.cubic_to(p[1], p[2], p[3]);
+            }
+            if contour.closed {
+                path = path.close();
+            }
+        }
+        if !path.is_finite() {
+            return Err(GeometryError::NonFinitePoint.into());
+        }
+        Ok(path)
+    }
+}
+
+pub(super) fn interpolate(
+    source: &VectorPath,
+    target: &VectorPath,
+    progress: f32,
+) -> Result<VectorPath, MorphError> {
+    PreparedPathInterpolation::new(source, target)?.interpolate(progress)
 }
 
 fn split(p: [Vec2; 4]) -> ([Vec2; 4], [Vec2; 4]) {
@@ -80,22 +206,41 @@ fn flat(p: [Vec2; 4], tolerance: f32) -> bool {
 }
 
 fn flatten_pair(
-    a: [Vec2; 4],
-    b: [Vec2; 4],
+    [a, b]: [[Vec2; 4]; 2],
     tolerance: f32,
     minimum: u32,
     depth: u32,
     output: &mut MorphContourPlan,
+    point_progress: &mut Vec<f32>,
+    progress: std::ops::Range<f32>,
 ) {
     if depth == 16 || (depth >= minimum && flat(a, tolerance) && flat(b, tolerance)) {
         output.source_points.push(a[0]);
         output.target_points.push(b[0]);
+        point_progress.push(progress.start);
         return;
     }
     let (a0, a1) = split(a);
     let (b0, b1) = split(b);
-    flatten_pair(a0, b0, tolerance, minimum, depth + 1, output);
-    flatten_pair(a1, b1, tolerance, minimum, depth + 1, output);
+    let middle_progress = (progress.start + progress.end) * 0.5;
+    flatten_pair(
+        [a0, b0],
+        tolerance,
+        minimum,
+        depth + 1,
+        output,
+        point_progress,
+        progress.start..middle_progress,
+    );
+    flatten_pair(
+        [a1, b1],
+        tolerance,
+        minimum,
+        depth + 1,
+        output,
+        point_progress,
+        middle_progress..progress.end,
+    );
 }
 
 #[cfg(test)]

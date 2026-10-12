@@ -1,0 +1,18 @@
+name: Install pinned wasm-opt
+description: Install and verify the pinned Binaryen wasm-opt release on Linux x64.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BINARYEN_VERSION: '132'
+        BINARYEN_LINUX_SHA256: '195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572'
+      run: |
+        archive="binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+        url="https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/${archive}"
+        curl --fail --location --retry 3 --retry-all-errors --output "$RUNNER_TEMP/$archive" "$url"
+        echo "${BINARYEN_LINUX_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+        tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+        binaryen_dir="$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}"
+        echo "$binaryen_dir/bin" >> "$GITHUB_PATH"
+        "$binaryen_dir/bin/wasm-opt" --version

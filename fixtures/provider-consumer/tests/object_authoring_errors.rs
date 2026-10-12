@@ -8,9 +8,9 @@ use noon::integration::{
 };
 use noon::{
     AnimationOptions, AuthoringError, ExecutionSession, ExecutionSessionCallbackError,
-    LayoutAnchor, LiveSessionError, Mobject, MobjectFamilyMember, RateFunction, Scene,
-    SceneRevision, SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticVec3,
-    StoredGeometry, UnsupportedAuthoringOperation, Vec2, VectorPath,
+    LayoutAnchor, LiveSessionError, Mobject, MobjectTarget, RateFunction, Scene, SceneRevision,
+    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticVec3, StoredGeometry,
+    UnsupportedAuthoringOperation, Vec2, VectorPath,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -59,7 +59,7 @@ fn assert_live_unchanged(
 
 #[test]
 fn constructor_and_resource_rejections_do_not_allocate_and_recover() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     assert!(matches!(
         scene.circle(0.0),
@@ -113,7 +113,7 @@ fn constructor_and_resource_rejections_do_not_allocate_and_recover() -> TestResu
 
 #[test]
 fn style_transform_and_query_categories_are_typed_and_atomic() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene.circle(1.0)?;
     let before = snapshot(&scene, &[&object]);
     assert!(matches!(
@@ -143,7 +143,7 @@ fn style_transform_and_query_categories_are_typed_and_atomic() -> TestResult {
 
 #[test]
 fn scalar_failures_preserve_domain_and_transaction_causes() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     let error = scene.value_tracker(f64::NAN).unwrap_err();
     assert_eq!(
@@ -196,7 +196,7 @@ fn scalar_failures_preserve_domain_and_transaction_causes() -> TestResult {
 
 #[test]
 fn duplicate_binding_preserves_existing_signal_and_same_binding_is_a_noop() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let object = scene.circle(1.0)?;
     let tracker = scene.value_tracker(1.0)?;
     let first = scene.position_from_tracker(
@@ -234,13 +234,10 @@ fn duplicate_binding_preserves_existing_signal_and_same_binding_is_a_noop() -> T
 
 #[test]
 fn layout_and_copy_failures_leave_all_family_leaves_unchanged() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let left = scene.circle(1.0)?;
     let right = scene.square(1.0)?;
-    let family = scene.family(&[
-        MobjectFamilyMember::Mobject(&left),
-        MobjectFamilyMember::Mobject(&right),
-    ])?;
+    let family = scene.family(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])?;
     let before = snapshot(&scene, &[&left, &right]);
     assert_eq!(
         LayoutAnchor::from(&family).member(-3).layout().unwrap_err(),
@@ -272,7 +269,7 @@ fn layout_and_copy_failures_leave_all_family_leaves_unchanged() -> TestResult {
     let foreign = Scene::new().circle(1.0)?;
     assert_eq!(
         family
-            .copy_with_references(&[MobjectFamilyMember::Mobject(&foreign)])
+            .copy_with_references(&[MobjectTarget::Object(&foreign)])
             .unwrap_err(),
         AuthoringError::ForeignStore
     );
@@ -306,8 +303,8 @@ fn layout_and_copy_failures_leave_all_family_leaves_unchanged() -> TestResult {
 fn pending_callback_capture_keeps_token_and_recovers_without_rebuilding() -> TestResult {
     let mut scene = Scene::new();
     let object = scene.circle(1.0)?;
-    let family = scene.family(&[MobjectFamilyMember::Mobject(&object)])?;
-    scene.add_many(&[MobjectFamilyMember::Family(&family)])?;
+    let family = scene.family(&[MobjectTarget::Object(&object)])?;
+    scene.add_many(&[MobjectTarget::Family(&family)])?;
     let mut callbacks = SemanticMutationTransaction::new();
     callbacks.add_updater(object.node_id(), HostCallbackId::new(9), 0.0, None);
     callbacks.apply(&mut scene.integration_store().borrow_mut())?;
@@ -347,10 +344,10 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
     let mut scene = Scene::new();
     let object = scene.circle(1.0)?;
     let unaffected = scene.square(1.0)?;
-    let family = scene.family(&[MobjectFamilyMember::Mobject(&object)])?;
+    let family = scene.family(&[MobjectTarget::Object(&object)])?;
     let mut target = object.target_editor()?;
     target.set_translation(4.0, 0.0)?;
-    scene.add_many(&[MobjectFamilyMember::Family(&family)])?;
+    scene.add_many(&[MobjectTarget::Family(&family)])?;
     scene.add(&unaffected)?;
     let animation = scene.declare_transform_to(
         &object,
@@ -369,7 +366,10 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
     let unaffected_id = session.execution_object_id(unaffected.node_id());
     let error = scene
         .live(&mut session)
-        .arrange_family(&family, 1.0, 0.0, 0.1, true)
+        .arrange_family_with_options(
+            &family,
+            &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
+        )
         .unwrap_err();
     assert!(matches!(
         error,
@@ -412,7 +412,10 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
     let mut live = scene.live(&mut session);
     live.advance_segment_to(segment, segment.end_time())?;
     live.complete_segment(segment)?;
-    live.arrange_family(&family, 1.0, 0.0, 0.1, true)?;
+    live.arrange_family_with_options(
+        &family,
+        &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
+    )?;
     assert_eq!(
         session.execution_object_id(unaffected.node_id()),
         unaffected_id
@@ -472,7 +475,7 @@ fn rejection_retains_previously_queued_changes_and_local_recovery() -> TestResul
 fn callback_family_invalid_paint_retains_shared_cause_before_reads_and_recovers() -> TestResult {
     use noon::{FamilyCallbackPaintError, FamilyPaint, Style};
 
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.circle(0.5)?;
     let second = scene.square(0.5)?;
     let nested = scene.family(&[(&first).into(), (&second).into()])?;
@@ -570,7 +573,7 @@ fn scalar_callback_paint_preserves_typed_rejection_and_composite_domain() -> Tes
 
 #[test]
 fn positive_number_rejection_retains_original_f64_and_recovers() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     for supplied in [
         f64::MIN_POSITIVE,

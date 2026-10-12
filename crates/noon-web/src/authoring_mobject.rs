@@ -108,14 +108,52 @@ pub(crate) fn manim_text(
     font_family: &str,
     font_size: f64,
     line_spacing: f64,
+    font_face: Option<noon::NativeFontFace>,
+) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
+    configure_native_text(
+        noon::Text::new(source),
+        font_family,
+        font_size,
+        line_spacing,
+        font_face,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn manim_markup_text(
+    source: &str,
+    font_family: &str,
+    font_size: f64,
+    line_spacing: f64,
+    font_face: Option<noon::NativeFontFace>,
+) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
+    configure_native_text(
+        noon::MarkupText::new(source).into(),
+        font_family,
+        font_size,
+        line_spacing,
+        font_face,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn configure_native_text(
+    text: noon::Text,
+    font_family: &str,
+    font_size: f64,
+    line_spacing: f64,
+    font_face: Option<noon::NativeFontFace>,
 ) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
     let font_size = text_authoring_f32("font size", font_size)?;
     let line_spacing = text_authoring_f32("line spacing", line_spacing)?;
     if line_spacing != -1.0 && line_spacing <= -1.0 {
         return Err("line spacing must be -1 or greater than -1".into());
     }
-    Ok(noon::Text::new(source)
-        .with_font(font_family)
+    let text = match font_face {
+        Some(face) => text.with_font_face(face),
+        None => text.with_font(font_family),
+    };
+    Ok(text
         .with_font_size(font_size)
         .with_line_spacing(line_spacing))
 }
@@ -138,6 +176,130 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmAuthoringStore {
         pub(crate) semantics: SharedSemanticStore,
+    }
+
+    /// Immutable authoring input; admission and font residency remain in the
+    /// shared Rust text pipeline. Clones reuse the same exact font bytes.
+    #[wasm_bindgen]
+    pub struct WasmNativeFontFace {
+        pub(crate) face: noon::NativeFontFace,
+    }
+
+    #[wasm_bindgen]
+    impl WasmNativeFontFace {
+        #[wasm_bindgen(constructor)]
+        pub fn new(family: &str, data: &[u8], face_index: f64) -> Result<Self, JsValue> {
+            // Keep the JS number until validation: wasm-bindgen's u32 coercion
+            // would otherwise wrap an invalid index onto another valid face.
+            if !face_index.is_finite()
+                || face_index.fract() != 0.0
+                || !(0.0..=f64::from(u32::MAX)).contains(&face_index)
+            {
+                return Err(js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "text.invalid_font_index",
+                    "font face index must be an integer between 0 and 4294967295",
+                )));
+            }
+            noon::NativeFontFace::new(
+                family,
+                std::sync::Arc::<[u8]>::from(data),
+                face_index as u32,
+            )
+            .map(|face| Self { face })
+            .map_err(|error| {
+                js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "text.invalid_font_face",
+                    error,
+                ))
+            })
+        }
+
+        /// Resolve the shared engine's embedded regular face without a byte transfer.
+        pub fn bundled(family: &str) -> Result<Self, JsValue> {
+            noon::bundled_native_font_face(family)
+                .map(|face| Self { face })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn family(&self) -> String {
+            self.face.family.to_string()
+        }
+
+        #[wasm_bindgen(getter, js_name = faceIndex)]
+        pub fn face_index(&self) -> u32 {
+            self.face.face_index
+        }
+
+        /// Produce an owned argument without copying or re-fingerprinting bytes.
+        #[wasm_bindgen(js_name = cloneFace)]
+        pub fn clone_face(&self) -> Self {
+            Self {
+                face: self.face.clone(),
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    pub struct WasmDecimalNumberHandle {
+        number: noon::DecimalNumber,
+    }
+
+    impl WasmDecimalNumberHandle {
+        pub(crate) fn from_number(number: noon::DecimalNumber) -> Self {
+            Self { number }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmDecimalNumberHandle {
+        #[wasm_bindgen(getter)]
+        pub fn value(&self) -> Result<f64, JsValue> {
+            self.number.value().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = integerValue)]
+        pub fn integer_value(&self) -> Result<i64, JsValue> {
+            self.number
+                .value()
+                .map_err(js_error)
+                .and_then(|value| noon::integer_value(value).map_err(js_error))
+        }
+        #[wasm_bindgen(getter)]
+        pub fn text(&self) -> Result<String, JsValue> {
+            self.number.text().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = fontSize)]
+        pub fn font_size(&self) -> Result<f64, JsValue> {
+            self.number.font_size().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = setValue)]
+        pub fn set_value(
+            &mut self,
+            compiler: &mut crate::WasmLatexCompiler,
+            value: f64,
+        ) -> Result<(), JsValue> {
+            self.number
+                .set_value(compiler, value)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = incrementValue)]
+        pub fn increment_value(
+            &mut self,
+            compiler: &mut crate::WasmLatexCompiler,
+            delta: f64,
+        ) -> Result<(), JsValue> {
+            self.number
+                .increment_value(compiler, delta)
+                .map(|_| ())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = mobject)]
+        pub fn mobject(&self) -> WasmAuthoringMobjectHandle {
+            WasmAuthoringMobjectHandle::from_semantic_mobject(self.number.mobject().clone())
+        }
     }
 
     #[wasm_bindgen]
@@ -165,6 +327,52 @@ mod wasm {
                 tracker,
                 Rc::clone(&self.semantics),
             ))
+        }
+
+        #[wasm_bindgen(js_name = createDecimalNumber)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn create_decimal_number(
+            &self,
+            value: f64,
+            decimal_places: u32,
+            include_sign: bool,
+            group_with_commas: bool,
+            show_ellipsis: bool,
+            unit: Option<String>,
+            font_size: f64,
+            compiler: &mut crate::WasmLatexCompiler,
+        ) -> Result<WasmDecimalNumberHandle, JsValue> {
+            if !font_size.is_finite() || font_size <= 0.0 || font_size > f64::from(f32::MAX) {
+                return Err(js_error(
+                    "DecimalNumber font_size must be finite and positive",
+                ));
+            }
+            noon::DecimalNumber::with_font_size(
+                Rc::clone(&self.semantics),
+                compiler,
+                value,
+                noon::DecimalFormat {
+                    decimal_places,
+                    include_sign,
+                    group_with_commas,
+                    show_ellipsis,
+                    unit,
+                },
+                font_size as f32,
+            )
+            .map(|number| WasmDecimalNumberHandle { number })
+            .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = numericFromMobject)]
+        pub fn numeric_from_mobject(
+            &self,
+            object: &WasmAuthoringMobjectHandle,
+        ) -> Result<WasmDecimalNumberHandle, JsValue> {
+            object.id_in_store(&self.semantics, "DecimalNumber")?;
+            noon::DecimalNumber::from_mobject(object.semantic_mobject().clone())
+                .map(|number| WasmDecimalNumberHandle { number })
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = createManimGeometry)]
@@ -229,9 +437,44 @@ mod wasm {
             font_family: &str,
             font_size: f64,
             line_spacing: f64,
+            colors: Option<crate::WasmTextColorBatch>,
+            font_face: Option<WasmNativeFontFace>,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-            let text = super::manim_text(source, font_family, font_size, line_spacing)
-                .map_err(js_error)?;
+            let text = super::manim_text(
+                source,
+                font_family,
+                font_size,
+                line_spacing,
+                font_face.map(|input| input.face),
+            )
+            .map_err(js_error)?;
+            let text = if let Some(batch) = colors {
+                text.color(batch.base_color).with_text2color(batch.colors)
+            } else {
+                text
+            };
+            Mobject::from_text(Rc::clone(&self.semantics), text)
+                .map(|handle| WasmAuthoringMobjectHandle { handle })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimMarkupText)]
+        pub fn create_manim_markup_text(
+            &self,
+            source: &str,
+            font_family: &str,
+            font_size: f64,
+            line_spacing: f64,
+            font_face: Option<WasmNativeFontFace>,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            let text = super::manim_markup_text(
+                source,
+                font_family,
+                font_size,
+                line_spacing,
+                font_face.map(|input| input.face),
+            )
+            .map_err(js_error)?;
             Mobject::from_text(Rc::clone(&self.semantics), text)
                 .map(|handle| WasmAuthoringMobjectHandle { handle })
                 .map_err(js_error)
@@ -278,6 +521,7 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmAuthoringFamilyHandle {
         family: noon::MobjectFamily,
+        surface: Option<noon::SurfaceFamily>,
     }
 
     /// Host-normalized options for one shared arrangement transaction.
@@ -781,21 +1025,57 @@ mod wasm {
                 .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = arrowFor)]
+        pub fn arrow_for(
+            &self,
+            source: &crate::WasmAuthoringArrowHandle,
+            vector_index: Option<u32>,
+        ) -> Result<crate::WasmAuthoringArrowHandle, JsValue> {
+            source.rebind_from_family_copy(&self.copied, vector_index)
+        }
     }
 
     impl WasmAuthoringFamilyHandle {
         pub(crate) fn from_semantic_family(family: noon::MobjectFamily) -> Self {
-            Self { family }
+            Self {
+                family,
+                surface: None,
+            }
+        }
+
+        pub(crate) fn from_surface_family(surface: noon::SurfaceFamily) -> Self {
+            Self {
+                family: surface.family().clone(),
+                surface: Some(surface),
+            }
         }
 
         pub(crate) fn semantic_family(&self) -> Result<noon::MobjectFamily, JsValue> {
             self.family.validate().map_err(typed_js_error)?;
             Ok(self.family.clone())
         }
+
+        pub(crate) fn semantic_family_ref(&self) -> &noon::MobjectFamily {
+            &self.family
+        }
+
+        pub(crate) fn semantic_surface_family(
+            &self,
+        ) -> Result<Option<&noon::SurfaceFamily>, JsValue> {
+            self.semantic_family()?;
+            Ok(self.surface.as_ref())
+        }
     }
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = worldFamilyCenter)]
+        pub fn world_family_center(&self) -> Result<Vec<f64>, JsValue> {
+            let center = self.family.world_center().map_err(js_error)?;
+            Ok(vec![center.x, center.y, center.z])
+        }
+
         #[wasm_bindgen(js_name = becomeFamily)]
         pub fn become_family(
             &self,
@@ -929,6 +1209,11 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = fade)]
+        pub fn fade(&self, darkness: f64) -> Result<(), JsValue> {
+            self.semantic_family()?.fade(darkness).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = gridOptions)]
         pub fn grid_options(
             &self,
@@ -1035,6 +1320,19 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = cyclicReplaceTarget)]
+        pub fn cyclic_replace_target(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            self.semantic_family()?
+                .cyclic_replace_target_with_references(
+                    &references.copy_references().map_err(js_error)?,
+                )
+                .map(WasmFamilyCopy::from_copy)
+                .map_err(js_error)
+        }
+
         /// Atomically apply Manim subset-display constructor semantics to every
         /// ordinary direct member before execution starts.
         #[wasm_bindgen(js_name = prepareSubsetDisplay)]
@@ -1114,7 +1412,7 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct WasmPathQuery {
-        value: noon::PathQuery,
+        pub(crate) value: noon::PathQuery,
     }
 
     impl WasmPathQuery {
@@ -1397,6 +1695,14 @@ mod wasm {
                 .map(WasmPathQuery::from_query)
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = functionPlotRange)]
+        pub fn function_plot_range(&self) -> Result<Vec<f64>, JsValue> {
+            self.handle
+                .function_plot_range()
+                .map(|range| range.to_vec())
+                .map_err(crate::authoring_plotting::coordinate_failure)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = localPathQuery)]
         pub fn local_path_query(&self) -> Result<WasmPathQuery, JsValue> {
             self.handle
@@ -1439,6 +1745,21 @@ mod wasm {
         #[wasm_bindgen(js_name = targetEditor)]
         pub fn target_editor(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             self.clone_handle()
+        }
+
+        /// Apply one deterministic pointwise matrix to this detached geometry target.
+        #[wasm_bindgen(js_name = applyMatrix)]
+        pub fn apply_matrix(
+            &mut self,
+            values: Vec<f64>,
+            rows: u32,
+            columns: u32,
+            about_x: f64,
+            about_y: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .apply_matrix(&values, rows as usize, columns as usize, about_x, about_y)
+                .map_err(js_error)
         }
 
         /// Replace world-space corners through the shared semantic transaction.
@@ -1561,7 +1882,14 @@ mod wasm {
         /// Read authored rotation directly, without lowering to a wire value.
         #[wasm_bindgen(getter)]
         pub fn rotation(&self) -> Result<f64, JsValue> {
-            Ok(self.handle.state().map_err(js_error)?.transform.rotation_z)
+            self.handle
+                .state()
+                .map_err(js_error)?
+                .transform
+                .planar_rotation()
+                .ok_or_else(|| {
+                    JsValue::from_str("rotation getter is unsupported for spatial orientation")
+                })
         }
 
         #[wasm_bindgen(getter, js_name = centerX)]
@@ -1916,7 +2244,15 @@ mod tests {
         handle.rotate(0.2).unwrap();
         assert_eq!(handle.state().unwrap().transform.scale.x, 1.1);
         assert_eq!(handle.state().unwrap().transform.scale.y, 0.9);
-        assert_eq!(handle.state().unwrap().transform.rotation_z, 0.2);
+        assert_eq!(
+            handle
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            0.2
+        );
     }
 
     #[test]
@@ -1942,7 +2278,14 @@ mod tests {
         assert!((handle.state().unwrap().transform.translation.x - 2.5).abs() < 1e-12);
         assert!((handle.state().unwrap().transform.translation.y + 0.5).abs() < 1e-12);
         assert!(
-            (handle.state().unwrap().transform.rotation_z - std::f64::consts::FRAC_PI_2).abs()
+            (handle
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .expect("planar orientation")
+                - std::f64::consts::FRAC_PI_2)
+                .abs()
                 < 1e-12
         );
     }
@@ -2211,7 +2554,15 @@ mod tests {
         assert_eq!(base.center().unwrap(), (0.0, 0.0));
         assert_eq!(target.state().unwrap().transform.translation.x, -1.0);
         assert_eq!(target.state().unwrap().transform.scale.x, 0.3);
-        assert_eq!(target.state().unwrap().transform.rotation_z, 0.4);
+        assert_eq!(
+            target
+                .state()
+                .unwrap()
+                .transform
+                .planar_rotation()
+                .expect("planar orientation"),
+            0.4
+        );
         assert_eq!(target.fill_opacity().unwrap(), 0.5);
         let Some(SemanticPaint::Solid(fill)) = target.state().unwrap().style.fill else {
             panic!("target must retain a solid fill");

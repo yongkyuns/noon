@@ -1,6 +1,7 @@
 import math
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import _manim_compat as compat
 import _manim_typst as typst
@@ -30,6 +31,35 @@ def _object(index: int) -> dict:
 
 
 class CanonicalCallbackPropertyRowTests(unittest.TestCase):
+    def test_always_redraw_selects_only_prebuilt_text_through_effective_content(self) -> None:
+        from noon import always_redraw
+
+        initial = identity_only_wrapper(typst.Text)
+        replacement = identity_only_wrapper(typst.Text)
+        initial.add_updater = Mock()
+        producer = Mock(side_effect=(initial, replacement))
+
+        with patch.object(updaters._base.Mobject, "set_effective_text") as set_text:
+            self.assertIs(always_redraw(producer), initial)
+            refresh = initial.add_updater.call_args.args[0]
+            refresh(initial, 0.25)
+
+        set_text.assert_called_once_with(replacement)
+        self.assertEqual(producer.call_count, 2)
+
+    def test_text_always_redraw_rejects_a_different_producer_category(self) -> None:
+        from noon import always_redraw
+
+        initial = identity_only_wrapper(typst.Text)
+        other = identity_only_wrapper(compat.Circle)
+        initial.add_updater = Mock()
+        producer = Mock(side_effect=(initial, other))
+        target = always_redraw(producer)
+        refresh = initial.add_updater.call_args.args[0]
+
+        with self.assertRaisesRegex(NotImplementedError, "prebuilt Text"):
+            refresh(target, 0.25)
+
     def test_geometry_adapter_keeps_coordinate_writes_in_callback_phase(self) -> None:
         import _manim_shared_geometry as geometry
 
@@ -67,6 +97,102 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertEqual(
             explicit_style.to_wire()["stroke_width_mode"], "screen_space"
         )
+
+    def test_effective_circle_content_can_batch_once_per_target(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIs(mobject.set_effective_circle(2.5), mobject)
+            self.assertEqual(context.effective_batch()["content"], {
+                "object": {"slot": 11, "generation": 3},
+                "geometry": {"kind": "circle", "radius": 2.5},
+            })
+            with self.assertRaisesRegex(NotImplementedError, "bounds are unavailable"):
+                mobject.get_center()
+            with self.assertRaisesRegex(ValueError, "more than once"):
+                mobject.set_effective_circle(3.0)
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+    def test_effective_content_batch_serializes_multiple_unique_targets(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            mobject.set_effective_circle(2.5)
+            row = context.row(mobject)[1]
+            context._append_content((12, 4), row, {
+                "object": {"slot": 12, "generation": 4},
+                "geometry": {"kind": "circle", "radius": 1.25},
+            })
+            self.assertEqual(context.effective_batch()["content"], [
+                {"object": {"slot": 11, "generation": 3},
+                 "geometry": {"kind": "circle", "radius": 2.5}},
+                {"object": {"slot": 12, "generation": 4},
+                 "geometry": {"kind": "circle", "radius": 1.25}},
+            ])
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+    def test_become_callback_provisional_uses_one_effective_visual_source(self) -> None:
+        scene, target, context = self._mobject_and_context()
+        source = identity_only_wrapper(compat.Rectangle)
+        source._callback_provisional_handle = SimpleNamespace(localKey="callback-local:source")
+        source._callback_provisional_context = context
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        guard = updaters._ACTIVE_CANONICAL_CONTEXT.set(context)
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "dimension matching"):
+                target.become(source, match_width=True)
+            self.assertIs(target.become(source), target)
+            self.assertEqual(context.effective_batch()["content"], {
+                "object": {"slot": 11, "generation": 3},
+                "provisional": "callback-local:source",
+            })
+            with self.assertRaisesRegex(ValueError, "more than once"):
+                target.become(source)
+            with self.assertRaisesRegex(NotImplementedError, "must precede"):
+                context.style_changed((11, 3), context.row(target)[1].style, context.row(target)[1])
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(guard)
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+    def test_effective_path_is_bounded_terminal_content(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIs(
+                mobject.set_effective_path([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], closed=True),
+                mobject,
+            )
+            self.assertEqual(context.effective_batch()["content"], {
+                "object": {"slot": 11, "generation": 3},
+                "path": {"points": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], "closed": True},
+            })
+            with self.assertRaisesRegex(ValueError, "between 2 and 4096"):
+                context._content = []
+                context._content_targets.clear()
+                mobject.set_effective_path([(0.0, 0.0)])
+            with self.assertRaisesRegex(ValueError, "between 2 and 4096"):
+                mobject.set_effective_path([(0.0, 0.0)] * 4097)
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
+    def test_effective_text_names_a_prebuilt_text_resource(self) -> None:
+        scene, target, context = self._mobject_and_context()
+        source = identity_only_wrapper(compat.Mobject)
+        source._semantic_handle = type(
+            "SemanticHandle", (), {"semanticSlot": 21, "semanticGeneration": 2}
+        )()
+        source._semantic_handle_fresh = True
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIs(updaters.set_effective_text(target, source), target)
+            self.assertEqual(context.effective_batch()["content"], {
+                "object": {"slot": 11, "generation": 3},
+                "text_source": {"slot": 21, "generation": 2},
+            })
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
@@ -341,10 +467,10 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertEqual(compat.VMobject.set_opacity.__module__, "_manim_compat")
         self.assertEqual(
             [write["kind"] for write in writes],
-            ["transform", "style", "style", "transform"],
+            ["translation", "opacity", "stroke", "translation"],
         )
         self.assertEqual(
-            writes[-1]["transform"]["translation"], {"x": 5.0, "y": 3.0}
+            writes[-1]["translation"], {"x": 5.0, "y": 3.0}
         )
         row = next(iter(context._rows.values()))
         self.assertIsInstance(row, updaters._PhasePropertyRow)
@@ -490,9 +616,9 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             context._operations.rotations[0],
             (2.0, -1.0, 0.0, 1.0, 1.0, math.pi / 2.0, 0.0, 0.0),
         )
-        self.assertEqual([write["kind"] for write in writes], ["transform"])
-        self.assertEqual(writes[0]["transform"]["translation"], {"x": 1.0, "y": 2.0})
-        self.assertAlmostEqual(writes[0]["transform"]["rotation"], math.pi / 2.0)
+        self.assertEqual([write["kind"] for write in writes], ["translation", "rotation"])
+        self.assertEqual(writes[0]["translation"], {"x": 1.0, "y": 2.0})
+        self.assertAlmostEqual(writes[1]["rotation"], math.pi / 2.0)
         self.assertFalse(next(iter(context._rows.values())).bounds_translation_only)
 
     def test_shared_line_rotate_about_origin_uses_the_callback_property_row(self) -> None:
@@ -517,9 +643,9 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
         self.assertEqual(len(context._operations.rotations), 1)
-        self.assertEqual([write["kind"] for write in writes], ["transform"])
-        self.assertEqual(writes[0]["transform"]["translation"], {"x": 1.0, "y": 2.0})
-        self.assertAlmostEqual(writes[0]["transform"]["rotation"], math.pi / 2.0)
+        self.assertEqual([write["kind"] for write in writes], ["translation", "rotation"])
+        self.assertEqual(writes[0]["translation"], {"x": 1.0, "y": 2.0})
+        self.assertAlmostEqual(writes[1]["rotation"], math.pi / 2.0)
 
     def test_native_text_uses_the_same_effective_overlay_without_authored_writes(self) -> None:
         scene, _, context = self._mobject_and_context()
@@ -568,11 +694,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
-        self.assertEqual([write["kind"] for write in writes], ["transform", "style"])
+        self.assertEqual([write["kind"] for write in writes], ["translation", "opacity"])
         self.assertEqual(
-            writes[0]["transform"]["translation"], {"x": 2.25, "y": -0.5}
+            writes[0]["translation"], {"x": 2.25, "y": -0.5}
         )
-        self.assertEqual(writes[1]["style"]["opacity"], 0.4)
+        self.assertEqual(writes[1]["opacity"], 0.4)
         self.assertEqual(handle.authored_translation, (2.0, -1.0))
         self.assertEqual(handle.authored_opacity, 1.0)
         self.assertEqual(handle.authored_revision, 17)
@@ -606,13 +732,38 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
             reads.append(key)
             return 0.0
         context._read_scalar_async = read
-        await context.prefetch_captured_scalars([callback, callback], self.Tracker)
+        await context.prefetch_captured_phase_reads([callback, callback], self.Tracker)
         self.assertEqual(calls, [])
         self.assertEqual(reads, [(7, 3)])
         self.assertEqual(context.effective_batch()["writes"], [])
         callback(None)
         self.assertEqual(calls, [0.0])
         self.assertNotEqual(calls[0], tracker.authored_value)
+
+    async def test_nested_producer_capture_is_prefetched_without_running_producer(self):
+        owner = object()
+        context = self.context(owner)
+        tracker = self.Tracker(owner, 9)
+        calls, reads = [], []
+
+        def producer():
+            calls.append("producer")
+            return context.scalar((tracker._canonical_handle.semanticSlot, 3))
+
+        def callback(_mobject):
+            calls.append("callback")
+            return producer()
+
+        async def read(key):
+            reads.append(key)
+            return 2.5
+
+        context._read_scalar_async = read
+        await context.prefetch_captured_phase_reads([callback], self.Tracker)
+        self.assertEqual(calls, [])
+        self.assertEqual(reads, [(9, 3)])
+        self.assertEqual(callback(None), 2.5)
+        self.assertEqual(calls, ["callback", "producer"])
 
     async def test_unused_invalid_capture_defers_failure_until_actual_read(self):
         owner = object()
@@ -627,7 +778,7 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
         async def read(key):
             raise failure
         context._read_scalar_async = read
-        await context.prefetch_captured_scalars([callback], self.Tracker)
+        await context.prefetch_captured_phase_reads([callback], self.Tracker)
         callback(None)
         self.assertEqual(calls, ["once"])
         with self.assertRaises(ValueError) as caught:
@@ -649,8 +800,8 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
             reads.append(key)
             return 1.0
         context._read_scalar_async = read
-        await context.prefetch_captured_scalars([lambda m: foreign], self.Tracker)
-        await context.prefetch_captured_scalars([lambda m: descriptor], DescriptorTracker)
+        await context.prefetch_captured_phase_reads([lambda m: foreign], self.Tracker)
+        await context.prefetch_captured_phase_reads([lambda m: descriptor], DescriptorTracker)
         self.assertEqual(reads, [])
 
     async def test_capture_cache_does_not_cross_phase_contexts(self):
@@ -662,7 +813,220 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
         async def later(key): return 5.0
         first._read_scalar_async = earlier
         second._read_scalar_async = later
-        await first.prefetch_captured_scalars([callback], self.Tracker)
-        await second.prefetch_captured_scalars([callback], self.Tracker)
+        await first.prefetch_captured_phase_reads([callback], self.Tracker)
+        await second.prefetch_captured_phase_reads([callback], self.Tracker)
         self.assertEqual(first.scalar((2, 3)), 2.0)
         self.assertEqual(second.scalar((2, 3)), 5.0)
+
+    def typed_mobject(self, owner, slot, *, scene_owner=None):
+        value = identity_only_wrapper(compat.Mobject)
+        value._scene = SimpleNamespace(
+            _canonical_authoring_context=owner if scene_owner is None else scene_owner
+        )
+        value._semantic_handle = SimpleNamespace(
+            semanticSlot=slot, semanticGeneration=3
+        )
+        value._semantic_handle_fresh = True
+        return value
+
+    @staticmethod
+    def object_item(key):
+        item = _object(key[0])
+        item["node"] = {"slot": key[0], "generation": key[1]}
+        return item
+
+    async def test_direct_mobject_capture_is_prefetched_without_js_pi_or_invocation(self):
+        owner = object()
+        context = self.context(owner)
+        captured = self.typed_mobject(owner, 31)
+        reads, calls = [], []
+        async def read(kind, key):
+            reads.append((kind, key))
+            return {"kind": "object", "object": self.object_item(key)}
+        context._read_async = read
+
+        def callback(_mobject):
+            calls.append("callback")
+            return context.row(captured)[1]
+
+        await context.prefetch_captured_phase_reads([callback], self.Tracker)
+        self.assertEqual(reads, [("object", (31, 3))])
+        self.assertEqual(calls, [])
+        self.assertEqual(callback(None).transform.translation_x, 31.0)
+        self.assertEqual(calls, ["callback"])
+
+    async def test_foreign_and_family_mobjects_are_not_prefetched(self):
+        owner = object()
+        context = self.context(owner)
+        foreign = self.typed_mobject(owner, 41, scene_owner=object())
+        family = self.typed_mobject(owner, 42)
+        family._semantic_family_handle = object()
+        reads = []
+        async def read(kind, key):
+            reads.append((kind, key))
+            return {"kind": "object", "object": self.object_item(key)}
+        context._read_async = read
+        await context.prefetch_captured_phase_reads(
+            [lambda _mobject: (foreign, family)], self.Tracker
+        )
+        self.assertEqual(reads, [])
+
+    async def test_malformed_mobject_prefetch_is_deferred_until_row_read(self):
+        owner = object()
+        context = self.context(owner)
+        captured = self.typed_mobject(owner, 51)
+        async def read(kind, key):
+            return {"kind": "object", "object": self.object_item((999, key[1]))}
+        context._read_async = read
+        await context.prefetch_captured_phase_reads([lambda _mobject: captured], self.Tracker)
+        with self.assertRaisesRegex(RuntimeError, "foreign semantic node"):
+            context.row(captured)
+
+    async def test_mobject_read_error_is_deferred_until_actual_read(self):
+        owner = object()
+        context = self.context(owner)
+        captured = self.typed_mobject(owner, 61)
+        failure = ValueError("stale phase object")
+        calls = []
+        async def read(kind, key):
+            raise failure
+        context._read_async = read
+        def callback(_mobject):
+            calls.append("once")
+        await context.prefetch_captured_phase_reads([callback, lambda _mobject: captured], self.Tracker)
+        callback(None)
+        self.assertEqual(calls, ["once"])
+        with self.assertRaises(ValueError) as caught:
+            context.row(captured)
+        self.assertIs(caught.exception, failure)
+
+
+class CallbackMembershipFinalizerTests(unittest.TestCase):
+    class Player:
+        def __init__(self) -> None:
+            self.staged = []
+
+        def stageCallbackMembership(self, token, batch) -> None:
+            self.staged.append((token, batch))
+
+        def callbackMembershipRootKeys(self, token):
+            self.token = token
+            return ["1:2", "3:4"]
+
+        def stageCallbackProvisionalGeometry(self, token, options):
+            self.staged.append((token, "provisional_geometry", options))
+            return "provisional"
+
+        def stageCallbackProvisionalShift(self, token, provisional, x, y) -> None:
+            self.staged.append((token, "shift", provisional, x, y))
+
+        def stageCallbackProvisionalFill(
+            self, token, provisional, red, green, blue, alpha, opacity
+        ) -> None:
+            self.staged.append((token, "fill", provisional, red, green, blue, alpha, opacity))
+
+        def callbackProvisionalCenter(self, token, provisional):
+            self.staged.append((token, "center", provisional))
+            return type("Point", (), {"x": 2.5, "y": -1.0})()
+
+        def resolveCallbackProvisionalMobject(self, token, provisional):
+            self.staged.append((token, "resolve", provisional))
+            return "durable"
+
+    def context(self):
+        return updaters._CanonicalCallbackContext(
+            {"time": 0.0, "delta_time": 0.0, "token": {"generation": 9}, "objects": []},
+            object(),
+            callback_player=self.Player(),
+        )
+
+    def test_provisional_reads_use_the_current_region_of_the_exact_phase(self) -> None:
+        original = self.context()
+        active = self.context()
+        active._authoring_context = original._authoring_context
+        active.region = 1
+        wrapper = SimpleNamespace(
+            _callback_provisional_context=original,
+            _callback_provisional_handle="provisional",
+        )
+        guard = updaters._ACTIVE_CANONICAL_CONTEXT.set(active)
+        try:
+            self.assertEqual(updaters._canonical_get_center(wrapper), updaters._base.Vec2(2.5, -1.0))
+            self.assertEqual(original._callback_player.staged, [])
+            self.assertEqual(active._callback_player.staged[0][1], "center")
+            active.token = {"generation": 10}
+            self.assertIsNone(updaters._canonical_provisional_context(wrapper))
+            active.token = original.token
+            active._authoring_context = object()
+            self.assertIsNone(updaters._canonical_provisional_context(wrapper))
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(guard)
+
+    def test_caught_callback_exception_discards_delayed_membership_finalizers(self) -> None:
+        context = self.context()
+        finalized = []
+        context.stage_membership("first", lambda: finalized.append("first"))
+        try:
+            raise RuntimeError("callback body failed")
+        except RuntimeError:
+            context.discard_membership()
+        self.assertEqual(context._callback_player.staged, [("{\"generation\":9}", "first")])
+        self.assertEqual(finalized, [])
+        self.assertEqual(context._membership_finalizers, [])
+
+    def test_delayed_membership_finalizers_run_only_after_callback_completion(self) -> None:
+        context = self.context()
+        finalized = []
+        context.stage_membership("first", lambda: finalized.append("first"))
+        context.stage_membership("second", lambda: finalized.append("second"))
+        self.assertEqual(finalized, [])
+        self.assertEqual(context.membership_root_keys(), ["1:2", "3:4"])
+        context.finalize_membership()
+        self.assertEqual(finalized, ["first", "second"])
+
+    def test_provisional_property_operations_stay_separate_from_effective_rows(self) -> None:
+        context = self.context()
+        provisional = context.stage_provisional_geometry("circle-options")
+        context.provisional_shift(provisional, updaters._base.Vec2(0.5, -1.0))
+        context.provisional_set_fill(
+            provisional, updaters._base.Color(0.2, 0.4, 0.8, 0.75), 0.6
+        )
+        self.assertEqual(context.provisional_center(provisional), updaters._base.Vec2(2.5, -1.0))
+        self.assertEqual(context.effective_batch()["writes"], [])
+        self.assertEqual(
+            context._callback_player.staged,
+            [
+                ('{"generation":9}', "provisional_geometry", "circle-options"),
+                ('{"generation":9}', "shift", "provisional", 0.5, -1.0),
+                ('{"generation":9}', "fill", "provisional", 0.2, 0.4, 0.8, 0.75, 0.6),
+                ('{"generation":9}', "center", "provisional"),
+            ],
+        )
+
+    def test_provisional_paint_and_move_to_chain_stays_in_callback_staging(self) -> None:
+        context = self.context()
+        provisional = context.stage_provisional_geometry("circle-options")
+        shape = identity_only_wrapper(
+            compat.Circle,
+            _callback_provisional_context=context,
+            _callback_provisional_handle=provisional,
+        )
+        guard = updaters._ACTIVE_CANONICAL_CONTEXT.set(context)
+        try:
+            color = updaters._base.Color(0.2, 0.4, 0.8, 0.75)
+            self.assertIs(shape.set_fill(color, opacity=0.6).move_to((5.0, 3.0)), shape)
+            with self.assertRaisesRegex(NotImplementedError, "center point placement only"):
+                shape.move_to((0.0, 0.0), aligned_edge=(1.0, 0.0))
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(guard)
+
+        self.assertEqual(context.effective_batch()["writes"], [])
+        self.assertEqual(
+            context._callback_player.staged,
+            [
+                ('{"generation":9}', "provisional_geometry", "circle-options"),
+                ('{"generation":9}', "fill", "provisional", 0.2, 0.4, 0.8, 0.75, 0.6),
+                ('{"generation":9}', "center", "provisional"),
+                ('{"generation":9}', "shift", "provisional", 2.5, 4.0),
+            ],
+        )

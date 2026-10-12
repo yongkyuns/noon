@@ -1,9 +1,11 @@
 // Runs an existing semantic session in its authoring worker. Rendering uses the
 // same mailbox and delta receiver as other execution producers.
 import {
+  DEFAULT_SHARED_SLOT_CAPACITY,
   EXECUTION_TRANSPORT_SHARED, EXECUTION_TRANSPORT_TRANSFERABLE,
   SharedExecutionDeltaWriter, TransferableExecutionDeltaSender,
   createSharedExecutionMailbox, executionDeltaMetadata,
+  prepareExecutionDeltaMetadataForSend, prepareExecutionDeltaTransportForSend,
 } from "./execution-transport.js";
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
@@ -18,6 +20,16 @@ const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
   "set_loop_duration",
   "advance_to",
 ]);
+// A denied replay capability is not a denial of forward execution. Pause and
+// advance_to keep the existing callback-aware, non-rewinding Rust path; only
+// controls that can restart/loop the historical plan require replay admission.
+const REPLAY_DEPENDENT_CONTROLS = new Set([
+  "resume", "seek", "restart_playback", "set_loop_duration",
+]);
+
+function normalizeReplayUnavailableReason(error) {
+  return String(error?.message ?? error).replace(/^replay unavailable:\s*/i, "");
+}
 
 export async function attachSemanticEngine(
   context,
@@ -25,6 +37,9 @@ export async function attachSemanticEngine(
   onStop = () => {},
   runRequiredCallbackPhase = null,
   continuation = null,
+  completeRequiredCallbackPhase = null,
+  discardRequiredCallbackPhase = null,
+  testOnlyTickTimestamp = null,
 ) {
   const {
     controlPort,
@@ -54,7 +69,11 @@ export async function attachSemanticEngine(
   if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && continuation === null) {
     throw new Error("external sample pacing requires a source-owned semantic continuation");
   }
+  if (testOnlyTickTimestamp !== null && typeof testOnlyTickTimestamp !== "function") {
+    throw new Error("test tick timestamp must be a function");
+  }
   let player = null;
+  let replayUnavailable = null;
   // A player is leased from the authoring context. The transport session only
   // frames deltas; it never selects or creates a second runtime for a scene.
   let transport;
@@ -67,20 +86,37 @@ export async function attachSemanticEngine(
   let lastSentPublication = null;
   let lastPresentedPublication = null;
   let pendingPresentation = null;
+  let pendingPointerInvalidation = null;
+  let pendingPointerPresentation = null;
+  let pointerView = null;
   let continuationActive = false;
+  // Read-only observation of the last completed lease. The authoring context's
+  // next segment horizon is future time, not elapsed playback time. Never use it
+  // as a clock while Python holds the returned player.
+  let returnedPlaybackTime = null;
   let continuationGeneration = continuation?.generation ?? null;
   let executionWakeCadence = null;
   let pendingRendererObservation = null;
   let lastExternalSampleTime = null;
+  let externalInteractionWallTime = null;
+  let externalInteractionTickTime = null;
   let pendingExternalContinuation = null;
   const controls = [];
   const post = (payload) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload });
   const fail = (error, requestId = null) => post({ type: "error", requestId, message: String(error?.message ?? error) });
   const writable = () => typeof transport.canSend === "function" ? transport.canSend() : transport.inFlight() < 2;
-  const send = (json) => {
+  const send = (json, timing = null, workerCarrier = false) => {
     if (json == null) return null;
-    const publication = executionDeltaMetadata(json);
-    if (!transport.send(json)) throw new Error("semantic transport became backpressured after admission");
+    const metadataStartedAtMs = timing === null ? 0 : performance.now();
+    const prepared = workerCarrier ? prepareExecutionDeltaTransportForSend(json) : null;
+    const publication = prepared?.metadata ?? prepareExecutionDeltaMetadataForSend(json);
+    if (prepared !== null) json = prepared.json;
+    if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
+    const transportStartedAtMs = timing === null ? 0 : performance.now();
+    if (!transport.send(json, publication)) {
+      throw new Error("semantic transport became backpressured after admission");
+    }
+    if (timing !== null) timing.deltaSendMs += performance.now() - transportStartedAtMs;
     lastSentPublication = publication;
     if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
     return publication;
@@ -183,12 +219,27 @@ export async function attachSemanticEngine(
         publication.sequence < lastPresentedPublication.sequence) {
       return;
     }
+    const firstPresentation = lastPresentedPublication === null;
     lastPresentedPublication = publication;
+    if (publication.pointerReceipt && player !== null) {
+      // The render port is ordered. An invalidation received before this repaint
+      // must cancel the old gesture before the repaint can authorize any input.
+      if (pendingPointerInvalidation !== null) {
+        pendingPointerPresentation = publication.pointerReceipt;
+      } else {
+        acknowledgePointerReceipt(publication.pointerReceipt);
+      }
+    }
     if (pendingPresentation !== null &&
         samePublication(pendingPresentation.publication, publication)) {
       const { resolve } = pendingPresentation;
       pendingPresentation = null;
       resolve();
+    }
+    if (firstPresentation && continuationActive && player !== null &&
+        pacing === SEMANTIC_PACING_REALTIME) {
+      try { observeContinuationWake(performance.now(), true); }
+      catch (error) { terminateProgression(error); }
     }
   };
   const state = (type) => {
@@ -196,13 +247,28 @@ export async function attachSemanticEngine(
       if (continuation === null) {
         throw new Error("semantic continuation is idle in its authoring context");
       }
-      const time = context.liveHandoffDuration();
+      const time = returnedPlaybackTime;
       if (!Number.isFinite(time) || time < 0) {
         throw new Error("returned semantic continuation has no valid authored time");
       }
-      return { type, time, playing: false, nextPatchSequence: "0" };
+      return {
+        type, time, playing: false, nextPatchSequence: "0", durationSeconds: null,
+        canUndoTranslationDrag: false,
+      };
     }
-    return { type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0" };
+    return {
+      type,
+      // Observe the Rust clock during idle waits. Command acknowledgements and
+      // external samples retain exact evaluated-frame time, independent of wall time.
+      time: type === "state" && pacing === SEMANTIC_PACING_REALTIME
+        ? player.playbackTimeAt(performance.now()) : player.time(),
+      playing: player.isPlaying(), nextPatchSequence: "0",
+      canUndoTranslationDrag: player.canUndoTranslationDrag,
+      // A Python continuation has not authored its complete future timeline.
+      ...(continuation === null
+        ? { replaySupported: replayUnavailable === null, replayUnavailable }
+        : { durationSeconds: null }),
+    };
   };
   const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {
     if (!force && cadence === "idle" && executionWakeCadence === "idle") return;
@@ -227,10 +293,40 @@ export async function attachSemanticEngine(
     }
     emitExecutionWake(cadence, timerAfterMilliseconds, force);
   };
-  const observeContinuationWake = (wallTime, force = false, emit = true, reanchor = false) => {
-    const wake = reanchor
-      ? player.reanchorLiveSegmentWake(wallTime)
-      : player.liveSegmentWake(wallTime);
+  const observeExternalInteractionWake = (force = false) => {
+    const active = continuationActive && player !== null && player.interactionsActive();
+    if (!active) {
+      externalInteractionWallTime = null;
+      externalInteractionTickTime = null;
+    }
+    emitExecutionWake(active ? "animation_frame" : "idle", null, force);
+  };
+  const advanceExternalInteractionClock = (wallTime) => {
+    // RAF can be throttled or suspended for seconds. Preserve normal 30–60 FPS
+    // wall pacing while bounding catch-up after longer stalls, so a resumed tab
+    // cannot fast-forward an interaction in one publication.
+    const maxStepMs = 100;
+    if (externalInteractionWallTime === null || externalInteractionTickTime === null) {
+      externalInteractionWallTime = wallTime;
+      externalInteractionTickTime = wallTime;
+    } else {
+      const elapsed = Math.max(0, wallTime - externalInteractionWallTime);
+      externalInteractionWallTime = wallTime;
+      externalInteractionTickTime += Math.min(elapsed, maxStepMs);
+    }
+    return externalInteractionTickTime;
+  };
+  const observeContinuationWake = (wallTime, force = false, emit = true) => {
+    // Cold renderer preparation belongs before the first live clock epoch.
+    // The existing presentation receipt admits that epoch exactly once; later
+    // source segments and callback barriers retain the Rust wall-time mapping.
+    if (pacing === SEMANTIC_PACING_REALTIME && lastPresentedPublication === null) {
+      if (emit) emitExecutionWake("idle", null, force);
+      return { cadence: "idle", timerAfterMilliseconds: null };
+    }
+    // A callback/presentation barrier never restarts the source's monotonic
+    // epoch. Only the Rust source/session chooses authored time.
+    const wake = player.liveSegmentWake(wallTime);
     const cadence = wake.cadence;
     const timerAfterMilliseconds = wake.timerAfterMilliseconds;
     wake.free?.();
@@ -282,12 +378,12 @@ export async function attachSemanticEngine(
   };
   async function publishCallbackPhase(
     phaseJson,
-    { initial = false, emitDelta = true, onPhaseToken = null, observeAtTime = null } = {},
+    { initial = false, emitDelta = true, onPhaseToken = null, observeAtTime = null, timing = null } = {},
   ) {
     let phaseToken = null;
     let rendererObservation = null;
     let phase = null;
-    if (phaseJson !== null && phaseJson !== undefined) {
+    while (phaseJson !== null && phaseJson !== undefined) {
       if (runRequiredCallbackPhase === null) {
         try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve original phase error */ }
         throw new Error("canonical execution requires a Python callback phase handler");
@@ -298,7 +394,7 @@ export async function attachSemanticEngine(
         if (phaseToken === undefined) {
           throw new Error("canonical callback phase is missing its token");
         }
-        onPhaseToken?.(phaseToken);
+        onPhaseToken?.(JSON.stringify({ token: phase.token, region: phase.region ?? 0 }));
       } catch (error) {
         try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve parse failure */ }
         throw new Error(`canonical callback phase view was not valid JSON: ${error}`);
@@ -306,29 +402,43 @@ export async function attachSemanticEngine(
       const phaseGeneration = callbackGeneration;
       pendingPhaseJson = phaseJson;
       try {
-        const batchJson = await runRequiredCallbackPhase(phase);
+        const callbackStartedAtMs = timing === null ? 0 : performance.now();
+        const batchJson = await runRequiredCallbackPhase(phase, player);
+        if (timing !== null) timing.callbackRunMs += performance.now() - callbackStartedAtMs;
         if (stopped || phaseGeneration !== callbackGeneration || player === null) {
+          try { await discardRequiredCallbackPhase?.(phase); } catch { /* endpoint teardown owns termination */ }
           return { phaseToken, publication: null, interrupted: true };
         }
-        player.commitCallbackPhaseJson(batchJson);
-        pendingPhaseJson = null;
+        const commitStartedAtMs = timing === null ? 0 : performance.now();
+        const nextRegionJson = player.commitCallbackPhaseJson(batchJson);
+        if (timing !== null) timing.callbackCommitMs += performance.now() - commitStartedAtMs;
+        if (nextRegionJson === null || nextRegionJson === undefined) {
+          const completeStartedAtMs = timing === null ? 0 : performance.now();
+          await completeRequiredCallbackPhase?.(phase);
+          if (timing !== null) timing.callbackCompleteMs += performance.now() - completeStartedAtMs;
+          pendingPhaseJson = null;
+        }
+        const completedRegionJson = phaseJson;
+        phaseJson = nextRegionJson;
+        if ((phaseJson === null || phaseJson === undefined)
+          && observeAtTime !== null && Math.abs(phase.time - observeAtTime) <= 1e-9) {
+          const target = callbackObservationTarget(phase);
+          rendererObservation = sendRendererObservationPublication(
+            player.drainRendererObservationPublicationJson(
+              completedRegionJson,
+              target.slot,
+              target.generation,
+            ),
+          );
+        }
       } catch (error) {
         if (!stopped && phaseGeneration === callbackGeneration && player !== null) {
+          try { await discardRequiredCallbackPhase?.(phase); } catch { /* Rust phase failure wins */ }
           try { player.failCallbackPhaseJson(phaseJson); } catch { /* preserve callback failure */ }
           pendingPhaseJson = null;
           callbackFault = error instanceof Error ? error : new Error(String(error));
         }
         throw error;
-      }
-      if (observeAtTime !== null && Math.abs(phase.time - observeAtTime) <= 1e-9) {
-        const target = callbackObservationTarget(phase);
-        rendererObservation = sendRendererObservationPublication(
-          player.drainRendererObservationPublicationJson(
-            phaseJson,
-            target.slot,
-            target.generation,
-          ),
-        );
       }
     }
     if (stopped || player === null) {
@@ -337,7 +447,7 @@ export async function attachSemanticEngine(
     return {
       phaseToken,
       publication: rendererObservation?.publication ?? (emitDelta
-        ? send(initial ? player.initialDeltaJson() : player.drainDeltaJson())
+        ? (initial ? send(player.initialDeltaJson()) : drainAndSendDelta())
         : null),
       rendererObservation,
       interrupted: false,
@@ -379,7 +489,7 @@ export async function attachSemanticEngine(
     return player.requiredCallbackReadJson(tokenJson, callbackReadRequestJson(request));
   }
 
-  async function advanceToAuthoredTime(time, observeRenderer) {
+  async function advanceToAuthoredTime(time, observeRenderer, timing = null) {
     const phaseTokens = new Set();
     let phaseCount = 0;
     let rendererObservation = null;
@@ -389,10 +499,16 @@ export async function attachSemanticEngine(
           "forward authored-time advance reached its callback phase bound before the requested time",
         );
       }
+      const driveStartedAtMs = timing === null ? 0 : performance.now();
+      const phaseJson = player.advanceForwardToCallbackPhaseJson(time);
+      if (timing !== null) timing.rustDriveMs += performance.now() - driveStartedAtMs;
+      const hasPhase = phaseJson !== null && phaseJson !== undefined;
+      const callbackStartedAtMs = timing === null || !hasPhase ? 0 : performance.now();
       const result = await publishCallbackPhase(
-        player.advanceForwardToCallbackPhaseJson(time),
+        phaseJson,
         {
           emitDelta: false,
+          timing,
           observeAtTime: observeRenderer && rendererObservation === null ? time : null,
           onPhaseToken(token) {
             if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE) {
@@ -408,6 +524,7 @@ export async function attachSemanticEngine(
           },
         },
       );
+      if (timing !== null && hasPhase) timing.callbackPhaseMs += performance.now() - callbackStartedAtMs;
       if (result.interrupted) return null;
       rendererObservation ??= result.rendererObservation;
       if (result.phaseToken !== null) continue;
@@ -416,7 +533,7 @@ export async function attachSemanticEngine(
           `forward authored-time advance stopped at ${player.time()} before requested time ${time}`,
         );
       }
-      const publication = send(player.drainDeltaJson());
+      const publication = drainAndSendDelta(timing);
       return {
         publication: publication ?? rendererObservation?.publication ?? null,
         rendererObservation,
@@ -425,39 +542,112 @@ export async function attachSemanticEngine(
     return null;
   }
 
+  function acknowledgePointerReceipt(receipt) {
+    try {
+      if (player !== null && player.notePointerPresentationJson(JSON.stringify(receipt))) {
+        post({ type: "pointer_presented", receipt });
+      }
+    } catch (error) { fail(error); }
+  }
+
+  function applyPointerInvalidation() {
+    if (pendingPointerInvalidation === null || player === null) return false;
+    const receipt = pendingPointerInvalidation;
+    pendingPointerInvalidation = null;
+    const presented = pendingPointerPresentation;
+    pendingPointerPresentation = null;
+    // A callback/sequence failure is not recovery. Stop rather than acknowledging
+    // a replacement image while the old gesture remains live.
+    let changed;
+    try { changed = player.invalidatePointerPresentationJson(JSON.stringify(receipt)); }
+    catch (error) { terminateProgression(error); throw error; }
+    if (presented !== null) acknowledgePointerReceipt(presented);
+    return changed;
+  }
+
   function applyNativeInput(message) {
-    if (message.type === "native_state_input") {
+    applyPointerInvalidation();
+    if (message.type === "pointer_fill_selection") {
+      if (message.maxMovement !== null &&
+          (typeof message.maxMovement !== "number" ||
+           !Number.isFinite(message.maxMovement) || message.maxMovement < 0)) {
+        throw new TypeError("selection tolerance must be a finite nonnegative number or null");
+      }
+      player.setPointerFillSelection(message.maxMovement);
+    } else if (message.type === "native_state_input") {
       player.setNativeStateInputJson(JSON.stringify({
         source: message.source,
         value: message.value,
       }));
     } else if (message.type === "native_event") {
       player.emitNativeEventJson(JSON.stringify({ source: message.source }));
+    } else if (message.type === "browser_pointer_view") {
+      const view = message.view;
+      if (!view || !Number.isSafeInteger(view.revision) || view.revision < 0 ||
+          !Number.isFinite(view.width) || !Number.isFinite(view.height) ||
+          view.width < 0 || view.height < 0 ||
+          (pointerView !== null && (view.revision < pointerView.revision ||
+           (view.revision === pointerView.revision &&
+            (view.width !== pointerView.width || view.height !== pointerView.height))))) {
+        throw new Error("invalid or retired browser pointer view");
+      }
+      // Platform metadata may arrive while Python owns the returned lease. It
+      // authorizes no input and is applied before the next leased publication.
+      player?.setBrowserPointerViewJson(JSON.stringify(view));
+      pointerView = Object.freeze({ revision: view.revision, width: view.width, height: view.height });
+    } else if (message.type === "inspection_scroll") {
+      return player.scrollInspectionViewJson(JSON.stringify({
+        ...message.input, presentation: message.presentation,
+      }));
+    } else if (message.type === "browser_pointer_input") {
+      const {
+        channel: _channel,
+        protocolVersion: _protocolVersion,
+        type: _type,
+        requestId: _requestId,
+        ...input
+      } = message;
+      return player.submitBrowserPointerInputJson(JSON.stringify(input));
     } else {
       throw new Error(`unsupported continuation input ${message.type}`);
     }
   }
 
-  async function settleContinuationPublication(publication) {
+  async function settleContinuationPublication(publication, timing = null) {
     while (!stopped && player !== null && continuationActive) {
+      const presentationStartedAtMs = timing === null ? 0 : performance.now();
       await awaitPresentation(publication);
+      if (timing !== null) {
+        timing.presentationWaitMs += performance.now() - presentationStartedAtMs;
+      }
       if (stopped || player === null || !continuationActive) return false;
+      if (applyPointerInvalidation()) {
+        publication = drainAndSendDelta();
+        continue;
+      }
       if (controls.length === 0) return true;
       // Input admitted while presentation was pending belongs to this lease.
       // Apply its bounded ordered queue at the same authored time, then wait
       // for the resulting coherent publication before completion or return.
       let appliedInput = false;
       while (controls.length > 0 &&
-             (controls[0].type === "native_state_input" || controls[0].type === "native_event")) {
+             (controls[0].type === "native_state_input" ||
+              controls[0].type === "native_event" ||
+              controls[0].type === "browser_pointer_input" ||
+              controls[0].type === "inspection_scroll" ||
+              controls[0].type === "browser_pointer_view" ||
+              controls[0].type === "pointer_fill_selection")) {
         const message = controls.shift();
         try {
-          applyNativeInput(message);
-          post({ requestId: message.requestId, ...state(message.type) });
+          const accepted = applyNativeInput(message);
+          post({ requestId: message.requestId, ...state(message.type),
+            ...(message.type === "browser_pointer_input" ? { pointerInputAccepted: accepted } : {}),
+            ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: accepted ?? null } : {}) });
         } catch (error) { fail(error, message.requestId); }
         appliedInput = true;
       }
       if (!appliedInput) return true;
-      publication = send(player.drainDeltaJson());
+      publication = drainAndSendDelta();
     }
     return false;
   }
@@ -503,22 +693,22 @@ export async function attachSemanticEngine(
       }
       // Ready means the entire ordered phase is coherent. Publish intermediate
       // frames as well as endpoints so realtime continuation remains visible.
-      const readyPublication = send(player.drainDeltaJson());
+      const readyPublication = drainAndSendDelta();
       if (!reachedEndpoint) {
-        // A required callback stalls simulation; exclude its wall latency from
-        // the next Rust wake anchor after all same-timestamp retries finish.
-        observeContinuationWake(
-          phaseCount > 0 ? performance.now() : wallTime, true, true, phaseCount > 0,
-        );
+        // Retry callback phases at the original authored sample. Afterwards,
+        // observe the actual current wall time without reanchoring: a slow
+        // callback must leave its elapsed-time debt for the next wake.
+        observeContinuationWake(phaseCount > 0 ? performance.now() : wallTime, true);
         return;
       }
 
       emitExecutionWake("idle", null, true);
       if (!await settleContinuationPublication(readyPublication)) return;
       player.completeLiveSegment();
-      const completionPublication = send(player.drainDeltaJson());
+      const completionPublication = drainAndSendDelta();
       if (!await settleContinuationPublication(completionPublication)) return;
       const completedPlayer = player;
+      returnedPlaybackTime = completedPlayer.time();
       player = null;
       continuationActive = false;
       context.returnExecutionPlayer(completedPlayer);
@@ -528,7 +718,14 @@ export async function attachSemanticEngine(
     }
   }
 
-  async function sampleContinuationToAuthoredTime(targetTime, stopAtSourceCompletion) {
+  function drainAndSendDelta(timing = null) {
+    const drainStartedAtMs = timing === null ? 0 : performance.now();
+    const packet = player.drainDeltaTransportJson();
+    if (timing !== null) timing.deltaDrainMs += performance.now() - drainStartedAtMs;
+    return send(packet, timing, true);
+  }
+
+  async function sampleContinuationToAuthoredTime(targetTime, stopAtSourceCompletion, timing = null) {
     const phaseTokens = new Set();
     let phaseCount = 0;
     while (!stopped) {
@@ -536,7 +733,9 @@ export async function attachSemanticEngine(
         throw new Error("external authored-time sample has no active continuation segment");
       }
       while (!stopped && continuationActive && player !== null) {
+        const driveStartedAtMs = timing === null ? 0 : performance.now();
         const drive = player.driveLiveSegmentToAuthoredTime(targetTime);
+        if (timing !== null) timing.rustDriveMs += performance.now() - driveStartedAtMs;
         if (drive === null || typeof drive !== "object") {
           throw new Error("external semantic continuation drive returned an invalid result");
         }
@@ -545,8 +744,10 @@ export async function attachSemanticEngine(
         drive.free?.();
 
         if (phaseJson !== null && phaseJson !== undefined) {
+          const callbackStartedAtMs = timing === null ? 0 : performance.now();
           const result = await publishCallbackPhase(phaseJson, {
             emitDelta: false,
+            timing,
             onPhaseToken(token) {
               if (phaseCount >= MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE) {
                 throw new Error("external semantic continuation exceeded its callback phase bound");
@@ -558,31 +759,45 @@ export async function attachSemanticEngine(
               phaseCount += 1;
             },
           });
+          if (timing !== null) timing.callbackPhaseMs += performance.now() - callbackStartedAtMs;
           if (result.interrupted) return;
           continue;
         }
 
-        const readyPublication = send(player.drainDeltaJson());
+        const readyPublication = drainAndSendDelta(timing);
         if (!reachedEndpoint) {
+          const presentationStartedAtMs = timing === null ? 0 : performance.now();
           await awaitPresentation(readyPublication);
+          if (timing !== null) {
+            timing.presentationWaitMs += performance.now() - presentationStartedAtMs;
+          }
           return;
         }
 
         emitExecutionWake("idle", null, true);
-        if (!await settleContinuationPublication(readyPublication)) return;
+        if (!await settleContinuationPublication(readyPublication, timing)) return;
+        const handoffStartedAtMs = timing === null ? 0 : performance.now();
         player.completeLiveSegment();
-        const completionPublication = send(player.drainDeltaJson());
-        if (!await settleContinuationPublication(completionPublication)) return;
+        if (timing !== null) timing.segmentHandoffMs += performance.now() - handoffStartedAtMs;
+        const completionPublication = drainAndSendDelta(timing);
+        if (!await settleContinuationPublication(completionPublication, timing)) return;
         const completedPlayer = player;
+        returnedPlaybackTime = completedPlayer.time();
         player = null;
         continuationActive = false;
+        const returnLeaseStartedAtMs = timing === null ? 0 : performance.now();
         context.returnExecutionPlayer(completedPlayer);
+        if (timing !== null) timing.segmentHandoffMs += performance.now() - returnLeaseStartedAtMs;
 
         const boundary = new Promise((resolve, reject) => {
           pendingExternalContinuation = { resolve, reject };
         });
+        const boundaryStartedAtMs = timing === null ? 0 : performance.now();
         continuation?.onComplete(continuationGeneration);
         const next = await boundary;
+        if (timing !== null) {
+          timing.authoringBoundaryWaitMs += performance.now() - boundaryStartedAtMs;
+        }
         if (stopped) return;
         if (next === null) {
           const authoredTime = context.liveHandoffDuration();
@@ -596,7 +811,7 @@ export async function attachSemanticEngine(
           }
           return true;
         }
-        if (!await settleContinuationPublication(next.publication)) return;
+        if (!await settleContinuationPublication(next.publication, timing)) return;
         // The same absolute request continues against the returned player. Rust
         // decides whether this is a same-time barrier, an interior sample, or the
         // next segment endpoint.
@@ -604,21 +819,49 @@ export async function attachSemanticEngine(
     }
   }
 
+  function createSampleTiming(collectTimings) {
+    if (collectTimings !== undefined && typeof collectTimings !== "boolean") {
+      throw new Error("sample timing collection flag must be a boolean");
+    }
+    // All durations use this endpoint's clock. Callback run/complete include
+    // Python invocation and bridge work; acknowledgement is not GPU/display time.
+    return collectTimings === true ? {
+      rustDriveMs: 0, callbackPhaseMs: 0,
+      callbackRunMs: 0, callbackCommitMs: 0, callbackCompleteMs: 0,
+      presentationWaitMs: 0,
+      deltaDrainMs: 0, deltaMetadataMs: 0, deltaSendMs: 0,
+      segmentHandoffMs: 0, authoringBoundaryWaitMs: 0,
+    } : null;
+  }
+
   async function drain() {
     if (stopped || !transport || draining) return;
     draining = true;
     try {
+      if (player !== null && writable() && applyPointerInvalidation()) {
+        drainAndSendDelta();
+      }
       while (controls.length && writable()) {
       const message = controls.shift();
       let rendererObservation = null;
       let debugFrame;
       let sourceCompleted;
+      let pointerInputAccepted;
+      let sampleTiming = null;
       try {
         switch (message.type) {
-          case "pause":
+          case "pause": {
+            latestTick = null;
+            if (pacing === SEMANTIC_PACING_REALTIME) {
+              const time = player.playbackTimeAt(performance.now());
+              // Commit elapsed static time before freezing, so pause/resume does
+              // not jump back to the previous rendered frame's timestamp.
+              if (time > player.time()) await advanceToAuthoredTime(time);
+            }
             player.pause();
             observeExecutionWake(performance.now(), true);
             break;
+          }
           case "resume":
             player.resume();
             observeExecutionWake(performance.now(), true);
@@ -637,24 +880,41 @@ export async function attachSemanticEngine(
             send(player.seekDeltaJson(0));
             observeExecutionWake(performance.now());
             break;
+          case "undo_translation_drag": {
+            latestTick = null;
+            if (player.undoTranslationDrag()) {
+              const publication = drainAndSendDelta();
+              await awaitPresentation(publication);
+            }
+            observeExecutionWake(performance.now());
+            break;
+          }
           case "advance_to": {
             if (callbackFault !== null) throw callbackFault;
+            sampleTiming = createSampleTiming(message.collectTimings);
             if (player.isPlaying()) {
               throw new Error(
                 "pause semantic execution before forward authored-time advancement",
               );
             }
             latestTick = null;
+            const sampleStartedAtMs = sampleTiming === null ? 0 : performance.now();
             const advanced = await advanceToAuthoredTime(
               message.time,
               message.observeRenderer === true,
+              sampleTiming,
             );
             const observation = advanced?.rendererObservation?.observation ??
               Promise.resolve(null);
+            const presentationStartedAtMs = sampleTiming === null ? 0 : performance.now();
             [, rendererObservation] = await Promise.all([
               awaitPresentation(advanced?.publication ?? null),
               observation,
             ]);
+            if (sampleTiming !== null) {
+              sampleTiming.presentationWaitMs += performance.now() - presentationStartedAtMs;
+              sampleTiming.endpointMs = performance.now() - sampleStartedAtMs;
+            }
             observeExecutionWake(performance.now());
             break;
           }
@@ -665,19 +925,44 @@ export async function attachSemanticEngine(
             break;
           case "sample_to_authored_time": {
             if (callbackFault !== null) throw callbackFault;
+            sampleTiming = createSampleTiming(message.collectTimings);
             latestTick = null;
+            const sampleStartedAtMs = sampleTiming === null ? 0 : performance.now();
             sourceCompleted = await sampleContinuationToAuthoredTime(
-              message.time, message.stopAtSourceCompletion === true,
+              message.time, message.stopAtSourceCompletion === true, sampleTiming,
             ) === true;
+            if (sampleTiming !== null) {
+              sampleTiming.endpointMs = performance.now() - sampleStartedAtMs;
+            }
             break;
           }
           case "native_state_input":
           case "native_event":
-            applyNativeInput(message);
-            send(player.drainDeltaJson());
-            if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null);
+          case "browser_pointer_input":
+          case "inspection_scroll":
+          case "pointer_fill_selection":
+          case "browser_pointer_view": {
+            pointerInputAccepted = applyNativeInput(message);
+            if (player === null) break;
+            const publication = drainAndSendDelta();
+            // Unavailable mappings cannot be presented. Acknowledging their
+            // registration authorizes no input and must not block the reveal
+            // command behind an impossible surface-presentation barrier.
+            if (message.type === "browser_pointer_view" &&
+                message.view.width > 0 && message.view.height > 0) {
+              await awaitPresentation(publication);
+            } else if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES &&
+                       player.interactionsActive() && publication !== null) {
+              await awaitPresentation(publication);
+            }
+            // Live driving pauses the ordinary playback clock. Native input
+            // must retain the active segment's Rust-derived wake, including
+            // pure-wait deadlines, rather than accidentally publishing idle.
+            if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) observeExternalInteractionWake();
+            else if (continuationActive) observeContinuationWake(performance.now());
             else observeExecutionWake(performance.now());
             break;
+          }
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (stopped) break;
@@ -687,6 +972,9 @@ export async function attachSemanticEngine(
           ...(rendererObservation === null ? {} : { rendererObservation }),
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
+          ...(sampleTiming === null ? {} : { sampleTiming }),
+          ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
+          ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: pointerInputAccepted ?? null } : {}),
         });
       } catch (error) {
         if (message.type === "sample_to_authored_time" && continuation !== null) {
@@ -703,7 +991,18 @@ export async function attachSemanticEngine(
         // side effects while this player is retained for recovery.
         if (callbackFault === null) {
           try {
-            if (continuationActive) {
+            if (continuationActive && pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) {
+              if (player.interactionsActive()) {
+                const publication = send(
+                  player.advanceInteractionsDeltaJson(advanceExternalInteractionClock(performance.now())),
+                );
+                if (publication !== null) await awaitPresentation(publication);
+              } else {
+                externalInteractionWallTime = null;
+                externalInteractionTickTime = null;
+              }
+              observeExternalInteractionWake();
+            } else if (continuationActive) {
               // A render-worker timestamp may use a different time origin.
               // Its tick is only a wake opportunity; Rust progression stays
               // anchored to this authoring worker's monotonic clock.
@@ -712,7 +1011,11 @@ export async function attachSemanticEngine(
               // Renderer timestamps may use another worker's time origin. They
               // admit one drive only; the player samples this engine context's
               // monotonic clock for authored-time conversion and wake projection.
-              await publishCallbackPhase(player.tickCallbackPhaseJson(performance.now()));
+              // Qualification may supply deterministic worker tick timestamps
+              // without replacing the worker's global clock or its scheduler.
+              await publishCallbackPhase(player.tickCallbackPhaseJson(
+                testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp(),
+              ));
               observeExecutionWake(performance.now());
             }
           } catch (error) {
@@ -722,9 +1025,12 @@ export async function attachSemanticEngine(
           }
         }
       }
+    } catch (error) {
+      if (!stopped) terminateProgression(error);
     } finally {
       draining = false;
-      if (!stopped && ((controls.length && writable()) || (latestTick !== null && writable()))) {
+      if (!stopped && ((controls.length && writable()) || (latestTick !== null && writable()) ||
+          (pendingPointerInvalidation !== null && player !== null && writable()))) {
         void drain();
       }
     }
@@ -756,6 +1062,7 @@ export async function attachSemanticEngine(
     controls.length = 0;
     latestTick = null;
     if (player !== null) {
+      player.clearTranslationDragUndo();
       if (pendingPhaseJson !== null) {
         const interruption = new Error("canonical callback phase interrupted by endpoint stop");
         try {
@@ -786,7 +1093,12 @@ export async function attachSemanticEngine(
       throw new Error("unsupported semantic execution transport");
     }
     player = context.createExecutionPlayer(loopDurationSeconds, session);
-    if (initiallyPaused) player.pause();
+    if (continuation === null) {
+      if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
+      try { player.sealReplay(); }
+      catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
+    }
+    if (initiallyPaused || replayUnavailable !== null) player.pause();
     continuation?.onCallbackReadAvailable?.(readCallbackPhase);
     if (typeof player.resourceBundleBytes !== "function") {
       throw new Error("semantic execution requires retained resource bundle support");
@@ -802,12 +1114,14 @@ export async function attachSemanticEngine(
           post({ requestId: message.requestId, type: "metrics", metrics: { host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 } } });
           return;
         }
-        if (![
-          "pause", "resume", "seek", "restart_playback", "set_loop_duration", "advance_to",
+        if (!["pause", "resume", "seek", "restart_playback", "undo_translation_drag", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
-          "native_state_input", "native_event",
+          "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
+        }
+        if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
+          throw new Error(`Replay unavailable: ${replayUnavailable}`);
         }
         if (continuation !== null && SOURCE_CONTINUATION_PLAYBACK_CONTROLS.has(message.type)) {
           throw new Error(
@@ -832,7 +1146,11 @@ export async function attachSemanticEngine(
           }
         }
         if (player === null &&
-            (message.type === "native_state_input" || message.type === "native_event")) {
+            (message.type === "native_state_input" ||
+             message.type === "native_event" ||
+             message.type === "browser_pointer_input" ||
+             message.type === "inspection_scroll" ||
+             message.type === "pointer_fill_selection")) {
           throw new Error("native input requires an active Python source continuation segment");
         }
         if (message.type === "advance_to" && message.observeRenderer !== undefined &&
@@ -851,12 +1169,34 @@ export async function attachSemanticEngine(
       if (stopped) return;
       if (message?.type === "tick") {
         if (!Number.isFinite(message.timestamp)) { fail(new Error("invalid render timestamp")); return; }
-        if (pacing === SEMANTIC_PACING_REALTIME) {
+        // Replay admission cannot suppress an input effect's Rust-owned wake.
+        // A paused authored clock still permits transient interaction animation.
+        if (pacing === SEMANTIC_PACING_REALTIME && executionWakeCadence !== "idle") {
+          latestTick = message.timestamp;
+          void drain();
+        } else if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && continuationActive &&
+                   player !== null && executionWakeCadence === "animation_frame" &&
+                   player.interactionsActive()) {
           latestTick = message.timestamp;
           void drain();
         }
       } else if (message?.type === "transport_writable") void drain();
       else if (message?.type === "execution_presented") notePresentedPublication(message);
+      else if (message?.type === "pointer_presentation_invalidated") {
+        if (message.receipt?.session !== session) return;
+        // Main retires the observed receipt immediately. Rust cancellation is
+        // ordered through the existing drain/callback barrier before more input.
+        post({ type: "pointer_presentation_invalidated", receipt: message.receipt });
+        if (!Number.isSafeInteger(message.receipt.presentation) || message.receipt.presentation <= 0) {
+          fail(new Error("invalid pointer presentation invalidation")); return;
+        }
+        // Until cleanup runs, Rust still owns the first acknowledged receipt.
+        // A newer repaint may itself disappear while transport is backpressured;
+        // cancel that original contact, not a receipt Rust has never accepted.
+        pendingPointerInvalidation ??= message.receipt;
+        pendingPointerPresentation = null;
+        void drain();
+      }
       else if (message?.type === "renderer_observation") noteRendererObservation(message);
       else if (message?.type === "render_error") {
         const error = new Error(message.message);
@@ -877,7 +1217,7 @@ export async function attachSemanticEngine(
     // A shared mailbox may already contain its initial snapshot when setup is
     // received. Install resources before exposing that mailbox to the renderer.
     if (transportMode === EXECUTION_TRANSPORT_SHARED) {
-      const mailbox = createSharedExecutionMailbox(request.sharedSlotCapacity ?? 1024 * 1024);
+      const mailbox = createSharedExecutionMailbox(request.sharedSlotCapacity ?? DEFAULT_SHARED_SLOT_CAPACITY);
       transport = new SharedExecutionDeltaWriter(mailbox);
       renderPort.postMessage({ type: "transport_setup", mode: transportMode, mailbox });
     } else transport = new TransferableExecutionDeltaSender(renderPort, { maxInFlight: 2, onWritable: drain });
@@ -922,11 +1262,13 @@ export async function attachSemanticEngine(
         throw new Error("stale semantic continuation generation");
       }
       player = context.resumeExecutionPlayer();
+      if (pointerView !== null) player.setBrowserPointerViewJson(JSON.stringify(pointerView));
+      applyPointerInvalidation();
       continuationGeneration = generation;
       continuationActive = true;
       callbackFault = null;
       latestTick = null;
-      const publication = send(player.drainDeltaJson());
+      const publication = drainAndSendDelta();
       if (pendingExternalContinuation !== null) {
         const { resolve } = pendingExternalContinuation;
         pendingExternalContinuation = null;

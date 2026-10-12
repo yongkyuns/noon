@@ -122,6 +122,14 @@ pub struct PathProportionPlan {
 }
 
 impl PathProportionPlan {
+    /// Logical heap held by this prepared measure, excluding allocator bookkeeping.
+    pub fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + std::mem::size_of_val(self.curves.as_slice())
+            + std::mem::size_of_val(self.lengths.as_slice())
+            + std::mem::size_of_val(self.cumulative_lengths.as_slice())
+    }
+
     pub fn curve_count(&self) -> usize {
         self.curves.len()
     }
@@ -225,6 +233,13 @@ impl PathProportionPlan {
         }
         Ok(length)
     }
+}
+
+/// Return the first and last drawable anchors using the same curve traversal as
+/// [`PathProportionPlan`], without preparing a sampled arc-length measure.
+pub fn drawable_endpoints(path: &VectorPath) -> Option<(Vec2, Vec2)> {
+    let curves = collect_curves(path);
+    Some((curves.first()?.from, curves.last()?.to))
 }
 
 /// Return the point at `alpha` using ManimCE v0.21's `VMobject.point_from_proportion` measure.

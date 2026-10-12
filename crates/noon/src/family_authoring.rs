@@ -1,5 +1,8 @@
 //! Typed handle for authoritative semantic family membership.
 
+mod path_admission;
+pub(crate) use path_admission::publish_path_family_with;
+
 use crate::semantic_mobject::authoring_xy_f64 as semantic_xy_f64;
 use crate::AuthoringError;
 use noon_core::{
@@ -69,6 +72,36 @@ impl FamilyTranslation {
         })
     }
 
+    /// Stage this translation into an aggregate semantic transaction.
+    ///
+    /// Composite authoring uses this instead of publishing an intermediate
+    /// placement transaction. Repeated leaves are accumulated before one
+    /// property write per semantic identity.
+    pub(crate) fn stage(
+        self,
+        transaction: &mut SemanticMutationTransaction,
+        store: &SemanticStore,
+    ) -> Result<(), AuthoringError> {
+        let mut translations = BTreeMap::new();
+        for (leaf, x, y) in self.into_shifts() {
+            if let std::collections::btree_map::Entry::Vacant(entry) = translations.entry(leaf) {
+                let translation = store
+                    .semantic_object_state_checked(leaf)
+                    .map_err(AuthoringError::from)?
+                    .transform
+                    .translation;
+                entry.insert(translation);
+            }
+            let translation = translations.get_mut(&leaf).expect("inserted above");
+            translation.x += x;
+            translation.y += y;
+        }
+        for (leaf, translation) in translations {
+            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
+        }
+        Ok(())
+    }
+
     pub fn into_shifts(self) -> Vec<(SemanticNodeId, f64, f64)> {
         self.source_members
             .into_iter()
@@ -112,50 +145,54 @@ pub struct MobjectFamily {
     node: SemanticNodeId,
 }
 
-/// One borrowed direct member used by authored and live family operations.
+/// One borrowed object-or-family target over canonical semantic identity.
 #[derive(Clone, Copy)]
-pub enum MobjectFamilyMember<'a> {
-    Mobject(&'a crate::Mobject),
+pub enum MobjectTarget<'a> {
+    Object(&'a crate::Mobject),
     Family(&'a MobjectFamily),
 }
 
-impl<'a> From<&'a crate::Mobject> for MobjectFamilyMember<'a> {
+impl<'a> From<&'a crate::Mobject> for MobjectTarget<'a> {
     fn from(value: &'a crate::Mobject) -> Self {
-        Self::Mobject(value)
+        Self::Object(value)
     }
 }
 
-impl<'a> From<&'a MobjectFamily> for MobjectFamilyMember<'a> {
+impl<'a> From<&'a MobjectFamily> for MobjectTarget<'a> {
     fn from(value: &'a MobjectFamily) -> Self {
         Self::Family(value)
     }
 }
 
-impl MobjectFamilyMember<'_> {
-    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), AuthoringError> {
+impl MobjectTarget<'_> {
+    pub(crate) fn require_store(
+        &self,
+        store: &Rc<RefCell<SemanticStore>>,
+    ) -> Result<SemanticNodeId, AuthoringError> {
         if !Rc::ptr_eq(self.integration_store(), store) {
             return Err(AuthoringError::ForeignStore);
         }
-        self.validate()
+        self.validate()?;
+        Ok(self.node_id())
     }
 
     pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         match self {
-            Self::Mobject(member) => member.integration_store(),
+            Self::Object(member) => member.integration_store(),
             Self::Family(member) => member.integration_store(),
         }
     }
 
     pub(crate) fn node_id(&self) -> SemanticNodeId {
         match self {
-            Self::Mobject(member) => member.node_id(),
+            Self::Object(member) => member.node_id(),
             Self::Family(member) => member.node_id(),
         }
     }
 
     pub(crate) fn validate(&self) -> Result<(), AuthoringError> {
         match self {
-            Self::Mobject(member) => member.validate(),
+            Self::Object(member) => member.validate(),
             Self::Family(member) => member.validate(),
         }
     }
@@ -163,7 +200,7 @@ impl MobjectFamilyMember<'_> {
 
 /// Select the last occurrence of each incoming identity, preserving batch order.
 /// This only visits the input batch, never the existing family's siblings.
-fn last_occurrences(members: &[MobjectFamilyMember<'_>]) -> Vec<usize> {
+fn last_occurrences(members: &[MobjectTarget<'_>]) -> Vec<usize> {
     let mut seen = BTreeSet::new();
     let mut indices: Vec<_> = members
         .iter()
@@ -178,7 +215,7 @@ fn last_occurrences(members: &[MobjectFamilyMember<'_>]) -> Vec<usize> {
 /// Construct the same pending semantic family for authored and live publication.
 pub(crate) fn family_creation_transaction(
     store: &Rc<RefCell<SemanticStore>>,
-    members: &[MobjectFamilyMember<'_>],
+    members: &[MobjectTarget<'_>],
     z_index: f64,
 ) -> Result<
     (
@@ -201,10 +238,10 @@ pub(crate) fn family_creation_transaction(
     Ok((transaction, family))
 }
 
-/// Prepare a local direct-member batch, returning one decision per input wrapper.
+/// Prepare a local direct-member batch, returning one decision per input target.
 pub(crate) fn family_membership_transaction(
     family: &MobjectFamily,
-    members: &[MobjectFamilyMember<'_>],
+    members: &[MobjectTarget<'_>],
     adding: bool,
 ) -> Result<(SemanticMutationTransaction, Vec<bool>), AuthoringError> {
     family.validate()?;
@@ -238,7 +275,7 @@ impl MobjectFamily {
     /// Create a detached family, including empty and nested families, atomically.
     pub fn create(
         store: Rc<RefCell<SemanticStore>>,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<Self, AuthoringError> {
         Self::create_with_z_index(store, members, 0.0)
     }
@@ -246,7 +283,7 @@ impl MobjectFamily {
     /// Construct a family with its own priority; member priorities are preserved.
     pub fn create_with_z_index(
         store: Rc<RefCell<SemanticStore>>,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<Self, AuthoringError> {
         let (transaction, family) = family_creation_transaction(&store, members, z_index)?;
@@ -261,33 +298,27 @@ impl MobjectFamily {
 
     /// Add one direct member, moving an existing member to the tail.
     /// Returns whether membership was new; a false result can still reorder it.
-    pub fn add(&self, member: MobjectFamilyMember<'_>) -> Result<bool, AuthoringError> {
+    pub fn add(&self, member: MobjectTarget<'_>) -> Result<bool, AuthoringError> {
         Ok(self.add_many(&[member])?[0])
     }
 
     /// Remove one direct member without changing that member's semantic identity.
-    pub fn remove(&self, member: MobjectFamilyMember<'_>) -> Result<bool, AuthoringError> {
+    pub fn remove(&self, member: MobjectTarget<'_>) -> Result<bool, AuthoringError> {
         Ok(self.remove_many(&[member])?[0])
     }
 
     /// Commit a whole direct-member addition before returning per-input decisions.
-    pub fn add_many(
-        &self,
-        members: &[MobjectFamilyMember<'_>],
-    ) -> Result<Vec<bool>, AuthoringError> {
+    pub fn add_many(&self, members: &[MobjectTarget<'_>]) -> Result<Vec<bool>, AuthoringError> {
         self.edit_members(members, true)
     }
 
-    pub fn remove_many(
-        &self,
-        members: &[MobjectFamilyMember<'_>],
-    ) -> Result<Vec<bool>, AuthoringError> {
+    pub fn remove_many(&self, members: &[MobjectTarget<'_>]) -> Result<Vec<bool>, AuthoringError> {
         self.edit_members(members, false)
     }
 
     fn edit_members(
         &self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
         adding: bool,
     ) -> Result<Vec<bool>, AuthoringError> {
         let (transaction, changed) = family_membership_transaction(self, members, adding)?;
@@ -329,6 +360,11 @@ impl MobjectFamily {
             .semantic_family_checked(self.node)
             .map(|_| ())
             .map_err(Into::into)
+    }
+
+    /// Authored aggregate world-space bounds center for this family's leaves.
+    pub fn world_center(&self) -> Result<noon_core::SemanticVec3, AuthoringError> {
+        crate::world_affine::target_world_center(&self.store, MobjectTarget::Family(self))
     }
 
     /// Aggregate the current layout bounds of this family's authoritative leaves.
@@ -380,7 +416,7 @@ mod tests {
 
     #[test]
     fn ordinary_family_arrange_uses_shared_bounds_and_one_transaction() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -400,7 +436,7 @@ mod tests {
 
     #[test]
     fn family_arrange_moves_shared_leaves_once_and_rejects_invalid_input() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.circle(0.2).unwrap();
         let mut second = scene.circle(0.2).unwrap();
         second.shift(2.0, 0.0).unwrap();
@@ -432,7 +468,7 @@ mod tests {
 
     #[test]
     fn family_layout_bounds_follow_nested_and_aliased_semantic_leaves() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.rectangle(2.0, 1.0).unwrap();
         first.shift(-2.0, 0.0).unwrap();
         let mut second = scene.circle(0.5).unwrap();

@@ -3,7 +3,7 @@ use noon_core::{PathCommand, Vec2, VectorPath};
 
 #[test]
 fn queries_promote_primitives_and_capture_transformed_controls_once() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene
         .geometry(
             ManimGeometryOptions::path(
@@ -66,10 +66,16 @@ fn refinement_preserves_shape_discontinuities_identity_and_live_publication() {
         assert_eq!(scene.revision(), revision);
         let mut session = scene.execution_session().unwrap();
         if live_mode {
-            scene
-                .live(&mut session)
-                .insert_n_curves(&object, 3)
-                .unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::Subdivide {
+                    object: &object,
+                    additional: 3,
+                },
+            )
+            .unwrap();
         } else {
             object.insert_n_curves(3).unwrap();
         }
@@ -85,11 +91,13 @@ fn refinement_preserves_shape_discontinuities_identity_and_live_publication() {
         assert_eq!(copy.state().unwrap().transform, old.transform);
         if live_mode {
             assert_eq!(
-                scene
-                    .live(&mut session)
-                    .effective_path_query(&object)
-                    .unwrap()
-                    .curve_count(),
+                noon::integration::effective_path_query(
+                    scene.integration_store(),
+                    &session,
+                    &object
+                )
+                .unwrap()
+                .curve_count(),
                 5
             );
         }

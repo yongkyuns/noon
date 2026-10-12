@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn mobject_pair_resolves_center_direction_then_vmobject_boundaries() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let mut square = scene.square(2.0).unwrap();
         square.shift(4.0, 0.0).unwrap();
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn off_axis_circle_uses_discrete_manim_anchor_not_analytic_intersection() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let angle = 20.0_f64.to_radians();
         let endpoints =
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn coincident_centers_preserve_first_anchor_argmax_fallback() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let square = scene.square(2.0).unwrap();
         let endpoints = manim_arrow_endpoints_from_mobjects(&circle, &square).unwrap();
@@ -176,8 +176,8 @@ mod tests {
 
     #[test]
     fn object_pair_rejects_foreign_store_before_resolution() {
-        let first = Scene::new();
-        let second = Scene::new();
+        let mut first = Scene::new();
+        let mut second = Scene::new();
         let start = first.circle(1.0).unwrap();
         let end = second.square(1.0).unwrap();
 

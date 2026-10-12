@@ -1008,6 +1008,136 @@ fn exact_object_tracks_retain_high_precision_timing_and_semantic_identity() {
 }
 
 #[test]
+fn camera_profile_track_retains_unwrapped_profile_endpoints_and_explicit_clips() {
+    let mut store = SemanticStore::new();
+    let from = crate::ManimCamera3DProfile {
+        phi: 0.2,
+        theta: -std::f64::consts::FRAC_PI_2,
+        gamma: -0.1,
+        focal_distance: 12.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::new(1.0 / 3.0, -2.0, 0.0),
+    };
+    let to = crate::ManimCamera3DProfile {
+        phi: 0.6,
+        theta: from.theta + 2.0 * std::f64::consts::PI,
+        gamma: 0.3,
+        focal_distance: 20.0,
+        zoom: 2.5,
+        frame_height: 10.0,
+        frame_center: SemanticVec3::new(4.0, 5.0, 6.0),
+    };
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    camera.set_role(crate::SemanticObjectRole::Camera3D);
+    camera.set_camera_profile(from, 0.1, 120.0).unwrap();
+    let target = store.insert_semantic_object(camera);
+
+    let timing = TrackTiming::new(0.25, 3.5, RateFunction::Linear);
+    let time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+        0.1,
+        0.8,
+        RateFunction::RushInto,
+    )]);
+    let mut transaction = SemanticMutationTransaction::new();
+    let track = transaction.create_object_property_track(
+        target,
+        SemanticObjectTrackProperty::CameraProfile,
+        SemanticObjectTrackValues::CameraProfile {
+            from,
+            to,
+            near: 0.1,
+            far: 120.0,
+        },
+        timing,
+        time_map.clone(),
+    );
+    let result = transaction.apply(&mut store).unwrap();
+    let track = result.resolve(track).unwrap();
+    assert_eq!(
+        store.semantic_animation_state(track).unwrap().intent(),
+        &SemanticAnimationIntent::ObjectPropertyTrack {
+            target,
+            property: SemanticObjectTrackProperty::CameraProfile,
+            values: SemanticObjectTrackValues::CameraProfile {
+                from,
+                to,
+                near: 0.1,
+                far: 120.0,
+            },
+            timing,
+            time_map,
+        }
+    );
+    assert_eq!(
+        crate::ManimCamera3DProfile::interpolate(from, to, 0.5)
+            .unwrap()
+            .theta,
+        from.theta + std::f64::consts::PI
+    );
+}
+
+#[test]
+fn camera_profile_tracks_reject_non_camera_targets_and_clip_mismatch_atomically() {
+    let mut store = SemanticStore::new();
+    let profile = crate::ManimCamera3DProfile {
+        phi: 0.2,
+        theta: 0.3,
+        gamma: 0.0,
+        focal_distance: 10.0,
+        zoom: 1.0,
+        frame_height: 8.0,
+        frame_center: SemanticVec3::ZERO,
+    };
+    let mut ordinary = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    ordinary.set_spatial_material(crate::SemanticSpatialMaterial::Unlit);
+    let target = store.insert_semantic_object(ordinary);
+    let revision = store.scene_revision();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.create_object_property_track(
+        target,
+        SemanticObjectTrackProperty::CameraProfile,
+        SemanticObjectTrackValues::CameraProfile {
+            from: profile,
+            to: profile,
+            near: 0.1,
+            far: 100.0,
+        },
+        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    assert!(matches!(
+        transaction.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { .. })
+    ));
+    assert_eq!(store.scene_revision(), revision);
+
+    let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+    camera.set_role(crate::SemanticObjectRole::Camera3D);
+    camera.set_camera_profile(profile, 0.1, 100.0).unwrap();
+    let camera = store.insert_semantic_object(camera);
+    let revision = store.scene_revision();
+    let mut mismatch = SemanticMutationTransaction::new();
+    mismatch.create_object_property_track(
+        camera,
+        SemanticObjectTrackProperty::CameraProfile,
+        SemanticObjectTrackValues::CameraProfile {
+            from: profile,
+            to: profile,
+            near: 0.2,
+            far: 100.0,
+        },
+        TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        CompositionTimeMap::identity(),
+    );
+    assert!(matches!(
+        mismatch.apply(&mut store),
+        Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { .. })
+    ));
+    assert_eq!(store.scene_revision(), revision);
+}
+
+#[test]
 fn exact_object_track_validation_is_atomic_and_checks_endpoint_provenance() {
     let mut store = SemanticStore::new();
     let target = object(&mut store, 1.0);

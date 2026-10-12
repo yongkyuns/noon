@@ -12,9 +12,12 @@ const SLOT_LENGTH_0 = 2;
 const SLOT_LENGTH_1 = 3;
 const WAKE_COUNTER = 4;
 const BACKPRESSURE_COUNTER = 5;
-const DEFAULT_SLOT_CAPACITY = 1024 * 1024;
+// Two slots reserve 4 MiB per isolated execution. This covers the gallery's
+// 600-object morph deltas without the 32 MiB slots used by stress experiments.
+export const DEFAULT_SHARED_SLOT_CAPACITY = 2 * 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const validatedDeltaJson = new WeakMap();
 
 export function selectExecutionTransportMode(scope = globalThis) {
   return scope.crossOriginIsolated === true && typeof scope.SharedArrayBuffer === "function"
@@ -23,6 +26,37 @@ export function selectExecutionTransportMode(scope = globalThis) {
 }
 
 export function executionDeltaMetadata(json) {
+  return parseExecutionDeltaMetadata(json);
+}
+
+// Prepare a one-shot producer handoff. Unlike the public metadata reader, this
+// temporarily ties an opaque result to its exact JSON so transport send can
+// skip a second producer parse. Send consumes the association immediately.
+export function prepareExecutionDeltaMetadataForSend(json) {
+  const metadata = parseExecutionDeltaMetadata(json);
+  validatedDeltaJson.set(metadata, json);
+  return metadata;
+}
+
+// Only accepts the atomic header/body carrier from drainDeltaTransportJson.
+// The body remains the ordinary worker delta; both receiving transports still
+// parse/validate it before admission. Generic/untrusted JSON uses the reader
+// above, which never treats a supplied header as proof of its body.
+export function prepareExecutionDeltaTransportForSend(packet) {
+  if (typeof packet !== "string") {
+    throw new TypeError("worker publication must be a header/body string");
+  }
+  const separator = packet.indexOf("\n");
+  if (separator < 1 || separator > 512 || separator === packet.length - 1) {
+    throw new Error("worker publication has an invalid bounded metadata header");
+  }
+  const metadata = parseExecutionDeltaMetadata(packet.slice(0, separator));
+  const json = packet.slice(separator + 1);
+  validatedDeltaJson.set(metadata, json);
+  return { json, metadata };
+}
+
+function parseExecutionDeltaMetadata(json) {
   if (typeof json !== "string") {
     throw new TypeError("execution delta must be a JSON string");
   }
@@ -44,11 +78,33 @@ export function executionDeltaMetadata(json) {
   if (typeof delta.snapshot !== "boolean") {
     throw new Error("execution delta snapshot flag must be boolean");
   }
-  return {
+  const view = delta.pointer_view;
+  if (view !== undefined && (view === null || !Number.isSafeInteger(view.revision) || view.revision < 0 ||
+      !Number.isFinite(view.width) || !Number.isFinite(view.height) || view.width <= 0 || view.height <= 0)) {
+    throw new Error("execution delta has an invalid pointer view");
+  }
+  const metadata = Object.freeze({
     session: delta.session,
     sequence: delta.sequence,
     snapshot: delta.snapshot,
-  };
+    ...(view === undefined ? {} : { pointerView: Object.freeze({
+      revision: view.revision, width: view.width, height: view.height,
+    }) }),
+  });
+  return metadata;
+}
+
+function metadataForSend(json, validatedMetadata) {
+  // Consume the temporary exact-string association even when it mismatches,
+  // so a retained or misused handoff cannot pin a large delta indefinitely.
+  if (validatedMetadata !== null && typeof validatedMetadata === "object") {
+    const validatedJson = validatedDeltaJson.get(validatedMetadata);
+    if (validatedJson !== undefined) {
+      validatedDeltaJson.delete(validatedMetadata);
+      if (typeof json === "string" && validatedJson === json) return validatedMetadata;
+    }
+  }
+  return executionDeltaMetadata(json);
 }
 
 export function decodeTransferableExecutionDelta(message) {
@@ -66,7 +122,7 @@ export function decodeTransferableExecutionDelta(message) {
   return { json, metadata };
 }
 
-export function createSharedExecutionMailbox(slotCapacity = DEFAULT_SLOT_CAPACITY) {
+export function createSharedExecutionMailbox(slotCapacity = DEFAULT_SHARED_SLOT_CAPACITY) {
   if (!Number.isSafeInteger(slotCapacity) || slotCapacity <= 0) {
     throw new TypeError("shared execution mailbox capacity must be a positive integer");
   }
@@ -100,8 +156,8 @@ export class SharedExecutionDeltaWriter {
     );
   }
 
-  send(json) {
-    executionDeltaMetadata(json);
+  send(json, validatedMetadata = null) {
+    metadataForSend(json, validatedMetadata);
     const payload = encoder.encode(json);
     if (payload.byteLength > this.#slotCapacity) {
       throw new Error(
@@ -168,6 +224,7 @@ export class SharedExecutionDeltaReader {
         throw new Error(`shared execution mailbox slot ${slot} has invalid length ${length}`);
       }
       const offset = slot * this.#slotCapacity;
+      // TextDecoder cannot consume a SharedArrayBuffer-backed view in browsers.
       const json = decoder.decode(this.#bytes.slice(offset, offset + length));
       ready.push({ slot, stateIndex, json, metadata: executionDeltaMetadata(json) });
     }
@@ -226,17 +283,18 @@ export class TransferableExecutionDeltaSender {
     return this.#inFlight < this.#maxInFlight;
   }
 
-  send(json) {
-    const metadata = executionDeltaMetadata(json);
+  send(json, validatedMetadata = null) {
+    const metadata = metadataForSend(json, validatedMetadata);
     if (this.#inFlight >= this.#maxInFlight) {
       this.#backpressure += 1;
       return false;
     }
     const payload = encoder.encode(json);
-    const buffer = payload.buffer.slice(
-      payload.byteOffset,
-      payload.byteOffset + payload.byteLength,
-    );
+    // TextEncoder normally returns an exact, standalone buffer. Transfer that
+    // allocation directly; retain the fallback for nonstandard typed-array views.
+    const buffer = payload.byteOffset === 0 && payload.byteLength === payload.buffer.byteLength
+      ? payload.buffer
+      : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
     this.#inFlight += 1;
     this.#port.postMessage(
       {

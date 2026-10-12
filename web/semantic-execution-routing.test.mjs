@@ -33,8 +33,8 @@ function request(worker, type) {
 
 async function waitForRequest(worker, type) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const entry = worker.messages.findLast(({ message }) => message.type === type);
-    if (entry) return entry.message;
+    const entry = worker.messages.findLast(entry => (entry.message ?? entry).type === type);
+    if (entry) return entry.message ?? entry;
     await Promise.resolve();
   }
   assert.fail(`missing ${type}`);
@@ -455,4 +455,481 @@ test("cancelled shared preparation cannot roll back a replacement startup genera
     client.terminate();
     await Promise.all([nextPrepare, nextStart]);
   }
+});
+
+
+const { MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
+const observeInputResult = promise => promise.then(value => ({ value }), error => ({ error }));
+const inputTurn = () => new Promise(resolve => setImmediate(resolve));
+
+async function startInputClient(t, canvas = new FakeCanvas(), callbacks = {}) {
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new AuthoringExecutionClient(canvas, callbacks);
+  t.after(() => client.terminate());
+  const render = await prepare(client);
+  const started = client.startSemanticExecution({ contextId: "original" }, { authoringClient: authoring });
+  await waitForRequest(render, "start_engine");
+  replyRender(render, "start_engine", "engine_started");
+  await started;
+  authoring.autoRespond = false;
+  return { client, authoring, render, engine: authoring.attachments.at(-1).controlPort.peer };
+}
+
+for (const [type, submit] of [
+  ["native_state_input", client => client.setNativeStateInput({ kind: "control", name: "gain" }, { kind: "scalar", value: 0.7 })],
+  ["native_event", client => client.emitNativeEvent({ kind: "wheel" })],
+]) {
+  test(`a ${type} is never automatically retried on a replacement scene`, async t => {
+    const { client, engine, render } = await startInputClient(t);
+    const outcome = observeInputResult(submit(client));
+    await inputTurn();
+    assert.equal(engine.messages.filter(message => message.type === type).length, 1);
+    const replacement = new FakeSemanticAuthoringClient();
+    const switching = client.reconcileSemanticExecution(
+      { contextId: "replacement" }, { authoringClient: replacement },
+    );
+    await waitForRequest(render, "rebuild_engine");
+    replyRender(render, "rebuild_engine", "engine_rebuilt");
+    await switching;
+    assert.match((await outcome).error?.message ?? "", /transition/);
+    const newEngine = replacement.attachments.at(-1).controlPort.peer;
+    assert.equal(newEngine.messages.filter(message => message.type === type).length, 0);
+  });
+}
+
+test("a completed playback seek is not retried into a same-player continuation transition", async t => {
+  const { client, engine, render } = await startInputClient(t);
+  const seek = client.seek(0.5);
+  const initial = await waitForRequest(engine, "seek");
+  const continuation = new FakeSemanticAuthoringClient();
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "source-continuation", continuationGeneration: 1 },
+    { authoringClient: continuation },
+  );
+
+  engine.emitMessage(envelope("noon.engine", "seek", {
+    requestId: initial.requestId,
+    time: 0.5,
+    playing: false,
+  }));
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  await switching;
+
+  const result = await seek;
+  assert.equal(result.time, 0.5);
+  assert.equal(result.playing, false);
+  const successor = continuation.attachments.at(-1).controlPort.peer;
+  assert.equal(
+    successor.messages.filter(message => message.type === "seek").length,
+    0,
+    "a replay control completed before the transition must not address the source owner",
+  );
+});
+
+test("native input submitted during a scene transition is rejected rather than queued for its successor", async t => {
+  const { client, render } = await startInputClient(t);
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "replacement" }, { authoringClient: replacement },
+  );
+  const during = observeInputResult(client.emitNativeEvent({ kind: "wheel" }));
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  await switching;
+  assert.match((await during).error?.message ?? "", /transition/);
+  assert.equal(replacement.attachments.at(-1).controlPort.peer.messages.some(message => message.type === "native_event"), false);
+});
+
+test("a layout change during the final transition query is applied before readiness", async t => {
+  const canvas = new FakeCanvas();
+  const { client, render } = await startInputClient(t, canvas);
+  const replacement = new FakeSemanticAuthoringClient();
+  replacement.autoRespond = false;
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "resized-replacement" }, { authoringClient: replacement },
+  );
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  const successor = replacement.attachments.at(-1).controlPort.peer;
+  const state = await waitForRequest(successor, "state");
+  canvas.clientWidth = 960;
+  canvas.clientHeight = 540;
+  FakeResizeObserver.instances.at(-1).deliver();
+  assert.equal(request(render, "resize").width, 640, "transition still owns resize admission");
+  successor.emitMessage(envelope("noon.engine", state.type, { requestId: state.requestId }));
+  await switching;
+  assert.equal(request(render, "resize").width, 960);
+  assert.equal(request(render, "resize").height, 540);
+});
+
+test("semantic replacement registers its pointer view before becoming interactive", async t => {
+  const dom = pointerCanvas(t);
+  const { client, render } = await startInputClient(t, dom.canvas);
+  const replacement = new FakeSemanticAuthoringClient();
+  replacement.autoRespond = false;
+  let settled = false;
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "pointer-replacement" }, { authoringClient: replacement },
+  ).then(result => { settled = true; return result; });
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  const successor = replacement.attachments.at(-1).controlPort.peer;
+  const state = await waitForRequest(successor, "state");
+  successor.emitMessage(envelope("noon.engine", state.type, { requestId: state.requestId }));
+  const registration = await waitForRequest(successor, "browser_pointer_view");
+  assert.equal(settled, false, "replacement must wait for its new pointer view registration");
+  successor.emitMessage(envelope("noon.engine", registration.type, { requestId: registration.requestId }));
+  await switching;
+  dom.emit("pointerdown");
+  await inputTurn();
+  const input = successor.messages.find(message => message.type === "browser_pointer_input");
+  assert.ok(input, "first successor click must reach the current engine");
+});
+
+test("terminating a replacement while its pointer view is pending cannot attach stale input", async t => {
+  const dom = pointerCanvas(t);
+  const { client, render } = await startInputClient(t, dom.canvas);
+  const replacement = new FakeSemanticAuthoringClient();
+  replacement.autoRespond = false;
+  const switching = client.reconcileSemanticExecution(
+    { contextId: "pointer-replacement-terminated" }, { authoringClient: replacement },
+  );
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  const successor = replacement.attachments.at(-1).controlPort.peer;
+  const state = await waitForRequest(successor, "state");
+  successor.emitMessage(envelope("noon.engine", state.type, { requestId: state.requestId }));
+  await waitForRequest(successor, "browser_pointer_view");
+  client.terminate();
+  await assert.rejects(switching);
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.equal(successor.messages.some(message => message.type === "browser_pointer_input"), false);
+});
+
+test("restart registers its pointer view before becoming interactive", async t => {
+  const dom = pointerCanvas(t);
+  const replacementCanvas = new FakeCanvas();
+  replacementCanvas.getBoundingClientRect = dom.canvas.getBoundingClientRect;
+  replacementCanvas.addEventListener = dom.canvas.addEventListener;
+  dom.canvas.cloneNode = () => replacementCanvas;
+  const { client, authoring } = await startInputClient(t, dom.canvas);
+  const renderCount = FakeWorker.instances.filter(({ name }) => name === "noon-render").length;
+  let settled = false;
+  const restarting = client.restart().then(result => { settled = true; return result; });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (FakeWorker.instances.filter(({ name }) => name === "noon-render").length === renderCount + 1) break;
+    await Promise.resolve();
+  }
+  assert.equal(FakeWorker.instances.filter(({ name }) => name === "noon-render").length, renderCount + 1);
+  const replacementRender = renderWorker();
+  replyRender(replacementRender, "prepare", "prepared");
+  await waitForRequest(replacementRender, "start_engine");
+  replyRender(replacementRender, "start_engine", "engine_started");
+  const successor = authoring.attachments.at(-1).controlPort.peer;
+  const registration = await waitForRequest(successor, "browser_pointer_view");
+  assert.equal(settled, false, "restart must wait for its new pointer view registration");
+  successor.emitMessage(envelope("noon.engine", registration.type, { requestId: registration.requestId }));
+  await restarting;
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.ok(successor.messages.some(message => message.type === "browser_pointer_input"),
+    "first restarted click must reach the current engine");
+});
+
+function pointerCanvas(t) {
+  const target = new EventTarget();
+  const win = new EventTarget();
+  const previous = globalThis.window;
+  win.devicePixelRatio = 1;
+  globalThis.window = win;
+  t.after(() => { globalThis.window = previous; });
+  const canvas = new FakeCanvas();
+  const listeners = new Map();
+  const rect = { left: 10, top: 20, width: 640, height: 360 };
+  canvas.getBoundingClientRect = () => ({ ...rect });
+  canvas.addEventListener = (type, listener, options) => {
+    listeners.set(type, listener);
+    target.addEventListener(type, listener, options);
+  };
+  let buttons = 0;
+  return { canvas, listeners, rect, win, emit(type, values = {}) {
+    if (type === "pointerdown") buttons = 1;
+    if (type === "pointerup" || type === "pointercancel") buttons = 0;
+    const event = new Event(type);
+    Object.assign(event, {
+      clientX: 110, clientY: 220,
+      button: type === "pointermove" ? -1 : 0, buttons,
+      pointerId: 1, pointerType: "mouse", isPrimary: true, ...values,
+    });
+    target.dispatchEvent(event);
+  } };
+}
+
+test("scene replacement retires pending DOM input without reporting cancellation as a callback failure", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { client, engine, render } = await startInputClient(t, dom.canvas, {
+    onRecoverableError: error => errors.push(error),
+  });
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.equal(engine.messages.filter(message => message.type === "browser_pointer_input").length, 1);
+  const retiredListener = dom.listeners.get("pointerdown");
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.reconcileSemanticExecution({ contextId: "replacement" }, { authoringClient: replacement });
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  await switching;
+  await inputTurn();
+  // Even an already-queued callback cannot address the successor's canvas/session.
+  retiredListener({ clientX: 9, clientY: 9, button: 0 });
+  await inputTurn();
+  const next = replacement.attachments.at(-1).controlPort.peer;
+  assert.equal(next.messages.some(message => message.type === "browser_pointer_input"), false);
+  assert.equal(errors.length, 0, "intentional endpoint retirement is not a callback failure");
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.equal(next.messages.filter(message => message.type === "browser_pointer_input").length, 1,
+    "the successor has a fresh working input collector");
+});
+
+test("DOM pointer overflow is bounded, surfaced, and cancelled in order without replay", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: error => errors.push(error) });
+  for (let i = 0; i < 1000; i += 1) dom.emit(i === 0 ? "pointerdown" : "pointermove", { clientX: i });
+  await inputTurn();
+  const accepted = pointerMessages(engine);
+  assert.equal(accepted.length, MAX_IN_FLIGHT_NATIVE_INPUTS);
+  assert.equal(errors.length, 1, "one overflow faults the collector, not 936 retry tasks");
+  assert.match(errors[0].message, /native input.*full/i);
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.equal(engine.messages.filter(message => message.type === "browser_pointer_input").length, MAX_IN_FLIGHT_NATIVE_INPUTS);
+  for (const message of accepted) engine.emitMessage(envelope("noon.engine", message.type, { requestId: message.requestId }));
+  await inputTurn();
+  const cancellation = pointerMessages(engine).at(-1);
+  assert.equal(cancellation.kind, "cancel");
+  assert.equal(cancellation.surface_x, null);
+  assert.equal(cancellation.view_revision, accepted[0].view_revision);
+  engine.emitMessage(envelope("noon.engine", cancellation.type, { requestId: cancellation.requestId }));
+  await inputTurn();
+  dom.emit("pointerdown");
+  assert.equal(errors.length, 1);
+  assert.equal(engine.messages.filter(message => message.type === "browser_pointer_input").length, MAX_IN_FLIGHT_NATIVE_INPUTS + 1);
+});
+
+
+test("DOM overflow cleanup never cancels the replacement session after old requests settle", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { client, render } = await startInputClient(t, dom.canvas, { onRecoverableError: error => errors.push(error) });
+  for (let i = 0; i <= MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) dom.emit("pointermove");
+  await inputTurn();
+  assert.equal(errors.length, 1);
+  const replacement = new FakeSemanticAuthoringClient();
+  const switching = client.reconcileSemanticExecution({ contextId: "replacement" }, { authoringClient: replacement });
+  await waitForRequest(render, "rebuild_engine");
+  replyRender(render, "rebuild_engine", "engine_rebuilt");
+  await switching;
+  await inputTurn();
+  const next = replacement.attachments.at(-1).controlPort.peer;
+  assert.equal(next.messages.some(message => message.type === "browser_pointer_input"), false);
+  dom.emit("pointerdown");
+  await inputTurn();
+  assert.equal(next.messages.filter(message => message.type === "browser_pointer_input").length, 1);
+  assert.equal(next.messages.find(message => message.type === "browser_pointer_input").input.kind, "press");
+});
+
+test("DOM input failure remains visible without a recoverable-error callback", async t => {
+  const dom = pointerCanvas(t);
+  const warnings = [];
+  const oldWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  t.after(() => { console.warn = oldWarn; });
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  await inputTurn();
+  const sent = engine.messages.find(message => message.type === "browser_pointer_input");
+  engine.emitMessage(envelope("noon.engine", "error", { requestId: sent.requestId, message: "position rejected" }));
+  await inputTurn();
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0][0], /pointer collection stopped/);
+  assert.match(warnings[0][1].message, /position rejected/);
+  const cancel = engine.messages.find(message => message.input?.kind === "cancel");
+  assert.ok(cancel);
+  engine.emitMessage(envelope("noon.engine", cancel.type, { requestId: cancel.requestId }));
+  await inputTurn();
+});
+
+
+// Unwrap only for the pre-existing collector assertions; worker receipt tests
+// below assert the full immutable wire envelope independently.
+const pointerMessages = engine => engine.messages
+  .filter(message => message.type === "browser_pointer_input")
+  .map(({ input, ...envelope }) => ({ ...envelope, ...input }));
+
+test("DOM selection preserves pointer identity and ignores foreign release or cancellation", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown", { pointerId: 7, pointerType: "touch" });
+  dom.emit("pointerdown", { pointerId: 8, pointerType: "touch", isPrimary: false });
+  dom.emit("pointermove", { pointerId: 9, pointerType: "pen", buttons: 1 });
+  dom.emit("pointerup", { pointerId: 9, pointerType: "pen" });
+  dom.emit("pointercancel", { pointerId: 8, isPrimary: false });
+  dom.emit("pointerleave", { pointerId: 9 });
+  dom.emit("pointerup", { pointerId: 7, pointerType: "touch" });
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "release"]);
+  assert.ok(messages.every(message => message.pointer_id === 7));
+  assert.equal(messages[0].source_id, messages[1].source_id);
+});
+
+test("recycled touch pointer IDs receive a new source lifetime", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  for (let i = 0; i < 2; i += 1) {
+    dom.emit("pointerdown", { pointerId: 31, pointerType: "touch" });
+    dom.emit("pointerup", { pointerId: 31, pointerType: "touch" });
+    dom.emit("lostpointercapture", { pointerId: 31, pointerType: "touch" });
+  }
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "release", "press", "release"]);
+  assert.ok(messages[2].source_id > messages[0].source_id);
+  assert.equal(messages[2].pointer_id, 31);
+});
+
+test("explicit resize cancels pressed input immediately and suppresses its late release", async t => {
+  const dom = pointerCanvas(t);
+  const { client, engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  client.resize(800, 450, 2);
+  dom.rect.width = 800;
+  dom.rect.height = 450;
+  dom.emit("pointerup");
+  dom.emit("pointermove");
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "cancel", "move"]);
+  assert.equal(messages[1].source_id, messages[0].source_id);
+  assert.equal(messages[1].view_revision, messages[0].view_revision);
+  assert.equal(messages[1].surface_x, null);
+  assert.ok(messages[2].view_revision > messages[0].view_revision);
+  assert.ok(messages[2].source_id > messages[0].source_id);
+});
+
+test("duplicate ResizeObserver delivery does not cancel an unchanged pointer view", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  FakeResizeObserver.instances.at(-1).deliver();
+  dom.emit("pointermove");
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "move"]);
+  assert.equal(messages[1].view_revision, messages[0].view_revision);
+});
+
+test("layout and device-scale changes invalidate coordinates even without a resize callback", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointermove");
+  dom.rect.left = 40;
+  dom.emit("pointermove");
+  dom.win.devicePixelRatio = 2;
+  dom.emit("pointermove");
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["move", "cancel", "move", "cancel", "move"]);
+  assert.equal(messages[2].surface_x, 70);
+  assert.ok(messages[4].view_revision > messages[2].view_revision);
+});
+
+test("zero-sized views cancel and do not manufacture positions or releases", async t => {
+  const dom = pointerCanvas(t);
+  const { client, engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  client.resize(0, 0, 1);
+  dom.rect.width = 0;
+  dom.rect.height = 0;
+  dom.emit("pointermove");
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(message => message.kind), ["press", "cancel"]);
+});
+
+test("capture loss is distinct from successful release and from foreign capture loss", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  dom.emit("lostpointercapture", { pointerId: 99 });
+  dom.emit("lostpointercapture");
+  dom.emit("pointerup");
+  dom.emit("pointerdown");
+  dom.emit("pointerup");
+  dom.emit("lostpointercapture");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(message => message.kind), ["press", "capture_lost", "press", "release"]);
+});
+
+test("chorded pointermove edges keep all subscribed button transitions", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  dom.emit("pointermove", { button: 2, buttons: 3 });
+  dom.emit("pointermove", { button: 0, buttons: 2 });
+  dom.emit("pointerup", { button: 2, buttons: 0 });
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(message => [message.kind, message.button]), [
+    ["press", 0], ["press", 2], ["release", 0], ["release", 2],
+  ]);
+});
+
+test("focus loss clears only the selected contact without a synthetic release", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown", { pointerId: -2 });
+  dom.win.dispatchEvent(new Event("blur"));
+  dom.emit("pointerup", { pointerId: -2 });
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(message => message.kind), ["press", "focus_lost"]);
+  assert.equal(messages[1].pointer_id, -2);
+});
+
+test("a pointer entering with already-held buttons never synthesizes a press or release", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointermove", { buttons: 1 });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine), []);
+});
+
+test("asynchronous pointer rejection retires only its own collected DOM source", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointerdown", {pointerId: 7}); await inputTurn();
+  const press = engine.messages.findLast(m => m.type === "browser_pointer_input");
+  engine.emitMessage(envelope("noon.engine", press.type, { requestId: press.requestId, pointerInputAccepted: false }));
+  await inputTurn();
+  const count=pointerMessages(engine).length;
+  dom.emit("pointerup", {pointerId: 7}); await inputTurn();
+  assert.equal(pointerMessages(engine).length, count, "late physical release is not a new edge");
+  dom.emit("pointerdown", {pointerId: 7}); await inputTurn();
+  const fresh = engine.messages.findLast(m => m.type === "browser_pointer_input");
+  assert.ok(fresh.input.source_id > press.input.source_id);
+  // Repeated feedback for the old source cannot retire this fresh contact.
+  engine.emitMessage(envelope("noon.engine", press.type, { requestId: press.requestId, pointerInputAccepted: false }));
+  engine.emitMessage(envelope("noon.engine", fresh.type, { requestId: fresh.requestId, pointerInputAccepted: true }));
+  await inputTurn();
+  dom.emit("pointerup", {pointerId: 7}); await inputTurn();
+  assert.equal(pointerMessages(engine).at(-1).kind, "release");
+  assert.equal(pointerMessages(engine).at(-1).source_id, fresh.input.source_id);
+  assert.deepEqual(errors, []);
 });

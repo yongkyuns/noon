@@ -14,14 +14,14 @@ class SceneBoundaryTests(unittest.TestCase):
             self.assertFalse(hasattr(scene, name), name)
         for operation in (lambda: scene.add(Circle()), lambda: scene.play(object()),
                           lambda: scene.wait(), lambda: scene.time):
-            with self.assertRaisesRegex(RuntimeError, "shared Rust"):
+            with self.assertRaisesRegex(RuntimeError, "shared.*Rust"):
                 operation()
 
     def test_detached_geometry_requires_shared_rust(self):
         from noon import Path, Line, Rectangle
         for construct in (Circle, Line, Rectangle, lambda: Path(VectorPath())):
             with self.subTest(construct=construct):
-                with self.assertRaisesRegex(RuntimeError, "shared Rust"):
+                with self.assertRaisesRegex(RuntimeError, "shared.*Rust"):
                     construct()
         self.assertFalse(hasattr(__import__("noon"), "_bounds"))
 
@@ -32,7 +32,7 @@ class SceneBoundaryTests(unittest.TestCase):
                 constructor(object())
         with self.assertRaisesRegex(TypeError, "base type"):
             Mobject()
-        with self.assertRaisesRegex(RuntimeError, "shared Rust"):
+        with self.assertRaisesRegex(RuntimeError, "shared.*Rust"):
             VMobject()
         for name in ("_make_mobject", "Circle", "Rectangle", "Line", "Path"):
             self.assertFalse(hasattr(_noon_ir, name), name)

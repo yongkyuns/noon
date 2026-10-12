@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, validate_style, validate_track_definition,
@@ -73,10 +73,16 @@ fn effective_track_interval(
         .expect("validated track has a valid composition time map")
 }
 
-#[derive(Clone, Copy)]
 enum ObjectOverlay {
-    Present { index: u32, is_text: bool },
-    Removed { index: u32 },
+    Present {
+        glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+        index: u32,
+        is_text: bool,
+        spatial: Option<Box<crate::CompiledSpatialState>>,
+    },
+    Removed {
+        index: u32,
+    },
 }
 
 /// A transaction-local sparse overlay. It reads untouched identity and channel
@@ -106,8 +112,8 @@ impl PreflightOverlay {
     }
 
     fn object_index(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<u32> {
-        match self.objects.get(&id).copied() {
-            Some(ObjectOverlay::Present { index, .. }) => Some(index),
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { index, .. }) => Some(*index),
             Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied();
@@ -119,9 +125,92 @@ impl PreflightOverlay {
         }
     }
 
+    fn glow(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+    ) -> Option<std::sync::Arc<crate::CompiledGlow>> {
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { glow, .. }) => glow.clone(),
+            Some(ObjectOverlay::Removed { .. }) => None,
+            None => {
+                let index = scene.object_indices.get(&id).copied()?;
+                self.seen_objects.insert(id);
+                scene.objects[index as usize].glow.clone()
+            }
+        }
+    }
+
+    fn set_glow(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+        glow: Option<std::sync::Arc<crate::CompiledGlow>>,
+    ) {
+        if let Some(ObjectOverlay::Present { glow: current, .. }) = self.objects.get_mut(&id) {
+            *current = glow;
+            return;
+        }
+        if let Some(index) = scene.object_indices.get(&id).copied() {
+            self.seen_objects.insert(id);
+            self.objects.insert(
+                id,
+                ObjectOverlay::Present {
+                    glow,
+                    index,
+                    is_text: scene.objects[index as usize].text().is_some(),
+                    spatial: scene.objects[index as usize].spatial.clone(),
+                },
+            );
+        }
+    }
+
+    fn spatial(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+    ) -> Option<crate::CompiledSpatialState> {
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { spatial, .. }) => spatial.as_deref().cloned(),
+            Some(ObjectOverlay::Removed { .. }) => None,
+            None => {
+                let index = scene.object_indices.get(&id).copied()?;
+                self.seen_objects.insert(id);
+                scene.objects[index as usize].spatial.as_deref().cloned()
+            }
+        }
+    }
+
+    fn set_spatial(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+        spatial: Option<crate::CompiledSpatialState>,
+    ) {
+        if let Some(ObjectOverlay::Present {
+            spatial: current, ..
+        }) = self.objects.get_mut(&id)
+        {
+            *current = spatial.map(Box::new);
+            return;
+        }
+        if let Some(index) = scene.object_indices.get(&id).copied() {
+            self.seen_objects.insert(id);
+            self.objects.insert(
+                id,
+                ObjectOverlay::Present {
+                    glow: scene.objects[index as usize].glow.clone(),
+                    index,
+                    is_text: scene.objects[index as usize].text().is_some(),
+                    spatial: spatial.map(Box::new),
+                },
+            );
+        }
+    }
+
     fn object_is_text(&mut self, scene: &CompiledScene, id: ObjectId) -> Option<bool> {
-        match self.objects.get(&id).copied() {
-            Some(ObjectOverlay::Present { is_text, .. }) => Some(is_text),
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { is_text, .. }) => Some(*is_text),
             Some(ObjectOverlay::Removed { .. }) => None,
             None => {
                 let index = scene.object_indices.get(&id).copied()?;
@@ -256,8 +345,8 @@ pub(super) fn preflight_transaction_with_resources(
                     &object.content,
                     object.text_bounds,
                 )?;
-                let index = match overlay.objects.get(&object.id).copied() {
-                    Some(ObjectOverlay::Removed { index }) => index,
+                let index = match overlay.objects.get(&object.id) {
+                    Some(ObjectOverlay::Removed { index }) => *index,
                     _ => match scene.retired_object_indices.get(&object.id).copied() {
                         Some(index) => index,
                         None => {
@@ -272,8 +361,10 @@ pub(super) fn preflight_transaction_with_resources(
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
+                        glow: object.glow.clone(),
                         index,
                         is_text: object.text().is_some(),
+                        spatial: object.spatial.clone(),
                     },
                 );
             }
@@ -325,11 +416,15 @@ pub(super) fn preflight_transaction_with_resources(
                         });
                     }
                 }
+                let spatial = overlay.spatial(scene, *object);
+                let glow = overlay.glow(scene, *object);
                 overlay.objects.insert(
                     *object,
                     ObjectOverlay::Present {
+                        glow,
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
+                        spatial: spatial.map(Box::new),
                     },
                 );
             }
@@ -337,7 +432,89 @@ pub(super) fn preflight_transaction_with_resources(
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));
                 }
+                if overlay.spatial(scene, *object).is_some() {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                }
                 validate_transform(*object, *transform).map_err(map_object_state_error)?;
+            }
+            ExecutionPatch::SetSemanticTransform { object, transform } => {
+                overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let spatial = overlay.spatial(scene, *object);
+                let Some((_, next_spatial)) =
+                    super::lower_semantic_transform_patch(*object, spatial.as_ref(), *transform)
+                else {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                };
+                overlay.set_spatial(scene, *object, next_spatial);
+            }
+            ExecutionPatch::SetSpatialState {
+                object,
+                base_transform,
+                spatial,
+            } => {
+                let index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                validate_transform(*object, *base_transform).map_err(map_object_state_error)?;
+                if !crate::valid_compiled_spatial(spatial.as_ref()) {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                }
+                let object_is_mesh = scene.compiled_object_is_mesh(index as usize);
+                if spatial.as_ref().is_some_and(|spatial| {
+                    (spatial.draw_kind == crate::CompiledSpatialDrawKind::Mesh) != object_is_mesh
+                }) || (object_is_mesh && spatial.is_none())
+                {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                }
+                const CHANNELS: [noon_core::Property; 15] = [
+                    noon_core::Property::Presence,
+                    noon_core::Property::ZIndex,
+                    noon_core::Property::Transform,
+                    noon_core::Property::WorldTransform,
+                    noon_core::Property::CameraProfile,
+                    noon_core::Property::Position,
+                    noon_core::Property::Rotation,
+                    noon_core::Property::Scale,
+                    noon_core::Property::Fill,
+                    noon_core::Property::Stroke,
+                    noon_core::Property::StrokeWidth,
+                    noon_core::Property::Opacity,
+                    noon_core::Property::Appearance,
+                    noon_core::Property::Reveal,
+                    noon_core::Property::Morph,
+                ];
+                if CHANNELS.into_iter().any(|property| {
+                    scene
+                        .channel_tracks(CompiledChannelKey::new(index, property))
+                        .iter()
+                        .any(|track| {
+                            !crate::valid_compiled_track_for_spatial(
+                                track.property,
+                                &track.values,
+                                spatial.as_ref(),
+                            )
+                        })
+                }) {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::Transform,
+                    });
+                }
+                overlay.set_spatial(scene, *object, spatial.clone());
             }
             ExecutionPatch::SetZIndex { object, value } => {
                 if overlay.object_index(scene, *object).is_none() {
@@ -345,11 +522,93 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 super::validate_z_index(*object, *value)?;
             }
+            ExecutionPatch::SetGlow { object, glow } => {
+                if overlay.object_index(scene, *object).is_none() {
+                    return Err(CompilePatchError::UnknownObject(*object));
+                }
+                let previous = overlay.glow(scene, *object);
+                crate::execution_patch::validate_glow_replacement(
+                    *object,
+                    previous.as_deref(),
+                    glow,
+                )?;
+                overlay.set_glow(scene, *object, Some(std::sync::Arc::clone(glow)));
+            }
+            ExecutionPatch::SetGlowAttachment {
+                object,
+                expected,
+                glow,
+            } => {
+                let index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let previous = overlay.glow(scene, *object);
+                crate::glow_attachment::validate_change(
+                    *object,
+                    previous.as_deref(),
+                    *expected,
+                    glow.as_deref(),
+                )?;
+                // Respect staged adds/replacements as well as base tracks. A
+                // retired generation cannot retain drivers or block its successor.
+                for property in crate::CompiledGlow::PARAMETER_PROPERTIES {
+                    for track in overlay.channel(scene, index, property) {
+                        overlay.set_track(track.id, None);
+                    }
+                }
+                overlay.set_glow(scene, *object, glow.clone());
+            }
             ExecutionPatch::SetStyle { object, style } => {
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));
                 }
                 validate_style(*object, *style).map_err(map_object_state_error)?;
+            }
+            ExecutionPatch::SetGraphDependencies {
+                owner,
+                dependencies,
+            } => {
+                let mut seen = HashSet::with_capacity(dependencies.len());
+                for dependency in dependencies {
+                    if !seen.insert(dependency.edge) {
+                        return Err(CompilePatchError::DuplicateGraphDependency {
+                            owner: *owner,
+                            edge: dependency.edge,
+                        });
+                    }
+                    let mut require_object = |object| {
+                        overlay
+                            .object_index(scene, object)
+                            .ok_or(CompilePatchError::UnknownObject(object))
+                    };
+                    require_object(dependency.start_vertex)?;
+                    require_object(dependency.end_vertex)?;
+                    require_object(dependency.line)?;
+                    if let crate::CompiledGraphDependencyKind::Arrow {
+                        end_tip, start_tip, ..
+                    } = dependency.kind
+                    {
+                        require_object(end_tip)?;
+                        if let Some(start_tip) = start_tip {
+                            require_object(start_tip)?;
+                        }
+                    }
+                }
+                let count = scene
+                    .graph_edge_dependencies
+                    .len()
+                    .checked_add(dependencies.len())
+                    .ok_or(CompilePatchError::TooManyGraphDependencies(usize::MAX))?;
+                if count != 0 && u32::try_from(count - 1).is_err() {
+                    return Err(CompilePatchError::TooManyGraphDependencies(count));
+                }
+            }
+            ExecutionPatch::SetSpatialAnchorGroupBoundsMembers { members, .. } => {
+                for member in members {
+                    if overlay.object_index(scene, *member).is_none() {
+                        return Err(CompilePatchError::UnknownObject(*member));
+                    }
+                }
             }
             ExecutionPatch::AddTrack(track) => {
                 if overlay.track(scene, track.id).is_some() {
@@ -359,9 +618,23 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                if matches!(track.values, TrackValues::Glow { .. }) {
+                    crate::validate_glow_track_attachment(
+                        track,
+                        overlay.glow(scene, track.object).as_deref(),
+                    )
+                    .map_err(CompilePatchError::InvalidTrack)?;
+                }
+                let spatial = overlay.spatial(scene, track.object);
+                if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidWorldTransformValues,
+                    ));
+                }
                 reject_geometry_track_on_text(scene, &mut overlay, track)?;
                 let shadow = TrackShadow::from_definition(track, object_index);
                 overlay.set_track(track.id, Some(shadow));
+                validate_camera_track_overlap(scene, &mut overlay, object_index)?;
                 if shadow.property == Property::Presence {
                     validate_presence_channel(scene, &mut overlay, object_index)?;
                 }
@@ -390,9 +663,23 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                if matches!(track.values, TrackValues::Glow { .. }) {
+                    crate::validate_glow_track_attachment(
+                        track,
+                        overlay.glow(scene, track.object).as_deref(),
+                    )
+                    .map_err(CompilePatchError::InvalidTrack)?;
+                }
+                let spatial = overlay.spatial(scene, track.object);
+                if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
+                    return Err(CompilePatchError::InvalidTrack(
+                        noon_core::TimelineError::InvalidWorldTransformValues,
+                    ));
+                }
                 reject_geometry_track_on_text(scene, &mut overlay, track)?;
                 let replacement = TrackShadow::from_definition(track, object_index);
                 overlay.set_track(track.id, Some(replacement));
+                validate_camera_track_overlap(scene, &mut overlay, object_index)?;
                 if old.property == Property::Presence {
                     validate_presence_channel(scene, &mut overlay, old.object_index)?;
                 }
@@ -447,7 +734,12 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Appearance
                             | Property::Reveal
                             | Property::Morph
+                            | Property::WorldTransform
+                            | Property::CameraProfile
                             | Property::ZIndex
+                            | Property::GlowColor
+                            | Property::GlowRadius
+                            | Property::GlowIntensity
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -478,6 +770,28 @@ pub(super) fn preflight_transaction_with_resources(
         mutations_preflighted: transaction.mutations().len(),
         staged_compiled_scene_clones: 0,
     })
+}
+
+fn validate_camera_track_overlap(
+    scene: &CompiledScene,
+    overlay: &mut PreflightOverlay,
+    object_index: u32,
+) -> Result<(), CompilePatchError> {
+    let profiles = overlay.channel(scene, object_index, Property::CameraProfile);
+    let worlds = overlay.channel(scene, object_index, Property::WorldTransform);
+    for profile in &profiles {
+        for world in &worlds {
+            if profile.start_time < world.start_time + world.duration
+                && world.start_time < profile.start_time + profile.duration
+            {
+                return Err(CompilePatchError::OverlappingTrackReconciliation {
+                    track: profile.id,
+                    other: world.id,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn reject_geometry_track_on_text(

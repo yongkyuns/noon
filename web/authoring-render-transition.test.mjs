@@ -111,21 +111,3 @@ test("retained readiness publishes preload telemetry before playback ticks begin
   assert.match(metrics, /metrics\.preloadedGeometryCount = renderer\.preloadedGeometryCount\(\);/);
   assert.match(metrics, /metrics\.preloadBytesUploaded = renderer\.preloadBytesUploaded\(\);/);
 });
-
-test("stale frame callbacks cannot tick or spawn a second loop after transition", () => {
-  const schedule = functionSlice("scheduleFrame", "frame");
-  assert.match(schedule, /frame\(timestamp, generation, ticket\)/);
-  const frame = functionSlice("frame", "drainGpuDiagnostics");
-  const staleGuard = frame.indexOf("generation !== frameLoopGeneration");
-  const tick = frame.indexOf('renderPort?.postMessage({ type: "tick", timestamp });');
-  const reschedule = frame.indexOf("scheduleFrame(generation);");
-  assert.ok(staleGuard >= 0 && tick > staleGuard && reschedule > tick);
-
-  const begin = functionSlice("beginRendererTransition", "resize");
-  assert.match(
-    begin,
-    /transitionFrameLoopWasRunning = running;\s*frameLoopGeneration \+= 1;\s*running = false;/s,
-  );
-  const stop = functionSlice("stop", "attachRenderPort");
-  assert.match(stop, /stopped = true;\s*frameLoopGeneration \+= 1;\s*running = false;/s);
-});

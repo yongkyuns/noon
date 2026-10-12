@@ -51,9 +51,9 @@ async function load(source, loopDurationSeconds, context = {}) {
   };
 }
 
-async function advanceOneFrame(frameIndex, time) {
+async function advanceOneFrame(frameIndex, time, options) {
   if (closed) throw new Error("host raster page is closed");
-  const sampled = await preview.sample(time);
+  const sampled = await preview.sample(time, options);
   currentLogicalTime = sampled.frame.publishedTime;
   currentFrameIndex = frameIndex;
 }
@@ -74,7 +74,10 @@ function normalizeFrameTimes(frameTimes, targetFrame) {
   });
 }
 
-async function renderThrough(frameIndex, frameTimes) {
+async function renderThrough(frameIndex, frameTimes, { stopAtSourceCompletion = false } = {}) {
+  if (typeof stopAtSourceCompletion !== "boolean") {
+    throw new TypeError("stopAtSourceCompletion must be a boolean");
+  }
   if (closed) throw new Error("host raster page is closed");
   if (preview === null) throw new Error("host raster scene has not been loaded");
   const targetFrame = Number(frameIndex);
@@ -99,7 +102,9 @@ async function renderThrough(frameIndex, frameTimes) {
   }
 
   for (let frame = currentFrameIndex + 1; frame <= targetFrame; frame += 1) {
-    await advanceOneFrame(frame, activeFrameTimes[frame]);
+    await advanceOneFrame(frame, activeFrameTimes[frame], {
+      stopAtSourceCompletion: stopAtSourceCompletion && frame === targetFrame,
+    });
   }
   await waitForPaint();
   if (closed) throw new Error("host raster page is closed");
@@ -120,6 +125,10 @@ async function renderThrough(frameIndex, frameTimes) {
     rendererBackend: report.frame.rendererBackend,
     drawCalls: report.frame.drawCalls,
     authoredDuration: report.authoredDuration,
+    ...(stopAtSourceCompletion ? {
+      sourceCompleted: report.frame.sourceCompleted === true,
+      sourceState: report.sourceState,
+    } : {}),
     frameIndex: currentFrameIndex,
   };
 }

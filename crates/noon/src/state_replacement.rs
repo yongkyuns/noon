@@ -1,5 +1,8 @@
 //! Shared object/family become preparation and atomic semantic state replacement.
-use std::{collections::HashMap, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use crate::{
     semantic_mobject::{
@@ -8,29 +11,70 @@ use crate::{
     },
     AuthoringError, Mobject, MobjectFamily,
 };
-use noon_core::{Bounds2D64, SemanticMutationTransaction, SemanticObjectState, SemanticStore};
+use noon_core::{
+    Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
+    SemanticNodeKind, SemanticObjectState, SemanticStore, SemanticTransactionNodeRef, VectorPath,
+};
+
+/// A state-only replacement cannot preserve an attachment on either operand.
+/// Effects elsewhere in the semantic store are irrelevant: this check visits
+/// only the receiver/target ownership graphs and leaves all unrelated effects
+/// and their generations untouched.
+fn require_effect_free_operands(
+    store: &SemanticStore,
+    operands: impl IntoIterator<Item = SemanticNodeId>,
+) -> Result<(), AuthoringError> {
+    if !store.has_effect_attachments() {
+        return Ok(());
+    }
+    for operand in operands {
+        for id in store.ordered_authoring_nodes(operand)? {
+            if store
+                .node(id)
+                .is_some_and(|node| !node.effect_ids().is_empty())
+            {
+                return Err(AuthoringError::EffectStateReplacementUnavailable);
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Pair through the same topology/alias contract as ordinary family Transform.
 /// All captures and fitting succeed before a caller can publish any edit.
-pub(crate) fn family_become_transaction<E: From<AuthoringError>>(
+pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     source: &MobjectFamily,
     target: &MobjectFamily,
     options: ManimBecomeOptions,
     mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
-) -> Result<SemanticMutationTransaction, E> {
+) -> Result<crate::path_editing::PreparedPathEdits, E> {
     if !Rc::ptr_eq(source.integration_store(), target.integration_store()) {
         return Err(AuthoringError::ForeignStore.into());
     }
     source.validate()?;
     target.validate()?;
-    let pairs = match source
+    require_effect_free_operands(
+        &source.integration_store().borrow(),
+        [source.node_id(), target.node_id()],
+    )?;
+    let pairing = source
         .integration_store()
         .borrow()
-        .ordered_family_leaf_pairs(source.node_id(), target.node_id())
-    {
+        .ordered_family_leaf_pairs(source.node_id(), target.node_id());
+    let pairs = match pairing {
         Ok(pairs) => pairs,
         Err(noon_core::SemanticFamilyPairingError::Empty) => {
-            return Ok(SemanticMutationTransaction::new())
+            return crate::path_editing::PreparedPathEdits::prepare(
+                &source.integration_store().borrow(),
+                Vec::new(),
+            )
+            .map_err(E::from);
+        }
+        Err(
+            noon_core::SemanticFamilyPairingError::TopologyMismatch { .. }
+            | noon_core::SemanticFamilyPairingError::AliasMismatch { .. },
+        ) => {
+            return prepare_persistent_family_reconcile(source, target, options, capture);
         }
         Err(error) => return Err(AuthoringError::from(error).into()),
     };
@@ -49,8 +93,9 @@ pub(crate) fn family_become_transaction<E: From<AuthoringError>>(
     let store = source.integration_store().borrow();
     let targets = prepare_become_states(&store, &sources, targets, options)?;
     let mut transaction = SemanticMutationTransaction::new();
-    let mut staged = HashMap::<noon_core::SemanticNodeId, SemanticObjectState>::new();
-    for ((source, target_id), mut target) in pairs.into_iter().zip(targets) {
+    let mut replacements = Vec::new();
+    let mut staged = HashMap::<SemanticNodeId, SemanticObjectState>::new();
+    for ((source, target_id), (mut target, path)) in pairs.into_iter().zip(targets) {
         // Plain Manim become reads a shared target after preceding leaf writes.
         // Matching options copy the target first, so those reads stay captured.
         if options == ManimBecomeOptions::default() {
@@ -62,24 +107,358 @@ pub(crate) fn family_become_transaction<E: From<AuthoringError>>(
         let previous = store
             .semantic_object_state_checked(source)
             .map_err(AuthoringError::from)?;
-        stage_state_changes(&mut transaction, source, previous, &target);
+        if let Some(path) = path {
+            replacements.push((source, target, path));
+        } else {
+            stage_state_changes(&mut transaction, source, previous, &target);
+        }
     }
-    Ok(transaction)
+    Ok(
+        crate::path_editing::PreparedPathEdits::prepare(&store, replacements)?
+            .with_transaction(transaction),
+    )
+}
+
+#[derive(Clone)]
+enum PersistentTargetNode {
+    Object,
+    Family { members: Vec<SemanticNodeId> },
+}
+
+/// Select receiver metadata for synthesized expansion nodes using the same repeat
+/// index rule as Manim's `add_n_more_submobjects`. This does not transfer target
+/// identity or painter metadata; it only chooses the receiver-side prototype.
+fn aligned_source_prototype(
+    source_members: &[SemanticNodeId],
+    target_len: usize,
+    target_index: usize,
+) -> Option<SemanticNodeId> {
+    if source_members.is_empty() {
+        return None;
+    }
+    if source_members.len() >= target_len {
+        return source_members.get(target_index).copied();
+    }
+    let source_index = target_index * source_members.len() / target_len;
+    source_members.get(source_index).copied()
+}
+
+/// Persistent `become()` reconciliation is intentionally separate from Transform
+/// pairing. The target graph is a preflight template: target semantic identities
+/// are never imported into the receiver. Compatible receiver identities are reused
+/// once, while additional topology is allocated only through transaction-local
+/// pending references.
+struct PersistentFamilyReconcile<'a> {
+    store: &'a SemanticStore,
+    target_states: &'a HashMap<SemanticNodeId, (SemanticObjectState, Option<VectorPath>)>,
+    transaction: SemanticMutationTransaction,
+    target_to_receiver: HashMap<SemanticNodeId, SemanticTransactionNodeRef>,
+    source_to_target: HashMap<SemanticNodeId, SemanticNodeId>,
+    existing_leaf_pairs: Vec<(SemanticNodeId, SemanticNodeId)>,
+}
+
+impl<'a> PersistentFamilyReconcile<'a> {
+    fn new(
+        store: &'a SemanticStore,
+        target_states: &'a HashMap<SemanticNodeId, (SemanticObjectState, Option<VectorPath>)>,
+    ) -> Self {
+        Self {
+            store,
+            target_states,
+            transaction: SemanticMutationTransaction::new(),
+            target_to_receiver: HashMap::new(),
+            source_to_target: HashMap::new(),
+            existing_leaf_pairs: Vec::new(),
+        }
+    }
+
+    fn target_node(&self, target: SemanticNodeId) -> Result<PersistentTargetNode, AuthoringError> {
+        let node = self.store.node(target).ok_or_else(|| {
+            AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(target))
+        })?;
+        match node.kind() {
+            SemanticNodeKind::AuthoringObject => Ok(PersistentTargetNode::Object),
+            SemanticNodeKind::Family(_) => Ok(PersistentTargetNode::Family {
+                members: node.members_iter().collect(),
+            }),
+            _ => Err(AuthoringError::from(
+                noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(target),
+            )),
+        }
+    }
+
+    fn reusable_candidate(
+        &self,
+        candidate: Option<SemanticNodeId>,
+        target: &PersistentTargetNode,
+    ) -> Option<SemanticNodeId> {
+        let candidate = candidate?;
+        if self.source_to_target.contains_key(&candidate) {
+            return None;
+        }
+        let node = self.store.node(candidate)?;
+        let compatible = matches!(
+            (node.kind(), target),
+            (
+                SemanticNodeKind::AuthoringObject,
+                PersistentTargetNode::Object
+            ) | (
+                SemanticNodeKind::Family(_),
+                PersistentTargetNode::Family { .. }
+            )
+        );
+        compatible.then_some(candidate)
+    }
+
+    fn reconcile_node(
+        &mut self,
+        candidate: Option<SemanticNodeId>,
+        prototype: Option<SemanticNodeId>,
+        target: SemanticNodeId,
+    ) -> Result<SemanticTransactionNodeRef, AuthoringError> {
+        if let Some(mapped) = self.target_to_receiver.get(&target) {
+            return Ok(*mapped);
+        }
+        let target_node = self.target_node(target)?;
+        let reusable = self.reusable_candidate(candidate, &target_node);
+        match target_node {
+            PersistentTargetNode::Object => {
+                let receiver = if let Some(source) = reusable {
+                    self.source_to_target.insert(source, target);
+                    self.existing_leaf_pairs.push((source, target));
+                    SemanticTransactionNodeRef::Existing(source)
+                } else {
+                    let (state, path) = self.target_states.get(&target).ok_or_else(|| {
+                        AuthoringError::from(
+                            noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(
+                                target,
+                            ),
+                        )
+                    })?;
+                    // Existing path replacement preparation addresses committed
+                    // semantic IDs. Do not publish a half-correct pending object if
+                    // a rotated non-uniform fit needs a freshly admitted path.
+                    if path.is_some() {
+                        return Err(AuthoringError::Unsupported(
+                            crate::UnsupportedAuthoringOperation::RotatedDimensionStretch,
+                        ));
+                    }
+                    {
+                        let receiver_state = prototype
+                            .and_then(|prototype| {
+                                self.store.semantic_object_state_checked(prototype).ok()
+                            })
+                            .cloned()
+                            .unwrap_or_else(|| SemanticObjectState::new(state.content))
+                            .with_visual_state_from(state);
+                        SemanticTransactionNodeRef::Pending(
+                            self.transaction
+                                .create_node(SemanticNodeCreation::object(receiver_state)),
+                        )
+                    }
+                };
+                self.target_to_receiver.insert(target, receiver);
+                Ok(receiver)
+            }
+            PersistentTargetNode::Family { members } => {
+                let (receiver, reused, prototype_members) = if let Some(source) = reusable {
+                    self.source_to_target.insert(source, target);
+                    (
+                        SemanticTransactionNodeRef::Existing(source),
+                        Some(source),
+                        Vec::new(),
+                    )
+                } else {
+                    let pending = self.transaction.create_node(SemanticNodeCreation::family());
+                    let (prototype_members, prototype_z_index) = prototype
+                        .and_then(|prototype| self.store.node(prototype))
+                        .and_then(|node| match node.kind() {
+                            SemanticNodeKind::Family(presentation) => Some((
+                                node.members_iter().collect::<Vec<_>>(),
+                                presentation.z_index,
+                            )),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| (Vec::new(), 0.0));
+                    if prototype_z_index != 0.0 {
+                        self.transaction.set_z_index(pending, prototype_z_index);
+                    }
+                    (
+                        SemanticTransactionNodeRef::Pending(pending),
+                        None,
+                        prototype_members,
+                    )
+                };
+                // Publish the mapping before descending so aliases in the target
+                // DAG converge on exactly one receiver-owned identity.
+                self.target_to_receiver.insert(target, receiver);
+                if let Some(source) = reused {
+                    self.reconcile_existing_family(source, &members)?;
+                } else {
+                    for (index, target_member) in members.iter().copied().enumerate() {
+                        let member = self.reconcile_node(
+                            None,
+                            aligned_source_prototype(&prototype_members, members.len(), index),
+                            target_member,
+                        )?;
+                        self.transaction.add_member(receiver, member);
+                    }
+                }
+                Ok(receiver)
+            }
+        }
+    }
+
+    fn reconcile_existing_family(
+        &mut self,
+        source: SemanticNodeId,
+        target_members: &[SemanticNodeId],
+    ) -> Result<(), AuthoringError> {
+        let current = self
+            .store
+            .semantic_family_members_checked(source)
+            .map_err(AuthoringError::from)?;
+        let mut desired = Vec::with_capacity(target_members.len());
+        for (index, &target_member) in target_members.iter().enumerate() {
+            desired.push(self.reconcile_node(
+                current.get(index).copied(),
+                aligned_source_prototype(&current, target_members.len(), index),
+                target_member,
+            )?);
+        }
+
+        let desired_existing: HashSet<_> = desired
+            .iter()
+            .filter_map(|member| member.existing())
+            .collect();
+        let current_set: HashSet<_> = current.iter().copied().collect();
+        for member in current.iter().copied() {
+            if !desired_existing.contains(&member) {
+                self.transaction.remove_member(source, member);
+            }
+        }
+        for member in desired
+            .iter()
+            .copied()
+            .filter_map(|member| member.existing())
+        {
+            if !current_set.contains(&member) {
+                self.transaction.add_member(source, member);
+            }
+        }
+
+        // First establish the relative order of all committed identities. Pending
+        // additions can then be inserted before the next committed target member;
+        // multiple pending members sharing the same anchor retain target order.
+        for member in desired
+            .iter()
+            .copied()
+            .filter_map(|member| member.existing())
+        {
+            self.transaction.reorder_member(source, member, None);
+        }
+        for (index, member) in desired.iter().copied().enumerate() {
+            if member.existing().is_some() {
+                continue;
+            }
+            self.transaction.add_member(source, member);
+            if let Some(before) = desired[index + 1..]
+                .iter()
+                .find_map(|candidate| candidate.existing())
+            {
+                self.transaction
+                    .reorder_member(source, member, Some(before));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn prepare_persistent_family_reconcile<E: From<AuthoringError>>(
+    source: &MobjectFamily,
+    target: &MobjectFamily,
+    options: ManimBecomeOptions,
+    mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
+) -> Result<crate::path_editing::PreparedPathEdits, E> {
+    let (source_leaves, target_leaves) = {
+        let store = source.integration_store().borrow();
+        (
+            store
+                .ordered_leaf_nodes(source.node_id())
+                .map_err(AuthoringError::from)?,
+            store
+                .ordered_leaf_nodes(target.node_id())
+                .map_err(AuthoringError::from)?,
+        )
+    };
+    let mut source_states = Vec::with_capacity(source_leaves.len());
+    for source_id in source_leaves {
+        source_states.push(capture(&Mobject::from_node(
+            Rc::clone(source.integration_store()),
+            source_id,
+        )?)?);
+    }
+    let mut captured_targets = Vec::with_capacity(target_leaves.len());
+    for &target_id in &target_leaves {
+        captured_targets.push(capture(&Mobject::from_node(
+            Rc::clone(source.integration_store()),
+            target_id,
+        )?)?);
+    }
+
+    let store = source.integration_store().borrow();
+    let fitted_targets = prepare_become_states(&store, &source_states, captured_targets, options)?;
+    let target_states: HashMap<_, _> = target_leaves.into_iter().zip(fitted_targets).collect();
+    let mut reconcile = PersistentFamilyReconcile::new(&store, &target_states);
+    let root = reconcile.reconcile_node(
+        Some(source.node_id()),
+        Some(source.node_id()),
+        target.node_id(),
+    )?;
+    debug_assert_eq!(root.existing(), Some(source.node_id()));
+
+    let mut transaction = reconcile.transaction;
+    let mut replacements = Vec::new();
+    for (source_id, target_id) in reconcile.existing_leaf_pairs {
+        let (target_state, path) = target_states
+            .get(&target_id)
+            .expect("target leaf was captured during persistent become preflight")
+            .clone();
+        let previous = store
+            .semantic_object_state_checked(source_id)
+            .map_err(AuthoringError::from)?;
+        if let Some(path) = path {
+            replacements.push((source_id, target_state, path));
+        } else {
+            stage_state_changes(&mut transaction, source_id, previous, &target_state);
+        }
+    }
+    Ok(
+        crate::path_editing::PreparedPathEdits::prepare(&store, replacements)?
+            .with_transaction(transaction),
+    )
 }
 
 impl MobjectFamily {
-    /// Replace family presentation while preserving member and alias identities.
+    /// Persistently become another family while preserving receiver ownership.
     /// Uses authored state; live execution uses `LiveSession::become_family`.
-    /// Different topology is rejected by the shared family pairing contract.
+    /// Matching topology preserves existing identities. Unequal topology is
+    /// reconciled atomically: compatible receiver identities are reused, new
+    /// receiver-owned nodes get fresh IDs at commit, and target IDs never transfer.
     pub fn become_family(
         &self,
         target: &Self,
         options: ManimBecomeOptions,
     ) -> Result<(), AuthoringError> {
-        family_become_transaction(self, target, options, Mobject::state)?
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        prepare_family_become(self, target, options, Mobject::state)?.publish(
+            &mut self.integration_store().borrow_mut(),
+            |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map(|_| ())
+                    .map_err(AuthoringError::from)
+            },
+        )
     }
 }
 
@@ -93,16 +472,36 @@ pub struct ManimBecomeOptions {
     pub stretch: bool,
 }
 
-pub(crate) fn prepare_become_state(
+pub(crate) fn prepare_become(
     store: &SemanticStore,
+    node: SemanticNodeId,
+    other_node: SemanticNodeId,
     source: &SemanticObjectState,
     target: SemanticObjectState,
     options: ManimBecomeOptions,
-) -> Result<SemanticObjectState, AuthoringError> {
-    Ok(
+) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
+    // State-only capture cannot import an effect from its counterpart, but a
+    // glow on an unrelated object must not poison ordinary become operations.
+    require_effect_free_operands(store, [node, other_node])?;
+    let (target, path) =
         prepare_become_states(store, std::slice::from_ref(source), vec![target], options)?
             .pop()
-            .expect("one target state"),
+            .expect("one target state");
+    let mut transaction = SemanticMutationTransaction::new();
+    let replacements = if let Some(path) = path {
+        vec![(node, target, path)]
+    } else {
+        stage_state_changes(
+            &mut transaction,
+            node,
+            store.semantic_object_state_checked(node)?,
+            &target,
+        );
+        Vec::new()
+    };
+    Ok(
+        crate::path_editing::PreparedPathEdits::prepare(store, replacements)?
+            .with_transaction(transaction),
     )
 }
 
@@ -111,9 +510,9 @@ pub(crate) fn prepare_become_state(
 pub(crate) fn prepare_become_states(
     store: &SemanticStore,
     source: &[SemanticObjectState],
-    mut targets: Vec<SemanticObjectState>,
+    targets: Vec<SemanticObjectState>,
     options: ManimBecomeOptions,
-) -> Result<Vec<SemanticObjectState>, AuthoringError> {
+) -> Result<Vec<(SemanticObjectState, Option<VectorPath>)>, AuthoringError> {
     fn bounds(
         store: &SemanticStore,
         states: &[SemanticObjectState],
@@ -121,7 +520,14 @@ pub(crate) fn prepare_become_states(
         let mut total: Option<Bounds2D64> = None;
         for state in states {
             validate_content(store, state.content)?;
-            if let Some(bounds) = layout_for_content(store, state.content, state.transform)? {
+            if let Some(bounds) = layout_for_content(
+                store,
+                state.content,
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
+            )? {
                 if let Some(total) = &mut total {
                     total.include(bounds.min_x, bounds.min_y);
                     total.include(bounds.max_x, bounds.max_y);
@@ -143,7 +549,10 @@ pub(crate) fn prepare_become_states(
                 crate::semantic_mobject::boundary_for_content(
                     store,
                     state.content,
-                    state.transform,
+                    state
+                        .transform
+                        .as_planar()
+                        .ok_or(AuthoringError::NonFiniteObjectState)?,
                 )?,
             );
         }
@@ -195,15 +604,34 @@ pub(crate) fn prepare_become_states(
     } else {
         target_center
     };
-    for target in &mut targets {
-        let (local_x, local_y) =
-            crate::dimension_fit::world_scale_factors(target.transform.rotation_z, x, y)?;
-        let old_center = state_center(store, target)?;
+    let mut result = Vec::with_capacity(targets.len());
+    for mut target in targets {
+        let Ok((local_x, local_y)) = crate::dimension_fit::world_scale_factors(
+            target
+                .transform
+                .planar_rotation()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+            x,
+            y,
+        ) else {
+            let path = crate::family_affine::world_scaled_path(
+                store,
+                &target,
+                x,
+                y,
+                target_center,
+                destination,
+            )?;
+            result.push((target, Some(path)));
+            continue;
+        };
+        let old_center = state_center(store, &target)?;
         let next_center = (
             destination.0 + (old_center.0 - target_center.0) * x,
             destination.1 + (old_center.1 - target_center.1) * y,
         );
-        scale_state_about_center(store, target, local_x, local_y, next_center)?;
+        scale_state_about_center(store, &mut target, local_x, local_y, next_center)?;
+        result.push((target, None));
     }
-    Ok(targets)
+    Ok(result)
 }

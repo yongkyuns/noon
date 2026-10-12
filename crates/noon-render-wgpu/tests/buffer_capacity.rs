@@ -9,7 +9,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 #[test]
 fn analytic_instance_buffer_grows_geometrically_only_at_capacity_boundary() {
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let mut renderer = GpuRenderer::new(&device, FORMAT);
+    let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
     let mut preparer = FramePreparer::new();
 
     let initial = circle_frame(1_000);
@@ -49,6 +49,8 @@ fn circle_frame(object_count: usize) -> FrameState {
         time: 0.0,
         objects: (0..object_count)
             .map(|index| FrameObjectState {
+                glow: None,
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(index as u64),
                 content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.5)),

@@ -1,13 +1,14 @@
 use lyon_path::{
     builder::{Build, PathBuilder},
     math::point,
-    Event, Path,
+    EndpointId, Event, IdEvent, Path,
 };
 use lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineCap, LineJoin, StrokeOptions,
-    StrokeTessellator, StrokeVertex, VertexBuffers,
+    StrokeTessellator, StrokeVertex, VertexBuffers, VertexSource,
 };
 use noon_core::{PathCommand, Rect, StrokeCap, StrokeJoin, Vec2, VectorPath};
+use std::collections::HashSet;
 
 const PATH_TESSELLATION_TOLERANCE: f32 = 0.002;
 const MORPH_MITER_LIMIT: f32 = 4.0;
@@ -47,6 +48,24 @@ pub struct TessellatedPath {
     reveal_points: Vec<RevealPoint>,
 }
 
+/// Local centerline and screen-normal offsets for a retained screen-space stroke.
+/// The renderer projects the centerline, then applies the stored offsets in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenStrokeVertex {
+    pub position: Vec2,
+    pub tangent: Vec2,
+    pub extrusion: Vec2,
+    /// `(kind, side, progress)` for projection-time join and cap reconstruction.
+    /// When nonzero, `tangent` and `extrusion` carry the incoming/outgoing frames.
+    pub metadata: [f32; 3],
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TessellatedScreenStroke {
+    pub vertices: Vec<ScreenStrokeVertex>,
+    pub indices: Vec<u32>,
+}
+
 impl TessellatedPath {
     pub fn revealed_stroke_length(&self, reveal: f32) -> f32 {
         if !reveal.is_finite() {
@@ -60,6 +79,13 @@ impl TessellatedPath {
     /// The lookup is O(log N) over a centerline measure cached with the mesh, so
     /// repeated Create frames do not flatten or tessellate the path again.
     pub fn reveal_head_position(&self, reveal: f32) -> Option<Vec2> {
+        self.reveal_head_position_at_morph(reveal, 0.0)
+    }
+
+    /// Returns the retained morph centerline position at normalized reveal progress.
+    /// Both scalar inputs are evaluated over preparation-time samples, so animation
+    /// frames perform only two bounded linear interpolations and no path flattening.
+    pub fn reveal_head_position_at_morph(&self, reveal: f32, morph: f32) -> Option<Vec2> {
         let first = *self.reveal_points.first()?;
         let last = *self.reveal_points.last()?;
         let reveal = if reveal.is_finite() {
@@ -67,26 +93,32 @@ impl TessellatedPath {
         } else {
             0.0
         };
+        let morph = if morph.is_finite() {
+            morph.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let position =
+            |point: RevealPoint| point.position * (1.0 - morph) + point.target_position * morph;
         let upper = self
             .reveal_points
             .partition_point(|point| point.progress < reveal);
         if upper == 0 {
-            return Some(first.position);
+            return Some(position(first));
         }
         if upper >= self.reveal_points.len() {
-            return Some(last.position);
+            return Some(position(last));
         }
         let left = self.reveal_points[upper - 1];
         let right = self.reveal_points[upper];
         let span = right.progress - left.progress;
         if span <= f32::EPSILON {
-            return Some(right.position);
+            return Some(position(right));
         }
         let t = ((reveal - left.progress) / span).clamp(0.0, 1.0);
-        Some(Vec2::new(
-            left.position.x + (right.position.x - left.position.x) * t,
-            left.position.y + (right.position.y - left.position.y) * t,
-        ))
+        let left = position(left);
+        let right = position(right);
+        Some(left * (1.0 - t) + right * t)
     }
 }
 
@@ -120,6 +152,7 @@ impl std::error::Error for GeometryError {}
 struct RevealPoint {
     progress: f32,
     position: Vec2,
+    target_position: Vec2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -170,6 +203,473 @@ pub fn tessellate_styled_with_fill(
         fill_enabled,
         false,
     )
+}
+
+/// Tessellate a unit-width stroke while retaining Lyon's centerline and local
+/// extrusion frame. Use `tessellate_projected_screen_stroke` when a World path
+/// needs camera-correct corner joins or caps.
+pub fn tessellate_screen_stroke(
+    path: &VectorPath,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+) -> Result<TessellatedScreenStroke, GeometryError> {
+    let lyon_path = build_lyon_path(path)?;
+    let options = StrokeOptions::default()
+        .with_tolerance(PATH_TESSELLATION_TOLERANCE)
+        .with_line_width(1.0)
+        .with_miter_limit(MORPH_MITER_LIMIT)
+        .with_line_cap(lyon_line_cap(stroke_cap))
+        .with_line_join(lyon_line_join(stroke_join));
+    let smooth_anchors = screen_stroke_smooth_anchors(&lyon_path);
+    let mut buffers = VertexBuffers::<ScreenStrokeVertex, u32>::new();
+    let mut output = BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex<'_, '_>| {
+        let smooth_endpoint = match vertex.source() {
+            VertexSource::Endpoint { id } => smooth_anchors.contains(&id),
+            VertexSource::Edge { .. } => true,
+        };
+        let normal = vertex.normal();
+        let normal_length = normal.length();
+        let tangent = if normal_length.is_finite() && normal_length > f32::EPSILON {
+            Vec2::new(normal.y / normal_length, -normal.x / normal_length)
+        } else {
+            Vec2::new(f32::NAN, f32::NAN)
+        };
+        let offset = vertex.position() - vertex.position_on_path();
+        let normal_axis = Vec2::new(-tangent.y, tangent.x);
+        let mut extrusion = Vec2::new(
+            offset.x * tangent.x + offset.y * tangent.y,
+            offset.x * normal_axis.x + offset.y * normal_axis.y,
+        );
+        // Lyon's curve flattener connects neighboring samples with an internal
+        // miter, even when the authored join is Round or Bevel. Its Edge-source
+        // vertices, plus endpoints at smooth authored curve joins, are nearly
+        // pure transverse samples. Correct their small overshoot while leaving
+        // authored corners and line caps alone.
+        let extrusion_length = extrusion.length();
+        if smooth_endpoint
+            && stroke_join != StrokeJoin::Miter
+            && extrusion_length.is_finite()
+            && extrusion_length > 0.5
+            && extrusion_length <= 0.51
+            && extrusion.x.abs() <= 1.0e-4
+        {
+            extrusion.y = extrusion.y.signum() * 0.5;
+        }
+        ScreenStrokeVertex {
+            position: vec2(vertex.position_on_path().x, vertex.position_on_path().y),
+            tangent,
+            extrusion,
+            metadata: [0.0; 3],
+        }
+    });
+    // Keep the Path endpoint identities used by the smooth-join prepass.
+    // The attribute-free tessellate_path shortcut generates different IDs.
+    StrokeTessellator::new()
+        .tessellate_with_ids(lyon_path.id_iter(), &lyon_path, None, &options, &mut output)
+        .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
+    if buffers.vertices.is_empty() || buffers.indices.is_empty() {
+        return Err(GeometryError::Tessellation(
+            "screen stroke produced no triangles".to_owned(),
+        ));
+    }
+    if buffers.vertices.iter().any(|vertex| {
+        [
+            vertex.position.x,
+            vertex.position.y,
+            vertex.tangent.x,
+            vertex.tangent.y,
+            vertex.extrusion.x,
+            vertex.extrusion.y,
+        ]
+        .iter()
+        .any(|value| !value.is_finite())
+    }) {
+        return Err(GeometryError::Tessellation(
+            "screen stroke produced an unrepresentable vertex".to_owned(),
+        ));
+    }
+    Ok(TessellatedScreenStroke {
+        vertices: buffers.vertices,
+        indices: buffers.indices,
+    })
+}
+
+fn screen_stroke_smooth_anchors(path: &Path) -> HashSet<EndpointId> {
+    fn tangent(direction: Vec2, chord: Vec2) -> Vec2 {
+        if direction.x.hypot(direction.y) > f32::EPSILON {
+            normalized(direction)
+        } else {
+            normalized(chord)
+        }
+    }
+
+    fn add_smooth_join(
+        anchors: &mut HashSet<EndpointId>,
+        point: EndpointId,
+        incoming: Vec2,
+        outgoing: Vec2,
+    ) {
+        if incoming.x * outgoing.x + incoming.y * outgoing.y >= 0.99999 {
+            anchors.insert(point);
+        }
+    }
+
+    let mut anchors = HashSet::new();
+    let mut first: Option<(EndpointId, Vec2)> = None;
+    let mut previous: Option<(EndpointId, Vec2)> = None;
+    for event in path.id_iter() {
+        match event {
+            IdEvent::Begin { .. } => {
+                first = None;
+                previous = None;
+            }
+            IdEvent::Line { from, to } => {
+                let start = path[from];
+                let end = path[to];
+                let direction = normalized(Vec2::new(end.x - start.x, end.y - start.y));
+                if let Some((endpoint, incoming)) = previous {
+                    add_smooth_join(&mut anchors, endpoint, incoming, direction);
+                } else {
+                    first = Some((from, direction));
+                }
+                previous = Some((to, direction));
+            }
+            IdEvent::Quadratic { from, ctrl, to } => {
+                let start = path[from];
+                let control = path[ctrl];
+                let end = path[to];
+                let chord = Vec2::new(end.x - start.x, end.y - start.y);
+                let outgoing = tangent(Vec2::new(control.x - start.x, control.y - start.y), chord);
+                let incoming = tangent(Vec2::new(end.x - control.x, end.y - control.y), chord);
+                if let Some((endpoint, direction)) = previous {
+                    add_smooth_join(&mut anchors, endpoint, direction, outgoing);
+                } else {
+                    first = Some((from, outgoing));
+                }
+                previous = Some((to, incoming));
+            }
+            IdEvent::Cubic {
+                from,
+                ctrl1,
+                ctrl2,
+                to,
+            } => {
+                let start = path[from];
+                let control1 = path[ctrl1];
+                let control2 = path[ctrl2];
+                let end = path[to];
+                let chord = Vec2::new(end.x - start.x, end.y - start.y);
+                let outgoing =
+                    tangent(Vec2::new(control1.x - start.x, control1.y - start.y), chord);
+                let incoming = tangent(Vec2::new(end.x - control2.x, end.y - control2.y), chord);
+                if let Some((endpoint, direction)) = previous {
+                    add_smooth_join(&mut anchors, endpoint, direction, outgoing);
+                } else {
+                    first = Some((from, outgoing));
+                }
+                previous = Some((to, incoming));
+            }
+            IdEvent::End {
+                last,
+                first: start,
+                close,
+            } => {
+                if close {
+                    let from = path[last];
+                    let to = path[start];
+                    if from != to {
+                        let direction = normalized(Vec2::new(to.x - from.x, to.y - from.y));
+                        if let Some((endpoint, incoming)) = previous {
+                            add_smooth_join(&mut anchors, endpoint, incoming, direction);
+                        }
+                        previous = Some((start, direction));
+                    }
+                    if let (Some((endpoint, incoming)), Some((first_endpoint, outgoing))) =
+                        (previous, first)
+                    {
+                        if endpoint == first_endpoint {
+                            add_smooth_join(&mut anchors, endpoint, incoming, outgoing);
+                        } else if path[endpoint] == path[first_endpoint] {
+                            add_smooth_join(&mut anchors, endpoint, incoming, outgoing);
+                            add_smooth_join(&mut anchors, first_endpoint, incoming, outgoing);
+                        }
+                    }
+                }
+                first = None;
+                previous = None;
+            }
+        }
+    }
+    anchors
+}
+
+/// Build a screen-space stroke with fixed topology and projection-time joins.
+/// The shared path flattener runs only during resource preparation; the renderer
+/// projects retained segment and join frames when camera/object transforms change.
+pub fn tessellate_projected_screen_stroke(
+    path: &VectorPath,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+) -> Result<TessellatedScreenStroke, GeometryError> {
+    const FAN_SEGMENTS: usize = 8;
+    let contours = crate::flatten::flatten_path(path, PATH_TESSELLATION_TOLERANCE)?;
+    let mut output = TessellatedScreenStroke::default();
+
+    fn push_vertex(
+        output: &mut TessellatedScreenStroke,
+        position: Vec2,
+        tangent: Vec2,
+        other: Vec2,
+        extrusion: Vec2,
+        metadata: [f32; 3],
+    ) -> Result<u32, GeometryError> {
+        let index = u32::try_from(output.vertices.len()).map_err(|_| {
+            GeometryError::Tessellation("screen stroke vertex limit exceeded".to_owned())
+        })?;
+        output.vertices.push(ScreenStrokeVertex {
+            position,
+            tangent,
+            extrusion: if metadata[0] == 0.0 { extrusion } else { other },
+            metadata,
+        });
+        Ok(index)
+    }
+
+    fn add_triangle(output: &mut TessellatedScreenStroke, a: u32, b: u32, c: u32) {
+        output.indices.extend([a, b, c]);
+    }
+
+    for contour in contours {
+        let points = contour.points;
+        if points.len() < 2 {
+            continue;
+        }
+        let segment_count = if contour.closed {
+            points.len()
+        } else {
+            points.len() - 1
+        };
+        let mut tangents = Vec::with_capacity(segment_count);
+        for segment in 0..segment_count {
+            let delta = points[(segment + 1) % points.len()] - points[segment];
+            tangents.push(delta.normalized().ok_or_else(|| {
+                GeometryError::Tessellation("screen stroke contains a collapsed segment".into())
+            })?);
+        }
+
+        for segment in 0..segment_count {
+            let start = points[segment];
+            let end = points[(segment + 1) % points.len()];
+            let tangent = tangents[segment];
+            let start_extension =
+                if !contour.closed && segment == 0 && stroke_cap == StrokeCap::Square {
+                    -0.5
+                } else {
+                    0.0
+                };
+            let end_extension = if !contour.closed
+                && segment + 1 == segment_count
+                && stroke_cap == StrokeCap::Square
+            {
+                0.5
+            } else {
+                0.0
+            };
+            let start_left = push_vertex(
+                &mut output,
+                start,
+                tangent,
+                Vec2::ZERO,
+                Vec2::new(start_extension, 0.5),
+                [0.0; 3],
+            )?;
+            let start_right = push_vertex(
+                &mut output,
+                start,
+                tangent,
+                Vec2::ZERO,
+                Vec2::new(start_extension, -0.5),
+                [0.0; 3],
+            )?;
+            let end_right = push_vertex(
+                &mut output,
+                end,
+                tangent,
+                Vec2::ZERO,
+                Vec2::new(end_extension, -0.5),
+                [0.0; 3],
+            )?;
+            let end_left = push_vertex(
+                &mut output,
+                end,
+                tangent,
+                Vec2::ZERO,
+                Vec2::new(end_extension, 0.5),
+                [0.0; 3],
+            )?;
+            add_triangle(&mut output, start_left, start_right, end_right);
+            add_triangle(&mut output, start_left, end_right, end_left);
+        }
+
+        let first_join = usize::from(!contour.closed);
+        let end_join = if contour.closed {
+            points.len()
+        } else {
+            points.len() - 1
+        };
+        let mut feature_cursor = 0;
+        for point_index in first_join..end_join {
+            let previous = tangents[(point_index + segment_count - 1) % segment_count];
+            let next = tangents[point_index % segment_count];
+            let turn = previous.x * next.y - previous.y * next.x;
+            if turn.abs() <= 1.0e-6 && (previous.x * next.x + previous.y * next.y) > 0.0 {
+                continue;
+            }
+            if turn.abs() <= 1.0e-6 {
+                return Err(GeometryError::Tessellation(
+                    "screen stroke contains an unrepresentable reversal join".to_owned(),
+                ));
+            }
+            let center = push_vertex(
+                &mut output,
+                points[point_index],
+                previous,
+                next,
+                Vec2::ZERO,
+                [2.0, 0.0, 0.0],
+            )?;
+            while contour
+                .feature_indices
+                .get(feature_cursor)
+                .is_some_and(|feature| *feature < point_index)
+            {
+                feature_cursor += 1;
+            }
+            let authored_feature =
+                contour.feature_indices.get(feature_cursor) == Some(&point_index);
+            let join = if authored_feature {
+                stroke_join
+            } else {
+                StrokeJoin::Bevel
+            };
+            let previous_edge = push_vertex(
+                &mut output,
+                points[point_index],
+                previous,
+                next,
+                Vec2::ZERO,
+                [1.0, 0.0, 0.0],
+            )?;
+            match join {
+                StrokeJoin::Bevel => {
+                    let next_edge = push_vertex(
+                        &mut output,
+                        points[point_index],
+                        previous,
+                        next,
+                        Vec2::ZERO,
+                        [1.0, 0.0, 1.0],
+                    )?;
+                    add_triangle(&mut output, center, previous_edge, next_edge);
+                }
+                StrokeJoin::Miter => {
+                    let miter = push_vertex(
+                        &mut output,
+                        points[point_index],
+                        previous,
+                        next,
+                        Vec2::ZERO,
+                        [3.0, 0.0, 0.0],
+                    )?;
+                    let next_edge = push_vertex(
+                        &mut output,
+                        points[point_index],
+                        previous,
+                        next,
+                        Vec2::ZERO,
+                        [1.0, 0.0, 1.0],
+                    )?;
+                    add_triangle(&mut output, center, previous_edge, miter);
+                    add_triangle(&mut output, center, miter, next_edge);
+                }
+                StrokeJoin::Round => {
+                    let mut previous_arc = previous_edge;
+                    for step in 1..=FAN_SEGMENTS {
+                        let next_arc = push_vertex(
+                            &mut output,
+                            points[point_index],
+                            previous,
+                            next,
+                            Vec2::ZERO,
+                            [4.0, 0.0, step as f32 / FAN_SEGMENTS as f32],
+                        )?;
+                        add_triangle(&mut output, center, previous_arc, next_arc);
+                        previous_arc = next_arc;
+                    }
+                }
+            }
+        }
+
+        if !contour.closed && stroke_cap == StrokeCap::Round {
+            for (point_index, tangent, sign) in [
+                (0, tangents[0], -1.0),
+                (points.len() - 1, tangents[segment_count - 1], 1.0),
+            ] {
+                let center = push_vertex(
+                    &mut output,
+                    points[point_index],
+                    tangent,
+                    tangent,
+                    Vec2::ZERO,
+                    [2.0, 0.0, 0.0],
+                )?;
+                let mut previous_arc = push_vertex(
+                    &mut output,
+                    points[point_index],
+                    tangent,
+                    tangent,
+                    Vec2::ZERO,
+                    [5.0, sign, 0.0],
+                )?;
+                for step in 1..=FAN_SEGMENTS {
+                    let next_arc = push_vertex(
+                        &mut output,
+                        points[point_index],
+                        tangent,
+                        tangent,
+                        Vec2::ZERO,
+                        [5.0, sign, step as f32 / FAN_SEGMENTS as f32],
+                    )?;
+                    add_triangle(&mut output, center, previous_arc, next_arc);
+                    previous_arc = next_arc;
+                }
+            }
+        }
+    }
+
+    if output.vertices.is_empty() || output.indices.is_empty() {
+        return Err(GeometryError::Tessellation(
+            "screen stroke produced no triangles".to_owned(),
+        ));
+    }
+    if output.vertices.iter().any(|vertex| {
+        [
+            vertex.position.x,
+            vertex.position.y,
+            vertex.tangent.x,
+            vertex.tangent.y,
+            vertex.extrusion.x,
+            vertex.extrusion.y,
+        ]
+        .iter()
+        .chain(vertex.metadata.iter())
+        .any(|value| !value.is_finite())
+    }) {
+        return Err(GeometryError::Tessellation(
+            "screen stroke produced an unrepresentable vertex".to_owned(),
+        ));
+    }
+    Ok(output)
 }
 
 /// Tessellate a morph while retaining source/target contour point order.
@@ -402,6 +902,7 @@ fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryEr
                 points.push(RevealPoint {
                     progress: progress(curve_index),
                     position: to,
+                    target_position: to,
                 });
                 current = Some(to);
                 contour_start = Some(to);
@@ -498,12 +999,14 @@ fn append_reveal_segment(
         points.push(RevealPoint {
             progress: start_progress,
             position: from,
+            target_position: from,
         });
     }
     if (to.x - from.x).hypot(to.y - from.y) > 0.0 {
         points.push(RevealPoint {
             progress: end_progress,
             position: to,
+            target_position: to,
         });
     }
 }
@@ -640,11 +1143,24 @@ fn tessellate_morph_path(
 ) -> Result<TessellatedPath, GeometryError> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    let reveal_points = build_reveal_points(source)?;
+    let source_reveal_points = build_reveal_points(source)?;
 
     if fill_enabled {
         let fill = if preserve_morph_order {
-            crate::plan_filled_morph_preserving_order(source, target, crate::MorphOptions::DEFAULT)
+            // Exact affine reflection must retain ordered point pairing. If it is
+            // not that bounded case, preserve the established general planner.
+            crate::plan_filled_affine_winding_flip_preserving_order(
+                source,
+                target,
+                crate::MorphOptions::DEFAULT,
+            )
+            .or_else(|_| {
+                crate::plan_filled_morph_preserving_order(
+                    source,
+                    target,
+                    crate::MorphOptions::DEFAULT,
+                )
+            })
         } else {
             crate::plan_filled_morph(source, target, crate::MorphOptions::DEFAULT)
         }
@@ -690,23 +1206,33 @@ fn tessellate_morph_path(
             bounds,
             stroke_length: 0.0,
             morphing: true,
-            reveal_points,
+            reveal_points: source_reveal_points,
         });
     }
 
-    let plan = if preserve_morph_order {
-        crate::plan_morph_preserving_order(source, target, crate::MorphOptions::DEFAULT)
+    let (plan, authored_progress) = if preserve_morph_order {
+        let prepared =
+            crate::morph::plan_with_authored_progress(source, target, crate::MorphOptions::DEFAULT)
+                .map_err(|error| {
+                    GeometryError::Tessellation(format!("morph planning failed: {error}"))
+                })?;
+        (prepared.plan, Some(prepared.contours))
     } else {
-        crate::plan_morph(source, target, crate::MorphOptions::DEFAULT)
-    }
-    .map_err(|error| GeometryError::Tessellation(format!("morph planning failed: {error}")))?;
+        (
+            crate::plan_morph(source, target, crate::MorphOptions::DEFAULT).map_err(|error| {
+                GeometryError::Tessellation(format!("morph planning failed: {error}"))
+            })?,
+            None,
+        )
+    };
     let total_points = plan.point_count();
     let mut global_point = 0_usize;
     let progress_denominator = total_points.saturating_sub(1).max(1) as f32;
     let half_width = stroke_width * 0.5;
     let mut stroke_length = 0.0_f32;
+    let reveal_points = morph_reveal_points(&plan, authored_progress.as_deref());
 
-    for contour in &plan.contours {
+    for (contour_index, contour) in plan.contours.iter().enumerate() {
         let point_count = contour.source_points.len();
         let segment_count = if contour.closed {
             point_count
@@ -740,8 +1266,25 @@ fn tessellate_morph_path(
                 stroke_cap,
                 half_width,
             );
-            let start_progress = (global_point + segment) as f32 / progress_denominator;
-            let end_progress = (global_point + next) as f32 / progress_denominator;
+            let (start_progress, end_progress) = authored_progress
+                .as_ref()
+                .map(|progress| {
+                    let progress = &progress[contour_index];
+                    (
+                        progress.point_progress[segment],
+                        if contour.closed && next == 0 {
+                            progress.end_progress
+                        } else {
+                            progress.point_progress[next]
+                        },
+                    )
+                })
+                .unwrap_or_else(|| {
+                    (
+                        (global_point + segment) as f32 / progress_denominator,
+                        (global_point + next) as f32 / progress_denominator,
+                    )
+                });
             add_paired_polygon(
                 &mut vertices,
                 &mut indices,
@@ -768,7 +1311,10 @@ fn tessellate_morph_path(
             } else {
                 index + 1
             };
-            let progress = (global_point + index) as f32 / progress_denominator;
+            let progress = authored_progress
+                .as_ref()
+                .map(|progress| progress[contour_index].point_progress[index])
+                .unwrap_or((global_point + index) as f32 / progress_denominator);
             for side in [StrokeSide::Left, StrokeSide::Right] {
                 let source_join = join_polygon(
                     contour.source_points[previous],
@@ -803,7 +1349,10 @@ fn tessellate_morph_path(
         if !contour.closed && stroke_cap == StrokeCap::Round {
             let source_start = round_cap_polygon(&contour.source_points, true, half_width);
             let target_start = round_cap_polygon(&contour.target_points, true, half_width);
-            let start_progress = (global_point as f32 / progress_denominator).clamp(0.0, 1.0);
+            let start_progress = authored_progress
+                .as_ref()
+                .map(|progress| progress[contour_index].point_progress[0])
+                .unwrap_or((global_point as f32 / progress_denominator).clamp(0.0, 1.0));
             add_paired_polygon(
                 &mut vertices,
                 &mut indices,
@@ -815,8 +1364,13 @@ fn tessellate_morph_path(
 
             let source_end = round_cap_polygon(&contour.source_points, false, half_width);
             let target_end = round_cap_polygon(&contour.target_points, false, half_width);
-            let end_progress =
-                ((global_point + point_count - 1) as f32 / progress_denominator).clamp(0.0, 1.0);
+            let end_progress = authored_progress
+                .as_ref()
+                .map(|progress| progress[contour_index].end_progress)
+                .unwrap_or(
+                    ((global_point + point_count - 1) as f32 / progress_denominator)
+                        .clamp(0.0, 1.0),
+                );
             add_paired_polygon(
                 &mut vertices,
                 &mut indices,
@@ -839,6 +1393,47 @@ fn tessellate_morph_path(
         morphing: true,
         reveal_points,
     })
+}
+
+fn morph_reveal_points(
+    plan: &crate::MorphPlan,
+    authored_progress: Option<&[crate::morph::AuthoredContourProgress]>,
+) -> Vec<RevealPoint> {
+    let total_points = plan.point_count();
+    let denominator = total_points.saturating_sub(1).max(1) as f32;
+    let mut global_point = 0_usize;
+    let mut points = Vec::new();
+    for (contour_index, contour) in plan.contours.iter().enumerate() {
+        for (point_index, (&position, &target_position)) in contour
+            .source_points
+            .iter()
+            .zip(&contour.target_points)
+            .enumerate()
+        {
+            let progress = authored_progress.map_or(
+                ((global_point + point_index) as f32 / denominator).clamp(0.0, 1.0),
+                |progress| progress[contour_index].point_progress[point_index],
+            );
+            points.push(RevealPoint {
+                progress,
+                position,
+                target_position,
+            });
+        }
+        if contour.closed {
+            let progress = authored_progress.map_or(
+                ((global_point + contour.source_points.len()) as f32 / denominator).clamp(0.0, 1.0),
+                |progress| progress[contour_index].end_progress,
+            );
+            points.push(RevealPoint {
+                progress,
+                position: contour.source_points[0],
+                target_position: contour.target_points[0],
+            });
+        }
+        global_point += contour.source_points.len();
+    }
+    points
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1449,6 +2044,191 @@ fn mesh_bounds(vertices: &[MeshVertex]) -> Option<Rect> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn screen_stroke_mesh_retains_smooth_centerline_and_finite_offsets() {
+        let path = crate::canonical_outline_path(&noon_core::GeometryRef::circle(1.0)).unwrap();
+        let mesh = tessellate_screen_stroke(&path, StrokeJoin::Round, StrokeCap::Butt).unwrap();
+        assert!(!mesh.vertices.is_empty());
+        assert!(!mesh.indices.is_empty());
+        assert!(mesh
+            .indices
+            .iter()
+            .all(|index| (*index as usize) < mesh.vertices.len()));
+        for vertex in &mesh.vertices {
+            assert!(vertex.position.x.is_finite() && vertex.position.y.is_finite());
+            assert!(vertex.tangent.x.is_finite() && vertex.tangent.y.is_finite());
+            assert!((vertex.tangent.length() - 1.0).abs() < 1e-4);
+            assert!(vertex.extrusion.x.is_finite() && vertex.extrusion.y.is_finite());
+            assert!(vertex.extrusion.y.abs() <= 0.5001);
+        }
+        let collapsed = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .cubic_to(Vec2::ZERO, Vec2::ZERO, Vec2::ZERO)
+            .close();
+        assert!(tessellate_screen_stroke(&collapsed, StrokeJoin::Round, StrokeCap::Butt).is_err());
+    }
+
+    #[test]
+    fn screen_stroke_clips_flattening_miters_but_preserves_authored_miters() {
+        let circle = crate::canonical_outline_path(&noon_core::GeometryRef::circle(1.0)).unwrap();
+        let round = tessellate_screen_stroke(&circle, StrokeJoin::Round, StrokeCap::Butt).unwrap();
+        assert!(round
+            .vertices
+            .iter()
+            .all(|v| v.extrusion.length() <= 0.5001));
+
+        let corner = VectorPath::new()
+            .move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(2.0, 0.0))
+            .line_to(Vec2::new(2.1, 2.0));
+        let miter = tessellate_screen_stroke(&corner, StrokeJoin::Miter, StrokeCap::Butt).unwrap();
+        assert!(miter.vertices.iter().any(|v| v.extrusion.length() > 0.6));
+    }
+
+    #[test]
+    fn screen_stroke_preserves_square_cap_corner_extension() {
+        let line = VectorPath::new()
+            .move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(2.0, 0.0));
+        let mesh = tessellate_screen_stroke(&line, StrokeJoin::Round, StrokeCap::Square).unwrap();
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.extrusion.length() >= 0.7070));
+
+        let closed_corner = VectorPath::new()
+            .move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(2.0, 0.0))
+            .line_to(Vec2::new(2.0, 2.0))
+            .line_to(Vec2::new(0.0, 2.0))
+            .close();
+        let joined =
+            tessellate_screen_stroke(&closed_corner, StrokeJoin::Round, StrokeCap::Square).unwrap();
+        assert!(joined
+            .vertices
+            .iter()
+            .all(|vertex| vertex.extrusion.length() <= 0.7072));
+        assert!(joined
+            .vertices
+            .iter()
+            .any(|vertex| vertex.extrusion.length() > 0.6));
+    }
+
+    #[test]
+    fn screen_stroke_smooth_join_anchors_are_keyed_by_path_endpoint_id() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 0.0))
+            .move_to(Vec2::new(0.0, -1.0))
+            .line_to(Vec2::ZERO)
+            .line_to(Vec2::new(1.0, 1.0));
+        let lyon_path = build_lyon_path(&path).unwrap();
+        let coincident_endpoints: Vec<_> = lyon_path
+            .id_iter()
+            .filter_map(|event| match event {
+                IdEvent::Line { to, .. } if lyon_path[to] == point(0.0, 0.0) => Some(to),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(coincident_endpoints.len(), 2);
+        let anchors = screen_stroke_smooth_anchors(&lyon_path);
+        assert!(anchors.contains(&coincident_endpoints[0]));
+        assert!(!anchors.contains(&coincident_endpoints[1]));
+    }
+
+    #[test]
+    fn projected_screen_stroke_retains_incident_frames_and_fixed_join_topology() {
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::ZERO)
+            .line_to(Vec2::new(0.0, 1.0));
+        let bevel =
+            tessellate_projected_screen_stroke(&path, StrokeJoin::Bevel, StrokeCap::Butt).unwrap();
+        let miter =
+            tessellate_projected_screen_stroke(&path, StrokeJoin::Miter, StrokeCap::Butt).unwrap();
+        let round =
+            tessellate_projected_screen_stroke(&path, StrokeJoin::Round, StrokeCap::Round).unwrap();
+        assert!(bevel
+            .vertices
+            .iter()
+            .all(|vertex| vertex.metadata.iter().all(|v| v.is_finite())));
+        let miter_vertex = miter
+            .vertices
+            .iter()
+            .find(|vertex| vertex.metadata[0] == 3.0)
+            .expect("miter join vertex");
+        assert_eq!(miter_vertex.tangent, Vec2::new(1.0, 0.0));
+        assert_eq!(miter_vertex.extrusion, Vec2::new(0.0, 1.0));
+        assert!(round
+            .vertices
+            .iter()
+            .any(|vertex| vertex.metadata[0] == 4.0));
+        assert!(round
+            .vertices
+            .iter()
+            .any(|vertex| vertex.metadata[0] == 5.0));
+        assert_ne!(bevel.indices.len(), miter.indices.len());
+        assert_ne!(miter.indices.len(), round.indices.len());
+
+        // A nonuniformly scaled, Y-tilted path under an oblique perspective
+        // changes the projected right-angle tangents. The miter must remain
+        // half a screen unit from both incident edges and obey the 4x limit.
+        let yaw = 0.63_f32;
+        let scale_x = 2.0_f32;
+        let scale_y = 0.45_f32;
+        let camera_tilt = 0.31_f32;
+        let position = [1.1_f32, -0.7_f32, 0.3_f32];
+        let depth = 5.0 + camera_tilt.sin() * position[1] - camera_tilt.cos() * position[2];
+        let camera_y = camera_tilt.cos() * position[1] + camera_tilt.sin() * position[2];
+        let project_derivative = |direction: [f32; 3]| {
+            let depth_derivative =
+                camera_tilt.sin() * direction[1] - camera_tilt.cos() * direction[2];
+            let y_derivative = camera_tilt.cos() * direction[1] + camera_tilt.sin() * direction[2];
+            Vec2::new(
+                (direction[0] * depth - position[0] * depth_derivative) / depth.powi(2),
+                (y_derivative * depth - camera_y * depth_derivative) / depth.powi(2),
+            )
+        };
+        let previous = project_derivative([scale_x * yaw.cos(), 0.0, -scale_x * yaw.sin()]);
+        let next = project_derivative([0.0, scale_y, 0.0]);
+        let previous = previous.normalized().unwrap();
+        let next = next.normalized().unwrap();
+        let turn = previous.x * next.y - previous.y * next.x;
+        let outer_sign = if turn > 0.0 { -1.0 } else { 1.0 };
+        let previous_normal = Vec2::new(-previous.y, previous.x) * outer_sign;
+        let next_normal = Vec2::new(-next.y, next.x) * outer_sign;
+        let miter_direction = (previous_normal + next_normal).normalized().unwrap();
+        let dot = |a: Vec2, b: Vec2| a.x * b.x + a.y * b.y;
+        let miter_offset = miter_direction * (0.5 / dot(miter_direction, previous_normal));
+        assert!((dot(miter_offset, previous_normal).abs() - 0.5).abs() < 1.0e-5);
+        assert!((dot(miter_offset, next_normal).abs() - 0.5).abs() < 1.0e-5);
+        assert!(
+            miter_offset.length() <= 2.0,
+            "miter remains within the 4x width limit"
+        );
+        for bevel_offset in [previous_normal * 0.5, next_normal * 0.5] {
+            assert!((bevel_offset.length() - 0.5).abs() < 1.0e-5);
+        }
+        for progress in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+            let angle = (previous_normal.x * next_normal.y - previous_normal.y * next_normal.x)
+                .atan2(dot(previous_normal, next_normal))
+                * progress;
+            let round_offset = Vec2::new(
+                previous_normal.x * angle.cos() - previous_normal.y * angle.sin(),
+                previous_normal.x * angle.sin() + previous_normal.y * angle.cos(),
+            ) * 0.5;
+            assert!((round_offset.length() - 0.5).abs() < 1.0e-5);
+        }
+        for (progress, sign) in [(0.0_f32, -1.0_f32), (0.5, -1.0), (1.0, -1.0)] {
+            let theta = std::f32::consts::PI * progress;
+            let cap = (Vec2::new(-previous.y, previous.x) * theta.cos()
+                + previous * (sign * theta.sin()))
+                * 0.5;
+            assert!((cap.length() - 0.5).abs() < 1.0e-5);
+        }
+    }
+
     fn curved_shape() -> VectorPath {
         VectorPath::new()
             .move_to(Vec2::new(-1.0, 0.0))
@@ -1705,6 +2485,87 @@ mod tests {
             .indices
             .iter()
             .all(|index| (*index as usize) < mesh.vertices.len()));
+    }
+
+    #[test]
+    fn ordered_morph_reveal_progress_tracks_authored_curves_not_flattened_samples() {
+        // The first curve needs substantially more adaptive samples than the line.
+        // Reveal still reaches their authored boundary at exactly one half.
+        let source = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .cubic_to(
+                Vec2::new(0.0, 1000.0),
+                Vec2::new(2.0, -1000.0),
+                Vec2::new(2.0, 0.0),
+            )
+            .line_to(Vec2::new(3.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .cubic_to(
+                Vec2::new(1000.0, 0.0),
+                Vec2::new(-1000.0, 2.0),
+                Vec2::new(0.0, 2.0),
+            )
+            .line_to(Vec2::new(0.0, 3.0));
+        let prepared = crate::morph::plan_with_authored_progress(
+            &source,
+            &target,
+            crate::MorphOptions::DEFAULT,
+        )
+        .unwrap();
+        let progress = &prepared.contours[0].point_progress;
+        let boundary = progress
+            .iter()
+            .position(|value| *value == 0.5)
+            .expect("second authored curve starts at one half");
+        assert!(
+            boundary > progress.len() / 2,
+            "adaptive first curve must dominate samples"
+        );
+
+        let mesh = tessellate_styled_with_fill_preserving_morph_order(
+            &source.with_morph_target(target),
+            0.1,
+            StrokeJoin::Round,
+            StrokeCap::Butt,
+            false,
+        )
+        .unwrap();
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.path_progress == 0.5));
+        assert!(mesh.vertices.iter().all(|vertex| {
+            vertex.path_progress.is_finite() && (0.0..=1.0).contains(&vertex.path_progress)
+        }));
+        let head = mesh
+            .reveal_head_position_at_morph(0.5, 0.5)
+            .expect("morphed reveal head");
+        assert!((head - Vec2::new(1.0, 1.0)).length() < 1.0e-5);
+    }
+
+    #[test]
+    fn degenerate_reveal_span_still_uses_the_morphed_endpoint() {
+        let mesh = TessellatedPath {
+            reveal_points: vec![
+                RevealPoint {
+                    progress: 0.0,
+                    position: Vec2::ZERO,
+                    target_position: Vec2::ZERO,
+                },
+                RevealPoint {
+                    progress: f32::EPSILON * 0.5,
+                    position: Vec2::new(1.0, 2.0),
+                    target_position: Vec2::new(5.0, 6.0),
+                },
+            ],
+            ..TessellatedPath::default()
+        };
+
+        assert_eq!(
+            mesh.reveal_head_position_at_morph(f32::EPSILON * 0.25, 0.25),
+            Some(Vec2::new(2.0, 3.0))
+        );
     }
 
     #[test]

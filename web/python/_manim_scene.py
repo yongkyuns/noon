@@ -147,6 +147,45 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     return _commit_typed_binding(self, scene, reservation, handle)
 
 
+def _set_translation_drag_targets(
+    scene: _base.Scene, *mobjects: _base.Mobject
+) -> _base.Scene:
+    """Declare source-owned drag eligibility through the canonical Rust context."""
+    handles = []
+    seen = set()
+    for mobject in mobjects:
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("Scene.set_drag_targets expects Mobjects")
+        if mobject._scene is not scene:
+            raise ValueError("translation drag target must belong to this Scene")
+        handle = getattr(mobject, "_semantic_handle", None)
+        if handle is None or not bool(getattr(mobject, "_semantic_handle_fresh", False)):
+            raise RuntimeError("translation drag target requires a current semantic handle")
+        if id(handle) in seen:
+            raise ValueError("translation drag targets must be unique")
+        seen.add(id(handle))
+        handles.append(handle)
+    context = _context(scene)
+    batch = engine_call(
+        context.beginMembershipBatch,
+        "add",
+        operation="Scene.set_drag_targets",
+    )
+    for handle in handles:
+        engine_call(
+            batch.appendMobject,
+            "",
+            handle,
+            operation="Scene.set_drag_targets",
+        )
+    engine_call(
+        context.setTranslationDragTargets,
+        batch,
+        operation="Scene.set_drag_targets",
+    )
+    return scene
+
+
 def _semantic_wrapper_key(value: object) -> str:
     if not isinstance(value, (_base.Mobject, _compat.Group)):
         raise TypeError("Scene membership accepts Mobjects and Groups")
@@ -167,17 +206,20 @@ def _membership_registry(scene: _base.Scene) -> dict[str, object]:
     return registry
 
 
-def _register_membership_wrappers(scene: _base.Scene, value: object) -> None:
-    registry = _membership_registry(scene)
+def _register_membership_wrappers(
+    scene: _base.Scene, value: object, *, registry: dict[str, object] | None = None
+) -> None:
+    if registry is None:
+        registry = _membership_registry(scene)
     registry[_semantic_wrapper_key(value)] = value
-    if isinstance(value, _compat.Group):
+    if _semantic_handles._is_shared_family(value):
         for member in value.submobjects:
-            _register_membership_wrappers(scene, member)
+            _register_membership_wrappers(scene, member, registry=registry)
 
 
 def _membership_wrapper_leaves(candidate: object):
     """Visit affected Python identities; Rust alone decides scene membership."""
-    if isinstance(candidate, _compat.Group):
+    if _semantic_handles._is_shared_family(candidate):
         for child in candidate.submobjects:
             yield from _membership_wrapper_leaves(child)
     elif isinstance(candidate, _base.Mobject):
@@ -190,8 +232,8 @@ def _membership_leaf_bindings(
     value: object,
     *,
     next_object_id: int,
-    key: str | None,
-    binding_keys: set[str],
+    key_binding: tuple[str, str] | None,
+    binding_reservations: dict[str, _TypedBindingReservation],
 ) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
     # This walk reserves Python wrapper IDs only. The family handle below remains
     # the sole membership/order input; Rust resolves authoritative family leaves.
@@ -199,19 +241,28 @@ def _membership_leaf_bindings(
     if not leaves:
         raise ValueError("Scene membership target must contain at least one Mobject")
     reservations = []
-    for index, member in enumerate(leaves):
+    for member in leaves:
         handle = getattr(member, "_semantic_handle", None)
         if handle is None:
             raise NotImplementedError(
                 "standard Scene membership does not support retained-only Mobjects"
             )
         semantic_key = _semantic_wrapper_key(member)
-        if semantic_key in binding_keys:
-            continue
-        binding_keys.add(semantic_key)
         if member._scene is not None and member._scene is not scene:
             raise ValueError("Mobject already belongs to another Scene")
+        if semantic_key in binding_reservations:
+            continue
+        # The designated leaf may first occur inside a Group. Resolve its key
+        # on that first binding, before deduplicating later wrapper occurrences.
+        key = (
+            key_binding[1]
+            if key_binding is not None and semantic_key == key_binding[0]
+            else None
+        )
         if member._scene is scene:
+            existing_key = scene._object_keys[member._object.id]
+            if key is not None and _ir._authoring_key("key", key, existing_key) != existing_key:
+                raise ValueError("a re-added canonical Mobject keeps its existing key")
             reservation = _TypedBindingReservation(
                 member._object,
                 scene._object_keys[member._object.id],
@@ -222,14 +273,13 @@ def _membership_leaf_bindings(
                 member,
                 scene,
                 handle,
-                key if index == 0 else None,
+                key,
                 object_id=next_object_id,
             )
             if not reservation.reuse_existing_identity:
                 next_object_id += 1
-                reservations.append((member, reservation, handle))
-            else:
-                reservations.append((member, reservation, handle))
+            reservations.append((member, reservation, handle))
+        binding_reservations[semantic_key] = reservation
         engine_call(batch.reserveMobjectBinding, str(reservation.object.id), handle, operation="Scene.membership")
     return next_object_id, reservations
 
@@ -240,9 +290,9 @@ def _append_membership_value(
     value: object,
     *,
     next_object_id: int,
-    binding_keys: set[str],
+    binding_reservations: dict[str, _TypedBindingReservation],
     reserve_bindings: bool,
-    key: str | None = None,
+    key_binding: tuple[str, str] | None = None,
 ) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
     reservations = []
     if reserve_bindings:
@@ -251,13 +301,11 @@ def _append_membership_value(
             batch,
             value,
             next_object_id=next_object_id,
-            key=key,
-            binding_keys=binding_keys,
+            key_binding=key_binding,
+            binding_reservations=binding_reservations,
         )
-    if isinstance(value, _compat.Group):
+    if _semantic_handles._is_shared_family(value):
         family = getattr(value, "_semantic_family_handle", None)
-        if family is None:
-            raise NotImplementedError("standard Scene membership requires a typed Group")
         engine_call(batch.appendFamily, family, operation="Scene.membership")
     elif isinstance(value, _base.Mobject):
         handle = getattr(value, "_semantic_handle", None)
@@ -267,12 +315,9 @@ def _append_membership_value(
             )
         object_id = ""
         if reserve_bindings:
-            assert value._object is not None or reservations
-            object_id = str(
-                value._object.id
-                if value._object is not None
-                else reservations[0][1].object.id
-            )
+            # A preceding Group may already have reserved this unbound leaf.
+            # Reuse that identity without committing any Python wrapper early.
+            object_id = str(binding_reservations[_semantic_wrapper_key(value)].object.id)
         engine_call(batch.appendMobject, object_id, handle, operation="Scene.membership")
     else:
         raise TypeError("Scene membership accepts Mobjects and Groups")
@@ -282,7 +327,7 @@ def _append_membership_value(
 def _sync_membership_wrapper_attachments(
     scene: _base.Scene, kind: str, values: tuple[object, ...]
 ) -> None:
-    if kind == "add":
+    if kind in {"add", "add_foreground", "remove_foreground"}:
         return
     context = _context(scene)
     # Clear affects every root; other operations only reconsider their old targets.
@@ -297,7 +342,7 @@ def _sync_membership_wrapper_attachments(
     )
     seen = set()
     for wrapper in candidates:
-        if isinstance(wrapper, _compat.Group) or wrapper._scene is not scene:
+        if _semantic_handles._is_shared_family(wrapper) or wrapper._scene is not scene:
             continue
         semantic_key = _semantic_wrapper_key(wrapper)
         if semantic_key in seen:
@@ -311,11 +356,74 @@ def _sync_membership_wrapper_attachments(
             wrapper._scene = None
 
 
+def _reconcile_completed_family_bindings(
+    scene: _base.Scene, families: tuple[object, ...]
+) -> None:
+    """Refresh affected wrapper identities from completed Rust membership only."""
+    if not families:
+        return
+    context = _context(scene)
+    wrappers: dict[str, object] = {}
+    for family in families:
+        _register_membership_wrappers(scene, family, registry=wrappers)
+    batch = engine_call(context.beginMembershipBatch, "add", operation="Scene.completion")
+    next_object_id = scene._next_object_id
+    reservations = []
+    detached = []
+    binding_reservations: dict[str, _TypedBindingReservation] = {}
+    for wrapper in wrappers.values():
+        if _semantic_handles._is_shared_family(wrapper):
+            continue
+        if wrapper._scene is not None and wrapper._scene is not scene:
+            raise ValueError("completion wrapper belongs to another Scene")
+        present = bool(engine_call(
+            context.containsMobject, wrapper._semantic_handle, operation="Scene.completion"
+        ))
+        if present:
+            next_object_id, appended = _membership_leaf_bindings(
+                scene, batch, wrapper, next_object_id=next_object_id,
+                key_binding=None, binding_reservations=binding_reservations,
+            )
+            reservations.extend(appended)
+        elif wrapper._scene is scene:
+            detached.append(wrapper)
+    # This validates the entire binding batch against published Rust membership.
+    # It does not add/remove objects, relower, or repeat matching cleanup.
+    engine_call(context.associatePublishedMobjects, batch, operation="Scene.completion")
+    for wrapper, reservation, handle in reservations:
+        _commit_typed_binding(wrapper, scene, reservation, handle)
+    _membership_registry(scene).update(wrappers)
+    for wrapper in detached:
+        wrapper._canonical_live_target_context = context
+        wrapper._scene = None
+
+
 def _canonical_scene_mobjects(scene: _base.Scene) -> list[object]:
+    from _manim_updaters import active_callback_membership_context
+
+    callback = active_callback_membership_context(scene)
+    if callback is not None:
+        keys = callback.membership_root_keys()
+        if keys is not None:
+            wrappers = dict(_membership_registry(scene))
+            wrappers.update(callback._membership_wrappers)
+            return [wrappers[key] for key in keys if key in wrappers]
     registry = _membership_registry(scene)
     return [
         registry[str(key)]
         for key in engine_call(_context(scene).rootMembershipKeys, operation="Scene.mobjects")
+        if str(key) in registry
+    ]
+
+
+def _canonical_scene_foreground_mobjects(scene: _base.Scene) -> list[object]:
+    """Project the shared Rust declaration back to already-known Python wrappers."""
+    registry = _membership_registry(scene)
+    return [
+        registry[str(key)]
+        for key in engine_call(
+            _context(scene).rootForegroundKeys, operation="Scene.foreground_mobjects"
+        )
         if str(key) in registry
     ]
 
@@ -326,16 +434,32 @@ def _canonical_edit_membership(
     values: tuple[object, ...] = (),
     *,
     key: str | None = None,
+    spatial_domain: str | None = None,
 ) -> None:
-    if key is not None and (kind != "add" or len(values) != 1 or isinstance(values[0], _compat.Group)):
+    from _manim_updaters import active_callback_membership_context
+
+    callback = active_callback_membership_context(scene)
+    if callback is not None:
+        if spatial_domain is not None:
+            raise NotImplementedError("spatial membership requires an ordinary continuation boundary")
+        _stage_callback_membership(scene, callback, kind, values, key=key)
+        return
+    if key is not None and (
+        kind != "add"
+        or len(values) != 1
+        or not isinstance(values[0], _base.Mobject)
+    ):
         raise ValueError("an explicit key requires one ordinary Mobject add")
+    key_binding = None if key is None else (_semantic_wrapper_key(values[0]), key)
     context = _context(scene)
     batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
+    if spatial_domain is not None:
+        engine_call(batch.setSpatialDomain, spatial_domain, operation="Scene.spatial_membership")
     next_object_id = scene._next_object_id
     reservations = []
-    binding_keys = set()
+    binding_reservations: dict[str, _TypedBindingReservation] = {}
     request_keys = set()
-    for index, value in enumerate(values):
+    for value in values:
         request_key = _semantic_wrapper_key(value)
         if request_key in request_keys:
             raise ValueError("membership request contains a duplicate Mobject or Group")
@@ -345,17 +469,195 @@ def _canonical_edit_membership(
             batch,
             value,
             next_object_id=next_object_id,
-            binding_keys=binding_keys,
-            reserve_bindings=kind in {"add", "replace"},
-            key=key if index == 0 else None,
+            binding_reservations=binding_reservations,
+            reserve_bindings=kind in {"add", "add_foreground", "replace"},
+            key_binding=key_binding,
         )
         reservations.extend(appended)
+    # Existing-key checks cannot see other speculative reservations. Detect
+    # explicit/default key collisions within this batch before Rust publication.
+    if len({item.key for item in binding_reservations.values()}) != len(binding_reservations):
+        raise ValueError("duplicate object key in membership batch")
     engine_call(context.editMembership, batch, operation="Scene." + kind)
     for member, reservation, handle in reservations:
         _commit_typed_binding(member, scene, reservation, handle)
     for value in values:
         _register_membership_wrappers(scene, value)
     _sync_membership_wrapper_attachments(scene, kind, values)
+
+
+def _stage_callback_membership(
+    scene: _base.Scene,
+    callback: object,
+    kind: str,
+    values: tuple[object, ...],
+    *,
+    key: str | None,
+) -> None:
+    """Stage one callback-local membership operation through the Rust collector.
+
+    Existing typed handles retain their original provenance. One newly created
+    provisional geometry Mobject may be admitted through its phase-bound local token; its
+    normal semantic handle and Python binding appear only after the shared
+    callback publication succeeds. Groups, keys, foreground, and reorders stay
+    outside this initial provisional slice.
+    """
+    if kind not in {"add", "remove", "clear"}:
+        raise NotImplementedError(
+            "canonical callbacks currently stage Scene.add, Scene.remove, and Scene.clear"
+        )
+    if key is not None:
+        raise NotImplementedError(
+            "canonical callback membership does not support provisional keyed construction"
+        )
+    provisional = [
+        (value, getattr(value, "_callback_provisional_handle", None),
+         getattr(value, "_callback_provisional_context", None))
+        for value in values
+    ]
+    if any(handle is not None for _, handle, _ in provisional):
+        if kind != "add":
+            raise NotImplementedError(
+                "canonical callback provisional Mobjects currently support Scene.add only"
+            )
+
+        # Validate the complete mixed argument list before a Rust admission is
+        # staged. The one batch below then gives Rust every original and local
+        # target at once, so a caught bad argument cannot retain an earlier
+        # member from this source-level Scene.add call.
+        seen: set[str] = set()
+        entries: list[tuple[_base.Mobject, object | None, object | None]] = []
+        provisional_bindings: list[tuple[_base.Mobject, object, object, str]] = []
+        for member, provisional_handle, owner in provisional:
+            if not isinstance(member, _base.Mobject):
+                raise NotImplementedError(
+                    "canonical callback membership currently accepts Mobjects only"
+                )
+            if provisional_handle is not None:
+                if owner is not callback:
+                    raise RuntimeError("callback provisional Mobject belongs to another callback phase")
+                identity = callback.provisional_membership_key(provisional_handle)
+                reservation = callback.reserve_provisional_binding(
+                    scene, member, provisional_handle
+                )
+                provisional_bindings.append((member, provisional_handle, reservation, identity))
+                entries.append((member, None, provisional_handle))
+            else:
+                if member._object is None or member._object.id not in scene._binding_handles:
+                    raise NotImplementedError(
+                        "callback membership Mobject requires a bound typed semantic handle"
+                    )
+                if member._scene is not None and member._scene is not scene:
+                    raise ValueError("callback membership Mobject belongs to another Scene")
+                handle = getattr(member, "_semantic_handle", None)
+                if handle is None:
+                    raise RuntimeError("callback membership Mobject requires a typed semantic handle")
+                identity = _semantic_wrapper_key(member)
+                entries.append((member, handle, None))
+            if identity in seen:
+                raise ValueError("membership request contains a duplicate Mobject")
+            seen.add(identity)
+
+        batch = engine_call(
+            _context(scene).beginMembershipBatch,
+            "add",
+            operation="callback.membership",
+        )
+        try:
+            for _, handle, provisional_handle in entries:
+                if provisional_handle is None:
+                    engine_call(batch.appendMobject, "", handle, operation="callback.membership")
+                else:
+                    engine_call(
+                        batch.appendCallbackProvisional,
+                        provisional_handle,
+                        operation="callback.provisional_membership",
+                    )
+        except Exception:
+            batch.free()
+            raise
+
+        def finalize() -> None:
+            resolved = [
+                (member, callback.resolve_provisional(provisional_handle), reservation, local_key)
+                for member, provisional_handle, reservation, local_key in provisional_bindings
+            ]
+            bindings = engine_call(_context(scene).beginMembershipBatch, "add")
+            for _, handle, reservation, _ in resolved:
+                engine_call(bindings.reserveMobjectBinding, str(reservation.object.id), handle)
+            callback.associate_published(bindings)
+            registry = _membership_registry(scene)
+            for member, handle, provisional_handle in entries:
+                if provisional_handle is None:
+                    member._bind(scene, member._object)
+                    registry[_semantic_wrapper_key(member)] = member
+            for member, handle, reservation, local_key in resolved:
+                _semantic_handles._attach_shared_handle(member, handle)
+                _commit_typed_binding(member, scene, reservation, handle)
+                member._canonical_live_target_context = _context(scene)
+                registry[_semantic_wrapper_key(member)] = member
+                del member._callback_provisional_handle
+                del member._callback_provisional_context
+                callback._membership_wrappers.pop(local_key, None)
+
+        callback.stage_membership(batch, finalize)
+        for member, _, _, local_key in provisional_bindings:
+            callback._membership_wrappers[local_key] = member
+        for member, handle, _ in entries:
+            if handle is not None:
+                callback._membership_wrappers[_semantic_wrapper_key(member)] = member
+        return
+    members: list[tuple[_base.Mobject, object]] = []
+    for value in values:
+        if not isinstance(value, _base.Mobject):
+            raise NotImplementedError(
+                "canonical callback membership currently accepts existing Mobjects only"
+            )
+        if value._object is None or value._object.id not in scene._binding_handles:
+            raise NotImplementedError(
+                "canonical callback membership cannot bind provisional Mobjects"
+            )
+        if value._scene is not None and value._scene is not scene:
+            raise ValueError("callback membership Mobject belongs to another Scene")
+        handle = getattr(value, "_semantic_handle", None)
+        if handle is None:
+            raise RuntimeError("callback membership Mobject requires a typed semantic handle")
+        members.append((value, handle))
+    if kind == "clear" and members:
+        raise ValueError("Scene.clear does not accept membership arguments")
+    batch = engine_call(
+        _context(scene).beginMembershipBatch,
+        kind,
+        operation="callback.membership",
+    )
+    try:
+        for _, handle in members:
+            engine_call(batch.appendMobject, "", handle, operation="callback.membership")
+    except Exception:
+        batch.free()
+        raise
+
+    def finalize() -> None:
+        registry = _membership_registry(scene)
+        if kind == "add":
+            for member, _ in members:
+                member._bind(scene, member._object)
+                registry[_semantic_wrapper_key(member)] = member
+        elif kind == "remove":
+            for member, _ in members:
+                if member._scene is scene:
+                    member._canonical_live_target_context = _context(scene)
+                    member._scene = None
+        else:
+            for member in registry.values():
+                if isinstance(member, _base.Mobject) and member._scene is scene:
+                    member._canonical_live_target_context = _context(scene)
+                    member._scene = None
+
+    callback.stage_membership(batch, finalize)
+    if kind == "add":
+        for member, _ in members:
+            callback._membership_wrappers[_semantic_wrapper_key(member)] = member
 
 
 def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object:
@@ -372,6 +674,77 @@ def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object
     handle = engine_call(_context(scene).createCameraFrame, str(object_id), operation="Scene.camera")
     _semantic_handles._attach_shared_handle(mobject, handle)
     return _commit_typed_binding(mobject, scene, reservation, handle)
+
+
+def _bind_zoomed_view(
+    scene: _base.Scene,
+    camera_frame: _base.Mobject,
+    display: _base.Mobject,
+    *,
+    display_height: float,
+    display_width: float,
+    display_center: _base.Vec2 | None,
+    display_corner: _base.Vec2,
+    display_corner_buff: float,
+    camera_frame_start: _base.Vec2,
+    zoom_factor: float,
+    camera_frame_stroke_width: float,
+    image_frame_stroke_width: float,
+    capture_own_display: bool,
+):
+    """Bind one Rust-authored inset pair without mirroring its geometry in Python."""
+    if camera_frame is display:
+        raise ValueError("zoomed camera frame and display must be distinct wrappers")
+    if camera_frame._scene is not None or display._scene is not None:
+        raise ValueError("zoomed-view wrappers are already bound")
+    context = _context(scene)
+    frame_id = scene._next_object_id
+    display_id = frame_id + 1
+    frame_reservation = _reserve_typed_binding(
+        camera_frame, scene, object(), None, object_id=frame_id
+    )
+    display_reservation = _reserve_typed_binding(
+        display, scene, object(), None, object_id=display_id
+    )
+    center_x = None if display_center is None else float(display_center.x)
+    center_y = None if display_center is None else float(display_center.y)
+    view = engine_call(
+        context.createZoomedView,
+        str(frame_id),
+        str(display_id),
+        float(display_height),
+        float(display_width),
+        center_x,
+        center_y,
+        float(display_corner.x),
+        float(display_corner.y),
+        float(display_corner_buff),
+        float(camera_frame_start.x),
+        float(camera_frame_start.y),
+        float(zoom_factor),
+        float(camera_frame_stroke_width),
+        float(image_frame_stroke_width),
+        bool(capture_own_display),
+        operation="ZoomedScene.setup",
+    )
+    frame_handle = engine_call(view.cameraFrame, operation="ZoomedScene.camera_frame")
+    display_handle = engine_call(view.display, operation="ZoomedScene.display")
+    _semantic_handles._attach_shared_handle(camera_frame, frame_handle)
+    _semantic_handles._attach_shared_handle(display, display_handle)
+    _commit_typed_binding(camera_frame, scene, frame_reservation, frame_handle)
+    _commit_typed_binding(display, scene, display_reservation, display_handle)
+    return view
+
+
+def _zoomed_view_factor(scene: _base.Scene, view: object) -> float:
+    return float(engine_call(_context(scene).zoomFactor, view, operation="ZoomedScene.get_zoom_factor"))
+
+
+def _activate_zoomed_view(scene: _base.Scene, view: object, *wrappers: _base.Mobject) -> None:
+    """Publish the relation and foreground membership through one Rust transaction."""
+    engine_call(_context(scene).activateZooming, view, operation="ZoomedScene.activate_zooming")
+    for wrapper in wrappers:
+        _register_membership_wrappers(scene, wrapper)
 
 
 def _record_mobject_binding(
@@ -406,6 +779,20 @@ def _associate_tracker(scene: _base.Scene, tracker: _reactive.ValueTracker) -> N
 def _canonical_scene_time(scene: _base.Scene) -> float:
     """Observe the shared Rust cursor, including an empty scene at time zero."""
     return float(_context(scene).authoredDuration())
+
+
+def _canonical_next_section(scene: _base.Scene, name: str, section_type: object) -> _base.Scene:
+    if not isinstance(name, str):
+        raise TypeError("section name must be a string")
+    value = getattr(section_type, "value", section_type)
+    if value not in {"normal", "skip"}:
+        raise ValueError("section type must be SectionType.NORMAL or SectionType.SKIP")
+    engine_call(_context(scene).nextSection, name, value == "skip", operation="Scene.next_section")
+    return scene
+
+
+def _canonical_sections(scene: _base.Scene) -> list[dict[str, object]]:
+    return json.loads(str(engine_call(_context(scene).sectionsJson, operation="Scene.sections")))
 
 
 def _begin_async_continuation_construct(scene: _base.Scene) -> None:
@@ -479,6 +866,45 @@ def _semantic_continuation_active(scene: _base.Scene) -> bool:
     return _async_continuation_active(scene) or _synchronous_continuation_active(scene)
 
 
+def _portable_scene_methods(scene: _base.Scene) -> dict[str, object] | None:
+    """Return the canonical methods portable source may call on ``scene``.
+
+    Zoom activation stays a ZoomedScene feature.  A scene that defines the
+    name must expose the canonical ZoomedScene implementation; otherwise the
+    existing static identity admission keeps the original synchronous path.
+    """
+    methods = {
+        "play": _base.Scene.play,
+        "wait": _base.Scene.wait,
+        "add": _base.Scene.add,
+        "remove": _base.Scene.remove,
+        "clear": _base.Scene.clear,
+        "add_foreground_mobject": _base.Scene.add_foreground_mobject,
+        "add_foreground_mobjects": _base.Scene.add_foreground_mobjects,
+        "on_click": _base.Scene.on_click,
+        "set_drag_targets": _base.Scene.set_drag_targets,
+    }
+    # Keep this conservative and descriptor-safe, like the base-method
+    # admission below.  The source compiler admits direct scene calls from its
+    # fixed allow-list, including calls nested in expressions.
+    if inspect.getattr_static(scene, "activate_zooming", None) is None:
+        # Base Scene has no activation method. Do not let a missing attribute
+        # be synthesized by user-defined dynamic lookup, which could conceal a
+        # synchronous barrier from the portable compiler.
+        if inspect.getattr_static(type(scene), "__getattr__", None) is not None:
+            return None
+        return methods
+    from _manim_zoomed_scene import ZoomedScene
+
+    if not isinstance(scene, ZoomedScene):
+        return None
+    methods["activate_zooming"] = ZoomedScene.activate_zooming
+    methods["get_zoomed_display_pop_out_animation"] = (
+        ZoomedScene.get_zoomed_display_pop_out_animation
+    )
+    return methods
+
+
 async def execute_construct(
     scene: _base.Scene, *, portable_constructs=None
 ) -> None:
@@ -499,13 +925,11 @@ async def execute_construct(
 
                 # Inspect the instance after setup(), without executing getters.
                 # Overrides and dynamic lookup retain the original call path.
-                if has_portable_scene_methods(
-                    scene, play=_base.Scene.play, wait=_base.Scene.wait,
-                    add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
-                ):
-                    portable_construct = bind_portable_construct(
-                        scene.construct, portable_constructs
-                    )
+                candidate = bind_portable_construct(scene.construct, portable_constructs)
+                if candidate is not None:
+                    methods = _portable_scene_methods(scene)
+                    if methods is not None and has_portable_scene_methods(scene, **methods):
+                        portable_construct = candidate
             if portable_construct is not None:
                 _begin_async_continuation_construct(scene)
                 setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)
@@ -670,6 +1094,121 @@ def _continuation_event(event_json: object) -> dict[str, object]:
     return event
 
 
+class _ContinuationCallbackPlayer:
+    """Token-scoped forwarding to the endpoint's existing leased player."""
+
+    def __init__(self, context: object, token_json: str) -> None:
+        self._context = context
+        self._token_json = token_json
+
+    def stageCallbackMembership(self, token_json: str, batch: object) -> None:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback membership token is stale")
+        from js import noonStageSemanticContinuationMembership
+        engine_call(
+            noonStageSemanticContinuationMembership,
+            self._context,
+            token_json,
+            batch,
+            operation="callback.membership",
+        )
+
+    def callbackMembershipRootKeys(self, token_json: str):
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback membership token is stale")
+        from js import noonContinuationMembershipRootKeys
+        return engine_call(
+            noonContinuationMembershipRootKeys,
+            self._context,
+            token_json,
+            operation="callback.membership_read",
+        )
+
+    def stageCallbackProvisionalGeometry(self, token_json: str, options: object) -> object:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationProvisionalGeometry
+        return engine_call(
+            noonStageSemanticContinuationProvisionalGeometry,
+            self._context,
+            token_json,
+            options,
+            operation="callback.provisional_geometry",
+        )
+
+    def stageCallbackProvisionalShift(
+        self, token_json: str, object: object, x: float, y: float
+    ) -> None:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationProvisionalShift
+        engine_call(
+            noonStageSemanticContinuationProvisionalShift,
+            self._context,
+            token_json,
+            object,
+            float(x),
+            float(y),
+            operation="callback.provisional_geometry",
+        )
+
+    def stageCallbackProvisionalFill(
+        self, token_json: str, object: object, red: float, green: float,
+        blue: float, alpha: float, opacity: float | None,
+    ) -> None:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonStageSemanticContinuationProvisionalFill
+        engine_call(
+            noonStageSemanticContinuationProvisionalFill,
+            self._context,
+            token_json,
+            object,
+            float(red),
+            float(green),
+            float(blue),
+            float(alpha),
+            opacity,
+            operation="callback.provisional_geometry",
+        )
+
+    def callbackProvisionalCenter(self, token_json: str, object: object) -> object:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonSemanticContinuationProvisionalCenter
+        return engine_call(
+            noonSemanticContinuationProvisionalCenter,
+            self._context,
+            token_json,
+            object,
+            operation="callback.provisional_geometry",
+        )
+
+    def resolveCallbackProvisionalMobject(self, token_json: str, object: object) -> object:
+        if token_json != self._token_json:
+            raise RuntimeError("continuation callback provisional geometry token is stale")
+        from js import noonResolveSemanticContinuationProvisionalMobject
+        return engine_call(
+            noonResolveSemanticContinuationProvisionalMobject,
+            self._context,
+            token_json,
+            object,
+            operation="callback.provisional_geometry",
+        )
+
+    def associatePublishedCallbackMobjects(self, context: object, batch: object) -> None:
+        if context is not self._context:
+            raise RuntimeError("continuation callback bindings belong to another context")
+        from js import noonAssociateSemanticContinuationCallbackMobjects
+        engine_call(
+            noonAssociateSemanticContinuationCallbackMobjects,
+            context,
+            self._token_json,
+            batch,
+            operation="callback.membership_binding",
+        )
+
+
 def _service_semantic_continuation_event(
     scene: _base.Scene, event_json: object, *, prepared_callback=None
 ) -> object | None:
@@ -684,6 +1223,21 @@ def _service_semantic_continuation_event(
     kind = event["kind"]
     if kind == "complete":
         return None
+    if kind == "callback_committed":
+        import _manim_updaters
+        from js import noonAcknowledgeSemanticContinuationCallback
+
+        phase = event["phase"]
+        failure = None
+        try:
+            _manim_updaters.complete_canonical_callback_phase(
+                _manim_updaters.canonical_callback_session_id(scene), phase
+            )
+        except Exception as error:
+            failure = str(error)
+        return noonAcknowledgeSemanticContinuationCallback(
+            _context(scene), _json(phase["token"]), failure
+        )
     if kind != "callback":
         raise RuntimeError(f"unsupported semantic continuation event: {kind}")
     phase = event.get("phase")
@@ -703,7 +1257,10 @@ def _service_semantic_continuation_event(
     token_json = _json(phase["token"])
     try:
         batch_json = _manim_updaters.run_canonical_callback_phase(
-            session_id, phase, prepared_context=prepared_callback
+            session_id,
+            phase,
+            prepared_context=prepared_callback,
+            callback_player=_ContinuationCallbackPlayer(context, token_json),
         )
     except Exception as error:
         # Failing the exact pending phase latches terminal Rust state. Its
@@ -719,6 +1276,7 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
     while True:
         prepared = None
         event = _continuation_event(event_json)
+        completed_phase = None
         if event["kind"] == "callback":
             import _manim_updaters
             from js import noonFailSemanticContinuationCallback
@@ -732,12 +1290,20 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
                     _context(scene), _json(event["phase"]["token"]), str(error)
                 ), operation="Scene.continuation")
                 continue
+            completed_phase = event["phase"]
         next_event = _service_semantic_continuation_event(
             scene, event_json, prepared_callback=prepared
         )
         if next_event is None:
             return
-        event_json = await engine_await(next_event, operation="Scene.continuation")
+        try:
+            event_json = await engine_await(next_event, operation="Scene.continuation")
+        except Exception:
+            if completed_phase is not None:
+                _manim_updaters.discard_canonical_callback_phase(
+                    _manim_updaters.canonical_callback_session_id(scene), completed_phase
+                )
+            raise
 
 
 def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
@@ -749,10 +1315,19 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
 
     event_json = engine_call(run_sync, noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
     while True:
+        event = _continuation_event(event_json)
         next_event = _service_semantic_continuation_event(scene, event_json)
         if next_event is None:
             break
-        event_json = engine_call(run_sync, next_event, operation="Scene.continuation")
+        try:
+            event_json = engine_call(run_sync, next_event, operation="Scene.continuation")
+        except Exception:
+            if event["kind"] == "callback":
+                import _manim_updaters
+                _manim_updaters.discard_canonical_callback_phase(
+                    _manim_updaters.canonical_callback_session_id(scene), event["phase"]
+                )
+            raise
     return scene
 
 
@@ -873,6 +1448,46 @@ def _canonical_affine_options(
     return resolved
 
 
+def _canonical_transform_options(
+    animation: object,
+    kwargs: dict[str, object],
+    *,
+    allow_family_lag: bool = False,
+) -> object | None:
+    """Resolve Transform path/timing options through the Transform-only Rust policy."""
+    duration = kwargs.get("duration")
+    run_time = kwargs.get("run_time")
+    easing = kwargs.get("easing")
+    rate_func = kwargs.get("rate_func")
+    lag_ratio = kwargs.get("lag_ratio")
+    path_arc = kwargs.get("path_arc")
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if kwargs.keys() - {
+        "duration", "run_time", "start_time", "easing", "rate_func", "lag_ratio", "path_arc"
+    }:
+        return None
+    if kwargs.get("start_time") is not None:
+        return None
+    try:
+        resolved = _options.resolve_transform(
+            builder_args=_options.builder_args(animation),
+            default_lag_ratio=0.0,
+            play_run_time=(run_time if run_time is not None else duration),
+            play_easing=easing,
+            play_rate_func=rate_func,
+            play_lag_ratio=lag_ratio,
+            play_path_arc=path_arc,
+        )
+    except NotImplementedError:
+        return None
+    if resolved.lag_ratio != 0.0 and not allow_family_lag:
+        return None
+    return resolved
+
+
 def _canonical_affine_lifecycle_animation(
     scene: _base.Scene, animation: object
 ) -> tuple[_base.Mobject, object] | None:
@@ -959,10 +1574,36 @@ def _canonical_family_fade_animation(
     return family, leaves, direction
 
 
+def _canonical_arrow_grow_animation(scene: _base.Scene, animation: object):
+    """Classify GrowArrow while leaving leaf order/admission to Rust."""
+    growing = sys.modules.get("_manim_growing")
+    arrow_module = sys.modules.get("_manim_arrow")
+    if growing is None or arrow_module is None or not isinstance(
+        animation, growing.GrowArrow
+    ):
+        return None
+    target = animation.mobject
+    if not isinstance(target, arrow_module.Arrow):
+        raise NotImplementedError("shared GrowArrow supports retained Arrow targets only")
+    family_handle = getattr(target, "_semantic_family_handle", None)
+    arrow_handle = getattr(target, "_semantic_arrow_handle", None)
+    if family_handle is None or arrow_handle is None:
+        raise NotImplementedError("GrowArrow requires a shared semantic Arrow")
+    leaves = _compat._leaf_mobjects(target)
+    if not leaves or any(
+        not isinstance(member, _base.Mobject)
+        or getattr(member, "_semantic_handle", None) is None
+        or member._scene is not None
+        for member in leaves
+    ):
+        raise NotImplementedError("GrowArrow requires detached shared Arrow leaves")
+    return target, arrow_handle, leaves
+
+
 def _canonical_create_animation(
     scene: _base.Scene, animation: object
 ) -> _base.Mobject | None:
-    """Classify one exact detached single-leaf Create."""
+    """Classify one shared single-leaf Create in this Scene."""
     if type(animation) is not _base.Create:
         return None
     target = getattr(animation, "target", None)
@@ -970,9 +1611,7 @@ def _canonical_create_animation(
         raise NotImplementedError("canonical ordinary Create target must be a Mobject")
     if getattr(target, "_semantic_handle", None) is None:
         return None
-    if target._scene is not None:
-        if target._scene is scene:
-            raise NotImplementedError("canonical Create requires a detached Mobject")
+    if target._scene not in (None, scene):
         raise ValueError("Create target already belongs to another Scene")
     return target
 
@@ -1103,10 +1742,39 @@ def _canonical_composition_child_options(animation: object, kwargs: dict[str, ob
     return resolved
 
 
+def _canonical_cyclic_replace_transform(
+    scene: _base.Scene, animation: object, child_kwargs: dict[str, object]
+) -> _animate.Transform | None:
+    """Build CyclicReplace's target through shared Rust family semantics."""
+    if not isinstance(animation, _animate.CyclicReplace):
+        return None
+    source = animation.group
+    if not isinstance(source, _compat.Group):
+        raise TypeError("CyclicReplace requires Mobjects or one Group/VGroup")
+    leaves = _compat._leaf_mobjects(source)
+    if not leaves or any(member._scene is not scene for member in leaves):
+        raise ValueError("CyclicReplace source members must belong to this Scene")
+    if getattr(source, "_semantic_family_handle", None) is None:
+        raise NotImplementedError("canonical CyclicReplace requires a shared family handle")
+
+    # Fail option preflight before the shared target-copy transaction allocates
+    # detached semantic identity. Rust owns direct-member validation, ordering,
+    # coherent copy capture, and cyclic placement.
+    if _canonical_transform_options(
+        animation, child_kwargs, allow_family_lag=True
+    ) is None:
+        raise NotImplementedError("unsupported canonical CyclicReplace options")
+
+    target = _semantic_handles._group_cyclic_replace_target(source)
+    return _animate.Transform(source, target, **animation.anim_args)
+
+
 def _canonical_family_transform_animation(
     scene: _base.Scene, animation: object
 ) -> tuple[_compat.Group, _compat.Group, object] | None:
     if isinstance(animation, _animate._AlignedGroupAnimationBuilder):
+        source, target = animation.source, animation.target
+    elif type(animation) in (_animate.TransformMatchingShapes, _animate.TransformMatchingTex):
         source, target = animation.source, animation.target
     elif type(animation) is _base.Transform and isinstance(animation.source, _compat.Group):
         source, target = animation.source, animation.target
@@ -1147,6 +1815,47 @@ def _canonical_indicate_animation(
     if getattr(target, handle_name, None) is None:
         raise NotImplementedError("canonical Indicate requires a shared semantic handle")
     return target, family
+
+
+def _indicate_parameters(animation: object, play_kwargs: dict[str, object]):
+    """Convert authoring arguments once for scripted and click-driven Indicate."""
+    resolved = _options.resolve(
+        builder_args=_options.builder_args(animation),
+        default_lag_ratio=0.0,
+        play_run_time=play_kwargs.get("run_time", play_kwargs.get("duration")),
+        play_easing=play_kwargs.get("easing"),
+        play_rate_func=play_kwargs.get("rate_func"),
+        play_lag_ratio=play_kwargs.get("lag_ratio"),
+    )
+    if resolved.path_arc != 0.0 or resolved.reverse_rate_function:
+        raise NotImplementedError("canonical Indicate does not support path options")
+    if resolved.rate_func != "there_and_back":
+        raise NotImplementedError("canonical restoring Indicate requires there_and_back easing")
+    rgba = tuple(
+        float(getattr(animation.color, name))
+        for name in ("red", "green", "blue", "alpha")
+    )
+    return (
+        float(animation.scale_factor), *rgba, float(resolved.run_time),
+        str(resolved.rate_func), float(resolved.lag_ratio),
+    )
+
+
+def _on_click(self: _base.Scene, target: object, animation: object) -> _base.Scene:
+    """Declare a Rust action; Python callbacks do not participate in playback."""
+    if not isinstance(animation, _animate.Indicate):
+        raise NotImplementedError("Scene.on_click currently supports Indicate(target) only")
+    classified = _canonical_indicate_animation(self, animation)
+    animated, family = classified
+    if family or animated is not target:
+        raise ValueError("Scene.on_click requires Indicate on the same single target")
+    engine_call(
+        _context(self).liveBindClickIndicate,
+        target._semantic_handle,
+        *_indicate_parameters(animation, {}),
+        operation="Scene.on_click",
+    )
+    return self
 
 
 def _canonical_passing_flash_animation(
@@ -1232,24 +1941,24 @@ def _canonical_draw_border_then_fill_animation(scene: _base.Scene, animation: ob
 
 
 def _canonical_text_write_animation(scene: _base.Scene, animation: object):
-    """Classify single plain-Text Write/Unwrite without deriving glyph state."""
+    """Classify retained-text Write/Unwrite without deriving glyph state."""
     if not isinstance(animation, _family_creation.Write):
         return None
     target = animation.target
-    if not isinstance(target, _typst.Text) or isinstance(target, _compat.Group):
+    if not isinstance(target, _typst._RetainedTextMobject) or isinstance(target, _compat.Group):
         return None
     if getattr(target, "_semantic_handle", None) is None:
-        raise NotImplementedError("canonical Text Write requires a typed plain Text target")
+        raise NotImplementedError("canonical Text Write requires a typed retained text target")
     if animation.introducer:
         if target._scene is not None and target._scene is not scene:
             raise ValueError("Text Write target belongs to another Scene")
     elif target._scene is not scene:
-        raise ValueError("reverse Text Write requires a plain Text target in this Scene")
+        raise ValueError("reverse Text Write requires a retained text target in this Scene")
     return target
 
 
 def _canonical_text_family_write_animation(scene: _base.Scene, animation: object):
-    """Classify a plain-Text family Write/Unwrite without traversing glyphs."""
+    """Classify retained-text family Write/Unwrite without traversing glyphs."""
     if not isinstance(animation, _family_creation.Write):
         return None
     family = animation.target
@@ -1258,10 +1967,10 @@ def _canonical_text_family_write_animation(scene: _base.Scene, animation: object
     leaves = _compat._leaf_mobjects(family)
     if not leaves:
         raise ValueError("canonical Text family Write requires at least one leaf")
-    if not all(isinstance(member, _typst.Text) for member in leaves):
+    if not all(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
         if any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
             raise NotImplementedError(
-                "canonical family Write supports plain Text; Typst and MathTypst remain #959"
+                "canonical family Write requires retained text leaves"
             )
         return None
     if getattr(family, "_semantic_family_handle", None) is None:
@@ -1275,24 +1984,17 @@ def _canonical_text_family_write_animation(scene: _base.Scene, animation: object
 
 
 def _canonical_text_reveal_animation(scene: _base.Scene, animation: object):
-    """Classify one plain-Text Create/Uncreate without deriving glyph state."""
+    """Classify one retained glyph-text Create/Uncreate without deriving members."""
     if type(animation) not in (_base.Create, _base.Uncreate):
         return None
     target = getattr(animation, "target", None)
     if isinstance(target, _compat.Group):
         return None
-    if isinstance(target, _typst._RetainedTextMobject) and not isinstance(
-        target, _typst.Text
-    ):
-        raise NotImplementedError(
-            "canonical Text Create/Uncreate supports plain Text; "
-            "Typst and MathTypst remain #959"
-        )
-    if not isinstance(target, _typst.Text):
+    if not isinstance(target, _typst._RetainedTextMobject):
         return None
     if getattr(target, "_semantic_handle", None) is None:
         raise NotImplementedError(
-            "canonical Text Create/Uncreate requires a typed plain Text target"
+            "canonical Text Create/Uncreate requires a typed retained text target"
         )
     reverse = type(animation) is _base.Uncreate
     if not reverse and target._scene is not None:
@@ -1315,15 +2017,6 @@ def _canonical_family_reveal_animation(scene: _base.Scene, animation: object):
     if not leaves:
         raise ValueError("canonical family Create/Uncreate requires at least one leaf")
     if any(
-        isinstance(member, _typst._RetainedTextMobject)
-        and not isinstance(member, _typst.Text)
-        for member in leaves
-    ):
-        raise NotImplementedError(
-            "canonical family Create/Uncreate supports plain Text and ordinary vector "
-            "leaves; Typst and MathTypst remain #959"
-        )
-    if any(
         not isinstance(member, _base.Mobject)
         or getattr(member, "_semantic_handle", None) is None
         for member in leaves
@@ -1341,6 +2034,11 @@ def _canonical_family_reveal_animation(scene: _base.Scene, animation: object):
     if reverse and any(member._scene not in (None, scene) for member in leaves):
         raise ValueError("family Uncreate target belongs to another Scene")
     return family, leaves, reverse
+
+
+def _canonical_text_play_options(kwargs: dict[str, object]):
+    """Marshal flat play overrides separately; Rust retains partial precedence."""
+    return _canonical_play_options(dict(kwargs)), _canonical_composition_rate_id(kwargs)
 
 
 def _canonical_text_write_options(animation: object):
@@ -1418,6 +2116,67 @@ def _canonical_subset_display_animation(scene: _base.Scene, animation: object):
     return family, leaves, animation.mode
 
 
+def _apply_matrix_target(target: object, animation: object) -> None:
+    """Transport ApplyMatrix call shape; Rust owns matrix/path semantics."""
+    rows, columns, values = _animate._matrix_arguments(animation.matrix)
+    about = _base._as_vec2(animation.about_point)
+    is_family = isinstance(target, _compat.Group)
+    handle = getattr(
+        target,
+        "_semantic_family_handle" if is_family else "_semantic_handle",
+        None,
+    )
+    if handle is None:
+        raise NotImplementedError(
+            "ApplyMatrix requires a typed semantic Mobject or family"
+        )
+    context = (
+        _semantic_handles._group_target_context(target)
+        if is_family
+        else getattr(target, "_canonical_live_target_context", None)
+    )
+    if context is None:
+        engine_call(
+            handle.applyMatrix,
+            values,
+            len(rows),
+            columns,
+            float(about.x),
+            float(about.y),
+            operation="ApplyMatrix",
+        )
+    else:
+        engine_call(
+            context.liveApplyMatrixFamily if is_family else context.liveApplyMatrix,
+            handle,
+            values,
+            len(rows),
+            columns,
+            float(about.x),
+            float(about.y),
+            operation="ApplyMatrix",
+        )
+
+
+def _validate_apply_matrix_target(scene: _base.Scene, source: object) -> None:
+    """Check wrapper ownership without assuming Groups carry Mobject fields."""
+    if isinstance(source, _compat.Group):
+        if getattr(source, "_semantic_family_handle", None) is None:
+            raise NotImplementedError(
+                "ApplyMatrix family target requires a typed semantic family"
+            )
+        if any(
+            getattr(member, "_scene", None) not in (None, scene)
+            for member in _compat._leaf_mobjects(source)
+        ):
+            raise ValueError("ApplyMatrix target belongs to another Scene")
+        source_context = _semantic_handles._group_target_context(source)
+        if source_context is not None and source_context is not _context(scene):
+            raise ValueError("ApplyMatrix target belongs to another Scene")
+    elif getattr(source, "_scene", None) not in (None, scene):
+        raise ValueError("ApplyMatrix target belongs to another Scene")
+
+
 def _build_canonical_composition_candidate(
     self: _base.Scene,
     kind: str,
@@ -1428,7 +2187,12 @@ def _build_canonical_composition_candidate(
     """Build one inert recursive composition tree owned by the WASM context."""
     import _manim_rotate as _rotate
 
-    play_run_time = _canonical_play_options(dict(kwargs))
+    root_play_kwargs = dict(kwargs)
+    if group is None:
+        # Flat Transform leaves resolve `path_arc` through their Transform-only
+        # Rust option policy; it is not a composition-root timing option.
+        root_play_kwargs.pop("path_arc", None)
+    play_run_time = _canonical_play_options(root_play_kwargs)
     composition_run_time = None if group is None else group.run_time
     composition_lag_ratio = 0.0 if group is None else float(group.lag_ratio)
     context = _context(self)
@@ -1447,14 +2211,20 @@ def _build_canonical_composition_candidate(
     family_registrations: list[_compat.Group] = []
     removals: list[_base.Mobject] = []
     tracker_associations: list[_reactive.ValueTracker] = []
+    completed_families: list[object] = []
     next_object_id = self._next_object_id
+    reserved_targets: dict[str, object] = {}
 
     def reserve(target: _base.Mobject):
         nonlocal next_object_id
+        key = _semantic_wrapper_key(target)
+        if key in reserved_targets:
+            return reserved_targets[key]
         reservation = _reserve_typed_binding(
             target, self, getattr(target, "_semantic_handle"), None, object_id=next_object_id,
         )
         reservations.append((target, reservation))
+        reserved_targets[key] = reservation
         if not reservation.reuse_existing_identity:
             next_object_id += 1
         return reservation
@@ -1465,6 +2235,75 @@ def _build_canonical_composition_candidate(
             nested_kind = "sequence" if isinstance(animation, _composition.Succession) else "parallel"
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
+            return
+        if isinstance(animation, _composition.UpdateFromFunc):
+            from _manim_updaters import reserve_composition_callback
+
+            target = animation.mobject
+            if target._scene is not self:
+                raise ValueError("UpdateFromFunc target must belong to this Scene")
+            # UpdateFromFunc invokes its callback with no alpha argument, so
+            # Manim's easing callable has no effect on this leaf's interval.
+            # Strip it before the shared resolver; the enclosing Rust group
+            # time map still owns any group-level easing.
+            timing_animation = copy.copy(animation)
+            timing_animation.anim_args = dict(animation.anim_args)
+            timing_animation.anim_args.pop("rate_func", None)
+            timing_kwargs = dict(child_kwargs)
+            timing_kwargs.pop("rate_func", None)
+            child = _canonical_composition_child_options(timing_animation, timing_kwargs)
+            if child.lag_ratio != 0 or child.path_arc != 0 or child.reverse_rate_function:
+                raise NotImplementedError(
+                    "UpdateFromFunc supports duration and rate function options"
+                )
+            callback_id = reserve_composition_callback(
+                self, target, animation.update_function
+            )
+            builder.appendCallbackInterval(
+                target._semantic_handle, str(callback_id), float(child.run_time),
+            )
+            return
+        from _noon_spatial import WorldTransformTo, CameraProfileTo, _bulk
+        if isinstance(animation, (WorldTransformTo, CameraProfileTo)):
+            target = animation.mobject
+            if target._scene is not self:
+                raise ValueError("WorldTransformTo target must belong to this Scene")
+            child = _canonical_composition_child_options(animation, child_kwargs)
+            if child.lag_ratio != 0 or child.path_arc != 0 or child.reverse_rate_function:
+                raise NotImplementedError("world endpoints support duration and rate function options")
+            append = (builder.appendCameraProfile if isinstance(animation, CameraProfileTo)
+                      else builder.appendWorldTransform)
+            append(target._semantic_handle, _bulk(animation.endpoint),
+                   float(child.run_time), str(child.rate_func))
+            return
+        if type(animation) is _animate.MoveAlongPath:
+            target, path = animation.mobject, animation.path
+            if target._scene is not self or path._scene is not self:
+                raise ValueError("MoveAlongPath target and path must belong to this Scene")
+            child = _canonical_composition_child_options(animation, child_kwargs)
+            if child.lag_ratio != 0 or child.path_arc != 0 or child.reverse_rate_function:
+                raise NotImplementedError("MoveAlongPath currently supports duration and rate function options")
+            builder.appendMoveAlongPath(
+                target._semantic_handle,
+                path._semantic_handle,
+                float(child.run_time),
+                str(child.rate_func),
+            )
+            return
+        cyclic_replace = _canonical_cyclic_replace_transform(self, animation, child_kwargs)
+        if cyclic_replace is not None:
+            append_leaf(builder, cyclic_replace, child_kwargs)
+            return
+        if type(animation) is _animate.ApplyMatrix:
+            # Validate generic animation options before target preparation. Nonzero
+            # path_arc remains outside this first pointwise-matrix slice.
+            _canonical_composition_child_options(animation, child_kwargs)
+            source = animation.source
+            _validate_apply_matrix_target(self, source)
+            target = source._copy_for_animate_target()
+            _apply_matrix_target(target, animation)
+            transform = _base.Transform(source, target, **animation.anim_args)
+            append_leaf(builder, transform, child_kwargs)
             return
         if type(animation) is _animate.ScaleInPlace:
             # Resolve options before creating a target. Copy/scale and effective
@@ -1563,6 +2402,7 @@ def _build_canonical_composition_candidate(
                 child_run_time,
                 rate_function,
                 child_lag_ratio,
+                *_canonical_text_play_options(child_kwargs),
             )
             detached = [member for member in leaves if member._scene is None]
             if detached:
@@ -1601,6 +2441,7 @@ def _build_canonical_composition_candidate(
                 child_run_time,
                 rate_function,
                 child_lag_ratio,
+                *_canonical_text_play_options(child_kwargs),
             )
             removes = reverse if remover is None else remover
             if removes:
@@ -1632,21 +2473,34 @@ def _build_canonical_composition_candidate(
             else:
                 removals.extend(leaves)
             return
+        arrow_grow = _canonical_arrow_grow_animation(self, animation)
+        if arrow_grow is not None:
+            family, arrow_handle, leaves = arrow_grow
+            child = _canonical_affine_options(
+                animation,
+                child_kwargs,
+                builder_args=dict(getattr(animation, "anim_args", {})),
+                allow_family_lag=True,
+            )
+            if child is None:
+                raise NotImplementedError("unsupported shared GrowArrow options")
+            builder.appendFamilyArrowGrow(
+                arrow_handle,
+                float(child.run_time),
+                str(child.rate_func),
+                float(child.lag_ratio),
+            )
+            family_registrations.append(family)
+            for member in leaves:
+                reservation = reserve(member)
+                if not reservation.reuse_existing_identity:
+                    builder.appendFamilyArrowGrowEntering(
+                        str(reservation.object.id), member._semantic_handle
+                    )
+            return
         family_write = _canonical_text_family_write_animation(self, animation)
         if family_write is not None:
             family, leaves = family_write
-            if child_kwargs:
-                unsupported = set(child_kwargs) - {
-                    "duration",
-                    "run_time",
-                    "easing",
-                    "rate_func",
-                }
-                if unsupported:
-                    names = ", ".join(sorted(unsupported))
-                    raise NotImplementedError(
-                        f"unsupported canonical Text family Write play option(s): {names}"
-                    )
             child_run_time, rate_function, child_lag_ratio = (
                 _canonical_text_write_options(animation)
             )
@@ -1659,6 +2513,7 @@ def _build_canonical_composition_candidate(
                 child_run_time,
                 rate_function,
                 child_lag_ratio,
+                *_canonical_text_play_options(child_kwargs),
             )
             if animation.introducer:
                 family_registrations.append(family)
@@ -1673,15 +2528,6 @@ def _build_canonical_composition_candidate(
             return
         text_write = _canonical_text_write_animation(self, animation)
         if text_write is not None:
-            if child_kwargs:
-                # Flat Scene.play options are already carried by the root request;
-                # nested groups pass their timing through their composition node.
-                unsupported = set(child_kwargs) - {"duration", "run_time", "easing", "rate_func"}
-                if unsupported:
-                    names = ", ".join(sorted(unsupported))
-                    raise NotImplementedError(
-                        f"unsupported canonical Text Write play option(s): {names}"
-                    )
             child_run_time, rate_function, child_lag_ratio = (
                 _canonical_text_write_options(animation)
             )
@@ -1698,6 +2544,7 @@ def _build_canonical_composition_candidate(
                 child_run_time,
                 rate_function,
                 child_lag_ratio,
+                *_canonical_text_play_options(child_kwargs),
             )
             return
         subset = _canonical_subset_display_animation(self, animation)
@@ -1773,56 +2620,60 @@ def _build_canonical_composition_candidate(
         indicate = _canonical_indicate_animation(self, animation)
         if indicate is not None:
             target, family = indicate
-            resolved = _options.resolve(
-                builder_args=_options.builder_args(animation),
-                default_lag_ratio=0.0,
-                play_run_time=child_kwargs.get("run_time", child_kwargs.get("duration")),
-                play_easing=child_kwargs.get("easing"),
-                play_rate_func=child_kwargs.get("rate_func"),
-                play_lag_ratio=child_kwargs.get("lag_ratio"),
-            )
-            if resolved.path_arc != 0.0 or resolved.reverse_rate_function:
-                raise NotImplementedError("canonical Indicate does not support path options")
-            if resolved.rate_func != "there_and_back":
-                raise NotImplementedError(
-                    "canonical restoring Indicate requires there_and_back easing"
-                )
-            color = animation.color
-            rgba = tuple(
-                float(getattr(color, name))
-                for name in ("red", "green", "blue", "alpha")
-            )
             method = builder.appendIndicateFamily if family else builder.appendIndicateMobject
             handle = getattr(
                 target,
                 "_semantic_family_handle" if family else "_semantic_handle",
             )
-            method(
-                handle,
-                float(animation.scale_factor),
-                *rgba,
-                float(resolved.run_time),
-                str(resolved.rate_func),
-                float(resolved.lag_ratio),
-            )
+            method(handle, *_indicate_parameters(animation, child_kwargs))
             return
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
             source, target, leaf = family_transform
-            child = _canonical_affine_options(leaf, child_kwargs, allow_family_lag=True)
-            if child is None or child.path_arc != 0.0 or child.reverse_rate_function:
+            matching = type(leaf) in (_animate.TransformMatchingShapes, _animate.TransformMatchingTex)
+            source_matching = type(leaf) is _animate.TransformMatchingTex
+            # Manim constructor options belong to the Transform/Fade children;
+            # Scene.play options belong to their enclosing AnimationGroup.
+            child = _canonical_transform_options(
+                leaf, {} if matching else child_kwargs, allow_family_lag=True
+            )
+            if child is None:
                 raise NotImplementedError("unsupported canonical family Transform options")
             if child.rate_func not in ("linear", "smooth"):
                 raise NotImplementedError(
                     "canonical family Transform requires linear or smooth easing"
                 )
-            builder.appendFamilyTransformTo(
+            destination = builder
+            if matching:
+                if any(child_kwargs.get(name) not in (None, 0.0)
+                       for name in ("lag_ratio", "path_arc")):
+                    raise NotImplementedError(
+                        "TransformMatchingShapes does not yet support play-level lag or path options"
+                    )
+                outer_kwargs = dict(child_kwargs)
+                outer_kwargs.pop("path_arc", None)
+                outer_duration = _canonical_play_options(outer_kwargs)
+                destination = context.beginOrdinaryCompositionBuilder(
+                    "parallel", outer_duration, 0.0, None,
+                )
+                destination.setCompositionRateFunction(
+                    _canonical_composition_rate_id(child_kwargs) or "linear"
+                )
+            append_family_transform = (
+                (destination.appendMatchingSourceFamilyTransformTo if source_matching else destination.appendMatchingFamilyTransformTo)
+                if matching else destination.appendFamilyTransformTo
+            )
+            append_family_transform(
                 source._semantic_family_handle,
                 target._semantic_family_handle,
                 float(child.run_time),
                 str(child.rate_func),
                 float(child.lag_ratio),
+                float(child.path_arc),
             )
+            if matching:
+                builder.appendComposition(destination)
+                completed_families.extend((source, target))
             return
         if isinstance(animation, _composition.Add):
             if child_kwargs:
@@ -1908,13 +2759,16 @@ def _build_canonical_composition_candidate(
             child = _canonical_create_options(animation, child_kwargs)
             if child is None:
                 raise NotImplementedError("unsupported canonical Create options")
-            reservation = reserve(created)
-            builder.appendCreate(str(reservation.object.id), getattr(created, "_semantic_handle"), float(child.run_time), str(child.rate_func))
+            reservation = reserve(created) if created._scene is None else None
+            entering_id = "" if reservation is None or reservation.reuse_existing_identity else str(reservation.object.id)
+            builder.appendCreate(entering_id, getattr(created, "_semantic_handle"), float(child.run_time), str(child.rate_func))
             return
         affine = _canonical_affine_animation(self, animation)
         if affine is not None:
             source, target, leaf = affine
-            child = _canonical_composition_child_options(leaf, child_kwargs)
+            child = _canonical_transform_options(leaf, child_kwargs)
+            if child is None:
+                raise NotImplementedError("unsupported canonical Transform options")
             source_handle = getattr(source, "_semantic_handle")
             target_handle = getattr(target, "_semantic_handle")
             # Resource-backed text has no vector point correspondence. Its
@@ -1932,16 +2786,25 @@ def _build_canonical_composition_candidate(
                 entering_id = str(reserve(source).object.id) if source._scene is None else None
                 builder.appendMethodTransformTo(
                     entering_id, source_handle, target_handle, point_correspondence,
-                    float(child.run_time), str(child.rate_func),
+                    float(child.run_time), str(child.rate_func), float(child.path_arc),
+                    bool(child.reverse_rate_function),
                 )
                 return
             if source._scene is None:
                 reservation = reserve(source)
                 method = builder.appendEnteringPointTransformTo if point_correspondence else builder.appendEnteringTransformTo
-                method(str(reservation.object.id), source_handle, target_handle, float(child.run_time), str(child.rate_func))
+                method(
+                    str(reservation.object.id), source_handle, target_handle,
+                    float(child.run_time), str(child.rate_func), float(child.path_arc),
+                    bool(child.reverse_rate_function),
+                )
             else:
                 method = builder.appendPointTransformTo if point_correspondence else builder.appendTransformTo
-                method(source_handle, target_handle, float(child.run_time), str(child.rate_func))
+                method(
+                    source_handle, target_handle, float(child.run_time),
+                    str(child.rate_func), float(child.path_arc),
+                    bool(child.reverse_rate_function),
+                )
             return
         if type(animation) in (_rotate.Rotate, _rotate.Rotating):
             target = animation.mobject
@@ -1996,6 +2859,7 @@ def _build_canonical_composition_candidate(
         family_registrations,
         removals,
         tracker_associations,
+        tuple(completed_families),
     ) if supported else False
 
 
@@ -2006,6 +2870,7 @@ def _play_canonical_composition(
     family_registrations: list[_compat.Group],
     removals: list[_base.Mobject],
     tracker_associations: list[_reactive.ValueTracker],
+    completed_families: tuple[object, ...] = (),
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     _start_default_synchronous_continuation(self)
     context = _context(self)
@@ -2031,6 +2896,7 @@ def _play_canonical_composition(
         for family in family_registrations:
             register(family)
     def completed() -> None:
+        _reconcile_completed_family_bindings(self, completed_families)
         for target in removals:
             _reconcile_fade_membership(self, target, "out")
 

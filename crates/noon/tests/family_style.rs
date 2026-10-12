@@ -1,7 +1,7 @@
 use noon::{Color, Mobject, MobjectFamily, Scene};
 
 fn family() -> (Scene, MobjectFamily, [Mobject; 2], Mobject) {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.square(0.5).unwrap();
     let b = scene.circle(0.4).unwrap();
     let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();
@@ -12,7 +12,7 @@ fn family() -> (Scene, MobjectFamily, [Mobject; 2], Mobject) {
 
 #[test]
 fn family_paint_matches_leaf_semantics_in_one_revision_and_leaves_other_objects_alone() {
-    let (scene, family, [a, b], unrelated) = family();
+    let (mut scene, family, [a, b], unrelated) = family();
     let untouched = unrelated.state().unwrap();
     let mut reference = scene.square(0.5).unwrap();
     let before = scene.revision();
@@ -42,7 +42,7 @@ fn family_paint_matches_leaf_semantics_in_one_revision_and_leaves_other_objects_
 
 #[test]
 fn invalid_combined_edit_changes_nothing_and_empty_families_still_validate() {
-    let (scene, family, [a, b], _) = family();
+    let (mut scene, family, [a, b], _) = family();
     let before = scene.revision();
     let states = [a.state().unwrap(), b.state().unwrap()];
     assert!(family
@@ -85,7 +85,8 @@ fn live_paint_batches_unique_leaves_and_rejects_foreign_or_invalid_edits_atomica
             None
         )
         .is_err());
-    let foreign = Scene::new().family(&[]).unwrap();
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.family(&[]).unwrap();
     assert!(live.set_family_opacity(&foreign, 0.2).is_err());
     assert_eq!(
         [live.effective(&a).unwrap(), live.effective(&b).unwrap()],
@@ -95,6 +96,42 @@ fn live_paint_batches_unique_leaves_and_rejects_foreign_or_invalid_edits_atomica
     live.set_family_opacity(&family, 0.5).unwrap();
     assert_eq!(live.effective(&a).unwrap().fill_opacity(), 0.5);
     assert_eq!(live.effective(&a).unwrap().stroke_opacity(), 0.5);
+}
+
+#[test]
+fn live_family_fade_publishes_one_atomic_style_only_update() {
+    let (mut scene, family, [mut a, mut b], _) = family();
+    a.set_fill(1.0, 0.0, 0.0, 0.8).unwrap();
+    a.set_stroke_color(0.0, 0.0, 1.0, 1.0).unwrap();
+    a.set_stroke_opacity(0.6).unwrap();
+    a.set_object_opacity(0.7).unwrap();
+    b.set_fill(0.0, 1.0, 0.0, 0.5).unwrap();
+    let a_content = a.state().unwrap().content;
+    let b_content = b.state().unwrap().content;
+    scene.add_many(&[(&family).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let before_revision = scene.revision();
+    let result = live.fade_family(&family, 0.25).unwrap();
+    assert_eq!(result.impacts().len(), 2);
+    assert_eq!(scene.revision(), before_revision.checked_next().unwrap());
+    let faded_a = live.effective(&a).unwrap();
+    let faded_b = live.effective(&b).unwrap();
+    assert!((faded_a.fill_opacity() - 0.6).abs() < 1e-7);
+    assert!((faded_a.stroke_opacity() - 0.45).abs() < 1e-7);
+    assert_eq!(faded_a.style.opacity, 0.7_f32);
+    assert!((faded_b.fill_opacity() - 0.375).abs() < 1e-7);
+    assert_eq!(a.state().unwrap().content, a_content);
+    assert_eq!(b.state().unwrap().content, b_content);
+
+    let before_invalid = [faded_a, faded_b];
+    let revision = scene.revision();
+    assert!(live.fade_family(&family, 1.1).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        [live.effective(&a).unwrap(), live.effective(&b).unwrap()],
+        before_invalid
+    );
 }
 
 #[test]
@@ -137,7 +174,7 @@ fn combined_style_is_atomic_and_omission_is_a_noop() {
 #[test]
 fn style_matching_preserves_source_identity_geometry_and_nonpaint_fields() {
     use noon::StyleUpdate;
-    let (scene, source, [a, b], _) = family();
+    let (mut scene, source, [a, b], _) = family();
     let target = source.copy_family().unwrap().root().clone();
     target
         .set_style(StyleUpdate {
@@ -167,9 +204,9 @@ fn style_matching_preserves_source_identity_geometry_and_nonpaint_fields() {
         assert_eq!(after.style.stroke_width, 0.15);
     }
     let revision = scene.revision();
-    assert!(source
-        .match_style(&Scene::new().family(&[]).unwrap())
-        .is_err());
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.family(&[]).unwrap();
+    assert!(source.match_style(&foreign).is_err());
     assert!(source
         .match_style(&scene.family(&[(&a).into()]).unwrap())
         .is_err());

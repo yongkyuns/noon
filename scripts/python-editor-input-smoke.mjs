@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 
 // Exercise the real enhanced editor without loading Python, WASM or a renderer.
 const editorSource = await readFile(new URL("../web/python-editor.js", import.meta.url), "utf8");
+const toolsSource = await readFile(new URL("../web/python-editor-tools.js", import.meta.url), "utf8");
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();
@@ -14,10 +15,11 @@ try {
     if (request.url().includes("ruff-wasm")) ruffRequests.push(request.url());
   });
   await page.route("http://editor.test/**", (route) => {
-    const isModule = route.request().url().endsWith("/editor.js");
+    const isTools = route.request().url().endsWith("/python-editor-tools.js");
+    const isModule = route.request().url().endsWith("/editor.js") || isTools;
     return route.fulfill({
       contentType: isModule ? "text/javascript" : "text/html",
-      body: isModule ? editorSource : `<!doctype html>
+      body: isModule ? (isTools ? toolsSource : editorSource) : `<!doctype html>
         <textarea id="python-scene-source">original</textarea>
         <button id="reset" disabled>Reset</button>
         <script>
@@ -41,7 +43,7 @@ try {
   const snapshot = () => page.evaluate(() => ({
     source: document.querySelector("textarea").value,
     observed: window.observedSources.slice(),
-    resetDisabled: document.querySelector("button").disabled,
+    resetDisabled: document.querySelector("#reset").disabled,
   }));
 
   // Gallery loads and Reset project source without scheduling a user edit.
@@ -76,6 +78,26 @@ try {
   assert.deepEqual(await snapshot(), {
     source: "original", observed: state.observed, resetDisabled: true,
   }, "Reset must restore source without generating another user edit");
+  // Source stays unwrapped by default; wrap is a presentation-only opt-in.
+  await page.evaluate(() => {
+    document.querySelector("textarea").value = `# ${"long identifier ".repeat(150)}\nx=1\n`;
+  });
+  assert.equal(await content.evaluate((node) => getComputedStyle(node).whiteSpace), "pre");
+  const beforeWrap = await snapshot();
+  await page.getByRole("button", { name: "Wrap: off", exact: true }).click();
+  assert.equal(await content.evaluate((node) => getComputedStyle(node).whiteSpace), "pre-wrap");
+  assert.deepEqual(await snapshot(), beforeWrap, "wrapping must not edit or rerun source");
+  await page.getByRole("button", { name: "Wrap: on", exact: true }).click();
+
+  await page.evaluate(() => { document.querySelector("textarea").value = "x=1\n"; });
+  await page.getByRole("button", { name: "Format", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea").value === "x = 1\n", null, { timeout: 60_000 });
+  assert.equal((await snapshot()).observed.at(-1), "x = 1\n", "formatting must publish the committed edit");
+  await content.press("ControlOrMeta+z");
+  assert.equal((await snapshot()).source, "x=1\n", "one undo must revert formatting");
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save .py", exact: true }).click();
+  assert.equal((await downloadPromise).suggestedFilename(), "main.py");
   assert.deepEqual(errors, []);
   console.log("Python editor input smoke passed: committed edits, undo/redo, Reset and source projection.");
 } finally {

@@ -64,12 +64,18 @@ const generatedPromiseBlock = [
 ].join("\n");
 const readyBlock = [
   "pyodidePromise",
-  '  .then(() => post("ready"))',
+  "  .then(() => {",
+  "    authoringMilestones.authoringWorkerReadyAtMs = performance.now();",
+  '    post("ready");',
+  "  })",
   "  .catch(failAuthoringWorker);",
 ].join("\n");
 const generatedReadyBlock = [
   "Promise.all([pyodidePromise, runtimeBuildPromise])",
-  '  .then(([, runtimeBuild]) => post("ready", { buildIdentity: runtimeBuild.identity }))',
+  "  .then(([, runtimeBuild]) => {",
+  "    authoringMilestones.authoringWorkerReadyAtMs = performance.now();",
+  '    post("ready", { buildIdentity: runtimeBuild.identity });',
+  "  })",
   "  .catch(failAuthoringWorker);",
 ].join("\n");
 const wasmInitBlock = '  const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", () => initNoonWeb());';

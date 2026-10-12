@@ -833,6 +833,73 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _morph_path_observation(shape):
+    return {"start": _point_observation(shape.get_start()),
+            "controls": [[_point_observation(p) for p in shape.get_nth_curve_points(i)]
+                         for i in range(shape.get_num_curves())]}
+
+
+def _noon_effective_morph_path():
+    scene = noon.Scene()
+    shape = noon.Square(side_length=2).rotate(.37).shift(noon.LEFT)
+    target = shape.copy().stretch(1.8, 0)
+    scene.add(shape)
+    animation = scene.declare_live_transform_to(shape, target, run_time=1, rate_func=noon.linear)
+    live = scene.live_execution()
+    end = live.play(animation)
+    live.advance_to(.5)
+    result = _morph_path_observation(shape)
+    live.advance_to(end)
+    live.complete()
+    return result
+
+
+def _manim_effective_morph_path():
+    shape = manim.Square(side_length=2).rotate(.37).shift(manim.LEFT)
+    target = shape.copy().stretch(1.8, 0)
+    animation = manim.Transform(shape, target, run_time=1, rate_func=manim.linear)
+    animation.begin()
+    animation.interpolate(.5)
+    return _morph_path_observation(shape)
+
+
+def _noon_effective_reveal_path():
+    scene = noon.Scene()
+    shape = noon.Circle(radius=1).stretch(1.5, 0).shift(noon.RIGHT)
+    scene.play(noon.Create(shape), run_time=1, rate_func=noon.linear)
+    live = scene.live_execution()
+    observations = []
+    for t in (0., .25, .625, 1.):
+        live.evaluate(t)
+        observations.append(_morph_path_observation(shape))
+    return observations
+
+
+def _manim_effective_reveal_path():
+    shape = manim.Circle(radius=1).stretch(1.5, 0).shift(manim.RIGHT)
+    animation = manim.Create(shape, run_time=1, rate_func=manim.linear)
+    animation.begin()
+    observations = []
+    for t in (0., .25, .625, 1.):
+        animation.interpolate(t)
+        observations.append(_morph_path_observation(shape))
+    return observations
+
+
+def _rotated_become(api):
+    source = api.Rectangle(width=4, height=1).shift(api.LEFT)
+    target = api.Square(side_length=2).rotate(.37).shift(api.RIGHT + api.UP)
+    source.become(target, stretch=True, match_center=True)
+    leaf = _morph_path_observation(source)
+    a = api.Square(side_length=.6).shift(2 * api.LEFT)
+    b = api.Square(side_length=.6)
+    family = api.VGroup(a, api.VGroup(a, b))
+    replacement = family.copy().rotate(.3).shift(api.RIGHT)
+    family.become(replacement, stretch=True)
+    return {"leaf": leaf, "family": [_morph_path_observation(obj) for obj in (a, b)],
+            "bounds": _object_observation(family)}
+
+
 def _world_stretch(api):
     shape = api.Square(side_length=2).rotate(.37).shift(api.RIGHT - api.UP)
     shape.stretch(-1.5, 0, about_point=2 * api.RIGHT)
@@ -973,7 +1040,108 @@ def _point_matching(api):
             _object_observation(line), list(line.get_start())[:2], list(line.get_end())[:2]]
 
 
+def _text_range_color_observation(api):
+    source = "Noon  café\nNoon Ω"
+    plain = api.Text(source, font="DejaVu Sans Mono", font_size=42)
+    styled = api.Text(
+        source, font="DejaVu Sans Mono", font_size=42,
+        t2c={"No": "#EF4444", "[6:10]": "#3B82F6", "[-1:]": "#22C55E"},
+    )
+    # The long alias supersedes t2c, including a conflicting short-form mapping.
+    alias = api.Text(
+        source, font="DejaVu Sans Mono", font_size=42,
+        t2c={"Noon": "#FF0000", "No": "#0000FF"},
+        text2color={"café": "#3B82F6"},
+    )
+    inherited = api.Text(
+        source, font="DejaVu Sans Mono", font_size=42, color=api.BLUE,
+        t2c={"Noon": api.BLUE, "No": "#FF0000"},
+    )
+    try:
+        api.Text("Noon", font="DejaVu Sans Mono", t2c={"Noon": "#FF0000", "No": "#0000FF"})
+    except ValueError:
+        rejected = True
+    else:
+        rejected = False
+    return {
+        "styled_size_ratio": [styled.width / plain.width, styled.height / plain.height],
+        "alias_size_ratio": [alias.width / plain.width, alias.height / plain.height],
+        "default_overlap_size_ratio": [inherited.width / plain.width, inherited.height / plain.height],
+        "conflicting_overlap_rejected": rejected,
+    }
+
+
+def _area_probe(api, case, scene=None):
+    y_range = [2, 5, 1] if case == "positive_axis" else [-2, 3, 1]
+    axes = api.Axes([-2, 2, 1], y_range, x_length=6, y_length=4, tips=False)
+    if scene is not None:
+        scene.add(axes)
+    graph = axes.plot(lambda x: 0.5 * x + 0.75, [-2, 2, 0.5], use_smoothing=False)
+    bounded = axes.plot(lambda x: -0.5 * x, [-2, 2, 0.5], use_smoothing=False) if case == "bounded" else None
+    if scene is not None:
+        scene.add(graph)
+        if bounded is not None:
+            scene.add(bounded)
+    area = axes.get_area(graph, [-1.25, 1.25], bounded_graph=bounded, color=api.GREEN, opacity=0.4)
+    return {**_object_observation(area), "start": _point_observation(area.get_start()),
+            "end": _point_observation(area.get_end()), "fill": _paint_rgb(area.get_fill_color()),
+            "fill_opacity": float(area.get_fill_opacity()), "stroke_opacity": float(area.get_stroke_opacity())}
+
+
+def _riemann_probe(api, case, scene=None):
+    axes = api.Axes([-2, 2, 1], [-2, 3, 1], x_length=6, y_length=4, tips=False)
+    if scene is not None:
+        scene.add(axes)
+    graph = axes.plot(lambda x: x, [-2, 2, 0.5], use_smoothing=False)
+    bounded = axes.plot(lambda x: -0.2, [-2, 2, 0.5], use_smoothing=False) if case == "bounded" else None
+    if scene is not None:
+        scene.add(graph)
+        if bounded is not None:
+            scene.add(bounded)
+    options = {"input_sample_type": "right", "width_scale_factor": 0.25} if case == "right" else {"input_sample_type": "center"}
+    rectangles = axes.get_riemann_rectangles(graph, [-1, 1.1], dx=0.5, bounded_graph=bounded,
+                                            blend=case == "blend", show_signed_area=case != "unsigned", **options)
+    return [{**_object_observation(rect), "start": _point_observation(rect.get_start()),
+             "fill": _paint_rgb(rect.get_fill_color()), "stroke": _paint_rgb(rect.get_stroke_color()),
+             "fill_opacity": float(rect.get_fill_opacity()), "stroke_width": float(rect.get_stroke_width())}
+            for rect in rectangles.submobjects]
+
+
+def _noon_live_scene_probe(probe: Callable[[Any], Any]) -> Any:
+    """Run a coordinate fixture through one active shared Rust Scene context.
+
+    Coordinate constructors intentionally have no detached authoring fallback:
+    their retained families must be created by the canonical live context. Keep
+    this scope local to those fixtures so the detached-object semantics covered
+    by the other differential probes remain unchanged.
+    """
+    scene = noon.Scene()
+    scene.live_execution()
+    from _manim_reactive import _enter_authoring_scene, _leave_authoring_scene
+
+    token = _enter_authoring_scene(scene)
+    try:
+        return probe(scene)
+    finally:
+        _leave_authoring_scene(token)
+
+
 FIXTURES = [
+    *[Fixture(f"area_{case}", lambda c=case: _noon_live_scene_probe(lambda scene: _area_probe(noon, c, scene)),
+              lambda c=case: _area_probe(manim, c), tolerance=2e-5)
+      for case in ("baseline", "positive_axis", "bounded")],
+    *[Fixture(f"riemann_{case}", lambda c=case: _noon_live_scene_probe(lambda scene: _riemann_probe(noon, c, scene)),
+              lambda c=case: _riemann_probe(manim, c), tolerance=2e-5)
+      for case in ("center", "right", "bounded", "blend", "unsigned")],
+    # Manim's per-glyph SVG styling perturbs the measured width by ~2.84e-5
+    # relative for this fixture, even though changing paint cannot change the
+    # shaped glyphs. Keep this tolerance local so meaningful layout drift still
+    # fails the default geometry comparison everywhere else.
+    Fixture("native_text_range_colors", lambda: _text_range_color_observation(noon),
+            lambda: _text_range_color_observation(manim), tolerance=3e-5),
+    Fixture("effective_reveal_path", _noon_effective_reveal_path, _manim_effective_reveal_path, 1e-5),
+    Fixture("effective_morph_path", _noon_effective_morph_path, _manim_effective_morph_path, 1e-5),
+    Fixture("rotated_become", lambda: _rotated_become(noon), lambda: _rotated_become(manim), 1e-5),
     Fixture("world_stretch", lambda: _world_stretch(noon), lambda: _world_stretch(manim), 1e-5),
     Fixture("path_alignment", lambda: _path_alignment(noon), lambda: _path_alignment(manim), 1e-5),
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),

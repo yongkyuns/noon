@@ -28,9 +28,19 @@ pub fn session() -> Result<ExecutionSession, String> {
         scene.add(&front)?;
         let mut session = scene.execution_session()?;
         for priority in [2.0, -1.0] {
+            let target = {
+                let mut live = scene.live(&mut session);
+                live.target_editor(&back)?
+            };
+            crate::z_index::publish_z_index(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                &(&target).into(),
+                priority,
+                true,
+            )?;
             let mut live = scene.live(&mut session);
-            let target = live.target_editor(&back)?;
-            live.set_z_index(&(&target).into(), priority, true)?;
             let request = Request::TransformTo(
                 TransformToRequest::new(
                     &back,
@@ -51,10 +61,23 @@ pub fn session() -> Result<ExecutionSession, String> {
         }
         // A short child of AnimationGroup finishes with the group, not at its
         // interpolation endpoint. The other child makes that distinction visible.
+        let back_target = {
+            let mut live = scene.live(&mut session);
+            live.target_editor(&back)?
+        };
+        crate::z_index::publish_z_index(
+            scene.integration_store(),
+            scene.root(),
+            &mut session,
+            &(&back_target).into(),
+            2.0,
+            true,
+        )?;
+        let front_target = {
+            let mut live = scene.live(&mut session);
+            live.target_editor(&front)?
+        };
         let mut live = scene.live(&mut session);
-        let back_target = live.target_editor(&back)?;
-        live.set_z_index(&(&back_target).into(), 2.0, true)?;
-        let front_target = live.target_editor(&front)?;
         live.shift(&front_target, -1.0, 0.0)?;
         let request = Request::Composition {
             kind: crate::SemanticAnimationCompositionKind::Parallel,

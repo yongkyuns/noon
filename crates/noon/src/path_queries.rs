@@ -1,10 +1,11 @@
 //! Immutable observations of one retained path in an explicit coordinate space.
-use crate::{AuthoringError, Mobject, UnsupportedAuthoringOperation};
+use crate::{AuthoringError, ExecutionSession, Mobject, UnsupportedAuthoringOperation};
 use noon_core::{
     GeometryRef, GeometryResource, SemanticObjectContent, SemanticStore, SemanticTransform2_5D,
     StoredGeometry, VectorPath,
 };
 use noon_geometry::{canonical_outline_path, PathProportionError, PathProportionPlan};
+use std::{cell::RefCell, rc::Rc};
 
 /// A reusable snapshot of one path and its coordinate-space transform.
 /// Preparation is O(path curves); proportion queries are O(log curves). This
@@ -18,7 +19,7 @@ pub struct PathQuery {
 }
 
 impl PathQuery {
-    fn prepare(
+    pub(crate) fn prepare(
         path: &VectorPath,
         transform: SemanticTransform2_5D,
     ) -> Result<Self, AuthoringError> {
@@ -217,11 +218,20 @@ pub(crate) fn content_path(
         StoredGeometry::Rectangle { size } => GeometryRef::Rectangle { size },
         StoredGeometry::Line { start, end } => GeometryRef::Line { start, end },
         StoredGeometry::Resource(handle) => {
-            let GeometryResource::VectorPath(path) = store
+            match store
                 .geometry_resources()
                 .get(handle)
-                .ok_or(AuthoringError::MissingGeometryResource(handle))?;
-            return Ok(std::borrow::Cow::Borrowed(path));
+                .ok_or(AuthoringError::MissingGeometryResource(handle))?
+            {
+                GeometryResource::VectorPath(path) => {
+                    return Ok(std::borrow::Cow::Borrowed(path));
+                }
+                GeometryResource::Mesh(_) => {
+                    return Err(AuthoringError::Unsupported(
+                        UnsupportedAuthoringOperation::PathQueryContent,
+                    ));
+                }
+            }
         }
     };
     Ok(std::borrow::Cow::Owned(
@@ -237,6 +247,62 @@ pub(crate) fn prepare_content(
     PathQuery::prepare(content_path(store, content)?.as_ref(), transform)
 }
 
+/// Observe one object's exact current path from an existing coherent execution.
+///
+/// This is explicit low-level integration over the existing Semantic Scene and Runtime
+/// authorities. It owns no scene/session state and performs no publication.
+pub fn effective_path_query(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    object: &Mobject,
+) -> Result<PathQuery, AuthoringError> {
+    if !Rc::ptr_eq(store, object.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    object.validate()?;
+    let store = store.borrow();
+    let observed = execution
+        .effective_semantic_object(&store, object.node_id())
+        .map_err(AuthoringError::from)?;
+    let unsupported =
+        || AuthoringError::Unsupported(UnsupportedAuthoringOperation::EffectivePathRenderOverride);
+    let geometry = observed
+        .render_geometry
+        .or_else(|| observed.object.content.geometry())
+        .ok_or(AuthoringError::Unsupported(
+            UnsupportedAuthoringOperation::PathQueryContent,
+        ))?;
+    let mut path = noon_geometry::canonical_outline_path(geometry).ok_or(
+        AuthoringError::Unsupported(UnsupportedAuthoringOperation::PathQueryContent),
+    )?;
+    if let Some(target) = path.morph_target() {
+        path = noon_geometry::interpolate_revealed_path_preserving_order(
+            &path,
+            target,
+            observed.morph,
+            observed.reveal,
+        )
+        .map_err(AuthoringError::MorphQuery)?;
+    } else if observed.morph != 0.0 {
+        return Err(unsupported());
+    } else if observed.reveal != 1.0 {
+        path = noon_geometry::authored_partial_path(&path, 0.0, observed.reveal);
+    }
+    let state = store
+        .semantic_object_state_checked(object.node_id())
+        .map_err(AuthoringError::from)?;
+    let transform = crate::semantic_mobject::semantic_transform_with_effective_affine(
+        state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?,
+        observed
+            .render_transform
+            .unwrap_or(observed.object.transform),
+    );
+    PathQuery::prepare(&path, transform)
+}
+
 impl Mobject {
     /// Prepare a query over immutable local/content-space geometry.
     pub fn local_path_query(&self) -> Result<PathQuery, AuthoringError> {
@@ -248,12 +314,19 @@ impl Mobject {
     }
 
     /// Prepare a query over authored world-space geometry. During execution,
-    /// use `LiveSession::effective_path_query` for the current publication.
+    /// use [`crate::Scene::effective_path_query`] for the current Runtime publication.
     pub fn path_query(&self) -> Result<PathQuery, AuthoringError> {
         let store = self.integration_store().borrow();
         let state = store
             .semantic_object_state_checked(self.node_id())
             .map_err(AuthoringError::from)?;
-        prepare_content(&store, state.content, state.transform)
+        prepare_content(
+            &store,
+            state.content,
+            state
+                .transform
+                .as_planar()
+                .ok_or(AuthoringError::NonFiniteObjectState)?,
+        )
     }
 }

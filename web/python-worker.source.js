@@ -1,19 +1,45 @@
 import initNoonWeb, {
   WasmAuthoringStore,
+  WasmGlow,
+  WasmGlowUpdate,
   WasmAuthoringVectorPath,
+  WasmCoordinateOptions,
+  WasmBarChartOptions,
+  WasmGraphOptions,
+  WasmSampleSpaceOptions,
+  WasmPlotSamplingPlan,
   WasmManimArrowOptions,
   WasmManimGeometryOptions,
+  WasmImageMobjectOptions,
+  WasmMeshOptions,
+  WasmMeshFamilyOptions,
+  WasmSurfaceSamplingPlan,
   WasmSceneMembershipBatch,
+  WasmTextColorBatch,
+  WasmNativeFontFace,
+  WasmLatexCompiler,
+  WasmLatexOptions,
+  WasmMatrixOptions,
+  WasmCompositeRows,
+  WasmTableOptions,
+  noonLinearTransformationPathArc,
   resolveAnimationOptions,
+  resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
+import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 7;
-const AUTHORING_STARTUP_METRICS_VERSION = 1;
+const AUTHORING_STARTUP_METRICS_VERSION = 2;
 const moduleGraphReadyAt = performance.now();
+const authoringMilestones = {
+  performanceTimeOriginMs: performance.timeOrigin,
+  firstSceneContextCreatedAtMs: null,
+  authoringWorkerReadyAtMs: null,
+};
 
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
@@ -24,7 +50,10 @@ let activeAuthoringRun = null;
 let fatalAuthoringFailure = false;
 
 pyodidePromise
-  .then(() => post("ready"))
+  .then(() => {
+    authoringMilestones.authoringWorkerReadyAtMs = performance.now();
+    post("ready");
+  })
   .catch(failAuthoringWorker);
 
 // Interpreter-fatal rejections may never settle runPythonAsync. Forward them
@@ -41,13 +70,21 @@ function failAuthoringWorker(error) {
   self.close();
 }
 
+// A WASM trap cannot unwind Rust borrows or restore a coherent engine instance.
+// Retire this host through the existing fatal channel, even if Python catches it.
+self.noonReportEngineTrap = (error) => {
+  if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
+};
+
 self.addEventListener("message", (event) => {
   if (fatalAuthoringFailure) return;
   if (isContinuationControl(event.data)) {
     void handleContinuationControl(event.data);
     return;
   }
-  requestQueue = requestQueue.then(() => handleRequest(event.data));
+  requestQueue = requestQueue.then(() => {
+    if (!fatalAuthoringFailure) return handleRequest(event.data);
+  });
 });
 
 async function initializePyodide() {
@@ -68,8 +105,12 @@ async function initializePyodide() {
   const [, pyodide, compatibilityModules] = await startupResourcesReady;
   const resourcesReadyAt = performance.now();
   const authoringStore = new WasmAuthoringStore();
-  self.noonCreateCanonicalAuthoringSceneContext = () =>
-    authoringStore.createSceneContext();
+  const authoringStoreCreatedAt = performance.now();
+  self.noonCreateCanonicalAuthoringSceneContext = () => {
+    const context = authoringStore.createSceneContext();
+    authoringMilestones.firstSceneContextCreatedAtMs ??= performance.now();
+    return context;
+  };
   self.noonCreateAuthoringValueTrackerHandle = (initial) =>
     authoringStore.createValueTracker(initial);
   self.noonRegisterSemanticExecution = (context) => {
@@ -99,13 +140,41 @@ async function initializePyodide() {
       throw new Error("semantic continuation callback session belongs to another context");
     }
     activeAuthoringRun.continuationCallbackSession = { context, sessionId };
+    const continuation = activeAuthoringRun.continuation;
+    if (continuation !== null) {
+      const entry = semanticContexts.get(continuation.contextId);
+      if (!entry || entry.released) throw new Error("semantic continuation context is retired");
+      entry.callbackSessionId = sessionId;
+    }
   };
   self.noonCompleteSemanticContinuationCallback = (context, tokenJson, patchBatchJson) =>
     completeContinuationCallback(context, tokenJson, patchBatchJson);
+  self.noonAcknowledgeSemanticContinuationCallback = (context, tokenJson, failure) =>
+    acknowledgeContinuationCallback(context, tokenJson, failure);
   self.noonFailSemanticContinuationCallback = (context, tokenJson, message) =>
     failContinuationCallback(context, tokenJson, message);
   self.noonReadSemanticContinuationCallback = (context, tokenJson, requestJson) =>
     readContinuationCallback(context, tokenJson, requestJson);
+  self.noonStageSemanticContinuationMembership = (context, tokenJson, batch) =>
+    stageContinuationCallbackMembership(context, tokenJson, batch);
+  self.noonContinuationMembershipRootKeys = (context, tokenJson) =>
+    continuationMembershipRootKeys(context, tokenJson);
+  self.noonStageSemanticContinuationProvisionalGeometry = (context, tokenJson, options) =>
+    stageContinuationCallbackProvisionalGeometry(context, tokenJson, options);
+  self.noonStageSemanticContinuationProvisionalShift = (context, tokenJson, object, x, y) =>
+    stageContinuationCallbackProvisionalShift(context, tokenJson, object, x, y);
+  self.noonStageSemanticContinuationProvisionalFill = (
+    context, tokenJson, object, red, green, blue, alpha, opacity,
+  ) => stageContinuationCallbackProvisionalFill(
+    context, tokenJson, object, red, green, blue, alpha, opacity,
+  );
+  self.noonSemanticContinuationProvisionalCenter = (context, tokenJson, object) =>
+    continuationCallbackProvisionalCenter(context, tokenJson, object);
+  self.noonResolveSemanticContinuationProvisionalMobject = (context, tokenJson, object) =>
+    resolveContinuationCallbackProvisionalMobject(context, tokenJson, object);
+  self.noonAssociateSemanticContinuationCallbackMobjects = (context, tokenJson, batch) =>
+    committedContinuationCallbackPlayer(context, tokenJson)
+      .associatePublishedCallbackMobjects(context, batch);
   self.noonSemanticContinuationGeneration = (context) => {
     const continuation = activeAuthoringRun?.continuation;
     return continuation?.context === context ? continuation.generation : undefined;
@@ -120,20 +189,218 @@ async function initializePyodide() {
       throw new Error("semantic continuation is not active for this Python source run");
     }
   };
+  self.noonGlowUpdate = (...args) => new WasmGlowUpdate(...args);
+  self.noonGlow = (update) => new WasmGlow(update);
+  self.noonAuthoringImageOptions = WasmImageMobjectOptions;
+  self.noonCreateAuthoringImageHandle = (options) => authoringStore.createImage(options);
+  self.noonAuthoringMeshOptions = WasmMeshOptions;
+  self.noonAuthoringMeshFamilyOptions = WasmMeshFamilyOptions;
+  self.noonSurfaceSamplingPlan = (...args) => new WasmSurfaceSamplingPlan(...args);
+  self.noonCreateAuthoringMeshHandle = (options) => authoringStore.createMesh(options);
+  self.noonCreateAuthoringMeshFamilyHandle = (options) => authoringStore.createMeshFamily(options);
+  self.noonLoadImageUrl = async (url) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`image request failed: HTTP ${response.status}`);
+    const limit = 32 * 1024 * 1024;
+    if (Number(response.headers.get("Content-Length")) > limit) {
+      await response.body?.cancel();
+      throw new Error("encoded image exceeds 32 MiB");
+    }
+    if (!response.body) throw new Error("image response has no body");
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > limit) {
+          await reader.cancel();
+          throw new Error("encoded image exceeds 32 MiB");
+        }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
+  };
   self.noonAuthoringGeometryOptions = WasmManimGeometryOptions;
   self.noonAuthoringArrowOptions = WasmManimArrowOptions;
+  self.noonAuthoringGraphOptions = () => new WasmGraphOptions();
+  self.noonAuthoringCoordinateOptions = WasmCoordinateOptions;
+  self.noonAuthoringSampleSpaceOptions = WasmSampleSpaceOptions;
+  self.noonCreateAuthoringSampleSpaceHandle = (options) => authoringStore.createSampleSpace(options);
+  self.noonAuthoringBarChartOptions = (values, range, width, height) =>
+    new WasmBarChartOptions(values, range, width, height);
+  self.noonPlotSamplingPlan = WasmPlotSamplingPlan;
+  self.noonCreateAuthoringCoordinateHandle = (options) =>
+    authoringStore.createCoordinates(options);
+  self.noonCreateAuthoringBarChart = (options, labels, context) => {
+    if (!latexCompiler) {
+      options.free(); labels.free();
+      throw new Error("Call await prepare_latex() before constructing BarChart");
+    }
+    return context == null ? authoringStore.createLabeledBarChart(options, labels, latexCompiler)
+      : context.liveCreateLabeledBarChart(options, labels, latexCompiler);
+  };
+  self.noonBarChartLabels = (chart, size, buff, math, rgba, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing chart labels");
+    return context == null ? chart.labelFamily(size, buff, math, rgba, latexCompiler)
+      : context.liveBarLabelFamily(chart, size, buff, math, rgba, latexCompiler);
+  };
+  self.noonNumberPlaneDecimalCoordinateLabelFamilies = (
+    plane, xValues, automaticX, yValues, automaticY, xOptions, yOptions,
+  ) => {
+    if (!latexCompiler) {
+      xOptions.free(); yOptions.free();
+      throw new Error("Call await prepare_latex() before constructing NumberPlane coordinates");
+    }
+    return plane.numberPlaneDecimalCoordinateLabelFamilies(
+      xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
+    );
+  };
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);
   self.noonCreateAuthoringArrowHandle = (options) =>
     authoringStore.createManimArrow(options);
-  self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
-    authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
+  self.noonCreateAuthoringSvgHandle = (source, shouldCenter, height, width) =>
+    authoringStore.createSvgFromString(source, shouldCenter, height, width);
+  self.noonTextColorBatch = () => new WasmTextColorBatch();
+  self.noonNativeFontFace = (family, data, faceIndex) =>
+    new WasmNativeFontFace(family, data, faceIndex);
+  self.noonBundledNativeFontFace = (family) => WasmNativeFontFace.bundled(family);
+  self.noonCreateAuthoringTextHandle = (...args) => authoringStore.createManimText(...args);
+  self.noonCreateAuthoringMarkupTextHandle = (...args) => authoringStore.createManimMarkupText(...args);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
+  let latexCompiler = null;
+  let latexPreparation = null;
+  self.noonPrepareLatex = async () => {
+    if (!latexPreparation) {
+      latexPreparation = import("./latex/backend.js")
+        .then(({ prepareLatexBackend }) => prepareLatexBackend())
+        .then(backend => { latexCompiler = new WasmLatexCompiler(backend); })
+        .catch(error => { latexPreparation = null; throw error; });
+    }
+    await latexPreparation;
+  };
+  self.noonCreateAuthoringLatexHandle = (source, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    const options = new WasmLatexOptions(source, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
+    options.isolateSubstrings(isolates);
+    return context == null ? authoringStore.createLatex(options, latexCompiler)
+      : context.liveCreateLatex(options, latexCompiler);
+  };
+  self.noonCreateAuthoringLatexStringsHandle = (strings, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    const options = WasmLatexOptions.fromStrings(strings, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
+    options.isolateSubstrings(isolates);
+    return context == null ? authoringStore.createLatex(options, latexCompiler)
+      : context.liveCreateLatex(options, latexCompiler);
+  };
+  const numericHandle = (handle) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    return {
+      // A detached number exposes its retained authored value. An attached
+      // number is queried through the current canonical execution session.
+      value: (context) => context == null ? handle.value : context.queryMobjectDecimalValue(handle.mobject()),
+      text: () => handle.text,
+      fontSize: (context) => context == null ? handle.fontSize() : context.queryMobjectDecimalFontSize(handle.mobject()),
+      mobject: () => handle.mobject(),
+      integerValue: (context) => context == null ? handle.integerValue() : context.queryMobjectIntegerValue(handle.mobject()),
+      setValue: (value) => handle.setValue(latexCompiler, value),
+      incrementValue: (delta) => handle.incrementValue(latexCompiler, delta),
+      setValueLive: (context, value) => context.liveSetDecimalValue(handle.mobject(), latexCompiler, value),
+      incrementValueLive: (context, delta) => context.liveIncrementDecimalValue(handle.mobject(), latexCompiler, delta),
+    };
+  };
+  self.noonDecimalNumberLabelMembers = (family) =>
+    Array.from(family.decimalNumberLabelMembers(), numericHandle);
+  self.noonCreateAuthoringDecimalNumberHandle = (value, places, sign, commas, ellipsis, unit, fontSize, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    const args = [value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler];
+    return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
+      : context.liveCreateDecimalNumber(...args));
+  };
+  const compositeRows = (rows) => {
+    const entries = new WasmCompositeRows();
+    for (const row of rows) {
+      entries.beginRow();
+      for (const entry of row) {
+        if (entry.memberCount !== undefined) entries.appendFamilyEntry(entry);
+        else entries.appendEntry(entry);
+      }
+    }
+    return entries;
+  };
+  self.noonTableOptions = (...args) => new WasmTableOptions(...args);
+  self.noonTableFromFamily = (family) => family.asTable();
+  self.noonHighlightTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
+    context.liveHighlightTableCell(table, row, column, red, green, blue, alpha, opacity);
+  self.noonGetHighlightedTableCell = (context, table, row, column, red, green, blue, alpha, opacity) =>
+    context.liveGetHighlightedTableCell(table, row, column, red, green, blue, alpha, opacity);
+  self.noonTableCell = (context, table, row, column) => context.liveTableCell(table, row, column);
+  self.noonCreateAuthoringTableHandle = (rows, v, h, outer, context) => {
+    return context.liveCreateTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer));
+  };
+  self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MathTable");
+    return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerTable");
+    return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringDecimalTableHandle = (rows, v, h, outer, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalTable");
+    return context.liveCreateDecimalTable(Array.from(rows, row => Array.from(row)), new WasmTableOptions(v, h, outer), latexCompiler);
+  };
+  self.noonCreateAuthoringMobjectTableHandle = (rows, v, h, outer, context) => {
+    const entries = compositeRows(rows);
+    return context.liveCreateMobjectTable(entries, new WasmTableOptions(v, h, outer));
+  };
+  self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Variable");
+    if (context == null) throw new Error("Variable requires a canonical Scene authoring context");
+    const handle = context.liveCreateVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
+    return {
+      family: () => handle.family(),
+      label: () => handle.label(),
+      equals: () => handle.equals(),
+      tracker: () => handle.tracker(),
+      value: () => numericHandle(handle.value()),
+    };
+  };
+  self.noonMatrixOptions = WasmMatrixOptions;
+  self.noonLinearTransformationPathArc = noonLinearTransformationPathArc;
+  self.noonMatrixFromFamily = (family) => family.asMatrix();
+  self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");
+    return context.liveCreateMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonCreateAuthoringIntegerMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerMatrix");
+    return context.liveCreateIntegerMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonCreateAuthoringDecimalMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalMatrix");
+    return context.liveCreateDecimalMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonCreateAuthoringMobjectMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
+    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MobjectMatrix");
+    const entries = compositeRows(rows);
+    return context.liveCreateMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+  };
+  self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
-  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
+  self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
+  self.noonResolveTransformAnimationOptions = (...args) =>
+    resolveAnimationOptionsPlain(resolveTransformAnimationOptions, ...args);
   const bindingsReadyAt = performance.now();
 
   for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {
@@ -147,17 +414,23 @@ async function initializePyodide() {
 import sys
 sys.path.insert(0, "/tmp")
 import noon
+import _manim_namespace
+_manim_namespace.install()
 `);
   const importsReadyAt = performance.now();
-  self.__noonAuthoringStartupMetrics = Object.freeze({
+  const startupMetrics = {
     version: AUTHORING_STARTUP_METRICS_VERSION,
+    ...authoringMilestones,
     totalMs: importsReadyAt,
     moduleGraphLoadMs: moduleGraphReadyAt,
     initializeMs: importsReadyAt - initializeStartedAt,
     startupResourcesMs: resourcesReadyAt - initializeStartedAt,
     noonWebInitMs: resourceDurations.noonWebInitMs,
+    noonWebInitReadyAtMs: resourceDurations.noonWebInitReadyAtMs,
     pyodideInitMs: resourceDurations.pyodideInitMs,
+    pyodideInitReadyAtMs: resourceDurations.pyodideInitReadyAtMs,
     compatibilityBundleMs: resourceDurations.compatibilityBundleMs,
+    compatibilityBundleReadyAtMs: resourceDurations.compatibilityBundleReadyAtMs,
     authoringBindingsMs: bindingsReadyAt - resourcesReadyAt,
     compatibilityFsInstallMs: compatibilityFilesReadyAt - bindingsReadyAt,
     compatibilityImportInstallMs: importsReadyAt - compatibilityFilesReadyAt,
@@ -166,7 +439,23 @@ import noon
       (total, module) => total + module.source.length,
       0,
     ),
+    resourcesReadyAtMs: resourcesReadyAt,
+    authoringStoreCreatedAtMs: authoringStoreCreatedAt,
+    bindingsReadyAtMs: bindingsReadyAt,
+    compatibilityFilesReadyAtMs: compatibilityFilesReadyAt,
+    importsReadyAtMs: importsReadyAt,
+  };
+  Object.defineProperties(startupMetrics, {
+    firstSceneContextCreatedAtMs: {
+      enumerable: true,
+      get: () => authoringMilestones.firstSceneContextCreatedAtMs,
+    },
+    authoringWorkerReadyAtMs: {
+      enumerable: true,
+      get: () => authoringMilestones.authoringWorkerReadyAtMs,
+    },
   });
+  self.__noonAuthoringStartupMetrics = Object.freeze(startupMetrics);
   return pyodide;
 }
 
@@ -180,6 +469,7 @@ function measureStartupTask(metrics, key, task) {
   }
   return Promise.resolve(result).then((value) => {
     metrics[key] = performance.now() - startedAt;
+    metrics[`${key.replace(/Ms$/, "")}ReadyAtMs`] = performance.now();
     return value;
   });
 }
@@ -212,20 +502,6 @@ async function loadCompatibilityBundle() {
   return bundle.modules;
 }
 
-function resolveAnimationOptionsPlain(...args) {
-  const result = resolveAnimationOptions(...args);
-  try {
-    return {
-      runTime: result.runTime,
-      rateFunc: result.rateFunc,
-      lagRatio: result.lagRatio,
-      pathArc: result.pathArc,
-      reverseRateFunction: result.reverseRateFunction,
-    };
-  } finally {
-    result.free();
-  }
-}
 
 function registerContinuationContext(context) {
   if (activeAuthoringRun === null) {
@@ -259,6 +535,8 @@ function registerContinuationContext(context) {
     callbackRead: null,
     pending: null,
     callbackRequest: null,
+    callbackCommit: null,
+    committedCallbackPlayer: null,
     terminal: false,
   };
   semanticContexts.set(contextId, entry);
@@ -306,12 +584,15 @@ function continuationEvent(kind, value = {}) {
   return JSON.stringify({ kind, ...value });
 }
 
-function requestContinuationCallback(continuation, phase) {
+function requestContinuationCallback(continuation, phase, player) {
   if (continuation.terminal || continuation.pending === null) {
     return Promise.reject(new Error("required callback reached a continuation without a suspended source"));
   }
   if (continuation.callbackRequest !== null) {
     return Promise.reject(new Error("semantic continuation already has a required callback request"));
+  }
+  if (continuation.callbackCommit !== null) {
+    return Promise.reject(new Error("semantic continuation callback commit is not acknowledged"));
   }
   let phaseTokenJson;
   try {
@@ -323,11 +604,89 @@ function requestContinuationCallback(continuation, phase) {
     return Promise.reject(new Error("canonical callback phase is missing its token"));
   }
   return new Promise((resolve, reject) => {
-    continuation.callbackRequest = { phaseTokenJson, resolve, reject, read: null };
+    continuation.committedCallbackPlayer = null;
+    continuation.callbackRequest = { phaseTokenJson, resolve, reject, read: null, player };
     const pending = continuation.pending;
     continuation.pending = null;
     pending.resolve(continuationEvent("callback", { phase }));
   });
+}
+
+function stageContinuationCallbackMembership(context, tokenJson, batch) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackMembership !== "function") {
+    throw new Error("semantic continuation callback has no pinned membership collector");
+  }
+  callback.player.stageCallbackMembership(tokenJson, batch);
+}
+
+function continuationMembershipRootKeys(context, tokenJson) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.callbackMembershipRootKeys !== "function") {
+    throw new Error("semantic continuation callback has no pinned membership collector");
+  }
+  return callback.player.callbackMembershipRootKeys(tokenJson);
+}
+
+function stageContinuationCallbackProvisionalGeometry(context, tokenJson, options) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackProvisionalGeometry !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  return callback.player.stageCallbackProvisionalGeometry(tokenJson, options);
+}
+
+function stageContinuationCallbackProvisionalShift(context, tokenJson, object, x, y) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackProvisionalShift !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  callback.player.stageCallbackProvisionalShift(tokenJson, object, x, y);
+}
+
+function stageContinuationCallbackProvisionalFill(
+  context, tokenJson, object, red, green, blue, alpha, opacity,
+) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.stageCallbackProvisionalFill !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  callback.player.stageCallbackProvisionalFill(
+    tokenJson, object, red, green, blue, alpha, opacity,
+  );
+}
+
+function continuationCallbackProvisionalCenter(context, tokenJson, object) {
+  const callback = continuationCallbackRequest(context, tokenJson).callbackRequest;
+  if (callback.player === null || callback.player === undefined ||
+      typeof callback.player.callbackProvisionalCenter !== "function") {
+    throw new Error("semantic continuation callback has no pinned provisional geometry collector");
+  }
+  return callback.player.callbackProvisionalCenter(tokenJson, object);
+}
+
+function committedContinuationCallbackPlayer(context, tokenJson) {
+  const continuation = activeAuthoringRun?.continuation;
+  if (!continuation || continuation.context !== context || continuation.terminal ||
+      continuation.callbackCommit?.tokenJson !== tokenJson) {
+    throw new Error("semantic continuation has no completed callback player");
+  }
+  const completed = continuation.committedCallbackPlayer;
+  const player = completed?.tokenJson === tokenJson ? completed.player : null;
+  if (player === null || player === undefined) {
+    throw new Error("semantic continuation callback has no committed provisional geometry collector");
+  }
+  return player;
+}
+
+function resolveContinuationCallbackProvisionalMobject(context, tokenJson, object) {
+  const player = committedContinuationCallbackPlayer(context, tokenJson);
+  return player.resolveCallbackProvisionalMobject(tokenJson, object);
 }
 
 function continuationCallbackRequest(context, tokenJson) {
@@ -421,8 +780,43 @@ function completeContinuationCallback(context, tokenJson, patchBatchJson) {
     throw new Error("semantic continuation callback cannot complete while a callback read is pending");
   }
   const next = awaitContinuationEvent(continuation);
+  continuation.committedCallbackPlayer = { tokenJson, player: callback.player };
   continuation.callbackRequest = null;
   callback.resolve(patchBatchJson);
+  return next;
+}
+
+// Rust has published, but the suspended source must attach its Python wrappers
+// before the endpoint starts another phase or returns/consumes the player lease.
+function requestContinuationCallbackCommit(continuation, phase) {
+  const tokenJson = JSON.stringify(phase.token);
+  if (continuation.terminal || continuation.pending === null ||
+      continuation.callbackRequest !== null || continuation.callbackCommit !== null ||
+      continuation.committedCallbackPlayer?.tokenJson !== tokenJson) {
+    return Promise.reject(new Error("stale semantic continuation callback commit"));
+  }
+  return new Promise((resolve, reject) => {
+    continuation.callbackCommit = { tokenJson, resolve, reject };
+    const pending = continuation.pending;
+    continuation.pending = null;
+    pending.resolve(continuationEvent("callback_committed", {
+      phase: { token: phase.token, region: phase.region ?? 0 },
+    }));
+  });
+}
+
+function acknowledgeContinuationCallback(context, tokenJson, failure = null) {
+  const continuation = activeAuthoringRun?.continuation;
+  if (!continuation || continuation.context !== context || continuation.terminal ||
+      continuation.callbackCommit?.tokenJson !== tokenJson) {
+    throw new Error("stale semantic continuation callback acknowledgement");
+  }
+  const commit = continuation.callbackCommit;
+  const next = awaitContinuationEvent(continuation);
+  continuation.callbackCommit = null;
+  continuation.committedCallbackPlayer = null;
+  if (failure === null || failure === undefined) commit.resolve();
+  else commit.reject(new Error(String(failure)));
   return next;
 }
 
@@ -444,7 +838,8 @@ function failContinuationCallback(context, tokenJson, message) {
 
 function completeContinuation(continuation, generation) {
   if (continuation.terminal || generation !== continuation.generation ||
-      continuation.pending === null || continuation.callbackRequest !== null) {
+      continuation.pending === null || continuation.callbackRequest !== null ||
+      continuation.callbackCommit !== null) {
     throw new Error("stale semantic continuation completion");
   }
   const { resolve } = continuation.pending;
@@ -455,6 +850,11 @@ function completeContinuation(continuation, generation) {
 function failContinuation(continuation, error) {
   if (continuation.terminal) return;
   continuation.terminal = true;
+  continuation.committedCallbackPlayer = null;
+  if (continuation.callbackCommit !== null) {
+    continuation.callbackCommit.reject(error instanceof Error ? error : new Error(String(error)));
+    continuation.callbackCommit = null;
+  }
   if (continuation.callbackRequest !== null) {
     const callback = continuation.callbackRequest;
     continuation.callbackRequest = null;
@@ -471,7 +871,8 @@ function failContinuation(continuation, error) {
 
 function isContinuationControl(request) {
   return isRecord(request) && request.channel === AUTHORING_CHANNEL &&
-    (request.type === "cancel_semantic_continuation" ||
+    (request.type === "release_semantic_execution" ||
+      request.type === "cancel_semantic_continuation" ||
       (request.type === "attach_semantic_execution" &&
        request.continuationGeneration !== undefined));
 }
@@ -485,6 +886,20 @@ async function handleContinuationControl(request) {
     if (request.type === "attach_semantic_execution") {
       await attachSemanticExecutionRequest(request, true, pyodide);
       post("semantic_execution_attached", { requestId });
+      return;
+    }
+    if (request.type === "release_semantic_execution") {
+      const entry = semanticContexts.get(request.contextId);
+      const continuation = activeAuthoringRun?.continuation;
+      if (continuation !== null && continuation !== undefined &&
+          continuation.contextId === request.contextId && !continuation.terminal) {
+        throw new Error("cannot release an active semantic continuation context");
+      }
+      if (entry) {
+        entry.released = true;
+        retireSemanticContext(request.contextId, entry);
+      }
+      post("semantic_execution_released", { requestId });
       return;
     }
     const entry = semanticContexts.get(request.contextId);
@@ -520,15 +935,25 @@ async function handleRequest(request) {
       activeAuthoringRun = run;
       let completed = false;
       try {
+        const workerRunStartedAtMs = performance.now();
         const resultJson = await runAuthoringSource(
           pyodide,
           request.source,
           request.context,
         );
+        const workerRunCompletedAtMs = performance.now();
         if (run.continuation !== null) {
           await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);
         }
-        post("result", { requestId, resultJson });
+        post("result", {
+          requestId,
+          resultJson,
+          workerRunTiming: {
+            performanceTimeOriginMs: performance.timeOrigin,
+            startedAtMs: workerRunStartedAtMs,
+            completedAtMs: workerRunCompletedAtMs,
+          },
+        });
         completed = true;
       } finally {
         if (!completed && run.continuation !== null) {
@@ -544,15 +969,6 @@ async function handleRequest(request) {
     if (request.type === "attach_semantic_execution") {
       await attachSemanticExecutionRequest(request, false, pyodide);
       post("semantic_execution_attached", { requestId });
-      return;
-    }
-    if (request.type === "release_semantic_execution") {
-      const entry = semanticContexts.get(request.contextId);
-      if (entry) {
-        entry.released = true;
-        retireSemanticContext(request.contextId, entry);
-      }
-      post("semantic_execution_released", { requestId });
       return;
     }
     throw new Error(`Unsupported Python authoring request: ${request.type}`);
@@ -589,11 +1005,23 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     entry.releaseCallbackSession = () =>
       releaseCanonicalCallbackSession(pyodide, request.callbackSessionId);
   }
-  const runRequiredCallbackPhase = entry.callbackSessionId === undefined
+  // A source continuation may add its first callback after an earlier play.
+  // Its suspended Python stack is the handler for the whole source lifetime.
+  const runRequiredCallbackPhase = continuationOnly
+    ? (frame, player) => requestContinuationCallback(continuation, frame, player)
+    : entry.callbackSessionId === undefined ? null
+      : (frame, player) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, player);
+  const completeRequiredCallbackPhase = continuationOnly
+    ? (frame) => requestContinuationCallbackCommit(continuation, frame)
+    : entry.callbackSessionId === undefined ? null
+      : (frame) => finishCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, true);
+  if (continuationOnly) {
+    entry.releaseCallbackSession = () => entry.callbackSessionId === undefined
+      ? undefined : releaseCanonicalCallbackSession(pyodide, entry.callbackSessionId);
+  }
+  const discardRequiredCallbackPhase = entry.callbackSessionId === undefined || continuationOnly
     ? null
-    : continuationOnly
-    ? (frame) => requestContinuationCallback(continuation, frame)
-    : (frame) => runCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame);
+    : (frame) => finishCanonicalCallbackPhase(pyodide, entry.callbackSessionId, frame, false);
   if (request.replaceExistingEndpoint) {
     if (continuationOnly || (continuation?.contextId === request.contextId && !continuation.terminal)) {
       throw new Error("cannot replace an endpoint while source continuation is active");
@@ -623,6 +1051,8 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
       },
       onCallbackReadAvailable: (read) => { continuation.callbackRead = read; },
     } : null,
+    completeRequiredCallbackPhase,
+    discardRequiredCallbackPhase,
   );
   entry.endpoints.add(endpoint);
   if (continuationOnly) continuation.endpoint = endpoint;
@@ -641,7 +1071,53 @@ function retireSemanticContext(token, entry) {
   }
 }
 
+async function prepareAuthoringDependencies(pyodide, source) {
+  // Explicit imports use Pyodide's ordinary package resolver. Implicit Manim
+  // namespace aliases are detected by Python's AST parser and loaded separately
+  // so packages like NumPy stay off the cold authoring startup path.
+  await pyodide.loadPackagesFromImports(source);
+
+  const dictConstructor = pyodide.globals.get("dict");
+  const globals = dictConstructor();
+  dictConstructor.destroy();
+  globals.set("__noon_dependency_source", source);
+  try {
+    const requiredJson = pyodide.runPython(
+      `
+import _manim_namespace
+_manim_namespace.required_packages_json(__noon_dependency_source)
+`,
+      { globals },
+    );
+    const requiredPackages = JSON.parse(requiredJson);
+    if (requiredPackages.length === 0) return;
+
+    const requiredPackagesJson = JSON.stringify(requiredPackages);
+    globals.set("__noon_required_packages_json", requiredPackagesJson);
+    const missingJson = pyodide.runPython(
+      `
+_manim_namespace.missing_packages_json(__noon_required_packages_json)
+`,
+      { globals },
+    );
+    const missingPackages = JSON.parse(missingJson);
+    if (missingPackages.length > 0) {
+      await pyodide.loadPackage(missingPackages);
+    }
+    pyodide.runPython(
+      `
+_manim_namespace.bind_loaded_packages_json(__noon_required_packages_json)
+`,
+      { globals },
+    );
+  } finally {
+    globals.destroy();
+  }
+}
+
 async function runAuthoringSource(pyodide, source, context) {
+  await prepareAuthoringDependencies(pyodide, source);
+
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
   dictConstructor.destroy();
@@ -739,44 +1215,33 @@ json.dumps(
   }
 }
 
-async function runCanonicalCallbackPhase(pyodide, sessionId, frame) {
-  const dictConstructor = pyodide.globals.get("dict");
-  const globals = dictConstructor();
-  dictConstructor.destroy();
-  globals.set("__noon_callback_session", sessionId);
-  globals.set("__noon_callback_frame_json", JSON.stringify(frame));
-  try {
-    return await pyodide.runPythonAsync(
-      `
-import json
-import _manim_updaters
-_manim_updaters.run_canonical_callback_phase(
-    int(__noon_callback_session),
-    json.loads(__noon_callback_frame_json),
-)
-`,
-      { globals },
-    );
-  } finally {
-    globals.destroy();
-  }
+async function runCanonicalCallbackPhase(pyodide, sessionId, frame, player) {
+  return invokeCanonicalCallback(
+    pyodide, "_run_canonical_callback_phase_json", sessionId, JSON.stringify(frame), player,
+  );
+}
+
+async function finishCanonicalCallbackPhase(pyodide, sessionId, frame, committed) {
+  // Wrapper finalization needs phase identity, never the callback read rows.
+  return invokeCanonicalCallback(
+    pyodide, "_finish_canonical_callback_phase_json", sessionId,
+    JSON.stringify({ token: frame.token, region: frame.region }), committed,
+  );
 }
 
 async function releaseCanonicalCallbackSession(pyodide, sessionId) {
-  const dictConstructor = pyodide.globals.get("dict");
-  const globals = dictConstructor();
-  dictConstructor.destroy();
-  globals.set("__noon_callback_session", sessionId);
+  return invokeCanonicalCallback(pyodide, "release_session", sessionId);
+}
+
+async function invokeCanonicalCallback(pyodide, name, ...args) {
+  const callable = pyodide.pyimport(`_manim_updaters.${name}`);
   try {
-    await pyodide.runPythonAsync(
-      `
-import _manim_updaters
-_manim_updaters.release_session(int(__noon_callback_session))
-`,
-      { globals },
-    );
+    // Awaiting the coroutine uses Pyodide's normal event loop, including JSPI
+    // suspension where supported. Pyodide releases the scheduled awaitable;
+    // this scope owns only the callable proxy, with no cross-run cache.
+    return await callable(...args);
   } finally {
-    globals.destroy();
+    callable.destroy();
   }
 }
 
@@ -856,6 +1321,7 @@ function validateRequest(request) {
 }
 
 function post(type, payload = {}) {
+  if (fatalAuthoringFailure && (type !== "error" || payload.requestId !== null)) return;
   self.postMessage({
     channel: AUTHORING_CHANNEL,
     protocolVersion: AUTHORING_PROTOCOL_VERSION,

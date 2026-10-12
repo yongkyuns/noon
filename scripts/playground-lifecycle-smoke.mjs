@@ -5,6 +5,8 @@ import path from "node:path";
 
 import playwright from "playwright";
 
+import { holdPlaygroundPreload } from "./playground-browser-support.mjs";
+
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_LIFECYCLE_PORT ?? "4184");
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -64,7 +66,7 @@ async function snapshot(page) {
   });
 }
 
-async function startDeferredRuntime(page) {
+async function startDeferredRuntime(page, releasePreload) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   const deferred = await snapshot(page);
   assert.equal(deferred.runtimeStartup, "deferred", "page load must leave lifecycle runtime deferred");
@@ -79,7 +81,7 @@ async function startDeferredRuntime(page) {
       visibleExampleCount <= 18,
     `initial gallery page materialized ${visibleExampleCount} examples`,
   );
-  await page.locator("#replace-scene").click();
+  releasePreload();
   await page.waitForFunction(
     () => {
       const status = document.querySelector("#status");
@@ -166,10 +168,11 @@ try {
   });
 
   diagnostics.browser = await browser.version();
+  const releasePreload = await holdPlaygroundPreload(page);
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
-    waitUntil: "load",
+    waitUntil: "domcontentloaded",
   });
-  await startDeferredRuntime(page);
+  await startDeferredRuntime(page, releasePreload);
   await page.evaluate(() => {
     document.querySelector("#scene").dataset.lifecycleSmokeIdentity = "original";
   });

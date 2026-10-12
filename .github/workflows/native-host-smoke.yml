@@ -7,6 +7,7 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/noon-native/**"
+      - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
       - "crates/noon-compile/**"
@@ -19,6 +20,7 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/noon-native/**"
+      - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
       - "crates/noon-compile/**"
@@ -52,6 +54,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
 
+      - name: Check transient viewport integration
+        run: cargo test -p noon --all-features --test transient_viewport
+
+      - name: Qualify transient before/after anchor pixels
+        run: |
+          cargo test -p noon-render-wgpu --test transient_anchor_order \
+            -- --include-ignored --nocapture --test-threads=1
+
+      - name: Qualify secondary viewport camera and composition isolation
+        run: |
+          cargo test -p noon-render-wgpu --test secondary_viewport \
+            -- --include-ignored --nocapture --test-threads=1
+
+      - name: Qualify resident path buffer retirement after submission
+        run: |
+          cargo test -p noon-render-wgpu --lib \
+            software_vulkan_keeps_submitted_paths_alive_across_resident_compaction \
+            -- --ignored --nocapture --test-threads=1
+
+      - name: Qualify native agent temporal rendering
+        run: |
+          cargo test -p noon --all-features --test agent_temporal_qualification \
+            -- --include-ignored --nocapture
+
+      - name: Check native transient viewport preparation
+        run: cargo test -p noon-native --all-features --lib execution_source::viewport_tests
+
       - name: Present typed Rust semantic scene through native host
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \
@@ -64,8 +93,139 @@ jobs:
             cargo test -p noon-native native_surface_smoke_presents_affine_continuation_endpoint \
               -- --ignored --nocapture --test-threads=1
 
+      - name: Present retained spatial meshes through native host
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_spatial_mesh_frame \
+              -- --ignored --nocapture --test-threads=1
+
       - name: Present ordered Rust callback continuation through native host
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \
             cargo test -p noon-native native_surface_smoke_presents_callback_continuation_endpoint \
               -- --ignored --nocapture --test-threads=1
+
+      - name: Qualify paused selection pixels and export isolation
+        env:
+          NOON_SELECTION_PROOF_DIR: ${{ github.workspace }}/selection-proof
+        run: |
+          cargo test -p noon --all-features --test selection_overlay_raster \
+            -- --include-ignored --nocapture
+
+      - name: Present inspection zoom and view recovery without advancing native time
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_inspection_zoom_and_recovery \
+              -- --ignored --nocapture --test-threads=1
+
+      - name: Present click selection and clear without advancing native time
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_paused_click_selection_and_clear \
+              -- --ignored --nocapture --test-threads=1
+
+      - name: Present click Indicate, zoom, restore, and retrigger on native surface
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_click_indicate_zoom_and_retrigger \
+              -- --ignored --nocapture --test-threads=1
+
+      - name: Retain selection pixel evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-selection-pixels
+          path: selection-proof/
+          retention-days: 14
+
+  headless-capture:
+    name: Rust scene capture without a display server
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      WGPU_BACKEND: vulkan
+      NOON_CAPTURE_PROOF_DIR: ${{ github.workspace }}/capture-proof/pixels
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+          mkdir -p capture-proof
+          git rev-parse HEAD > capture-proof/tested-commit.txt
+
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-capture-cargo-sources-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-capture-cargo-sources-
+
+      - name: Install software Vulkan without a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+
+      - name: Verify native capture does not depend on a window or language host
+        run: |
+          set -o pipefail
+          cargo tree -p noon-export --edges normal --prefix none > capture-proof/dependencies.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          forbidden = {'noon-native', 'noon-web', 'winit', 'pyo3', 'wasm-bindgen', 'web-sys', 'js-sys'}
+          packages = {line.split()[0] for line in Path('capture-proof/dependencies.txt').read_text().splitlines() if line.strip()}
+          assert not packages.intersection(forbidden), packages.intersection(forbidden)
+          PY
+
+      - name: Qualify native offscreen capture and failure recovery
+        run: |
+          set -o pipefail
+          # Preserve all original capture cases without depending on FFmpeg.
+          # Encoder-dependent ignored cases run in native-export-output.yml.
+          {
+            env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+              --lib --tests -- --nocapture --test-threads=1
+            env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+              --lib gpu::tests:: -- --include-ignored --nocapture --test-threads=1
+            env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+              --test capture -- --include-ignored --nocapture --test-threads=1
+          } 2>&1 | tee capture-proof/tests.log
+
+      - name: Check formatting and lint the native capture package
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p noon-export --all-features --all-targets -- -D warnings
+
+      - name: Stream the normal Rust camera example without a viewer
+        run: |
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo run --quiet -p noon-export \
+            --example capture_frames > capture-proof/example.rgba 2> capture-proof/example.log
+          python3 - <<'PY'
+          from pathlib import Path
+          output = Path('capture-proof/example.rgba')
+          assert output.stat().st_size == 90 * 320 * 180 * 4, output.stat().st_size
+          output.unlink()
+          PY
+
+      - name: Retain pinned formatter diagnostics without changing tested code
+        if: always()
+        run: |
+          mkdir -p capture-proof
+          cargo fmt --all
+          git diff --binary > capture-proof/rustfmt.patch
+
+      - name: Retain native capture evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-export-capture
+          path: capture-proof/
+          retention-days: 14

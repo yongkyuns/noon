@@ -12,7 +12,7 @@ Read this document in three modes:
 
 - **Normative architecture** defines ownership, interfaces, ordering, publication, locality, and lifetime rules.
 - **Current implementation** callouts describe where those responsibilities live today without creating a second target architecture.
-- **Roadmap status** is intentionally coarse; mutable task inventories and final qualification evidence live in GitHub issues, primarily the Phase A umbrella.
+- **Roadmap status** is intentionally coarse; mutable task inventories and final qualification evidence live in the owning phase and follow-up issues linked below.
 
 ---
 
@@ -158,6 +158,67 @@ The Rust public API is the first-class native authoring API for these layers. Py
 Serialization is not a fifth scene model. It is an optional codec around one of these representations for explicit external boundaries such as export/import, debugging, tests, persistence, or unavoidable cross-context transport.
 
 **Normal in-process engine boundaries are typed Rust boundaries.** `Rust API -> Semantic Scene -> Execution Plan -> Runtime -> Renderer` must not serialize to JSON or any other wire representation as part of ordinary native authoring, lowering, execution, mutation, or rendering. The same rule applies when the Rust engine is compiled to WASM and all layers execute in one browser context.
+
+### Common Rust input and interaction seam
+
+Platform input and authored interaction declarations converge on a common typed Rust seam before interaction policy or engine execution. Browser DOM events, native window-system events, embedded/platform adapters, tests, and replay are collectors only; Python, JavaScript/TypeScript, and other language frontends are authoring adapters only. Neither platform nor authoring language owns interaction semantics.
+
+The canonical flow is:
+
+```text
+platform collectors
+  browser DOM / native host / embedded / test-replay
+        |
+        v
+typed Rust InputIngress
+        |
+        +--> sampled state ------> native reactive inputs
+        |
+        +--> ordered occurrences -> InteractiveSession
+                                      |
+                                      +--> spatial candidates
+                                      +--> precise hit testing
+                                      +--> trigger synthesis
+                                      +--> hover/selection/capture
+                                      |
+                                      v
+                              interaction binding
+                                      |
+                                      v
+                                    action
+                          +-----------+-----------+
+                          |           |           |
+                    runtime driver  signal   host callback
+                          |           |      when required
+                          +-----------+-----------+
+                                      |
+                                      v
+                              ExecutionSession
+```
+
+The normalized Rust input occurrence must carry the information needed to interpret the occurrence coherently, including source/pointer identity where applicable, position for pointer occurrences, button/modifier context, ingress sequence, and compatible scene/view publication context. Sampled latest-value state may still coalesce by exact source. Coalescing must never retroactively change the position or identity of an already ordered press/release/click occurrence.
+
+The platform adapter may perform platform-only mechanics such as DOM pointer capture, coordinate conversion, focus handling, and event-listener lifetime, but it does not choose scene targets or actions. Browser and native adapters must lower equivalent physical input to equivalent Rust input semantics.
+
+Interaction declarations are language-neutral authored semantics. Rust, Python and future JS/TS wrappers may expose different syntax for declarations such as `click -> highlight`, but they lower to the same semantic trigger/action binding. Common native actions execute entirely in Rust after authoring; arbitrary host-language callbacks remain an explicit slow/compatibility path rather than the implementation of ordinary click, hover or drag behavior.
+
+Keep these domains distinct:
+
+- **Input occurrence** — normalized platform-independent Rust input.
+- **Trigger** — scene interpretation such as click, hover enter/leave, drag start/update/end, or key activation.
+- **Interaction binding** — authored mapping from a target/trigger to an action; this belongs to Semantic Scene truth.
+- **Action** — canonical engine behavior such as session highlight, effective property write, signal update, animation start, or explicit host callback.
+- **InteractiveSession state** — transient hovered/selected/captured targets, active gesture/tool, driver ownership, drag references and overlays; this is not authored scene content.
+
+Hit testing uses the execution-owned spatial index as broad phase and performs precise tests only on returned candidates in painter-correct order. No frontend, platform adapter, or renderer may create a second authoritative picking index. Picking observes one coherent effective publication so moving/animated objects are targeted where the user sees them.
+
+Selection/editor highlighting is a session overlay and must not mutate the authored object, family order, compatibility output or serialized scene. A scene-authored click action that changes style, signals or animation is different: it is an authored interaction binding whose action executes through the normal Rust runtime/semantic contracts.
+
+The initial authored `click -> Indicate` action keeps one optional declaration on its object and projects it into the session's existing pointer lane. It reuses ordinary Rust Indicate lowering and interpolation, with at most one active invocation per target; additional clicks during that invocation do not restart or queue another effect. A platform monotonic timestamp advances only these effective values; it does not advance authored time or append replay tracks. Completion restores only the captured channels owned by the effect. Unrelated scripted animation may continue, including disjoint channels on the same object. A conflicting authored/native channel prevents activation, or supersedes an effect already running; the click effect never takes over that channel or later restores a stale value. Seek or a superseding authored publication retires the invocation. The first supported targets are filled analytic circles and rectangles without signal drivers. Pending host callbacks, effective-driver targets and family animation domains have conservative admission barriers. These barriers suppress the effect for that occurrence rather than queueing it for later. Platforms schedule a wake from Rust-owned activity and return to idle when it settles.
+
+Inspection navigation is a constant-size session adjustment composed with the current effective camera in shared Rust. Rendering, visibility and picking consume that same composed view, qualified by a monotonic inspection revision and the existing displayed-frame receipt. A wheel action changes neither the authored camera nor authored time; it can coexist with an independent object animation. Hosts opt in and normalize platform wheel units, while stale receipts and excess outstanding input are rejected explicitly. New sessions reset inspection; same-session seeks preserve it. This viewer adjustment is excluded from ordinary authored export and replay.
+
+Pointer capture has split ownership: the platform shell owns OS/DOM capture mechanics, while `InteractiveSession` owns the semantic captured target and gesture lifecycle. Release, cancellation, lost platform capture, target retirement/replacement, seek/reload policy and stale generations must terminate or reconcile the gesture deterministically.
 
 ### Live-session control plane
 
@@ -531,7 +592,99 @@ Noon distinguishes clocks/sequences that must not be conflated:
 
 Compatibility updater `dt` is defined from authored/simulation-time advancement. A paused scene may process pointer/keyboard/editor input while authored `dt == 0`. Behavior that explicitly reads wall time, network time or another external clock is externally timed/non-deterministic unless the source is recorded and replayed by an explicit policy.
 
+Native translation dragging is session policy over the same typed pointer ingress. Configure semantic targets once, then deliver typed pointer records without choosing a runtime object per move. `LiveSession` and `LiveProgram` accept ordinary `Mobject` handles, retain the existing store gate, and route each occurrence to the same session policy:
+
+```rust
+program.set_translation_drag_targets([&circle])?;
+let token = program.configure_native_pointer_input(pointer, view_revision)?;
+let press = NativePointerInput::new(1, token.pointer(), token.context(), modifiers, press_kind);
+program.submit_native_pointer_input(&token, press)?;
+```
+
+Press and move publish scoped effective Position. Release prepares its native occurrence and one authored translation reconciliation together; cancellation restores the authored position without changing `SceneRevision`. Obtain a fresh token after each publication. Position/Transform timelines, reactive Position bindings, and target-local transient Position effects reject acquisition. Acquisition also checks the shared persistent-publication barriers before taking a lease. An unrelated nonstructural segment may continue and complete while a target is held; release reconciles only that target and advances the pending segment’s semantic revision proof after publication succeeds. Segments that touch the target or change structure still reject acquisition. Starting a new segment while a target is held remains explicitly gated. Stale or failed releases retain the lease without acknowledging the occurrence. The receipt-returning `submit_translation_drag_input` entry exposes the single release undo action to editor hosts.
+
+The drag entry remains the ordinary pointer publication lane: misses and non-captured occurrences keep normal native-signal, hover, and click behavior. See `crates/noon-native/examples/native_translation_drag.rs` for an executable scene using the ordinary native host.
+
+Python authoring declares the same source policy with `scene.set_drag_targets(circle)`. It passes the original typed Mobject handles through the inert canonical membership batch; the browser never picks a drag target or calculates a translation. Rebinding or invalidating a browser view cancels an active capture through that same Rust ingress before its receipt is retired. A successful current-presentation press pins one constant-size mapping for its acquired drag. Captured moves and primary release keep their collection-time receipt and use that mapping even when newer motion acknowledgements overtake delivery on the independent worker channel. Receipts must remain within the acquired-to-latest acknowledged session/view interval; runtime, source, view and camera must still match. This retains no frame history, performs no new pick and never relabels a receipt. A fresh press and ordinary picking retain exact current-presentation admission. Configured unrecorded drag input rejects replay explicitly; Run recreates the authored scene.
+
 Replay classification applies to all externally supplied behavior that can affect results, including pointer/keyboard input, editor manipulation, host callbacks, async/network results and other external data. Recorded native input/event streams may be replayable even though their original occurrence was nondeterministic.
+
+### Historical execution and object lifetime
+
+One authored scene owner does not make a latest-state execution projection a
+history of that scene. Object existence, current scene membership, membership at
+an earlier authored time, and physical execution/GPU retirement are different
+questions. In particular, completing a FadeOut may detach a still-valid semantic
+object; it must not erase earlier execution data while that data is promised to
+replay. Reusing the same object identity on FadeIn does not restore deleted tracks.
+
+For a declared deterministic replay range, the core invariant is:
+
+```text
+first execution at t == reconstructed replay at t == rewind then forward to t
+```
+
+Equality covers effective content, transform/style, presence, painter order and
+resource versions throughout the range, not merely object counts or the final
+frame. Completing an earlier animation must not substitute the latest authored
+base for that animation's historical endpoint. Prepared morph coordinate frames
+must release correctly to later affine drivers at the same time-qualified
+execution revision. Optimizations are subordinate to this invariant.
+
+Finite source execution may explicitly retain sparse compiler-owned reversible
+revisions under its existing Runtime, then seal that range for read-only replay.
+Only successfully published changes enter that history. It must reuse the normal
+evaluator, immutable resource handles and semantic-derived identities; no second
+mutable Semantic Scene, frontend state mirror, per-frame scene snapshots or
+re-execution of arbitrary host source is permitted. The authored scene remains at
+its current frontier. Historical projection changes advance execution/frame
+publication identity, not authored semantic revisions.
+
+History and necessary execution identity/resource pins have an explicit scope and
+retention budget. Removal from current membership cannot reclaim a pin still
+needed by that scope. Discarding the scope restores the authored frontier before
+releasing pins and permitting further edits. Ordinary indefinitely editable live
+sessions do not accumulate historical revisions by default. A capacity limit or
+unsupported execution domain must leave first execution coherent and reject the
+replay capability, never silently reconstruct incorrect past frames. Required
+callbacks, native input and scalar/family-specific execution need their own
+qualified participation in the same contract; source completion alone is not
+proof of seekability.
+
+Playback admission is an engine decision. The host must enable seek/restart/loop
+controls only after the Rust execution owner validates the advertised capability.
+A non-replayable completed execution may retain its final presentation and explain
+the limitation, but may not fall back to seeking a destructively updated plan.
+An unfinished live segment, including a pure wait with no animation tracks, cannot
+be sealed as completed history. A sealed snapshot with no elapsed interval has no
+loop cadence; paused playback observations remain at the committed runtime time.
+
+Replay capability and forward execution admission are distinct. Denying backward
+replay must not reject a paused, explicit forward authored-time observation through
+the existing callback-aware Runtime path. Rust validates its monotonic target and
+orders required callbacks; the host still waits for the matching publication and
+renderer observation. This does not authorize rewind, looping, callback
+re-execution or takeover of an active source continuation.
+
+A related observation distinction applies to static waits: the timestamp of the
+last evaluated/rendered frame is not necessarily current elapsed playback time.
+An authored wait advances playback time at the selected rate while unchanged
+rendering may sleep. The existing Rust clock and runtime deadlines bound that
+observation; pause and required dependency barriers remain authoritative. Unknown
+future source duration does not justify a frozen elapsed-time counter or a second
+JavaScript animation clock.
+Clock observations must also remain independent of renderer telemetry latency.
+A ready engine time sample may not wait for GPU metrics or readbacks, and a slow
+telemetry request must not stall subsequent time observations. Hosts retain only
+bounded in-flight requests and reject replies from superseded runs.
+
+**Implementation finding, September 18, 2026:** #1660 records premature missing
+columns and absent pulse objects in Dynamic Load Stress replay, caused by current
+membership retirement deleting historical channels and by later base/render-frame
+state leaking backward. #1658 qualified a narrower morph/hold sequence, not the
+full lifecycle contract. #1661 separately addresses wait-time observation. These
+issues carry dated evidence and repair status; their existence is not a claim
+that every history domain has been implemented or qualified.
 
 ### Identity generations, revisions, versions and sequences
 
@@ -708,6 +861,8 @@ The ordered callback barrier is a transaction, not a sequence of scalar bridge c
 
 [D2 source](diagrams/callback-transaction.d2). The callback invocation is pinned to one coherent scene/execution/frame context. Reads consult pending overlay writes first and then the revision-pinned read view; writes accumulate in one `StagedUpdateBatch` as effective driver writes and/or authored semantic mutations. Fallible semantic/resource preparation completes before the next publication becomes visible.
 
+The shared session can commit a required callback's effective writes and a semantic transaction together through `commit_required_callback_transaction`. Provisional construction and reads use the existing prepared semantic transaction; validation or lowering failure leaves both the published frame and the pending callback token unchanged. Scoped translation, rotation, scale and style writes retain their order and ownership, so completion does not overwrite unrelated animation channels. Python returns these scoped effective writes and may stage `Scene.add`, `Scene.remove`, and `Scene.clear` for existing typed handles in the same required callback. One token-pinned Rust collector owns the ordered semantic transaction; staged membership reads consult its prepared overlay, and Python wrapper attachments finalize only after publication succeeds. A rejected individual staging operation preserves the accepted prefix. Bounded Python analytic and retained-path construction uses transaction-local tokens; immutable path payloads enter the existing resource admission scope only for the final publication. Ordered native/host regions share that one phase transaction and expose earlier regions’ effective writes to later reads. Wrapper finalization is acknowledged before the player advances or returns to its authoring context. Provisional text/family construction and arbitrary effective-content replacement remain follow-up work. Active animation segments retain their structural-publication gate.
+
 If compatibility semantics require updater order `native A -> Python B -> native C`, callback B observes A's effective writes and C observes B's overlay writes regardless of whether B produced effective driver writes, authored semantic mutations or both. Structural changes still do not mutate the traversal currently being enumerated; their structural visibility follows the staged publication rule.
 
 Do not cross Python/WASM once per property getter/setter. Callback requests should contain or bulk/lazily obtain the host working set needed for the callback phase, and the returned result should be one bounded staged-update/resource transaction. Arbitrary host code must not silently degrade into thousands of synchronous scalar bridge calls per frame.
@@ -748,6 +903,10 @@ The runtime must define acquisition/release/suspension/rebase/cancel rules for c
 
 Animation activation must also define when start/target state is captured. Live mutations before activation cannot be ignored merely because an animation declaration was lowered earlier. Authored animation intent, activation-time state and active execution channels are distinct concepts where semantics require late binding.
 
+### Source reload scope
+
+The normal Python Run action restarts the scene. Source hot reload is a separate live-authoring feature owned by #64; it is not required for native input, callbacks, direct manipulation or local runtime/content changes. A future live-reload implementation must define stable source identity, driver conflicts and preservation rules before wiring source reruns to the active session. Temporary source candidates may compare declarations, but cannot become another live scene or replay arbitrary Python callbacks to recover from a failed edit. Keep the current explicit restart behavior until that separate contract and its qualification are ready.
+
 ### Replay and host latency
 
 Host-dynamic behavior must be classifiable as replayable/deterministic, history-dependent, or externally/non-replayable as needed for seek/offline semantics. The broader replay policy also covers native input/event streams, editor manipulation and external async/network results as described in the time/determinism contract.
@@ -775,11 +934,17 @@ Examples:
 
 Transform/style/visibility-only changes must not regenerate immutable content.
 
+Renderer-local fill coverage may specialize a convex triangle or quadrilateral as one polygon, computing its pixel-box intersection once to avoid internal tessellation seams and multisample edge loss. Morph eligibility must prove convexity throughout the interpolated interval, including any removed collinear subdivisions; endpoint checks alone are insufficient. Eligible paths retain immutable endpoint vertices and GPU interpolation. Other paths keep ordinary tessellation or the sampled-mesh specialization below. This coverage choice does not create semantic geometry or a second source of animation state.
+
+Glyph masks are disposable renderer resources derived from shared shaped runs. Device density and camera origin may select a bounded raster-size and subpixel-phase cache key without reshaping text or rewriting semantic resources. An eligible translated text object replaces its glyph masks in reusable object-local instance ranges; unrelated objects and uploads remain unchanged. A phase change may make a glyph empty or nonempty or change its atlas batches. Stable glyph-run submission entries resolve the current batch slots, so these transitions preserve painter order without rebuilding unrelated text. Vacated ranges and batch slots are reused under repeated phase churn. Atlas exhaustion still replaces the atlas generation and rebuilds text packing; that resource-pressure fallback remains a C4 locality limitation and is counted separately from ordinary object-local updates. Rotated, reflected, skewed or nonuniform bitmap transforms retain the filtered path. Cache limits remain independent of animation duration, and camera changes invalidate device-dependent preparation coherently.
+
 ### Immutable versioned resource rule
 
 Expensive geometry/text/image/mesh realization should be represented as immutable/versioned resources wherever practical. Mutable object state references those resources rather than embedding repeatedly rewritten heavy geometry in ordinary frame state.
 
 Morph lowering may prepare immutable endpoint geometry in a fixed rendering coordinate frame, with a derived render transform separate from the effective semantic transform. This specialization must preserve world-space point correspondence, stroke behavior, channel precedence, and spatial queries. The current screen-space specialization requires finite, safe endpoint geometry and an invertible interpolated scale; unsupported cases retain current-relative evaluation. Independent affine drivers release the fixed frame before taking ownership, and exact morph endpoints restore source/target content without a stale render override. Native execution shares the compiled geometry directly; a genuine worker boundary installs its session-scoped resources once and sends references with per-frame progress, rather than reconstructing or retransmitting paths on each tick.
+
+A filled path whose changing shape has no safe time-invariant triangulation uses a renderer-local sampled-mesh specialization. The same immutable ordered endpoint resource and scalar progress remain authoritative; canonical cubic correspondence is cached once on first use. Only the affected presentation row is sampled and tessellated, using ordinary fill rules. One disposable mesh per stable row or identity-free derived occurrence is reused across progress values, and local arena ranges and painter chunks are updated without rebuilding unrelated state. Such a mesh is never installed as an immutable resident prefix or shared between independently progressing occurrences. Safe fan and stroke-only morphs retain GPU endpoint interpolation, and an unchanged progress/style/geometry sample performs no tessellation. This correctness path has work proportional to the changed path complexity, not the total scene; it must not become a frontend per-frame path loop or a sequence of new cross-worker geometry resources.
 
 Installed immutable geometry may carry one-shot preparation hints containing its actual tessellation style and render transform. The renderer resolves and deduplicates its full mesh keys, tessellates eligible paths, and uploads a resident geometry prefix before playback readiness; ordinary frames still use the same authoritative mesh-key lookup and lazy fallback for unsupported or changing inputs. Preparation must not advance or sample the timeline. Scene installation replaces this disposable residency coherently, and the browser suspends animation ticks through preparation and initial presentation, including reruns and renderer transitions.
 
@@ -787,11 +952,21 @@ Replacing persistent semantic content prepares a new `ResourceVersion`, validate
 
 Runtime/effective content drivers, where supported for compatibility such as redraw-style behavior, must use an explicit effective resource/publication path rather than implicitly rewriting authored semantic content every frame. They remain subject to resource-version, stale-result and retirement rules, but do not create a `SceneRevision` merely because the effective resource changed.
 
+A held effective resource is resident state, not recurring frame work. Preparing an unrelated frame must not visit every held content lease or copy its path payload; only changed objects and their dependents may be prepared.
+
+The initial runtime content lease publishes a validated replacement into one effective row without relowering the compiled scene. Initial acquisition pins the exact publication; later versions require the lease and matching authored/execution revisions, while unrelated effective frame advances may continue during preparation. The lease version rejects results after another content version commits; a producer whose output depends on authored time or other effective inputs must also reject obsolete source samples. Release reveals the latest authored content. Acquisition excludes numeric text, Graph-owned rows, and targets with Morph, Transform or family-animation tracks. If one of those authored owners is installed later, that publication retires the lease. Existing compiled text/image handles and inline geometry can be referenced. A producer-owned image arena may supply a new immutable image to a prepared lease result; runtime lookup and renderer publication see it only after commit, and the last referring lease retires it on replacement or release. New text and external geometry still need dependency-aware resource admission. Held leases do not enter the ordinary forward-frame loop, and a full seek may revisit them as part of its deliberate whole-scene rebuild.
+
 Async preparation normally remains staged while the old resource/execution version remains active. If a feature deliberately publishes a semantic pending state, that state is explicit and queryable; it does not imply that incomplete resource data has become the active execution representation.
 
 Renderer/GPU lifetime is decoupled from semantic publication: an old resource version may remain physically resident while already-submitted GPU work still references it. Resource retirement occurs only when the relevant `SubmissionSerial`/fence indicates it is safe. New content must not overwrite buffers/resources still referenced by in-flight frames.
 
+For managed wgpu handles, renderer/cache eviction drops Noon references while wgpu and its backend track submitted use and ordered queue writes; this is logical eviction, not proof of immediate physical GPU destruction. Additional Noon fencing is needed only when Noon reuses or externally owns resources beyond those guarantees.
+
+Semantic resource retention follows durable object references, including detached objects and numeric-text tokens. Each admitted text resource retains its font and vector dependencies even before attachment. Replacing content or removing the final semantic owner queues only the affected resources for reclamation after the complete transaction and any enclosing resource-admission scope succeed. Resource handles are versioned lookup capabilities; retaining a copied handle alone does not retain retired content. Compiled execution snapshots retain their own immutable dependency closure so reclaiming store entries cannot invalidate an older execution revision.
+
 Long-running interactive/hot-reload churn must have a bounded reclamation/compaction strategy. Stable/tombstoned execution identities and retained caches are allowed, but memory usage must not grow indefinitely with historical mutations when the corresponding semantic/execution/resource state is no longer live or deliberately cached. Explicit maintenance compaction may use the deliberate maintenance-barrier exception defined above.
+
+The current explicit execution maintenance barrier prunes superseded compiled resources even when no object slots need relocation. Resource-only pruning advances the execution/frame publication and requests one presentation refresh without rebuilding retained rows, so older prepared work and displayed input context cannot silently cross the barrier. Active effective-content leases are additional resource roots, so one held version does not pin unrelated stale entries; active interactions, drag captures and replay projections defer this barrier, while stable property drivers do not. Ordinary track geometry dependencies and every compiled numeric-text token dependency are traversed before pruning; family/Graph derivation still retains its full closure until its dependencies can be traversed safely. This is a partial reclamation path; general long-churn resource retirement still needs qualification.
 
 Text, Graph, 3D and interaction are features of the same scene/runtime architecture, not separate scene engines.
 
@@ -825,9 +1000,19 @@ The current implementation keeps the semantic context and its existing compiler/
 
 Required Python callbacks can hold authored progress at the shared barrier while the last coherent frame remains presentable. Playback with no host callbacks does not require per-frame interpreter execution. Source reruns currently replace a session; this diagram does not claim incremental hot-reload identity preservation.
 
+A `WebAssembly.RuntimeError` crossing the Python authoring adapter retires that
+worker through its existing fatal-error channel. Rust borrows and publication
+state cannot be recovered after a trap; queued requests and late results are
+discarded, and the next Run creates a fresh host. Ordinary Python and typed
+Noon errors remain recoverable within the existing host.
+
 Exact worker placement remains an integration decision, not a semantic boundary. A future placement that separates semantic authoring from execution must still satisfy the same ownership, callback, revision and atomic-publication contracts.
 
 A browser worker/process boundary may require a typed transport representation because it is a real cross-context boundary. That transport is derived from authoritative semantic/execution state and must not become another scene model.
+
+The retained execution channel may send changed style, transform, and morph fields for an existing row in a dense incremental publication. The receiver validates the session sequence, slot generation, object identity, and the whole patch set before applying it to the same retained frame mirror used by full rows. Snapshots and changes to content, resources, structure, or family plans retain their complete transport form. This is a wire-size optimization at the worker boundary; it does not add semantic state or a second execution model.
+
+Effect-bearing rows use the **same** full-row worker transport when their effective parameters change. Retained protocol v17 combines render-geometry retirement with one optional validated `glow` field with the original semantic attachment generation, color, radius unit/value, intensity and source mode. No-effect rows omit it entirely; snapshot and incremental receivers validate the complete definition and supported planar source profile before installing anything or consuming a sequence number. Older protocol versions fail closed, so a worker cannot silently drop a new halo. This is derived wire data at the existing genuine Python/render worker boundary, **not** a new in-process scene representation. V17 also retains the current explicit render-geometry retirement contract; the independently changed V15/V16 schemas are not treated as interchangeable. The validated worker mirror now reborrows that same effective runtime frame and installed immutable resources for the retained renderer. Its own coherent glow preparation and painter capture execute on the existing encoder after the ordinary retained GPU upload; they do not round-trip through a new host effect store. The public finite-profile Scene path uses the same lowering and publications; supported Python worker playback must still be qualified through the actual authoring/worker channel, not inferred from transport fixtures.
 
 JSON may exist for debugging/export/tests or an explicitly justified external boundary. It is not the normal typed Rust authoring API, not an internal Rust layer boundary, and not a per-frame mutation protocol.
 
@@ -853,6 +1038,14 @@ Required renderer properties:
 - versioned resource publication/retirement safe for frames already in flight;
 - no synchronous GPU-to-CPU readback on the normal frame/input/host-callback path;
 - WebGPU and supported fallback backends must agree semantically and visually within reviewed tolerances.
+
+Zero-contribution geometry is suppressed only at shared GPU draw submission,
+using an exact derived index of effective packed paint. Semantic presence, resident
+slots and source painter anchors remain intact, including anchors for independently
+visible transient effects. Only dirty packed rows update the coalesced exclusion
+index; clean frames do not scan instances or rebuild painter order. Packed unique
+paths use index spans at existing mesh boundaries. Opacity restoration uses the
+current publication; no visibility epsilon or host-side camera workaround exists.
 
 `noon-render-wgpu` owns reusable retained GPU rendering. It may own renderer camera uniforms, GPU viewport dimensions, retained GPU resources, preparation/upload logic, command encoding, and renderer-local caches.
 
@@ -880,6 +1073,12 @@ published FrameEpoch N+1                    renderer/GPU FrameEpoch N
 
 Each renderer-facing publication is attached to one `FrameEpoch`, and that frame epoch references its `SceneRevision`/`ExecutionRevision`. Renderer caches may therefore invalidate on the narrow revision/version actually relevant to them rather than treating every frame as a new semantic/execution generation.
 
+For the supported planar glow profile, native, direct-WASM and native-capture hosts use the same renderer-owned visibility expansion and retained preparation. The sparse index records only existing runtime source slots, object identities and their current geometry-scratch correspondence; parameter values are always borrowed from the coherent runtime publication. Initialization or an explicit full rebuild examines the frame, while sparse updates inspect the published dirty rows. No-effect visibility retains the original input slice. When every glow source is already a candidate, inverse painter ranks and binary searches also preserve that input slice without a complete candidate scan. Only expansion for additional sources constructs and orders a union; its work depends on the candidate set plus the glow sources, not just the dirty rows. Effect source candidates are added in the runtime's painter order so a source outside ordinary semantic bounds can still contribute a visible halo; the padded tile planner performs the final contribution clipping. Semantic bounds, layout and picking are unchanged.
+
+Automatic preparation proves membership in the actual retained geometry/text frame before capturing a source. Mixed text/geometry uses the existing source-to-scratch and painter-rank mappings rather than assuming that source and packed indices match. Clean publications issue no glow GPU work, and view changes reconsider only glow sources. A host that abandons encoded work invalidates the disposable capture/filter caches before retrying. The current renderer-owned texture budget includes source capture and filter textures, not driver metadata or resources retained by frames already in flight; queue submission, fences and device recreation remain host responsibilities. The retained render-worker host now uses this same preparation and painter path, with an explicit validated transport-frame borrowing boundary and a no-glow fast path. A new worker session retires the old GPU publication epoch; removal retires old scopes.
+
+Planar geometry (including stroke-only paths) and Text/MathTypst use their canonical per-object draw ranges for isolated capture. Create/Write captures the currently revealed coverage through the ordinary geometry and glyph pipelines at the same publication epoch. Fully revealed filled circles/rectangles retain their existing single-sample analytic capture; general sources resolve four-sample capture into RGBA8. The texture budget charges that retained multisample target as well as source, optional silhouette, and filter images. Final scope opacity is removed from isolated instances and applied once after filtering. Painter placement replaces the entire source range once, and bounded path compaction stops at that anchor. Source capture contains no glow parameters and can serve future filters without another semantic store or renderer scene graph. Parallel Create/text reveal/Write and effect-only target edits share one admission; glyph-driver conflict checks permit only animations whose actually lowered channels are effect parameters. Competing introductions and geometry/pose edits retain atomic rejection. Insets, 3D, composed-group effects, effect stacks, and content-changing morphs remain outside this profile. Native/direct host correctness tests do not themselves qualify end-to-end Python worker playback, browser rendering, or physical-device performance, and public finite-profile Scene admission does not itself establish those results.
+
 A backend may internally use render bundles, display-list-like recordings, bind-group caches, instance groups or other derived accelerators, but those are disposable renderer optimizations. A recorded drawing command stream is not the Execution Plan and cannot replace semantic/runtime data needed for mutation, hit testing, reactive dependencies or live authoring.
 
 Where backend/host support allows it, CPU/runtime work for a later frame may overlap renderer/GPU work from an earlier frame as long as `FrameEpoch`, `ResourceVersion` and `SubmissionSerial` rules make publication and lifetime coherent.
@@ -890,11 +1089,18 @@ Platform integration shells provide lifecycle mechanics and reuse the same rende
 
 The [direct Rust execution diagram](#direct-rust-execution-invariant) shows both platform shells around the same typed engine. Both hosts own surface/device/queue configuration, resize and input ingress, and acquire/submit/present/recovery policy. They reuse `noon-runtime` and `noon-render-wgpu`; neither owns another scene or scheduler.
 
+Cold browser renderer startup precedes admission of a source's realtime epoch.
+The first WebGPU submission must complete and pass GPU diagnostics before its
+presentation receipt can admit playback. This is one asynchronous startup barrier
+per renderer generation, not a display-scanout claim or a per-frame queue fence.
+Later source segments, callbacks and presentation barriers preserve the existing
+Rust wall-to-authored-time mapping; they do not restart it.
+
 Whether native host integration deserves a separate crate such as `noon-native` or remains a module is a dependency/compilation decision, not an architectural naming requirement.
 
 The renderer is usable directly from the native Rust runtime and through web integration. Neither platform host owns renderer semantics.
 
-Renderer-specific mirrors and caches are derived and disposable.
+Renderer-specific mirrors and caches are derived and disposable. Compact-path submission may combine a bounded window of mutually disjoint raster bounds while retaining shared meshes and contiguous instance ranges. Bounds derive from cached source/target tessellation and current transforms, with a pixel/rounding guard; overlapping, unknown, sampled-morph, and exact-polygon cases retain ordinary painter order. Text, images, and inset composition remain ordering barriers. This is disposable draw compaction, not a semantic reorder or a new scene representation.
 
 ---
 
@@ -1005,7 +1211,7 @@ The roadmap is deliberately short. Detailed implementation checklists belong in 
 
 ## Phase A — architecture consolidation
 
-**Status: Phase A architecture consolidation is complete.** [#953](https://github.com/yongkyuns/noon/issues/953) records the completed exit checklist and qualification evidence. Phase B is the default priority for common 2D feature breadth; correctness fixes continue under their owning issues.
+**Status: Phase A consolidation and the representative Phase B exit are complete.** [#953](https://github.com/yongkyuns/noon/issues/953) and [#954](https://github.com/yongkyuns/noon/issues/954) record their qualification evidence. The Phase C integration and exit evidence is tracked in [#955](https://github.com/yongkyuns/noon/issues/955); narrower compatibility, replay, editor, and performance follow-ons continue under their owning issues.
 
 The permanent Phase A result is already reflected in the normative sections above:
 
@@ -1040,6 +1246,19 @@ Order:
 
 Every supported Python feature must use shared semantic behavior and add representative ManimCE differential evidence. Significant common features supported by both public frontends should land with equivalent executable Rust and Python examples; the Rust example is the direct product proof and the Python example is wrapper/parity proof.
 
+Callable-backed graph input queries reevaluate the author's scalar function and
+use the creating axes' current authored or effective Rust coordinate frame.
+The runtime retains only the sampled path and its declared parameter interval;
+queries do not resample the path or add frame work. Python `t_min`/`t_max` read
+that semantic interval through the typed handle. Copy carries the declaration;
+Manim `become` changes appearance while preserving the receiver's callable and
+interval. Retained-path inversion remains outside this bounded graph-query
+profile. Default 2D Axes ranges, sizing and tips are supported separately through
+the shared coordinate constructors.
+The interval records whether the plot was mapped through Axes; standalone
+scene-coordinate graphs retain query metadata without widening the existing
+Axes-only area/partition profile.
+
 **Phase B exit:** representative common 2D Manim scenes require only the intended language/browser adaptation and run through the same semantic/runtime path from Python and Rust, with representative paired examples usable on the supported Rust execution targets.
 
 ---
@@ -1054,7 +1273,7 @@ Every supported Python feature must use shared semantic behavior and add represe
 - make retained family/text updates resident and dirty-member-local;
 - complete spatial culling and dirty GPU upload locality;
 - add editor/session state above semantic identity (selection, hover, drag, undo grouping);
-- implement hot reload by reconciling stable source/semantic identities and preserving compatible runtime/resource state; source-language recompilation/re-execution and semantic reconciliation remain distinct steps;
+- keep source hot reload under the separate #64 live-authoring contract; Phase C provides the shared mutation and resource-versioning prerequisites, while normal Python Run remains an explicit restart;
 - make stale async host/content results revision-safe and bind resource retirement to GPU completion rather than semantic publication alone.
 
 ### Ownership of the live-session/scalability contracts
@@ -1074,6 +1293,15 @@ The architecture above does not create a new roadmap phase or runtime owner. Exi
 
 ## Phase D — 3D and broader capability
 
+**Status: the bounded D1–D5 shared-engine milestone is complete; broader 3D
+usability, compatibility and qualification remain.**
+[#956](https://github.com/yongkyuns/noon/issues/956) records the completed
+world/camera/resource/depth, surface/solid/light, composition and vector-space
+profiles. [#1879](https://github.com/yongkyuns/noon/issues/1879) owns their
+remaining rendering/API work and coordinates the existing qualification owners.
+Do not reopen the completed substrate or interpret its completion as full Manim
+3D support or as “only D6 remains.”
+
 Extend the same architecture:
 
 - 3D semantic transforms and camera behavior;
@@ -1084,6 +1312,221 @@ Extend the same architecture:
 - broader Manim namespace coverage and advanced live-authoring UX.
 
 No separate 3D scene engine or canvas/runtime.
+
+### Bounded implementation profiles
+
+Phase D exposes checked capability slices over the shared semantic scene; the
+Manim class name alone does not imply full ManimCE parity. `Mesh3D` provides
+indexed Surface, sphere, cube, prism, torus, cylinder, cone, line, and point
+profiles with Rust-owned geometry, transforms, resources, and rendering. The
+current implementation includes checked Manim defaults, partial parameter
+ranges, axial directions and end options for bounded primitives. Cairo-style
+Surface, solid-face, axis-piece, and World-path appearances are implemented as
+distinct retained material profiles; native point lighting remains a separate
+explicit profile. Unsupported option combinations still reject instead of
+silently substituting another result. The bounded extensions below have paired
+Rust/Python and backend qualification in
+[#1891](https://github.com/yongkyuns/noon/pull/1891); this does not qualify the
+untouched camera examples recorded in #254 and owned by #1879. The opaque indexed-mesh profile remains
+available without cell-family overhead.
+
+Sampled `Surface` cell families retain UV roles on ordinary semantic mesh
+objects. The default `shade_in_3d=True` path records Cairo-compatible endpoint
+appearance from the sampled parametric control points; `point_lit=True` selects
+the distinct Noon-native lighting profile, and `shade_in_3d=False` selects an
+unshaded mesh. Checkerboard color and opacity changes use one checked
+owner-routed transaction; family transforms reuse the shared world-affine
+operation. Surface borders derive immutable exterior triangle edges once and
+omit triangulation diagonals. Sampled Cairo cells retain four mapped perimeter
+cubics; their fills and borders share a bounded approximation of four chords
+per curved edge. Resource bounds retain the perimeter control hull so world
+bounds and depth ordering include the curves. The renderer derives these buffers
+once. Sampled Cairo fills filter their complete projected face with the shared
+polygon pixel-coverage kernel, including subpixel cells; their screen fringe
+stays within padded face bounds. Curved fills integrate signed perimeter edges
+over the pixel box once, without clipping every fan triangle. For planar sampled
+faces, staging replaces an invalid fan anchor only when the area centroid passes
+every oriented perimeter half-plane. Those corrected planar faces use a bounded
+screen box with the original depth plane as disposable filter support; the
+signed perimeter remains authoritative for coverage. Complex concavity beyond
+that retained profile remains unqualified under #1879.
+Border quads retain analytic pixel coverage
+and screen-space extrusion during camera movement. Ordinary mesh vertex and
+instance layouts remain unchanged. Cairo-only scenes need no multisample target.
+Translucency is bounded to
+individual triangle or canonical quad cells. Opaque world geometry populates
+depth first; translucent and Cairo cells paint each fill and border together in
+camera-depth order, with authored painter order breaking ties. Color-only cell
+changes preserve that cached order. Cairo-compatible
+Surface gradients and six-face Cube/Prism materials have pinned, bounded raster
+profiles. General intersecting transparent solids remain outside the profile.
+
+Cairo World-path miter joins use Cairo's 10× limit; the ordinary World-path
+profile retains its 4× limit. ThreeDAxes inherits Cairo miter joins on its tips.
+Straight screen-space Cairo butt strokes derive box-filter pixel coverage from
+their projected endpoints and existing width conversion. Curves, other caps,
+fixed-orientation paths and depth-clipped endpoints retain their existing coverage.
+Cairo World paths share the cached camera-depth order with Cairo and translucent
+mesh faces, testing opaque world depth without writing it. Authored painter
+order breaks depth ties. Retained path bounds supply the ordering center. Clean
+and color-only frames reuse the order; geometry and pose changes update the
+retained center. Fixed-orientation paths retain painter order after world draws.
+
+Spatial mesh-object `get_center()` and default affine pivots share Rust's bounds convention:
+the world bounds of the retained local AABB. They read the current effective pose
+for attached live objects and the authored pose for detached objects. A geometric
+center can differ from the transform origin; `world_transform` and
+`WorldTransformTo` retain their explicit pose-origin convention. These queries
+use resource bounds metadata rather than traversing mesh vertices.
+Surface cell families use the shared family affine pivots; aggregate world-pose
+and world-center observations are not part of the qualified profile.
+
+`ThreeDScene` and `SpatialScene` use one effective camera and the shared frame
+publication/runtime. Camera profile tracks update the effective pose and
+projection together; ambient and 3D-illusion camera motion are authored camera
+state, while ordinary object animation remains on the common timeline.
+Illusion motion evaluates the pinned sine/cosine orientation analytically
+without host callbacks. Camera-motion intervals
+are sampled analytically from authored time and share the existing camera-profile
+scheduler channel. Overlapping finite camera moves and ambient ownership are
+rejected; stopping closes the interval at the exact effective endpoint. Ordinary
+authored edits require a completed animation segment, and zero-rate ambient
+intervals do not keep settled playback awake. Each camera admits at most 256
+camera-motion intervals; further begins fail before publication. Replay budgets count
+both saved and incoming motion metadata, including the payload exchanged on seek. Direct seeking and forward playback are required to produce the same effective spatial state.
+`MoveAlongPath` captures a static retained path and target bounds-center offset
+at activation, then uses the ordinary Position timeline channel. Path length
+sampling plans are derived once, shared across equivalent snapshots, rebuilt
+before changed-track evaluation, and retired with their tracks. Replay retains
+immutable path snapshots and charges their complexity against its budget.
+Unsupported simultaneous path drivers fail before publication.
+
+`UpdateFromFunc` registers a host callback over a compiler-scheduled finite
+composition interval. It reuses the existing callback phase barrier; nested
+timing does not create a second host scheduler. Its final callback runs once at
+the exact interval endpoint, then the registration retires; an ordinary updater
+still uses a half-open activation interval. Revising another registration at
+that endpoint cannot reactivate the finished callback. Callback layout replacement
+stages all affected transforms and bounds before publication, validates store
+and revision ownership, and uses typed bulk rows for same-context WASM calls.
+Removing the last active planar updater reconciles its current callback-owned
+affine channels through the ordinary authored transaction. Explicit writes in
+that transaction retain ownership; unrelated active updaters are not reconciled.
+Reverse Transform timing supports the checked `smooth(1-t)` pop-out profile;
+Create/Uncreate retains its existing reveal and easing semantics.
+
+World, FixedOrientation, and FixedFrame composition are represented as
+semantic domains on ordinary objects/families. World mesh/path content uses
+depth; FixedOrientation currently supports retained path and vector text with
+the runtime-derived shared family center; FixedFrame remains planar HUD
+content. Point-lit mesh material/light inputs are bounded renderer semantics,
+not Cairo lighting emulation.
+
+The bounded `ThreeDAxes` implementation supports per-axis ranges, lengths,
+ticks, tips, Cairo-shaded shaft pieces, and retained text-label placement through
+its label methods. Checked `c2p`/`p2c` helpers derive coordinates from authored
+or effective axis families. The `labels=` constructor option and richer custom
+tip shapes remain unsupported. The current axis appearance/configuration slice
+has pinned, bounded raster qualification. Shared vector-space
+implementations include animated `VectorScene.add_vector`, matrix transforms,
+coordinate labels, and bounded faded-vector history. These use the existing
+families and animation channels, with paired qualification for the bounded
+operations below. They do not add a separate coordinate or scene model.
+
+These profiles do not claim complete Manim API compatibility. In particular,
+custom Surface materials, general intersecting transparency, unsupported
+geometry topologies, arbitrary per-face appearance, unsupported vector-space
+operations, and optional host-language APIs remain outside the qualified
+surface until their owning capability and paired qualification are added.
+The JS/TypeScript facade is an independent optional frontend track (D6); it is
+not a required Phase D 3D exit criterion.
+
+#### Qualified bounded extensions
+
+Paired Rust/Python execution, pinned Manim profiles and WebGPU/WebGL raster
+checks qualify these bounded extensions. The profile-specific limits and
+unsupported inputs remain part of the contract; they do not establish full
+Manim compatibility:
+
+- Sphere, Cylinder, Cone, and Torus use checked parameter ranges; Cylinder and
+  Cone also accept finite nonzero axial directions and bounded open-end options.
+- Surface has an immutable Cairo-compatible endpoint-gradient material. Cube
+  and Prism retain six semantic faces with Cairo-compatible appearance; this
+  does not qualify general intersecting transparent solids.
+- ThreeDAxes supports per-axis configuration, retained text-label methods, and
+  Cairo-shaded shaft pieces. Its constructor `labels=` option and richer custom
+  tip shapes remain unsupported.
+- Retained World paths support Cairo-compatible endpoint appearance and
+  screen-space stroke rendering under bounded styles; broad arbitrary-path
+  appearance parity remains to be qualified.
+- Family world-bounds-center queries use authored state for detached families
+  and effective state for attached live families. Heterogeneous family
+  `world_transform` remains unsupported.
+- `VectorScene.add_vector` has an animated shared-Rust path. Linear
+  Transformation Scene supports coordinates, transformables, coordinate
+  labels, and bounded faded-vector history through shared semantic operations.
+
+Performance tooling reuses the same-run cumulative Product Gate anchor and
+includes five representative workload instrumentation cases. Runtime assertions
+require real scene objects and source continuation; opt-in raw timestamps retain
+the measured frame gaps. Functional instrumentation checks provide no
+physical-device 60 FPS evidence.
+
+### Remaining capability and qualification
+
+The next work extends these profiles rather than replacing their architecture.
+Detailed batches, dependencies and evidence belong in
+[#1879](https://github.com/yongkyuns/noon/issues/1879) and its linked owners;
+this overview is not another implementation checklist.
+
+| Workstream | Remaining outcome and owner |
+| --- | --- |
+| Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE camera/3D examples. Qualify their exact source, effective state, timing/replay and raster/depth/compositing behavior; related Noon-profile Rust/Python pairs are not a full Manim pass. #254 records dispositions; #1879 owns unresolved implementations. |
+| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. It also owns the unresolved exact camera implementations recorded in #254; native point lighting remains distinct from Cairo compatibility, and general intersecting transparency remains separate. |
+| Geometry, axes and vector-space breadth | #1879 records the qualified bounded primitive ranges/orientations/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers in #1891. Further options require their own selected capability and paired evidence. |
+| Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. The five spatial workloads have separate functional and Mac measurement evidence; the fixed Product Gate anchor measures five general gallery workloads. #1900 records three alternating Mac baseline/candidate pairs; occasional long frames and means below the strict 60 FPS requirement remain unqualified. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
+
+Exact `FollowingGraphCamera` source/state/raster qualification was merged in
+[#1882](https://github.com/yongkyuns/noon/pull/1882). Its callback replay remains
+explicitly denied. [#1900](https://github.com/yongkyuns/noon/pull/1900)
+qualifies the exact `ThreeDLightSourcePosition` source, effective light/camera
+state and raster on both WebGPU and WebGL. The untouched static
+`ThreeDSurfacePlot` case is qualified for source, camera state, raster, seek and
+restart on both backends; this does not qualify animated surfaces or general
+transparency. The other four required camera cases remain unresolved under
+#1879; #254 retains the per-case evidence and dispositions. Exact camera-motion
+handoff and completion observations retain timing differences even when raster
+comparisons pass.
+Straight-Line World-stroke and axes-label qualification can proceed beside
+physical-device pacing attribution. Independent
+geometry/vector-space batches need not wait for general transparency or all
+seven reference cases. Every promoted slice preserves the existing 2D output,
+atomic publication, authored/effective distinction, retained-resource locality,
+ordered callback/replay contract and one presentation surface. Unsupported
+defaults/options remain explicit until implemented; silently removing guards or
+substituting native appearance is not compatibility completion.
+
+Support records must distinguish **implemented profile**, **cross-frontend
+qualified**, and **Manim-qualified**. A class name, compilation, a showcase or
+matching Rust/Python pixels cannot substitute for pinned semantic/timing/raster
+evidence. Physical performance is a separate qualification dimension: retain
+exact package/device/backend identities, raw repeated samples and frame-gap
+measurements, not only mean FPS. A deferral needs a named owner and remains
+visible as unfinished work; it is not a parity pass or a reason to restart D1/D2.
+
+### Independent frontend and live-authoring tracks
+
+Optional D6 [#259](https://github.com/yongkyuns/noon/issues/259) owns high-level
+JS/TS authoring; existing WASM bindings do not imply that facade has shipped.
+[#1874](https://github.com/yongkyuns/noon/issues/1874) owns native CPython/Pyodide
+same-source semantics and real-binding conformance/performance, distinct from
+native Rust versus browser-Python evidence. Phase D APIs consume that shared
+Python path rather than introducing a native-only or browser-only 3D facade;
+eliminating async is not an acceptance criterion. Source hot reload and advanced
+live-authoring reconciliation remain [#64](https://github.com/yongkyuns/noon/issues/64),
+separate from the normal Python Run/restart contract. These owners remain
+independent of the completed bounded 3D milestone and do not create another
+scene/runtime authority.
 
 ---
 
@@ -1153,6 +1596,8 @@ long-running edit/add/remove/resource/input churn
 ```
 
 Performance regressions should be measured in terms of authoring/host bridge calls and bytes, effective driver writes versus authored semantic mutations, validation/preflight work, active channels, ordered updater regions/barriers, dirty dependencies, affected slots/domains/materialized leaves, visible candidates, resource versions and GPU ranges—not only total FPS.
+
+The debug/renderer-smoke-only retained glow fixture uses ordinary compiled tracks and runtime frames, then the actual retained encoder, to qualify real transferable and shared-memory render-worker boundaries. That lower-level fixture is not a public Scene execution proof. Its reference uses extended no-effect primitive/path renders at the same reveal progress for source coverage and an independent full two-dimensional Gaussian, encoded source-over composition, and viewport crop. The existing browser-rendering job owns the full-frame comparisons, exact neutral/rewind checks, source retirement, invalid-payload preservation, and worker recreation. Primitive antialiasing is shared with the production renderer, so this is not an independent geometry-rasterization oracle. Missing browser access, setup failures, and compilation alone cannot count as pixel qualification.
 
 ### Diagram maintenance
 

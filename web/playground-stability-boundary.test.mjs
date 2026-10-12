@@ -37,7 +37,7 @@ assert.match(
 );
 assert.match(
   authoringExecutionClient,
-  /constructor\(canvas, \{ onError = null, onRecoverableError = null \} = \{\}\)/,
+  /constructor\(canvas, \{ onError = null, onRecoverableError = null, inspectionZoom = false \} = \{\}\)/,
   "authoring execution must preserve the recoverable error callback boundary",
 );
 assert.equal(
@@ -94,7 +94,7 @@ assert.match(
 );
 assert.match(
   playgroundConstruction,
-  /onRecoverableError\(error\) \{\s*showRecoverableSceneError\(error\);\s*\}/,
+  /onRecoverableError\(error\) \{\s*if \(editStopPromise !== null\) return;\s*if \(player !== candidate && runtimePreparation\?\.candidate !== candidate\) return;\s*showRecoverableSceneError\(error\);\s*\}/,
   "recoverable execution errors must be presented as scene errors",
 );
 const recoverableHandler = playgroundConstruction.match(

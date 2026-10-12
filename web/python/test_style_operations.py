@@ -23,6 +23,8 @@ class StyleOperationsTests(unittest.TestCase):
     def test_matching_uses_live_family_route_and_rejects_unsupported_options(self):
         source = identity_only_wrapper(compat.VGroup)
         target = identity_only_wrapper(compat.VGroup)
+        source._semantic_family_handle = object()
+        target._semantic_family_handle = object()
         source_handle, target_handle = object(), object()
         context = SimpleNamespace(liveMatchFamilyStyle=Mock())
         with patch.object(handles, '_style_target', side_effect=[

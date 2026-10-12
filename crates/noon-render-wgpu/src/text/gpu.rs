@@ -196,9 +196,12 @@ pub struct TextGlyphGpuRenderer {
     mask_pipeline_msaa: wgpu::RenderPipeline,
     color_pipeline_msaa: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
+    camera_layout: wgpu::BindGroupLayout,
     camera_bind_group: wgpu::BindGroup,
+    inset_camera_buffers: Vec<wgpu::Buffer>,
+    inset_camera_bind_groups: Vec<wgpu::BindGroup>,
+    inset_cameras: Vec<TextCamera2D>,
     atlas_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
     mask_bind_groups: Vec<wgpu::BindGroup>,
     color_bind_groups: Vec<wgpu::BindGroup>,
     mask_buffer: wgpu::Buffer,
@@ -248,34 +251,16 @@ impl TextGlyphGpuRenderer {
 
         let atlas_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon glyph atlas bind group layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Noon glyph atlas sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
+                count: None,
+            }],
         });
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("glyph.wgsl"));
@@ -327,9 +312,12 @@ impl TextGlyphGpuRenderer {
             mask_pipeline_msaa,
             color_pipeline_msaa,
             camera_buffer,
+            camera_layout,
             camera_bind_group,
+            inset_camera_buffers: Vec::new(),
+            inset_camera_bind_groups: Vec::new(),
+            inset_cameras: Vec::new(),
             atlas_layout,
-            sampler,
             mask_bind_groups: Vec::new(),
             color_bind_groups: Vec::new(),
             mask_buffer: empty_instance_buffer(device, "Noon text mask glyph instances"),
@@ -349,6 +337,45 @@ impl TextGlyphGpuRenderer {
             0,
             bytemuck::bytes_of(&self.camera.uniform()),
         );
+    }
+
+    pub(crate) fn set_inset_cameras(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cameras: &[TextCamera2D],
+    ) {
+        while self.inset_camera_buffers.len() < cameras.len() {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Noon inset text camera uniform"),
+                size: size_of::<TextCameraUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Noon inset text camera bind group"),
+                layout: &self.camera_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            self.inset_camera_buffers.push(buffer);
+            self.inset_camera_bind_groups.push(bind_group);
+        }
+        self.inset_camera_buffers.truncate(cameras.len());
+        self.inset_camera_bind_groups.truncate(cameras.len());
+        for (index, camera) in cameras.iter().copied().enumerate() {
+            if self.inset_cameras.get(index).copied() != Some(camera) {
+                queue.write_buffer(
+                    &self.inset_camera_buffers[index],
+                    0,
+                    bytemuck::bytes_of(&camera.uniform()),
+                );
+            }
+        }
+        self.inset_cameras.clear();
+        self.inset_cameras.extend_from_slice(cameras);
     }
 
     pub const fn camera(&self) -> TextCamera2D {
@@ -494,7 +521,6 @@ impl TextGlyphGpuRenderer {
         refresh_plane_bind_groups(
             device,
             &self.atlas_layout,
-            &self.sampler,
             &mut self.mask_bind_groups,
             atlas,
             GlyphAtlasPlane::Mask,
@@ -503,7 +529,6 @@ impl TextGlyphGpuRenderer {
         refresh_plane_bind_groups(
             device,
             &self.atlas_layout,
-            &self.sampler,
             &mut self.color_bind_groups,
             atlas,
             GlyphAtlasPlane::Color,
@@ -516,6 +541,42 @@ impl TextGlyphGpuRenderer {
         pass: &mut wgpu::RenderPass<'a>,
         item: &PreparedTextItem,
         sample_count: u32,
+    ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
+        self.draw_item_with_camera(pass, item, sample_count, &self.camera_bind_group)
+    }
+
+    fn draw_item_with_camera<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        item: &PreparedTextItem,
+        sample_count: u32,
+        camera: &'a wgpu::BindGroup,
+    ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
+        self.draw_captured_item(pass, item, sample_count, camera, None)
+    }
+
+    pub(crate) fn capture_camera_binding(
+        &self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Noon isolated text camera"),
+            layout: &self.camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        })
+    }
+
+    pub(crate) fn draw_captured_item<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        item: &PreparedTextItem,
+        sample_count: u32,
+        camera: &'a wgpu::BindGroup,
+        isolated: Option<wgpu::BufferSlice<'a>>,
     ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
         let PreparedTextItem::GlyphBatch {
             plane,
@@ -562,7 +623,7 @@ impl TextGlyphGpuRenderer {
                 }
             }
         })?;
-        if instance_range.end > available {
+        if isolated.is_none() && instance_range.end > available {
             return Err(TextGpuDrawError::InstanceRangeOutOfBounds {
                 plane: *plane,
                 end: instance_range.end,
@@ -571,9 +632,9 @@ impl TextGlyphGpuRenderer {
         }
 
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(0, camera, &[]);
         pass.set_bind_group(1, bind_group, &[]);
-        pass.set_vertex_buffer(0, buffer.slice(..));
+        pass.set_vertex_buffer(0, isolated.unwrap_or_else(|| buffer.slice(..)));
         pass.draw(0..6, instance_range.clone());
         Ok(TextGpuDrawStats {
             draw_calls: 1,
@@ -582,15 +643,34 @@ impl TextGlyphGpuRenderer {
         })
     }
 
+    pub(crate) fn draw_item_with_inset_camera<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        item: &PreparedTextItem,
+        sample_count: u32,
+        camera_index: usize,
+    ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
+        let camera = self
+            .inset_camera_bind_groups
+            .get(camera_index)
+            .expect("inset text camera was prepared before encoding");
+        self.draw_item_with_camera(pass, item, sample_count, camera)
+    }
+
     pub fn draw_ordered_glyphs<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &PreparedRetainedTextFrame<'_>,
         sample_count: u32,
     ) -> Result<TextGpuDrawStats, TextGpuDrawError> {
-        let mut stats = TextGpuDrawStats::default();
-        for item in prepared.items {
-            stats += self.draw_item(pass, item, sample_count)?;
+        let mut stats = TextGpuDrawStats {
+            deferred_items: prepared.stats.vector_items + prepared.stats.outline_runs,
+            ..TextGpuDrawStats::default()
+        };
+        for slots in prepared.object_glyph_slots {
+            for &slot in slots {
+                stats += self.draw_item(pass, &prepared.items[slot], sample_count)?;
+            }
         }
         Ok(stats)
     }
@@ -666,7 +746,6 @@ fn upload_plane_instances(
 fn refresh_plane_bind_groups(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    sampler: &wgpu::Sampler,
     bind_groups: &mut Vec<wgpu::BindGroup>,
     atlas: &GpuGlyphAtlas,
     plane: GlyphAtlasPlane,
@@ -681,9 +760,7 @@ fn refresh_plane_bind_groups(
         let view = atlas
             .texture_view_for_page(plane, page)
             .expect("resident glyph atlas page must expose its texture view");
-        bind_groups.push(create_atlas_bind_group(
-            device, layout, sampler, view, label,
-        ));
+        bind_groups.push(create_atlas_bind_group(device, layout, view, label));
     }
 }
 
@@ -737,23 +814,16 @@ fn create_glyph_pipeline(
 fn create_atlas_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    sampler: &wgpu::Sampler,
     view: &wgpu::TextureView,
     label: &'static str,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some(label),
         layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(view),
+        }],
     })
 }
 
@@ -812,6 +882,7 @@ mod tests {
             glyph_id,
             pixel_size_bits: 32.0f32.to_bits(),
             variation_fingerprint: 0,
+            phase: noon_text::raster::GlyphRasterPhase::ZERO,
         }
     }
 
@@ -828,15 +899,24 @@ mod tests {
         })
     }
 
+    static TEST_GLYPH_SLOTS: std::sync::LazyLock<Vec<Vec<usize>>> =
+        std::sync::LazyLock::new(|| vec![vec![0]]);
+
     fn prepared_mask_frame<'a>(
         quads: &'a [GlyphQuadInstance],
         items: &'a [PreparedTextItem],
     ) -> PreparedRetainedTextFrame<'a> {
         PreparedRetainedTextFrame {
             time: 0.0,
+            layout_rebuilt: true,
             mask_quads: quads,
             color_quads: &[],
             items,
+            object_glyph_slots: if items.is_empty() {
+                &[]
+            } else {
+                &TEST_GLYPH_SLOTS
+            },
             stats: Default::default(),
         }
     }
@@ -897,8 +977,7 @@ mod tests {
             },
             data: Arc::from([255, 200, 100, 0]),
         });
-        let GlyphAtlasEntry::Image(image) = atlas.insert(&device, &queue, key, &raster).unwrap()
-        else {
+        let GlyphAtlasEntry::Image(image) = atlas.insert(&device, key, &raster).unwrap() else {
             panic!("visible mask glyph must allocate an atlas image");
         };
         let quads = [GlyphQuadInstance {
@@ -932,6 +1011,7 @@ mod tests {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Noon text glyph noop encoder"),
         });
+        atlas.encode_pending_uploads(&mut encoder);
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
             depth_slice: None,
@@ -955,6 +1035,7 @@ mod tests {
                 .unwrap()
         };
         queue.submit(Some(encoder.finish()));
+        atlas.acknowledge_pending_uploads();
         assert_eq!(stats.draw_calls, 1);
         assert_eq!(stats.instances_drawn, 1);
         assert_eq!(stats.deferred_items, 0);
@@ -966,18 +1047,16 @@ mod tests {
         let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
         for glyph_id in 1..=2 {
             let image = mask_raster(4, 2, 100 + glyph_id as u8);
-            let GlyphAtlasEntry::Image(entry) = atlas
-                .insert(&device, &queue, raster_key(glyph_id), &image)
-                .unwrap()
+            let GlyphAtlasEntry::Image(entry) =
+                atlas.insert(&device, raster_key(glyph_id), &image).unwrap()
             else {
                 panic!("visible mask glyph must allocate an atlas image");
             };
             assert_eq!(entry.page, 0);
         }
         let raster = mask_raster(1, 1, 255);
-        let GlyphAtlasEntry::Image(page_one) = atlas
-            .insert(&device, &queue, raster_key(3), &raster)
-            .unwrap()
+        let GlyphAtlasEntry::Image(page_one) =
+            atlas.insert(&device, raster_key(3), &raster).unwrap()
         else {
             panic!("visible mask glyph must allocate an atlas image");
         };
@@ -1012,6 +1091,7 @@ mod tests {
 
         let (_target, view) = noop_target(&device, "Noon text page-one noop target");
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        atlas.encode_pending_uploads(&mut encoder);
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
             depth_slice: None,
@@ -1033,6 +1113,7 @@ mod tests {
             renderer.draw_item(&mut pass, &items[0], 1).unwrap()
         };
         queue.submit(Some(encoder.finish()));
+        atlas.acknowledge_pending_uploads();
         assert_eq!(stats.draw_calls, 1);
         assert_eq!(stats.instances_drawn, 1);
     }
@@ -1052,8 +1133,7 @@ mod tests {
             },
             data: Arc::from([255]),
         });
-        let GlyphAtlasEntry::Image(image) = atlas.insert(&device, &queue, key, &raster).unwrap()
-        else {
+        let GlyphAtlasEntry::Image(image) = atlas.insert(&device, key, &raster).unwrap() else {
             panic!("visible glyph must allocate an atlas image");
         };
         let quads = [GlyphQuadInstance {

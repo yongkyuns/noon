@@ -62,6 +62,20 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                 value.snapshot = snapshot(cx, cy, width, height, **kwargs)
                 return value
 
+            def cross_line_options(cx, cy, width, height, index, scale):
+                import _typed_geometry_test_support as geometry_test
+                half_width = width * 0.5 * float(scale)
+                half_height = height * 0.5 * float(scale)
+                if int(index) == 0:
+                    start = (cx - half_width, cy + half_height)
+                    end = (cx + half_width, cy - half_height)
+                elif int(index) == 1:
+                    start = (cx + half_width, cy + half_height)
+                    end = (cx - half_width, cy - half_height)
+                else:
+                    raise ValueError("Cross line index")
+                return geometry_test.FakeGeometryOptions.line(*start, *end)
+
             class FakeHandle:
                 def __init__(self, store, snapshot_json):
                     self.store = store
@@ -155,6 +169,12 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                         fill_opacity=float(fill_opacity),
                     )
 
+                def beginCrossLine(self, index, scale_factor):
+                    calls.append(("leaf-cross", int(index), float(scale_factor)))
+                    return cross_line_options(
+                        self.centerX, self.centerY, self.width, self.height, index, scale_factor
+                    )
+
                 def setStrokeWidth(self, value):
                     self.snapshot["style"]["stroke_width"] = float(value)
                     self._sync()
@@ -229,6 +249,12 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                         background=True, fill_opacity=float(fill_opacity)
                     )
 
+                def beginCrossLine(self, index, scale_factor):
+                    calls.append(("family-cross", len(self.members), int(index), float(scale_factor)))
+                    return cross_line_options(
+                        self.centerX, self.centerY, self.width, self.height, index, scale_factor
+                    )
+
             class FakeFamilyHandle:
                 def __init__(self, store):
                     self.store = store
@@ -265,6 +291,9 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             store = FakeStore()
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, store.createMobject)
+            _geometry_test.FakeGeometryOptions.crossLine = staticmethod(
+                lambda index, scale: cross_line_options(0.0, 0.0, 2.0, 2.0, index, scale)
+            )
             import _typed_family_test_support as _family_test
             _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeHandle)
 
@@ -275,7 +304,7 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             )
 
             import _manim_shared_geometry
-            from noon import BackgroundRectangle, BLUE, Rectangle, SurroundingRectangle, VGroup
+            from noon import BackgroundRectangle, BLUE, Cross, Rectangle, SurroundingRectangle, VGroup
 
             leaf = Rectangle(width=4.0, height=2.0)
             surround = SurroundingRectangle(leaf, buff=(0.25, 0.5), color=BLUE)
@@ -298,6 +327,24 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             assert abs(background.get_fill_opacity() - 0.6) < 1e-9
             assert abs(background.get_stroke_opacity()) < 1e-9
             assert background.style["stroke_width"] == 0.0
+
+            default_cross = Cross()
+            assert isinstance(default_cross, VGroup)
+            assert len(default_cross) == 2
+            assert all(isinstance(member, _manim_compat.Line) for member in default_cross)
+            first_default = json.loads(default_cross[0]._semantic_handle.snapshotJson())["geometry"]["line"]
+            second_default = json.loads(default_cross[1]._semantic_handle.snapshotJson())["geometry"]["line"]
+            assert first_default == {"start": {"x": -1.0, "y": 1.0}, "end": {"x": 1.0, "y": -1.0}}
+            assert second_default == {"start": {"x": 1.0, "y": 1.0}, "end": {"x": -1.0, "y": -1.0}}
+            assert all(abs(member.style["stroke_width"] - 0.06) < 1e-9 for member in default_cross)
+
+            leaf_cross = Cross(leaf, scale_factor=1.5)
+            assert calls[-2:] == [("leaf-cross", 0, 1.5), ("leaf-cross", 1, 1.5)]
+            assert len(leaf_cross) == 2
+
+            family_cross = Cross(family, scale_factor=0.5)
+            assert calls[-2:] == [("family-cross", 2, 0, 0.5), ("family-cross", 2, 1, 0.5)]
+            assert len(family_cross) == 2
 
             family._semantic_family_handle = None
             try:

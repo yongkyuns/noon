@@ -19,8 +19,15 @@ pub fn session() -> Result<ExecutionSession, String> {
     let family = scene
         .family(&members.iter().map(Into::into).collect::<Vec<_>>())
         .map_err(|error| error.to_string())?;
-    family
-        .arrange_in_grid(None, Some(2), 0.5, 0.25)
+    scene
+        .arrange_family_in_grid_with_options(
+            &family,
+            &FamilyGridOptions {
+                columns: Some(2),
+                gap: (0.5, 0.25),
+                ..Default::default()
+            },
+        )
         .map_err(|error| error.to_string())?;
     assert_eq!(
         family.layout().map_err(|error| error.to_string())?.center(),

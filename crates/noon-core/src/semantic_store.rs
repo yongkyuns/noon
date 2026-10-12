@@ -4,7 +4,7 @@
 //! live with the store they mutate. Immutable resources are shared contracts in
 //! the sibling resources module; execution and rendering remain downstream.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -34,16 +34,28 @@ pub use semantic_scene_operations::*;
 
 mod semantic_scene_restructure;
 pub use semantic_scene_restructure::{
-    plan_semantic_scene_membership, semantic_scene_root_contains, SemanticSceneMembershipRequest,
+    plan_prepared_semantic_scene_membership, plan_semantic_scene_membership,
+    semantic_scene_root_contains, stage_prepared_semantic_scene_admission,
+    stage_prepared_semantic_scene_membership, stage_semantic_foreground_removal,
+    stage_semantic_scene_admission, stage_semantic_scene_lifecycle_membership,
+    PreparedSemanticMembershipError, PreparedSemanticMembershipErrorKind,
+    SemanticSceneMembershipRequest,
 };
 
+mod effects;
 mod semantic_declarations;
+pub use effects::*;
 
 mod semantic_signals;
 pub use semantic_signals::*;
 
 mod semantic_bindings;
 pub use semantic_bindings::*;
+
+mod semantic_graph;
+pub use semantic_graph::*;
+mod semantic_table_layout;
+pub use semantic_table_layout::*;
 
 mod semantic_animations;
 pub use semantic_animations::*;
@@ -56,6 +68,10 @@ pub use semantic_family::*;
 
 mod semantic_model;
 pub use semantic_model::*;
+
+mod image_content;
+pub use image_content::*;
+mod semantic_image_resources;
 
 mod object_content;
 pub use object_content::*;
@@ -73,6 +89,9 @@ mod semantic_text_resources;
 use semantic_references::SemanticIncomingReference;
 pub(crate) use semantic_references::{SemanticRemoveNodeEffect, SemanticRemoveNodeOutcome};
 pub use semantic_text_resources::SemanticTextImportError;
+
+mod resource_reclamation;
+use resource_reclamation::{SemanticResourceReferences, SemanticResourceRetirementCandidates};
 
 /// Stable semantic identity independent of execution/render dense indices.
 ///
@@ -338,6 +357,8 @@ pub enum SemanticNodeKind {
     /// Authored animation declaration using the same scene-global generational
     /// identity allocator as every other semantic entity.
     Animation(SemanticAnimationState),
+    /// Non-renderable appearance attachment in this same generational arena.
+    Effect(SemanticEffectState),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -371,6 +392,21 @@ pub struct SemanticNode {
     /// no painter ordering, so one ordered identity set provides deterministic
     /// traversal and local membership insertion/removal without a mirror index.
     scoped_signals: BTreeSet<SemanticNodeId>,
+    /// Ordered foreground declarations for this family-root scope. These are
+    /// soft references, not display membership, parent edges or painter order.
+    foreground_members: Vec<SemanticNodeId>,
+    /// Optional authored Graph/DiGraph topology carried by this family root.
+    ///
+    /// The declaration references ordinary semantic vertex objects and edge
+    /// families/Line components. It is Semantic Scene state, not wrapper or
+    /// renderer state.
+    graph_declaration: Option<SemanticGraphDeclaration>,
+    /// Ordered attachment identities; absent effects allocate no collection.
+    /// Boxing the Vec header keeps every effect-free node to one pointer of
+    /// overhead rather than three words. The first attachment pays the extra
+    /// header allocation; structural edits then reuse the Vec capacity.
+    #[allow(clippy::box_collection)]
+    effects: Option<Box<Vec<SemanticNodeId>>>,
 }
 
 impl SemanticNode {
@@ -515,6 +551,30 @@ impl SemanticNode {
         &mut self.host_updaters
     }
 
+    /// Ordered foreground declarations, independent of current display membership.
+    ///
+    /// Only family roots can own this metadata. Mutate it through
+    /// [`SemanticMutationTransaction::set_foreground_members`]; changing this list
+    /// alone neither adds renderable objects nor changes their painter order.
+    pub fn foreground_members(&self) -> &[SemanticNodeId] {
+        &self.foreground_members
+    }
+
+    pub(crate) fn foreground_members_mut(&mut self) -> &mut Vec<SemanticNodeId> {
+        &mut self.foreground_members
+    }
+
+    pub fn graph_declaration(&self) -> Option<&SemanticGraphDeclaration> {
+        self.graph_declaration.as_ref()
+    }
+
+    pub(crate) fn replace_graph_declaration(
+        &mut self,
+        graph: Option<SemanticGraphDeclaration>,
+    ) -> Option<SemanticGraphDeclaration> {
+        std::mem::replace(&mut self.graph_declaration, graph)
+    }
+
     pub fn scoped_signals(&self) -> &BTreeSet<SemanticNodeId> {
         &self.scoped_signals
     }
@@ -545,16 +605,34 @@ pub struct SemanticStore {
     identity: SemanticStoreIdentity,
     geometry_resources: crate::GeometryResourceArena,
     text_resources: crate::TextResourceArena,
+    raster_image_resources: crate::RasterImageResourceArena,
     font_resources: crate::FontResourceArena,
+    // Bounded compiler registries supply deterministic complete identities. This
+    // store-local index maps those identities to one immutable retained resource;
+    // semantic nodes still retain independent identity and presentation state.
+    compiled_text_resources: HashMap<crate::TextCompilationIdentity, crate::TextResourceHandle>,
+    compiled_text_resource_order: VecDeque<crate::TextCompilationIdentity>,
+    compiled_text_resource_retained_bytes: usize,
+    resource_references: SemanticResourceReferences,
+    resource_retirement_candidates: SemanticResourceRetirementCandidates,
+    resource_reclamation_defer_depth: usize,
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
     live_nodes: usize,
+    // Derived cardinality, maintained at allocator insertion/retirement. It lets
+    // the declaration-only effect profile reject execution without scene scans.
+    effect_nodes: usize,
     scene_head: Option<SemanticNodeId>,
     scene_tail: Option<SemanticNodeId>,
     scene_nodes: usize,
     next_insertion_order: u64,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     incoming_references: HashMap<SemanticNodeId, Vec<SemanticIncomingReference>>,
+    table_layouts: HashMap<SemanticNodeId, SemanticTableLayout>,
+    /// Derived index of authored inset display roles. The role on each ordinary
+    /// display object remains authoritative; this bounds view discovery by active
+    /// inset count rather than total semantic slots.
+    inset_2d_displays: BTreeSet<SemanticNodeId>,
     last_mutation: SemanticMutationStats,
     scene_revision: crate::SceneRevision,
 }
@@ -574,6 +652,8 @@ impl Clone for SemanticStore {
         });
         let mut font_resources = self.font_resources.clone();
         font_resources.fork_namespace();
+        let raster_image_resources = self.raster_image_resources.clone();
+        let image_namespace = raster_image_resources.namespace();
         let mut slots = self.slots.clone();
         for slot in &mut slots {
             if let Some(node) = slot.node.as_mut() {
@@ -589,32 +669,116 @@ impl Clone for SemanticStore {
                         {
                             handle.arena = text_namespace;
                         }
+                        crate::SemanticObjectContent::Image(content)
+                            if self
+                                .raster_image_resources
+                                .get(content.resource())
+                                .is_some() =>
+                        {
+                            let mut handle = content.resource();
+                            handle.arena = image_namespace;
+                            content.remap_resource(handle);
+                        }
                         _ => {}
                     }
                 }
             }
         }
-        Self {
+        let compiled_text_resources: HashMap<_, _> = self
+            .compiled_text_resources
+            .iter()
+            .filter_map(|(key, handle)| {
+                self.text_resources.get(*handle)?;
+                let mut handle = *handle;
+                handle.arena = text_namespace;
+                Some((key.clone(), handle))
+            })
+            .collect();
+        let compiled_text_resource_order = self
+            .compiled_text_resource_order
+            .iter()
+            .filter(|key| compiled_text_resources.contains_key(*key))
+            .cloned()
+            .collect::<VecDeque<_>>();
+        let compiled_text_resource_retained_bytes = compiled_text_resource_order
+            .iter()
+            .map(|identity| {
+                identity.descriptor.len()
+                    + identity
+                        .font_contents
+                        .iter()
+                        .map(|font| font.len())
+                        .sum::<usize>()
+            })
+            .sum();
+        let mut cloned = Self {
             identity: SemanticStoreIdentity::default(),
             geometry_resources,
             text_resources,
+            raster_image_resources,
             font_resources,
+            compiled_text_resources,
+            compiled_text_resource_order,
+            compiled_text_resource_retained_bytes,
+            resource_references: SemanticResourceReferences::default(),
+            resource_retirement_candidates: SemanticResourceRetirementCandidates::default(),
+            resource_reclamation_defer_depth: 0,
             slots,
             free_head: self.free_head,
             live_nodes: self.live_nodes,
+            effect_nodes: self.effect_nodes,
             scene_head: self.scene_head,
             scene_tail: self.scene_tail,
             scene_nodes: self.scene_nodes,
             next_insertion_order: self.next_insertion_order,
             source_nodes: self.source_nodes.clone(),
             incoming_references: self.incoming_references.clone(),
+            table_layouts: self.table_layouts.clone(),
+            inset_2d_displays: self.inset_2d_displays.clone(),
             last_mutation: self.last_mutation,
             scene_revision: self.scene_revision,
-        }
+        };
+        cloned.rebuild_semantic_resource_references();
+        cloned
     }
 }
 
 impl SemanticStore {
+    pub fn inset_2d_views(
+        &self,
+    ) -> impl Iterator<Item = (SemanticNodeId, crate::SemanticInset2DViewRole)> + '_ {
+        self.inset_2d_displays.iter().filter_map(|display| {
+            let state = self.node(*display)?.semantic_object_state()?;
+            let crate::SemanticObjectRole::Inset2DView(role) = state.role() else {
+                return None;
+            };
+            Some((*display, role))
+        })
+    }
+
+    pub(crate) fn replace_semantic_object_role(
+        &mut self,
+        object: SemanticNodeId,
+        role: crate::SemanticObjectRole,
+    ) {
+        self.unregister_semantic_references_for_owner(object);
+        self.inset_2d_displays.remove(&object);
+        self.node_mut(object)
+            .expect("validated semantic object")
+            .semantic_object_state_mut()
+            .expect("validated semantic object state")
+            .set_role(role);
+        if matches!(
+            self.node(object)
+                .and_then(SemanticNode::semantic_object_state)
+                .map(|state| state.role()),
+            Some(crate::SemanticObjectRole::Inset2DView(_))
+        ) {
+            self.inset_2d_displays.insert(object);
+        }
+        self.register_semantic_references_for_owner(object);
+    }
+
     pub(crate) const fn next_insertion_order(&self) -> u64 {
         self.next_insertion_order
     }
@@ -644,6 +808,24 @@ impl SemanticStore {
         Ok(self.geometry_resources.insert_path(path))
     }
 
+    /// Admit a validated immutable mesh into this store's resource namespace.
+    pub fn insert_geometry_mesh(
+        &mut self,
+        mesh: crate::MeshResource,
+    ) -> crate::GeometryResourceHandle {
+        self.geometry_resources.insert_mesh(mesh)
+    }
+
+    /// Admit a path whose finiteness was proven by the owning prepared
+    /// transaction. This is crate-private so ordinary callers retain the
+    /// fallible validation boundary above.
+    pub(crate) fn insert_preflighted_geometry_path(
+        &mut self,
+        path: crate::VectorPath,
+    ) -> crate::GeometryResourceHandle {
+        self.geometry_resources.insert_path(path)
+    }
+
     /// Make a new immutable path available to one atomic semantic publication.
     /// The callback must use a preflighted/atomic transaction: on error this
     /// discards only the unpublished resource, preserving existing handles.
@@ -658,8 +840,24 @@ impl SemanticStore {
         self.with_geometry_paths([path], |store, handles| publish(store, handles[0]))
     }
 
-    /// Admit a local batch of immutable paths for one atomic transaction. Any
-    /// allocation or publication error releases every unpublished batch resource.
+    /// Admit one validated mesh for an atomic semantic publication. If the
+    /// publication fails, the unpublished resource is retired with the same
+    /// arena lifecycle used by path batches.
+    pub fn with_geometry_mesh<T, E>(
+        &mut self,
+        mesh: crate::MeshResource,
+        publish: impl FnOnce(&mut Self, crate::GeometryResourceHandle) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<crate::GeometryResourceError>,
+    {
+        self.with_geometry_resources(
+            [crate::GeometryResource::Mesh(std::sync::Arc::new(mesh))],
+            |store, handles| publish(store, handles[0]),
+        )
+    }
+
+    /// Admit a local batch of immutable paths for one atomic transaction.
     pub fn with_geometry_paths<T, E>(
         &mut self,
         paths: impl IntoIterator<Item = crate::VectorPath>,
@@ -668,10 +866,34 @@ impl SemanticStore {
     where
         E: From<crate::GeometryResourceError>,
     {
+        self.with_geometry_resources(
+            paths
+                .into_iter()
+                .map(|path| crate::GeometryResource::VectorPath(std::sync::Arc::new(path))),
+            publish,
+        )
+    }
+
+    /// Admit immutable path/mesh resources inside one semantic publication.
+    /// Any validation or publication error releases only this unpublished batch.
+    /// Mesh payloads have already passed their checked resource constructor.
+    pub fn with_geometry_resources<T, E>(
+        &mut self,
+        resources: impl IntoIterator<Item = crate::GeometryResource>,
+        publish: impl FnOnce(&mut Self, &[crate::GeometryResourceHandle]) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<crate::GeometryResourceError>,
+    {
         let mut handles = Vec::new();
         let result = (|| {
-            for path in paths {
-                handles.push(self.insert_geometry_path(path).map_err(E::from)?);
+            for resource in resources {
+                if let crate::GeometryResource::VectorPath(path) = &resource {
+                    if !path.is_finite() {
+                        return Err(E::from(crate::GeometryResourceError::NonFinitePath));
+                    }
+                }
+                handles.push(self.geometry_resources.insert(resource));
             }
             publish(self, &handles)
         })();
@@ -679,7 +901,7 @@ impl SemanticStore {
             for handle in handles {
                 self.geometry_resources
                     .remove(handle.id)
-                    .expect("an unpublished fresh path remains removable");
+                    .expect("an unpublished fresh resource remains removable");
             }
         }
         result
@@ -703,7 +925,21 @@ impl SemanticStore {
         self.node_mut(id)
             .expect("newly inserted semantic node exists")
             .object_state = Some(state);
+        if matches!(
+            self.node(id)
+                .and_then(SemanticNode::semantic_object_state)
+                .map(|state| state.role()),
+            Some(crate::SemanticObjectRole::Inset2DView(_))
+        ) {
+            self.inset_2d_displays.insert(id);
+        }
         self.register_semantic_references_for_owner(id);
+        let resource_state = self
+            .node(id)
+            .and_then(SemanticNode::semantic_object_state)
+            .expect("newly inserted semantic object has state")
+            .clone();
+        self.retain_semantic_object_resources(&resource_state);
         id
     }
 
@@ -755,6 +991,7 @@ impl SemanticStore {
     }
 
     fn insert_kind(&mut self, kind: SemanticNodeKind) -> SemanticNodeId {
+        self.effect_nodes += usize::from(matches!(kind, SemanticNodeKind::Effect(_)));
         let id = self
             .preview_node_allocations()
             .next()
@@ -779,6 +1016,9 @@ impl SemanticStore {
             members: OrderedFamilyMembers::default(),
             host_updaters: Vec::new(),
             scoped_signals: BTreeSet::new(),
+            foreground_members: Vec::new(),
+            graph_declaration: None,
+            effects: None,
         });
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {
@@ -808,6 +1048,66 @@ impl SemanticStore {
             .get(source)
             .copied()
             .filter(|id| self.node(*id).is_some())
+    }
+
+    /// Return the authored Graph/DiGraph declaration attached to one family root.
+    pub fn semantic_graph_declaration(
+        &self,
+        scope: SemanticNodeId,
+    ) -> Result<Option<&SemanticGraphDeclaration>, SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        Ok(node.graph_declaration())
+    }
+    pub fn semantic_table_layout(
+        &self,
+        scope: SemanticNodeId,
+    ) -> Result<Option<SemanticTableLayout>, SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        Ok(self.table_layouts.get(&scope).copied())
+    }
+    pub(crate) fn replace_semantic_table_layout(
+        &mut self,
+        scope: SemanticNodeId,
+        layout: SemanticTableLayout,
+    ) -> Result<(), SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        self.table_layouts.insert(scope, layout);
+        Ok(())
+    }
+
+    pub(crate) fn replace_semantic_graph_declaration(
+        &mut self,
+        scope: SemanticNodeId,
+        graph: Option<SemanticGraphDeclaration>,
+    ) -> Result<Option<SemanticGraphDeclaration>, SemanticStoreError> {
+        let node = self
+            .node(scope)
+            .ok_or(SemanticStoreError::UnknownNode(scope))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticStoreError::NotFamily(scope));
+        }
+        self.unregister_semantic_references_for_owner(scope);
+        let previous = self
+            .node_mut(scope)
+            .expect("validated graph scope remains live")
+            .replace_graph_declaration(graph);
+        self.register_semantic_references_for_owner(scope);
+        Ok(previous)
     }
 
     /// Signals explicitly included in one family-root execution scope, ordered
@@ -896,6 +1196,12 @@ impl SemanticStore {
     /// Identity, source identity and family relationships are preserved. The
     /// operation writes only this node and the former tail node, if any.
     pub fn attach_to_scene(&mut self, id: SemanticNodeId) -> Result<bool, SemanticStoreError> {
+        if matches!(
+            self.node(id).map(SemanticNode::kind),
+            Some(SemanticNodeKind::Effect(_))
+        ) {
+            return Err(SemanticStoreError::EffectCannotBeMember(id));
+        }
         let membership = self
             .node(id)
             .ok_or(SemanticStoreError::UnknownNode(id))?
@@ -1176,6 +1482,12 @@ impl SemanticStore {
         if self.node(member).is_none() {
             return Err(SemanticStoreError::UnknownNode(member));
         }
+        if matches!(
+            self.node(member).map(SemanticNode::kind),
+            Some(SemanticNodeKind::Effect(_))
+        ) {
+            return Err(SemanticStoreError::EffectCannotBeMember(member));
+        }
         if family == member {
             return Err(SemanticStoreError::FamilyCycle { family, member });
         }
@@ -1315,9 +1627,19 @@ impl SemanticStore {
             .node(id)
             .ok_or(SemanticStoreError::UnknownNode(id))?
             .clone();
+        let mut writes = 0;
+        for &effect in node.effect_ids() {
+            if self.node(effect).is_some() {
+                self.remove_node(effect)?;
+                writes += self.last_mutation.slots_written;
+            }
+        }
+        if let Some(effect) = node.semantic_effect_state() {
+            self.unlink_effect(id, effect.owner());
+            writes += usize::from(self.node(effect.owner()).is_some());
+        }
         self.unregister_semantic_references_for_owner(id);
 
-        let mut writes = 0;
         if node.is_scene_owned() {
             self.detach_from_scene(id)?;
             writes += self.last_mutation.slots_written;
@@ -1339,10 +1661,17 @@ impl SemanticStore {
         if let Some(source) = &node.source_identity {
             self.source_nodes.remove(source);
         }
+        self.inset_2d_displays.remove(&id);
         self.incoming_references.remove(&id);
+        self.table_layouts.remove(&id);
+
+        if let Some(state) = node.semantic_object_state() {
+            self.release_semantic_object_resources(state);
+        }
 
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");
+        self.effect_nodes -= usize::from(matches!(removed.kind, SemanticNodeKind::Effect(_)));
         slot.generation = slot
             .generation
             .checked_add(1)
@@ -1355,6 +1684,7 @@ impl SemanticStore {
             slots_written: writes,
             cycle_nodes_visited: 0,
         };
+        self.reclaim_semantic_resource_candidates();
         Ok(removed)
     }
 
@@ -1419,6 +1749,8 @@ impl SemanticStore {
 pub enum SemanticStoreError {
     UnknownNode(SemanticNodeId),
     NotFamily(SemanticNodeId),
+    NotEffect(SemanticNodeId),
+    EffectCannotBeMember(SemanticNodeId),
     NotFamilyMember {
         family: SemanticNodeId,
         member: SemanticNodeId,
@@ -1439,6 +1771,10 @@ impl std::fmt::Display for SemanticStoreError {
                 id.slot(),
                 id.generation()
             ),
+            Self::NotEffect(id) => write!(formatter, "semantic node {id:?} is not an effect"),
+            Self::EffectCannotBeMember(id) => {
+                write!(formatter, "effect {id:?} is not painter membership")
+            }
             Self::NotFamily(id) => write!(
                 formatter,
                 "semantic node {}:{} is not a family",
@@ -1475,6 +1811,143 @@ mod tests {
     use crate::StoredGeometry;
 
     use super::*;
+
+    fn triangle_mesh() -> crate::MeshResource {
+        crate::MeshResource::new(
+            vec![
+                crate::SemanticVec3::ZERO,
+                crate::SemanticVec3::new(1.0, 0.0, 0.0),
+                crate::SemanticVec3::new(0.0, 1.0, 0.0),
+            ],
+            None,
+            vec![0, 1, 2],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn failed_mesh_object_publication_retires_the_unpublished_resource() {
+        let mut store = SemanticStore::new();
+        let before_resources = store.geometry_resources().len();
+        let before_nodes = store.len();
+        let result = store.with_geometry_mesh(triangle_mesh(), |store, handle| {
+            let mut transaction = crate::SemanticMutationTransaction::new();
+            transaction
+                .add_node(crate::SemanticNodeCreation::object(
+                    SemanticObjectState::new(StoredGeometry::Resource(handle)),
+                ))
+                .add_node(crate::SemanticNodeCreation::object(
+                    SemanticObjectState::new(StoredGeometry::Circle { radius: f32::NAN }),
+                ));
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(|_| crate::GeometryResourceError::UnknownResource(handle.id))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(store.geometry_resources().len(), before_resources);
+        assert_eq!(store.len(), before_nodes);
+    }
+
+    #[test]
+    fn mesh_admission_rejects_invalid_data_before_consuming_resources() {
+        let before = 0;
+        assert_eq!(
+            crate::MeshResource::new(
+                vec![crate::SemanticVec3::new(f64::INFINITY, 0.0, 0.0)],
+                None,
+                vec![0, 0, 0],
+            ),
+            Err(crate::MeshResourceError::NonFinitePosition)
+        );
+        let store = SemanticStore::new();
+        assert_eq!(store.geometry_resources().len(), before);
+    }
+
+    #[test]
+    fn cloned_mesh_resource_refs_are_remapped_and_share_the_immutable_arc() {
+        let mut store = SemanticStore::new();
+        let handle = store.insert_geometry_mesh(triangle_mesh());
+        let node = store
+            .insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(handle)));
+        let cloned = store.clone();
+        let Some(StoredGeometry::Resource(cloned_handle)) = cloned
+            .semantic_object_state_checked(node)
+            .unwrap()
+            .content
+            .geometry()
+        else {
+            panic!("mesh resource object content")
+        };
+        assert_ne!(handle.arena, cloned_handle.arena);
+        assert!(cloned.geometry_resources().get(handle).is_none());
+        let crate::GeometryResource::Mesh(original) =
+            store.geometry_resources().get(handle).unwrap()
+        else {
+            panic!("expected mesh")
+        };
+        let crate::GeometryResource::Mesh(copy) =
+            cloned.geometry_resources().get(cloned_handle).unwrap()
+        else {
+            panic!("expected mesh")
+        };
+        assert!(std::sync::Arc::ptr_eq(original, copy));
+    }
+
+    #[test]
+    fn stale_and_foreign_mesh_handles_are_rejected_for_object_publication() {
+        let mut store = SemanticStore::new();
+        let live = store.insert_geometry_mesh(triangle_mesh());
+        let stale = crate::GeometryResourceHandle {
+            version: live.version + 1,
+            ..live
+        };
+        let mut foreign_store = SemanticStore::new();
+        let foreign = foreign_store.insert_geometry_mesh(triangle_mesh());
+        assert_eq!((live.id, live.version), (foreign.id, foreign.version));
+        assert_ne!(live.arena, foreign.arena);
+
+        for handle in [stale, foreign] {
+            let mut transaction = crate::SemanticMutationTransaction::new();
+            transaction.add_node(crate::SemanticNodeCreation::object(
+                SemanticObjectState::new(StoredGeometry::Resource(handle)),
+            ));
+            assert!(transaction.apply(&mut store).is_err());
+        }
+        assert!(store.geometry_resources().get(live).is_some());
+    }
+
+    #[test]
+    fn mesh_resources_are_reclaimed_after_object_replacement_or_deletion() {
+        let mut store = SemanticStore::new();
+        let replaced = store.insert_geometry_mesh(triangle_mesh());
+        let mut add = crate::SemanticMutationTransaction::new();
+        add.add_node(crate::SemanticNodeCreation::object(
+            SemanticObjectState::new(StoredGeometry::Resource(replaced)),
+        ));
+        let added = add.apply(&mut store).unwrap();
+        let crate::SemanticMutationImpact::NodeAdded { node: first } = added.impacts()[0] else {
+            panic!("expected node")
+        };
+
+        let mut replace = crate::SemanticMutationTransaction::new();
+        replace.replace_content(first, StoredGeometry::Circle { radius: 1.0 });
+        replace.apply(&mut store).unwrap();
+        assert!(store.geometry_resources().get(replaced).is_none());
+
+        let deleted = store.insert_geometry_mesh(triangle_mesh());
+        let mut add = crate::SemanticMutationTransaction::new();
+        add.add_node(crate::SemanticNodeCreation::object(
+            SemanticObjectState::new(StoredGeometry::Resource(deleted)),
+        ));
+        let added = add.apply(&mut store).unwrap();
+        let crate::SemanticMutationImpact::NodeAdded { node: second } = added.impacts()[0] else {
+            panic!("expected node")
+        };
+        store.remove_node(second).unwrap();
+        assert!(store.geometry_resources().get(deleted).is_none());
+    }
 
     #[test]
     fn resources_are_store_scoped_and_clones_share_only_immutable_payloads() {
@@ -1532,8 +2005,14 @@ mod tests {
         };
         assert_ne!(a.arena, c.arena);
         assert!(cloned.geometry_resources().get(a).is_none());
-        let GeometryResource::VectorPath(original) = first.geometry_resources().get(a).unwrap();
-        let GeometryResource::VectorPath(copied) = cloned.geometry_resources().get(c).unwrap();
+        let GeometryResource::VectorPath(original) = first.geometry_resources().get(a).unwrap()
+        else {
+            panic!("expected path")
+        };
+        let GeometryResource::VectorPath(copied) = cloned.geometry_resources().get(c).unwrap()
+        else {
+            panic!("expected path")
+        };
         assert!(Arc::ptr_eq(original, copied));
         assert_eq!(
             cloned

@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 
 import playwright from "playwright";
 
+import { holdPlaygroundPreload } from "./playground-browser-support.mjs";
+
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_LAYOUT_PORT ?? "4174");
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -40,8 +42,14 @@ async function waitForServer() {
 async function layout(page) {
   const canvas = await page.locator("#scene").boundingBox();
   const wrap = await page.locator(".canvas-wrap").boundingBox();
+  const metrics = await page.locator(".metrics").boundingBox();
   assert.ok(canvas, "playground canvas must be laid out");
   assert.ok(wrap, "canvas wrapper must be laid out");
+  assert.ok(metrics, "live metrics must be laid out");
+  assert.ok(canvas.y >= wrap.y - 1 && canvas.y + canvas.height <= wrap.y + wrap.height + 1,
+    "canvas must fit vertically inside its wrapper");
+  assert.ok(metrics.y >= canvas.y + canvas.height - 1,
+    "canvas must not cover the live FPS and metrics row");
   const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   const viewportWidth = await page.evaluate(() => window.innerWidth);
   return { canvas, wrap, documentWidth, viewportWidth };
@@ -127,14 +135,7 @@ try {
     if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
   });
 
-  // Hold the optional post-paint preload at its real module-load boundary so
-  // cold-layout assertions cannot race the automatic first source run.
-  let releasePreload;
-  const preloadGate = new Promise((resolve) => { releasePreload = resolve; });
-  await page.route("**/live-authoring-bootstrap.js", async (route) => {
-    await preloadGate;
-    await route.continue();
-  });
+  const releasePreload = await holdPlaygroundPreload(page);
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "domcontentloaded",
   });

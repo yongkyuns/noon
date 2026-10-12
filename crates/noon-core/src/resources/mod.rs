@@ -13,11 +13,23 @@ pub use geometry::*;
 mod image;
 pub use image::*;
 
+mod mesh;
+pub use mesh::*;
+
 mod lookup;
 pub use lookup::*;
 
+mod matching_shape;
+pub use matching_shape::*;
+
+mod matching_shape_correspondence;
+pub use matching_shape_correspondence::*;
+
 mod mutation;
 pub use mutation::*;
+
+mod numeric_text;
+pub use numeric_text::*;
 
 mod text;
 pub use text::*;

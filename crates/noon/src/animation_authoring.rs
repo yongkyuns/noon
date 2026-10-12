@@ -103,6 +103,26 @@ impl crate::Scene {
         )
     }
 
+    /// Declare exact bounds-center motion over a retained static path.
+    pub fn declare_move_along_path(
+        &self,
+        target: &Mobject,
+        path: &Mobject,
+        options: AnimationOptions,
+    ) -> Result<DeclaredAnimation, String> {
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
+        self.require_object(path)
+            .map_err(|error| error.to_string())?;
+        self.declare_animation(
+            SemanticAnimationIntent::MoveAlongPath {
+                target: target.node_id(),
+                path: path.node_id(),
+            },
+            options,
+        )
+    }
+
     /// Declare one transient flash over an exact analytic Line.
     pub fn declare_passing_flash(
         &self,
@@ -242,7 +262,7 @@ mod tests {
 
     #[test]
     fn declared_passing_flash_has_fixed_transient_lifecycle() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         let animation = scene
             .declare_passing_flash(&line, 0.25, AnimationOptions::new().run_time(2.0))

@@ -95,7 +95,7 @@ fn content_property_and_subscription_changes_share_one_object_slot() {
 
     let state = store.semantic_object_state_checked(target).unwrap();
     assert_eq!(state.content, replacement);
-    assert_eq!(state.transform.rotation_z, 0.25);
+    assert_eq!(state.transform.planar_rotation().unwrap(), 0.25);
     assert_eq!(state.signal_bindings().len(), 1);
     assert_eq!(store.last_mutation_stats().slots_written, 1);
     assert_eq!(
@@ -256,7 +256,8 @@ fn unavailable_geometry_resource_replacement_rolls_back_atomically() {
                 .semantic_object_state_checked(earlier)
                 .unwrap()
                 .transform
-                .rotation_z,
+                .planar_rotation()
+                .unwrap(),
             0.0
         );
         assert_eq!(store.last_mutation_stats().slots_written, 0);
@@ -329,7 +330,8 @@ fn unavailable_text_replacement_rolls_back_an_earlier_valid_property_write() {
                 .semantic_object_state_checked(earlier)
                 .unwrap()
                 .transform
-                .rotation_z,
+                .planar_rotation()
+                .unwrap(),
             0.0
         );
         assert_eq!(store.last_mutation_stats().slots_written, 0);
@@ -360,4 +362,31 @@ fn imported_same_store_text_is_valid_for_add_and_replace() {
         store.semantic_object_state_checked(object).unwrap().content,
         SemanticObjectContent::Text(second)
     );
+    assert!(store.text_resources().get(first).is_none());
+    assert!(store.text_resources().get(second).is_some());
+}
+
+#[test]
+fn remove_then_readd_in_one_transaction_keeps_the_resource_live() {
+    let mut store = SemanticStore::new();
+    let path = store
+        .insert_geometry_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 1.0)),
+        )
+        .unwrap();
+    let old =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Resource(path)));
+    let replacement =
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 1.0,
+        }));
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.replace_content(old, StoredGeometry::Circle { radius: 1.0 });
+    transaction.replace_content(replacement, StoredGeometry::Resource(path));
+    transaction.apply(&mut store).unwrap();
+
+    assert!(store.geometry_resources().get(path).is_some());
 }

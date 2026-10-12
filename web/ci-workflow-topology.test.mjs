@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
@@ -21,10 +22,13 @@ const exactFamilies = new Map([
   ["test-coverage.yml", "coverage"],
   ["platform-release.yml", "platform-release"],
   ["native-host-smoke.yml", "native-host"],
+  ["native-export-output.yml", "native-host"],
   ["pages.yml", "deployment"],
   ["fuzz.yml", "fuzz"],
   ["branch-cleanup-once.yml", "maintenance"],
   ["noon-agent-foundation.yml", "agent-authoring"],
+  ["image-raster-qualification.yml", "renderer"],
+  ["foreground-matching-qualification.yml", "manim"],
 ]);
 
 function classifyWorkflow(name) {
@@ -234,4 +238,92 @@ test("architecture diagrams stay a read-only check with independently preserved 
   assert.match(preservation, /^        if: always\(\)$/m);
   assert.match(preservation, /uses: actions\/upload-artifact@/);
   assert.match(preservation, /docs\/diagrams\//);
+});
+
+
+test("foreground matching has an explicit reference family without a broad prefix exemption", () => {
+  assert.equal(classifyWorkflow("foreground-matching-qualification.yml"), "manim");
+  assert.equal(classifyWorkflow("foreground-unregistered.yml"), null);
+});
+
+test("native export is classified explicitly without exempting other native workflows", () => {
+  assert.ok(workflowFiles.includes("native-export-output.yml"));
+  assert.equal(classifyWorkflow("native-export-output.yml"), "native-host");
+  assert.equal(classifyWorkflow("native-export-unregistered.yml"), null);
+  assert.equal(classifyWorkflow("native-unregistered.yml"), null);
+});
+
+test("foreground qualification requires success from every evidence stage", async () => {
+  const workflow = await readFile(new URL("foreground-matching-qualification.yml", workflowDir), "utf8");
+  assert.match(workflow, /permissions:\n  contents: read/);
+  const gate = workflow.split("      - name: Require every qualification stage\n")[1];
+  assert.ok(gate, "foreground qualification must retain its final required-stage gate");
+  assert.match(gate, /^        if: always\(\)$/m);
+  const stages = { RASTER: "raster", TOLERANCES: "tolerances", WITNESSES: "witnesses", CADENCE: "cadence" };
+  for (const [variable, step] of Object.entries(stages)) {
+    assert.ok(gate.includes(`${variable}: \${{ steps.${step}.outcome }}`),
+      `${variable} must observe the real ${step} outcome`);
+  }
+  const script = gate.split("        run: |\n")[1];
+  assert.ok(script, "foreground final gate must execute its required-stage checks");
+  const allPassed = Object.fromEntries(Object.keys(stages).map(name => [name, "success"]));
+  const run = (outcomes) => {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", script], {
+      encoding: "utf8", timeout: 10_000, env: { ...process.env, ...outcomes },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.signal, null);
+    return result.status;
+  };
+  assert.equal(run(allPassed), 0);
+  for (const stage of Object.keys(stages)) {
+    for (const outcome of ["", "failure", "skipped", "cancelled"]) {
+      assert.notEqual(run({ ...allPassed, [stage]: outcome }), 0,
+        `${stage}=${JSON.stringify(outcome)} must not qualify`);
+    }
+  }
+});
+
+
+test("automatic glow qualification selects its retained preparation and real host call sites", async () => {
+  const workflow = await readFile(new URL("ci.yml", workflowDir), "utf8");
+  const selection = workflow.split("  pull_request:\n")[1]?.split("  workflow_dispatch:")[0];
+  assert.ok(selection, "main CI must retain its pull-request selection");
+  for (const path of [
+    "crates/noon-render-wgpu/src/gpu/retained_text.rs",
+    "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication*",
+    "crates/noon-render-wgpu/src/gpu/retained_text/glow_publication/**",
+    "crates/noon-render-wgpu/src/gpu/mod.rs",
+    "crates/noon-render-wgpu/src/lib.rs",
+    "crates/noon-render-wgpu/src/render_order.rs",
+    "crates/noon-render-wgpu/src/path_residency.rs",
+    "crates/noon-native/src/lib.rs",
+    "crates/noon-export/src/gpu.rs",
+    "crates/noon-web/src/execution_canvas.rs",
+    "web/ci-workflow-topology.test.mjs",
+  ]) {
+    assert.ok(selection.includes(`      - "${path}"`), `glow qualification must select ${path}`);
+  }
+  const contracts = workflow.split("      - name: Test glow resource and kernel contracts\n")[1]?.split("      - name:")[0];
+  assert.ok(contracts?.includes("cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests"),
+    "dedicated raster job must run the automatic source/budget/retry contracts");
+});
+
+
+test("real worker glow pixels run in the existing canonical browser job", async () => {
+  const workflow = await readFile(new URL("ci.yml", workflowDir), "utf8");
+  const selection = workflow.split("  pull_request:\n")[1]?.split("  workflow_dispatch:")[0];
+  for (const path of ["scripts/glow-worker-*.mjs", "crates/noon-web/src/glow_worker_smoke.rs",
+    "crates/noon-web/src/retained_execution_canvas.rs", "crates/noon-web/src/retained_execution_transport.rs",
+    "crates/noon-web/src/retained_execution_resources.rs"]) {
+    assert.ok(selection?.includes(`      - "${path}"`), `worker qualification must select ${path}`);
+  }
+  const job = workflow.split("\n  browser-rendering-parity:\n")[1]?.split(/^  [a-z][a-z-]*:/m)[0];
+  assert.ok(job, "worker pixel qualification must run in the consolidated backend job");
+  assert.doesNotMatch(job, /matrix\.backend/, "the consolidated job has no backend matrix");
+  const step = job.split("      - name: Qualify retained worker glow images and recovery\n")[1]?.split("      - name:")[0];
+  assert.ok(step, "worker pixel qualification cannot silently disappear");
+  assert.doesNotMatch(step, /^\s+if:/m, "worker qualification must run unconditionally after WebGPU checks");
+  assert.match(step, /run: node scripts\/glow-worker-qualification\.mjs/);
+  assert.doesNotMatch(step, /continue-on-error|\|\| true/);
 });

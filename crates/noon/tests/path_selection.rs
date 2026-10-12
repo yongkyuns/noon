@@ -29,10 +29,18 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
             .unwrap();
         let mut session = scene.execution_session().unwrap();
         if live_mode {
-            scene
-                .live(&mut session)
-                .pointwise_become_partial(&destination, &source, 0.25, 0.75)
-                .unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::Partial {
+                    object: &destination,
+                    source: &source,
+                    a: 0.25,
+                    b: 0.75,
+                },
+            )
+            .unwrap();
         } else {
             destination
                 .pointwise_become_partial(&source, 0.25, 0.75)
@@ -50,13 +58,24 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
         );
         assert_eq!(source.state().unwrap(), source_before);
         if live_mode {
-            let mut live = scene.live(&mut session);
-            live.reverse_direction(&destination).unwrap();
+            noon::integration::publish_borrowed_path_edit(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                noon::integration::BorrowedPathEdit::Reverse {
+                    object: &destination,
+                },
+            )
+            .unwrap();
             assert_eq!(
-                live.effective_path_query(&destination)
-                    .unwrap()
-                    .start()
-                    .unwrap(),
+                noon::integration::effective_path_query(
+                    scene.integration_store(),
+                    &session,
+                    &destination
+                )
+                .unwrap()
+                .start()
+                .unwrap(),
                 (14., 2.)
             );
         } else {
@@ -68,7 +87,7 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
 
 #[test]
 fn partial_alias_empty_source_and_invalid_interval_are_atomic() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene.line((0., 0.), (4., 0.)).unwrap();
     let alias = object.clone();
     object.pointwise_become_partial(&alias, 0.25, 0.75).unwrap();
@@ -113,7 +132,7 @@ fn partial_alias_empty_source_and_invalid_interval_are_atomic() {
 
 #[test]
 fn authored_boundary_curves_survive_subsequent_selection() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene
         .geometry(
             ManimGeometryOptions::path(
@@ -153,19 +172,31 @@ fn live_partial_rejects_unrepresentable_source_before_allocating() {
     scene.add(&destination).unwrap();
     let mut session = scene.execution_session().unwrap();
     let before = destination.state().unwrap();
-    let mut live = scene.live(&mut session);
-    let segment = live
+    let segment = scene
+        .live(&mut session)
         .declare_and_activate_create(&source, AnimationOptions::new().run_time(1.))
         .unwrap();
-    live.advance_segment_to(segment, 0.5).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 0.5)
+        .unwrap();
     let count = source
         .integration_store()
         .borrow()
         .geometry_resources()
         .len();
-    assert!(live
-        .pointwise_become_partial(&destination, &source, 0.2, 0.8)
-        .is_err());
+    assert!(noon::integration::publish_borrowed_path_edit(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        noon::integration::BorrowedPathEdit::Partial {
+            object: &destination,
+            source: &source,
+            a: 0.2,
+            b: 0.8,
+        },
+    )
+    .is_err());
     assert_eq!(destination.state().unwrap(), before);
     assert_eq!(
         source

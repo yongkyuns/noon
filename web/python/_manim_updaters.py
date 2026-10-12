@@ -2,7 +2,7 @@
 
 Python owns callable identity and invocation. Rust owns semantic registration,
 activation ordering, the staged effective snapshot, and publication. Callbacks
-return one property-only effective batch to their existing session.
+return one effective batch to their existing session.
 """
 
 from __future__ import annotations
@@ -11,11 +11,11 @@ import inspect
 import json
 import math
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 import noon as _base
-from _noon_errors import engine_await, raise_engine_error
+from _noon_errors import engine_await, engine_call, raise_engine_error
 
 _NEXT_SESSION_ID = 0
 _TRACKED_MOBJECTS: list[_base.Mobject] = []
@@ -132,6 +132,8 @@ class _CanonicalCallbackSession:
     callback_ids: list[tuple[Callable[..., Any], int]]
     targets: dict[tuple[int, int], _base.Mobject]
     next_callback_id: int = 0
+    pending_callback_context: "_CanonicalCallbackContext | None" = None
+    pending_region_contexts: list["_CanonicalCallbackContext"] = field(default_factory=list)
 
     def callback_id(self, callback: Callable[..., Any]) -> tuple[int, bool]:
         for existing, callback_id in self.callback_ids:
@@ -249,6 +251,31 @@ def prepare_canonical_callbacks(scene: _base.Scene, context: object) -> int | No
 def canonical_callback_session_id(scene: _base.Scene) -> int | None:
     session = getattr(scene, "_noon_canonical_callback_session", None)
     return None if session is None else session.session_id
+
+
+def reserve_composition_callback(
+    scene: _base.Scene, mobject: _base.Mobject, callback: Callable[..., Any]
+) -> int:
+    """Reserve a host callable for one Rust-scheduled composition interval.
+
+    Rust authors and activates the finite callback registration from the
+    composition child's compiled interval. This only supplies Python callable
+    identity and the callback target lookup table.
+    """
+    if not callable(callback):
+        raise TypeError("UpdateFromFunc callback must be callable")
+    if getattr(mobject, "_scene", None) is not scene:
+        raise ValueError("UpdateFromFunc target must belong to this Scene")
+    _semantic_key(mobject)
+    context = _canonical_context(mobject)
+    if context is None:
+        raise RuntimeError("UpdateFromFunc target has no canonical authoring context")
+    session = _canonical_session(scene, context)
+    callback_id, newly_reserved = session.callback_id(callback)
+    if newly_reserved:
+        session.commit_callback_id(callback, callback_id)
+    session.bind_target(mobject)
+    return callback_id
 
 
 def add_updater(
@@ -518,17 +545,29 @@ class _PhasePropertyRow:
 
 
 class _CanonicalCallbackContext:
-    """Property-only Python overlay over a Rust-prepared phase view.
+    """Phase-local effective rows plus Rust-owned existing-handle membership staging.
 
-    Rows contain only effective scalar properties and a Rust-derived world AABB.
-    They intentionally cannot carry geometry, identity, membership, or authored state.
+    Python can read and write the prepared effective rows, then stage ordered
+    membership edits for already-bound handles through the pinned Rust player.
+    The player retains semantic identity, transaction ownership, and the one
+    callback publication; Python only delays wrapper associations until commit.
     """
 
-    def __init__(self, frame: dict[str, Any], authoring_context: object) -> None:
+    def __init__(
+        self,
+        frame: dict[str, Any],
+        authoring_context: object,
+        *,
+        callback_player: object | None = None,
+        scene: _base.Scene | None = None,
+    ) -> None:
         self.time = float(frame["time"])
         self.delta_time = float(frame["delta_time"])
         self.token = frame["token"]
+        self.region = int(frame.get("region", 0))
         self._authoring_context = authoring_context
+        self._callback_player = callback_player
+        self._scene = scene
         self._operations = authoring_context
         self._frame_items = {
             _phase_node_key(item["node"]): item for item in frame["objects"]
@@ -538,6 +577,154 @@ class _CanonicalCallbackContext:
         self._prefetch_errors: dict[tuple[int, int], Exception] = {}
         self._next_read_request_id = 0
         self._writes: list[dict[str, Any]] = []
+        self._content: list[dict[str, Any]] = []
+        self._content_targets: set[tuple[int, int]] = set()
+        self._content_write_count: int | None = None
+        self._last_invocation = False
+        # Python retains only delayed wrapper bookkeeping. The player owns the
+        # one typed semantic transaction and is the sole publication authority.
+        self._membership_finalizers: list[Callable[[], None]] = []
+        self._membership_wrappers: dict[str, object] = {}
+        self._next_provisional_binding_id: int | None = None
+
+    def stage_membership(self, batch: object, finalize: Callable[[], None]) -> None:
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback structural staging requires the pinned semantic execution player"
+            )
+        engine_call(
+            self._callback_player.stageCallbackMembership,
+            json.dumps(self.token, separators=(",", ":")),
+            batch,
+            operation="callback.membership",
+        )
+        self._membership_finalizers.append(finalize)
+
+    def stage_provisional_geometry(self, options: object) -> object:
+        """Create one phase-local geometry object through the pinned player."""
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback provisional construction requires the pinned semantic execution player"
+            )
+        return engine_call(
+            self._callback_player.stageCallbackProvisionalGeometry,
+            json.dumps(self.token, separators=(",", ":")),
+            options,
+            operation="callback.provisional_geometry",
+        )
+
+    def provisional_shift(self, provisional: object, offset: _base.Vec2) -> None:
+        """Stage one authored construction translation, never an effective row."""
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback provisional construction requires the pinned semantic execution player"
+            )
+        engine_call(
+            self._callback_player.stageCallbackProvisionalShift,
+            json.dumps(self.token, separators=(",", ":")),
+            provisional,
+            float(offset.x),
+            float(offset.y),
+            operation="callback.provisional_geometry",
+        )
+
+    def provisional_set_fill(
+        self,
+        provisional: object,
+        color: _base.Color,
+        opacity: float | None,
+    ) -> None:
+        """Stage an authored fill beside the provisional declaration."""
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback provisional construction requires the pinned semantic execution player"
+            )
+        engine_call(
+            self._callback_player.stageCallbackProvisionalFill,
+            json.dumps(self.token, separators=(",", ":")),
+            provisional,
+            float(color.red),
+            float(color.green),
+            float(color.blue),
+            float(color.alpha),
+            None if opacity is None else float(opacity),
+            operation="callback.provisional_geometry",
+        )
+
+    def provisional_center(self, provisional: object) -> _base.Vec2:
+        """Read the prepared local declaration without assigning it a node ID."""
+        if self._callback_player is None:
+            raise NotImplementedError(
+                "callback provisional construction requires the pinned semantic execution player"
+            )
+        point = engine_call(
+            self._callback_player.callbackProvisionalCenter,
+            json.dumps(self.token, separators=(",", ":")),
+            provisional,
+            operation="callback.provisional_geometry",
+        )
+        return _base.Vec2(float(point.x), float(point.y))
+
+    def reserve_provisional_binding(self, scene: _base.Scene, mobject: _base.Mobject, provisional: object):
+        """Reserve a callback-local derived wrapper ID without assigning a node ID.
+
+        Several separate Scene.add calls can be staged before Rust publishes any
+        binding. This counter prevents their delayed Python wrappers from
+        selecting the same derived object ID.
+        """
+        if self._next_provisional_binding_id is None:
+            self._next_provisional_binding_id = scene._next_object_id
+        object_id = self._next_provisional_binding_id
+        self._next_provisional_binding_id += 1
+        from _manim_scene import _reserve_typed_binding
+        return _reserve_typed_binding(mobject, scene, provisional, None, object_id=object_id)
+
+    @staticmethod
+    def provisional_membership_key(provisional: object) -> str:
+        """Read the opaque phase-local key used by the Rust membership view."""
+        key = getattr(provisional, "localKey", None)
+        if key is None:
+            raise RuntimeError("callback provisional object has no local membership key")
+        return str(key)
+
+    def resolve_provisional(self, provisional: object) -> object:
+        """Redeem one phase-local name after Rust committed the whole callback."""
+        if self._callback_player is None:
+            raise RuntimeError("callback provisional construction has no pinned player")
+        return engine_call(
+            self._callback_player.resolveCallbackProvisionalMobject,
+            json.dumps(self.token, separators=(",", ":")),
+            provisional,
+            operation="callback.provisional_geometry",
+        )
+
+    def associate_published(self, batch: object) -> None:
+        engine_call(
+            self._callback_player.associatePublishedCallbackMobjects,
+            self._authoring_context,
+            batch,
+            operation="callback.membership_binding",
+        )
+
+    def membership_root_keys(self) -> list[str] | None:
+        if self._callback_player is None:
+            return None
+        return [str(key) for key in engine_call(
+            self._callback_player.callbackMembershipRootKeys,
+            json.dumps(self.token, separators=(",", ":")),
+            operation="callback.membership_read",
+        )]
+
+    def finalize_membership(self) -> None:
+        # All finalizers were validated before the Rust commit. They mutate
+        # derived Python wrapper associations only after its one publication.
+        for finalize in self._membership_finalizers:
+            finalize()
+        self._membership_finalizers.clear()
+
+    def discard_membership(self) -> None:
+        self._membership_finalizers.clear()
+        self._membership_wrappers.clear()
 
     def _read(self, kind: str, key: tuple[int, int]) -> dict[str, Any]:
         """Suspend this exact callback invocation for one Rust-pinned read miss."""
@@ -582,40 +769,60 @@ class _CanonicalCallbackContext:
             raise RuntimeError("canonical callback sparse read returned the wrong typed value")
         return result
 
-    async def _read_scalar_async(self, key: tuple[int, int]) -> float:
-        """Read the same Rust-pinned phase without suspending a Python stack."""
+    async def _read_async(self, kind: str, key: tuple[int, int]) -> dict[str, Any]:
+        """Read one typed sparse value from the same Rust-pinned callback phase."""
         from js import noonReadSemanticContinuationCallback
 
         request_id = self._next_read_request_id
         self._next_read_request_id += 1
-        request = {"request_id": request_id, "kind": "scalar_signal", "node": _phase_node_json(key)}
+        request = {"request_id": request_id, "kind": kind, "node": _phase_node_json(key)}
         raw = await engine_await(noonReadSemanticContinuationCallback(
             self._authoring_context,
             json.dumps(self.token, separators=(",", ":")),
             json.dumps(request, separators=(",", ":")),
         ), operation="callback.read")
         result = json.loads(str(raw))
-        if not isinstance(result, dict) or result.get("kind") != "scalar":
-            raise RuntimeError("canonical callback scalar prefetch returned the wrong typed value")
+        expected_kind = "scalar" if kind == "scalar_signal" else kind
+        if not isinstance(result, dict) or result.get("kind") != expected_kind:
+            raise RuntimeError("canonical callback prefetch returned the wrong typed value")
+        return result
+
+    async def _read_scalar_async(self, key: tuple[int, int]) -> float:
+        """Read a scalar from the same Rust-pinned phase without suspending Python."""
+        result = await self._read_async("scalar_signal", key)
         return _phase_number("scalar callback read", result.get("value"))
 
-    async def prefetch_captured_scalars(self, callbacks, tracker_type) -> None:
-        """Resolve direct Python captures, never invoke callbacks or user getters.
+    async def _read_object_async(self, key: tuple[int, int]) -> dict[str, Any]:
+        """Read and identity-check one object envelope from the pinned phase."""
+        result = await self._read_async("object", key)
+        item = result.get("object")
+        if not isinstance(item, dict) or _phase_node_key(item.get("node")) != key:
+            raise RuntimeError("canonical callback object read returned a foreign semantic node")
+        return item
 
-        These are optional phase-local read hints, not authored signal values or
-        a callback dependency graph. Rust validates every read against the pinned
+    async def prefetch_captured_phase_reads(self, callbacks, tracker_type) -> None:
+        """Resolve direct and one-level producer captures without invoking Python code.
+
+        These are optional phase-local read hints, not authored values or a
+        callback dependency graph. Rust validates every read against the pinned
         token. Unused/invalid speculative reads must not change callback behavior;
-        defer their errors until an actual scalar read. Dynamic misses keep the
-        existing suspended-read contract instead of replaying callback effects.
+        defer errors until the callback actually reads that semantic value.
+        Dynamic misses keep the existing suspended-read contract instead of
+        replaying callback effects.
         """
         from types import FunctionType, MethodType
 
-        seen_functions = set()
-        for callback in callbacks:
+        seen_functions: dict[int, int] = {}
+        pending = [(callback, 0) for callback in callbacks]
+        while pending:
+            callback, depth = pending.pop()
             function = callback.__func__ if isinstance(callback, MethodType) else callback
-            if not isinstance(function, FunctionType) or id(function) in seen_functions:
+            if not isinstance(function, FunctionType):
                 continue
-            seen_functions.add(id(function))
+            previous_depth = seen_functions.get(id(function))
+            if previous_depth is not None and previous_depth <= depth:
+                continue
+            seen_functions[id(function)] = depth
             values = list(function.__defaults__ or ())
             values.extend((function.__kwdefaults__ or {}).values())
             for cell in function.__closure__ or ():
@@ -623,9 +830,36 @@ class _CanonicalCallbackContext:
                     values.append(cell.cell_contents)
                 except ValueError:
                     pass
+            # Only functions explicitly captured by this callback can be
+            # producer helpers. Do not traverse arbitrary module globals.
+            if depth == 0:
+                pending.extend((value, 1) for value in values if isinstance(value, FunctionType))
             values.extend(function.__globals__[name] for name in function.__code__.co_names
                           if name in function.__globals__)
             for value in values:
+                if isinstance(value, _base.Mobject):
+                    # Family handles have a separate sparse read contract. This
+                    # prefetch is deliberately limited to ordinary typed rows.
+                    if inspect.getattr_static(value, "_semantic_family_handle", None) is not None:
+                        continue
+                    if _canonical_context(value) is not self._authoring_context:
+                        continue
+                    handle = inspect.getattr_static(value, "_semantic_handle", None)
+                    if handle is None or isinstance(handle, property):
+                        continue
+                    try:
+                        key = (int(handle.semanticSlot), int(handle.semanticGeneration))
+                    except (AttributeError, TypeError, ValueError, OverflowError):
+                        # Let the actual callback access report an unusable
+                        # captured handle; a speculative hint must not fail it.
+                        continue
+                    if key in self._frame_items or key in self._prefetch_errors:
+                        continue
+                    try:
+                        self._frame_items[key] = await self._read_object_async(key)
+                    except Exception as error:
+                        self._prefetch_errors[key] = error
+                    continue
                 if type(value) is not tracker_type:
                     continue
                 if inspect.getattr_static(value, "_canonical_context", None) is not self._authoring_context:
@@ -642,6 +876,8 @@ class _CanonicalCallbackContext:
                     self._prefetch_errors[key] = error
 
     def _object_item(self, key: tuple[int, int]) -> dict[str, Any]:
+        if key in self._prefetch_errors:
+            raise_engine_error(self._prefetch_errors[key], operation="callback.read")
         try:
             return self._frame_items[key]
         except KeyError:
@@ -732,7 +968,7 @@ class _CanonicalCallbackContext:
         from _noon_errors import engine_call
         rows = self._family_rows(family)
         def bounds_wire(row):
-            if row.bounds is None or not row.bounds_translation_only:
+            if row.bounds is None:
                 return None
             x0, y0, x1, y1 = row.bounds
             return {"min": {"x": x0, "y": y0}, "max": {"x": x1, "y": y1}}
@@ -759,17 +995,106 @@ class _CanonicalCallbackContext:
             row.bounds_translation_only = translated.bounds_translation_only
             self.transform_changed(node, before, row)
 
+    def replace_layout(self, source, target, dim_to_match=0, stretch=False):
+        """Stage Rust-computed replacement over the callback's sparse read overlay."""
+        from _manim_semantic_handles import _layout_anchor
+        from _noon_errors import engine_call
+
+        source_anchor = _layout_anchor(source, callback_context=self)
+        target_anchor = _layout_anchor(target, callback_context=self)
+        if source_anchor is None or target_anchor is None:
+            raise RuntimeError("callback replace requires typed shared layout anchors")
+        revision = str(self.token["publication"]["scene_revision"])
+        keys = set()
+        for anchor in (source_anchor, target_anchor):
+            values = list(engine_call(self._operations.callbackLayoutKeys, anchor, revision))
+            if len(values) % 2:
+                raise RuntimeError("callback layout returned malformed typed semantic keys")
+            for index in range(0, len(values), 2):
+                keys.add((int(values[index]), int(values[index + 1])))
+
+        rows = {}
+        for node in sorted(keys):
+            row = self._rows.get(node)
+            if row is None and node in self._frame_items:
+                row = _PhasePropertyRow.from_wire(self._frame_items[node])
+            if row is None:
+                row = _PhasePropertyRow.from_wire(self._object_item(node))
+            rows[node] = row
+
+        payload = []
+        for node, row in rows.items():
+            transform = row.transform
+            bounds = row.bounds if row.bounds_translation_only else None
+            payload.extend((float(node[0]), float(node[1]),
+                transform.translation_x, transform.translation_y,
+                transform.scale_x, transform.scale_y, transform.rotation,
+                1.0 if bounds is not None else 0.0))
+            payload.extend(bounds if bounds is not None else (0.0, 0.0, 0.0, 0.0))
+        projected_rows = list(engine_call(
+            self._operations.callbackLayoutReplace,
+            source_anchor,
+            target_anchor,
+            revision,
+            [component for node in rows for component in node],
+            payload,
+            int(dim_to_match),
+            bool(stretch),
+            operation="Mobject.replace",
+        ))
+        stride = 12
+        if len(projected_rows) % stride:
+            raise RuntimeError("callback replace returned malformed typed layout rows")
+        changes = []
+        returned_nodes = set()
+        for index in range(0, len(projected_rows), stride):
+            slot, generation, tx, ty, sx, sy, rotation, bounds_flag, *bounds = projected_rows[index:index + stride]
+            if (not float(slot).is_integer() or not float(generation).is_integer()
+                    or bounds_flag not in (0.0, 1.0)):
+                raise RuntimeError("callback replace returned an invalid typed layout row")
+            node = (int(slot), int(generation))
+            if node not in rows or node in returned_nodes:
+                raise RuntimeError("callback replace returned an unread semantic node")
+            returned_nodes.add(node)
+            projected_transform = _PhaseTransform(
+                _phase_number("callback replacement translation.x", tx),
+                _phase_number("callback replacement translation.y", ty),
+                _phase_number("callback replacement rotation", rotation),
+                _phase_number("callback replacement scale.x", sx),
+                _phase_number("callback replacement scale.y", sy),
+            )
+            projected_bounds = (
+                tuple(_phase_number("callback replacement bound", value) for value in bounds)
+                if bounds_flag == 1.0 else None
+            )
+            projected = _PhasePropertyRow(
+                projected_transform,
+                rows[node].style,
+                projected_bounds,
+                projected_bounds is not None,
+            )
+            changes.append((node, projected))
+
+        self._rows.update(rows)
+        for node, projected in changes:
+            row = rows[node]
+            before = row.transform
+            row.transform = projected.transform
+            row.bounds = projected.bounds
+            row.bounds_translation_only = projected.bounds_translation_only
+            self.transform_changed(node, before, row)
+
     def transform_changed(
         self, key: tuple[int, int], before: _PhaseTransform, row: _PhasePropertyRow
     ) -> None:
-        if before != row.transform:
-            self._writes.append(
-                {
-                    "kind": "transform",
-                    "object": _phase_node_json(key),
-                    "transform": row.transform.to_wire(),
-                }
-            )
+        # These are non-authoritative property deltas. Rust owns validation,
+        # driver arbitration and application to the prepared effective row.
+        old, new = before.to_wire(), row.transform.to_wire()
+        self._require_writes_open()
+        for channel in ("translation", "rotation", "scale"):
+            if old[channel] != new[channel]:
+                self._writes.append({"kind": channel, "object": _phase_node_json(key),
+                                     channel: new[channel]})
 
     def rotate_transform_about_point(
         self,
@@ -872,17 +1197,115 @@ class _CanonicalCallbackContext:
     def style_changed(
         self, key: tuple[int, int], before: _PhaseStyle, row: _PhasePropertyRow
     ) -> None:
-        if before != row.style:
-            self._writes.append(
-                {
-                    "kind": "style",
-                    "object": _phase_node_json(key),
-                    "style": row.style.to_wire(),
-                }
-            )
+        old, new = before.to_wire(), row.style.to_wire()
+        self._require_writes_open()
+        for channel in ("fill", "stroke", "stroke_width", "opacity"):
+            if old[channel] != new[channel]:
+                self._writes.append({"kind": channel, "object": _phase_node_json(key),
+                                     channel: new[channel]})
 
     def effective_batch(self) -> dict[str, Any]:
-        return {"token": self.token, "writes": self._writes}
+        if self._content_write_count is not None and len(self._writes) != self._content_write_count:
+            raise NotImplementedError(
+                "effective content replacement must be the final callback write"
+            )
+        batch = {"token": self.token, "region": self.region, "writes": self._writes}
+        if self._content:
+            batch["content"] = self._content[0] if len(self._content) == 1 else self._content
+        return batch
+
+    def _require_writes_open(self) -> None:
+        if self._content_write_count is not None:
+            raise NotImplementedError("callback property writes must precede effective content")
+
+    def _append_content(self, key: tuple[int, int], row: _PhasePropertyRow, content: dict[str, Any]) -> None:
+        if key in self._content_targets:
+            raise ValueError("effective content batch cannot target one object more than once")
+        if self._content_write_count is None:
+            self._content_write_count = len(self._writes)
+        self._content.append(content)
+        self._content_targets.add(key)
+        row.invalidate_bounds()
+
+    def replace_effective_circle(self, mobject: _base.Mobject, radius: float) -> None:
+        key, row = self.row(mobject)
+        self._append_content(key, row, {
+            "object": _phase_node_json(key),
+            "geometry": {"kind": "circle", "radius": _phase_number("circle radius", radius)},
+        })
+
+    def replace_effective_provisional(
+        self, mobject: _base.Mobject, source: _base.Mobject
+    ) -> None:
+        """Use a callback-local constructor result as one effective visual snapshot."""
+        resolved = _canonical_provisional_context(source)
+        if resolved is None or resolved[0] is not self:
+            raise RuntimeError("effective visual source must belong to this callback phase")
+        key, row = self.row(mobject)
+        self._append_content(key, row, {
+            "object": _phase_node_json(key),
+            "provisional": self.provisional_membership_key(resolved[1]),
+        })
+
+    def replace_effective_path(
+        self, mobject: _base.Mobject, points: list[tuple[float, float]], closed: bool
+    ) -> None:
+
+        if not 2 <= len(points) <= 4096:
+            raise ValueError("effective path requires between 2 and 4096 points")
+        checked = [
+            [_phase_number("path x", point[0]), _phase_number("path y", point[1])]
+            for point in points
+        ]
+        key, row = self.row(mobject)
+        self._append_content(key, row, {
+            "object": _phase_node_json(key),
+            "path": {"points": checked, "closed": bool(closed)},
+        })
+
+    def replace_effective_text(self, mobject: _base.Mobject, source: _base.Mobject) -> None:
+        """Use a prebuilt text resource as effective callback content."""
+
+        if not isinstance(source, _base.Mobject):
+            raise TypeError("effective text source must be a prebuilt Text mobject")
+        source_handle = getattr(source, "_semantic_handle", None)
+        if source_handle is None or not bool(getattr(source, "_semantic_handle_fresh", False)):
+            raise NotImplementedError("effective text source requires a fresh semantic Text handle")
+        source_key = _semantic_key(source)
+        key, row = self.row(mobject)
+        self._append_content(key, row, {
+            "object": _phase_node_json(key),
+            "text_source": _phase_node_json(source_key),
+        })
+
+
+def set_effective_circle(mobject: _base.Mobject, radius: float) -> _base.Mobject:
+    context = _canonical_phase_context(mobject)
+    if context is None:
+        raise RuntimeError("set_effective_circle requires an active canonical callback phase")
+    context.replace_effective_circle(mobject, radius)
+    return mobject
+
+
+def set_effective_path(
+    mobject: _base.Mobject,
+    points: list[tuple[float, float]],
+    closed: bool = False,
+) -> _base.Mobject:
+    """Publish a producer-owned polygonal path through the callback content lease."""
+    context = _canonical_phase_context(mobject)
+    if context is None:
+        raise RuntimeError("set_effective_path requires an active canonical callback phase")
+    context.replace_effective_path(mobject, points, closed)
+    return mobject
+
+
+def set_effective_text(mobject: _base.Mobject, source: _base.Mobject) -> _base.Mobject:
+    context = _canonical_phase_context(mobject)
+    if context is None:
+        raise RuntimeError("set_effective_text requires an active canonical callback phase")
+    context.replace_effective_text(mobject, source)
+    return mobject
 
 
 def callback_line_target(
@@ -1015,11 +1438,43 @@ def _phase_node_json(key: tuple[int, int]) -> dict[str, int]:
 
 
 def _canonical_phase_context(mobject: _base.Mobject) -> _CanonicalCallbackContext | None:
-    scene = mobject._scene
+    scene = getattr(mobject, "_scene", None)
     if scene is None or mobject._object is None:
         return None
     context = _ACTIVE_CONTEXTS.get(id(scene))
     if isinstance(context, _CanonicalCallbackContext):
+        return context
+    return None
+
+
+def _canonical_provisional_context(
+    mobject: _base.Mobject,
+) -> tuple[_CanonicalCallbackContext, object] | None:
+    """Return one exact callback-local construction capability.
+
+    The marker has no semantic slot or generation. It is accepted only while
+    the owning callback phase is active, so ordinary callback rows retain
+    their batched effective-write path.
+    """
+    context = getattr(mobject, "_callback_provisional_context", None)
+    provisional = getattr(mobject, "_callback_provisional_handle", None)
+    active = _ACTIVE_CANONICAL_CONTEXT.get()
+    if (not isinstance(context, _CanonicalCallbackContext)
+            or not isinstance(active, _CanonicalCallbackContext)
+            or provisional is None
+            or active._scene is not context._scene
+            or active._authoring_context is not context._authoring_context
+            or active.token != context.token):
+        return None
+    # A later host region reads the same transaction-local object through its
+    # current region view. The constructor's Python context is not authority.
+    return active, provisional
+
+
+def active_callback_membership_context(scene: _base.Scene) -> _CanonicalCallbackContext | None:
+    """Return the one phase-local structural collector for this exact Scene."""
+    context = _ACTIVE_CANONICAL_CONTEXT.get()
+    if isinstance(context, _CanonicalCallbackContext) and context._scene is scene:
         return context
     return None
 
@@ -1049,6 +1504,10 @@ def _canonical_apply(self: _base.Mobject, raw: object) -> _base.Mobject:
 
 
 def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
+    provisional = _canonical_provisional_context(self)
+    if provisional is not None:
+        context, local = provisional
+        return context.provisional_center(local)
     value = _canonical_row(self)
     if value is None:
         return _base._semantic_operations()._get_center(self)
@@ -1057,6 +1516,11 @@ def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
 
 
 def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
+    provisional = _canonical_provisional_context(self)
+    if provisional is not None:
+        context, local = provisional
+        context.provisional_shift(local, _base._as_vec2(direction))
+        return self
     value = _canonical_row(self)
     if value is None:
         return _base._semantic_operations()._shift(self, direction)
@@ -1068,6 +1532,16 @@ def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
 
 
 def _canonical_move_to(self: _base.Mobject, point: object, *args: object, **kwargs: object) -> _base.Mobject:
+    provisional = _canonical_provisional_context(self)
+    if provisional is not None:
+        if args or kwargs:
+            raise NotImplementedError(
+                "callback move_to currently supports center point placement only"
+            )
+        context, local = provisional
+        offset = _base._as_vec2(point) - context.provisional_center(local)
+        context.provisional_shift(local, offset)
+        return self
     value = _canonical_row(self)
     if value is None:
         return _base._semantic_operations()._move_to(self, point, *args, **kwargs)
@@ -1154,6 +1628,15 @@ def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobje
 def _canonical_set_fill(
     self: _base.Mobject, color: _base.Color | None = None, opacity: float | None = None
 ) -> _base.Mobject:
+    provisional = _canonical_provisional_context(self)
+    if provisional is not None:
+        if color is None:
+            raise NotImplementedError(
+                "callback provisional fill requires an explicit Color in this slice"
+            )
+        context, local = provisional
+        context.provisional_set_fill(local, color, opacity)
+        return self
     value = _canonical_row(self)
     if value is None:
         return _base._semantic_operations()._set_fill(self, color, opacity)
@@ -1224,7 +1707,8 @@ def _canonical_vmobject_set_fill(
     opacity: float | None = None,
     family: bool = True,
 ) -> _base.Mobject:
-    if _canonical_phase_context(self) is not None:
+    if (_canonical_phase_context(self) is not None
+            or _canonical_provisional_context(self) is not None):
         del family
         if color is not None:
             from _manim_compat import _as_color
@@ -1277,19 +1761,30 @@ def _canonical_vmobject_set_opacity(
     return _base._semantic_operations()._set_opacity(self, opacity, family=family)
 
 
+def _carry_callback_region_state(
+    session: _CanonicalCallbackSession, context: _CanonicalCallbackContext
+) -> None:
+    if session.pending_region_contexts:
+        previous = session.pending_region_contexts[-1]
+        if previous.token == context.token:
+            context._next_provisional_binding_id = previous._next_provisional_binding_id
+            context._membership_wrappers = previous._membership_wrappers
+
+
 async def prepare_canonical_callback_phase(session_id: int, frame: dict[str, Any]):
     """Prepare bounded capture reads before executing this callback phase once."""
     session = _CANONICAL_SESSIONS[int(session_id)]
-    context = _CanonicalCallbackContext(frame, session.context)
+    context = _CanonicalCallbackContext(frame, session.context, scene=session.scene)
+    _carry_callback_region_state(session, context)
     from _manim_reactive import ValueTracker
 
     callbacks = [session.callbacks[int(item["callback_id"])] for item in frame.get("invocations", [])]
-    await context.prefetch_captured_scalars(callbacks, ValueTracker)
+    await context.prefetch_captured_phase_reads(callbacks, ValueTracker)
     return context
 
 
 def run_canonical_callback_phase(
-    session_id: int, frame: dict[str, Any], *, prepared_context=None
+    session_id: int, frame: dict[str, Any], *, prepared_context=None, callback_player=None
 ) -> str:
     """Invoke one Rust-selected callback phase and return only effective writes.
 
@@ -1304,8 +1799,19 @@ def run_canonical_callback_phase(
     except KeyError as error:
         raise ValueError(f"unknown canonical Noon updater session {session_id}") from error
 
-    context = prepared_context or _CanonicalCallbackContext(frame, session.context)
-    if context.token != frame["token"] or context._authoring_context is not session.context:
+    context = prepared_context or _CanonicalCallbackContext(
+        frame,
+        session.context,
+        callback_player=callback_player,
+        scene=session.scene,
+    )
+    if prepared_context is None:
+        _carry_callback_region_state(session, context)
+    if prepared_context is not None:
+        context._callback_player = callback_player
+        context._scene = session.scene
+    if (context.token != frame["token"] or context.region != int(frame.get("region", 0))
+            or context._authoring_context is not session.context):
         raise RuntimeError("prepared canonical callback reads belong to a different phase")
     scene_key = id(session.scene)
     if scene_key in _ACTIVE_CONTEXTS:
@@ -1313,7 +1819,9 @@ def run_canonical_callback_phase(
     _ACTIVE_CONTEXTS[scene_key] = context
     context_token = _ACTIVE_CANONICAL_CONTEXT.set(context)
     try:
-        for invocation in frame.get("invocations", []):
+        invocations = frame.get("invocations", [])
+        for invocation_index, invocation in enumerate(invocations):
+            context._last_invocation = invocation_index == len(invocations) - 1
             if not isinstance(invocation, dict):
                 raise TypeError("canonical callback invocation must be an object")
             callback_id = invocation.get("callback_id")
@@ -1341,11 +1849,56 @@ def run_canonical_callback_phase(
                     f"{target[0]}:{target[1]}"
                 ) from error
             _invoke(callback, mobject, context.delta_time)
+    except Exception:
+        context.discard_membership()
+        raise
     finally:
         _ACTIVE_CANONICAL_CONTEXT.reset(context_token)
         _ACTIVE_CONTEXTS.pop(scene_key, None)
 
+    session.pending_callback_context = context
+    session.pending_region_contexts.append(context)
     return _json_phase(context.effective_batch())
+
+
+def complete_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> None:
+    """Commit Python-only wrapper bindings after the player published the phase."""
+    session = _CANONICAL_SESSIONS[int(session_id)]
+    context = session.pending_callback_context
+    if (context is None or context.token != frame.get("token")
+            or context.region != int(frame.get("region", 0))):
+        raise RuntimeError("canonical callback completion does not match the pending phase")
+    try:
+        for region in session.pending_region_contexts:
+            region.finalize_membership()
+    finally:
+        session.pending_region_contexts.clear()
+        session.pending_callback_context = None
+
+
+def discard_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> None:
+    """Drop delayed wrapper work when the exact Rust callback phase aborts."""
+    session = _CANONICAL_SESSIONS.get(int(session_id))
+    if session is not None and any(
+        region.token == frame.get("token") for region in session.pending_region_contexts
+    ):
+        for region in session.pending_region_contexts:
+            region.discard_membership()
+        session.pending_region_contexts.clear()
+        session.pending_callback_context = None
+
+
+async def _run_canonical_callback_phase_json(session_id, frame_json, callback_player):
+    """Enter the Pyodide event loop without compiling a script for each phase."""
+    return run_canonical_callback_phase(
+        int(session_id), json.loads(frame_json), callback_player=callback_player
+    )
+
+
+async def _finish_canonical_callback_phase_json(session_id, identity_json, committed):
+    """Finalize the same pinned phase after Rust commit, or discard its wrappers."""
+    finish = complete_canonical_callback_phase if committed else discard_canonical_callback_phase
+    finish(int(session_id), json.loads(identity_json))
 
 
 def _json_phase(value: object) -> str:

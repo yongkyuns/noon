@@ -304,7 +304,7 @@ def _apply_constructor_color(handle: object, color: _base.Color | None) -> None:
         engine_call(handle.setColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
 
 
-def _live_constructor_context(kind: str = "primitive"):
+def _live_constructor_context(kind: str = "primitive", *, allow_unstarted: bool = False):
     """Return the one retained context that may publish a new Mobject.
 
     Before an ordinary segment starts there is no live session to protect, so
@@ -319,10 +319,13 @@ def _live_constructor_context(kind: str = "primitive"):
         return None
     scene = reactive._current_authoring_scene()
     context = getattr(scene, "_canonical_authoring_context", None)
+    if context is None and allow_unstarted and scene is not None:
+        from _manim_scene import _context
+        context = _context(scene)
     if context is None:
         return None
     ownership = str(engine_call(context.liveExecutionOwnership))
-    if ownership in {"active", "returned"}:
+    if ownership in {"active", "returned"} or (allow_unstarted and ownership == "none"):
         return context
     if ownership == "transferred":
         raise RuntimeError(
@@ -374,6 +377,20 @@ def _consume_geometry_options(options: object, kind: str = "geometry"):
 def _attach_geometry_options(
     self: _base.Mobject, options: object, kind: str = "geometry"
 ) -> None:
+    reactive = sys.modules.get("_manim_reactive")
+    scene = None if reactive is None else reactive._current_authoring_scene()
+    if scene is not None:
+        from _manim_updaters import active_callback_membership_context
+
+        callback = active_callback_membership_context(scene)
+        if callback is not None:
+            # The provisional name deliberately is not a durable semantic
+            # handle. Scene.add stages it through the same callback collector;
+            # the finalizer replaces this marker only after Rust commits.
+            _initialize_shared_wrapper(self)
+            self._callback_provisional_handle = callback.stage_provisional_geometry(options)
+            self._callback_provisional_context = callback
+            return
     handle, context = _consume_geometry_options(options, kind)
     _attach_shared_handle(self, handle)
     if context is not None:
@@ -518,9 +535,43 @@ def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
     )
 
 
+def _copy_nested_mobject(
+    value: _base.Mobject,
+    context: object | None,
+    memo: dict[int, object],
+):
+    """Preserve wrapper-specific copy behavior under the parent's live owner."""
+    existing = memo.get(id(value))
+    if existing is not None:
+        return existing
+    if not _is_shared_family(value):
+        return _clone_mobject(value, context_override=context, memo=memo)
+    members = _compat._leaf_mobjects(value)
+    restore = []
+    for member in members:
+        if getattr(member, "_canonical_live_target_context", None) is None:
+            restore.append((member, hasattr(member, "_canonical_live_target_context")))
+            member._canonical_live_target_context = context
+    try:
+        copied = value.copy()
+        memo[id(value)] = copied
+        return copied
+    finally:
+        for member, had_attribute in restore:
+            if had_attribute:
+                member._canonical_live_target_context = None
+            else:
+                del member._canonical_live_target_context
+
+
 def _clone_mobject(
-    self: _base.Mobject, *, target_state: bool = False, subcurve=None
+    self: _base.Mobject, *, target_state: bool = False, subcurve=None,
+    context_override: object | None = None, memo: dict[int, object] | None = None,
 ) -> _base.Mobject:
+    memo = {} if memo is None else memo
+    existing = memo.get(id(self))
+    if existing is not None:
+        return existing
     handle = _handle_for(self)
     if handle is None:
         from _manim_updaters import _canonical_phase_context
@@ -532,6 +583,8 @@ def _clone_mobject(
             )
         raise RuntimeError("Mobject copy requires a current shared Rust semantic handle")
     context = _live_mutation_context(self)
+    if context is None:
+        context = context_override
     clone = object.__new__(type(self))
     clone._raw = None
     clone._scene = None
@@ -546,6 +599,11 @@ def _clone_mobject(
     clone._semantic_handle_fresh = True
     if context is not None:
         clone._canonical_live_target_context = context
+    memo[id(self)] = clone
+    if _compat._FAMILY_COPY_METADATA not in memo:
+        memo[_compat._FAMILY_COPY_METADATA] = lambda value: _copy_nested_mobject(
+            value, context, memo
+        )
 
     excluded = {
         "_raw",
@@ -565,9 +623,13 @@ def _clone_mobject(
     for name, value in self.__dict__.items():
         if name not in excluded:
             if isinstance(value, _base.Mobject):
-                setattr(clone, name, value.copy())
+                # Snapshot Mobjects such as ``saved_state`` can predate the
+                # live session even when their parent is copied after playback.
+                # Route their detached copies through the same owner so they
+                # cannot advance the semantic store outside its publication.
+                setattr(clone, name, _copy_nested_mobject(value, context, memo))
             else:
-                setattr(clone, name, copy.deepcopy(value))
+                setattr(clone, name, copy.deepcopy(value, memo))
     return clone
 
 
@@ -585,7 +647,7 @@ def _target_mobject(self: _base.Mobject) -> _base.Mobject:
 
 
 def _get_center(self: _base.Mobject) -> _base.Vec2:
-    if isinstance(self, _compat.Group):
+    if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))
     observed = _bound_layout_observation(self)
@@ -600,7 +662,7 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _base._as_vec2(direction)
-    if isinstance(self, _compat.Group):
+    if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
                           float(engine_call(layout.criticalY, axis.x, axis.y)))
@@ -614,7 +676,7 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
 
 
 def _width(self: _base.Mobject) -> float:
-    if isinstance(self, _compat.Group):
+    if _is_shared_family(self):
         return float(_group_layout_observation(self).width)
     observed = _bound_layout_observation(self)
     if observed is not None:
@@ -626,7 +688,7 @@ def _width(self: _base.Mobject) -> float:
 
 
 def _height(self: _base.Mobject) -> float:
-    if isinstance(self, _compat.Group):
+    if _is_shared_family(self):
         return float(_group_layout_observation(self).height)
     observed = _bound_layout_observation(self)
     if observed is not None:
@@ -674,7 +736,7 @@ def _move_to(
     mask = _alignment_mask2(coor_mask)
     args = (edge.x, edge.y, mask.x, mask.y)
     context = _live_mutation_context(self)
-    if isinstance(point_or_mobject, _compat.Group):
+    if _is_shared_family(point_or_mobject):
         target = _layout_anchor(point_or_mobject)
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
@@ -705,7 +767,7 @@ def _dimension_fit_source(self, dim):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("dimension fitting requires a shared Rust layout handle")
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self))
     return anchor, context
 
@@ -811,7 +873,7 @@ def _planar_affine(self, operation, arguments, about_point, about_edge):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("affine edits require the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self))
     arguments = (*arguments, *_pivot_arguments(about_point, about_edge))
     if context is None:
@@ -825,7 +887,7 @@ def _get_z_index(self):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("painter priority requires the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self))
     if context is not None:
         return float(engine_call(context.liveZIndex, anchor))
@@ -834,13 +896,13 @@ def _get_z_index(self):
 
 def _set_z_index(self, value, family=True):
     from _manim_updaters import _canonical_phase_context
-    if not isinstance(self, _compat.Group) and _canonical_phase_context(self) is not None:
+    if not _is_shared_family(self) and _canonical_phase_context(self) is not None:
         raise NotImplementedError("z-index during a host callback requires phase-local publication")
     value = float(value)
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("painter priority requires the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self))
     if context is None:
         engine_call(anchor.setZIndex, value, bool(family))
@@ -851,7 +913,7 @@ def _set_z_index(self, value, family=True):
 
 def _flip(self, axis=_base.UP, *, about_point=None, about_edge=None):
     from _manim_updaters import _canonical_phase_context
-    if not isinstance(self, _compat.Group) and _canonical_phase_context(self) is not None:
+    if not _is_shared_family(self) and _canonical_phase_context(self) is not None:
         raise NotImplementedError("flip during a host callback needs shared phase-local affine capture")
     try:
         components = tuple(float(component) for component in axis)
@@ -910,8 +972,21 @@ def _become(
     if match_depth:
         raise NotImplementedError("depth matching requires the shared 2.5D family model")
 
-    if isinstance(self, _compat.Group) or isinstance(mobject, _compat.Group):
-        if not isinstance(self, _compat.Group) or not isinstance(mobject, _compat.Group):
+    from _manim_updaters import _canonical_phase_context, _canonical_provisional_context
+    provisional = _canonical_provisional_context(mobject)
+    if provisional is not None:
+        if any((match_height, match_width, match_center, stretch)):
+            raise NotImplementedError(
+                "callback provisional become does not support dimension matching"
+            )
+        context = _canonical_phase_context(self)
+        if context is None or context is not provisional[0]:
+            raise RuntimeError("callback provisional become requires a target in the same phase")
+        context.replace_effective_provisional(self, mobject)
+        return self
+
+    if _is_shared_family(self) or _is_shared_family(mobject):
+        if not _is_shared_family(self) or not _is_shared_family(mobject):
             raise NotImplementedError("become between an object and a family requires topology alignment")
         source = self._semantic_family_handle
         target = mobject._semantic_family_handle
@@ -960,12 +1035,20 @@ def _replace(
 ) -> _base.Mobject:
     if not isinstance(mobject, _base.Mobject):
         raise TypeError("replacement target must be a Mobject")
+    from _manim_updaters import _canonical_phase_context
+
+    callback_context = _canonical_phase_context(self)
+    if callback_context is not None:
+        if getattr(mobject, "_scene", None) not in (None, callback_context._scene):
+            raise ValueError("callback replacement target belongs to another Scene")
+        callback_context.replace_layout(self, mobject, dim_to_match, stretch)
+        return self
     source, context = _dimension_fit_source(self, dim_to_match)
     target = _layout_anchor(mobject)
     if target is None:
         raise RuntimeError("replacement requires a shared Rust target layout")
     if context is None:
-        context = (_group_live_layout_context(mobject) if isinstance(mobject, _compat.Group)
+        context = (_group_live_layout_context(mobject) if _is_shared_family(mobject)
                    else _live_mutation_context(mobject))
     if context is None:
         context = _live_constructor_context("replace")
@@ -996,7 +1079,7 @@ def _semantic_member_index(index):
     return index
 
 
-def _layout_reference_handle(value):
+def _layout_reference_handle(value, callback_context=None):
     """Borrow typed identity for placement without granting raw geometry access."""
     handle = getattr(value, "_semantic_handle", None)
     if handle is None or not hasattr(handle, "layoutAnchor"):
@@ -1004,20 +1087,25 @@ def _layout_reference_handle(value):
     if not bool(getattr(value, "_semantic_handle_fresh", False)):
         return None
     from _manim_updaters import _canonical_phase_context
-    if _canonical_phase_context(value) is not None:
+    active_context = _canonical_phase_context(value)
+    if active_context is not None and active_context is not callback_context:
         raise NotImplementedError("layout placement is unsupported during an active callback phase")
+    if (callback_context is not None
+            and getattr(value, "_scene", None) is not callback_context._scene):
+        raise RuntimeError("callback layout anchors must belong to the active Scene")
     return handle
 
 
-def _layout_anchor(value, index=None):
-    if isinstance(value, _compat.Group):
+def _layout_anchor(value, index=None, *, callback_context=None):
+    if _is_shared_family(value):
         handle = getattr(value, "_semantic_family_handle", None)
         if handle is None or not hasattr(handle, "layoutAnchor"):
             return None
-        if any(_layout_reference_handle(leaf) is None for leaf in _compat._leaf_mobjects(value)):
+        if any(_layout_reference_handle(leaf, callback_context) is None
+               for leaf in _compat._leaf_mobjects(value)):
             return None
     else:
-        handle = _layout_reference_handle(value)
+        handle = _layout_reference_handle(value, callback_context)
     if handle is None:
         return None
     return engine_call(handle.layoutAnchor, _semantic_member_index(index))
@@ -1040,7 +1128,7 @@ def _shared_next_to(self, target, direction, buff, aligned_edge,
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
     arguments = (vector.x, vector.y, float(buff), edge.x, edge.y, mask.x, mask.y)
-    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+    context = (_group_live_layout_context(self) if _is_shared_family(self)
                else _live_mutation_context(self) or _live_constructor_context())
     try:
         if target_anchor is not None:
@@ -1086,7 +1174,7 @@ def _align_to(
             "canonical live affine targets do not support layout alignment"
         )
     axis = _base._as_vec2(direction)
-    if isinstance(mobject_or_point, _compat.Group):
+    if _is_shared_family(mobject_or_point):
         target = _layout_anchor(mobject_or_point)
         if target is None:
             raise RuntimeError("alignment requires current shared Rust semantic handles")
@@ -1165,7 +1253,7 @@ def _set_color_by_gradient(self, *colors):
 
 
 def _style_target(value):
-    if isinstance(value, _compat.Group):
+    if _is_shared_family(value):
         return value._semantic_family_handle, _group_target_context(value), "Family"
     return _handle_for(value), _live_mutation_context(value), ""
 
@@ -1177,7 +1265,7 @@ def _set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("atomic set_style in host callbacks requires staged style publication")
-    if not family and isinstance(self, _compat.Group):
+    if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group style requires shared family style state")
     arguments = (*_family_color_arguments(fill_color),
                  None if fill_opacity is None else _compat._opacity("fill opacity", fill_opacity),
@@ -1197,9 +1285,9 @@ def _set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
 def _match_style(self, vmobject, family=True):
     if not isinstance(vmobject, _base.Mobject):
         raise TypeError("match_style target must be a Mobject")
-    if isinstance(self, _compat.Group) != isinstance(vmobject, _compat.Group):
+    if _is_shared_family(self) != _is_shared_family(vmobject):
         raise NotImplementedError("mixed object/family style matching requires shared family style state")
-    if not family and isinstance(self, _compat.Group):
+    if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group style requires shared family style state")
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
@@ -1386,7 +1474,7 @@ def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):
 
 
 def _shared_family_layout(value: object, *, mutation: bool = False):
-    if not isinstance(value, _compat.Group):
+    if not _is_shared_family(value):
         return None
     family_handle = getattr(value, "_semantic_family_handle", None)
     if family_handle is None or not hasattr(family_handle, "layout"):
@@ -1447,6 +1535,22 @@ def _group_set_stroke(self, color=None, width=None, opacity=None):
 def _group_set_opacity(self, opacity):
     alpha = _compat._opacity("opacity", opacity)
     return _group_paint(self, "Opacity", (alpha,))
+
+
+def _group_fade(self, darkness=0.5):
+    darkness = _compat._opacity("darkness", darkness)
+    handle = getattr(self, "_semantic_family_handle", None)
+    if handle is None:
+        raise RuntimeError("Group fade requires the shared Rust authoring host")
+    context = _group_target_context(self)
+    try:
+        if context is None:
+            engine_call(handle.fade, darkness, operation="Group.fade")
+        else:
+            engine_call(context.liveSetFamilyFade, handle, darkness)
+    except Exception as error:
+        raise_engine_error(error)
+    return self
 
 
 def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF,
@@ -1561,7 +1665,7 @@ def _group_live_layout_context(value: _compat.Group):
 
 
 def _live_family_placement(context, family, target, operation, *arguments):
-    if isinstance(target, _compat.Group):
+    if _is_shared_family(target):
         method = getattr(context, f"live{operation}FamilyToFamily")
         engine_call(method, family, target._semantic_family_handle, *arguments)
     elif isinstance(target, _base.Mobject):
@@ -1593,7 +1697,7 @@ def _group_move_to(
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
 
-    if isinstance(point_or_mobject, _compat.Group):
+    if _is_shared_family(point_or_mobject):
         target = _shared_family_layout(point_or_mobject)
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
@@ -1641,7 +1745,7 @@ def _group_align_to(
     session = shared
     axis = _base._as_vec2(direction)
 
-    if isinstance(mobject_or_point, _compat.Group):
+    if _is_shared_family(mobject_or_point):
         target = _shared_family_layout(mobject_or_point)
         if target is None:
             raise RuntimeError("alignment target requires a current shared Rust semantic handle")
@@ -1711,9 +1815,16 @@ def _group_layout_observation(value: _compat.Group):
     return layout
 
 
+def _is_shared_family(value: object) -> bool:
+    return (
+        isinstance(value, _compat.Group)
+        and getattr(value, "_semantic_family_handle", None) is not None
+    )
+
+
 def _family_member_handle(value: object) -> tuple[str | None, object | None]:
-    if isinstance(value, _compat.Group):
-        return "family", getattr(value, "_semantic_family_handle", None)
+    if _is_shared_family(value):
+        return "family", value._semantic_family_handle
     if isinstance(value, _base.Mobject):
         return "mobject", getattr(value, "_semantic_handle", None)
     return None, None
@@ -1751,9 +1862,47 @@ def _family_wrapper_key(value: object) -> str:
     return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
 
 
+def _attach_shared_family(wrapper, handle, context=None, leaf_type=None):
+    if leaf_type is None:
+        leaf_type = _compat.VMobject
+    if wrapper is None:
+        wrapper = object.__new__(_compat.Group)
+    if context is None:
+        context = getattr(wrapper, "_canonical_live_target_context", None)
+    old_members = getattr(wrapper, "_semantic_member_wrappers", {})
+    keys = list(engine_call(handle.memberKeys, operation="family.members"))
+    members = {}
+    for index, key in enumerate(keys):
+        key = str(key)
+        if bool(engine_call(handle.memberIsFamily, index, operation="family.members")):
+            member_handle = engine_call(handle.memberFamily, index, operation="family.members")
+            member = old_members.get(key)
+            if not _is_shared_family(member):
+                member = object.__new__(_compat.Group)
+            _attach_shared_family(member, member_handle, context, leaf_type)
+        else:
+            member_handle = engine_call(handle.memberMobject, index, operation="family.members")
+            member = old_members.get(key)
+            if not isinstance(member, _base.Mobject):
+                member = object.__new__(leaf_type)
+            _attach_shared_handle(member, member_handle)
+            if context is not None:
+                member._canonical_live_target_context = context
+        members[key] = member
+    wrapper._semantic_family_handle = handle
+    wrapper._semantic_member_wrappers = members
+    if context is not None:
+        wrapper._canonical_live_target_context = context
+    return wrapper
+
+
+
 def _group_members(self: _compat.Group) -> list[object]:
     # Ordering is observed from Rust only when requested. Mutations update this
     # identity registry locally; it is neither a membership nor an order cache.
+    refresh = getattr(self, "_refresh_semantic_members", None)
+    if refresh is not None:
+        refresh()
     return [self._semantic_member_wrappers[str(key)]
             for key in engine_call(self._semantic_family_handle.memberKeys)]
 
@@ -1815,13 +1964,11 @@ def _group_target_context(value: object) -> object | None:
         if id(member) in seen:
             return
         seen.add(id(member))
-        if isinstance(member, _compat.Group):
+        if _is_shared_family(member):
             for child in member.submobjects:
                 collect(child)
             return
-        context = getattr(member, "_canonical_live_target_context", None)
-        if context is None:
-            context = _live_mutation_context(member)
+        context = _live_mutation_context(member)
         if context is not None:
             contexts.append(context)
 
@@ -1838,32 +1985,83 @@ def _group_target_context(value: object) -> object | None:
     return context
 
 
-def _group_copy(self: _compat.Group) -> _compat.Group:
+def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _compat.Group:
     context = _group_target_context(self)
 
     def excluded_fields(value):
         excluded = {
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
+            "_sample_space_handle", "_brace_label_handle", "_matrix_handle", "_table_handle",
+            "_bar_chart_handle", "_bar_chart_context", "_semantic_latex_handle", "_numeric_handle",
+            # Arrow and ArrowVectorField keep this aggregate JS capability only for
+            # convenience queries and dependent edits. Family copying already maps
+            # the authoritative family and every leaf below; there is no valid
+            # Python deepcopy or aggregate-handle alias for the target family.
+            "_semantic_arrow_handle",
             "_noon_updater_registrations", "_noon_updater_registration_history",
         }
-        if not isinstance(value, _compat.Group) and _is_bound(value) and hasattr(value, "_noon_updaters"):
+        if not _is_shared_family(value) and _is_bound(value) and hasattr(value, "_noon_updaters"):
             excluded.add("_noon_updaters")
         return excluded
 
     clone, pairs, family_members = _compat.prepare_family_wrapper_copy(self, excluded_fields)
     references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
-    copied = (engine_call(context.liveCopyFamily, self._semantic_family_handle, references)
-              if context is not None else engine_call(self._semantic_family_handle.copyFamily, references))
+    if cyclic_replace:
+        copied = (
+            engine_call(context.liveCyclicReplaceTarget, self._semantic_family_handle, references)
+            if context is not None
+            else engine_call(self._semantic_family_handle.cyclicReplaceTarget, references)
+        )
+    else:
+        copied = (
+            engine_call(context.liveCopyFamily, self._semantic_family_handle, references)
+            if context is not None
+            else engine_call(self._semantic_family_handle.copyFamily, references)
+        )
     for source, target in pairs:
-        if isinstance(source, _compat.Group):
+        if _is_shared_family(source):
             target._semantic_family_handle = engine_call(copied.familyFor, source._semantic_family_handle)
+            owner = context or getattr(source, "_canonical_live_target_context", None)
+            if owner is not None:
+                target._canonical_live_target_context = owner
         else:
             _initialize_shared_wrapper(target)
             target._semantic_handle = engine_call(copied.mobjectFor, source._semantic_handle)
             target._semantic_handle_fresh = True
-            if context is not None:
-                target._canonical_live_target_context = context
+            owner = context or getattr(source, "_canonical_live_target_context", None)
+            if owner is not None:
+                target._canonical_live_target_context = owner
     for target, members in family_members:
         target._semantic_member_wrappers = {_family_wrapper_key(member): member for member in members}
+    for source, target in pairs:
+        latex = getattr(source, "_semantic_latex_handle", None)
+        if latex is not None:
+            target._semantic_latex_handle = engine_call(latex.rebindFamily, target._semantic_family_handle)
+            target._part_views()
+        if not _is_shared_family(target):
+            rebind = getattr(target, "_rebind_copied_semantic_handle", None)
+            if rebind is not None:
+                rebind()
+        aggregate = getattr(source, "_semantic_arrow_handle", None)
+        if aggregate is not None:
+            index = getattr(source, "_semantic_arrow_index", None)
+            if index is None:
+                target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate)
+            else:
+                target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate, index)
+                target.__dict__.pop("_semantic_arrow_index", None)
+    for source, target in pairs:
+        if _is_shared_family(source):
+            rehydrate = getattr(target, "_rehydrate_semantic_family_handle", None)
+            if rehydrate is not None:
+                rehydrate()
     return clone
+
+
+def _group_copy(self: _compat.Group) -> _compat.Group:
+    return _group_copy_operation(self, cyclic_replace=False)
+
+
+def _group_cyclic_replace_target(self: _compat.Group) -> _compat.Group:
+    return _group_copy_operation(self, cyclic_replace=True)

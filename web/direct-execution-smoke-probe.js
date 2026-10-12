@@ -6,6 +6,8 @@ const {
   createDirectLineMatchSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
   createDirectExecutionSmokeRenderer,
+  createDirectNativeDragSmokeRenderer,
+  createDirectRetainedLocalityRenderer,
   createDirectNativeSignalsSmokeRenderer,
   createDirectOrdinaryAffineCallbackContinuationSmokeRenderer,
   createDirectOrdinaryAffineContinuationSmokeRenderer,
@@ -34,6 +36,7 @@ const {
   createDirectDrawBorderThenFillSmokeRenderer,
   createDirectOrdinarySubsetDisplaySmokeRenderer,
   createDirectOrdinaryMembershipSmokeRenderer,
+  createDirectOverdueShortAnimationRenderer,
   createDirectOrdinaryTextWriteSmokeRenderer,
   createDirectAutomaticWaitTextSmokeRenderer,
   createDirectExactPropertyTracksSmokeRenderer,
@@ -100,6 +103,298 @@ async function presentDirectFrame(renderer) {
     await sleep(10);
   }
   throw new Error("direct affine callback renderer could not acquire a frame");
+}
+
+function percentile(values, fraction) {
+  const ordered = [...values].sort((left, right) => left - right);
+  if (ordered.length === 0) return null;
+  const position = (ordered.length - 1) * fraction;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower);
+}
+
+async function directNativeDragProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectNativeDragSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    renderer.setPointerView(0, canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    const initialFrame = JSON.parse(renderer.debugSelectionFrameJson());
+    const initialRevision = renderer.directSceneRevision();
+    const [cameraX, cameraY, cameraHeight] =
+      JSON.parse(renderer.debugPointerPresentationJson()).camera;
+    const cameraWidth = cameraHeight * canvas.width / canvas.height;
+    const point = (x, y) => ({
+      x: ((x - cameraX) / cameraWidth + 0.5) * canvas.width,
+      y: (0.5 - (y - cameraY) / cameraHeight) * canvas.height,
+    });
+    const dispatch = (kind, position, button) => {
+      const accepted = renderer.nativePointerInput(
+        kind, 41, 9, 0,
+        position?.x ?? null, position?.y ?? null,
+        position ? canvas.width : null, position ? canvas.height : null,
+        button, false, false, false, false,
+      );
+      if (accepted === undefined || accepted === null) {
+        throw new Error(`direct Rust/WASM rejected native ${kind}`);
+      }
+    };
+    const assertCenter = (object, expectedX, expectedY, label) => {
+      if (Math.abs(object.center[0] - expectedX) > 0.02 ||
+          Math.abs(object.center[1] - expectedY) > 0.02) {
+        throw new Error(`${label} center was ${JSON.stringify(object.center)}`);
+      }
+    };
+    if (renderer.rendererBackend() !== expectedBackend || initialFrame.objects.length !== 2) {
+      throw new Error(`direct drag fixture has wrong renderer/frame: ${JSON.stringify(initialFrame)}`);
+    }
+    const targetId = initialFrame.objects[0].id;
+    const unrelatedId = initialFrame.objects[1].id;
+    assertCenter(initialFrame.objects[0], 0, 0, "initial drag target");
+    assertCenter(initialFrame.objects[1], 2.5, 1, "unrelated object");
+
+    dispatch("press", point(0, 0), 0);
+    await settleDirectPublication(renderer, 0);
+    dispatch("move", point(1, 0), null);
+    await presentDirectFrame(renderer);
+    const movedFrame = JSON.parse(renderer.debugSelectionFrameJson());
+    const movedTarget = movedFrame.objects.find(object => object.id === targetId);
+    const movedUnrelated = movedFrame.objects.find(object => object.id === unrelatedId);
+    assertCenter(movedTarget, 1, 0, "effective target during drag");
+    assertCenter(movedUnrelated, 2.5, 1, "unrelated object during drag");
+    if (renderer.directSceneRevision() !== initialRevision) {
+      throw new Error("direct drag authored scene before release");
+    }
+
+    dispatch("release", point(1, 0), 0);
+    await presentDirectFrame(renderer);
+    const releasedRevision = renderer.directSceneRevision();
+    if (releasedRevision !== initialRevision + 1n) {
+      throw new Error(`release advanced authored revision by ${releasedRevision - initialRevision}, expected one`);
+    }
+    const releasedFrame = JSON.parse(renderer.debugSelectionFrameJson());
+    assertCenter(releasedFrame.objects.find(object => object.id === targetId), 1, 0, "released target");
+
+    dispatch("press", point(1, 0), 0);
+    await settleDirectPublication(renderer, 0);
+    dispatch("move", point(2, 0), null);
+    await presentDirectFrame(renderer);
+    assertCenter(
+      JSON.parse(renderer.debugSelectionFrameJson()).objects.find(object => object.id === targetId),
+      2, 0, "second effective drag",
+    );
+    dispatch("cancel", null, null);
+    await presentDirectFrame(renderer);
+    const cancelledFrame = JSON.parse(renderer.debugSelectionFrameJson());
+    assertCenter(cancelledFrame.objects.find(object => object.id === targetId), 1, 0, "cancelled target");
+    assertCenter(cancelledFrame.objects.find(object => object.id === unrelatedId), 2.5, 1, "unrelated object after cancel");
+    if (renderer.directSceneRevision() !== releasedRevision) {
+      throw new Error("direct drag cancellation authored a scene revision");
+    }
+    return {
+      backend: renderer.rendererBackend(),
+      objectCount: renderer.objectCount(),
+      revisionBefore: initialRevision.toString(),
+      revisionAfterRelease: releasedRevision.toString(),
+      targetId,
+      movedCenter: movedTarget.center,
+      cancelledCenter: cancelledFrame.objects.find(object => object.id === targetId).center,
+    };
+  } finally {
+    renderer.free();
+  }
+}
+
+async function directRetainedLocalityProof(expectedBackend) {
+  const sustainedTicks = 64;
+  const tickIntervalMs = 15;
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectRetainedLocalityRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    if (!renderer.setPointerFillSelection(4)) {
+      throw new Error("100k mixed locality selection did not arm pointer input");
+    }
+    if (!renderer.setPointerView(0, canvas.width, canvas.height)) {
+      throw new Error("100k mixed locality initial viewport was rejected");
+    }
+    await presentDirectFrame(renderer);
+    const initialBytesUploaded = renderer.lastBytesUploaded();
+    const objectCount = renderer.objectCount();
+    // Advance normal playback; inspection seek intentionally rebuilds its frame.
+    renderer.directWakeDirectiveJson(0);
+    const tickUploads = [];
+    const frameUploads = [];
+    const frameDrawCalls = [];
+    const advanceCpuMs = [];
+    const renderSubmitCpuMs = [];
+    const renderRetryWaitMs = [];
+    const rafIntervalsMs = [];
+    let rafOrigin = null;
+    let previousRafTimestamp = null;
+    let pointerViewRevision = 0;
+    let previousTime = renderer.time();
+    for (let tick = 1; tick <= sustainedTicks; tick += 1) {
+      const wallTimeMs = tick * tickIntervalMs;
+      // Keep one sparse-scene hit target centered while changing the presented
+      // viewport and hovering it alongside the independent animated target.
+      // This exercises the mixed browser path without adding a second fixture.
+      if (tick % 8 === 0) {
+        const width = canvas.width === 960 ? 912 : 960;
+        canvas.width = width;
+        renderer.resize(width, canvas.height);
+        pointerViewRevision += 1;
+        if (!renderer.setPointerView(pointerViewRevision, width, canvas.height)) {
+          throw new Error(`100k mixed locality viewport ${pointerViewRevision} was rejected`);
+        }
+        // Install the new receipt before sending pointer coordinates that name it.
+        await presentDirectFrame(renderer);
+      }
+      const pointerAccepted = renderer.nativePointerInput(
+        // A viewport revision retires the prior pointer source, so issue a
+        // monotonically newer source ID for the fresh post-resize sample.
+        "move", 41 + pointerViewRevision, 9, pointerViewRevision,
+        canvas.width / 2, canvas.height / 2,
+        canvas.width, canvas.height,
+        null, false, false, false, false,
+      );
+      if (pointerAccepted === undefined || pointerAccepted === null) {
+        throw new Error(`100k mixed locality pointer sample ${tick} was rejected`);
+      }
+      if (!renderer.advanceDirectRealtime(wallTimeMs)) {
+        throw new Error(`100k locality tick ${tick} did not publish a changed frame`);
+      }
+      await presentDirectFrame(renderer);
+      const time = renderer.time();
+      const bytesUploaded = renderer.lastBytesUploaded();
+      if (!(time > previousTime)) {
+        throw new Error(`100k locality target stopped changing at tick ${tick}: ${time} <= ${previousTime}`);
+      }
+      if (bytesUploaded <= 0 || bytesUploaded > 256) {
+        throw new Error(`100k locality tick ${tick} uploaded non-local bytes: ${bytesUploaded}`);
+      }
+      tickUploads.push(bytesUploaded);
+      previousTime = time;
+    }
+
+    // Keep the synthetic-tick locality proof above unchanged. This second pass
+    // samples the same target at real browser cadence over a longer fixture
+    // duration, without pointer or viewport changes in the timed window.
+    for (let tick = 1; tick <= sustainedTicks; tick += 1) {
+      const rafTimestamp = await new Promise((resolve) => requestAnimationFrame(resolve));
+      if (rafOrigin === null) rafOrigin = rafTimestamp;
+      if (previousRafTimestamp !== null) {
+        rafIntervalsMs.push(rafTimestamp - previousRafTimestamp);
+      }
+      previousRafTimestamp = rafTimestamp;
+      const wallTimeMs = sustainedTicks * tickIntervalMs + tickIntervalMs + rafTimestamp - rafOrigin;
+      const advanceStart = performance.now();
+      const changed = renderer.advanceDirectRealtime(wallTimeMs);
+      advanceCpuMs.push(performance.now() - advanceStart);
+      if (!changed) {
+        throw new Error(`100k RAF locality frame ${tick} did not publish a changed frame`);
+      }
+      let renderCpuMs = 0;
+      let retryWaitMs = 0;
+      let presented = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const renderStart = performance.now();
+        presented = renderer.render();
+        renderCpuMs += performance.now() - renderStart;
+        if (presented) break;
+        const waitStart = performance.now();
+        await sleep(10);
+        retryWaitMs += performance.now() - waitStart;
+      }
+      renderSubmitCpuMs.push(renderCpuMs);
+      renderRetryWaitMs.push(retryWaitMs);
+      if (!presented) {
+        throw new Error(`100k RAF locality frame ${tick} could not present its changed frame`);
+      }
+      const time = renderer.time();
+      const bytesUploaded = renderer.lastBytesUploaded();
+      if (!(time > previousTime)) {
+        throw new Error(`100k RAF locality target stopped changing at frame ${tick}: ${time} <= ${previousTime}`);
+      }
+      if (bytesUploaded <= 0 || bytesUploaded > 256) {
+        throw new Error(`100k RAF locality frame ${tick} uploaded non-local bytes: ${bytesUploaded}`);
+      }
+      frameUploads.push(bytesUploaded);
+      frameDrawCalls.push(renderer.lastDrawCalls());
+      previousTime = time;
+    }
+    if (rafIntervalsMs.length !== sustainedTicks - 1) {
+      throw new Error(`100k RAF trace captured ${rafIntervalsMs.length} intervals, expected ${sustainedTicks - 1}`);
+    }
+    const pointerPresentation = JSON.parse(renderer.debugPointerPresentationJson());
+    const metrics = {
+      backend: renderer.rendererBackend(),
+      objectCount,
+      initialBytesUploaded,
+      sustainedTicks,
+      frameTiming: {
+        clock: "requestAnimationFrame timestamp",
+        rafIntervalsMs: {
+          p50: percentile(rafIntervalsMs, 0.50),
+          p95: percentile(rafIntervalsMs, 0.95),
+          p99: percentile(rafIntervalsMs, 0.99),
+          missedAt16_67ms: rafIntervalsMs.filter((interval) => interval > 16.67).length,
+          samples: rafIntervalsMs.length,
+        },
+        advanceCpuMs: {
+          p50: percentile(advanceCpuMs, 0.50),
+          p95: percentile(advanceCpuMs, 0.95),
+        },
+        renderSubmitCpuMs: {
+          p50: percentile(renderSubmitCpuMs, 0.50),
+          p95: percentile(renderSubmitCpuMs, 0.95),
+        },
+        renderRetryWaitMs: {
+          p50: percentile(renderRetryWaitMs, 0.50),
+          p95: percentile(renderRetryWaitMs, 0.95),
+          samplesWithWait: renderRetryWaitMs.filter((duration) => duration > 0).length,
+        },
+        workload: "64 RAF callbacks; one animated target among 100k objects, no pointer or viewport changes during timing",
+        renderSubmitMeaning: "CPU time spent calling render and submitting/presenting; not GPU completion or physical scanout",
+      },
+      mixedInteraction: {
+        pointerSamples: sustainedTicks,
+        viewportChanges: pointerViewRevision,
+        presentedView: pointerPresentation.view,
+        presentationSettled: !pointerPresentation.refreshPending &&
+          pointerPresentation.current === pointerPresentation.presented &&
+          pointerPresentation.inspectionRevision === pointerPresentation.presentedInspectionRevision,
+      },
+      tickUploads,
+      frameUploads,
+      frameDrawCalls,
+      drawCalls: renderer.lastDrawCalls(),
+    };
+    if (metrics.backend !== expectedBackend) {
+      throw new Error(`100k locality renderer selected ${metrics.backend}; expected ${expectedBackend}`);
+    }
+    if (metrics.objectCount !== 100000) {
+      throw new Error(`100k locality renderer exposed ${metrics.objectCount} objects`);
+    }
+    if (metrics.mixedInteraction.viewportChanges !== 8 ||
+        metrics.mixedInteraction.presentedView?.[0] !== canvas.width ||
+        !metrics.mixedInteraction.presentationSettled) {
+      throw new Error(`100k mixed pointer/viewport presentation did not settle: ${JSON.stringify(metrics.mixedInteraction)}`);
+    }
+    if (metrics.initialBytesUploaded <= 0 || metrics.drawCalls <= 0) {
+      throw new Error(`100k locality scene did not reach the GPU: ${JSON.stringify(metrics)}`);
+    }
+    // Bound every local upload independently of how much of the initial scene
+    // the renderer elects to install. Native coverage pins the exact instance size.
+    if (metrics.tickUploads.length !== sustainedTicks) {
+      throw new Error(`100k locality trace completed ${metrics.tickUploads.length}/${sustainedTicks} ticks`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+  }
 }
 
 async function settleDirectPublication(renderer, wallTimeMs) {
@@ -647,7 +942,7 @@ async function directOrdinaryAffinePlayProof(expectedBackend) {
     throw new Error(`direct ordinary affine authored time is ${metrics.authoredTime}; expected 4`);
   }
   if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
-    throw new Error(`direct ordinary affine produced invalid metrics ${JSON.stringify(metrics)}`);
+    throw new Error(`direct ordinary affine produced invalid renderer metrics ${JSON.stringify(metrics)}`);
   }
   if (endpointLuma < 250 || firstEndpointLuma > 60 || shiftedLuma > 60) {
     throw new Error(`direct ordinary affine did not render its x=5 endpoint ${JSON.stringify(metrics)}`);
@@ -1313,11 +1608,21 @@ async function directFamilyStateProof(expectedBackend) {
   try {
     renderer.resize(canvas.width, canvas.height);
     await presentDirectFrame(renderer);
-    for (const [time, leftX, rightX, y] of [[0, -1, 1, 0], [200, -0.5, 1.5, 0.5], [400, -2, 0, 0], [601, -2, 0, 0]]) {
+    // Aggregate bounds of two 0.6 squares, separated by 2, scaled 1.5 and
+    // rotated 0.3 before becoming the original 2.6-by-0.6 family.
+    const c = Math.cos(0.3), s = Math.sin(0.3);
+    const x = 1.5 * c * 2.6 / (3.9 * c + 0.9 * s);
+    const y = 1.5 * s * 0.6 / (3.9 * s + 0.9 * c);
+    for (const [time, leftX, rightX, leftY, rightY] of [
+      [0, -x, x, -y, y],
+      [200, 0.5 - x, 0.5 + x, 0.5 - y, 0.5 + y],
+      [400, -2, 0, 0, 0],
+      [601, -2, 0, 0, 0],
+    ]) {
       renderer.advanceDirectRealtime(time);
       await settleDirectPublication(renderer, time);
-      const left = await sampleRenderedColor(canvas, leftX, y);
-      const right = await sampleRenderedColor(canvas, rightX, y);
+      const left = await sampleRenderedColor(canvas, leftX, leftY);
+      const right = await sampleRenderedColor(canvas, rightX, rightY);
       if (!(left.red > 180 && left.blue < 50 && right.blue > 180 && right.red < 50)) {
         throw new Error(`direct family state at ${time}ms missed expected members: ${JSON.stringify({left, right})}`);
       }
@@ -1340,53 +1645,69 @@ async function directFamilyTransformIndicateProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectFamilyTransformIndicateSmokeRenderer(canvas);
   const samples = [];
+  const pink = (pixel) => pixel.red > pixel.green + 40 && pixel.blue > pixel.green + 40;
+  const blue = (pixel) => pixel.blue > pixel.red + 25;
+  const yellow = (pixel) => pixel.red > 180 && pixel.green > 150 && pixel.blue < pixel.green - 40;
   try {
     renderer.resize(canvas.width, canvas.height);
     await presentDirectFrame(renderer);
-    for (const [time, leftX, rightX, highlighted] of [
-      [0, -2, 0, null],
-      [500, -1.625, 0, null],
-      [1000, -1.25, 0.25, null],
-      [2000, -1, 1, null],
-      [8000 / 3, -1.2, 1, "left"],
-      [10000 / 3, -1, 1.2, "right"],
-      [4000, -1, 1, null],
-      [4250, 0, 1, null],
-      [4500, 0, 1, null],
-    ]) {
-      renderer.advanceDirectRealtime(time);
-      const directive = await settleDirectPublication(renderer, time);
-      const left = await sampleRenderedColor(canvas, leftX, 0);
-      const right = await sampleRenderedColor(canvas, rightX, 0);
-      if (left.alpha < 128 || right.alpha < 128) {
-        throw new Error(
-          `direct family transform/Indicate at ${time}ms missed its expected members: ${JSON.stringify({ left, right })}`,
-        );
-      }
-      if (highlighted !== null) {
-        const color = highlighted === "left" ? left : right;
-        if (!(color.red > 180 && color.green > 150 && color.blue < color.green - 40)) {
-          throw new Error(
-            `direct family Indicate did not reach its shared outward state: ${JSON.stringify({ left, right })}`,
-          );
-        }
-      }
-      if (time === 4000 || time === 4500) {
-        const restored = left.red > left.green + 40 && left.blue > left.green + 40
-          && right.blue > right.red + 25;
-        if (!restored) {
-          throw new Error(
-            `direct family Indicate did not restore its captured transformed state: ${JSON.stringify({ left, right })}`,
-          );
-        }
-      }
-      samples.push({ time, leftX, rightX, highlighted, left, right, cadence: directive.cadence });
+
+    renderer.advanceDirectRealtime(0);
+    let directive = await settleDirectPublication(renderer, 0);
+    const initialLeft = await sampleRenderedColor(canvas, -2, 0);
+    const initialRight = await sampleRenderedColor(canvas, 0, 0);
+    if (!pink(initialLeft) || !blue(initialRight) || renderer.objectCount() !== 2) {
+      throw new Error(`direct unequal-family Transform missed its initial source: ${JSON.stringify({ initialLeft, initialRight, objects: renderer.objectCount() })}`);
     }
+    samples.push({ time: 0, initialLeft, initialRight, cadence: directive.cadence });
+
+    // Midpoint occurrence identity/order is interpolation-only. Exercising this
+    // publication is enough here; stable lifecycle checks begin at completion.
+    renderer.advanceDirectRealtime(1000);
+    directive = await settleDirectPublication(renderer, 1000);
+    samples.push({ time: 1000, objects: renderer.objectCount(), cadence: directive.cadence });
+
+    renderer.advanceDirectRealtime(2000);
+    directive = await settleDirectPublication(renderer, 2000);
+    const endpointLeft = await sampleRenderedColor(canvas, -1, 0);
+    const endpointMiddle = await sampleRenderedColor(canvas, 0, 0);
+    const endpointRight = await sampleRenderedColor(canvas, 1, 0);
+    if (renderer.objectCount() !== 3 || !pink(endpointLeft) || !pink(endpointMiddle) || !blue(endpointRight)) {
+      throw new Error(`direct unequal-family Transform did not publish its persistent 3-member endpoint: ${JSON.stringify({ endpointLeft, endpointMiddle, endpointRight, objects: renderer.objectCount() })}`);
+    }
+    samples.push({ time: 2000, endpointLeft, endpointMiddle, endpointRight, cadence: directive.cadence });
+
+    // The Rust continuation starts Indicate only after asserting that the
+    // semantic source family itself has three persistent members.
+    renderer.advanceDirectRealtime(3000);
+    directive = await settleDirectPublication(renderer, 3000);
+    const indicated = await Promise.all([-1, 0, 1].map((x) => sampleRenderedColor(canvas, x, 0)));
+    if (renderer.objectCount() !== 3 || !indicated.some(yellow)) {
+      throw new Error(`direct family Indicate did not consume the persisted endpoint: ${JSON.stringify({ indicated, objects: renderer.objectCount() })}`);
+    }
+    samples.push({ time: 3000, indicated, cadence: directive.cadence });
+
+    renderer.advanceDirectRealtime(4000);
+    directive = await settleDirectPublication(renderer, 4000);
+    const restored = await Promise.all([-1, 0, 1].map((x) => sampleRenderedColor(canvas, x, 0)));
+    if (renderer.objectCount() !== 3 || !pink(restored[0]) || !pink(restored[1]) || !blue(restored[2])) {
+      throw new Error(`direct family Indicate did not restore the persistent endpoint: ${JSON.stringify({ restored, objects: renderer.objectCount() })}`);
+    }
+    samples.push({ time: 4000, restored, cadence: directive.cadence });
+
+    renderer.advanceDirectRealtime(4250);
+    await settleDirectPublication(renderer, 4250);
+    renderer.advanceDirectRealtime(4500);
+    directive = await settleDirectPublication(renderer, 4500);
+    const finalLeft = await sampleRenderedColor(canvas, 0, 0);
+    const finalRight = await sampleRenderedColor(canvas, 1, 0);
     const wake = JSON.parse(renderer.directWakeDirectiveJson(4500));
     if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 4.5
-        || renderer.objectCount() !== 2 || wake.cadence !== "idle") {
-      throw new Error("direct family transform/Indicate did not complete its shared continuation");
+        || renderer.objectCount() !== 3 || wake.cadence !== "idle"
+        || !pink(finalLeft) || !blue(finalRight)) {
+      throw new Error(`direct family transform/Indicate did not complete its shared continuation: ${JSON.stringify({ backend: renderer.rendererBackend(), time: renderer.time(), objects: renderer.objectCount(), wake, finalLeft, finalRight })}`);
     }
+    samples.push({ time: 4500, finalLeft, finalRight, cadence: directive.cadence });
     return samples;
   } finally {
     renderer.free();
@@ -2454,6 +2775,40 @@ async function directNativeSignalsProof(expectedBackend) {
   return metrics;
 }
 
+async function directOverdueShortAnimationProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(320, 180);
+  const renderer = await createDirectOverdueShortAnimationRenderer(canvas);
+  try {
+    if (!renderer.render()) throw new Error("initial direct source frame was not presented");
+    renderer.directWakeDirectiveJson(1_000);
+    // All thirty-two 1/16-second animations are already overdue at this wake.
+    renderer.advanceDirectRealtime(3_000);
+    if (!renderer.render()) throw new Error("late direct source could not present a frame");
+    const frame = JSON.parse(renderer.debugSelectionFrameJson());
+    const finalLuma = await sampleRenderedNeighborhood(canvas, 2.0, 0.0, 2);
+    const oldLuma = await sampleRenderedNeighborhood(canvas, 0.0, 0.0, 2);
+    const result = {
+      backend: renderer.rendererBackend(),
+      time: renderer.time(),
+      objectX: frame.objects[0]?.center?.[0],
+      draws: renderer.lastDrawCalls(),
+      bytesUploaded: renderer.lastBytesUploaded(),
+      finalLuma,
+      oldLuma,
+    };
+    if (result.backend !== expectedBackend ||
+        Math.abs(result.time - 2.0) > 1e-9 ||
+        Math.abs(result.objectX - 2.0) > 0.02 ||
+        result.draws <= 0 || result.bytesUploaded <= 0 ||
+        finalLuma < 180 || oldLuma > 60) {
+      throw new Error(`direct overdue first presented frame did not catch up: ${JSON.stringify(result)}`);
+    }
+    return result;
+  } finally {
+    renderer.free();
+  }
+}
+
 async function start() {
   if (typeof createDirectExecutionSmokeRenderer !== "function") {
     state.metrics = {
@@ -2530,6 +2885,7 @@ async function start() {
     throw new Error("direct execution renderer prepared a static frame without a publication");
   }
 
+  metrics.overdueShortAnimation = await directOverdueShortAnimationProof(expectedBackend);
   metrics.affineCallbacks = await directAffineCallbackProof(expectedBackend);
   metrics.callbackPaint = await directCallbackPaintProof(expectedBackend);
   metrics.lineMatch = await directLineMatchProof(expectedBackend);
@@ -2587,6 +2943,8 @@ async function start() {
   metrics.ordinaryStylePlay = await directOrdinaryStylePlayProof(expectedBackend);
   metrics.ordinaryPaintPlay = await directOrdinaryPaintPlayProof(expectedBackend);
   metrics.nativeSignals = await directNativeSignalsProof(expectedBackend);
+  metrics.nativeDrag = await directNativeDragProof(expectedBackend);
+  metrics.retainedLocality = await directRetainedLocalityProof(expectedBackend);
 
   state.metrics = metrics;
   state.ready = true;

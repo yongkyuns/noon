@@ -4,8 +4,7 @@ use noon_compile::{CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
     ComputeProgram, ComputeState, ObjectId, PreparedComputeInputBatch,
     PreparedComputeInputEnrollment, PreparedComputeInputEnrollmentBatch, Property,
-    PublicationContext, ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveValue,
-    SignalId,
+    PublicationContext, ReactiveBinding, ReactiveError, ReactiveValue, SignalId,
 };
 
 use crate::{frame_row_mut, FrameRowMut, FrameState, SceneInstance};
@@ -62,9 +61,25 @@ impl PreparedReactiveRuntimeUpdate {
     pub(crate) fn property_changes(&self) -> &[(usize, Property, ReactiveValue)] {
         &self.property_changes
     }
+
+    pub(crate) fn signal_changes(&self) -> &[noon_core::SignalChange] {
+        self.compute.update().signal_changes()
+    }
+
+    pub(crate) const fn stats(&self) -> ReactiveRuntimeStats {
+        self.stats
+    }
 }
 
 impl ReactiveRuntime {
+    pub(crate) fn owns_property(&self, object: ObjectId, property: Property) -> bool {
+        self.target_lookup
+            .contains_key(&binding_key(object, property))
+    }
+
+    pub(crate) fn has_property_bindings(&self) -> bool {
+        !self.targets.is_empty()
+    }
     pub(crate) fn state_value(&self, signal: noon_core::SignalId) -> Option<&ReactiveValue> {
         self.state.value(signal)
     }
@@ -191,6 +206,8 @@ impl ReactiveRuntime {
     }
 
     fn rebind_object(&mut self, object: ObjectId, object_index: usize) {
+        // Spatial properties are deliberately excluded: ReactiveValue has no world-pose
+        // payload, and reactive graph compilation rejects that property by kind.
         const PROPERTIES: [Property; 12] = [
             Property::Presence,
             Property::Transform,
@@ -226,6 +243,27 @@ impl ReactiveRuntime {
             self.targets[target_index].object_index = object_index;
             self.targets_by_object[object_index].push(target_index);
         }
+    }
+
+    /// Rebuild dense row-target lookup after the explicit compiled-row
+    /// maintenance barrier. Compute state stays intact; bindings are resolved
+    /// again through their stable `ObjectId` keys without evaluation.
+    pub(crate) fn remap_object_indices(&mut self, compiled: &CompiledScene) {
+        self.targets_by_object = vec![Vec::new(); compiled.objects().len()];
+        for (&(raw_object, _), &target_index) in &self.target_lookup {
+            let object_index = compiled
+                .object_index(ObjectId::new(raw_object))
+                .expect("live reactive target survives compiled-row compaction")
+                as usize;
+            self.targets[target_index].object_index = object_index;
+            self.targets_by_object[object_index].push(target_index);
+        }
+    }
+
+    pub(crate) fn has_retired_targets(&self, compiled: &CompiledScene) -> bool {
+        self.target_lookup
+            .keys()
+            .any(|(raw_object, _)| compiled.object_index(ObjectId::new(*raw_object)).is_none())
     }
 }
 
@@ -291,6 +329,11 @@ impl SceneInstance {
         instance.publication = publication;
         instance.reactive = Some(reactive);
         instance.reapply_reactive();
+        let numeric = instance
+            .prepare_all_numeric_text()
+            .expect("lowered numeric text declarations are validated");
+        instance.commit_numeric_text_updates(numeric, false);
+        instance.refresh_all_graph_dependencies();
         instance
     }
 
@@ -301,6 +344,7 @@ impl SceneInstance {
 
     /// Publish a coherent effective-only frame change.
     pub(crate) fn publish_effective_change(&mut self) {
+        self.flush_spatial_anchor_changes();
         let next = self
             .publication
             .frame_epoch()
@@ -313,6 +357,7 @@ impl SceneInstance {
     /// effective frame context. Authored scene revision remains pinned to the
     /// semantic snapshot from which this session was built.
     pub(crate) fn publish_execution_change(&mut self) {
+        self.flush_spatial_anchor_changes();
         let execution = self
             .publication
             .execution_revision()
@@ -335,8 +380,10 @@ impl SceneInstance {
         self.reactive.as_ref()?.state.value(signal)
     }
 
-    /// Deterministically seek, evaluating a canonical signal-timeline input batch
-    /// before reactive bindings are reapplied to the rebuilt frame.
+    /// Seek while evaluating a canonical signal-timeline input batch before
+    /// reactive bindings are reapplied. Nonempty input batches cannot mutate a
+    /// sealed history; changed values require a separately qualified input replay
+    /// policy. An empty batch follows the ordinary historical seek path.
     pub fn seek_with_reactive_inputs(
         &mut self,
         time: f64,
@@ -344,6 +391,14 @@ impl SceneInstance {
     ) -> Result<&FrameState, crate::EvaluationError> {
         if !time.is_finite() {
             return Err(crate::EvaluationError::InvalidTime(time));
+        }
+        // An empty batch is an ordinary seek, including sealed historical replay.
+        // It must not index a missing input or bypass time-qualified revisions.
+        if inputs.is_empty() {
+            return self.seek(time);
+        }
+        if self.replay_is_sealed() {
+            return Err(crate::EvaluationError::ReplaySealed);
         }
         let previous_time = self.frame.time;
         let prepared = self
@@ -354,62 +409,82 @@ impl SceneInstance {
             })?
             .prepare_input_batch(inputs)
             .map_err(crate::EvaluationError::Reactive)?;
+        let numeric = self
+            .prepare_changed_numeric_text(&prepared)
+            .map_err(crate::EvaluationError::NumericText)?;
+        let effective_changed = !prepared.is_empty();
+        if effective_changed {
+            self.invalidate_replay_input();
+        }
         let stats = self
             .reactive
             .as_mut()
             .expect("prepared reactive inputs retain their runtime")
             .commit_prepared_input_batch(prepared);
+        self.commit_numeric_text_updates(numeric, false);
         self.seek_unchecked(time);
         self.last_reactive_stats = stats;
-        if self.frame.time != previous_time || stats.bindings_invalidated != 0 {
+        if self.frame.time != previous_time || effective_changed {
             self.publish_effective_change();
         }
         Ok(&self.frame)
     }
 
     /// Change one native input and apply only its invalidated bindings to the
-    /// already-compiled dense frame state.
+    /// already-compiled dense frame state. Sealed history is read-only; a changed
+    /// input during retention makes that range unavailable for deterministic
+    /// replay. Rejected and unchanged inputs preserve the retained capability.
     pub fn set_reactive_input(
         &mut self,
         signal: SignalId,
         value: impl Into<ReactiveValue>,
-    ) -> Result<&FrameState, ReactiveError> {
-        let update = self
+    ) -> Result<&FrameState, crate::EvaluationError> {
+        if self.replay_is_sealed() {
+            return Err(crate::EvaluationError::ReplaySealed);
+        }
+        let prepared = self
             .reactive
             .as_mut()
-            .ok_or(ReactiveError::UnknownSignal(signal))?
-            .state
-            .set_input(signal, value)?;
-        let effective_changed = !update.signal_changes().is_empty();
-        let evaluation = update.stats();
+            .ok_or(crate::EvaluationError::Reactive(
+                ReactiveError::UnknownSignal(signal),
+            ))?
+            .prepare_input_batch(&[(signal, value.into())])
+            .map_err(crate::EvaluationError::Reactive)?;
+        let numeric = self
+            .prepare_changed_numeric_text(&prepared)
+            .map_err(crate::EvaluationError::NumericText)?;
+        let effective_changed = !prepared.is_empty();
+        if effective_changed {
+            self.invalidate_replay_input();
+        }
+        let prepared_stats = prepared.stats();
+        let property_changes = prepared.property_changes().to_vec();
+        self.last_reactive_stats = self
+            .reactive
+            .as_mut()
+            .expect("prepared reactive input retains its runtime")
+            .commit_prepared_input_batch(prepared);
         let mut applied_targets = 0;
         let mut changed_targets = 0;
 
-        for change in update.property_changes() {
-            let target = self
-                .reactive
-                .as_ref()
-                .expect("reactive state exists while applying its update")
-                .target(change.object, change.property);
-            if !self
-                .compiled
-                .object_slot_is_live(target.object_index as u32)
-            {
+        for (object_index, property, value) in property_changes {
+            if !self.compiled.object_slot_is_live(object_index as u32) {
                 continue;
             }
             applied_targets += 1;
-            if apply_reactive_value(
-                &mut self.frame,
-                target.object_index,
-                target.property,
-                &change.value,
-            ) {
-                self.mark_changed(target.object_index);
+            if apply_reactive_value(&mut self.frame, object_index, property, &value) {
+                self.mark_changed(object_index);
                 changed_targets += 1;
             }
         }
 
-        self.last_reactive_stats = runtime_stats(evaluation, applied_targets, changed_targets);
+        self.commit_numeric_text_updates(numeric, true);
+        self.last_reactive_stats = ReactiveRuntimeStats {
+            derived_signals_evaluated: prepared_stats.derived_signals_evaluated,
+            bindings_invalidated: prepared_stats.bindings_invalidated,
+            dense_targets_applied: applied_targets,
+            dense_targets_changed: changed_targets,
+        };
         if effective_changed {
             self.publish_effective_change();
         }
@@ -487,18 +562,18 @@ impl SceneInstance {
             apply_reactive_value_to_row(&mut row, target.property, value);
         }
     }
-}
 
-fn runtime_stats(
-    evaluation: ReactiveEvaluationStats,
-    dense_targets_applied: usize,
-    dense_targets_changed: usize,
-) -> ReactiveRuntimeStats {
-    ReactiveRuntimeStats {
-        derived_signals_evaluated: evaluation.derived_signals_evaluated,
-        bindings_invalidated: evaluation.bindings_invalidated,
-        dense_targets_applied,
-        dense_targets_changed,
+    pub(crate) fn reactive_properties_for_object(&self, object_index: usize) -> Vec<Property> {
+        let Some(reactive) = self.reactive.as_ref() else {
+            return Vec::new();
+        };
+        reactive
+            .targets_by_object
+            .get(object_index)
+            .into_iter()
+            .flatten()
+            .map(|&index| reactive.targets[index].property)
+            .collect()
     }
 }
 
@@ -510,17 +585,22 @@ const fn property_slot(property: Property) -> u8 {
     match property {
         Property::Presence => 0,
         Property::Transform => 1,
-        Property::Position => 2,
-        Property::Rotation => 3,
-        Property::Scale => 4,
-        Property::Fill => 5,
-        Property::Stroke => 6,
-        Property::StrokeWidth => 7,
-        Property::Opacity => 8,
-        Property::Appearance => 9,
-        Property::Reveal => 10,
-        Property::Morph => 11,
-        Property::ZIndex => 12,
+        Property::WorldTransform => 2,
+        Property::CameraProfile => 14,
+        Property::Position => 3,
+        Property::Rotation => 4,
+        Property::Scale => 5,
+        Property::Fill => 6,
+        Property::Stroke => 7,
+        Property::StrokeWidth => 8,
+        Property::Opacity => 9,
+        Property::Appearance => 10,
+        Property::Reveal => 11,
+        Property::Morph => 12,
+        Property::ZIndex => 13,
+        Property::GlowColor => 15,
+        Property::GlowRadius => 16,
+        Property::GlowIntensity => 17,
     }
 }
 
@@ -602,7 +682,14 @@ pub(crate) fn apply_reactive_value_to_row(
             *row.morph = value;
             changed
         }
-        (Property::Transform | Property::Fill | Property::Stroke, _) => {
+        (
+            Property::Transform
+            | Property::CameraProfile
+            | Property::WorldTransform
+            | Property::Fill
+            | Property::Stroke,
+            _,
+        ) => {
             unreachable!("reactive values cannot drive object-snapshot or paint-color properties")
         }
         _ => unreachable!("validated reactive binding value type must match its property"),

@@ -4,8 +4,9 @@ use noon_compile::{
     ExecutionPatch, PreparedScalarSignalTimelineError, SemanticAnimationCompletion,
 };
 use noon_core::{
-    ReactiveValue, SemanticFadeDirection, SemanticMutationTransaction, SemanticNodeId,
-    SemanticObjectProperty, SemanticSignalValue, SemanticStore,
+    stage_semantic_scene_lifecycle_membership, ReactiveValue, SemanticFadeDirection,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectProperty,
+    SemanticSignalValue, SemanticStore, SemanticTransform,
 };
 use noon_runtime::{EffectivePropertyWrite, FrameState, RuntimeIdentity};
 
@@ -13,7 +14,10 @@ use crate::execution_segment::ExecutionSegmentToken;
 use crate::execution_session::CallbackTermination;
 use crate::{ExecutionSegment, ExecutionSession, ExecutionSessionPublicationError};
 
-use super::callback::{CALLBACK_STYLE_DOMAIN, CALLBACK_TRANSFORM_DOMAIN};
+use super::callback::{
+    CALLBACK_FILL, CALLBACK_OPACITY, CALLBACK_ROTATION, CALLBACK_SCALE, CALLBACK_STROKE,
+    CALLBACK_STROKE_WIDTH, CALLBACK_TRANSLATION,
+};
 
 /// Failure to atomically release one completed animation segment into authored state.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +39,7 @@ pub enum ExecutionSegmentCompletionError {
     CallbackNotCoherent,
     CallbackTerminated(CallbackTermination),
     MissingLifecycleRoot(SemanticNodeId),
+    MissingFamilyTransformRoot(SemanticNodeId),
     /// A host-modified domain cannot be released without guessing whether it
     /// should persist. The first reconciliation slice supports only callbacks
     /// that remain active at the endpoint.
@@ -46,6 +51,8 @@ pub enum ExecutionSegmentCompletionError {
     },
     PreparedScalarTimeline(PreparedScalarSignalTimelineError),
     ScalarTimeline(super::SignalTimelineAppendError),
+    InvalidFamilyReplacement,
+    ForegroundMembership(noon_core::SemanticSceneOperationError),
     Publication(ExecutionSessionPublicationError),
 }
 
@@ -70,17 +77,25 @@ impl std::fmt::Display for ExecutionSegmentCompletionError {
             Self::RequiredCallbackPending => {
                 formatter.write_str("a required callback publication is pending")
             }
-            Self::CallbackNotCoherent => formatter.write_str(
-                "required callbacks have not published a coherent endpoint frame",
-            ),
+            Self::CallbackNotCoherent => formatter
+                .write_str("required callbacks have not published a coherent endpoint frame"),
             Self::CallbackTerminated(termination) => {
-                write!(formatter, "required callback progression terminated: {termination:?}")
+                write!(
+                    formatter,
+                    "required callback progression terminated: {termination:?}"
+                )
             }
             Self::MissingLifecycleRoot(object) => write!(
                 formatter,
                 "fade completion for semantic object {}:{} has no execution root",
                 object.slot(),
                 object.generation()
+            ),
+            Self::MissingFamilyTransformRoot(source) => write!(
+                formatter,
+                "unequal family Transform completion for source {}:{} has no execution root",
+                source.slot(),
+                source.generation()
             ),
             Self::UnsupportedHostDriverRelease(object) => write!(
                 formatter,
@@ -100,6 +115,10 @@ impl std::fmt::Display for ExecutionSegmentCompletionError {
             ),
             Self::PreparedScalarTimeline(error) => error.fmt(formatter),
             Self::ScalarTimeline(error) => error.fmt(formatter),
+            Self::InvalidFamilyReplacement => formatter.write_str(
+                "segment family replacement is not valid for the current authored topology",
+            ),
+            Self::ForegroundMembership(error) => error.fmt(formatter),
             Self::Publication(error) => error.fmt(formatter),
         }
     }
@@ -126,6 +145,7 @@ impl ExecutionSession {
         segment: ExecutionSegment,
     ) -> Result<&FrameState, ExecutionSegmentCompletionError> {
         let actual_time = self.frame().time;
+        let callback_publication = self.publication_context();
         let token = segment.token();
         if let Some(token) = token {
             let runtime = self.runtime.runtime_identity();
@@ -203,6 +223,7 @@ impl ExecutionSession {
         let crate::execution_segment::PendingSegmentCompletionKind {
             lifecycle_root,
             lifecycle_removals,
+            family_transform,
             object_entries: entries,
             scalar_entries,
         } = &pending.kind;
@@ -225,15 +246,34 @@ impl ExecutionSession {
         }
 
         let mut semantic = SemanticMutationTransaction::new();
+        let mut membership_removals = BTreeMap::<SemanticNodeId, BTreeSet<SemanticNodeId>>::new();
         for entry in scalar_entries {
             semantic.set_scalar_signal_at(entry.signal, entry.authored_endpoint, actual_time);
         }
         for &(root, target) in lifecycle_removals {
-            semantic.remove_member(root, target);
+            membership_removals.entry(root).or_default().insert(target);
+        }
+        if let Some(replacement) = segment.family_replacement() {
+            super::family_transform::validate_matching_family_completion_swap(
+                store,
+                replacement.root,
+                replacement.source,
+                replacement.target,
+            )
+            .map_err(|_| ExecutionSegmentCompletionError::InvalidFamilyReplacement)?;
+            membership_removals
+                .entry(replacement.root)
+                .or_default()
+                .insert(replacement.source);
         }
         let family_removals = lifecycle_removals
             .iter()
             .map(|(_, target)| *target)
+            .chain(
+                segment
+                    .family_replacement()
+                    .map(|replacement| replacement.source),
+            )
             .collect::<BTreeSet<_>>();
         let mut release = Vec::with_capacity(entries.len());
         for entry in entries {
@@ -254,8 +294,29 @@ impl ExecutionSession {
                 let root = lifecycle_root.ok_or(
                     ExecutionSegmentCompletionError::MissingLifecycleRoot(entry.semantic_object),
                 )?;
-                semantic.remove_member(root, entry.semantic_object);
+                membership_removals
+                    .entry(root)
+                    .or_default()
+                    .insert(entry.semantic_object);
             }
+        }
+        // One combined display/declaration edit per scope. Matching cleanup's
+        // authored target is admitted after removals but before surviving foreground.
+        // Planning separate add/remove transactions could resurrect a retired source
+        // declaration or write the same membership edge twice.
+        for (root, removed) in membership_removals {
+            let added = segment
+                .family_replacement()
+                .filter(|replacement| replacement.root == root)
+                .map(|replacement| replacement.target);
+            stage_semantic_scene_lifecycle_membership(
+                store,
+                root,
+                &removed.into_iter().collect::<Vec<_>>(),
+                added.as_slice(),
+                &mut semantic,
+            )
+            .map_err(ExecutionSegmentCompletionError::ForegroundMembership)?;
         }
 
         // Paint channels carry only their exact semantic fields. Start from the
@@ -306,6 +367,14 @@ impl ExecutionSession {
                 _ => unreachable!("style-domain completion was classified above"),
             };
         }
+        if let Some(completion) = family_transform {
+            stage_unequal_family_transform_completion(
+                store,
+                &mut semantic,
+                &mut completed_styles,
+                *completion,
+            );
+        }
         for (object, style) in &completed_styles {
             semantic.replace_style(*object, style.clone());
         }
@@ -334,6 +403,40 @@ impl ExecutionSession {
                 .then_some((entry.semantic_object, index))
             })
             .collect::<HashMap<_, _>>();
+        let final_content_entries = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(
+                    entry.completion,
+                    SemanticAnimationCompletion::ContentMorph { .. }
+                )
+                .then_some((entry.semantic_object, index))
+            })
+            .collect::<HashMap<_, _>>();
+        let final_world_transform_entries = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(
+                    entry.completion,
+                    SemanticAnimationCompletion::WorldTransform { .. }
+                )
+                .then_some((entry.semantic_object, index))
+            })
+            .collect::<HashMap<_, _>>();
+        let final_camera_profile_entries = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(
+                    entry.completion,
+                    SemanticAnimationCompletion::CameraProfile { .. }
+                )
+                .then_some((entry.semantic_object, index))
+            })
+            .collect::<HashMap<_, _>>();
+        stage_glow_completions(entries, &mut semantic);
         for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
                 SemanticAnimationCompletion::Priority { value } => {
@@ -352,9 +455,25 @@ impl ExecutionSession {
                     }
                 }
                 SemanticAnimationCompletion::ContentMorph { content } => {
-                    semantic.replace_content(entry.semantic_object, *content);
+                    if final_content_entries.get(&entry.semantic_object) == Some(&index) {
+                        semantic.replace_content(entry.semantic_object, *content);
+                    }
                 }
-                SemanticAnimationCompletion::Fill { .. }
+                SemanticAnimationCompletion::WorldTransform { value } => {
+                    if final_world_transform_entries.get(&entry.semantic_object) == Some(&index) {
+                        semantic.set_object_transform(
+                            entry.semantic_object,
+                            SemanticTransform::from(*value),
+                        );
+                    }
+                }
+                SemanticAnimationCompletion::CameraProfile { profile, near, far } => {
+                    if final_camera_profile_entries.get(&entry.semantic_object) == Some(&index) {
+                        semantic.set_camera_profile(entry.semantic_object, *profile, *near, *far);
+                    }
+                }
+                SemanticAnimationCompletion::Glow { .. }
+                | SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
                 | SemanticAnimationCompletion::Fade { .. }
                 | SemanticAnimationCompletion::RevealLifecycle { .. }
@@ -365,12 +484,11 @@ impl ExecutionSession {
             // their execution history. A kept reveal lifecycle likewise has no
             // semantic reveal field to receive its endpoint, so its completed
             // execution track remains the authoritative persistent reveal history.
-            if (!entry.property.is_instant() || entry.property == noon_core::Property::ZIndex)
-                && !matches!(
-                    &entry.completion,
-                    SemanticAnimationCompletion::RevealLifecycle { remove: false }
-                )
-            {
+            if should_reconcile_execution_track(
+                entry.property,
+                &entry.completion,
+                entry.retain_effective && family_transform.is_none(),
+            ) {
                 release.push(ExecutionPatch::ReconcileTrack {
                     track: entry.track,
                     object: entry.execution_object,
@@ -420,16 +538,48 @@ impl ExecutionSession {
             let object = self
                 .effective_semantic_object(store, entry.semantic_object)?
                 .object;
-            if domains & CALLBACK_TRANSFORM_DOMAIN != 0 {
-                effective.push(EffectivePropertyWrite::Transform {
+            // Preserve only channels actually owned by continuing callbacks;
+            // unrelated completed timeline values reconcile independently.
+            if domains & CALLBACK_TRANSLATION != 0 {
+                effective.push(EffectivePropertyWrite::Translation {
                     object: entry.execution_object,
-                    transform: object.transform,
+                    translation: object.transform.translation,
                 });
             }
-            if domains & CALLBACK_STYLE_DOMAIN != 0 {
-                effective.push(EffectivePropertyWrite::Style {
+            if domains & CALLBACK_ROTATION != 0 {
+                effective.push(EffectivePropertyWrite::Rotation {
                     object: entry.execution_object,
-                    style: object.style,
+                    rotation: object.transform.rotation,
+                });
+            }
+            if domains & CALLBACK_SCALE != 0 {
+                effective.push(EffectivePropertyWrite::Scale {
+                    object: entry.execution_object,
+                    scale: object.transform.scale,
+                });
+            }
+            if domains & CALLBACK_FILL != 0 {
+                effective.push(EffectivePropertyWrite::Fill {
+                    object: entry.execution_object,
+                    fill: object.style.fill,
+                });
+            }
+            if domains & CALLBACK_STROKE != 0 {
+                effective.push(EffectivePropertyWrite::Stroke {
+                    object: entry.execution_object,
+                    stroke: object.style.stroke,
+                });
+            }
+            if domains & CALLBACK_STROKE_WIDTH != 0 {
+                effective.push(EffectivePropertyWrite::StrokeWidth {
+                    object: entry.execution_object,
+                    stroke_width: object.style.stroke_width,
+                });
+            }
+            if domains & CALLBACK_OPACITY != 0 {
+                effective.push(EffectivePropertyWrite::Opacity {
+                    object: entry.execution_object,
+                    opacity: object.style.opacity,
                 });
             }
         }
@@ -460,22 +610,146 @@ impl ExecutionSession {
             .signal_timeline
             .prepare_append_batch(timeline_entries, actual_time)
             .map_err(ExecutionSegmentCompletionError::ScalarTimeline)?;
-        self.apply_prepared_scalar_timeline_transaction_with_execution(
-            prepared,
-            release,
-            Some(effective),
-            super::publication::SemanticPublicationPurpose::SegmentCompletion,
-            handled_scalar_signals,
-        )?;
-        self.signal_timeline.commit_append(timeline);
+        // Completion can restructure display membership even without an unequal
+        // Transform. Carry the declaration's validated root through the existing
+        // publication boundary; explicit family replacement also supplies its root.
+        // The publication layer still rejects unrooted or foreign-root reorders.
+        let order_root = match family_transform {
+            Some(completion) => Some((*lifecycle_root).ok_or(
+                ExecutionSegmentCompletionError::MissingFamilyTransformRoot(completion.source),
+            )?),
+            None => (*lifecycle_root).or_else(|| {
+                segment
+                    .family_replacement()
+                    .map(|replacement| replacement.root)
+            }),
+        };
+        if let Some(root) = order_root {
+            self.apply_prepared_scalar_timeline_transaction_with_execution_at_root(
+                prepared,
+                release,
+                Some(effective),
+                super::publication::SemanticPublicationPurpose::SegmentCompletion,
+                handled_scalar_signals,
+                root,
+            )?;
+        } else {
+            self.apply_prepared_scalar_timeline_transaction_with_execution(
+                prepared,
+                release,
+                Some(effective),
+                super::publication::SemanticPublicationPurpose::SegmentCompletion,
+                handled_scalar_signals,
+            )?;
+        }
+        self.commit_scalar_timeline_append(timeline);
         self.pending_segment_completion = None;
         self.completed_segment_sequence = Some(token.sequence());
-        self.last_callback_receipt = None;
+        if (family_transform.is_some() || segment.family_replacement().is_some())
+            && self.derived_display_plan.is_some()
+        {
+            // Stable source topology is now authoritative in the same completion
+            // publication, so the identity-free interpolation occurrence must not
+            // survive for one extra frame and double-render its endpoint.
+            self.derived_display_plan = None;
+            self.derived_display_objects.clear();
+            self.derived_display_expire_after_publication = false;
+        } else if self.derived_display_plan.is_some() {
+            self.derived_display_expire_after_publication = true;
+        }
         let publication = self.publication_context();
+        // Completion preserves continuing callback domains in this exact-time
+        // frame. Carry their ownership receipt through the same publication so
+        // a subsequent updater removal can retain the endpoint without calling
+        // the host again. Stale receipts remain invalid.
+        self.carry_callback_ownership_through_completion(actual_time, callback_publication);
         self.callback_schedule
             .carry_completed_publication(actual_time, publication);
         Ok(self.frame())
     }
+}
+
+fn stage_unequal_family_transform_completion(
+    store: &SemanticStore,
+    semantic: &mut SemanticMutationTransaction,
+    completed_styles: &mut BTreeMap<SemanticNodeId, noon_core::SemanticStyle>,
+    completion: crate::execution_segment::UnequalFamilyTransformCompletion,
+) {
+    let source_members = store
+        .semantic_family_members_checked(completion.source)
+        .expect("pending unequal family Transform source remains a family at one scene revision")
+        .to_vec();
+    let target_members = store
+        .semantic_family_members_checked(completion.target_state)
+        .expect("pending unequal family Transform target remains a family at one scene revision")
+        .to_vec();
+    debug_assert!(!source_members.is_empty());
+    debug_assert!(!target_members.is_empty());
+    debug_assert_ne!(source_members.len(), target_members.len());
+
+    if source_members.len() < target_members.len() {
+        // Match Manim's repeat-index alignment. The first occurrence keeps the
+        // original source identity; only repeated source occurrences become new
+        // semantic children. They copy source-only metadata/bindings, then receive
+        // the same authored endpoint domains as the corresponding target child.
+        let mut seen_source_indices = BTreeSet::new();
+        for (position, &target_member) in target_members.iter().enumerate() {
+            let source_index =
+                aligned_repeat_index(position, source_members.len(), target_members.len());
+            if seen_source_indices.insert(source_index) {
+                continue;
+            }
+            let mut state = store
+                .semantic_object_state_checked(source_members[source_index])
+                .expect("aligned source member remains an ordinary semantic object")
+                .clone();
+            let target_state = store
+                .semantic_object_state_checked(target_member)
+                .expect("aligned target member remains an ordinary semantic object");
+            state.content = target_state.content;
+            state.transform = target_state.transform;
+            state.style = target_state.style.clone();
+            // Ordinary Transform preserves source priority. This persistent child
+            // is a legitimate copy of the repeated source occurrence, so it keeps
+            // source-owned z/role/bindings while receiving target visual domains.
+
+            let copy = semantic.create_node(SemanticNodeCreation::object(state));
+            semantic.add_member(completion.source, copy);
+            semantic.reorder_member(
+                completion.source,
+                copy,
+                source_members.get(source_index + 1).copied(),
+            );
+        }
+        return;
+    }
+
+    // When the target is shorter, Manim pads its copy and fades the repeated
+    // target occurrence to zero. Persist that visibility in authored source style
+    // so copy/save-state/future sessions observe the same completed topology, then
+    // release the execution-only Appearance driver normally.
+    let mut seen_target_indices = BTreeSet::new();
+    for (position, &source_member) in source_members.iter().enumerate() {
+        let target_index =
+            aligned_repeat_index(position, target_members.len(), source_members.len());
+        if seen_target_indices.insert(target_index) {
+            continue;
+        }
+        let style = completed_styles.entry(source_member).or_insert_with(|| {
+            store
+                .semantic_object_state_checked(source_member)
+                .expect("aligned source member remains live through completion")
+                .style
+                .clone()
+        });
+        style.object_opacity = 0.0;
+    }
+}
+
+fn aligned_repeat_index(position: usize, original_count: usize, aligned_count: usize) -> usize {
+    debug_assert!(original_count > 0);
+    debug_assert!(aligned_count >= original_count);
+    position * original_count / aligned_count
 }
 
 fn has_ancestor_in(
@@ -503,6 +777,72 @@ fn has_ancestor_in(
         }
     }
     false
+}
+
+fn stage_glow_completions(
+    entries: &[crate::execution_segment::SegmentCompletionEntry],
+    semantic: &mut SemanticMutationTransaction,
+) {
+    let final_entries = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            if let SemanticAnimationCompletion::Glow { attachment, value } = &entry.completion {
+                Some(((*attachment, value.property()), index))
+            } else {
+                None
+            }
+        })
+        .collect::<HashMap<_, _>>();
+    for (index, entry) in entries.iter().enumerate() {
+        if let SemanticAnimationCompletion::Glow { attachment, value } = &entry.completion {
+            if final_entries.get(&(*attachment, value.property())) == Some(&index) {
+                semantic.update_effect(*attachment, value.update());
+            }
+        }
+    }
+}
+
+fn should_reconcile_execution_track(
+    property: noon_core::Property,
+    completion: &SemanticAnimationCompletion,
+    retain_effective: bool,
+) -> bool {
+    !retain_effective
+        && (!property.is_instant() || property == noon_core::Property::ZIndex)
+        && !matches!(
+            completion,
+            SemanticAnimationCompletion::RevealLifecycle { remove: false }
+        )
+}
+
+#[cfg(test)]
+mod retain_effective_completion_tests {
+    use super::*;
+
+    #[test]
+    fn retained_presentation_endpoint_skips_only_execution_reconciliation() {
+        assert!(should_reconcile_execution_track(
+            noon_core::Property::Appearance,
+            &SemanticAnimationCompletion::Release,
+            false,
+        ));
+        assert!(!should_reconcile_execution_track(
+            noon_core::Property::Appearance,
+            &SemanticAnimationCompletion::Release,
+            true,
+        ));
+        assert!(!should_reconcile_execution_track(
+            noon_core::Property::Reveal,
+            &SemanticAnimationCompletion::RevealLifecycle { remove: false },
+            false,
+        ));
+        assert!(should_reconcile_execution_track(
+            noon_core::Property::ZIndex,
+            &SemanticAnimationCompletion::Priority { value: 3.0 },
+            false,
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -1278,6 +1618,7 @@ mod tests {
         updater.apply(&mut store).unwrap();
         let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
         target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        target_state.transform.orientation = noon_core::SemanticOrientation::Planar(0.75);
         let target = store.insert_semantic_object(target_state);
         let animation = store
             .insert_semantic_transform_animation(object, target, AnimationOptions::new())
@@ -1309,11 +1650,10 @@ mod tests {
             }
         };
         endpoint
-            .set_transform(
-                object,
-                Transform2D {
+            .write(
+                crate::integration::EffectiveSemanticPropertyWrite::Translation {
+                    object,
                     translation: Vec2::new(5.0, 1.0),
-                    ..Transform2D::IDENTITY
                 },
             )
             .unwrap();
@@ -1334,11 +1674,35 @@ mod tests {
             session.frame().objects[0].transform.translation,
             Vec2::new(5.0, 1.0)
         );
+        assert_eq!(session.frame().objects[0].transform.rotation, 0.75);
         assert!(session.segment_state(segment).is_complete());
         assert!(matches!(
             session.advance_to_callback_barrier(1.0).unwrap(),
             crate::execution_session::CallbackAdvance::Ready(_)
         ));
+        let mut remove = SemanticMutationTransaction::new();
+        remove.remove_updater(object, HostCallbackId::new(1), 1.0);
+        session
+            .apply_semantic_transaction(&mut store, remove)
+            .unwrap();
+        assert_eq!(
+            store
+                .semantic_object_state_checked(object)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(5.0, 1.0, 0.0),
+            "removal after segment completion retains the last callback endpoint"
+        );
+        assert!(matches!(
+            session.advance_to_callback_barrier(1.5).unwrap(),
+            crate::execution_session::CallbackAdvance::Ready(_)
+        ));
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            Vec2::new(5.0, 1.0)
+        );
+        assert_eq!(session.frame().objects[0].transform.rotation, 0.75);
     }
 
     #[test]
@@ -1396,5 +1760,211 @@ mod tests {
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.frame(), &frame);
         assert!(!session.segment_state(segment).is_complete());
+    }
+
+    #[test]
+    fn family_replacement_is_atomic_at_exact_segment_completion() {
+        let mut store = SemanticStore::new();
+        let source_leaf =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        let source_family = store.insert_family();
+        store.add_member(source_family, source_leaf).unwrap();
+
+        let mut target_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        let target_leaf = store.insert_semantic_object(target_state);
+        let target_family = store.insert_family();
+        store.add_member(target_family, target_leaf).unwrap();
+
+        let root = store.insert_family();
+        store.add_member(root, source_family).unwrap();
+        let animation = store
+            .insert_semantic_transform_animation(source_leaf, target_leaf, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap()
+            .with_family_replacement(root, source_family, target_family);
+
+        let source_execution = session
+            .execution_index
+            .execution_object_id(source_leaf)
+            .unwrap();
+        assert!(session
+            .execution_index
+            .execution_object_id(target_leaf)
+            .is_none());
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            &[source_family]
+        );
+
+        session.advance_segment_to(segment, 0.5).unwrap();
+        let before = session.publication_context();
+        assert!(matches!(
+            session.complete_segment(&mut store, segment),
+            Err(ExecutionSegmentCompletionError::NotAtBoundary {
+                expected: 1.0,
+                actual: 0.5,
+            })
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            &[source_family]
+        );
+
+        session.advance_segment_to(segment, 1.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            &[target_family]
+        );
+        assert_eq!(
+            session.execution_index.execution_object_id(source_leaf),
+            Some(source_execution)
+        );
+        assert!(session
+            .runtime
+            .frame_index_for_object(source_execution)
+            .is_none());
+        assert!(session
+            .execution_index
+            .execution_object_id(target_leaf)
+            .is_some());
+        let target_execution = session
+            .execution_index
+            .execution_object_id(target_leaf)
+            .unwrap();
+        let target_index = session
+            .runtime
+            .frame_index_for_object(target_execution)
+            .expect("replacement target must be live");
+        assert_eq!(
+            (0..session.frame().objects.len())
+                .filter(|&index| session.runtime.object_slot_is_live(index))
+                .count(),
+            1
+        );
+        assert_eq!(
+            session.frame().objects[target_index]
+                .transform
+                .translation
+                .x,
+            4.0
+        );
+
+        let completed = session.publication_context();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(session.publication_context(), completed);
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            &[target_family]
+        );
+    }
+}
+
+#[cfg(test)]
+mod glow_completion_tests {
+    use super::*;
+    use crate::execution_segment::SegmentCompletionEntry;
+    use crate::{Mobject, Scene};
+    use noon_core::{Color, Glow, GlowTrackValue, GlowUpdate, ObjectId, TrackId};
+
+    fn fixture() -> (Scene, Mobject, SemanticNodeId) {
+        let mut scene = Scene::new();
+        let source = scene.circle(0.4).unwrap();
+        scene
+            .set_glow(
+                &source,
+                GlowUpdate::default().intensity(0.4).color(Color::RED),
+            )
+            .unwrap();
+        let id = source.get_effect("glow").unwrap().node_id();
+        (scene, source, id)
+    }
+    fn entry(
+        source: &Mobject,
+        attachment: SemanticNodeId,
+        value: GlowTrackValue,
+        sequence: u64,
+    ) -> SegmentCompletionEntry {
+        SegmentCompletionEntry {
+            semantic_object: source.node_id(),
+            completion: SemanticAnimationCompletion::Glow { attachment, value },
+            execution_object: ObjectId::new(1),
+            property: value.property(),
+            track: TrackId::new(sequence),
+            end_time: sequence as f64,
+            retain_effective: false,
+        }
+    }
+    fn definition(store: &SemanticStore, attachment: SemanticNodeId) -> Glow {
+        let noon_core::EffectDefinition::Glow(glow) = store
+            .semantic_effect_state(attachment)
+            .unwrap()
+            .definition();
+        glow
+    }
+    #[test]
+    fn final_glow_completion_owns_only_its_parameter_and_coalesces_sequential_endpoints() {
+        let (mut scene, source, attachment) = fixture();
+        // Later persistent color edit must survive intensity completion.
+        scene
+            .set_glow(&source, GlowUpdate::default().color(Color::BLUE))
+            .unwrap();
+        let entries = [
+            entry(&source, attachment, GlowTrackValue::Intensity(1.4), 1),
+            entry(&source, attachment, GlowTrackValue::Intensity(0.7), 2),
+        ];
+        let mut tx = SemanticMutationTransaction::new();
+        stage_glow_completions(&entries, &mut tx);
+        assert_eq!(tx.mutations().len(), 1);
+        let mut store = scene.integration_store().borrow_mut();
+        let revision = store.scene_revision();
+        let prepared = tx.prepare(&mut store).unwrap();
+        assert_eq!(definition(prepared.store(), attachment).intensity(), 0.4);
+        assert_eq!(prepared.store().scene_revision(), revision);
+        prepared.commit();
+        assert_eq!(definition(&store, attachment).intensity(), 0.7);
+        assert_eq!(definition(&store, attachment).color(), Color::BLUE);
+        for entry in &entries {
+            assert!(should_reconcile_execution_track(
+                entry.property,
+                &entry.completion,
+                false
+            ));
+        }
+    }
+    #[test]
+    fn stale_completion_does_not_mutate_new_generation_or_other_pending_channels() {
+        let (mut scene, source, old) = fixture();
+        scene.remove_glow(&source).unwrap();
+        scene
+            .set_glow(&source, GlowUpdate::default().intensity(0.6))
+            .unwrap();
+        let new = source.get_effect("glow").unwrap().node_id();
+        assert_ne!(old, new);
+        let entries = [
+            entry(&source, new, GlowTrackValue::Color(Color::BLUE), 1),
+            entry(&source, old, GlowTrackValue::Intensity(7.0), 2),
+        ];
+        let mut tx = SemanticMutationTransaction::new();
+        stage_glow_completions(&entries, &mut tx);
+        let mut store = scene.integration_store().borrow_mut();
+        let revision = store.scene_revision();
+        let before = definition(&store, new);
+        assert!(tx.prepare(&mut store).is_err());
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(definition(&store, new), before);
     }
 }

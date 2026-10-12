@@ -1,0 +1,800 @@
+//! Explicit-position Graph/DiGraph authoring over ordinary retained semantics.
+//!
+//! Topology and semantic bindings live on the semantic family root. These
+//! wrappers retain only user-key lookup and ordinary object/family handles.
+//! Construction publishes one transaction; reads borrow the authoritative
+//! declaration instead of cloning it. Persistent topology edits replace that
+//! declaration atomically alongside their ordinary membership changes.
+
+mod construction;
+mod copy;
+mod mutation;
+#[cfg(test)]
+mod tests;
+
+use crate::{
+    AuthoringError, GraphEdge, GraphEdgeId, GraphTopology, GraphTopologyError, GraphVertexId,
+    ManimArrow, Mobject, MobjectFamily, Scene,
+};
+use construction::build_graph;
+pub use mutation::{GraphLayout, GraphLayoutOptions, GraphMutationResult};
+use noon_core::{Color, SemanticGraphDeclaration, SemanticNodeId, SemanticStoreError, WHITE};
+use std::{cell::Ref, collections::HashMap, hash::Hash};
+
+pub const DEFAULT_GRAPH_VERTEX_RADIUS: f64 = 0.08;
+pub const DEFAULT_GRAPH_VERTEX_STROKE_WIDTH: f64 = 0.0;
+pub const DEFAULT_GRAPH_EDGE_STROKE_WIDTH: f64 = 0.04;
+
+/// Shared appearance for explicit-position Graph/DiGraph construction.
+///
+/// All options are validated, including for an empty graph. Directed edges use
+/// `vertex_radius` as their default buff. Explicit positions are authored once;
+/// incident edges follow vertex movement through shared runtime dependencies.
+#[derive(Clone, Debug)]
+pub struct GraphOptions {
+    pub vertex_radius: f64,
+    pub vertex_fill: Color,
+    /// Opacity applied to every vertex fill independently from its color alpha.
+    pub vertex_fill_opacity: f64,
+    pub vertex_stroke: Color,
+    pub vertex_stroke_width: f64,
+    pub edge_color: Color,
+    pub edge_stroke_width: f64,
+    pub directed_edge_buff: Option<f64>,
+}
+
+impl Default for GraphOptions {
+    fn default() -> Self {
+        Self {
+            vertex_radius: DEFAULT_GRAPH_VERTEX_RADIUS,
+            vertex_fill: WHITE,
+            vertex_fill_opacity: 1.0,
+            vertex_stroke: WHITE,
+            vertex_stroke_width: DEFAULT_GRAPH_VERTEX_STROKE_WIDTH,
+            edge_color: WHITE,
+            edge_stroke_width: DEFAULT_GRAPH_EDGE_STROKE_WIDTH,
+            directed_edge_buff: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphEndpoint {
+    Start,
+    End,
+}
+
+#[derive(Debug)]
+pub enum GraphAuthoringError {
+    Authoring(AuthoringError),
+    Topology(GraphTopologyError),
+    /// The root is missing, stale, or not a semantic family.
+    Store(SemanticStoreError),
+    /// An explicit integration borrow currently holds the store exclusively.
+    StoreBorrowed,
+    /// The live root has no authored graph declaration.
+    MissingDeclaration(SemanticNodeId),
+    /// A graph operation could not publish through the active live session.
+    Live(crate::LiveSessionError),
+    DuplicateVertexKey {
+        vertex_index: usize,
+    },
+    UnknownEdgeEndpoint {
+        edge_index: usize,
+        endpoint: GraphEndpoint,
+    },
+    SelfEdgeUnsupported {
+        edge_index: usize,
+    },
+    UnknownVertexKey,
+    UnknownEdgeKey,
+    DuplicateMutationVertexKey,
+    DuplicateMutationEdgeKey,
+    InvalidLayout(&'static str),
+}
+
+impl From<AuthoringError> for GraphAuthoringError {
+    fn from(value: AuthoringError) -> Self {
+        Self::Authoring(value)
+    }
+}
+
+impl From<GraphTopologyError> for GraphAuthoringError {
+    fn from(value: GraphTopologyError) -> Self {
+        Self::Topology(value)
+    }
+}
+
+impl From<crate::LiveSessionError> for GraphAuthoringError {
+    fn from(value: crate::LiveSessionError) -> Self {
+        Self::Live(value)
+    }
+}
+
+impl std::fmt::Display for GraphAuthoringError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Authoring(error) => error.fmt(formatter),
+            Self::Topology(error) => error.fmt(formatter),
+            Self::Store(error) => error.fmt(formatter),
+            Self::Live(error) => error.fmt(formatter),
+            Self::StoreBorrowed => formatter.write_str("graph store is exclusively borrowed"),
+            Self::MissingDeclaration(root) => write!(
+                formatter,
+                "semantic graph root {root:?} has no graph declaration"
+            ),
+            Self::DuplicateVertexKey { vertex_index } => write!(
+                formatter,
+                "graph vertex at input index {vertex_index} repeats an existing user key"
+            ),
+            Self::UnknownEdgeEndpoint {
+                edge_index,
+                endpoint,
+            } => write!(
+                formatter,
+                "graph edge at input index {edge_index} references an unknown {} vertex key",
+                match endpoint {
+                    GraphEndpoint::Start => "start",
+                    GraphEndpoint::End => "end",
+                }
+            ),
+            Self::SelfEdgeUnsupported { edge_index } => write!(
+                formatter,
+                "graph edge at input index {edge_index} is a self-edge; public Graph self-loop geometry is not implemented yet"
+            ),
+            Self::UnknownVertexKey => formatter.write_str("unknown graph vertex key"),
+            Self::UnknownEdgeKey => formatter.write_str("unknown graph edge key"),
+            Self::DuplicateMutationVertexKey => {
+                formatter.write_str("duplicate graph vertex key in mutation")
+            }
+            Self::DuplicateMutationEdgeKey => {
+                formatter.write_str("duplicate graph edge key in mutation")
+            }
+            Self::InvalidLayout(reason) => write!(formatter, "invalid graph layout: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for GraphAuthoringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Authoring(error) => Some(error),
+            Self::Topology(error) => Some(error),
+            Self::Store(error) => Some(error),
+            Self::Live(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// Ordinary retained semantic representation of one graph edge.
+#[derive(Clone, Debug)]
+pub enum GraphEdgeMobject {
+    /// An analytic Line inside a one-member family.
+    Line {
+        family: MobjectFamily,
+        line: Mobject,
+    },
+    /// The existing shared retained Arrow family.
+    Arrow(ManimArrow),
+}
+
+impl GraphEdgeMobject {
+    pub fn family(&self) -> &MobjectFamily {
+        match self {
+            Self::Line { family, .. } => family,
+            Self::Arrow(arrow) => arrow.family(),
+        }
+    }
+
+    pub fn line(&self) -> &Mobject {
+        match self {
+            Self::Line { line, .. } => line,
+            Self::Arrow(arrow) => arrow.shaft(),
+        }
+    }
+
+    pub fn arrow(&self) -> Option<&ManimArrow> {
+        match self {
+            Self::Line { .. } => None,
+            Self::Arrow(arrow) => Some(arrow),
+        }
+    }
+}
+
+pub(super) struct GraphVertexEntry<K> {
+    pub(super) key: K,
+    pub(super) id: GraphVertexId,
+    pub(super) object: Mobject,
+}
+
+pub(super) struct GraphEdgeEntry {
+    pub(super) edge: GraphEdge,
+    pub(super) object: GraphEdgeMobject,
+}
+
+pub(super) struct RetainedGraph<K> {
+    pub(super) directed: bool,
+    pub(super) family: MobjectFamily,
+    pub(super) vertices: Vec<GraphVertexEntry<K>>,
+    pub(super) vertex_lookup: HashMap<K, usize>,
+    pub(super) edges: Vec<GraphEdgeEntry>,
+    pub(super) edge_lookup: HashMap<GraphEdgeId, usize>,
+    pub(super) options: GraphOptions,
+}
+
+impl<K: Eq + Hash> RetainedGraph<K> {
+    fn semantic_declaration(
+        &self,
+    ) -> Result<Ref<'_, SemanticGraphDeclaration>, GraphAuthoringError> {
+        let root = self.family.node_id();
+        let store = self
+            .family
+            .integration_store()
+            .try_borrow()
+            .map_err(|_| GraphAuthoringError::StoreBorrowed)?;
+        // Preserve the typed stale-root/wrong-kind error before projecting the
+        // borrow. The exclusive mutation boundary cannot change this proof while
+        // the returned Ref is alive.
+        store
+            .semantic_graph_declaration(root)
+            .map_err(GraphAuthoringError::Store)?;
+        Ref::filter_map(store, |store| {
+            store.node(root).and_then(|node| node.graph_declaration())
+        })
+        .map_err(|_| GraphAuthoringError::MissingDeclaration(root))
+    }
+
+    fn topology(&self) -> Result<Ref<'_, GraphTopology>, GraphAuthoringError> {
+        Ok(Ref::map(
+            self.semantic_declaration()?,
+            SemanticGraphDeclaration::topology,
+        ))
+    }
+
+    fn vertex_id(&self, key: &K) -> Option<GraphVertexId> {
+        self.vertex_lookup
+            .get(key)
+            .map(|&index| self.vertices[index].id)
+    }
+
+    fn vertex(&self, key: &K) -> Option<&Mobject> {
+        self.vertex_lookup
+            .get(key)
+            .map(|&index| &self.vertices[index].object)
+    }
+
+    fn edge_id(&self, start: &K, end: &K) -> Option<GraphEdgeId> {
+        let start = self.vertex_id(start)?;
+        let end = self.vertex_id(end)?;
+        self.semantic_declaration()
+            .ok()?
+            .edge_between(start, end, self.directed)
+    }
+
+    fn edge(&self, start: &K, end: &K) -> Option<&GraphEdgeMobject> {
+        let id = self.edge_id(start, end)?;
+        self.edge_lookup
+            .get(&id)
+            .map(|&index| &self.edges[index].object)
+    }
+
+    fn vertex_keys(&self) -> impl Iterator<Item = &K> {
+        self.vertices.iter().map(|entry| &entry.key)
+    }
+
+    fn edge_mobjects(&self) -> impl Iterator<Item = (GraphEdge, &GraphEdgeMobject)> {
+        self.edges.iter().map(|entry| (entry.edge, &entry.object))
+    }
+}
+
+/// Explicit-position undirected retained graph.
+///
+/// Topology survives this wrapper on its semantic family root. Key lookups return
+/// ordinary handles, which can become stale after explicit semantic deletion.
+/// Use `semantic_declaration` for a fallible authoritative read. Self-loop
+/// geometry is not supported.
+pub struct Graph<K> {
+    inner: RetainedGraph<K>,
+}
+
+impl<K: Clone + Eq + Hash> Graph<K> {
+    pub fn new<V, E>(scene: &mut Scene, vertices: V, edges: E) -> Result<Self, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Self::with_options(scene, vertices, edges, GraphOptions::default())
+    }
+
+    pub fn with_options<V, E>(
+        scene: &mut Scene,
+        vertices: V,
+        edges: E,
+        options: GraphOptions,
+    ) -> Result<Self, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Ok(Self {
+            inner: build_graph(scene, vertices, edges, false, options)?,
+        })
+    }
+
+    /// Construct through an already-running session without creating a second
+    /// Scene or execution owner.
+    pub fn new_live<V, E>(
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+        edges: E,
+    ) -> Result<Self, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Self::with_options_live(live, vertices, edges, GraphOptions::default())
+    }
+
+    pub fn with_options_live<V, E>(
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+        edges: E,
+        options: GraphOptions,
+    ) -> Result<Self, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Ok(Self {
+            inner: build_graph(live, vertices, edges, false, options)?,
+        })
+    }
+}
+
+impl<K: Eq + Hash> Graph<K> {
+    pub fn family(&self) -> &MobjectFamily {
+        &self.inner.family
+    }
+
+    /// Borrow the authoritative topology in O(1), without allocation or cloning.
+    /// Drop this read guard before mutating the same semantic store.
+    pub fn topology(&self) -> Result<Ref<'_, GraphTopology>, GraphAuthoringError> {
+        self.inner.topology()
+    }
+
+    /// Borrow the authoritative declaration in O(1). Stale roots and conflicting
+    /// integration borrows return typed errors rather than panicking.
+    pub fn semantic_declaration(
+        &self,
+    ) -> Result<Ref<'_, SemanticGraphDeclaration>, GraphAuthoringError> {
+        self.inner.semantic_declaration()
+    }
+
+    pub fn vertex_id(&self, key: &K) -> Option<GraphVertexId> {
+        self.inner.vertex_id(key)
+    }
+
+    pub fn vertex(&self, key: &K) -> Option<&Mobject> {
+        self.inner.vertex(key)
+    }
+
+    /// Missing keys, an unavailable declaration, or a missing edge return None.
+    pub fn edge_id(&self, start: &K, end: &K) -> Option<GraphEdgeId> {
+        self.inner.edge_id(start, end)
+    }
+
+    pub fn edge(&self, start: &K, end: &K) -> Option<&GraphEdgeMobject> {
+        self.inner.edge(start, end)
+    }
+
+    pub fn vertex_keys(&self) -> impl Iterator<Item = &K> {
+        self.inner.vertex_keys()
+    }
+
+    pub fn edge_mobjects(&self) -> impl Iterator<Item = (GraphEdge, &GraphEdgeMobject)> {
+        self.inner.edge_mobjects()
+    }
+}
+
+impl<K: Clone + Eq + Hash> Graph<K> {
+    /// Append graph vertices through the Scene's current publication path.
+    pub fn add_vertices<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+    {
+        mutation::add_vertices(scene, &mut self.inner, vertices)
+    }
+
+    /// Append graph edges through the Scene's current publication path.
+    pub fn add_edges<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::add_edges(scene, &mut self.inner, edges)
+    }
+
+    pub fn remove_vertices<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = K>,
+    {
+        mutation::remove_vertices(scene, &mut self.inner, vertices)
+    }
+
+    pub fn remove_edges<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::remove_edges(scene, &mut self.inner, edges)
+    }
+
+    pub fn change_layout(
+        &mut self,
+        scene: &mut Scene,
+        options: GraphLayoutOptions,
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout(scene, &mut self.inner, options)
+    }
+
+    /// Persist explicit positions in current graph vertex insertion order.
+    pub fn change_layout_positions(
+        &mut self,
+        scene: &mut Scene,
+        positions: &[(f64, f64)],
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout_positions(scene, &mut self.inner, positions)
+    }
+
+    pub fn add_vertices_live<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+    {
+        mutation::add_vertices(live, &mut self.inner, vertices)
+    }
+
+    pub fn add_edges_live<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::add_edges(live, &mut self.inner, edges)
+    }
+
+    pub fn remove_vertices_live<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = K>,
+    {
+        mutation::remove_vertices(live, &mut self.inner, vertices)
+    }
+
+    pub fn remove_edges_live<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::remove_edges(live, &mut self.inner, edges)
+    }
+
+    pub fn change_layout_live(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        options: GraphLayoutOptions,
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout(live, &mut self.inner, options)
+    }
+
+    pub fn change_layout_positions_live(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        positions: &[(f64, f64)],
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout_positions(live, &mut self.inner, positions)
+    }
+}
+
+/// Explicit-position directed retained graph using shared Arrow geometry.
+/// The same read/lifetime and unsupported-feature boundaries as Graph apply.
+pub struct DiGraph<K> {
+    inner: RetainedGraph<K>,
+}
+
+impl<K: Clone + Eq + Hash> DiGraph<K> {
+    pub fn new<V, E>(scene: &mut Scene, vertices: V, edges: E) -> Result<Self, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Self::with_options(scene, vertices, edges, GraphOptions::default())
+    }
+
+    pub fn with_options<V, E>(
+        scene: &mut Scene,
+        vertices: V,
+        edges: E,
+        options: GraphOptions,
+    ) -> Result<Self, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Ok(Self {
+            inner: build_graph(scene, vertices, edges, true, options)?,
+        })
+    }
+
+    /// Construct through an already-running session without creating a second
+    /// Scene or execution owner.
+    pub fn new_live<V, E>(
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+        edges: E,
+    ) -> Result<Self, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Self::with_options_live(live, vertices, edges, GraphOptions::default())
+    }
+
+    pub fn with_options_live<V, E>(
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+        edges: E,
+        options: GraphOptions,
+    ) -> Result<Self, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Ok(Self {
+            inner: build_graph(live, vertices, edges, true, options)?,
+        })
+    }
+}
+
+impl<K: Eq + Hash> DiGraph<K> {
+    pub fn family(&self) -> &MobjectFamily {
+        &self.inner.family
+    }
+
+    /// Borrow the authoritative topology in O(1). Drop before mutation.
+    pub fn topology(&self) -> Result<Ref<'_, GraphTopology>, GraphAuthoringError> {
+        self.inner.topology()
+    }
+
+    /// Borrow the authoritative declaration without cloning or stale-root panic.
+    pub fn semantic_declaration(
+        &self,
+    ) -> Result<Ref<'_, SemanticGraphDeclaration>, GraphAuthoringError> {
+        self.inner.semantic_declaration()
+    }
+
+    pub fn vertex_id(&self, key: &K) -> Option<GraphVertexId> {
+        self.inner.vertex_id(key)
+    }
+
+    pub fn vertex(&self, key: &K) -> Option<&Mobject> {
+        self.inner.vertex(key)
+    }
+
+    pub fn edge_id(&self, start: &K, end: &K) -> Option<GraphEdgeId> {
+        self.inner.edge_id(start, end)
+    }
+
+    pub fn edge(&self, start: &K, end: &K) -> Option<&GraphEdgeMobject> {
+        self.inner.edge(start, end)
+    }
+
+    pub fn vertex_keys(&self) -> impl Iterator<Item = &K> {
+        self.inner.vertex_keys()
+    }
+
+    pub fn edge_mobjects(&self) -> impl Iterator<Item = (GraphEdge, &GraphEdgeMobject)> {
+        self.inner.edge_mobjects()
+    }
+}
+
+impl<K: Clone + Eq + Hash> DiGraph<K> {
+    pub fn add_vertices<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+    {
+        mutation::add_vertices(scene, &mut self.inner, vertices)
+    }
+
+    pub fn add_edges<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::add_edges(scene, &mut self.inner, edges)
+    }
+
+    pub fn remove_vertices<V>(
+        &mut self,
+        scene: &mut Scene,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = K>,
+    {
+        mutation::remove_vertices(scene, &mut self.inner, vertices)
+    }
+
+    pub fn remove_edges<E>(
+        &mut self,
+        scene: &mut Scene,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::remove_edges(scene, &mut self.inner, edges)
+    }
+
+    pub fn change_layout(
+        &mut self,
+        scene: &mut Scene,
+        options: GraphLayoutOptions,
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout(scene, &mut self.inner, options)
+    }
+
+    /// Persist explicit positions in current graph vertex insertion order.
+    pub fn change_layout_positions(
+        &mut self,
+        scene: &mut Scene,
+        positions: &[(f64, f64)],
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout_positions(scene, &mut self.inner, positions)
+    }
+
+    pub fn add_vertices_live<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = (K, (f64, f64))>,
+    {
+        mutation::add_vertices(live, &mut self.inner, vertices)
+    }
+
+    pub fn add_edges_live<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::add_edges(live, &mut self.inner, edges)
+    }
+
+    pub fn remove_vertices_live<V>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        vertices: V,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        V: IntoIterator<Item = K>,
+    {
+        mutation::remove_vertices(live, &mut self.inner, vertices)
+    }
+
+    pub fn remove_edges_live<E>(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        edges: E,
+    ) -> Result<GraphMutationResult, GraphAuthoringError>
+    where
+        E: IntoIterator<Item = (K, K)>,
+    {
+        mutation::remove_edges(live, &mut self.inner, edges)
+    }
+
+    pub fn change_layout_live(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        options: GraphLayoutOptions,
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout(live, &mut self.inner, options)
+    }
+
+    pub fn change_layout_positions_live(
+        &mut self,
+        live: &mut crate::LiveSession<'_>,
+        positions: &[(f64, f64)],
+    ) -> Result<(), GraphAuthoringError> {
+        mutation::change_layout_positions(live, &mut self.inner, positions)
+    }
+}
+
+impl Scene {
+    pub fn graph<K, V, E>(&mut self, vertices: V, edges: E) -> Result<Graph<K>, GraphAuthoringError>
+    where
+        K: Clone + Eq + Hash,
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Graph::new(self, vertices, edges)
+    }
+
+    pub fn graph_with_options<K, V, E>(
+        &mut self,
+        vertices: V,
+        edges: E,
+        options: GraphOptions,
+    ) -> Result<Graph<K>, GraphAuthoringError>
+    where
+        K: Clone + Eq + Hash,
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        Graph::with_options(self, vertices, edges, options)
+    }
+
+    pub fn digraph<K, V, E>(
+        &mut self,
+        vertices: V,
+        edges: E,
+    ) -> Result<DiGraph<K>, GraphAuthoringError>
+    where
+        K: Clone + Eq + Hash,
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        DiGraph::new(self, vertices, edges)
+    }
+
+    pub fn digraph_with_options<K, V, E>(
+        &mut self,
+        vertices: V,
+        edges: E,
+        options: GraphOptions,
+    ) -> Result<DiGraph<K>, GraphAuthoringError>
+    where
+        K: Clone + Eq + Hash,
+        V: IntoIterator<Item = (K, (f64, f64))>,
+        E: IntoIterator<Item = (K, K)>,
+    {
+        DiGraph::with_options(self, vertices, edges, options)
+    }
+}

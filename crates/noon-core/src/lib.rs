@@ -8,20 +8,28 @@
 #![forbid(unsafe_code)]
 
 mod animation;
+mod camera_motion;
 mod graph_topology;
+mod manim_camera3d;
+mod numeric_format;
 mod object_state;
 mod publication;
 mod reactive;
 mod resources;
 mod semantic_store;
+mod spatial3d;
 
 pub use animation::*;
+pub use camera_motion::*;
 pub use graph_topology::*;
+pub use manim_camera3d::*;
+pub use numeric_format::*;
 pub use object_state::*;
 pub use publication::*;
 pub use reactive::*;
 pub use resources::*;
 pub use semantic_store::*;
+pub use spatial3d::*;
 
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
@@ -172,6 +180,39 @@ pub const DEFAULT_FRAME_WIDTH: f32 = DEFAULT_FRAME_HEIGHT * 16.0 / 9.0;
 pub struct Camera2DState {
     pub center: Vec2,
     pub height: f32,
+}
+
+/// One effective retained inset view derived from two ordinary runtime rows in
+/// the same frame epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Inset2DViewState {
+    pub camera_frame: ObjectId,
+    pub display: ObjectId,
+    pub camera: Camera2DState,
+    pub display_center: Vec2,
+    pub display_size: Vec2,
+    pub display_stroke_width: f32,
+    pub capture_own_display: bool,
+}
+
+impl Inset2DViewState {
+    pub fn zoom_factor(self) -> f32 {
+        self.camera.height / self.display_size.y
+    }
+
+    /// World-space source bounds captured by this inset's effective camera.
+    pub fn camera_bounds(self) -> Option<Rect> {
+        let aspect = self.display_size.x / self.display_size.y;
+        let size = Vec2::new(self.camera.height * aspect, self.camera.height);
+        if !size.x.is_finite() || !size.y.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
+            return None;
+        }
+        let half = size * 0.5;
+        Some(Rect::new(
+            self.camera.center - half,
+            self.camera.center + half,
+        ))
+    }
 }
 
 impl Default for Camera2DState {
@@ -488,6 +529,47 @@ pub struct VectorPath {
 }
 
 impl VectorPath {
+    /// Number of authored commands retained by this path, including nested morph targets.
+    pub fn retained_command_count(&self) -> usize {
+        self.commands.len()
+            + self
+                .morph_target
+                .as_deref()
+                .map(Self::retained_command_count)
+                .unwrap_or(0)
+    }
+
+    /// Whether this path contains at least one drawable segment.
+    pub fn has_drawable_segments(&self) -> bool {
+        let mut current = None;
+        let mut subpath_start = None;
+        for command in self.commands() {
+            match *command {
+                PathCommand::MoveTo { to } => {
+                    current = Some(to);
+                    subpath_start = Some(to);
+                }
+                PathCommand::LineTo { to }
+                | PathCommand::QuadraticTo { to, .. }
+                | PathCommand::CubicTo { to, .. } => {
+                    if current.is_some() {
+                        return true;
+                    }
+                    current = Some(to);
+                }
+                PathCommand::Close => {
+                    if current
+                        .zip(subpath_start)
+                        .is_some_and(|(from, to)| (from - to).length() > f32::EPSILON)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Transform every endpoint/control point, including any morph target.
     pub fn transformed(&self, transform: Transform2D) -> Self {
         let mut result = Self::new();
@@ -532,6 +614,31 @@ impl VectorPath {
             } => vec2_is_finite(control1) && vec2_is_finite(control2) && vec2_is_finite(to),
             PathCommand::Close => true,
         }) && self.morph_target().is_none_or(VectorPath::is_finite)
+    }
+
+    /// Whether every anchor and curve control remains finite after the supplied affine
+    /// transform and center-offset subtraction. Curves stay inside the convex hull of
+    /// their transformed controls, so this also bounds every runtime sample.
+    pub fn has_finite_transformed_output(&self, transform: Transform2D, offset: Vec2) -> bool {
+        let finite_output = |point: Vec2| {
+            let output = transform.transform_point(point);
+            output.x.is_finite()
+                && output.y.is_finite()
+                && (output.x - offset.x).is_finite()
+                && (output.y - offset.y).is_finite()
+        };
+        self.commands().iter().all(|command| match *command {
+            PathCommand::MoveTo { to } | PathCommand::LineTo { to } => finite_output(to),
+            PathCommand::QuadraticTo { control, to } => finite_output(control) && finite_output(to),
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => finite_output(control1) && finite_output(control2) && finite_output(to),
+            PathCommand::Close => true,
+        }) && self
+            .morph_target()
+            .is_none_or(|target| target.has_finite_transformed_output(transform, offset))
     }
 
     pub const fn new() -> Self {

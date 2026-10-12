@@ -52,6 +52,8 @@ fn build_frame(segments: usize) -> FrameState {
         family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(1),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::path(path)),

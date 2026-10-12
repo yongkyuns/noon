@@ -1,13 +1,27 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Infallible,
+};
 
 use super::*;
-use crate::SceneRevision;
+mod effects;
+use crate::{
+    SceneRevision, SemanticGraphDeclaration, SemanticGraphEdgeBinding, SemanticGraphEdgeDependency,
+    SemanticTransactionGraphEdgeDependency,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticTransactionReadError {
     PendingNodeFromDifferentTransaction(SemanticLocalNodeToken),
     UnknownPendingNode(SemanticLocalNodeToken),
     RemovedPendingNode(SemanticLocalNodeToken),
+    /// Existing-handle planners cannot traverse an order link that leads to a
+    /// transaction-local node. They must reject rather than truncate it.
+    PendingMembershipAdjacency(SemanticLocalNodeToken),
+    /// The requested local object does not carry transaction-local path content.
+    NotPendingGeometry(SemanticTransactionNodeRef),
+    /// A pending path declaration lost its transaction-owned payload before read.
+    UnknownPendingGeometry(SemanticTransactionNodeRef),
     RemovedExistingNode(SemanticNodeId),
     UnknownExistingNode(SemanticNodeId),
     NotObject(SemanticTransactionNodeRef),
@@ -55,30 +69,78 @@ pub struct PreparedSemanticMutationTransaction<'a> {
     planned_nodes: HashMap<SemanticLocalNodeToken, SemanticNodeId>,
 }
 
+struct PreparedTransactionParts {
+    preflight: SemanticTransactionPreflight,
+    next_revision: Option<SceneRevision>,
+    planned_nodes: HashMap<SemanticLocalNodeToken, SemanticNodeId>,
+}
+
+enum PreparedExtensionError<E> {
+    Extension(E),
+    Preflight(SemanticMutationTransactionError),
+}
+
+/// Failure while materializing transaction-owned path payloads inside the same
+/// scope as a final semantic/execution publication.
+#[derive(Debug)]
+pub enum PendingGeometryPublicationError<E> {
+    Resource(crate::GeometryResourceError),
+    Transaction(SemanticMutationTransactionError),
+    Publication(E),
+}
+
+impl<E> From<crate::GeometryResourceError> for PendingGeometryPublicationError<E> {
+    fn from(error: crate::GeometryResourceError) -> Self {
+        Self::Resource(error)
+    }
+}
+
+/// A recoverable extension failure that may have retained fresh transaction-local
+/// resource payloads. Recovery drops only the extension's payload suffix while
+/// preserving prior callback declarations and monotonic local token allocation.
+#[derive(Debug)]
+pub enum PendingResourceExtensionError<E> {
+    Extension(E),
+    Preflight(SemanticMutationTransactionError),
+}
+
 impl<'a> PreparedSemanticMutationTransaction<'a> {
+    fn pending_path_resource_tokens(
+        preflight: &SemanticTransactionPreflight,
+    ) -> Vec<SemanticLocalResourceToken> {
+        let mut seen = HashSet::with_capacity(preflight.staged_pending_paths.len());
+        preflight
+            .staged_pending_paths
+            .values()
+            .map(|state| state.resource())
+            .filter(|resource| seen.insert(*resource))
+            .collect()
+    }
     pub(super) fn new(
         transaction: SemanticMutationTransaction,
         store: &'a mut SemanticStore,
     ) -> Result<Self, SemanticMutationTransactionError> {
-        let preflight = transaction.preflight(store)?;
-        let next_revision = if preflight.changed.iter().any(|changed| *changed) {
-            Some(
-                store
-                    .scene_revision()
-                    .checked_next()
-                    .ok_or(SemanticMutationTransactionError::SceneRevisionExhausted)?,
-            )
-        } else {
-            None
+        Self::new_recoverable(transaction, store).map_err(|(_, error)| error)
+    }
+
+    pub(super) fn new_recoverable(
+        transaction: SemanticMutationTransaction,
+        store: &'a mut SemanticStore,
+    ) -> Result<
+        Self,
+        (
+            SemanticMutationTransaction,
+            SemanticMutationTransactionError,
+        ),
+    > {
+        let PreparedTransactionParts {
+            preflight,
+            next_revision,
+            planned_nodes,
+        } = match Self::preflight_parts(&transaction, store) {
+            Ok(parts) => parts,
+            Err(error) => return Err((transaction, error)),
         };
-        let tokens = transaction.mutations.iter().filter_map(|mutation| match mutation {
-            SemanticMutation::AddNode { token, .. } if !preflight.removed_pending.contains(token) => Some(*token),
-            SemanticMutation::AddAnimation { token, animation }
-                if !preflight.removed_pending.contains(token) && !animation.intent().node_references().any(|reference|
-                    matches!(reference, SemanticTransactionNodeRef::Pending(dependency) if preflight.removed_pending.contains(&dependency))) => Some(*token),
-            _ => None,
-        });
-        let planned_nodes = tokens.zip(store.preview_node_allocations()).collect();
         Ok(Self {
             store,
             transaction,
@@ -91,6 +153,217 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     /// The published store, held read-only while this batch is staged.
     pub fn store(&self) -> &SemanticStore {
         self.store
+    }
+
+    /// Discard this preflight proof and recover its exact unpublished
+    /// transaction.
+    ///
+    /// This is intentionally consuming: the returned transaction keeps its
+    /// transaction identity and local-node allocator, while releasing the
+    /// exclusive store borrow held by the proof. Callback collectors use it to
+    /// stage several fallible existing-handle operations before preparing one
+    /// final publication. It never clones or commits authored state.
+    pub fn into_transaction(self) -> SemanticMutationTransaction {
+        self.transaction
+    }
+
+    /// Extend an unpublished transaction, then preflight it atomically.
+    ///
+    /// On either extension or preflight failure, this restores the exact prior
+    /// mutation prefix and preflight proof. Local-token allocation remains
+    /// monotonic: a token exposed by a rejected extension is never reused by a
+    /// later retry, preventing an escaped phase-local token from aliasing a new
+    /// declaration. The small callers below select only their mutation source
+    /// and error vocabulary.
+    fn with_recoverable_extension<E>(
+        self,
+        allow_repeated_membership: Option<bool>,
+        extend: impl FnOnce(&mut SemanticMutationTransaction, &SemanticStore) -> Result<(), E>,
+    ) -> Result<Self, (Box<Self>, PreparedExtensionError<E>)> {
+        let Self {
+            store,
+            mut transaction,
+            preflight,
+            next_revision,
+            planned_nodes,
+        } = self;
+        let original_len = transaction.mutations.len();
+        let original_resource_len = transaction.pending_resource_count();
+        let original_repeated_membership = transaction.allow_repeated_membership_mutations;
+        if let Some(allow_repeated_membership) = allow_repeated_membership {
+            transaction.allow_repeated_membership_mutations = allow_repeated_membership;
+        }
+        if let Err(error) = extend(&mut transaction, store) {
+            transaction.mutations.truncate(original_len);
+            transaction.truncate_pending_resources(original_resource_len);
+            transaction.allow_repeated_membership_mutations = original_repeated_membership;
+            return Err((
+                Box::new(Self {
+                    store,
+                    transaction,
+                    preflight,
+                    next_revision,
+                    planned_nodes,
+                }),
+                PreparedExtensionError::Extension(error),
+            ));
+        }
+        let PreparedTransactionParts {
+            preflight: candidate_preflight,
+            next_revision: candidate_next_revision,
+            planned_nodes: candidate_planned_nodes,
+        } = match Self::preflight_parts(&transaction, store) {
+            Ok(parts) => parts,
+            Err(error) => {
+                transaction.mutations.truncate(original_len);
+                transaction.truncate_pending_resources(original_resource_len);
+                transaction.allow_repeated_membership_mutations = original_repeated_membership;
+                return Err((
+                    Box::new(Self {
+                        store,
+                        transaction,
+                        preflight,
+                        next_revision,
+                        planned_nodes,
+                    }),
+                    PreparedExtensionError::Preflight(error),
+                ));
+            }
+        };
+        Ok(Self {
+            store,
+            transaction,
+            preflight: candidate_preflight,
+            next_revision: candidate_next_revision,
+            planned_nodes: candidate_planned_nodes,
+        })
+    }
+
+    /// Consume this unpublished proof after an existing-handle planner has read
+    /// it, then re-preflight the combined transaction under the same exclusive
+    /// store borrow. This is intentionally not `Clone`: provisional names and
+    /// transaction provenance remain in their original allocation domain.
+    pub(crate) fn with_existing_plan(
+        self,
+        plan: SemanticMutationTransaction,
+    ) -> Result<Self, (Box<Self>, SemanticMutationTransactionError)> {
+        debug_assert!(plan.mutations.iter().all(|mutation| {
+            !matches!(
+                mutation,
+                SemanticMutation::AddNode { .. } | SemanticMutation::AddAnimation { .. }
+            ) && mutation
+                .node_references()
+                .into_iter()
+                .all(|node| node.existing().is_some())
+        }));
+        self.with_recoverable_extension(Some(true), move |transaction, _store| {
+            transaction.mutations.extend(plan.mutations);
+            Ok::<(), Infallible>(())
+        })
+        .map_err(|(prepared, error)| match error {
+            PreparedExtensionError::Extension(never) => match never {},
+            PreparedExtensionError::Preflight(error) => (prepared, error),
+        })
+    }
+
+    /// Extend this prepared proof with one shared pending-node scene admission.
+    ///
+    /// This keeps the transaction-local allocator and prior mutation prefix in
+    /// place. Both planner rejection and final preflight rejection truncate the
+    /// attempted edge/order suffix before reconstructing the original proof.
+    pub(crate) fn with_pending_scene_admission(
+        self,
+        scene_root: SemanticNodeId,
+        admitted: &[SemanticTransactionNodeRef],
+    ) -> Result<Self, (Box<Self>, crate::PreparedSemanticMembershipErrorKind)> {
+        self.with_recoverable_extension(Some(true), |transaction, store| {
+            crate::stage_semantic_scene_admission(store, scene_root, admitted, transaction)
+        })
+        .map_err(|(prepared, error)| match error {
+            PreparedExtensionError::Extension(error) => (
+                prepared,
+                crate::PreparedSemanticMembershipErrorKind::Operation(error),
+            ),
+            PreparedExtensionError::Preflight(error) => (
+                prepared,
+                crate::PreparedSemanticMembershipErrorKind::Transaction(error),
+            ),
+        })
+    }
+
+    fn preflight_parts(
+        transaction: &SemanticMutationTransaction,
+        store: &SemanticStore,
+    ) -> Result<PreparedTransactionParts, SemanticMutationTransactionError> {
+        let mut preflight = transaction.preflight(store)?;
+        let next_revision = if preflight.changed.iter().any(|changed| *changed) {
+            Some(
+                store
+                    .scene_revision()
+                    .checked_next()
+                    .ok_or(SemanticMutationTransactionError::SceneRevisionExhausted)?,
+            )
+        } else {
+            None
+        };
+        let tokens = transaction.mutations.iter().filter_map(|mutation| match mutation {
+            SemanticMutation::AddNode { token, .. } if !preflight.removed_pending.contains(token) => {
+                Some(*token)
+            }
+            SemanticMutation::AddAnimation { token, animation }
+                if !preflight.removed_pending.contains(token)
+                    && !animation.intent().node_references().any(|reference|
+                        matches!(reference, SemanticTransactionNodeRef::Pending(dependency) if preflight.removed_pending.contains(&dependency))) =>
+            {
+                Some(*token)
+            }
+            _ => None,
+        });
+        let planned_nodes: HashMap<_, _> = tokens.zip(store.preview_node_allocations()).collect();
+        for mutation in &transaction.mutations {
+            if let SemanticMutation::AddNode {
+                token,
+                creation: SemanticNodeCreation::Effect { owner, .. },
+            } = mutation
+            {
+                if planned_nodes.contains_key(token) {
+                    preflight
+                        .pending_effect_order
+                        .entry(*owner)
+                        .or_default()
+                        .push(*token);
+                }
+            }
+        }
+        for mutation in &transaction.mutations {
+            let SemanticMutation::AddAnimation { token, animation } = mutation else {
+                continue;
+            };
+            if !planned_nodes.contains_key(token) {
+                continue;
+            }
+            if let crate::SemanticTransactionAnimationIntent::TransformTo {
+                target,
+                target_state,
+                ..
+            } = animation.intent()
+            {
+                let source = effects::effect_snapshot(store, &preflight, &planned_nodes, *target);
+                let target =
+                    effects::effect_snapshot(store, &preflight, &planned_nodes, *target_state);
+                if let Some(snapshot) = crate::SemanticTransformEffectSnapshot::new(source, target)
+                {
+                    preflight
+                        .animation_effect_snapshots
+                        .insert(*token, snapshot);
+                }
+            }
+        }
+        Ok(PreparedTransactionParts {
+            preflight,
+            next_revision,
+            planned_nodes,
+        })
     }
 
     /// Allocator-derived identity for fallible execution preparation under this
@@ -108,6 +381,126 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             SemanticTransactionNodeRef::Existing(node) => self.store.node(node).map(|_| node),
             SemanticTransactionNodeRef::Pending(token) => self.planned_nodes.get(&token).copied(),
         }
+    }
+
+    /// Extend this prepared proof with authored writes to pending nodes while
+    /// retaining the exact prior proof when the added writes fail preflight.
+    ///
+    /// Callback-local construction uses this for a phase-bound object before it
+    /// has a durable semantic identity. The closure appends ordinary semantic
+    /// transaction mutations; it does not introduce a second patch vocabulary.
+    pub fn with_pending_object_update(
+        self,
+        update: impl FnOnce(&mut SemanticMutationTransaction),
+    ) -> Result<Self, (Box<Self>, SemanticMutationTransactionError)> {
+        // Pending-only coalescing can replace a mutation that was already in
+        // the prefix. Keep a bounded exact snapshot so a late invalid update
+        // restores that declaration as well as appended suffix mutations.
+        // Local-token allocation intentionally remains monotonic on recovery.
+        let original_mutations = self.transaction.mutations.clone();
+        self.with_recoverable_extension(None, |transaction, _store| {
+            update(transaction);
+            Ok::<(), Infallible>(())
+        })
+        .map_err(|(mut prepared, error)| {
+            prepared.transaction.mutations = original_mutations;
+            match error {
+                PreparedExtensionError::Extension(never) => match never {},
+                PreparedExtensionError::Preflight(error) => (prepared, error),
+            }
+        })
+    }
+
+    /// Extend this proof with transaction-owned resource content while keeping
+    /// a caught construction/preflight error recoverable. Fresh raw payloads are
+    /// truncated on error; their token allocation remains monotonic so an escaped
+    /// rejected token cannot name a later declaration.
+    pub fn with_pending_resource_object<T, E>(
+        self,
+        extend: impl FnOnce(&mut SemanticMutationTransaction) -> Result<T, E>,
+    ) -> Result<(Self, T), (Box<Self>, PendingResourceExtensionError<E>)> {
+        // This closure accepts the transaction's normal mutable vocabulary, so
+        // it may coalesce an earlier provisional write before returning an
+        // error. Preserve that exact prefix as well as the helper's resource
+        // suffix rollback.
+        let original_mutations = self.transaction.mutations.clone();
+        let mut value = None;
+        self.with_recoverable_extension(None, |transaction, _store| {
+            value = Some(extend(transaction)?);
+            Ok(())
+        })
+        .map(|prepared| {
+            (
+                prepared,
+                value.expect("successful resource extension returns its staged value"),
+            )
+        })
+        .map_err(|(mut prepared, error)| {
+            prepared.transaction.mutations = original_mutations;
+            let error = match error {
+                PreparedExtensionError::Extension(error) => {
+                    PendingResourceExtensionError::Extension(error)
+                }
+                PreparedExtensionError::Preflight(error) => {
+                    PendingResourceExtensionError::Preflight(error)
+                }
+            };
+            (prepared, error)
+        })
+    }
+
+    /// Materialize every live transaction-local path payload inside the existing
+    /// scoped geometry admission boundary, then invoke one final publication.
+    ///
+    /// This consuming seam is intentionally terminal: the callback/runtime
+    /// publication may consume lowering proof before reporting an error. Fresh
+    /// paths are removed by [`SemanticStore::with_geometry_paths`] on any
+    /// materialization, preflight, or publication failure; no durable resource
+    /// exists before this scope starts. Canceled pending nodes are excluded and
+    /// their raw payloads are simply dropped.
+    pub fn with_pending_geometry_paths<T, E>(
+        self,
+        publish: impl for<'scope> FnOnce(PreparedSemanticMutationTransaction<'scope>) -> Result<T, E>,
+    ) -> Result<T, PendingGeometryPublicationError<E>> {
+        let Self {
+            store,
+            mut transaction,
+            preflight,
+            next_revision,
+            planned_nodes,
+        } = self;
+        let tokens = Self::pending_path_resource_tokens(&preflight);
+        if tokens.is_empty() {
+            return publish(Self {
+                store,
+                transaction,
+                preflight,
+                next_revision,
+                planned_nodes,
+            })
+            .map_err(PendingGeometryPublicationError::Publication);
+        }
+        let payloads = transaction.take_pending_geometry_paths(&tokens);
+        debug_assert_eq!(payloads.len(), tokens.len());
+        let resource_tokens = payloads.iter().map(|(token, _)| *token).collect::<Vec<_>>();
+        let final_states = preflight.staged_pending_paths.clone();
+        store.with_geometry_paths(
+            payloads.into_iter().map(|(_, path)| path),
+            move |store, handles| {
+                let resources = resource_tokens
+                    .iter()
+                    .copied()
+                    .zip(handles.iter().copied())
+                    .collect::<HashMap<_, _>>();
+                transaction.materialize_pending_geometry_paths(&resources, &final_states);
+                let prepared =
+                    PreparedSemanticMutationTransaction::new_recoverable(transaction, store)
+                        .map_err(|(_, error)| {
+                            PendingGeometryPublicationError::Transaction(error)
+                        })?;
+                publish(prepared).map_err(PendingGeometryPublicationError::Publication)
+            },
+        )
     }
 
     /// Re-preflight this still-unpublished batch with compiler-derived scalar tracks.
@@ -132,6 +525,27 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 track.time_map().clone(),
             );
         }
+        Self::new(transaction, store)
+    }
+
+    /// Re-preflight this unpublished batch after resolving metadata against a
+    /// transaction-local allocator identity.
+    ///
+    /// Composite resource authors use this narrow extension when a newly
+    /// created DecimalNumber binds to a signal created by the same transaction.
+    /// The allocator remains exclusively borrowed, so the planned signal id is
+    /// stable across this second preflight and still cannot escape publication.
+    pub fn with_decimal_number(
+        self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        number: crate::SemanticDecimalNumber,
+    ) -> Result<Self, SemanticMutationTransactionError> {
+        let Self {
+            store,
+            mut transaction,
+            ..
+        } = self;
+        transaction.replace_decimal_number(object, number);
         Self::new(transaction, store)
     }
 
@@ -176,6 +590,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .unwrap_or_else(|| self.store.scene_revision())
     }
 
+    /// Existing objects whose shared spatial anchor is cleared by the staged
+    /// structural removal. These rows require local spatial-state publication.
+    pub fn spatial_anchor_cleared_owners(&self) -> &[SemanticNodeId] {
+        &self.preflight.spatial_anchor_cleared
+    }
+
     /// Proposed presentation states, grouped in first changed-object order.
     ///
     /// This derived overlay applies object `SetZIndex`, `SetProperty`, `ReplaceStyle`,
@@ -190,10 +610,24 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .filter_map(|mutation| match mutation {
                 SemanticMutation::SetZIndex { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
+                | SemanticMutation::SetObjectTransform { object, .. }
+                | SemanticMutation::SetClickIndicate { object, .. }
+                | SemanticMutation::SetSpatialCompositionDomain { object, .. }
+                | SemanticMutation::SetCameraProfile { object, .. }
+                | SemanticMutation::SetCameraMotions { object, .. }
                 | SemanticMutation::ReplaceStyle { object, .. }
-                | SemanticMutation::ReplaceContent { object, .. } => Some(*object),
+                | SemanticMutation::ReplaceContent { object, .. }
+                | SemanticMutation::ReplaceDecimalNumber { object, .. }
+                | SemanticMutation::ReplaceTextPresentationBaseline { object, .. } => Some(*object),
                 _ => None,
             })
+            .chain(
+                self.preflight
+                    .spatial_anchor_cleared
+                    .iter()
+                    .copied()
+                    .map(SemanticTransactionNodeRef::Existing),
+            )
             .collect();
         self.preflight
             .staged_object_order
@@ -202,9 +636,43 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 let SemanticTransactionNodeRef::Existing(node_id) = node else {
                     return None;
                 };
-                changed_objects
-                    .contains(node)
-                    .then(|| (*node_id, self.preflight.staged_objects[node].clone()))
+                if !changed_objects.contains(node) {
+                    return None;
+                }
+                let mut state = self.preflight.staged_objects[node].clone();
+                if let Some(anchor) = self.preflight.staged_spatial_anchors.get(node) {
+                    let anchor = resolve_node_ref(*anchor, &self.planned_nodes);
+                    let domain = state.spatial_composition_domain();
+                    state
+                        .set_spatial_composition_domain_with_anchor(domain, Some(anchor))
+                        .expect("preflight validated resolved spatial anchor");
+                }
+                Some((*node_id, state))
+            })
+    }
+
+    /// Final changed definitions of existing attachments in this prepared batch.
+    /// Reads only the sparse preflight overlay, never unrelated objects/effects.
+    /// New attachments and retired identities are not value updates.
+    pub fn effect_updates(
+        &self,
+    ) -> impl Iterator<Item = (SemanticNodeId, SemanticNodeId, crate::EffectDefinition)> + '_ {
+        self.preflight
+            .staged_effects
+            .iter()
+            .filter_map(|(&effect, &definition)| {
+                if self.preflight.removed_existing.contains(&effect) {
+                    return None;
+                }
+                let original = self
+                    .store
+                    .semantic_effect_state(effect)
+                    .expect("prepared existing effect update retains its validated source");
+                (definition != original.definition()).then_some((
+                    effect,
+                    original.owner(),
+                    definition,
+                ))
             })
     }
 
@@ -235,15 +703,88 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 .map_err(SemanticTransactionReadError::Existing),
             SemanticTransactionNodeRef::Pending(token) => match self.pending_creation(token) {
                 Some(SemanticNodeCreation::Object { state, .. }) => Ok(state),
-                Some(SemanticNodeCreation::Family { .. } | SemanticNodeCreation::Signal { .. }) => {
-                    Err(SemanticTransactionReadError::NotObject(object))
-                }
+                Some(
+                    SemanticNodeCreation::PendingPathObject { .. }
+                    | SemanticNodeCreation::Family { .. }
+                    | SemanticNodeCreation::Effect { .. }
+                    | SemanticNodeCreation::Signal { .. },
+                ) => Err(SemanticTransactionReadError::NotObject(object)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
                     Err(SemanticTransactionReadError::NotObject(object))
                 }
                 None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
             },
         }
+    }
+
+    fn pending_path_state(
+        &self,
+        object: SemanticTransactionNodeRef,
+    ) -> Result<&super::node_addition::SemanticPendingPathObject, SemanticTransactionReadError>
+    {
+        let SemanticTransactionNodeRef::Pending(token) = object else {
+            return Err(SemanticTransactionReadError::NotPendingGeometry(object));
+        };
+        self.validate_read_token(token)?;
+        if self.preflight.removed_pending.contains(&token) {
+            return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+        }
+        self.preflight
+            .staged_pending_paths
+            .get(&token)
+            .ok_or(SemanticTransactionReadError::NotPendingGeometry(object))
+    }
+
+    /// Read the true staged transform for a transaction-only path constructor.
+    /// Unlike `object_state`, this does not fabricate durable content before
+    /// resource admission.
+    pub fn pending_path_transform(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<crate::SemanticTransform2_5D, SemanticTransactionReadError> {
+        Ok(self.pending_path_state(object.into())?.transform)
+    }
+
+    /// Read the true staged style for a transaction-only path constructor.
+    pub fn pending_path_style(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<crate::SemanticStyle, SemanticTransactionReadError> {
+        Ok(self.pending_path_state(object.into())?.style.clone())
+    }
+
+    /// Read the true staged painter priority for a transaction-only path constructor.
+    pub fn pending_path_z_index(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<f64, SemanticTransactionReadError> {
+        Ok(self.pending_path_state(object.into())?.z_index)
+    }
+
+    /// Resolve the actual transaction-owned vector path for one pending object.
+    ///
+    /// This is intentionally separate from durable object-state getters: a
+    /// pending resource token is never a store handle. Callers that need path
+    /// data can read this real staged payload; ordinary lowered/runtime queries
+    /// remain unavailable until materialization.
+    pub fn pending_geometry_path(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<&crate::VectorPath, SemanticTransactionReadError> {
+        let object = object.into();
+        let state = self.pending_path_state(object)?;
+        self.transaction
+            .pending_geometry_path(state.resource())
+            .ok_or(SemanticTransactionReadError::UnknownPendingGeometry(object))
+    }
+
+    /// Return conservative local bounds from the real staged path payload.
+    /// Empty paths have no bounds, matching ordinary [`VectorPath`] semantics.
+    pub fn pending_geometry_local_bounds(
+        &self,
+        object: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Option<crate::Rect>, SemanticTransactionReadError> {
+        Ok(self.pending_geometry_path(object)?.conservative_bounds())
     }
 
     /// Read proposed object or family painter priority without committing it.
@@ -256,7 +797,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             SemanticTransactionNodeRef::Existing(id)
                 if self.preflight.removed_existing.contains(&id) =>
             {
-                return Err(SemanticTransactionReadError::RemovedExistingNode(id))
+                return Err(SemanticTransactionReadError::RemovedExistingNode(id));
             }
             SemanticTransactionNodeRef::Pending(token) => {
                 self.validate_read_token(token)?;
@@ -283,7 +824,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     Some(SemanticNodeCreation::Family { .. })
                 ) =>
             {
-                return Ok(0.0)
+                return Ok(0.0);
+            }
+            SemanticTransactionNodeRef::Pending(token)
+                if self.preflight.staged_pending_paths.contains_key(&token) =>
+            {
+                return self.pending_path_z_index(node);
             }
             _ => {}
         }
@@ -307,7 +853,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         for mutation in self.transaction.mutations() {
             let SemanticMutation::AddNode {
                 token: candidate,
-                creation: SemanticNodeCreation::Object { .. },
+                creation:
+                    SemanticNodeCreation::Object { .. } | SemanticNodeCreation::PendingPathObject { .. },
             } = mutation
             else {
                 continue;
@@ -391,15 +938,126 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .into_iter()
                     .filter(|member| !self.is_removed_ref(*member))
                     .collect()),
-                Some(SemanticNodeCreation::Object { .. } | SemanticNodeCreation::Signal { .. }) => {
-                    Err(SemanticTransactionReadError::NotFamily(family))
-                }
+                Some(
+                    SemanticNodeCreation::Object { .. }
+                    | SemanticNodeCreation::PendingPathObject { .. }
+                    | SemanticNodeCreation::Effect { .. }
+                    | SemanticNodeCreation::Signal { .. },
+                ) => Err(SemanticTransactionReadError::NotFamily(family)),
                 None if self.preflight.pending_animations.contains_key(&token) => {
                     Err(SemanticTransactionReadError::NotFamily(family))
                 }
                 None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
             },
         }
+    }
+
+    /// Query one staged direct family edge without materializing that family's
+    /// complete order.  Local structural planners use these adjacency reads for
+    /// large scene roots.
+    pub(crate) fn family_contains_existing(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<bool, SemanticTransactionReadError> {
+        self.validate_existing_family(family)?;
+        self.validate_existing_authoring_node(member)?;
+        Ok(self
+            .preflight
+            .family_edges
+            .contains_existing(self.store, family, member))
+    }
+
+    /// First member in final staged order, without cloning an unrelated root.
+    pub(crate) fn family_first_member_existing(
+        &self,
+        family: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
+        self.validate_existing_family(family)?;
+        self.preflight
+            .family_edges
+            .first_existing(self.store, family)
+    }
+
+    /// Next member in final staged order, without cloning an unrelated root.
+    pub(crate) fn family_next_member_existing(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
+        self.validate_existing_family(family)?;
+        self.validate_existing_authoring_node(member)?;
+        self.preflight
+            .family_edges
+            .next_existing(self.store, family, member)
+    }
+
+    /// Previous member in final staged order, without cloning an unrelated root.
+    pub(crate) fn family_previous_member_existing(
+        &self,
+        family: SemanticNodeId,
+        member: SemanticNodeId,
+    ) -> Result<Option<SemanticNodeId>, SemanticTransactionReadError> {
+        self.validate_existing_family(family)?;
+        self.validate_existing_authoring_node(member)?;
+        self.preflight
+            .family_edges
+            .previous_existing(self.store, family, member)
+    }
+
+    pub(crate) fn staged_parent_additions_existing(
+        &self,
+        member: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticTransactionReadError> {
+        self.validate_existing_authoring_node(member)?;
+        self.preflight.family_edges.added_parents_existing(member)
+    }
+
+    /// Read final foreground declarations without inspecting display membership.
+    /// Structural deletion removes soft references in the staged view as well
+    /// as at commit; abandoned preparation leaves the published list untouched.
+    pub fn foreground_members(
+        &self,
+        scope: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Vec<SemanticTransactionNodeRef>, SemanticTransactionReadError> {
+        let scope = scope.into();
+        let published = match scope {
+            SemanticTransactionNodeRef::Existing(id) => {
+                if self.preflight.removed_existing.contains(&id) {
+                    return Err(SemanticTransactionReadError::RemovedExistingNode(id));
+                }
+                let node = self
+                    .store
+                    .node(id)
+                    .ok_or(SemanticTransactionReadError::UnknownExistingNode(id))?;
+                if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+                    return Err(SemanticTransactionReadError::NotFamily(scope));
+                }
+                node.foreground_members()
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_read_token(token)?;
+                if self.preflight.removed_pending.contains(&token) {
+                    return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+                }
+                match self.pending_creation(token) {
+                    Some(SemanticNodeCreation::Family { .. }) => &[][..],
+                    Some(_) => return Err(SemanticTransactionReadError::NotFamily(scope)),
+                    None if self.preflight.pending_animations.contains_key(&token) => {
+                        return Err(SemanticTransactionReadError::NotFamily(scope));
+                    }
+                    None => return Err(SemanticTransactionReadError::UnknownPendingNode(token)),
+                }
+            }
+        };
+        let mut members = self
+            .preflight
+            .staged_foreground
+            .get(&scope)
+            .cloned()
+            .unwrap_or_else(|| published.iter().copied().map(Into::into).collect());
+        members.retain(|member| !self.is_removed_ref(*member));
+        Ok(members)
     }
 
     /// Read final signal associations for one family root through the staged view.
@@ -465,6 +1123,43 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         Ok(())
     }
 
+    fn validate_existing_family(
+        &self,
+        family: SemanticNodeId,
+    ) -> Result<(), SemanticTransactionReadError> {
+        if self.preflight.removed_existing.contains(&family) {
+            return Err(SemanticTransactionReadError::RemovedExistingNode(family));
+        }
+        let node = self
+            .store
+            .node(family)
+            .ok_or(SemanticTransactionReadError::UnknownExistingNode(family))?;
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            return Err(SemanticTransactionReadError::NotFamily(family.into()));
+        }
+        Ok(())
+    }
+
+    fn validate_existing_authoring_node(
+        &self,
+        node: SemanticNodeId,
+    ) -> Result<(), SemanticTransactionReadError> {
+        if self.preflight.removed_existing.contains(&node) {
+            return Err(SemanticTransactionReadError::RemovedExistingNode(node));
+        }
+        let existing = self
+            .store
+            .node(node)
+            .ok_or(SemanticTransactionReadError::UnknownExistingNode(node))?;
+        let authoring = matches!(existing.kind(), SemanticNodeKind::Family(_))
+            || matches!(existing.kind(), SemanticNodeKind::AuthoringObject)
+                && existing.semantic_object_state().is_some();
+        if !authoring {
+            return Err(SemanticTransactionReadError::NotObject(node.into()));
+        }
+        Ok(())
+    }
+
     fn pending_creation(&self, token: SemanticLocalNodeToken) -> Option<&SemanticNodeCreation> {
         self.preflight.pending_creations.get(&token)
     }
@@ -494,22 +1189,39 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     pub fn commit_with_store(self) -> (SemanticMutationTransactionResult, &'a mut SemanticStore) {
         let Self {
             store,
-            transaction,
+            mut transaction,
             preflight,
             next_revision,
             planned_nodes,
         } = self;
+        // A direct semantic commit has no later fallible lowering step, so it
+        // materializes live path payloads immediately before writing nodes. The
+        // combined semantic/runtime path instead uses `with_pending_geometry_paths`
+        // to retain the same admission scope across fallible lowering/publication.
+        let tokens = Self::pending_path_resource_tokens(&preflight);
+        if !tokens.is_empty() {
+            let payloads = transaction.take_pending_geometry_paths(&tokens);
+            let resources = payloads
+                .into_iter()
+                .map(|(token, path)| (token, store.insert_preflighted_geometry_path(path)))
+                .collect::<HashMap<_, _>>();
+            transaction
+                .materialize_pending_geometry_paths(&resources, &preflight.staged_pending_paths);
+        }
+        let mut animation_effect_snapshots = preflight.animation_effect_snapshots;
         let mut impacts = Vec::with_capacity(transaction.mutations.len());
         let mut written_slots = HashSet::with_capacity(transaction.mutations.len());
         let mut pending_source_assignments = Vec::new();
         let mut committed_nodes = HashMap::new();
+        store.begin_semantic_resource_reclamation_defer();
         for mutation in &transaction.mutations {
             match mutation {
                 SemanticMutation::AddNode { token, creation } => {
                     if !planned_nodes.contains_key(token) {
                         continue;
                     }
-                    let (node, source_identity) = commit_add_node(store, creation.clone());
+                    let (node, source_identity) =
+                        commit_add_node(store, creation.clone(), &committed_nodes);
                     assert_eq!(
                         planned_nodes.get(token),
                         Some(&node),
@@ -517,6 +1229,12 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     );
                     committed_nodes.insert(*token, node);
                     written_slots.insert(node);
+                    if let Some(effect) = store
+                        .node(node)
+                        .and_then(crate::SemanticNode::semantic_effect_state)
+                    {
+                        written_slots.insert(effect.owner());
+                    }
                     if let Some(source_identity) = source_identity {
                         pending_source_assignments.push((node, source_identity));
                     }
@@ -525,8 +1243,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     if !planned_nodes.contains_key(token) {
                         continue;
                     }
-                    let state = animation.resolve(&committed_nodes);
-                    let node = commit_add_animation(store, &state);
+                    let mut state = animation.resolve(&committed_nodes);
+                    state.transform_effects = animation_effect_snapshots.remove(token);
+                    let node = commit_add_animation(store, state);
                     assert_eq!(
                         planned_nodes.get(token),
                         Some(&node),
@@ -543,6 +1262,29 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 continue;
             }
             match mutation {
+                SemanticMutation::UpdateEffect { effect, update } => {
+                    let previous = store
+                        .semantic_effect_state(effect)
+                        .expect("validated effect");
+                    let owner = previous.owner();
+                    let previous = previous.definition();
+                    let prepared = preflight.staged_effects[&effect];
+                    // Publish this mutation's disjoint channels in order. The
+                    // final value was validated before any semantic commit.
+                    let next = previous.update(update).expect("preflighted effect update");
+                    for parameter in update.parameters() {
+                        debug_assert!(!next.parameter_changed(prepared, parameter));
+                        if previous.parameter_changed(next, parameter) {
+                            impacts.push(SemanticMutationImpact::EffectParameter {
+                                owner,
+                                effect,
+                                parameter,
+                            });
+                        }
+                    }
+                    store.replace_effect_definition(effect, next);
+                    written_slots.insert(effect);
+                }
                 SemanticMutation::SetSignal { signal, value } => {
                     let changed = store
                         .set_semantic_signal_source(signal, SemanticSignalSource::Input(value))
@@ -589,11 +1331,132 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectProperty { object, property });
                 }
+                SemanticMutation::SetObjectTransform { object, transform } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic object")
+                        .set_transform(transform);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ObjectTransform { object });
+                }
+                SemanticMutation::SetCameraMotions { object, motions } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic camera")
+                        .set_camera_motions(motions)
+                        .expect("preflighted camera motion history");
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::CameraMotions { object });
+                }
+                SemanticMutation::SetCameraProfile {
+                    object,
+                    profile,
+                    near,
+                    far,
+                } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic object")
+                        .set_camera_profile(profile, near, far)
+                        .expect("preflighted camera profile");
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::CameraProfile { object });
+                }
+                SemanticMutation::SetSpatialCompositionDomain {
+                    object,
+                    domain,
+                    anchor_family,
+                } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    let anchor_family =
+                        anchor_family.map(|anchor| resolve_node_ref(anchor, &committed_nodes));
+                    store.unregister_semantic_references_for_owner(object);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic object")
+                        .set_spatial_composition_domain_with_anchor(domain, anchor_family)
+                        .expect("preflight validated spatial composition domain");
+                    store.register_semantic_references_for_owner(object);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::SpatialCompositionDomain { object });
+                    if anchor_family.is_some()
+                        || domain == crate::SemanticSpatialCompositionDomain::FixedOrientation
+                    {
+                        impacts.push(SemanticMutationImpact::SpatialAnchorChanged { object });
+                    }
+                }
+                SemanticMutation::SetClickIndicate { object, binding } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .expect("preflighted semantic object")
+                        .semantic_object_state_mut()
+                        .expect("preflighted semantic object state")
+                        .set_click_indicate(binding);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ClickIndicate { object });
+                }
                 SemanticMutation::ReplaceContent { object, content } => {
                     let object = resolve_node_ref(object, &committed_nodes);
-                    set_object_content(store, object, content);
+                    store.replace_semantic_object_content(object, content);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectContent { object });
+                }
+                SemanticMutation::SetBarMetadata { object, metadata } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic object must remain valid while transaction owns the semantic store")
+                        .set_bar_metadata(metadata);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::BarMetadata { object });
+                }
+                SemanticMutation::SetInset2DView {
+                    object,
+                    camera_frame,
+                    capture_own_display,
+                } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    let role = camera_frame.map_or(SemanticObjectRole::Ordinary, |camera| {
+                        SemanticObjectRole::Inset2DView(
+                            crate::SemanticInset2DViewRole::new(resolve_node_ref(
+                                camera,
+                                &committed_nodes,
+                            ))
+                            .capture_own_display(capture_own_display),
+                        )
+                    });
+                    store.replace_semantic_object_role(object, role);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ObjectRole { object });
+                }
+                SemanticMutation::ReplaceDecimalNumber { object, number } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store.replace_semantic_decimal_number(object, number);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::DecimalNumber { object });
+                }
+                SemanticMutation::ReplaceTextPresentationBaseline { object, baseline } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    let state = store
+                        .node_mut(object)
+                        .expect("preflighted semantic object")
+                        .semantic_object_state_mut()
+                        .expect("preflighted semantic object state");
+                    match baseline {
+                        Some(baseline) => state.set_text_presentation_baseline(baseline),
+                        None => state.clear_text_presentation_baseline(),
+                    }
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::TextPresentationBaseline { object });
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);
@@ -624,12 +1487,18 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     target,
                     callback,
                     active_from,
+                    inactive_from,
+                    endpoint_policy,
                     position,
                 } => {
                     let target = resolve_node_ref(target, &committed_nodes);
-                    let registration =
-                        SemanticUpdaterRegistration::new(callback, active_from, None)
-                            .expect("preflighted updater activation interval remains valid");
+                    let registration = SemanticUpdaterRegistration::with_endpoint_policy(
+                        callback,
+                        active_from,
+                        inactive_from,
+                        endpoint_policy,
+                    )
+                    .expect("preflighted updater activation interval remains valid");
                     store
                         .insert_semantic_updater_registration(target, registration, position)
                         .expect("preflighted updater insertion remains valid");
@@ -660,6 +1529,75 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     debug_assert!(closed);
                     written_slots.insert(target);
                     impacts.push(SemanticMutationImpact::UpdaterRegistrations { target });
+                }
+                SemanticMutation::SetForegroundMembers { scope, members } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    let members = members
+                        .into_iter()
+                        .map(|member| resolve_node_ref(member, &committed_nodes))
+                        .collect();
+                    store.replace_semantic_foreground_members(scope, members);
+                    written_slots.insert(scope);
+                    impacts.push(SemanticMutationImpact::ForegroundMembers { scope });
+                }
+                SemanticMutation::SetGraphDeclaration { scope, graph } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    let vertices = graph
+                        .vertices()
+                        .iter()
+                        .copied()
+                        .map(|(id, vertex)| (id, resolve_node_ref(vertex, &committed_nodes)))
+                        .collect::<Vec<_>>();
+                    let edges = graph
+                        .edges()
+                        .iter()
+                        .copied()
+                        .map(|edge| {
+                            let dependency = match edge.dependency() {
+                                SemanticTransactionGraphEdgeDependency::Line => {
+                                    SemanticGraphEdgeDependency::Line
+                                }
+                                SemanticTransactionGraphEdgeDependency::Arrow {
+                                    end_tip,
+                                    start_tip,
+                                    policy,
+                                } => SemanticGraphEdgeDependency::Arrow {
+                                    end_tip: resolve_node_ref(end_tip, &committed_nodes),
+                                    start_tip: start_tip
+                                        .map(|tip| resolve_node_ref(tip, &committed_nodes)),
+                                    policy,
+                                },
+                            };
+                            SemanticGraphEdgeBinding::from_resolved(
+                                edge.id(),
+                                resolve_node_ref(edge.family(), &committed_nodes),
+                                resolve_node_ref(edge.line(), &committed_nodes),
+                                dependency,
+                            )
+                        })
+                        .collect();
+                    let graph = SemanticGraphDeclaration::from_resolved(
+                        graph.topology().clone(),
+                        vertices,
+                        edges,
+                    );
+                    let previous = store
+                        .replace_semantic_graph_declaration(scope, Some(graph))
+                        .expect("preflighted graph scope remains a family");
+                    // Replacements are explicitly validated against the final
+                    // transaction overlay. Dropping the prior declaration here
+                    // only changes graph authority; unrelated semantic nodes
+                    // retain their identities and resources.
+                    drop(previous);
+                    written_slots.insert(scope);
+                    impacts.push(SemanticMutationImpact::GraphDeclaration { scope });
+                }
+                SemanticMutation::SetTableLayout { scope, layout } => {
+                    let scope = resolve_node_ref(scope, &committed_nodes);
+                    store
+                        .replace_semantic_table_layout(scope, layout)
+                        .expect("preflighted table layout scope remains a family");
+                    written_slots.insert(scope);
                 }
                 SemanticMutation::ScopeSignal { scope, signal } => {
                     let scope = resolve_node_ref(scope, &committed_nodes);
@@ -716,6 +1654,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 SemanticMutation::AddNode { token, .. } => {
                     let node = committed_nodes[&token];
                     impacts.push(SemanticMutationImpact::NodeAdded { node });
+                    if let Some(effect) = store
+                        .node(node)
+                        .and_then(crate::SemanticNode::semantic_effect_state)
+                    {
+                        impacts.push(SemanticMutationImpact::EffectAttachment {
+                            owner: effect.owner(),
+                            effect: node,
+                        });
+                    }
                 }
                 SemanticMutation::AddAnimation { token, .. } => {
                     let animation = committed_nodes[&token];
@@ -738,13 +1685,33 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     written_slots.extend(outcome.written_slots().iter().copied());
                     for effect in outcome.effects() {
                         match effect {
+                            SemanticRemoveNodeEffect::EffectAttachmentChanged { owner, effect } => {
+                                impacts.push(SemanticMutationImpact::EffectAttachment {
+                                    owner: *owner,
+                                    effect: *effect,
+                                });
+                            }
                             SemanticRemoveNodeEffect::NodeRemoved(node) => {
                                 impacts.push(SemanticMutationImpact::NodeRemoved { node: *node });
+                            }
+                            SemanticRemoveNodeEffect::ForegroundMembersChanged { scope } => {
+                                impacts.push(SemanticMutationImpact::ForegroundMembers {
+                                    scope: *scope,
+                                });
                             }
                             SemanticRemoveNodeEffect::SubscriptionRemoved { object, property } => {
                                 impacts.push(SemanticMutationImpact::Subscription {
                                     object: *object,
                                     property: *property,
+                                });
+                            }
+                            SemanticRemoveNodeEffect::ObjectRoleReplaced(object) => {
+                                impacts
+                                    .push(SemanticMutationImpact::ObjectRole { object: *object });
+                            }
+                            SemanticRemoveNodeEffect::SpatialAnchorCleared(object) => {
+                                impacts.push(SemanticMutationImpact::SpatialAnchorChanged {
+                                    object: *object,
                                 });
                             }
                         }
@@ -765,6 +1732,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         if !written_slots.is_empty() {
             store.publish_scene_revision(next_revision.expect("changed transaction preflighted"));
         }
+        store.end_semantic_resource_reclamation_defer();
 
         (
             SemanticMutationTransactionResult {

@@ -24,8 +24,13 @@ pub fn session() -> Result<ExecutionSession, String> {
         )?;
         scene.add_many(&[(&curve).into(), (&selected).into()])?;
         let mut session = scene.execution_session()?;
+        crate::integration::publish_borrowed_path_edit(
+            scene.integration_store(),
+            scene.root(),
+            &mut session,
+            crate::integration::BorrowedPathEdit::Reverse { object: &selected },
+        )?;
         let mut live = scene.live(&mut session);
-        live.reverse_direction(&selected)?;
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;

@@ -1,0 +1,406 @@
+// Capture the exact showcase sources through existing Noon hosts. No Manim renders,
+// synthetic posters, private scene mutation, or performance conclusions from sampled time.
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright";
+import pngjs from "pngjs";
+import { serveRepository } from "./browser-test-server.mjs";
+import { browserArgs } from "./manim-raster-support.mjs";
+import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { posterEvidence } from "./showcase-posters.mjs";
+import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
+import { seekPausedGallery, qualifyPlayheadEndpoints } from "./showcase-playback.mjs";
+import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
+import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
+
+const { PNG } = pngjs;
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
+normalizeShowcaseManifest(manifest);
+const schedules = new Map(manifest.entries.map(entry => [entry.id, captureSchedule(entry)]));
+const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
+assert.ok(["webgl", "webgpu"].includes(backend));
+const expectedBackend = backend === "webgl" ? "WebGL2" : "WebGPU";
+const output = path.join(root, "browser-smoke-artifacts/showcase", backend);
+const report = {
+  purpose: "render-and-presentation-qualification, not a real-time performance benchmark",
+  checkoutRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+  backendRequested: backend, samplingHz: 30, viewport: { width: 960, height: 540 }, results: [],
+};
+const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const json = (value) => JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2);
+const escape = (text) => String(text).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+
+function validateImage(bytes, label) {
+  const image = PNG.sync.read(bytes);
+  assert.ok(image.width >= 320 && image.height >= 180, `${label}: unexpectedly small capture`);
+  const background = image.data.subarray(0, 3);
+  let foreground = 0;
+  for (let index = 0; index < image.data.length; index += 4) {
+    if ([0, 1, 2].some((channel) => Math.abs(image.data[index + channel] - background[channel]) > 20)) foreground++;
+  }
+  assert.ok(foreground > image.width * image.height * 0.001, `${label}: effectively empty capture`);
+  return { width: image.width, height: image.height, foregroundPixels: foreground,
+    pngSha256: hash(bytes), pixelSha256: hash(image.data) };
+}
+
+function samePixels(left, right) {
+  const a = PNG.sync.read(left), b = PNG.sync.read(right);
+  return a.width === b.width && a.height === b.height && a.data.equals(b.data);
+}
+
+await mkdir(output, { recursive: true });
+const server = await serveRepository(root, 0);
+const base = `${server.baseUrl}/web`;
+let browser;
+try {
+  browser = await chromium.launch({ headless: true, args: browserArgs(backend) });
+  report.browserVersion = browser.version();
+  const context = await browser.newContext({ viewport: report.viewport, deviceScaleFactor: 1 });
+  const controlsPage = await context.newPage();
+  try {
+    await controlsPage.goto(`${base}/manim-raster-host.html`);
+    report.playbackControlQualification = await qualifyPlayheadEndpoints(controlsPage);
+  } finally {
+    await controlsPage.close();
+  }
+  const worker = await readFile(path.join(root, "web/python-worker.js"), "utf8");
+  const cache = createPyodideResourceCache(worker);
+  await cache.install(context);
+  const identity = await context.request.get(`${base}/runtime-build-identity.json`);
+  assert.ok(identity.ok(), "served runtime build identity missing");
+  report.servedBuildIdentity = await identity.json();
+  report.workerFileSha256 = hash(worker);
+
+  for (const entry of manifest.entries) {
+    const result = { id: entry.id, title: entry.title, samples: [], pageErrors: [], outcome: "fail" };
+    report.results.push(result);
+    const page = await context.newPage();
+    page.setDefaultTimeout(120000);
+    page.on("pageerror", (error) => result.pageErrors.push(String(error)));
+    try {
+      const source = await readFile(path.join(root, "web", entry.path), "utf8");
+      result.sourceSha256 = hash(source);
+      await page.goto(`${base}/manim-raster-host.html`);
+      await page.waitForFunction(() => window.noonHostRaster !== undefined);
+      const loaded = await page.evaluate(({ source, duration }) => window.noonHostRaster.load(source, duration), { source, duration: entry.duration });
+      assert.equal(loaded.rendererBackend, expectedBackend, `${entry.id}: requested backend must actually execute`);
+      const { frameTimes, wanted, completionTime, posterTime } = schedules.get(entry.id);
+      let poster;
+      for (const time of wanted) {
+        const frameIndex = frameTimes.indexOf(time);
+        const completionProbe = time === completionTime;
+        const sample = await page.evaluate(({ frameIndex, frameTimes, completionProbe }) =>
+          window.noonHostRaster.renderThrough(frameIndex, frameTimes, { stopAtSourceCompletion: completionProbe }),
+        { frameIndex, frameTimes, completionProbe });
+        assert.equal(sample.error, null);
+        assert.equal(sample.presented, true);
+        assert.equal(sample.rendererBackend, expectedBackend);
+        if (completionProbe) assertCompletedCapture(entry, sample, time);
+        else assertCaptureTime(entry, sample, time);
+        // A completion probe stops at the actual endpoint. Ordinary quiet holds
+        // may reuse a frame only within their explicitly declared still interval.
+        const bytes = await page.locator("#scene").screenshot();
+        const filename = `${entry.id}-${String(time).replace(".", "_")}.png`;
+        const image = validateImage(bytes, `${entry.id}@${time}`);
+        await writeFile(path.join(output, filename), bytes);
+        result.samples.push({ ...sample, completionProbe, ...image, filename });
+        if (time === posterTime) poster = bytes;
+        if (entry.performance && time >= entry.beats[0].time) assert.ok(sample.objectCount >= 600, `${entry.id}: dense phases must retain the geometry workload`);
+      }
+      assert.ok(new Set(result.samples.map((sample) => sample.pixelSha256)).size >= 3, `${entry.id}: temporal samples did not change`);
+      await page.evaluate(() => window.noonHostRaster.close());
+      assert.deepEqual(result.pageErrors, []);
+      if (entry.interaction || entry.features.includes("on_click")) {
+        poster = await captureSelection(context, entry, result);
+      }
+      assert.ok(poster, `${entry.id}: poster not captured`);
+      result.poster = `${entry.id}.png`;
+      result.posterImage = validateImage(poster, `${entry.id}: poster`);
+      await writeFile(path.join(output, result.poster), poster);
+      result.outcome = "pass";
+      console.log(`PASS ${entry.id}: ${result.samples.length} actual ${expectedBackend} samples`);
+    } catch (error) {
+      result.error = String(error.stack ?? error);
+      console.error(`FAIL ${entry.id}: ${result.error}`);
+      await page.screenshot({ path: path.join(output, `${entry.id}-failure.png`) }).catch(() => {});
+    } finally {
+      await page.close();
+      await writeFile(path.join(output, "report.json"), json(report));
+    }
+  }
+
+  const cards = report.results.map((result) => `<article><h2>${escape(result.title)}</h2><p>${escape(result.outcome)}</p>${result.poster ? `<img src="${result.poster}" alt="${escape(result.title)}">` : "<p>Capture failed — not publishable</p>"}<details><summary>Storyboard frames</summary>${result.samples.map((sample) => `<figure><img src="${sample.filename}" alt="Actual scene frame"><figcaption>${sample.completionProbe ? "Completion probe" : "Requested"} ${sample.requestedTime}s · published ${sample.publishedTime}s</figcaption></figure>`).join("")}</details></article>`).join("");
+  await writeFile(path.join(output, "index.html"), `<!doctype html><html lang="en"><meta charset="utf-8"><title>Noon showcase review</title><style>body{margin:32px;font:16px system-ui;background:#10141d;color:#eef2fa}main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}article{border:1px solid #3b4454;padding:12px}h2{font-size:18px}img{width:100%;height:auto}figure{margin:12px 0}figcaption{font-size:12px}</style><h1>Noon showcase — actual ${escape(expectedBackend)} captures</h1><p>Preview review, not editorial approval or performance benchmarking.</p><main>${cards}</main></html>`);
+  const sheet = await context.newPage();
+  await sheet.setViewportSize({ width: 1440, height: 1200 });
+  await sheet.goto(`${server.baseUrl}/browser-smoke-artifacts/showcase/${backend}/index.html`);
+  await sheet.evaluate(async () => { await Promise.all([...document.images].map((image) => image.decode())); });
+  await sheet.screenshot({ path: path.join(output, "contact-sheet.png"), fullPage: true });
+  await sheet.close();
+  const failed = report.results.filter((result) => result.outcome !== "pass");
+  assert.deepEqual(failed.map((result) => result.id), [], "showcase capture failures");
+  const evidence = json(posterEvidence(manifest, report));
+  await writeFile(path.join(output, "capture-evidence.json"), evidence);
+  // Stage real posters only after every scene passes. They remain review artifacts;
+  // this script does not commit, approve, publish, or modify the catalog's status.
+  await mkdir(path.join(root, "web/thumbnails/showcase"), { recursive: true });
+  for (const result of report.results) {
+    await writeFile(path.join(root, "web/thumbnails/showcase", result.poster), await readFile(path.join(output, result.poster)));
+  }
+  await writeFile(path.join(root, "web/thumbnails/showcase/capture-evidence.json"), evidence);
+  const decodePage = await context.newPage();
+  await decodePage.goto(`${base}/manim-raster-host.html`);
+  await decodePage.evaluate(async (paths) => {
+    await Promise.all(paths.map(async (path) => {
+      const image = new Image(); image.src = path; await image.decode();
+      if (image.naturalWidth < 320 || image.naturalHeight < 180) throw new Error(`Invalid poster: ${path}`);
+    }));
+  }, manifest.entries.map((entry) => `./${entry.thumbnail}`));
+  await decodePage.close();
+  report.stagedPosterDecode = "pass";
+  report.runtimeResources = cache.stats();
+  await context.close();
+} finally {
+  await writeFile(path.join(output, "report.json"), json(report));
+  await browser?.close();
+  await server.close();
+}
+
+async function captureSelection(context, entry, result) {
+  const page = await context.newPage();
+  page.setDefaultTimeout(120000);
+  const errors = [];
+  const sourceDeclaredClick = entry.features.includes("on_click");
+  const legacyOverlay = Boolean(entry.interaction) && !sourceDeclaredClick;
+  const nativeInput = entry.playback_capability === "nonreplayable-native-input";
+  if (nativeInput) await page.addInitScript(() => {
+    // Test-only delivery delay after the engine acknowledges a real presented
+    // frame. Keep input, Rust admission and rendering on the production path.
+    // Independent pointer/render channels must tolerate this acknowledgement
+    // overtaking an occurrence collected against its preceding presentation.
+    const delayed = { held: false, pending: [], count: 0 };
+    window.MessageChannel = new Proxy(window.MessageChannel, {
+      construct(Target, args) {
+        const channel = Reflect.construct(Target, args);
+        for (const port of [channel.port1, channel.port2]) {
+          port.addEventListener("message", event => {
+            if (!delayed.held || event.data?.type !== "pointer_presented") return;
+            if (delayed.pending.length >= 32) throw new Error("pointer receipt delay capacity exceeded");
+            delayed.pending.push({ port, data: event.data });
+            delayed.count++;
+            event.stopImmediatePropagation();
+          });
+        }
+        return channel;
+      },
+    });
+    delayed.resume = () => {
+      delayed.held = false;
+      for (const { port, data } of delayed.pending.splice(0)) {
+        port.dispatchEvent(new MessageEvent("message", { data }));
+      }
+      return delayed.count;
+    };
+    window.__noonCapturePointerReceipts = delayed;
+  });
+  let stage = "open playground";
+  page.on("pageerror", (error) => errors.push(String(error)));
+  try {
+    await page.setViewportSize({ width: 1800, height: 1100 });
+    await page.goto(`${base}/index.html?catalog=showcase&example=${entry.id}`);
+    await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+    const canvas = page.locator("#scene");
+    await layoutReplayViewport(canvas, report.viewport);
+    // Source-declared input is attached when Run installs the scene. Give the
+    // canvas pointer eligibility before that installation, as the gallery
+    // selection smoke does for the same public UI path.
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "auto", "important"));
+    stage = "run authored introduction";
+    await page.evaluate(() => window.__noonExampleGallery.run());
+    await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
+    if (nativeInput) await page.waitForFunction((duration) => {
+      const controls = document.querySelector(".playback-controls")?.dataset;
+      return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
+    }, entry.duration);
+    await replayViewport(canvas, report.viewport);
+    stage = nativeInput ? "verify completed native-input introduction" : "pause and seek to the authored endpoint";
+    const requestedTime = nativeInput ? entry.duration : await seekPausedGallery(page, entry.duration);
+    assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
+    const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+    const actualBackend = await page.locator("#status").getAttribute("data-renderer-backend");
+    assert.equal(actualBackend, expectedBackend, "pointer capture must use the requested backend too");
+    assertCaptureTime(entry, { requestedTime, publishedTime: metrics.metrics.time }, requestedTime);
+    const before = await canvas.screenshot();
+    const baseImage = validateImage(before, `${entry.id}: unselected base`);
+    // Preserve comparison inputs as they are captured, including on failure.
+    await writeFile(path.join(output, `${entry.id}-base.png`), before);
+    result.interactionAttempt = { requestedTime, publishedTime: metrics.metrics.time, rendererBackend: actualBackend, baseImage };
+    const bounds = await canvas.boundingBox();
+    assert.ok(bounds);
+    const click = (x, y) => page.mouse.click(bounds.x + bounds.width * x, bounds.y + bounds.height * y);
+    stage = "select the circle";
+    // Begin sampling with the click in flight. A software WebGL screenshot can
+    // take most of a short Indicate cycle, so waiting for click() to return
+    // before the first readback can miss every changed frame.
+    const clickResult = click(0.36, 0.5).then(() => null, error => error);
+    let selected;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const bytes = await canvas.screenshot();
+      if (!samePixels(before, bytes)) { selected = bytes; break; }
+      await page.waitForTimeout(50);
+    }
+    const clickError = await clickResult;
+    if (clickError) throw clickError;
+    assert.ok(selected, "actual pointer click did not change the displayed image");
+    const basePixels = PNG.sync.read(before).data;
+    const indicationStrength = bytes => PNG.sync.read(bytes).data.reduce(
+      (sum, value, index) => sum + Math.abs(value - basePixels[index]), 0,
+    );
+    let selectedStrength = sourceDeclaredClick ? indicationStrength(selected) : 0;
+    await writeFile(path.join(output, `${entry.id}-selected.png`), selected);
+    stage = sourceDeclaredClick ? "wait for automatic indication restoration" : "clear the selection";
+    if (!sourceDeclaredClick) await click(0.05, 0.5);
+    let restored, lastRestore;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const bytes = await canvas.screenshot();
+      lastRestore = bytes;
+      if (samePixels(before, bytes)) { restored = bytes; break; }
+      // Retain the strongest actually observed indication, not its barely changed
+      // first frame. Sampling never controls or reconstructs the animation.
+      if (sourceDeclaredClick) {
+        const strength = indicationStrength(bytes);
+        if (strength > selectedStrength) { selected = bytes; selectedStrength = strength; }
+      }
+      await page.waitForTimeout(50);
+    }
+    await writeFile(path.join(output, `${entry.id}-selected.png`), selected);
+    const restorationName = sourceDeclaredClick ? "restored" : "cleared";
+    if (lastRestore) await writeFile(path.join(output, `${entry.id}-${restored ? restorationName : `${restorationName}-last`}.png`), lastRestore);
+    assert.ok(restored, sourceDeclaredClick ? "click indication did not restore the base pixels exactly" : "background click did not restore the base pixels exactly");
+    if (sourceDeclaredClick) {
+      stage = "ignore a background click";
+      await click(0.05, 0.5);
+      await page.waitForTimeout(100);
+      assert.ok(samePixels(before, await canvas.screenshot()), "background click changed the restored base pixels");
+    }
+    if (nativeInput) {
+      stage = "drag the green rectangle with real pointer input";
+      const dragStart = { x: bounds.x + bounds.width * 0.68, y: bounds.y + bounds.height * 0.5 };
+      const dragEnd = { x: bounds.x + bounds.width * 0.82, y: bounds.y + bounds.height * 0.5 };
+      await page.mouse.move(dragStart.x, dragStart.y);
+      await page.mouse.down();
+      await page.evaluate(() => { window.__noonCapturePointerReceipts.held = true; });
+      await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 8 });
+      // Observe a published drag frame while the contact is held. Releasing
+      // immediately after synthetic move events can outrun a WebGPU frame and
+      // would make the test unable to distinguish delivery from persistence.
+      let moving;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const bytes = await canvas.screenshot();
+        if (!samePixels(before, bytes)) { moving = bytes; break; }
+        await page.waitForTimeout(50);
+      }
+      assert.ok(moving, "held pointer drag did not change the displayed image");
+      await page.mouse.up();
+      await page.waitForTimeout(200);
+      let dragged;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const bytes = await canvas.screenshot();
+        if (!samePixels(before, bytes)) { dragged = bytes; break; }
+        await page.waitForTimeout(50);
+      }
+      assert.ok(dragged, "released pointer drag did not persist in the displayed image");
+      const delayedPointerAcknowledgements = await page.evaluate(() => window.__noonCapturePointerReceipts.resume());
+      assert.ok(delayedPointerAcknowledgements > 0, "drag did not exercise delayed presentation acknowledgement delivery");
+      const beforeImage = PNG.sync.read(before), draggedImage = PNG.sync.read(dragged);
+      assert.equal(draggedImage.width, beforeImage.width);
+      assert.equal(draggedImage.height, beforeImage.height);
+      let changed = 0, outsideExpectedRoi = 0;
+      for (let y = 0; y < beforeImage.height; y++) for (let x = 0; x < beforeImage.width; x++) {
+        const offset = (y * beforeImage.width + x) * 4;
+        if (beforeImage.data[offset] === draggedImage.data[offset] &&
+            beforeImage.data[offset + 1] === draggedImage.data[offset + 1] &&
+            beforeImage.data[offset + 2] === draggedImage.data[offset + 2]) continue;
+        changed++;
+        if (x < beforeImage.width * 0.52) outsideExpectedRoi++;
+      }
+      assert.ok(changed > 0, "rectangle drag produced no pixel changes");
+      assert.equal(outsideExpectedRoi, 0, "drag changed pixels outside the rectangle's right-side region");
+      await writeFile(path.join(output, `${entry.id}-dragged.png`), dragged);
+      stage = "Run to restore the authored scene";
+      await canvas.evaluate((element) => element.style.setProperty("pointer-events", "none", "important"));
+      await page.getByRole("button", { name: "Run", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
+      await page.waitForFunction((duration) => {
+        const controls = document.querySelector(".playback-controls")?.dataset;
+        return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
+      }, entry.duration);
+      const resetMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+      assertCaptureTime(entry, { requestedTime: entry.duration, publishedTime: resetMetrics.metrics.time }, entry.duration);
+      const reset = await canvas.screenshot();
+      await writeFile(path.join(output, `${entry.id}-run-reset.png`), reset);
+      assert.ok(samePixels(before, reset), "public Run did not restore the original scene pixels");
+      assert.deepEqual(errors, []);
+      result.interaction = {
+        recipe: "completed introduction -> click blue circle -> automatic restoration -> drag green rectangle with pointer -> public Run",
+        requestedTime, publishedTime: metrics.metrics.time, rendererBackend: actualBackend,
+        automaticRestore: true, backgroundNoOp: true, pointerDrag: true, changedPixels: changed,
+        delayedPointerAcknowledgements,
+        changedPixelsOutsideRightSideRoi: outsideExpectedRoi, runRestoresBase: true,
+        baseMetrics: metrics, baseImage,
+        selectedImage: validateImage(selected, `${entry.id}: selected`),
+        restoredImage: validateImage(restored, `${entry.id}: restored`),
+        draggedImage: validateImage(dragged, `${entry.id}: dragged`),
+      };
+      return selected;
+    }
+    stage = "restart and restore the same resolved frame";
+    await canvas.evaluate((element) => element.style.setProperty("pointer-events", "none", "important"));
+    await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
+    await seekPausedGallery(page, entry.duration);
+    await replayViewport(canvas, report.viewport);
+    const restarted = await canvas.screenshot();
+    await writeFile(path.join(output, `${entry.id}-restarted.png`), restarted);
+    assert.ok(samePixels(before, restarted), "restart/seek did not restore the base pixels exactly");
+    assert.deepEqual(errors, []);
+    result.interaction = {
+      recipe: sourceDeclaredClick
+        ? "completed introduction -> click normalized (0.36, 0.5) -> automatic restoration -> background no-op (0.05, 0.5)"
+        : "completed introduction -> click normalized (0.36, 0.5) -> clear (0.05, 0.5)",
+      requestedTime, publishedTime: metrics.metrics.time,
+      rendererBackend: actualBackend,
+      ...(sourceDeclaredClick ? { automaticRestore: true, backgroundNoOp: true } : {}),
+      ...(legacyOverlay ? { exactClear: true } : {}),
+      restartRestoresBase: true, baseMetrics: metrics,
+      baseImage, selectedImage: validateImage(selected, `${entry.id}: selected`),
+      ...(sourceDeclaredClick
+        ? { restoredImage: validateImage(restored, `${entry.id}: restored`) }
+        : { clearedImage: validateImage(restored, `${entry.id}: cleared`) }),
+    };
+    return selected;
+  } catch (error) {
+    // Retain the failing production page before closing it, not the already
+    // closed raster host that was used for the independent scene samples.
+    result.interactionFailure = {
+      stage, pageErrors: errors, error: String(error),
+      state: await page.evaluate(() => ({
+        status: document.querySelector("#status-text")?.textContent,
+        patch: document.querySelector("#patch-status")?.value,
+        patchState: document.querySelector("#patch-status")?.dataset.state,
+        controls: { ...document.querySelector(".playback-controls")?.dataset },
+        slider: { value: document.querySelector(".playback-scrubber")?.value,
+          max: document.querySelector(".playback-scrubber")?.max,
+          step: document.querySelector(".playback-scrubber")?.step },
+      })).catch(() => null),
+    };
+    await page.screenshot({ path: path.join(output, `${entry.id}-interaction-failure.png`) }).catch(() => {});
+    throw error;
+  } finally {
+    await page.close();
+  }
+}

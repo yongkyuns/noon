@@ -3,6 +3,28 @@
 Development qualification and CI evidence tooling, not another architecture or
 roadmap. The engine contract remains `docs/architecture.md`.
 
+## Qualification cadence
+
+The exhaustive pinned Manim raster oracle runs nightly at 06:17 UTC and on
+explicit dispatch. Relevant PRs run its policy/manifest/capture preflight; the
+full oracle is no longer a PR merge gate. Dispatch it against the exact candidate
+for Manim parity, renderer rasterization or camera semantics changes, and triage
+nightly failures as regressions. Its sources, thresholds and full stages remain
+unchanged.
+
+Every PR still runs the CI contracts and web unit tests in PR Fast Gate. Edits to
+the cadence policy, timing reporter, physical-adapter tests or CI README do not
+also select the heavyweight browser/Product Gate suites. Gallery topology checks
+select browser CI, while web `*.test.mjs` edits use preflight. Runtime, artifact,
+product protocol and mixed production changes keep their existing qualification.
+Unknown CI helpers still select the heavyweight suites; exclusions are explicit.
+
+Master CI reads the complete before/after Git diff and skips its compiled/browser
+jobs only for documentation, named preflight-only policies or web unit tests.
+Unknown inputs, mixed changes, missing history and classification failures retain
+full qualification. PR and manual runs remain full when selected. Recovery and
+playback workflows keep isolated web unit-test edits in preflight as well.
+
 ## Local architecture and iteration gate
 
 The #1272 R3/R4 guardrails are owned by #961. The ordinary local command remains
@@ -73,6 +95,16 @@ These are explicit iteration commands, not change-based task selection. Use
 `bash scripts/check.sh full BASE` when required before merge. Existing native/WASM
 feature, browser, parity, golden, differential, performance and platform workflows
 remain qualification requirements; focused passes do not replace them.
+
+The `rust`, `test`, and `full` entrypoints run workspace unit/integration/binary
+tests with `--lib --tests --bins`, followed by a separate `--doc` test command.
+This avoids linking non-test example programs into test builds; Cargo's `--tests`
+selection also includes examples configured with `test = true`. A tiny isolated
+Cargo fixture confirms that such an example runs alongside library, binary, and
+integration tests. Current workspace metadata has 144 examples and none marked
+`test = true` or `doctest = true`; workspace `check` and Clippy still use
+`--all-targets` and compile every example. Doc tests remain an explicit separate
+step.
 
 Each architecture guard reports wall time. Run the regression suites with:
 
@@ -199,17 +231,112 @@ Representative cold/warm Rust/frontend/mixed trials, end-to-end comparison acros
 all required workflows, seed eviction/freshness, build-once producer consolidation,
 and a measured tool-image decision remain separate #1265 acceptance work.
 
-### Product measurement retries
+### Product measurement protocol
 
-`playground-product-gate.yml` builds the baseline and candidate release packages
+`playground-product-gate.yml` builds the baseline, pinned anchor, and candidate release packages
 in one producer, preserving the job-local compiler cache between fresh source
 builds. Its measurement job downloads the producer's immutable artifact IDs and
 verifies each checkout SHA, release feature set, compiler pin, resolved lockfile,
 and runtime-file hashes using the shared WASM artifact contract. The candidate is
-GitHub's tested PR merge commit; the baseline is the event's base SHA.
+GitHub's exact tested PR merge commit; the baseline is that merge's actual first
+parent. The producer checks its second parent against the requested PR head and
+records all three commits plus the event base in each product manifest. An older
+event base remains provenance and is never substituted for the actual baseline.
+Comparison retries check out the producer's pinned commits and verify the recorded
+pair alongside package contents, so a moving PR ref cannot change the comparison.
 
-After a measurement failure, rerun the failed measurement job to reuse those
-packages without rebuilding Rust. Re-running all jobs builds new packages. Keep
+Before the first product build, the producer resolves the baseline Cargo lock once.
+It reuses that lock for checkouts whose tracked Cargo manifests, `.cargo` settings,
+and Rust toolchain pin match; changed dependency inputs are resolved independently
+and logged. Existing tracked `Cargo.lock` files are preserved. Every lock is checked
+with `cargo metadata --locked` over the full dependency graph, so missing entries fail rather
+than being accepted by a manifest-only check or silently regenerated. The
+renderer-smoke fixture and production candidate share the candidate checkout's
+prepared resolution.
+
+The accepted cumulative source remains pinned to `58135c40` in
+`product-performance-anchor.json`, independently of the immediate PR parent.
+Both source comparisons use the same validated manifest workload list and retain
+separate evidence. The source/configuration/package verifier remains shared.
+
+The comparison uses three serial pairs in a fixed B/C, C/B, B/C order. Each
+browser run completes a cold pass before measuring a warm pass. The existing
+square/circle fixture scores authored seconds 1–4 with a half-second endpoint
+hold. The curated camera lesson runs verbatim on both packages and scores only
+its following segment, authored seconds 3.7–6.9. Its existing 0.4-second hold
+exposes that endpoint before camera restoration and source completion at 9.8
+seconds; setup, restoration and holds are excluded from FPS. Three additional
+unmodified showcase lessons cover mixed text/geometry (First Scene, 2.6–6.8 s),
+raster-image transforms (3.4–6.4 s), and vector-path construction/reveal (Bézier,
+1.4–3.4 s). Each window is entirely animated and ends at an existing static hold.
+These are representative product cases, not a dense-scene or live-allocation proof.
+All five workloads reuse the same downloaded packages and three-pair protocol,
+with no per-workload builds: 60 runs and ten comparisons across the two source
+cohorts. The adjacent-base and cumulative pinned-anchor cohorts run concurrently
+on **different GitHub-hosted runners** to avoid GPU/CPU contention. Each
+30-run cohort still runs its unchanged B/C, C/B, B/C pairs serially, in the
+prescribed order, and uploads its full evidence under a distinct artifact ID.
+The original required **Runtime, visual, latency, and FPS regression** job
+downloads these exact same-run evidence IDs, re-verifies the immutable product
+packages, and performs all ten unchanged comparisons. It fails closed unless
+the producer and both complete measurement jobs succeeded; missing or failed
+cohorts are never treated as skipped/passing evidence. The two measurement jobs
+retain their 55-minute execution allowance; the aggregation/comparison job
+has a 20-minute allowance. No latency/FPS/visual acceptance threshold changes.
+Compiler cache remains job-local; release executables are not reused from
+untrusted prior PR runs.
+The preview stays visible during measurement. The sampler sends read-only queries
+through the existing renderer metrics channel, consumes only its test-owned replies,
+and never adds aggregate source-owner queries to the callback lane. Replayable
+lessons seek to their fixed endpoint; the camera lesson must keep seeking disabled
+and reach its endpoint through normal source execution.
+FPS uses the render worker's sampling clock and
+presentation counter within one session/clock epoch; reply arrival and polling
+times remain diagnostic observations. Duplicate settled endpoint replies do not
+extend the window. A late start, missing endpoint, malformed clock, failed run,
+changed package/configuration, or reordered cohort fails qualification.
+
+Camera and the three additional workloads enable the existing bounded, optional publication-stage metrics.
+The harness deduplicates worker-clock render-call timestamps and requires complete
+presentation-counter coverage in the scored window. It reports p50/p95/p99/max
+gaps and 60 Hz long-frame diagnostics; missing samples fail qualification. These
+are CPU renderer-submission intervals, not GPU completion or physical scanout.
+Shared software-GPU gap summaries remain diagnostic; no physical cadence budget
+is applied to them. The comparison recomputes camera FPS and gaps from raw samples.
+
+Protocol version 5 records the exact installed authored source path and SHA-256
+before the edit-pass comment. Every source arm receives the same candidate-owned
+fixture; wrong paths, missing hashes, or different bytes between arms/trials fail
+before image decoding. Only the established square/circle duration/hold edit is
+applied; the showcase sources are unmodified.
+
+The protocol reports delta-apply, render-call and acknowledgment
+CPU wall times over those same completely covered publications. It summarizes
+existing draw/upload/cache/object counters from distinct renderer observations as
+**sampled last-frame values**, not totals across frames missed between polls.
+Renderer rebuild and mode-switch counts are lifetime-counter differences across
+the window. No GPU timestamp queries or source-owner work are added. Reports retain
+raw observations and the comparison recomputes these costs before image decoding.
+Each run hashes the locally derived generated artifact inventory against its
+producer manifest and reports uncompressed file bytes, excluding the dependency
+lockfile. This is package size, not compressed HTTP transfer size. All three trials
+must retain the same package inventory and sizes. These costs are descriptive;
+the existing latency/FPS/visual thresholds remain unchanged.
+
+The existing latency/FPS thresholds apply to arithmetic means across all three
+runs. Every raw sample, per-run report and fixed-frame image is retained. The
+comparison reports ranges and percentiles as dispersion, and checks every pair's
+image independently. Dependency-free preflight runs invalid-report/cohort controls;
+Product Gate explicitly enables the PNG/seeded-regression controls after its
+existing dependency setup. This is software-WebGL qualification, not physical-device
+60 FPS evidence. Physical camera pacing and denser/additional workload coverage
+remain owned by #1653. All ten comparison invocations run even if an earlier
+comparison rejects, retaining the negative result and failing the job afterward.
+A failed measurement still fails its cohort; it is never replaced or retried.
+
+Any diagnostic rerun must repeat the entire declared cohort with those exact
+packages, without rebuilding Rust or selecting a passing observation. A passing
+rerun does not erase the earlier failure. Re-running all jobs builds new packages. Keep
 both package artifacts for the 14-day evidence window; after they expire, rerun
 the full workflow. Measurement artifacts include the attempt number, so a retry
 does not overwrite the original failure. All existing smokes, comparison

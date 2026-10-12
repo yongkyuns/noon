@@ -156,9 +156,12 @@ emulation does not establish physical-device iOS qualification.
 
 ### Review hardening and qualification
 
-Portable execution admits only the ordinary `play`, `wait`, `add`, `remove` and
-`clear` methods, checked on the instance after `setup()` without invoking authored
-properties. Instance/class overrides, custom attribute lookup, method replacement
+Portable execution admits the ordinary `play`, `wait`, `add`, `remove`, `clear`
+and `on_click` methods, plus canonical `ZoomedScene.activate_zooming`, checked on
+the instance after `setup()` without invoking authored properties. The selection
+gallery regression removes JSPI before loading the authoring worker, then checks
+click Indicate, zoom, picking and exact restoration. A mobile viewport alone does
+not establish that the interpreter can run without JSPI. Instance/class overrides, custom attribute lookup, method replacement
 and explicit `__dict__` access retain the original synchronous path. In particular,
 an overridden membership method must not hide an uncompiled suspension barrier.
 

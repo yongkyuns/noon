@@ -1,7 +1,8 @@
-import { PythonAuthoringClient } from "./authoring-client.js";
+import { ProvenancedPythonAuthoringClient } from "./provenanced-authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { BrowserJankMonitor } from "./browser-jank.js";
 import { FrameMetrics } from "./frame-metrics.js";
+import { shouldSampleRendererStageFrame } from "./renderer-stage-sampling.js";
 
 const parameters = new URLSearchParams(location.search);
 const sourcePath = parameters.get("source") ?? "./python/demo_scene.py";
@@ -16,6 +17,19 @@ if (!["transferable", "shared"].includes(transportMode)) throw new Error("unsupp
 const sharedSlotCapacity = parameters.has("sharedSlotCapacity")
   ? positiveInteger("sharedSlotCapacity") : undefined;
 const samples = parameters.get("includeSamples") === "1" ? [] : null;
+const rendererSamples = parameters.get("includeRendererSamples") === "1" ? [] : null;
+const rendererMetricsSampling = parameters.get("rendererMetricsSampling") ?? "dense";
+const includeRendererGpuIdentity = parameters.get("includeRendererGpuIdentity") === "1";
+if (!["dense", "sparse"].includes(rendererMetricsSampling)) {
+  throw new Error("unsupported renderer metrics sampling mode");
+}
+const rendererPublicationStageSamples = rendererSamples === null ? null : [];
+const rendererSubstageSamples = rendererSamples === null ? null : [];
+let rendererPublicationStageCursor = null;
+let rendererSubstageCursor = null;
+const MAX_RENDERER_PUBLICATION_STAGE_SAMPLES = 32;
+const MAX_RENDERER_SUBSTAGE_SAMPLES = 32;
+const stageTimingSamples = parameters.get("includeStageTimings") === "1" ? [] : null;
 const context = parseContext(parameters.get("context"));
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
@@ -28,6 +42,7 @@ let sourceError = null;
 let completedSource = null;
 let continuation = false;
 let sourceCompleted = false;
+let runtimeBuildIdentity = null;
 let lastSampleTime = 0;
 let firstMeasuredTime = null;
 let rejectSourceFailure;
@@ -42,8 +57,9 @@ function failSource(error) {
 try {
   const source = await loadText(sourcePath);
   const workerStarted = performance.now();
-  client = new PythonAuthoringClient();
-  await client.ready();
+  client = new ProvenancedPythonAuthoringClient();
+  const readyIdentity = await client.ready();
+  runtimeBuildIdentity = readyIdentity;
   const workerStartupMs = performance.now() - workerStarted;
   execution = new AuthoringExecutionClient(canvas, {
     onError: failSource,
@@ -56,13 +72,16 @@ try {
     rejectAttached = reject;
   });
   let attaching = false;
-  async function attach(descriptor, isContinuation) {
+  async function attach(descriptor, isContinuation, duration) {
     if (attaching) return;
     attaching = true;
     if (!descriptor) throw new Error("scene profiler requires shared semantic execution");
     continuation = isContinuation;
     const ready = await execution.startSemanticExecution(descriptor, {
       authoringClient: client,
+      loopDurationSeconds: isContinuation
+        ? Math.max(duration, (warmupFrames + measuredFrames) / targetHz)
+        : duration > 0 ? duration : (warmupFrames + measuredFrames) / targetHz,
       transportMode,
       ...(sharedSlotCapacity === undefined ? {} : { sharedSlotCapacity }),
       ...(continuation ? { pacing: "external_samples" } : { initiallyPaused: true }),
@@ -72,16 +91,25 @@ try {
   // Source execution may remain suspended across play/wait. Attach to its
   // existing session, then let exact samples advance Rust's continuation lane.
   void client.run(source, context, {
-    onSemanticContinuation: (registration) => attach(registration.semanticExecution, true),
+    onSemanticContinuation: (registration) => attach(registration.semanticExecution, true, registration.duration),
   }).then(async (result) => {
     completedSource = result;
-    await attach(result.semanticExecution, false);
+    await attach(result.semanticExecution, false, result.duration);
   }).catch((error) => {
     failSource(error);
     rejectAttached(error);
   });
   const ready = await Promise.race([attached, sourceFailure]);
+  if (stageTimingSamples !== null && !continuation) {
+    throw new Error("stage timing samples require a source-owned semantic continuation");
+  }
   const initialExecutionReadyMs = performance.now() - authorStarted;
+  if (!continuation && (await execution.state()).time > 0) {
+    // Predeclared deterministic sources may hand off an already-completed
+    // session. Its ordinary seek API validates replay eligibility; opaque
+    // callback programs still fail explicitly instead of being replayed.
+    await execution.seek(0);
+  }
   await advanceSample(0);
 
   // Continue forward through warmup: arbitrary host callbacks cannot be
@@ -91,7 +119,11 @@ try {
     await nextAnimationFrame();
     await advanceSample((frame + 1) / targetHz);
   }
-  const before = (await execution.metrics()).metrics;
+  const before = (await execution.metrics({
+    profilePublicationStages: rendererSamples !== null,
+    profileRenderSubstages: rendererSamples !== null,
+    includeGpuIdentity: includeRendererGpuIdentity,
+  })).metrics;
   const cadence = new FrameMetrics({ targetHz });
   jank = new BrowserJankMonitor();
   const measurementStart = performance.now();
@@ -100,11 +132,76 @@ try {
     status.value = `Measuring ${frame + 1}/${measuredFrames} · ${sourcePath}…`;
     const timestamp = await nextAnimationFrame();
     const started = performance.now();
-    await advanceSample((warmupFrames + frame + 1) / targetHz);
+    const advanceResult = await advanceSample(
+      (warmupFrames + frame + 1) / targetHz,
+      stageTimingSamples !== null,
+    );
     firstMeasuredTime ??= lastSampleTime;
     const advanceRoundTripMs = performance.now() - started;
     cadence.record(timestamp, advanceRoundTripMs);
-    samples?.push({ sceneTime: lastSampleTime, advanceRoundTripMs });
+    samples?.push({ sceneTime: lastSampleTime, frameTimestampMs: timestamp, advanceRoundTripMs });
+    if (stageTimingSamples !== null) {
+      stageTimingSamples.push({
+        sceneTime: lastSampleTime,
+        advanceRoundTripMs,
+        ...advanceResult.sampleTiming,
+      });
+    }
+    if (rendererSamples !== null && (rendererMetricsSampling === "dense" ||
+        shouldSampleRendererStageFrame(frame, measuredFrames))) {
+      const metricsStarted = performance.now();
+      const renderer = (await execution.metrics({
+        profilePublicationStages: rendererSamples !== null,
+        profileRenderSubstages: rendererSamples !== null,
+      })).metrics;
+      const renderSubstageWindow = renderer.renderSubstageSamples;
+      const latestRenderSubstage = renderSubstageWindow?.[renderSubstageWindow.length - 1];
+      const hasSubstageIdentity = Number.isSafeInteger(latestRenderSubstage?.session) &&
+        Number.isSafeInteger(latestRenderSubstage?.sequence);
+      const isNewSubstage = hasSubstageIdentity && (rendererSubstageCursor === null ||
+        latestRenderSubstage.session > rendererSubstageCursor.session ||
+        (latestRenderSubstage.session === rendererSubstageCursor.session &&
+         latestRenderSubstage.sequence > rendererSubstageCursor.sequence));
+      if (isNewSubstage && rendererSubstageSamples.length < MAX_RENDERER_SUBSTAGE_SAMPLES) {
+        rendererSubstageCursor = {
+          session: latestRenderSubstage.session,
+          sequence: latestRenderSubstage.sequence,
+        };
+        rendererSubstageSamples.push({
+          ...latestRenderSubstage,
+          measuredFrameIndex: frame,
+        });
+      }
+      rendererSamples.push({
+        sceneTime: lastSampleTime,
+        metricsQueryMs: performance.now() - metricsStarted,
+        lastDeltaApplyMs: renderer.lastDeltaApplyMs,
+        lastRendererCallMs: renderer.lastRendererCallMs,
+        drawCalls: renderer.drawCalls,
+        instances: renderer.instancesDrawn,
+        uploadBytes: renderer.bytesUploaded,
+      });
+      if (rendererPublicationStageSamples !== null) {
+        let latestNewPublicationStageSample = null;
+        for (const sample of renderer.publicationStageSamples ?? []) {
+          const isNew = rendererPublicationStageCursor === null ||
+            sample.session > rendererPublicationStageCursor.session ||
+            (sample.session === rendererPublicationStageCursor.session &&
+             sample.sequence > rendererPublicationStageCursor.sequence);
+          if (!isNew) continue;
+          rendererPublicationStageCursor = { session: sample.session, sequence: sample.sequence };
+          latestNewPublicationStageSample = sample;
+        }
+        if (rendererPublicationStageSamples.length < MAX_RENDERER_PUBLICATION_STAGE_SAMPLES &&
+            shouldSampleRendererStageFrame(frame, measuredFrames) &&
+            latestNewPublicationStageSample !== null) {
+          rendererPublicationStageSamples.push({
+            ...latestNewPublicationStageSample,
+            measuredFrameIndex: frame,
+          });
+        }
+      }
+    }
   }
   const measurementEnd = performance.now();
   jank.stop();
@@ -114,14 +211,56 @@ try {
   const report = {
     schemaVersion: 2,
     ...(samples === null ? {} : { samples }),
+    ...(rendererSamples === null ? {} : { rendererSamples }),
+    ...(rendererSubstageSamples === null ? {} : {
+      rendererSubstageSamples,
+      rendererSubstageNotes: {
+        timing: "CPU wall time inside one successful render call, split at the existing renderer-host boundaries",
+        scope: "small observation and bookkeeping work between/after measured stages is omitted, so stage totals need not equal lastRendererCallMs",
+        surfaceAcquireCpuWallMs: "surface texture acquisition call; does not measure later physical presentation",
+        prepareCpuWallMs: "retained frame preparation and inset setup",
+        uploadCpuWallMs: "synchronous renderer upload calls; not GPU transfer completion",
+        encodeCpuWallMs: "command encoder creation, retained draw encoding, and command-buffer finish",
+        submitPresentCpuWallMs: "host queue submit and present call duration; not GPU completion or scanout",
+        collection: "latest exact session/sequence sample at each renderer metrics poll, capped at 32; enabling diagnostics adds timing calls to every successful render",
+      },
+    }),
+    ...(rendererSamples === null ? {} : { rendererMetricsSampling }),
+    ...(rendererPublicationStageSamples === null ? {} : {
+      rendererPublicationStageSamples,
+      rendererPublicationStageNotes: {
+        applyMs: "render-worker WASM delta application for this exact session/sequence",
+        renderMs: "synchronous retained renderer render call; not GPU completion",
+        receiveToPresentMs: "render-worker consume entry through successful render return",
+        ackPostMs: "synchronous execution_presented MessagePort post duration",
+        capture: "latest unique publication at evenly spaced measured-frame slots, capped at 32; sparse mode polls renderer metrics only at those slots",
+      },
+    }),
+    ...(stageTimingSamples === null ? {} : { stageTimingSamples }),
+    ...(stageTimingSamples === null ? {} : {
+      stageTimingNotes: {
+        endpointMs: "sample endpoint handling through continuation completion, before response transport",
+        rustDriveMs: "synchronous authored-time drive call",
+        deltaDrainMs: "delta drain and JSON generation",
+        deltaMetadataMs: "producer-side retained delta metadata validation",
+        deltaSendMs: "transport encoding and publication send after metadata validation",
+        callbackPhaseMs: "required callback-phase service and commit",
+        presentationWaitMs: "render-worker presented acknowledgement wait; not GPU completion",
+        segmentHandoffMs: "segment completion and player lease return",
+        authoringBoundaryWaitMs: "wait for Python source continuation and next segment attachment",
+      },
+    }),
     benchmark: "Noon shared authored scene profile",
     generatedAt: new Date().toISOString(),
     scene: { source: sourcePath, context, objects: metrics.objectCount, camera: "authored" },
+    ...(runtimeBuildIdentity === null ? {} : { runtimeBuild: runtimeBuildIdentity }),
     environment: {
       userAgent: navigator.userAgent,
       rendererBackend: execution.rendererBackend,
+      ...(includeRendererGpuIdentity ? { rendererGpuIdentity: before.rendererGpuIdentity } : {}),
       devicePixelRatio: window.devicePixelRatio || 1,
       viewportCssPixels: [canvas.clientWidth, canvas.clientHeight],
+      backingResolution: [canvas.width, canvas.height],
       targetHz,
     },
     setup: { workerStartupMs, initialExecutionReadyMs, warmupFrames },
@@ -148,6 +287,11 @@ try {
     },
     renderer: {
       presentedFrames: metrics.presentedFrames - before.presentedFrames,
+      // Latest accepted WASM delta application; excludes host/engine worker time.
+      lastDeltaApplyMs: metrics.lastDeltaApplyMs,
+      // One successful render call near the end of the run, not a frame-time
+      // distribution or physical presentation latency.
+      lastRendererCallMs: metrics.lastRendererCallMs,
       drawCalls: metrics.drawCalls,
       instances: metrics.instancesDrawn,
       lastUploadBytes: metrics.bytesUploaded,
@@ -172,14 +316,23 @@ try {
   client?.terminate();
 }
 
-async function advanceSample(time) {
+async function advanceSample(time, collectTimings = false) {
   if (sourceError) throw sourceError;
+  // Predeclared timelines have a finite replay interval. Static scenes (zero
+  // duration) remain useful steady-state measurements and keep sampling.
+  const replayEnd = !continuation && completedSource?.duration > 0
+    ? completedSource.duration : null;
+  const sampleTime = replayEnd === null ? time : Math.min(time, replayEnd);
   const request = continuation
-    ? execution.sampleToAuthoredTime(time, { stopAtSourceCompletion: true })
-    : execution.advanceTo(time);
+    ? execution.sampleToAuthoredTime(sampleTime, {
+      stopAtSourceCompletion: true,
+      collectTimings,
+    })
+    : execution.advanceTo(sampleTime);
   const result = await Promise.race([request, sourceFailure]);
   if (sourceError) throw sourceError;
-  sourceCompleted = result.sourceCompleted === true;
+  sourceCompleted = result.sourceCompleted === true ||
+    (replayEnd !== null && sampleTime >= replayEnd);
   lastSampleTime = result.time;
   return result;
 }

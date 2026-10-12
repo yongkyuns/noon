@@ -18,6 +18,7 @@ fn glyph_key(glyph_id: u16) -> GlyphRasterKey {
         glyph_id,
         pixel_size_bits: 16.0f32.to_bits(),
         variation_fingerprint: 0,
+        phase: noon_text::raster::GlyphRasterPhase::ZERO,
     }
 }
 
@@ -40,14 +41,13 @@ fn mask_raster(value: u8) -> GlyphRaster {
 fn two_page_atlas_churn_plateaus_without_texture_reallocation() {
     const GENERATIONS: u16 = 1_000;
 
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut atlas = GpuGlyphAtlas::with_page_limit(8, 2).unwrap();
     let raster = mask_raster(180);
 
     for glyph_id in 1..=4 {
-        let GlyphAtlasEntry::Image(_) = atlas
-            .insert(&device, &queue, glyph_key(glyph_id), &raster)
-            .unwrap()
+        let GlyphAtlasEntry::Image(_) =
+            atlas.insert(&device, glyph_key(glyph_id), &raster).unwrap()
         else {
             panic!("visible mask glyph must occupy the atlas");
         };
@@ -62,9 +62,8 @@ fn two_page_atlas_churn_plateaus_without_texture_reallocation() {
         atlas.begin_generation();
         let first = 5 + generation * 2;
         for glyph_id in first..=first + 1 {
-            let GlyphAtlasEntry::Image(_) = atlas
-                .insert(&device, &queue, glyph_key(glyph_id), &raster)
-                .unwrap()
+            let GlyphAtlasEntry::Image(_) =
+                atlas.insert(&device, glyph_key(glyph_id), &raster).unwrap()
             else {
                 panic!("visible mask glyph must occupy the atlas");
             };
@@ -75,6 +74,11 @@ fn two_page_atlas_churn_plateaus_without_texture_reallocation() {
         assert_eq!(atlas.page_count(GlyphAtlasPlane::Color), 0);
         assert_eq!(stats.texture_allocations, 2);
         assert_eq!(stats.entries, 4);
+        assert_eq!(
+            atlas.pending_upload_count(),
+            4,
+            "unsubmitted staging must plateau with the resident page budget"
+        );
         assert_eq!(stats.mask_entries, 4);
         assert_eq!(stats.color_entries, 0);
     }

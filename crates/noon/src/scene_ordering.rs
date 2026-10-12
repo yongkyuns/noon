@@ -1,11 +1,28 @@
 use noon_core::SemanticMutationTransactionResult;
 
 use crate::{
-    AuthoringError, LiveSession, LiveSessionError, Mobject, MobjectFamilyMember, Scene,
+    AuthoringError, LiveSession, LiveSessionError, Mobject, MobjectTarget, Scene,
     SceneMembershipRequest,
 };
 
 impl Scene {
+    /// Add ordinary object/family targets with persistent foreground ordering.
+    /// Membership and declarations commit together through the shared planner.
+    pub fn add_foreground_many(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.edit_membership(SceneMembershipRequest::AddForeground(members))
+    }
+
+    /// End foreground persistence without removing or reordering visible objects.
+    pub fn remove_foreground_many(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.edit_membership(SceneMembershipRequest::RemoveForeground(members))
+    }
+
     /// Move one object/family projection to the front of painter order.
     ///
     /// ManimCE v0.21 defines `bring_to_front()` through ordinary `add()` semantics,
@@ -17,7 +34,7 @@ impl Scene {
     /// Move several object/family projections to the front in caller order.
     pub fn bring_to_front_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.add_many(members)
     }
@@ -25,7 +42,7 @@ impl Scene {
     /// Move one object/family projection to the back of painter order.
     pub fn bring_to_back(&mut self, mobject: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::BringToBack(&[
-            MobjectFamilyMember::Mobject(mobject),
+            MobjectTarget::Object(mobject),
         ]))
         .map(|_| ())
     }
@@ -33,13 +50,30 @@ impl Scene {
     /// Move several object/family projections to the back in caller order.
     pub fn bring_to_back_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::BringToBack(members))
     }
 }
 
 impl<'a> LiveSession<'a> {
+    /// Add ordinary object/family targets with persistent foreground ordering.
+    /// Membership and declarations commit together through the shared planner.
+    pub fn add_foreground_many(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::AddForeground(members))
+    }
+
+    /// End foreground persistence without removing or reordering visible objects.
+    pub fn remove_foreground_many(
+        &mut self,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_membership(SceneMembershipRequest::RemoveForeground(members))
+    }
+
     /// Move one live object projection to the front through ordinary add semantics.
     pub fn bring_to_front(
         &mut self,
@@ -51,7 +85,7 @@ impl<'a> LiveSession<'a> {
     /// Move several live projections to the front in caller order.
     pub fn bring_to_front_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.add_many(members)
     }
@@ -62,14 +96,14 @@ impl<'a> LiveSession<'a> {
         mobject: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_membership(SceneMembershipRequest::BringToBack(&[
-            MobjectFamilyMember::Mobject(mobject),
+            MobjectTarget::Object(mobject),
         ]))
     }
 
     /// Move several live projections to the back in caller order.
     pub fn bring_to_back_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_membership(SceneMembershipRequest::BringToBack(members))
     }

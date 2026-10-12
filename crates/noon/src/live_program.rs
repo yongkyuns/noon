@@ -1,18 +1,24 @@
 //! Target-neutral ownership for realtime Rust authoring continuations.
 //!
-//! A [`LiveProgram`] keeps the consumed semantic [`Scene`] paired with the one
-//! [`ExecutionSession`] lowered from it. It owns only the control-plane state
+//! A [`LiveProgram`] drives the one execution component owned by its consumed
+//! semantic [`Scene`]. It owns only the continuation control-plane state
 //! needed to await one existing [`ExecutionSegment`]. Timeline evaluation,
 //! callback ordering, semantic publication, and renderer-facing invalidation
 //! remain in their existing owners.
 
-use std::error::Error;
+use std::{error::Error, rc::Rc};
+
+mod inspection;
 
 use noon_core::{
-    NativeEventOccurrence, NativeInputValue, NativeStateSource, PublicationContext, Rect,
+    NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,
+    NativeStateSource, PublicationContext, Rect,
 };
 
-use crate::execution_session::ExecutionViewportQuery;
+use crate::execution_session::{
+    ExecutionViewportQuery, NativePointerInputPublication, NativePointerInputToken,
+    TranslationDragError, TranslationDragReceipt,
+};
 use crate::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
     ExecutionSessionInputError, LiveSession, RustHostCallbackError, RustHostCallbackTable, Scene,
@@ -77,6 +83,8 @@ pub enum LiveProgramError<E> {
     CompletedSegment(ExecutionSegment),
     Callback(RustHostCallbackError),
     Input(ExecutionSessionInputError),
+    TranslationDrag(TranslationDragError),
+    Inspection(crate::InspectionNavigationError),
     Segment(ExecutionSegmentAdvanceError),
     Completion(crate::LiveSessionError),
     Continuation(E),
@@ -106,6 +114,8 @@ impl<E: std::fmt::Display> std::fmt::Display for LiveProgramError<E> {
             ),
             Self::Callback(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
+            Self::TranslationDrag(error) => error.fmt(formatter),
+            Self::Inspection(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
             Self::Completion(error) => error.fmt(formatter),
             Self::Continuation(error) => error.fmt(formatter),
@@ -118,6 +128,8 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
         match self {
             Self::Callback(error) => Some(error),
             Self::Input(error) => Some(error),
+            Self::TranslationDrag(error) => Some(error),
+            Self::Inspection(error) => Some(error),
             Self::Segment(error) => Some(error),
             Self::Completion(error) => Some(error),
             Self::Continuation(error) => Some(error),
@@ -136,7 +148,6 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
 /// one existing segment and never creates another timeline or cursor.
 pub struct LiveProgram<C> {
     scene: Scene,
-    session: ExecutionSession,
     continuation: C,
     phase: LiveProgramPhase,
 }
@@ -147,13 +158,13 @@ impl Scene {
     /// Lowering happens once before the continuation starts. All later semantic
     /// work is available only through the program's temporary [`LiveSession`].
     pub fn into_live_program<C: LiveContinuation>(
-        self,
+        mut self,
         continuation: C,
     ) -> Result<LiveProgram<C>, noon_compile::SemanticExecutionLoweringError> {
-        let session = self.execution_session()?;
+        let execution = self.execution_session()?;
+        self.install_execution(execution);
         Ok(LiveProgram {
             scene: self,
-            session,
             continuation,
             phase: LiveProgramPhase::ReadyToResume,
         })
@@ -163,7 +174,7 @@ impl Scene {
 impl<C: LiveContinuation> LiveProgram<C> {
     /// Borrow the authoritative runtime for frame, wake, camera, and query observations.
     pub const fn session(&self) -> &ExecutionSession {
-        &self.session
+        self.scene.owned_execution()
     }
 
     /// Derive host cadence from the runtime and this program's one continuation barrier.
@@ -172,7 +183,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// callbacks and shared completion cannot be skipped merely because the
     /// underlying tokenless wait already reports a complete interval.
     pub fn wake_state(&self) -> noon_runtime::RuntimeWakeState {
-        let wake = self.session.wake_state();
+        let wake = self.session().wake_state();
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             // Only an awaited segment authorizes authored-time advancement.
             // Endpoint presentation, authoring resumption, and a finished source
@@ -180,17 +191,149 @@ impl<C: LiveContinuation> LiveProgram<C> {
             // callback registrations beyond the source's logical interval.
             return wake.without_timeline_wake();
         };
-        let timeline = if self.session.frame().time >= segment.end_time() {
-            noon_runtime::TimelineWakeState::Deadline(self.session.frame().time)
+        let timeline = if self.session().frame().time >= segment.end_time() {
+            noon_runtime::TimelineWakeState::Deadline(self.session().frame().time)
         } else {
-            self.session.segment_state(segment).timeline()
+            self.session().segment_state(segment).timeline()
         };
         wake.with_additional_timeline(timeline)
     }
 
     /// Query candidate frame rows through the session-owned derived spatial index.
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
-        self.session.query_viewport(bounds)
+        self.scene.owned_execution_mut().query_viewport(bounds)
+    }
+
+    /// Feed a platform monotonic tick to input-driven animations, including after source completion.
+    pub fn advance_interactions(
+        &mut self,
+        wall_time_seconds: f64,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        if !self.session().interactions_active() {
+            return Ok(());
+        }
+        self.ensure_host_input_available("advance interaction")?;
+        self.scene
+            .owned_execution_mut()
+            .advance_interactions(wall_time_seconds)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(())
+    }
+
+    /// Observe a successfully presented frame without advancing the continuation
+    /// or opening its input/publication barriers.
+    pub fn refresh_pointer_hover(
+        &mut self,
+        frame: &crate::integration::PointerFrameSnapshot,
+    ) -> Result<Option<crate::PointerHoverTransition>, crate::integration::PointerFrameError> {
+        self.scene
+            .owned_execution_mut()
+            .refresh_pointer_hover(frame, frame.view())
+    }
+
+    /// Configure transient selection without exposing a mutable execution session.
+    pub fn set_pointer_fill_selection(
+        &mut self,
+        max_movement: Option<f32>,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure pointer selection")?;
+        let session = self.scene.owned_execution_mut();
+        match max_movement {
+            Some(value) => session.enable_pointer_fill_selection(value),
+            None => session.disable_pointer_fill_selection(),
+        }
+        .map_err(LiveProgramError::Input)
+    }
+
+    /// Configure the semantic objects eligible for session-owned native
+    /// translation dragging. Native callers still route every occurrence to
+    /// [`Self::submit_translation_drag_input`]; they do not select an object
+    /// identity for a press or move.
+    pub fn set_translation_drag_targets<'target>(
+        &mut self,
+        targets: impl IntoIterator<Item = &'target crate::Mobject>,
+    ) -> Result<(), LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure translation drag targets")?;
+        let mut nodes = Vec::new();
+        for target in targets {
+            if !Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+                return Err(LiveProgramError::TranslationDrag(
+                    TranslationDragError::ForeignStore,
+                ));
+            }
+            target.validate().map_err(|error| {
+                LiveProgramError::TranslationDrag(TranslationDragError::Semantic(error.to_string()))
+            })?;
+            nodes.push(target.node_id());
+        }
+        self.scene
+            .owned_execution_mut()
+            .set_translation_drag_targets(nodes)
+            .map_err(LiveProgramError::TranslationDrag)?;
+        self.refresh_pending_publication();
+        Ok(())
+    }
+
+    /// Configure the platform pointer projected into the existing unkeyed native signals.
+    pub fn configure_native_pointer_input(
+        &mut self,
+        pointer: NativePointerId,
+        view_revision: u64,
+    ) -> Result<NativePointerInputToken, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("configure contextual pointer input")?;
+        let token = self
+            .scene
+            .owned_execution_mut()
+            .configure_native_pointer_input(pointer, view_revision)
+            .map_err(LiveProgramError::Input)?;
+        self.refresh_pending_publication();
+        Ok(token)
+    }
+
+    /// Capture the current session context without exposing mutable execution authority.
+    pub fn native_pointer_input_token(
+        &self,
+    ) -> Result<NativePointerInputToken, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("capture contextual pointer input")?;
+        self.session()
+            .native_pointer_input_token()
+            .map_err(LiveProgramError::Input)
+    }
+
+    /// Publish one occurrence and refresh an outstanding endpoint receipt after success.
+    pub fn submit_native_pointer_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<NativePointerInputPublication, LiveProgramError<C::Error>> {
+        self.submit_translation_drag_input(token, input)
+            .map(|receipt| receipt.input)
+    }
+
+    /// Deliver one typed pointer occurrence through the configured translation
+    /// drag policy and the existing native pointer publication lane.
+    ///
+    /// Misses and non-captured occurrences retain ordinary pointer, hover, and
+    /// click behavior. A captured primary drag alone publishes its scoped
+    /// effective translation and reconciles the authored value on release.
+    pub fn submit_translation_drag_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<TranslationDragReceipt, LiveProgramError<C::Error>> {
+        self.ensure_host_input_available("deliver translation drag input")?;
+        let store = Rc::clone(self.scene.integration_store());
+        let publication = self
+            .scene
+            .owned_execution_mut()
+            .submit_translation_drag_input(&mut store.borrow_mut(), token, input)
+            .map_err(|error| match error {
+                TranslationDragError::Input(error) => LiveProgramError::Input(error),
+                error => LiveProgramError::TranslationDrag(error),
+            })?;
+        self.refresh_pending_publication();
+        Ok(publication)
     }
 
     /// Deliver one normalized sampled native value without exposing mutable session authority.
@@ -200,11 +343,12 @@ impl<C: LiveContinuation> LiveProgram<C> {
         value: NativeInputValue,
     ) -> Result<&FrameState, LiveProgramError<C::Error>> {
         self.ensure_host_input_available("deliver native state input")?;
-        self.session
+        self.scene
+            .owned_execution_mut()
             .set_native_state_input(source, value)
             .map_err(LiveProgramError::Input)?;
         self.refresh_pending_publication();
-        Ok(self.session.frame())
+        Ok(self.session().frame())
     }
 
     /// Deliver one ordered native event without exposing mutable session authority.
@@ -213,23 +357,24 @@ impl<C: LiveContinuation> LiveProgram<C> {
         occurrence: NativeEventOccurrence,
     ) -> Result<&FrameState, LiveProgramError<C::Error>> {
         self.ensure_host_input_available("deliver a native event")?;
-        self.session
+        self.scene
+            .owned_execution_mut()
             .emit_native_event(occurrence)
             .map_err(LiveProgramError::Input)?;
         self.refresh_pending_publication();
-        Ok(self.session.frame())
+        Ok(self.session().frame())
     }
 
     /// Consume the runtime's current renderer-facing invalidation without copying state.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
-        self.session.take_renderer_publication()
+        self.scene.owned_execution_mut().take_renderer_publication()
     }
 
     pub fn status(&self) -> LiveProgramStatus {
         match self.phase {
             LiveProgramPhase::ReadyToResume => LiveProgramStatus::ReadyToResume,
             LiveProgramPhase::Awaiting(segment) => {
-                LiveProgramStatus::Awaiting(self.session.segment_state(segment))
+                LiveProgramStatus::Awaiting(self.session().segment_state(segment))
             }
             LiveProgramPhase::PublicationPending(publication) => {
                 LiveProgramStatus::PublicationPending(publication)
@@ -248,12 +393,13 @@ impl<C: LiveContinuation> LiveProgram<C> {
             return Err(self.invalid_state("resume authoring"));
         }
         let result = {
-            let mut live = self.scene.live(&mut self.session);
-            self.continuation.resume(&mut live)
+            let continuation = &mut self.continuation;
+            let mut live = self.scene.owned_live();
+            continuation.resume(&mut live)
         };
         match result {
             Ok(ContinuationStep::Await(segment)) => {
-                match self.session.validate_segment_for_advance(segment) {
+                match self.session().validate_segment_for_advance(segment) {
                     Ok(false) => {}
                     Ok(true) => {
                         self.phase = LiveProgramPhase::Terminal;
@@ -292,27 +438,28 @@ impl<C: LiveContinuation> LiveProgram<C> {
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             return Err(self.invalid_state("drive a segment"));
         };
-        if let Err(error) = callbacks.advance_segment_to(&mut self.session, segment, requested_time)
+        if let Err(error) =
+            callbacks.advance_segment_to(self.scene.owned_execution_mut(), segment, requested_time)
         {
             self.phase = LiveProgramPhase::Terminal;
             return Err(LiveProgramError::Callback(error));
         }
-        if self.session.frame().time < segment.end_time() {
+        if self.session().frame().time < segment.end_time() {
             return Ok(self.status());
         }
 
         let completion = {
-            let mut live = self.scene.live(&mut self.session);
+            let mut live = self.scene.owned_live();
             live.complete_segment(segment)
         };
         if let Err(error) = completion {
             self.phase = LiveProgramPhase::Terminal;
             return Err(LiveProgramError::Completion(error));
         }
-        debug_assert!(self.session.segment_state(segment).is_complete());
+        debug_assert!(self.session().segment_state(segment).is_complete());
 
-        self.phase = if self.session.wake_state().frame_pending() {
-            LiveProgramPhase::PublicationPending(self.session.publication_context())
+        self.phase = if self.session().wake_state().frame_pending() {
+            LiveProgramPhase::PublicationPending(self.session().publication_context())
         } else {
             LiveProgramPhase::ReadyToResume
         };
@@ -337,7 +484,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
                 actual: publication,
             });
         }
-        if self.session.wake_state().frame_pending() {
+        if self.session().wake_state().frame_pending() {
             return Err(LiveProgramError::PublicationStillPending { expected });
         }
         self.phase = LiveProgramPhase::ReadyToResume;
@@ -363,7 +510,8 @@ impl<C: LiveContinuation> LiveProgram<C> {
 
     fn refresh_pending_publication(&mut self) {
         if matches!(self.phase, LiveProgramPhase::PublicationPending(_)) {
-            self.phase = LiveProgramPhase::PublicationPending(self.session.publication_context());
+            let publication = self.session().publication_context();
+            self.phase = LiveProgramPhase::PublicationPending(publication);
         }
     }
 }
@@ -567,7 +715,7 @@ mod tests {
         ));
         assert_eq!(foreign_program.status(), LiveProgramStatus::Terminal);
 
-        let (scene, session, pending) = scene_with_pending_segment();
+        let (mut scene, session, pending) = scene_with_pending_segment();
         let pending_token = pending.token().unwrap();
         let stale_sequence = crate::execution_segment::ExecutionSegmentSequence::new(
             pending_token.sequence().get().checked_add(1).unwrap(),
@@ -578,9 +726,9 @@ mod tests {
                 session.runtime_identity(),
                 stale_sequence,
             ));
+        scene.install_execution(session);
         let mut stale_program = LiveProgram {
             scene,
-            session,
             continuation: ReturnSegment(stale),
             phase: LiveProgramPhase::ReadyToResume,
         };
@@ -815,3 +963,6 @@ mod tests {
         assert_eq!(program.session().frame().time, 1.0);
     }
 }
+
+#[cfg(test)]
+mod pointer_input_tests;

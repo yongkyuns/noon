@@ -5,6 +5,7 @@ use std::error::Error;
 
 use crate::execution_session::{
     CallbackAdvance, CallbackPhaseOverlay, CallbackReadRequest, CallbackReadValue,
+    CallbackRegionAdvance,
 };
 use crate::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSession,
@@ -297,6 +298,57 @@ impl RustHostCallbackContext<'_> {
         Ok(())
     }
 
+    /// Replace an object or family from the exact effective layout rows of this
+    /// phase. Rust computes every transform and projected bound before exposing
+    /// any write; later reads in the same callback see the staged replacement.
+    pub fn replace_layout(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), crate::CallbackLayoutError> {
+        let token = self.overlay.token();
+        let revision = token.publication().scene_revision();
+        self.session
+            .validate_callback_store(&source.integration_store().borrow(), token)?;
+        let mut rows: BTreeMap<SemanticNodeId, EffectiveObjectProperties> = BTreeMap::new();
+        let changes = crate::prepare_callback_layout_replace(
+            source,
+            target,
+            revision,
+            dimension,
+            stretch,
+            |node| {
+                if let Some(row) = self.overlay.object(node) {
+                    return Ok((row.transform, row.bounds));
+                }
+                if let Some(row) = rows.get(&node) {
+                    return Ok((row.transform, row.bounds));
+                }
+                let row = match self
+                    .session
+                    .required_callback_read(token, CallbackReadRequest::Object(node))?
+                {
+                    CallbackReadValue::Object(row) => row,
+                    CallbackReadValue::Scalar(_) => {
+                        unreachable!("object callback read returns object")
+                    }
+                };
+                rows.insert(node, row);
+                Ok((row.transform, row.bounds))
+            },
+        )?;
+        for (node, row) in rows {
+            self.overlay.cache_read_object(node, row);
+        }
+        for change in changes {
+            self.overlay
+                .set_transform_and_bounds(change.node, change.transform, change.bounds)?;
+        }
+        Ok(())
+    }
+
     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
         self.overlay.set_style(self.target, style)
     }
@@ -552,41 +604,66 @@ impl RustHostCallbackTable {
                 }
                 CallbackAdvance::HostRequired {
                     invocations,
-                    mut overlay,
+                    overlay,
                 } => {
                     let token = overlay.token();
-                    for invocation in invocations {
-                        let callback_id = invocation.callback_id();
-                        let occurrence_index = invocation.occurrence_index();
-                        let Some(callback) = self.callbacks.get_mut(&callback_id) else {
-                            session.fail_required_callback_phase(token)?;
-                            return Err(RustHostCallbackError::UnknownCallback {
-                                callback: callback_id,
-                                occurrence_index: Some(occurrence_index),
-                            });
-                        };
-                        let mut context = RustHostCallbackContext {
-                            callback_id,
-                            occurrence_index,
-                            target: invocation.target(),
-                            overlay: &mut overlay,
-                            session,
-                        };
-                        if let Err(source) = callback(&mut context) {
-                            session.fail_required_callback_phase(token)?;
-                            return Err(RustHostCallbackError::CallbackFailed {
-                                callback: callback_id,
-                                occurrence_index,
-                                source,
-                            });
+                    let mut region = CallbackRegionAdvance::HostRequired {
+                        invocations,
+                        overlay,
+                    };
+                    loop {
+                        match region {
+                            CallbackRegionAdvance::HostRequired {
+                                invocations,
+                                mut overlay,
+                            } => {
+                                for invocation in invocations {
+                                    let callback_id = invocation.callback_id();
+                                    let occurrence_index = invocation.occurrence_index();
+                                    let Some(callback) = self.callbacks.get_mut(&callback_id)
+                                    else {
+                                        session.fail_required_callback_phase(token)?;
+                                        return Err(RustHostCallbackError::UnknownCallback {
+                                            callback: callback_id,
+                                            occurrence_index: Some(occurrence_index),
+                                        });
+                                    };
+                                    let mut context = RustHostCallbackContext {
+                                        callback_id,
+                                        occurrence_index,
+                                        target: invocation.target(),
+                                        overlay: &mut overlay,
+                                        session,
+                                    };
+                                    if let Err(source) = callback(&mut context) {
+                                        session.fail_required_callback_phase(token)?;
+                                        return Err(RustHostCallbackError::CallbackFailed {
+                                            callback: callback_id,
+                                            occurrence_index,
+                                            source,
+                                        });
+                                    }
+                                }
+                                region = match session
+                                    .submit_required_callback_region(overlay.finish())
+                                {
+                                    Ok(region) => region,
+                                    Err(error) => {
+                                        session.fail_required_callback_phase(token)?;
+                                        return Err(RustHostCallbackError::Session(error));
+                                    }
+                                };
+                            }
+                            CallbackRegionAdvance::Complete(batch) => {
+                                if let Err(error) = session.commit_required_callback_phase(batch) {
+                                    session.fail_required_callback_phase(token)?;
+                                    return Err(RustHostCallbackError::Session(error));
+                                }
+                                self.last_advance_completed_callback_phase = true;
+                                break;
+                            }
                         }
                     }
-                    let batch = overlay.finish();
-                    if let Err(error) = session.commit_required_callback_phase(batch) {
-                        session.fail_required_callback_phase(token)?;
-                        return Err(RustHostCallbackError::Session(error));
-                    }
-                    self.last_advance_completed_callback_phase = true;
                 }
             }
         }
@@ -679,13 +756,202 @@ mod tests {
     use std::rc::Rc;
 
     use crate::{AnimationOptions, RateFunction, Scene, Vec2};
-    use noon_core::Color;
+    use noon_core::{
+        Color, SemanticMutationTransaction, SemanticObjectProperty, SemanticVec3, TrackTiming,
+    };
 
     use super::*;
 
     const SET_Y: HostCallbackId = HostCallbackId::new(1);
     const SET_OPACITY: HostCallbackId = HostCallbackId::new(2);
     const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
+
+    #[test]
+    fn rust_wrapper_runs_native_host_native_host_before_one_publication() {
+        let mut scene = Scene::new();
+        let object = scene.circle(1.0).unwrap();
+        scene.add(&object).unwrap();
+        let order = Rc::new(RefCell::new(Vec::new()));
+        let mut callbacks = RustHostCallbackTable::new();
+        let first_order = Rc::clone(&order);
+        callbacks
+            .insert(SET_Y, move |context| {
+                first_order.borrow_mut().push(1);
+                assert_eq!(context.target_state().transform.translation.x, 4.0);
+                assert_eq!(context.target_state().style.stroke_width, 1.0);
+                let mut transform = context.target_state().transform;
+                transform.translation.y = 9.0;
+                context.set_target_transform(transform)?;
+                let mut style = context.target_state().style;
+                style.stroke_width = 3.0;
+                context.set_target_style(style)
+            })
+            .unwrap();
+        let second_order = Rc::clone(&order);
+        callbacks
+            .insert(SET_OPACITY, move |context| {
+                second_order.borrow_mut().push(2);
+                assert_eq!(context.target_state().transform.translation.y, 9.0);
+                assert_eq!(context.target_state().style.stroke_width, 2.0);
+                let mut style = context.target_state().style;
+                style.opacity = 0.7;
+                context.set_target_style(style)
+            })
+            .unwrap();
+        {
+            let mut store = scene.integration_store().borrow_mut();
+            let translation = store
+                .insert_semantic_input_signal(SemanticVec3::new(4.0, 1.0, 0.0))
+                .unwrap();
+            let width = store.insert_semantic_input_signal(1.0_f64).unwrap();
+            let mut track = SemanticMutationTransaction::new();
+            track.add_scalar_signal_track(
+                width,
+                1.0,
+                2.0,
+                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            );
+            track.apply(&mut store).unwrap();
+            store
+                .bind_semantic_signal(
+                    translation,
+                    object.node_id(),
+                    SemanticObjectProperty::Translation,
+                )
+                .unwrap();
+            callbacks
+                .add_updater(&mut store, object.node_id(), SET_Y, 1.0, None)
+                .unwrap();
+            store
+                .bind_semantic_signal(width, object.node_id(), SemanticObjectProperty::StrokeWidth)
+                .unwrap();
+            callbacks
+                .add_updater(&mut store, object.node_id(), SET_OPACITY, 1.0, None)
+                .unwrap();
+        }
+        let mut session = scene.execution_session().unwrap();
+        let publication = session.publication_context();
+        callbacks.advance_to(&mut session, 1.0).unwrap();
+        assert_eq!(&*order.borrow(), &[1, 2]);
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            Vec2::new(4.0, 9.0)
+        );
+        assert_eq!(session.frame().objects[0].style.stroke_width, 2.0);
+        assert_eq!(session.frame().objects[0].style.opacity, 0.7);
+        assert_eq!(
+            session.publication_context().frame_epoch(),
+            publication.frame_epoch().checked_next().unwrap()
+        );
+    }
+
+    #[test]
+    fn cross_target_native_order_and_host_written_binding_survive_two_ticks() {
+        let mut scene = Scene::new();
+        let early = scene.circle(0.5).unwrap();
+        let host = scene.circle(0.5).unwrap();
+        let late = scene.circle(0.5).unwrap();
+        scene.add(&early).unwrap();
+        scene.add(&host).unwrap();
+        scene.add(&late).unwrap();
+        let early_id = early.node_id();
+        let late_id = late.node_id();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&observed);
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(SET_Y, move |context| {
+                let before = context.read_object(early_id)?.style.opacity;
+                let after = context.read_object(late_id)?.style.stroke_width;
+                seen.borrow_mut().push((before, after));
+                let mut style = context.read_object(late_id)?.style;
+                style.stroke_width = 3.0;
+                context.set_style(late_id, style)
+            })
+            .unwrap();
+        {
+            let mut store = scene.integration_store().borrow_mut();
+            let opacity = store.insert_semantic_input_signal(0.1_f64).unwrap();
+            let width = store.insert_semantic_input_signal(1.0_f64).unwrap();
+            let mut tracks = SemanticMutationTransaction::new();
+            tracks.add_scalar_signal_track(
+                opacity,
+                0.1,
+                0.4,
+                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            );
+            tracks.add_scalar_signal_track(
+                width,
+                1.0,
+                2.0,
+                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            );
+            tracks.apply(&mut store).unwrap();
+            store
+                .bind_semantic_signal(opacity, early_id, SemanticObjectProperty::ObjectOpacity)
+                .unwrap();
+            callbacks
+                .add_updater(&mut store, host.node_id(), SET_Y, 1.0, None)
+                .unwrap();
+            store
+                .bind_semantic_signal(width, late_id, SemanticObjectProperty::StrokeWidth)
+                .unwrap();
+        }
+        let mut session = scene.execution_session().unwrap();
+        callbacks.advance_to(&mut session, 1.0).unwrap();
+        assert_eq!(session.frame().objects[2].style.stroke_width, 2.0);
+        callbacks.advance_to(&mut session, 2.0).unwrap();
+        assert_eq!(&*observed.borrow(), &[(0.4, 1.0), (0.4, 2.0)]);
+        assert_eq!(session.frame().objects[2].style.stroke_width, 2.0);
+    }
+
+    #[test]
+    fn host_write_reveals_unchanged_native_binding_before_later_host() {
+        let mut scene = Scene::new();
+        let first = scene.circle(0.5).unwrap();
+        let middle = scene.circle(0.5).unwrap();
+        let last = scene.circle(0.5).unwrap();
+        scene.add(&first).unwrap();
+        scene.add(&middle).unwrap();
+        scene.add(&last).unwrap();
+        let middle_id = middle.node_id();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let first_seen = Rc::clone(&seen);
+        let last_seen = Rc::clone(&seen);
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(SET_Y, move |context| {
+                first_seen.borrow_mut().push(1);
+                let mut style = context.read_object(middle_id)?.style;
+                style.stroke_width = 3.0;
+                context.set_style(middle_id, style)
+            })
+            .unwrap();
+        callbacks
+            .insert(SET_OPACITY, move |context| {
+                last_seen.borrow_mut().push(2);
+                assert_eq!(context.read_object(middle_id)?.style.stroke_width, 1.0);
+                Ok::<(), ExecutionSessionCallbackError>(())
+            })
+            .unwrap();
+        {
+            let mut store = scene.integration_store().borrow_mut();
+            let width = store.insert_semantic_input_signal(1.0_f64).unwrap();
+            callbacks
+                .add_updater(&mut store, first.node_id(), SET_Y, 1.0, None)
+                .unwrap();
+            store
+                .bind_semantic_signal(width, middle_id, SemanticObjectProperty::StrokeWidth)
+                .unwrap();
+            callbacks
+                .add_updater(&mut store, last.node_id(), SET_OPACITY, 1.0, None)
+                .unwrap();
+        }
+        let mut session = scene.execution_session().unwrap();
+        callbacks.advance_to(&mut session, 1.0).unwrap();
+        assert_eq!(&*seen.borrow(), &[1, 2]);
+        assert_eq!(session.frame().objects[1].style.stroke_width, 1.0);
+    }
 
     #[test]
     fn effective_pivot_rotation_reuses_the_shared_affine_operation() {
@@ -1005,6 +1271,71 @@ mod tests {
         assert_eq!(session.frame(), &frame);
         assert_eq!(session.publication_context(), publication);
         assert!(session.callback_termination().is_some());
+    }
+
+    #[test]
+    fn required_callback_read_miss_fails_phase_without_replaying_host_side_effects() {
+        let mut scene = Scene::new();
+        let target = scene.circle(1.0).unwrap();
+        scene.add(&target).unwrap();
+        let calls = Rc::new(RefCell::new(0));
+        let callback_calls = Rc::clone(&calls);
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(SET_Y, move |context| {
+                *callback_calls.borrow_mut() += 1;
+                let mut transform = context.target_state().transform;
+                transform.translation.y = 42.0;
+                context
+                    .set_target_transform(transform)
+                    .map_err(std::io::Error::other)?;
+                // This semantic identity is not part of the pinned execution. A
+                // required read miss fails this invocation instead of publishing
+                // its earlier staged write or retrying opaque host work.
+                context
+                    .read_object(SemanticNodeId::new(u32::MAX, 0))
+                    .map_err(std::io::Error::other)?;
+                Ok::<_, std::io::Error>(())
+            })
+            .unwrap();
+        callbacks
+            .add_updater(
+                &mut scene.integration_store().borrow_mut(),
+                target.node_id(),
+                SET_Y,
+                0.0,
+                None,
+            )
+            .unwrap();
+
+        let mut session = scene.execution_session().unwrap();
+        let frame = session.frame().clone();
+        let publication = session.publication_context();
+        let error = callbacks.advance_to(&mut session, 0.0).unwrap_err();
+        let source = match error {
+            RustHostCallbackError::CallbackFailed {
+                callback: SET_Y,
+                occurrence_index: 0,
+                source,
+            } => source,
+            other => panic!("expected required read failure, got {other}"),
+        };
+        assert!(matches!(
+            source
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .and_then(|error| error.downcast_ref::<ExecutionSessionCallbackError>()),
+            Some(ExecutionSessionCallbackError::Read(
+                crate::ExecutionSessionCallbackReadError::UnknownObject(_)
+            ))
+        ));
+        assert_eq!(*calls.borrow(), 1);
+        assert_eq!(session.frame(), &frame);
+        assert_eq!(session.publication_context(), publication);
+        assert!(session.callback_termination().is_some());
+        assert!(!callbacks.last_advance_completed_callback_phase());
+        assert!(callbacks.advance_to(&mut session, 0.0).is_err());
+        assert_eq!(*calls.borrow(), 1);
     }
 
     #[test]

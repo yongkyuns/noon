@@ -2,9 +2,8 @@
 
 use crate::{
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, ManimGeometryOptions, ManimLineEndpoints, Mobject,
-    MobjectFamilyMember, RateFunction, Scene, SemanticAnimationCompositionKind, TransformToRequest,
-    Vec2, VectorPath,
+    LiveProgram, LiveSession, ManimGeometryOptions, ManimLineEndpoints, Mobject, MobjectTarget,
+    RateFunction, Scene, SemanticAnimationCompositionKind, TransformToRequest, Vec2, VectorPath,
 };
 use std::rc::Rc;
 
@@ -96,9 +95,9 @@ impl LiveContinuation for LiveGeometryConstruction {
                     .create_manim_geometry(late_path)
                     .map_err(|e| e.to_string())?;
                 live.add_many(&[
-                    MobjectFamilyMember::Mobject(&rectangle),
-                    MobjectFamilyMember::Mobject(&line),
-                    MobjectFamilyMember::Mobject(&late_path),
+                    MobjectTarget::Object(&rectangle),
+                    MobjectTarget::Object(&line),
+                    MobjectTarget::Object(&late_path),
                 ])
                 .map_err(|e| e.to_string())?;
                 let target = live.target_editor(&rectangle).map_err(|e| e.to_string())?;
@@ -176,9 +175,9 @@ impl LiveContinuation for LiveGeometryConstruction {
                     .create_manim_geometry(underline)
                     .map_err(|e| e.to_string())?;
                 live.add_many(&[
-                    MobjectFamilyMember::Mobject(&dot),
-                    MobjectFamilyMember::Mobject(&annulus),
-                    MobjectFamilyMember::Mobject(&underline),
+                    MobjectTarget::Object(&dot),
+                    MobjectTarget::Object(&annulus),
+                    MobjectTarget::Object(&underline),
                 ])
                 .map_err(|e| e.to_string())?;
                 self.stage = 3;
@@ -270,9 +269,9 @@ pub fn program() -> Result<LiveProgram<LiveGeometryConstruction>, String> {
     .map_err(|error| error.to_string())?;
     scene
         .add_many(&[
-            MobjectFamilyMember::Mobject(&background),
-            MobjectFamilyMember::Mobject(&path),
-            MobjectFamilyMember::Mobject(&outline),
+            MobjectTarget::Object(&background),
+            MobjectTarget::Object(&path),
+            MobjectTarget::Object(&outline),
         ])
         .map_err(|error| error.to_string())?;
     scene

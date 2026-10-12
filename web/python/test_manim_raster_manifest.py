@@ -1,5 +1,6 @@
 import ast
 import json
+import math
 import pathlib
 import unittest
 
@@ -52,7 +53,11 @@ class ManimRasterManifestTests(unittest.TestCase):
                 if isinstance(node, ast.ClassDef)
             }
             self.assertIn(fixture["scene"], classes, source_path)
-            self.assertGreater(float(fixture["expected_duration"]), 0.0)
+            duration = float(fixture["expected_duration"])
+            self.assertTrue(math.isfinite(duration))
+            self.assertGreaterEqual(duration, 0.0)
+            if duration == 0.0:
+                self.assertEqual(fixture.get("sample_times"), [0.0])
 
     def test_samples_cover_animation_span(self) -> None:
         fractions = self.manifest["sample_fractions"]

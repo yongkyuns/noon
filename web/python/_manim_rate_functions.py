@@ -8,6 +8,8 @@ IDs passed to Rust. Python callables remain available for explicit user evaluati
 from __future__ import annotations
 
 import math
+import dis
+import inspect
 from typing import Callable
 
 
@@ -87,4 +89,51 @@ def easing_from_rate_func(rate_func: object) -> str:
         "Noon currently supports deterministic rate_func=linear, smooth, rush_into, "
         "rush_from, and there_and_back; arbitrary Python per-frame rate functions "
         "are intentionally unsupported"
+    )
+
+
+def is_reverse_smooth_rate_func(rate_func: object) -> bool:
+    """Recognize only the inert expression ``lambda t: smooth(1 - t)``.
+
+    This cold, structural bytecode check never calls or samples user code. It is
+    deliberately narrow so arbitrary Python easing callables stay unsupported.
+    """
+
+    code = getattr(rate_func, "__code__", None)
+    global_smooth = getattr(rate_func, "__globals__", {}).get("smooth")
+    if (
+        not inspect.isfunction(rate_func)
+        or code is None
+        or global_smooth is not smooth
+        or getattr(rate_func, "__defaults__", None) is not None
+        or getattr(rate_func, "__kwdefaults__", None) is not None
+        or getattr(rate_func, "__closure__", None) is not None
+        or code.co_argcount != 1
+        or code.co_posonlyargcount != 0
+        or code.co_kwonlyargcount != 0
+        or code.co_flags & (inspect.CO_VARARGS | inspect.CO_VARKEYWORDS)
+    ):
+        return False
+
+    ignored = {"CACHE", "EXTENDED_ARG", "PRECALL", "PUSH_NULL", "RESUME"}
+    instructions = [
+        instruction
+        for instruction in dis.get_instructions(rate_func)
+        if instruction.opname not in ignored
+    ]
+    if len(instructions) != 6:
+        return False
+    load_global, one, argument, subtract, call, returned = instructions
+    return (
+        load_global.opname == "LOAD_GLOBAL"
+        and load_global.argval == "smooth"
+        and one.opname in {"LOAD_CONST", "LOAD_SMALL_INT"}
+        and one.argval == 1
+        and argument.opname in {"LOAD_FAST", "LOAD_FAST_BORROW"}
+        and argument.argval == code.co_varnames[0]
+        and subtract.opname in {"BINARY_OP", "BINARY_SUBTRACT"}
+        and (subtract.opname != "BINARY_OP" or subtract.argrepr == "-")
+        and call.opname in {"CALL", "CALL_FUNCTION"}
+        and call.arg == 1
+        and returned.opname == "RETURN_VALUE"
     )

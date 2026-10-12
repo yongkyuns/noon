@@ -48,6 +48,34 @@ class Wait:
             self.anim_args["rate_func"] = rate_func
 
 
+class UpdateFromFunc:
+    """Run one host callback over a finite, Rust-scheduled composition interval."""
+
+    def __init__(
+        self,
+        mobject: _base.Mobject,
+        update_function: Callable[..., Any],
+        run_time: float | None = None,
+        rate_func: object = None,
+        **kwargs: Any,
+    ) -> None:
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("UpdateFromFunc target must be a Mobject")
+        if not callable(update_function):
+            raise TypeError("UpdateFromFunc callback must be callable")
+        self.mobject = mobject
+        self.update_function = update_function
+        self.run_time = (
+            None if run_time is None else _nonnegative_run_time(run_time, "UpdateFromFunc")
+        )
+        self.rate_func = _rate_functions.linear if rate_func is None else rate_func
+        self.anim_args = dict(kwargs)
+        if run_time is not None:
+            self.anim_args["run_time"] = self.run_time
+        if rate_func is not None:
+            self.anim_args["rate_func"] = rate_func
+
+
 class Add:
     """Introduce one or more mobjects at an exact authored timeline instant."""
 

@@ -1,9 +1,97 @@
-use noon::{AnimationOptions, RateFunction, Scene};
-use noon_core::{SemanticObjectProperty, SemanticVec3};
+use noon::{
+    AnimationOptions, ManimArrow, ManimArrowOptions, ManimArrowVectorField, RateFunction, Scene,
+    VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
+};
+use noon_core::{SemanticGraphEdgeDependency, SemanticObjectProperty, SemanticVec3};
+use std::rc::Rc;
+
+#[test]
+fn arrow_aggregate_rebind_uses_only_copied_components_for_queries_and_scale() {
+    let mut scene = Scene::new();
+    let mut options = ManimArrowOptions::double_arrow(-2.0, 0.0, 2.0, 0.0).unwrap();
+    options.set_buff(0.0).unwrap();
+    let source = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
+    let copied = source.family().copy_family().unwrap();
+    let target = copied.rebind_manim_arrow(&source).unwrap();
+
+    assert_ne!(target.family().node_id(), source.family().node_id());
+    assert_ne!(target.shaft().node_id(), source.shaft().node_id());
+    assert_ne!(target.end_tip().node_id(), source.end_tip().node_id());
+    assert_eq!(
+        target.start_tip().unwrap().node_id(),
+        copied
+            .mobject(source.start_tip().unwrap())
+            .unwrap()
+            .node_id()
+    );
+    assert_eq!(
+        target.manim_endpoints().unwrap(),
+        source.manim_endpoints().unwrap()
+    );
+    assert_eq!(
+        target.manim_length().unwrap(),
+        source.manim_length().unwrap()
+    );
+
+    let source_endpoints = source.manim_endpoints().unwrap();
+    let source_length = source.manim_length().unwrap();
+    target.scale(0.5, true).unwrap();
+    assert_eq!(source.manim_endpoints().unwrap(), source_endpoints);
+    assert_eq!(source.manim_length().unwrap(), source_length);
+    assert!((target.manim_length().unwrap() - source_length * 0.5).abs() < 1.0e-6);
+
+    let unrelated = scene.family(&[]).unwrap().copy_family().unwrap();
+    assert!(unrelated.rebind_manim_arrow(&source).is_err());
+}
+
+#[test]
+fn vector_field_aggregate_rebind_keeps_each_vector_on_the_copied_family_graph() {
+    let scene = Scene::new();
+    let source = ManimArrowVectorField::create(
+        Rc::clone(scene.integration_store()),
+        |point| VectorFieldPoint::new(point.x + 1.0, point.y + 1.0),
+        VectorFieldRanges2D::new(
+            VectorFieldAxisRange::new(0.0, 0.0, 1.0),
+            VectorFieldAxisRange::new(0.0, 0.0, 1.0),
+        ),
+    )
+    .unwrap();
+    let copied = source.family().copy_family().unwrap();
+    let target = copied.rebind_manim_arrow_vector_field(&source).unwrap();
+
+    assert_ne!(target.family().node_id(), source.family().node_id());
+    assert_eq!(target.vectors().len(), 1);
+    let source_vector = &source.vectors()[0];
+    let target_vector = &target.vectors()[0];
+    assert_eq!(
+        target_vector.family().node_id(),
+        copied.family(source_vector.family()).unwrap().node_id()
+    );
+    assert_eq!(
+        target_vector.manim_length().unwrap(),
+        source_vector.manim_length().unwrap()
+    );
+
+    let source_length = source_vector.manim_length().unwrap();
+    target_vector.scale(0.5, false).unwrap();
+    assert_eq!(source_vector.manim_length().unwrap(), source_length);
+    assert!((target_vector.manim_length().unwrap() - source_length * 0.5).abs() < 1.0e-6);
+
+    let selected_copy = source_vector.family().copy_family().unwrap();
+    let selected = selected_copy.rebind_manim_arrow_vector(&source, 0).unwrap();
+    assert_eq!(
+        selected.manim_endpoints().unwrap(),
+        source_vector.manim_endpoints().unwrap()
+    );
+    selected.scale(0.5, true).unwrap();
+    assert_eq!(source_vector.manim_length().unwrap(), source_length);
+    assert!((selected.manim_length().unwrap() - source_length * 0.5).abs() < 1.0e-6);
+    assert!(selected_copy.rebind_manim_arrow_vector(&source, 1).is_err());
+}
 
 #[test]
 fn authored_copy_preserves_dag_aliases_order_resources_and_source_state_in_one_commit() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let leaf = scene.square(0.5).unwrap();
     let nested = scene.family(&[(&leaf).into()]).unwrap();
     let source = scene.family(&[(&leaf).into(), (&nested).into()]).unwrap();
@@ -109,7 +197,7 @@ fn live_copy_obeys_completion_and_captures_completed_state_without_changing_sour
 
 #[test]
 fn a_late_uncapturable_member_rejects_the_entire_live_copy() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(0.5).unwrap();
     let reactive = scene.square(0.5).unwrap();
     let signal = scene
@@ -142,7 +230,7 @@ fn a_late_uncapturable_member_rejects_the_entire_live_copy() {
 
 #[test]
 fn detached_references_copy_atomically_without_changing_family_membership() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let leaf = scene.square(0.5).unwrap();
     let saved = leaf.target_editor().unwrap();
     let source = scene.family(&[(&leaf).into()]).unwrap();
@@ -179,4 +267,93 @@ fn detached_references_copy_atomically_without_changing_family_membership() {
         .copy_with_references(&[(&saved).into(), (&foreign).into()])
         .is_err());
     assert_eq!(scene.integration_store().borrow().scene_revision(), before);
+}
+
+#[test]
+fn graph_family_copy_preserves_and_remaps_semantic_graph_declaration() {
+    let mut scene = Scene::new();
+    let graph = scene
+        .graph([("a", (-1.0, 0.0)), ("b", (1.0, 0.0))], [("a", "b")])
+        .unwrap();
+    let a_id = graph.vertex_id(&"a").unwrap();
+    let b_id = graph.vertex_id(&"b").unwrap();
+    let ab_id = graph.edge_id(&"a", &"b").unwrap();
+    let source_a = graph.vertex(&"a").unwrap();
+    let source_b = graph.vertex(&"b").unwrap();
+    let source_edge = graph.edge(&"a", &"b").unwrap();
+
+    let copied = graph.family().copy_family().unwrap();
+    let copied_a = copied.mobject(source_a).unwrap();
+    let copied_b = copied.mobject(source_b).unwrap();
+    let copied_edge_family = copied.family(source_edge.family()).unwrap();
+    let copied_line = copied.mobject(source_edge.line()).unwrap();
+
+    let store = scene.integration_store().borrow();
+    let declaration = store
+        .semantic_graph_declaration(copied.root().node_id())
+        .unwrap()
+        .expect("copied graph root retains graph semantics");
+
+    assert_eq!(declaration.vertex_node(a_id), Some(copied_a.node_id()));
+    assert_eq!(declaration.vertex_node(b_id), Some(copied_b.node_id()));
+    assert_eq!(declaration.edge_between(b_id, a_id, false), Some(ab_id));
+    let binding = declaration.edge_binding(ab_id).unwrap();
+    assert_eq!(binding.family(), copied_edge_family.node_id());
+    assert_eq!(binding.line(), copied_line.node_id());
+    assert_ne!(binding.family(), source_edge.family().node_id());
+    assert_ne!(binding.line(), source_edge.line().node_id());
+}
+
+#[test]
+fn directed_graph_family_copy_remaps_arrow_dependency_components() {
+    let mut scene = Scene::new();
+    let graph = scene
+        .digraph_with_options(
+            [("a", (-2.0, 0.0)), ("b", (2.0, 0.0))],
+            [("a", "b")],
+            noon::GraphOptions {
+                vertex_radius: 0.21,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let edge_id = graph.edge_id(&"a", &"b").unwrap();
+    let source_edge = graph.edge(&"a", &"b").unwrap();
+    let source_arrow = source_edge.arrow().expect("DiGraph edge uses shared Arrow");
+
+    let copied = graph.family().copy_family().unwrap();
+    let copied_family = copied.family(source_arrow.family()).unwrap();
+    let copied_shaft = copied.mobject(source_arrow.shaft()).unwrap();
+    let copied_end_tip = copied.mobject(source_arrow.end_tip()).unwrap();
+
+    let store = scene.integration_store().borrow();
+    let declaration = store
+        .semantic_graph_declaration(copied.root().node_id())
+        .unwrap()
+        .expect("copied DiGraph root retains graph semantics");
+    let binding = declaration.edge_binding(edge_id).unwrap();
+
+    assert_eq!(binding.family(), copied_family.node_id());
+    assert_eq!(binding.line(), copied_shaft.node_id());
+    match binding.dependency() {
+        SemanticGraphEdgeDependency::Arrow {
+            end_tip,
+            start_tip,
+            policy,
+        } => {
+            assert_eq!(end_tip, copied_end_tip.node_id());
+            assert_eq!(start_tip, None);
+            assert!(policy.is_valid());
+            assert_eq!(policy.buff(), 0.21);
+            assert_eq!(policy.tip_length(), noon::DEFAULT_ARROW_TIP_LENGTH);
+            assert_eq!(
+                policy.max_tip_length_to_length_ratio(),
+                noon::DEFAULT_ARROW_TIP_LENGTH_RATIO
+            );
+        }
+        SemanticGraphEdgeDependency::Line => panic!("DiGraph copy lost Arrow dependency semantics"),
+    }
+    assert_ne!(binding.family(), source_arrow.family().node_id());
+    assert_ne!(binding.line(), source_arrow.shaft().node_id());
+    assert_ne!(copied_end_tip.node_id(), source_arrow.end_tip().node_id());
 }

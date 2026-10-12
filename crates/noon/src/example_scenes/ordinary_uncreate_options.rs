@@ -2,7 +2,7 @@
 
 use crate::{
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, MobjectFamilyMember, RateFunction, Scene,
+    LiveProgram, LiveSession, Mobject, MobjectTarget, RateFunction, Scene,
     SemanticAnimationCompositionKind,
 };
 
@@ -20,9 +20,9 @@ impl LiveContinuation for UncreateOptions {
         let (target, options) = match self.stage {
             0 => {
                 live.add_many(&[
-                    MobjectFamilyMember::Mobject(&self.first),
-                    MobjectFamilyMember::Mobject(&self.kept),
-                    MobjectFamilyMember::Mobject(&self.forward),
+                    MobjectTarget::Object(&self.first),
+                    MobjectTarget::Object(&self.kept),
+                    MobjectTarget::Object(&self.forward),
                 ])
                 .map_err(|error| error.to_string())?;
                 (
@@ -89,7 +89,7 @@ impl LiveContinuation for UncreateOptions {
 }
 
 pub fn program() -> Result<LiveProgram<UncreateOptions>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut first = scene.square(0.6).map_err(|error| error.to_string())?;
     let mut kept = scene.circle(0.25).map_err(|error| error.to_string())?;
     let mut forward = scene.square(0.4).map_err(|error| error.to_string())?;

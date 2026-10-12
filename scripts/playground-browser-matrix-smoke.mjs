@@ -1,18 +1,20 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
+const showcaseManifest = JSON.parse(await readFile(path.join(repoRoot, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
+const denseShowcase = showcaseManifest.entries.find(entry => entry.id === "showcase-dynamic-scene");
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? "chromium";
 const profileName = process.env.NOON_PLAYGROUND_PROFILE ?? "desktop-dpr1";
 const port = Number(process.env.NOON_PLAYGROUND_MATRIX_PORT ?? "4175");
-const baseUrl = `http://127.0.0.1:${port}`;
 const artifactDir = path.resolve(
   repoRoot,
   process.env.NOON_PLAYGROUND_MATRIX_ARTIFACTS ??
@@ -23,6 +25,7 @@ const profiles = {
   "desktop-dpr1": { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 },
   "desktop-dpr2": { viewport: { width: 1100, height: 760 }, deviceScaleFactor: 2 },
   "mobile-dpr2": { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 },
+  "mobile-dpr3": { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3 },
 };
 
 assert.ok(
@@ -35,34 +38,8 @@ const browserType = playwright[browserName];
 const profile = profiles[profileName];
 await mkdir(artifactDir, { recursive: true });
 
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-server.stderr.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Playground matrix server did not start: ${lastError}\n${serverOutput}`);
-}
-
+const server = await serveRepository(repoRoot, port);
+const baseUrl = server.baseUrl;
 
 async function baselineCapabilities(page) {
   return page.evaluate(() => ({
@@ -149,6 +126,8 @@ async function runtimeSnapshot(page) {
     const execution = status?.dataset.executionMode && patch?.dataset.state !== "error"
       ? await window.__noonExampleGallery?.executionMetrics?.()
       : null;
+    const controls = document.querySelector(".playback-controls");
+    const toggle = controls?.querySelector(".playback-toggle");
     return {
       rendererBackend: status?.dataset.rendererBackend ?? null,
       renderHost: execution?.renderHost ?? null,
@@ -162,6 +141,15 @@ async function runtimeSnapshot(page) {
         document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
       visibleExampleCount: window.__noonExampleGallery?.visibleExampleCount ?? null,
       hasPlaybackControls: document.querySelector(".playback-controls") !== null,
+      playbackControls: controls === null ? null : {
+        data: { ...controls.dataset },
+        toggle: toggle === null ? null : {
+          ariaLabel: toggle.getAttribute("aria-label"),
+          disabled: toggle.disabled,
+          text: toggle.textContent,
+        },
+      },
+      playbackTrace: window.__matrixPlaybackTrace?.events?.slice() ?? [],
       canvases: document.querySelectorAll("canvas").length,
     };
   });
@@ -254,6 +242,140 @@ async function chooseDifferentExample(page) {
   return targetId;
 }
 
+async function runShowcaseFromPublicUi(page, exampleId) {
+  await page.goto(`${baseUrl}/web/index.html?catalog=showcase&example=${exampleId}`, { waitUntil: "load" });
+  await assertDeferredRuntime(page);
+  await page.waitForFunction(
+    (id) => document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId === id,
+    exampleId,
+    { timeout: 10_000 },
+  );
+  await page.locator("#replace-scene").click();
+  await page.locator("#metric-fps").waitFor({ state: "visible" });
+  await page.waitForFunction(() => Number(document.querySelector("#metric-fps")?.value) > 0,
+    null, { timeout: 180_000 });
+  const sourceFps = await page.locator("#metric-fps").evaluate(output => output.value);
+  const visibility = await page.evaluate(() => {
+    const canvas = document.querySelector("#scene").getBoundingClientRect();
+    const fps = document.querySelector("#metric-fps").getBoundingClientRect();
+    const preview = document.querySelector(".preview-pane").getBoundingClientRect();
+    return { canvasBottom: canvas.bottom, fpsTop: fps.top, fpsBottom: fps.bottom, previewBottom: preview.bottom };
+  });
+  assert.ok(visibility.fpsTop >= visibility.canvasBottom && visibility.fpsBottom <= visibility.previewBottom,
+    `FPS must be visible below the canvas: ${JSON.stringify(visibility)}`);
+  await page.screenshot({ path: path.join(artifactDir, "fps-running.png"), fullPage: true });
+  await waitForAppliedScene(page, exampleId, 180_000);
+  const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+  return { runtime: await runtimeSnapshot(page), metrics, sourceFps };
+}
+
+async function completeShowcasePlayback(page, replayLoops) {
+  // Test-only, bounded observations preserve real UI clicks and commands. The
+  // browser context owns the wrappers and discards them when this case closes.
+  await page.evaluate(async () => {
+    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+    const trace = { events: [], nextId: 0 };
+    const record = (event) => {
+      const controls = document.querySelector(".playback-controls");
+      const toggle = controls?.querySelector(".playback-toggle");
+      trace.events.push({
+        at: performance.now(),
+        ...event,
+        controls: controls === null ? null : {
+          data: { ...controls.dataset },
+          toggle: toggle === null ? null : {
+            ariaLabel: toggle.getAttribute("aria-label"),
+            disabled: toggle.disabled,
+            text: toggle.textContent,
+          },
+        },
+      });
+      if (trace.events.length > 32) trace.events.shift();
+    };
+    window.__matrixPlaybackTrace = trace;
+    document.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest(".playback-toggle") : null;
+      if (button !== null) record({ type: "toggle-click", trusted: event.isTrusted });
+    }, true);
+    for (const method of ["pause", "resume"]) {
+      const original = ExecutionWorkerClient.prototype[method];
+      ExecutionWorkerClient.prototype[method] = async function (...args) {
+        const id = ++trace.nextId;
+        record({ type: method, phase: "entered", id });
+        try {
+          const result = await original.apply(this, args);
+          record({ type: method, phase: "resolved", id, result: {
+            playing: result?.playing ?? null,
+            time: result?.time ?? null,
+          } });
+          return result;
+        } catch (error) {
+          record({ type: method, phase: "rejected", id, error: String(error) });
+          throw error;
+        }
+      };
+    }
+  });
+  const restart = page.locator(".playback-restart");
+  await restart.waitFor({ state: "visible", timeout: 10_000 });
+  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.controllable === "true", null, { timeout: 10_000 });
+  await restart.click();
+  await page.waitForFunction(() => {
+    if (document.querySelector("#patch-status")?.dataset.state === "error") {
+      throw new Error(document.querySelector("#patch-status")?.value || "showcase playback failed");
+    }
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.busy === "false";
+  }, null, { timeout: 10_000 });
+  const toggle = page.locator(".playback-toggle");
+  if (await toggle.getAttribute("aria-label") === "Play animation") await toggle.click();
+  await page.waitForFunction(() => {
+    if (document.querySelector("#patch-status")?.dataset.state === "error") {
+      throw new Error(document.querySelector("#patch-status")?.value || "showcase playback failed");
+    }
+    return document.querySelector(".playback-controls")?.dataset.playing === "true";
+  }, null, { timeout: 10_000 });
+  // Replay intentionally loops. Observe the full traversal and wrap before
+  // pausing; waiting for playing=false would time out on healthy playback.
+  await page.evaluate(() => { window.__matrixReplay = { previous: 0, maximum: 0, loops: 0, fps: [], lastSampleAt: 0 }; });
+  await page.waitForFunction((requiredLoops) => {
+    if (document.querySelector("#patch-status")?.dataset.state === "error") {
+      throw new Error(document.querySelector("#patch-status")?.value || "showcase playback failed");
+    }
+    const controls = document.querySelector(".playback-controls");
+    const duration = Number(document.querySelector(".playback-scrubber")?.max);
+    const elapsed = Number(controls?.dataset.elapsedSeconds);
+    const observation = window.__matrixReplay;
+    const now = performance.now();
+    if (now - observation.lastSampleAt >= 1000 && observation.fps.length < 180) {
+      const fps = Number(document.querySelector("#metric-fps")?.value);
+      if (Number.isFinite(fps)) observation.fps.push({ time: elapsed, fps });
+      observation.lastSampleAt = now;
+    }
+    const wrapped = observation.maximum >= duration - 1 && elapsed < observation.previous;
+    if (wrapped) observation.loops += 1;
+    observation.maximum = wrapped ? elapsed : Math.max(observation.maximum, elapsed);
+    observation.previous = elapsed;
+    return observation.loops >= requiredLoops;
+  }, replayLoops, { timeout: 180_000 });
+  const fps = await page.evaluate(() => {
+    const samples = window.__matrixReplay.fps;
+    delete window.__matrixReplay;
+    return samples;
+  });
+  assert.ok(fps.some(sample => sample.fps > 0), "replay must expose live renderer FPS");
+  const endpoint = await seekPausedGallery(page, denseShowcase.duration);
+  await waitForPublishedGalleryFrame(page, endpoint, denseShowcase.duration);
+  await page.waitForFunction(() => document.querySelector("#metric-fps")?.value === "—");
+  return page.evaluate(async (fps) => ({
+    controls: { ...document.querySelector(".playback-controls").dataset },
+    duration: Number(document.querySelector(".playback-scrubber").max),
+    execution: await window.__noonExampleGallery.executionMetrics(),
+    fps,
+  }), fps);
+}
+
 async function editAndRerun(page, expectedExampleId) {
   const editMarker = `# cross-browser matrix ${browserName} ${profileName}`;
   await page.evaluate((marker) => {
@@ -275,9 +397,89 @@ async function editAndRerun(page, expectedExampleId) {
   assert.ok(source.includes(editMarker), `${browserName}/${profileName}: edited source was not retained`);
 }
 
+async function exerciseAuthoringTrapRecovery(browser) {
+  const context = await browser.newContext(profile);
+  try {
+    // Test-only wrapper imports the unchanged, attested production worker.
+    await context.addInitScript(() => {
+      window.Worker = new Proxy(window.Worker, { construct(target, args, newTarget) {
+        const workerArgs = [...args];
+        const url = new URL(workerArgs[0], window.location.href);
+        if (url.pathname.endsWith("/python-worker.js")) {
+          workerArgs[0] = new URL("./python-worker-trap-test.js", url);
+        }
+        return Reflect.construct(target, workerArgs, newTarget);
+      } });
+    });
+    await context.route("**/python-worker-trap-test.js", route => route.fulfill({
+      contentType: "text/javascript",
+      body: `
+        const trap = new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array([
+          0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,0,7,8,1,4,116,114,97,112,0,0,10,5,1,3,0,0,11
+        ]))).exports.trap;
+        self.noonTestTrap = trap;
+        self.noonTestTrapAsync = () => Promise.resolve().then(() => trap());
+        await import('./python-worker.js');
+      `,
+    }));
+    const probe = await context.newPage();
+    await probe.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`);
+    const report = await probe.evaluate(async () => {
+      const { PythonAuthoringClient } = await import("./authoring-client.js");
+      const attempt = async promise => {
+        try { return { status: "fulfilled", result: await promise }; }
+        catch (error) { return { status: "rejected", message: error.message }; }
+      };
+      const source = "from noon import Scene, Circle, Text\nresult = Scene()\nresult.add(Circle().set_stroke(width=1), Text('fresh host', font_size=18))\n";
+      const results = [];
+      for (const mode of ["call", "await", "caught"]) {
+        const client = new PythonAuthoringClient();
+        let fresh = null;
+        try {
+          await client.ready();
+          const ordinary = await attempt(client.run("raise ValueError('recoverable input')"));
+          const ordinaryTerminated = client.terminated;
+          const ordinaryRecovery = await attempt(client.run(source));
+          let trapSource = "from js import noonTestTrap\nfrom _noon_errors import engine_call\nengine_call(noonTestTrap)";
+          if (mode === "await") {
+            trapSource = "from js import noonTestTrapAsync\nfrom _noon_errors import engine_await\nawait engine_await(noonTestTrapAsync())";
+          } else if (mode === "caught") {
+            trapSource = "from noon import Scene\nfrom js import noonTestTrap\nfrom _noon_errors import engine_call\ntry:\n    engine_call(noonTestTrap)\nexcept Exception:\n    pass\nresult = Scene()";
+          }
+          const trapped = attempt(client.run(trapSource));
+          const queued = attempt(client.run(source));
+          const failures = await Promise.all([trapped, queued]);
+          const deadHostRetry = await attempt(client.run(source));
+          fresh = new PythonAuthoringClient();
+          results.push({ mode, ordinary, ordinaryTerminated, ordinaryRecovery, failures,
+            trapTerminated: client.terminated, diagnostics: client.diagnostics,
+            deadHostRetry,
+            freshHostRecovery: await attempt(fresh.run(source)) });
+        } finally { client.terminate(); fresh?.terminate(); }
+      }
+      return results;
+    });
+    await writeDiagnostics("trap-recovery.json", { browser: browserName, profile: profileName,
+      realWasmTrapInjected: true, originalStartupTrapReproduced: false, cases: report });
+    for (const result of report) {
+      assert.equal(result.ordinary.status, "rejected");
+      assert.equal(result.ordinaryTerminated, false, "ordinary Python error retired its host");
+      assert.equal(result.ordinaryRecovery.status, "fulfilled");
+      assert.ok(result.failures.every(failure => failure.status === "rejected"));
+      assert.equal(result.failures[0].message, result.failures[1].message,
+        "queued run did not receive the original fatal failure");
+      assert.equal(result.trapTerminated, true, `${result.mode}: trapped host was reused`);
+      assert.equal(result.diagnostics.pendingRequests, 0);
+      assert.equal(result.deadHostRetry.status, "rejected");
+      assert.equal(result.freshHostRecovery.status, "fulfilled");
+    }
+    return report;
+  } finally { await context.close(); }
+}
+
 async function exerciseResize(page) {
   const sequence =
-    profileName === "mobile-dpr2"
+    profileName.startsWith("mobile-")
       ? [
           { width: 430, height: 760 },
           { width: 360, height: 780 },
@@ -297,7 +499,11 @@ async function exerciseResize(page) {
 }
 
 async function writeDiagnostics(fileName, diagnostics) {
-  await writeFile(path.join(artifactDir, fileName), `${JSON.stringify(diagnostics, null, 2)}\n`, "utf8");
+  await writeFile(
+    path.join(artifactDir, fileName),
+    `${JSON.stringify(diagnostics, (_key, value) => typeof value === "bigint" ? value.toString() : value, 2)}\n`,
+    "utf8",
+  );
 }
 
 let browser = null;
@@ -309,7 +515,6 @@ let runtimeSupported = null;
 let finalRuntime = null;
 
 try {
-  await waitForServer();
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
   const context = await browser.newContext({
     viewport: profile.viewport,
@@ -364,6 +569,8 @@ try {
 
   if (!runtimeSupported) {
     const reasons = missingBase.length > 0 ? missingBase.join(", ") : selectionError;
+    assert.notEqual(process.env.NOON_PLAYGROUND_REQUIRE_RUNTIME, "1",
+      `${browserName}/${profileName}: required runtime is unavailable: ${reasons}`);
     console.log(
       `↷ ${browserName}/${profileName}: runtime unsupported by production render-host selection (${reasons})`,
     );
@@ -385,7 +592,22 @@ try {
     const selectedExampleId = await chooseDifferentExample(page);
     await editAndRerun(page, selectedExampleId);
     await exerciseResize(page);
+    console.log(`→ ${browserName}/${profileName}: public workflow passed; running full showcase`);
+    const showcaseSourcePass = await runShowcaseFromPublicUi(page, denseShowcase.id);
+    assert.equal(showcaseSourcePass.runtime.patchState, "applied", "showcase source pass failed");
+    assert.ok(Math.abs(Number(showcaseSourcePass.metrics?.metrics?.time) - denseShowcase.duration) < 1e-7,
+      `showcase source pass stopped at ${showcaseSourcePass.metrics?.metrics?.time}s instead of ${denseShowcase.duration}s`);
+    console.log(`→ ${browserName}/${profileName}: showcase source completed; checking replay`);
+    const replayLoops = browserName === "webkit" ? 3 : 1;
+    const showcasePlayback = await completeShowcasePlayback(page, replayLoops);
+    const showcaseMetrics = showcasePlayback.execution?.metrics ?? {};
+    assert.ok(Math.abs(Number(showcasePlayback.duration) - denseShowcase.duration) < 1e-7,
+      `showcase authored duration changed: ${showcasePlayback.duration}`);
+    assert.ok(Number(showcaseMetrics.objectCount) > 600,
+      `showcase retained only ${showcaseMetrics.objectCount} objects`);
+    assert.equal(showcasePlayback.controls.controllable, "true", "showcase replay was not admitted");
     finalRuntime = await runtimeSnapshot(page);
+    const trapRecovery = await exerciseAuthoringTrapRecovery(browser);
 
     assert.deepEqual(
       pageErrors,
@@ -409,11 +631,24 @@ ${consoleErrors.join("\n")}`,
       selectedHost,
       capabilities,
       runtime: finalRuntime,
+      showcase: {
+        exampleId: denseShowcase.id,
+        sourcePassState: showcaseSourcePass.runtime.patchState,
+        sourcePassTime: showcaseSourcePass.metrics?.metrics?.time,
+        playbackDuration: showcasePlayback.duration,
+        playbackEndpoint: showcasePlayback.controls.elapsedSeconds,
+        replayAdmitted: showcasePlayback.controls.controllable === "true",
+        replayLoops,
+        sourceFps: showcaseSourcePass.sourceFps,
+        replayFps: showcasePlayback.fps,
+        metrics: showcaseMetrics,
+      },
+      trapRecovery,
       pageErrors,
       consoleErrors,
     });
     console.log(
-      `✓ ${browserName}/${profileName}: ${finalRuntime.renderHost}/${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize`,
+      `✓ ${browserName}/${profileName}: ${finalRuntime.renderHost}/${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize + 600-shape showcase playback`,
     );
   }
 } catch (error) {
@@ -435,10 +670,10 @@ ${consoleErrors.join("\n")}`,
     pageErrors,
     consoleErrors,
     error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
-    serverOutput,
+    testServer: { baseUrl, host: "shared-node-file-server" },
   });
   throw error;
 } finally {
   if (browser !== null) await browser.close();
-  server.kill("SIGTERM");
+  await server.close();
 }

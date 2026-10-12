@@ -70,19 +70,18 @@ async function snapshot(page) {
   });
 }
 
-async function startDeferredRuntime(page) {
-  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
-  const deferred = await snapshot(page);
-  assert.equal(deferred.runtimeStartup, "deferred", "resize page load must leave runtime deferred");
-  assert.equal(deferred.rendererBackend, "", "deferred resize page must not initialize renderer");
-  assert.equal(deferred.presentedFrames, 0, "deferred resize page must not present frames");
-  await page.locator("#replace-scene").click();
+async function waitForInitialRuntime(page) {
+  // Live authoring starts the selected source after the first paint. Join that
+  // run before resizing; a later driver snapshot can already be past deferred
+  // startup, and clicking Run here races the same automatic source execution.
   await page.waitForFunction(
     () => {
       const status = document.querySelector("#status");
       const patch = document.querySelector("#patch-status");
       return (
         status?.dataset.rendererBackend === "WebGL2" &&
+        status?.dataset.liveAuthoring === "ready" &&
+        window.__noonExampleGallery?.runInFlight === false &&
         patch?.dataset.state === "applied" &&
         Number(status?.dataset.presentedFrames ?? "0") > 0
       );
@@ -131,6 +130,48 @@ async function waitForFrameAfter(page, previousFrames, label) {
   assert.equal(current.rendererBackend, "WebGL2", `${label}: renderer backend changed`);
   assert.notEqual(current.runtimeState, "error", `${label}: runtime entered an error state`);
   return current;
+}
+
+async function waitForQuiescentMetrics(page, label) {
+  const deadline = Date.now() + 5_000;
+  const samples = [];
+  let stableSamples = 0;
+  let previous = null;
+  while (Date.now() < deadline) {
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    const current = await snapshot(page);
+    samples.push(current);
+    assert.notEqual(current.runtimeState, "error", `${label}: runtime entered an error state`);
+    if (
+      previous !== null &&
+      current.presentedFrames === previous.presentedFrames &&
+      current.renderedTime === previous.renderedTime &&
+      current.needsPresent === false
+    ) {
+      stableSamples += 1;
+      if (stableSamples === 4) return { current, samples };
+    } else {
+      stableSamples = 0;
+    }
+    previous = current;
+  }
+  throw new Error(`${label}: presentation metrics did not quiesce within 5 seconds: ${JSON.stringify(samples)}`);
+}
+
+async function assertUnchangedLogicalView(page, baseline, label) {
+  const samples = [];
+  for (let sample = 0; sample < 4; sample += 1) {
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    const current = await snapshot(page);
+    samples.push(current);
+    assert.equal(current.presentedFrames, baseline.presentedFrames,
+      `${label}: unchanged logical view presented a new frame`);
+    assert.equal(current.renderedTime, baseline.renderedTime,
+      `${label}: unchanged logical view advanced authored time`);
+    assert.equal(current.needsPresent, false,
+      `${label}: unchanged logical view left presentation work pending`);
+  }
+  return samples;
 }
 
 async function setCanvasContentSize(page, width, height) {
@@ -186,6 +227,7 @@ const diagnostics = {
   viewport: { width: 1000, height: 700 },
   devicePixelRatio: 1,
   snapshots: {},
+  settling: {},
   pageErrors: [],
   consoleErrors: [],
   serverOutput: "",
@@ -223,7 +265,7 @@ try {
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
     waitUntil: "load",
   });
-  await startDeferredRuntime(page);
+  await waitForInitialRuntime(page);
 
   diagnostics.snapshots.baseline = await snapshot(page);
   assert.ok(diagnostics.snapshots.baseline.cssWidth >= 320, "baseline canvas must be visible");
@@ -238,28 +280,35 @@ try {
   );
   assert.equal(diagnostics.snapshots.zero.cssWidth, 0, "canvas content width must reach zero");
   assert.equal(diagnostics.snapshots.zero.cssHeight, 0, "canvas content height must reach zero");
-  await page.screenshot({ path: path.join(artifactDir, "zero-size-page.png"), fullPage: true });
 
   await setCanvasContentSize(page, 1, 1);
-  // ResizeObserver clamps both 0px and 1px CSS content to the same 1px backing.
-  // Let layout/observer delivery finish, then query the existing renderer channel
-  // in FIFO order. A redundant resize must not invent work or wedge presentation.
-  await page.evaluate(() => new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(resolve));
-  }));
-  diagnostics.snapshots.nearZero = await snapshot(page);
-  assert.equal(diagnostics.snapshots.nearZero.presentedFrames,
-    diagnostics.snapshots.zero.presentedFrames, "equivalent backing size must stay settled");
-  assert.equal(diagnostics.snapshots.nearZero.needsPresent, false,
-    "no-op resize must not leave a pending presentation");
+  // A CSS 0px -> 1px transition changes the logical browser view even though
+  // ResizeObserver clamps both to a 1px backing. It may republish pointer
+  // receipts, so require recovery and a bounded idle window before testing a
+  // genuinely unchanged 1px logical view.
+  diagnostics.snapshots.nearZero = await waitForFrameAfter(
+    page,
+    diagnostics.snapshots.zero.presentedFrames,
+    "changed 1px logical view",
+  );
   assert.equal(diagnostics.snapshots.nearZero.renderedTime,
-    diagnostics.snapshots.zero.renderedTime, "resize must not advance authored time");
+    diagnostics.snapshots.zero.renderedTime, "changed logical view must not advance authored time");
   assert.equal(diagnostics.snapshots.nearZero.cssWidth, 1, "canvas content width must reach 1px");
   assert.equal(diagnostics.snapshots.nearZero.cssHeight, 1, "canvas content height must reach 1px");
+  diagnostics.settling.nearZero = await waitForQuiescentMetrics(page, "changed 1px logical view");
+  assert.equal(diagnostics.settling.nearZero.current.renderedTime,
+    diagnostics.snapshots.zero.renderedTime, "settling must not advance authored time");
+  await setCanvasContentSize(page, 1, 1);
+  await page.evaluate(() => window.dispatchEvent(new Event("resize")));
+  diagnostics.settling.unchangedNearZero = await assertUnchangedLogicalView(
+    page,
+    diagnostics.settling.nearZero.current,
+    "unchanged 1px logical view",
+  );
 
   await setCanvasContentSize(page, 2, 2);
   diagnostics.snapshots.small = await waitForFrameAfter(
-    page, diagnostics.snapshots.nearZero.presentedFrames, "changed small backing size");
+    page, diagnostics.settling.nearZero.current.presentedFrames, "changed small backing size");
 
   await page.evaluate(async () => {
     const canvas = document.querySelector("#scene");

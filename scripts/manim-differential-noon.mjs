@@ -28,6 +28,8 @@ try {
   const observations = await page.evaluate(async ({ modules, probes, pyodideUrl }) => {
     const wasm = await import("/web/pkg/noon_web.js");
     await wasm.default();
+    const { resolveAnimationOptionsPlain } = await import("/web/animation-options.js");
+    globalThis.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(wasm.resolveAnimationOptions, ...args);
     const { loadPyodide } = await import(pyodideUrl);
     const pyodide = await loadPyodide();
     const store = new wasm.WasmAuthoringStore();
@@ -37,6 +39,24 @@ try {
     globalThis.noonAuthoringGeometryOptions = wasm.WasmManimGeometryOptions;
     globalThis.noonAuthoringVectorPath = () => new wasm.WasmAuthoringVectorPath();
     globalThis.noonCreateAuthoringGeometryHandle = options => store.createManimGeometry(options);
+    globalThis.noonAuthoringCoordinateOptions = wasm.WasmCoordinateOptions;
+    globalThis.noonCreateAuthoringCoordinateHandle = options => store.createCoordinates(options);
+    globalThis.noonAuthoringBarChartOptions = (values, range, width, height) =>
+      new wasm.WasmBarChartOptions(values, range, width, height);
+    globalThis.noonPlotSamplingPlan = wasm.WasmPlotSamplingPlan;
+    // Match the production host's explicit unavailable-Latex behavior. These
+    // imports keep the plotting module intact; this differential never
+    // exercises BarChart or its labels without the production Latex setup.
+    globalThis.noonCreateAuthoringBarChart = (options, labels) => {
+      options.free();
+      labels.free();
+      throw new Error("Call await prepare_latex() before constructing BarChart");
+    };
+    globalThis.noonBarChartLabels = () => {
+      throw new Error("Call await prepare_latex() before constructing chart labels");
+    };
+    globalThis.noonTextColorBatch = () => new wasm.WasmTextColorBatch();
+    globalThis.noonCreateAuthoringTextHandle = (...args) => store.createManimText(...args);
     globalThis.noonAuthoringMembershipBatch = kind => new wasm.WasmSceneMembershipBatch(kind);
     globalThis.noonCreateAuthoringFamilyHandle = (batch, zIndex) => store.createFamily(batch, zIndex);
     for (const { runtimePath, source } of modules) pyodide.FS.writeFile(runtimePath, source);

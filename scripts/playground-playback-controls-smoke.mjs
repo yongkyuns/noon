@@ -47,6 +47,27 @@ async function waitForServer() {
   throw new Error(`Playground playback server did not start: ${lastError}\n${serverOutput}`);
 }
 
+function parseSeconds(text) {
+  const match = String(text).match(/([0-9]+(?:\.[0-9]+)?)\s*s/);
+  assert.ok(match, `unable to parse seconds from ${JSON.stringify(text)}`);
+  return Number(match[1]);
+}
+
+async function waitForMetricNear(page, target, tolerance = 0.08, timeout = 10_000) {
+  await page.waitForFunction(
+    ({ target: expected, tolerance: allowed }) => {
+      const raw =
+        document.querySelector("#metric-time")?.value ??
+        document.querySelector("#metric-time")?.textContent ??
+        "";
+      const observed = Number(String(raw).match(/([0-9]+(?:\.[0-9]+)?)\s*s/)?.[1]);
+      return Number.isFinite(observed) && Math.abs(observed - expected) <= allowed;
+    },
+    { target, tolerance },
+    { timeout },
+  );
+}
+
 async function waitForAppliedScene(page, expectedExampleId, timeout = 60_000) {
   await page.waitForFunction(
     (id) => {
@@ -92,6 +113,7 @@ async function playbackSnapshot(page) {
     const status = document.querySelector("#status");
     return {
       hasControls: controls !== null,
+      canvasHidden: canvas ? getComputedStyle(canvas).visibility === "hidden" : true,
       playing: controls?.dataset.playing ?? null,
       busy: controls?.dataset.busy ?? null,
       playText: play?.textContent ?? "",
@@ -110,6 +132,10 @@ async function playbackSnapshot(page) {
       playbackAvailability: status?.dataset.playbackControls ?? null,
       runText: document.querySelector("#replace-scene")?.textContent?.trim() ?? "",
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
+      patchState: document.querySelector("#patch-status")?.dataset.state ?? "",
+      patchSequence: document.querySelector("#patch-status")?.dataset.sequence ?? "",
+      patchRunGeneration: document.querySelector("#patch-status")?.dataset.runGeneration ?? "",
+      runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
       canvasIdentity: canvas?.dataset.playbackSmokeIdentity ?? null,
       canvasCount: document.querySelectorAll("canvas").length,
       documentWidth: document.documentElement.scrollWidth,
@@ -165,6 +191,33 @@ try {
       });
       observer.observe(status, { attributes: true });
     }, { once: true });
+
+    window.__noonPlaybackLifecycle = { sawSourceOwnedPass: false, samples: [] };
+    const observePlaybackOwnership = () => {
+      const currentStatus = document.querySelector("#status");
+      if (!currentStatus) return;
+      const sample = {
+        controls: currentStatus.dataset.playbackControls ?? null,
+        hasControls: document.querySelector(".playback-controls") !== null,
+        controllable: document.querySelector(".playback-controls")?.dataset.controllable,
+        scrubberDisabled: document.querySelector(".playback-scrubber")?.disabled,
+        time: Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds ?? 0),
+        scrubberHidden: document.querySelector(".playback-scrubber")?.hidden,
+        phase: currentStatus.dataset.playbackPhase,
+        runInFlight: window.__noonExampleGallery?.runInFlight ?? false,
+      };
+      window.__noonPlaybackLifecycle.samples.push(sample);
+      if (sample.controls === "unavailable" && sample.runInFlight) {
+        window.__noonPlaybackLifecycle.sawSourceOwnedPass = true;
+      }
+    };
+    const playbackObserver = new MutationObserver(observePlaybackOwnership);
+    playbackObserver.observe(document, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ["data-playback-controls", "data-playback-phase"],
+    });
+    observePlaybackOwnership();
   });
 
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
@@ -177,16 +230,91 @@ try {
 
   const initial = await playbackSnapshot(page);
   diagnostics.initial = initial;
-  assert.equal(initial.hasControls, false, "source-owned execution must not expose host playback controls");
-  assert.equal(initial.playbackAvailability, "unavailable");
+  diagnostics.lifecycle = await page.evaluate(() => window.__noonPlaybackLifecycle);
+  assert.equal(
+    diagnostics.lifecycle.sawSourceOwnedPass,
+    true,
+    "the first source-owned pass must keep host playback controls unavailable",
+  );
+  assert.ok(
+    diagnostics.lifecycle.samples
+      .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
+      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && sample.scrubberHidden),
+    "source-owned playback must expose live progress but reject host commands",
+  );
+  const liveTimes = diagnostics.lifecycle.samples
+    .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
+    .map((sample) => sample.time);
+  assert.ok(liveTimes.length >= 2 && Math.max(...liveTimes) > Math.min(...liveTimes),
+    "live elapsed time must advance without a misleading percentage during the first Python-owned pass");
+  assert.equal(initial.hasControls, true, "completed source playback must expose its replay lease");
+  assert.equal(initial.playbackAvailability, "available");
   assert.equal(initial.runText, "Run");
   assert.equal(initial.runDisabled, false, "Run must remain available after source completion");
+  assert.equal(initial.scrubberDisabled, false, "completed replay must remain seekable");
+  assert.ok(Number(initial.scrubberMax) > 0, "completed replay must expose authored duration");
   assert.equal(initial.canvasCount, 1);
   assert.equal(initial.canvasIdentity, "original");
   assert.ok(initial.rendererBackend === "WebGL2" || initial.rendererBackend === "WebGPU");
 
-  const runButton = page.locator("#replace-scene");
-  await runButton.click();
+  assert.ok(
+    initial.playing === "true" || initial.playing === "false",
+    "completed replay lease must publish a playback state",
+  );
+  if (initial.playing === "true") {
+    await page.locator(".playback-toggle").click();
+    await page.waitForFunction(
+      () => document.querySelector(".playback-controls")?.dataset.playing === "false",
+    );
+  }
+  const seekTarget = Number(initial.scrubberMax) * 0.6;
+  await page.locator(".playback-scrubber").evaluate((input, target) => {
+    input.value = String(target);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, seekTarget);
+  await waitForMetricNear(page, seekTarget);
+  const sought = await playbackSnapshot(page);
+  diagnostics.sought = sought;
+  assert.equal(sought.playing, "false", "seeking a completed replay must preserve its paused state");
+  assert.equal(sought.canvasIdentity, "original", "completed replay seek must preserve the canvas");
+  assert.equal(sought.rendererBackend, initial.rendererBackend, "completed replay seek changed renderer backend");
+  assert.ok(
+    Math.abs(parseSeconds(sought.metricTime) - seekTarget) <= 0.08,
+    `completed replay seek missed target: ${sought.metricTime} vs ${seekTarget}`,
+  );
+
+  // Real browser fullscreen includes the same canvas and its transport controls.
+  const beforeFullscreen = await page.locator("#scene").boundingBox();
+  await page.locator("#preview-fullscreen").click();
+  await page.waitForFunction(() => document.fullscreenElement === document.querySelector(".preview-pane"));
+  const fullscreen = await page.evaluate(() => {
+    const canvas = document.querySelector("#scene").getBoundingClientRect();
+    const timeline = document.querySelector(".playback-controls").getBoundingClientRect();
+    return { width: canvas.width, bottom: canvas.bottom, timelineTop: timeline.top, timelineBottom: timeline.bottom, height: innerHeight };
+  });
+  assert.ok(fullscreen.width > beforeFullscreen.width);
+  assert.ok(fullscreen.bottom <= fullscreen.timelineTop + 1, "fullscreen canvas must not overlap the timeline");
+  assert.ok(fullscreen.timelineBottom <= fullscreen.height + 1, "fullscreen timeline must remain visible");
+  await page.screenshot({ path: path.join(artifactDir, "fullscreen.png") });
+  await page.locator("#preview-fullscreen").click();
+  await page.waitForFunction(() => document.fullscreenElement === null);
+  assert.equal(await page.locator("#preview-fullscreen").getAttribute("aria-pressed"), "false");
+  assert.equal((await playbackSnapshot(page)).canvasIdentity, "original", "fullscreen must not recreate execution");
+
+  const initialGeneration = initial.runGeneration;
+  await page.evaluate(() => {
+    const source = document.querySelector("#python-scene-source");
+    source.value = `${source.value.trimEnd()}\n        self.wait(0.25)\n`;
+    source.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const edited = await playbackSnapshot(page);
+  diagnostics.edited = edited;
+  assert.equal(edited.patchState, "ready", "editing must stop before its debounced restart");
+  assert.ok(edited.runGeneration > initialGeneration, "editing must immediately invalidate the old run");
+  assert.equal(edited.canvasHidden, true, "editing must hide the old source preview");
+  assert.equal(edited.playing, "false", "editing must pause the retained execution");
+  assert.ok(edited.playDisabled && edited.restartDisabled && edited.scrubberDisabled,
+    "editing must disable every control for the old replay lease");
   await page.waitForFunction(() => window.__noonExampleGallery?.runInFlight === true);
   await page.waitForFunction(
     () =>
@@ -198,10 +326,17 @@ try {
   );
   const rerun = await playbackSnapshot(page);
   diagnostics.rerun = rerun;
-  assert.equal(rerun.hasControls, false);
-  assert.equal(rerun.playbackAvailability, "unavailable");
+  assert.equal(rerun.hasControls, true, "automatic source restart must restore a completed replay lease");
+  assert.equal(rerun.playbackAvailability, "available");
   assert.equal(rerun.runDisabled, false);
-  assert.equal(rerun.canvasIdentity, "original", "source rerun must preserve the canvas");
+  assert.equal(rerun.patchRunGeneration, String(rerun.runGeneration));
+  assert.ok(rerun.runGeneration > initialGeneration, "automatic restart must apply the newest source generation");
+  assert.equal(
+    Number(rerun.scrubberMax),
+    Number(initial.scrubberMax) + 0.25,
+    "Run must execute the edited source's added wait",
+  );
+  assert.equal(rerun.canvasCount, 1, "source replacement must leave exactly one canvas");
   assert.equal(rerun.rendererBackend, initial.rendererBackend, "source rerun changed renderer backend");
   assert.equal(rerun.canvasCount, 1);
 
@@ -213,7 +348,7 @@ try {
     mobile.documentWidth <= mobile.viewportWidth + 1,
     `source controls overflow mobile viewport (${mobile.documentWidth}px > ${mobile.viewportWidth}px)`,
   );
-  await runButton.screenshot({ path: path.join(artifactDir, "controls-mobile.png") });
+  await page.locator(".playback-controls").screenshot({ path: path.join(artifactDir, "controls-mobile.png") });
   await page.screenshot({ path: path.join(artifactDir, "playground.png"), fullPage: true });
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
@@ -221,7 +356,7 @@ try {
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
-  console.log("✓ source-owned Playground Run remains deterministic without competing host playback controls");
+  console.log("✓ live progress, completed replay controls, fullscreen, and automatic source restart");
 } catch (error) {
   if (page !== null) {
     try {

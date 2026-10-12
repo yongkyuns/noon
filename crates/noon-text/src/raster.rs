@@ -12,7 +12,7 @@ use noon_core::{
 };
 use swash::{
     scale::{image::Content, Render, ScaleContext, Source, StrikeWith},
-    zeno::Format,
+    zeno::{Format, Vector},
     CacheKey, FontRef, GlyphId,
 };
 
@@ -45,22 +45,53 @@ pub enum GlyphRaster {
     Image(GlyphRasterImage),
 }
 
-/// Exact cache identity for one position-independent glyph image.
+/// Exact cache identity for one bounded-phase glyph image.
 ///
-/// Fractional scene position is intentionally excluded. Noon rasterizes unhinted
-/// glyphs at an explicit device-pixel size and applies subpixel translation when
-/// placing atlas quads, so ordinary animation does not explode the glyph cache.
+/// The renderer quantizes eligible translation-only device origins to eight bins
+/// per axis. Arbitrary scene position remains excluded, limiting one size/variation
+/// identity to at most 64 phase variants while preserving phase-aware coverage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GlyphRasterKey {
     pub font: FontResourceHandle,
     pub glyph_id: GlyphId,
     pub pixel_size_bits: u32,
     pub variation_fingerprint: u64,
+    pub phase: GlyphRasterPhase,
 }
 
 impl GlyphRasterKey {
     pub fn pixel_size(self) -> f32 {
         f32::from_bits(self.pixel_size_bits)
+    }
+}
+
+pub const GLYPH_RASTER_PHASE_BINS: u8 = 8;
+
+/// Bounded subpixel origin used when an unhinted outline is converted to a mask.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct GlyphRasterPhase {
+    x: u8,
+    y: u8,
+}
+
+impl GlyphRasterPhase {
+    pub const ZERO: Self = Self { x: 0, y: 0 };
+
+    pub fn new(x: u8, y: u8) -> Option<Self> {
+        (x < GLYPH_RASTER_PHASE_BINS && y < GLYPH_RASTER_PHASE_BINS).then_some(Self { x, y })
+    }
+
+    pub fn offset(self) -> (f32, f32) {
+        let bins = f32::from(GLYPH_RASTER_PHASE_BINS);
+        (f32::from(self.x) / bins, f32::from(self.y) / bins)
+    }
+
+    pub const fn x(self) -> u8 {
+        self.x
+    }
+
+    pub const fn y(self) -> u8 {
+        self.y
     }
 }
 
@@ -293,6 +324,17 @@ impl GlyphRasterCache {
         glyph_id: u32,
         pixel_size: f32,
     ) -> Result<Arc<GlyphRaster>, GlyphRasterError> {
+        self.get_or_rasterize_at_phase(fonts, run, glyph_id, pixel_size, GlyphRasterPhase::ZERO)
+    }
+
+    pub fn get_or_rasterize_at_phase<F: FontResourceLookup + ?Sized>(
+        &mut self,
+        fonts: &F,
+        run: &GlyphRun,
+        glyph_id: u32,
+        pixel_size: f32,
+        phase: GlyphRasterPhase,
+    ) -> Result<Arc<GlyphRaster>, GlyphRasterError> {
         if !pixel_size.is_finite() || pixel_size <= 0.0 {
             return Err(GlyphRasterError::InvalidPixelSize);
         }
@@ -317,6 +359,7 @@ impl GlyphRasterCache {
             glyph_id,
             pixel_size_bits: pixel_size.to_bits(),
             variation_fingerprint: variation_fingerprint(run.variations.as_ref()),
+            phase,
         };
         let access = self.next_access();
         if let Some(entry) = self.entries.get_mut(&key) {
@@ -330,7 +373,7 @@ impl GlyphRasterCache {
             .get(font_handle)
             .ok_or(GlyphRasterError::MissingFontResource)?;
         let face = self.swash_face(font_handle, resource)?;
-        let raster = Arc::new(self.rasterize(resource, face, run, glyph_id, pixel_size)?);
+        let raster = Arc::new(self.rasterize(resource, face, run, glyph_id, pixel_size, phase)?);
         let image_bytes = raster_image_bytes(raster.as_ref());
 
         if self.limits.max_entries == 0 || image_bytes > self.limits.max_image_bytes {
@@ -404,6 +447,7 @@ impl GlyphRasterCache {
         run: &GlyphRun,
         glyph_id: GlyphId,
         pixel_size: f32,
+        phase: GlyphRasterPhase,
     ) -> Result<GlyphRaster, GlyphRasterError> {
         let font = FontRef {
             data: resource.data.as_ref(),
@@ -428,10 +472,25 @@ impl GlyphRasterCache {
             Source::Outline,
         ];
         let mut render = Render::new(&sources);
-        render.format(Format::Alpha);
-        let Some(image) = render.render(&mut scaler, glyph_id) else {
+        let (phase_x, phase_y) = phase.offset();
+        render
+            .format(Format::Alpha)
+            .offset(Vector::new(phase_x, phase_y));
+        let Some(mut image) = render.render(&mut scaler, glyph_id) else {
             return Ok(GlyphRaster::Empty);
         };
+        // Embedded color strikes do not promise to honor outline offsets. Re-render
+        // color output at phase zero so callers never compensate a bitmap that did
+        // not actually move. The bounded phase key may duplicate such an entry, but
+        // geometry and color-glyph sampling remain unchanged.
+        if image.content == Content::Color && phase != GlyphRasterPhase::ZERO {
+            let mut zero_phase = Render::new(&sources);
+            zero_phase.format(Format::Alpha);
+            let Some(zero_image) = zero_phase.render(&mut scaler, glyph_id) else {
+                return Ok(GlyphRaster::Empty);
+            };
+            image = zero_image;
+        }
 
         let format = match image.content {
             Content::Mask => GlyphRasterFormat::Alpha8,
@@ -650,6 +709,42 @@ mod tests {
         }]);
         assert_ne!(no_variation, weight);
         assert_ne!(48.0_f32.to_bits(), 64.0_f32.to_bits());
+    }
+
+    #[test]
+    fn subpixel_phase_is_bounded_cache_identity_and_reuses_exact_matches() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        let glyph = run.glyphs.first().unwrap();
+        let mut cache = GlyphRasterCache::with_limits(GlyphRasterCacheLimits::new(2, usize::MAX));
+        let quarter = GlyphRasterPhase::new(2, 2).unwrap();
+        let half = GlyphRasterPhase::new(4, 4).unwrap();
+
+        let first = cache
+            .get_or_rasterize_at_phase(&artifact.fonts, run, glyph.glyph_id, 48.0, quarter)
+            .unwrap();
+        let repeated = cache
+            .get_or_rasterize_at_phase(&artifact.fonts, run, glyph.glyph_id, 48.0, quarter)
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &repeated));
+        cache
+            .get_or_rasterize_at_phase(&artifact.fonts, run, glyph.glyph_id, 48.0, half)
+            .unwrap();
+        cache
+            .get_or_rasterize_at_phase(
+                &artifact.fonts,
+                run,
+                glyph.glyph_id,
+                48.0,
+                GlyphRasterPhase::ZERO,
+            )
+            .unwrap();
+
+        assert_eq!(cache.stats().entries, 2);
+        assert_eq!(cache.stats().hits, 1);
+        assert_eq!(cache.stats().misses, 3);
+        assert_eq!(cache.stats().evictions, 1);
+        assert!(GlyphRasterPhase::new(GLYPH_RASTER_PHASE_BINS, 0).is_none());
     }
 
     #[test]

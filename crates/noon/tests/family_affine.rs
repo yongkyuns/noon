@@ -1,7 +1,7 @@
 use noon::{ManimRotationPivot, Mobject, MobjectFamily, Scene};
 
 fn family() -> (Scene, MobjectFamily, [Mobject; 2], Mobject) {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut a = scene.square(0.5).unwrap();
     let mut b = scene.square(0.5).unwrap();
     a.shift(-1.0, 0.0).unwrap();
@@ -63,7 +63,8 @@ fn live_family_edits_publish_atomically_and_foreign_family_is_rejected() {
     .unwrap();
     assert!((live.effective(&b).unwrap().transform.translation.y - 2.0).abs() < 1e-6);
     let before = live.effective(&a).unwrap();
-    let foreign = Scene::new().family(&[]).unwrap();
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.family(&[]).unwrap();
     assert!(live.scale_family(&foreign, 2.0, 2.0).is_err());
     assert!(live.scale_family(&family, f64::NAN, 2.0).is_err());
     assert_eq!(live.effective(&a).unwrap(), before);

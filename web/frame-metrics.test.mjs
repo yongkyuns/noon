@@ -3,10 +3,40 @@ import test from "node:test";
 
 import {
   FrameMetrics,
+  PresentationRate,
   SampleWindow,
   summarizeCadence,
   summarizeSamples,
 } from "./frame-metrics.js";
+
+test("live FPS counts renderer presentations over real time, including stalls", () => {
+  const rate = new PresentationRate();
+  const observe = (presentedFrames, sampledAtMs) => rate.observe({ presentedFrames, sampledAtMs }, "run");
+  assert.equal(observe(500, 2000), null);
+  assert.equal(observe(530, 2500), null);
+  assert.equal(observe(560, 3000), 60);
+  assert.equal(observe(580, 3500), 60);
+  assert.equal(observe(605, 4500), 30);
+  assert.equal(observe(605, 5500), 0, "no new frames must not retain the previous rate");
+  assert.equal(observe(620, 10500), 3, "a long stall remains in the denominator");
+  assert.equal(observe(740, 11500), 120, "the target must not cap the measured rate");
+});
+
+test("live FPS discards pause, hidden-tab, run and renderer transitions", () => {
+  const rate = new PresentationRate();
+  const sample = (count, time, session = "run") => rate.observe({ presentedFrames: count, sampledAtMs: time }, session);
+  sample(0, 0);
+  assert.equal(sample(60, 1000), 60);
+  rate.reset();
+  assert.equal(sample(70, 10000), null);
+  assert.equal(sample(130, 11000), 60);
+  assert.equal(sample(200, 12000, "replacement"), null, "a replacement may have a larger counter");
+  assert.equal(sample(1, 12500, "replacement"), null, "counter reset starts a new interval");
+  assert.equal(sample(61, 13500, "replacement"), 60);
+  assert.equal(sample(62, 10, "replacement"), null, "worker clocks may restart");
+  assert.equal(sample(NaN, 1010, "replacement"), null);
+  assert.equal(sample(122, 1010, "replacement"), null);
+});
 
 test("summarizes deterministic frame percentiles", () => {
   assert.deepEqual(summarizeSamples([4, 1, 3, 2]), {
@@ -91,6 +121,18 @@ test("bounded sample windows retain recent measurements", () => {
   assert.equal(samples.summary(), null);
   assert.throws(() => new SampleWindow(0), /positive integer/);
   assert.throws(() => samples.record(Number.NaN), /finite values/);
+});
+
+test("sample windows forget old spikes across repeated wrap and reset", () => {
+  const samples = new SampleWindow(3);
+  for (const value of [100, 1, 2, 3, 4, 5, 6, 7]) samples.record(value);
+  assert.equal(samples.size, 3);
+  assert.equal(samples.summary().max, 7);
+  assert.equal(samples.summary().mean, 6);
+  samples.reset();
+  for (const value of [20, 21, 22, 23]) samples.record(value);
+  assert.equal(samples.summary().min, 21);
+  assert.equal(samples.summary().max, 23);
 });
 
 test("rejects invalid frame-metric inputs", () => {

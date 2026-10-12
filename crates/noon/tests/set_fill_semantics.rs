@@ -57,7 +57,7 @@ fn authored_and_animated_fill_keep_stroke_and_object_opacity_independent() {
 #[test]
 fn partial_fill_edits_preserve_other_authored_paint_layers() {
     for mode in 0..3 {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut object = scene.square(1.0).unwrap();
         object.set_fill(1.0, 0.0, 0.0, 0.25).unwrap();
         object.set_stroke_color(0.0, 1.0, 0.0, 1.0).unwrap();

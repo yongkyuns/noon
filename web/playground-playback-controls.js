@@ -10,15 +10,22 @@ export class PlaygroundPlaybackControls {
   #root;
   #playButton;
   #restartButton;
+  #undoDragButton;
   #scrubber;
   #timeOutput;
+  #liveStatus;
   #durationSeconds;
   #timeSeconds = 0;
   #playing = true;
   #externalBusy = false;
+  #controllable = true;
+  #unavailableReason = null;
+  #canUndoTranslationDrag = false;
+  #undoDragSupported = false;
   #commandPending = false;
   #seekActive = false;
   #desiredSeek = null;
+  #controlGeneration = 0;
   #destroyed = false;
 
   constructor(
@@ -34,6 +41,7 @@ export class PlaygroundPlaybackControls {
       throw new TypeError("playback controls onError must be a function");
     }
     this.#player = player;
+    this.#undoDragSupported = typeof player.undoTranslationDrag === "function";
     this.#onError = onError;
     this.#durationSeconds = validateDuration(durationSeconds);
 
@@ -46,6 +54,7 @@ export class PlaygroundPlaybackControls {
     }
     this.#root.className = "playback-controls";
     this.#root.setAttribute("aria-label", "Animation playback controls");
+    this.#root.dataset.undoSupport = String(this.#undoDragSupported);
     this.#root.replaceChildren();
 
     this.#playButton = document.createElement("button");
@@ -61,6 +70,14 @@ export class PlaygroundPlaybackControls {
     this.#restartButton.title = "Restart";
     this.#restartButton.addEventListener("click", this.#handleRestart);
 
+    this.#undoDragButton = document.createElement("button");
+    this.#undoDragButton.type = "button";
+    this.#undoDragButton.className = "playback-button playback-undo-drag";
+    this.#undoDragButton.textContent = "Undo drag";
+    this.#undoDragButton.setAttribute("aria-label", "Undo the most recent drag");
+    this.#undoDragButton.addEventListener("click", this.#handleUndoDrag);
+    this.#undoDragButton.hidden = !this.#undoDragSupported;
+
     const timeline = document.createElement("label");
     timeline.className = "playback-timeline";
 
@@ -68,17 +85,22 @@ export class PlaygroundPlaybackControls {
     this.#scrubber.type = "range";
     this.#scrubber.className = "playback-scrubber";
     this.#scrubber.min = "0";
-    this.#scrubber.step = "0.001";
+    // A millisecond step truncates endpoints such as 2.5999999999999996 to
+    // 2.599 in the browser. Preserve the exact authored range and seek value.
+    this.#scrubber.step = "any";
     this.#scrubber.setAttribute("aria-label", "Animation playhead");
     this.#scrubber.addEventListener("input", this.#handleSeekInput);
-    timeline.append(this.#scrubber);
+    this.#liveStatus = document.createElement("span");
+    this.#liveStatus.className = "playback-live-status";
+    this.#liveStatus.textContent = "Duration pending";
+    timeline.append(this.#scrubber, this.#liveStatus);
 
     this.#timeOutput = document.createElement("output");
     this.#timeOutput.className = "playback-time";
     this.#timeOutput.setAttribute("aria-live", "off");
     this.#timeOutput.setAttribute("aria-label", "Animation time");
 
-    this.#root.append(this.#playButton, this.#restartButton, timeline, this.#timeOutput);
+    this.#root.append(this.#playButton, this.#restartButton, this.#undoDragButton, timeline, this.#timeOutput);
     this.#render();
   }
 
@@ -87,22 +109,54 @@ export class PlaygroundPlaybackControls {
   }
 
   get durationSeconds() {
-    return this.#durationSeconds;
+    return this.#controllable ? this.#durationSeconds : null;
   }
 
   setDuration(durationSeconds) {
     this.#durationSeconds = validateDuration(durationSeconds);
-    this.#timeSeconds = Math.min(this.#timeSeconds, this.#durationSeconds);
+    if (this.#controllable) this.#timeSeconds = Math.min(this.#timeSeconds, this.#durationSeconds);
     this.#render();
   }
 
+  setControllable(controllable) {
+    const next = Boolean(controllable);
+    if (this.#controllable && !next) this.#invalidateCommands();
+    this.#controllable = next;
+    this.#unavailableReason = null;
+    this.#root.dataset.controllable = String(this.#controllable);
+    this.#root.title = this.#controllable ? "" : "Live progress · seeking is available after Python finishes";
+    this.#render();
+  }
+
+  setUnavailable(reason) {
+    this.setControllable(false);
+    this.#unavailableReason = String(reason ?? "History not retained");
+    this.#root.title = `Replay unavailable: ${this.#unavailableReason}`;
+    this.#render();
+  }
+
+  // A read-only observation must not fight a user's in-flight scrub or command.
+  observe(state) {
+    if (this.#destroyed || this.#seekActive || this.#commandPending) return;
+    // A continuation's current play/wait endpoint is not its full duration.
+    // Only the completed source result may set the replay range via setDuration.
+    this.sync({ time: state.time, playing: state.playing, canUndoTranslationDrag: state.canUndoTranslationDrag });
+  }
+
   setBusy(busy) {
-    this.#externalBusy = Boolean(busy);
+    const next = Boolean(busy);
+    if (next && !this.#externalBusy) this.#invalidateCommands();
+    this.#externalBusy = next;
     this.#renderDisabled();
   }
 
-  sync({ time, playing, durationSeconds = undefined }) {
-    if (durationSeconds !== undefined) {
+  #invalidateCommands() {
+    this.#controlGeneration += 1;
+    this.#desiredSeek = null;
+  }
+
+  sync({ time, playing, durationSeconds = undefined, canUndoTranslationDrag = undefined }) {
+    if (this.#controllable && durationSeconds !== undefined) {
       this.#durationSeconds = validateDuration(durationSeconds);
     }
     if (!Number.isFinite(time) || time < 0) {
@@ -111,8 +165,14 @@ export class PlaygroundPlaybackControls {
     if (typeof playing !== "boolean") {
       throw new TypeError("playback state playing must be boolean");
     }
-    this.#timeSeconds = Math.min(time, this.#durationSeconds);
+    this.#timeSeconds = this.#controllable ? Math.min(time, this.#durationSeconds) : time;
     this.#playing = playing;
+    if (canUndoTranslationDrag !== undefined) {
+      if (typeof canUndoTranslationDrag !== "boolean") {
+        throw new TypeError("canUndoTranslationDrag must be boolean when provided");
+      }
+      this.#canUndoTranslationDrag = canUndoTranslationDrag;
+    }
     this.#render();
   }
 
@@ -126,7 +186,7 @@ export class PlaygroundPlaybackControls {
     ) {
       return;
     }
-    this.#timeSeconds = Math.min(time, this.#durationSeconds);
+    this.#timeSeconds = this.#controllable ? Math.min(time, this.#durationSeconds) : time;
     this.#renderTime();
   }
 
@@ -135,42 +195,57 @@ export class PlaygroundPlaybackControls {
     this.#destroyed = true;
     this.#playButton.removeEventListener("click", this.#handleToggle);
     this.#restartButton.removeEventListener("click", this.#handleRestart);
+    this.#undoDragButton.removeEventListener("click", this.#handleUndoDrag);
     this.#scrubber.removeEventListener("input", this.#handleSeekInput);
     renderPlaybackPlaceholder(this.#root);
   }
 
   #handleToggle = () => {
-    void this.#runCommand(async () => {
+    void this.#runCommand(async (generation) => {
       const result = this.#playing ? await this.#player.pause() : await this.#player.resume();
-      this.sync(result);
+      if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
     });
   };
 
   #handleRestart = () => {
-    void this.#runCommand(async () => {
+    void this.#runCommand(async (generation) => {
       const result = await this.#player.restartPlayback();
-      this.sync(result);
+      if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
+    });
+  };
+
+  #handleUndoDrag = () => {
+    if (!this.#undoDragSupported) return;
+    void this.#runCommand(async (generation) => {
+      const result = await this.#player.undoTranslationDrag();
+      if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
     });
   };
 
   #handleSeekInput = () => {
-    if (this.#destroyed || this.#externalBusy || this.#commandPending) return;
+    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending) return;
     const target = Number(this.#scrubber.value);
     if (!Number.isFinite(target)) return;
-    this.#timeSeconds = Math.min(Math.max(target, 0), this.#durationSeconds);
+    const bounded = Math.min(Math.max(target, 0), this.#durationSeconds);
+    // Browsers may serialize a range value to fewer digits than its max.
+    // Restore only an endpoint within floating-point roundoff, not a time step.
+    const endpointRoundoff = 8 * Number.EPSILON * this.#durationSeconds;
+    this.#timeSeconds = this.#durationSeconds - bounded <= endpointRoundoff
+      ? this.#durationSeconds : bounded;
     this.#desiredSeek = this.#timeSeconds;
     this.#renderTime();
     void this.#drainSeek();
   };
 
   async #runCommand(operation) {
-    if (this.#destroyed || this.#externalBusy || this.#commandPending || this.#seekActive) return;
+    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending || this.#seekActive) return;
+    const generation = this.#controlGeneration;
     this.#commandPending = true;
     this.#renderDisabled();
     try {
-      await operation();
+      await operation(generation);
     } catch (error) {
-      this.#reportError(error);
+      if (generation === this.#controlGeneration) this.#reportError(error);
     } finally {
       this.#commandPending = false;
       this.#renderDisabled();
@@ -179,15 +254,17 @@ export class PlaygroundPlaybackControls {
 
   async #drainSeek() {
     if (this.#seekActive || this.#destroyed) return;
+    const generation = this.#controlGeneration;
     this.#seekActive = true;
     this.#renderDisabled();
     try {
-      while (!this.#destroyed && this.#desiredSeek !== null) {
+      while (!this.#destroyed && generation === this.#controlGeneration && this.#desiredSeek !== null) {
         const target = this.#desiredSeek;
         this.#desiredSeek = null;
         const result = await this.#player.seek(target);
+        if (generation !== this.#controlGeneration) break;
         if (this.#desiredSeek === null) {
-          this.sync(result);
+          if (!this.#destroyed) this.sync(result);
         } else if (typeof result.playing === "boolean") {
           // Keep the latest user-selected playhead visible while an older seek
           // completion is superseded by another queued direct seek.
@@ -196,15 +273,21 @@ export class PlaygroundPlaybackControls {
         }
       }
     } catch (error) {
-      this.#desiredSeek = null;
-      this.#reportError(error);
+      if (generation === this.#controlGeneration) {
+        this.#desiredSeek = null;
+        this.#reportError(error);
+      }
     } finally {
       this.#seekActive = false;
       this.#renderDisabled();
+      if (!this.#destroyed && !this.#externalBusy && this.#controllable && this.#desiredSeek !== null) {
+        void this.#drainSeek();
+      }
     }
   }
 
   #reportError(error) {
+    if (this.#destroyed) return;
     if (this.#onError !== null) {
       this.#onError(error);
       return;
@@ -213,34 +296,52 @@ export class PlaygroundPlaybackControls {
   }
 
   #render() {
-    this.#playButton.textContent = this.#playing ? "Pause" : "Play";
+    if (this.#destroyed) return;
+    this.#playButton.textContent = this.#unavailableReason !== null ? "Complete" : !this.#controllable ? "Live" : this.#playing ? "Pause" : "Play";
     this.#playButton.setAttribute(
       "aria-label",
-      this.#playing ? "Pause animation" : "Play animation",
+      !this.#controllable ? (this.#unavailableReason !== null ? "Replay unavailable" : "Python owns live playback") : this.#playing ? "Pause animation" : "Play animation",
     );
+    this.#scrubber.hidden = !this.#controllable;
+    this.#liveStatus.hidden = this.#controllable;
+    this.#liveStatus.textContent = this.#unavailableReason !== null ? "Replay unavailable" : "Duration pending";
     this.#scrubber.max = String(this.#durationSeconds);
     this.#renderTime();
     this.#renderDisabled();
   }
 
   #renderTime() {
-    const clampedTime = Math.min(this.#timeSeconds, this.#durationSeconds);
-    this.#scrubber.value = String(clampedTime);
+    if (this.#destroyed) return;
+    const time = this.#controllable
+      ? Math.min(this.#timeSeconds, this.#durationSeconds) : this.#timeSeconds;
+    this.#root.dataset.elapsedSeconds = String(time);
+    // Keep the layout slot, but do not draw a percentage thumb before the total
+    // is known. Expanding a segment-sized range makes forward time jump back.
+    this.#scrubber.value = String(Math.min(time, this.#durationSeconds));
     this.#scrubber.setAttribute(
       "aria-valuetext",
-      `${formatTime(clampedTime)} seconds of ${formatTime(this.#durationSeconds)} seconds`,
+      this.#controllable
+        ? `${formatTime(time)} seconds of ${formatTime(this.#durationSeconds)} seconds`
+        : `${formatTime(time)} seconds elapsed · total duration not yet known`,
     );
-    this.#timeOutput.value = `${formatTime(clampedTime)} / ${formatTime(this.#durationSeconds)} s`;
+    this.#timeOutput.value = this.#controllable
+      ? `${formatTime(time)} / ${formatTime(this.#durationSeconds)} s`
+      : this.#unavailableReason !== null ? `${formatTime(time)} s · completed` : `${formatTime(time)} / — s`;
   }
 
   #renderDisabled() {
-    const blockCommands = this.#externalBusy || this.#commandPending || this.#seekActive;
+    if (this.#destroyed) return;
+    // Capability denial is not an unfinished command. A completed, non-replayable
+    // scene stays disabled without displaying an indefinite wait cursor/aria-busy.
+    const busy = this.#externalBusy || this.#commandPending || this.#seekActive;
+    const blockCommands = !this.#controllable || busy;
     this.#playButton.disabled = blockCommands;
     this.#restartButton.disabled = blockCommands;
-    this.#scrubber.disabled = this.#externalBusy || this.#commandPending;
-    this.#root.dataset.busy = String(blockCommands);
+    this.#undoDragButton.disabled = blockCommands || !this.#canUndoTranslationDrag;
+    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
+    this.#root.dataset.busy = String(busy);
     this.#root.dataset.playing = String(this.#playing);
-    this.#root.setAttribute("aria-busy", String(blockCommands));
+    this.#root.setAttribute("aria-busy", String(busy));
   }
 }
 
@@ -261,6 +362,9 @@ function renderPlaybackPlaceholder(root) {
   root.removeAttribute("aria-busy");
   root.removeAttribute("data-busy");
   root.removeAttribute("data-playing");
+  root.removeAttribute("data-controllable");
+  root.removeAttribute("data-elapsed-seconds");
+  root.removeAttribute("title");
   root.setAttribute("aria-label", "Animation playback controls");
 
   const playButton = document.createElement("button");
@@ -315,6 +419,9 @@ function installStyles() {
       border-top: 1px solid var(--border);
       background: rgb(9 12 19 / 94%);
     }
+    .playback-controls[data-undo-support="true"] {
+      grid-template-columns: auto auto auto minmax(4rem, 1fr) auto;
+    }
     .playback-button {
       appearance: none;
       border: 1px solid var(--border-strong);
@@ -358,6 +465,15 @@ function installStyles() {
       cursor: default;
       opacity: 0.42;
     }
+    .playback-live-status {
+      display: block;
+      overflow: hidden;
+      color: #b9c3d6;
+      font-size: 0.68rem;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .playback-controls [hidden] { display: none !important; }
     .playback-controls[data-busy="true"] button:disabled,
     .playback-controls[data-busy="true"] input:disabled {
       cursor: wait;
@@ -369,6 +485,9 @@ function installStyles() {
         gap: 0.32rem;
         min-height: 2.75rem;
         padding: 0.42rem 0.5rem;
+      }
+      .playback-controls[data-undo-support="true"] {
+        grid-template-columns: auto auto auto minmax(3rem, 1fr) auto;
       }
       .playback-button {
         padding: 0.36rem 0.45rem;

@@ -5,9 +5,11 @@ on:
     branches:
       - master
     paths:
+      - "crates/noon-render-wgpu/src/gpu/**"
       - "crates/noon-web/src/authoring_mobject.rs"
       - "crates/noon-web/src/canonical_authoring_scene.rs"
       - "crates/noon-web/src/semantic_execution_player.rs"
+      - "crates/noon-web/src/retained_execution_canvas.rs"
       - "web/authoring-client.js"
       - "web/authoring-execution-client.js"
       - "web/execution-worker-client.js"
@@ -20,9 +22,11 @@ on:
       - ".github/workflows/retained-typst-authoring.yml"
   pull_request:
     paths:
+      - "crates/noon-render-wgpu/src/gpu/**"
       - "crates/noon-web/src/authoring_mobject.rs"
       - "crates/noon-web/src/canonical_authoring_scene.rs"
       - "crates/noon-web/src/semantic_execution_player.rs"
+      - "crates/noon-web/src/retained_execution_canvas.rs"
       - "web/authoring-client.js"
       - "web/authoring-execution-client.js"
       - "web/execution-worker-client.js"
@@ -68,7 +72,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7
         with:
           tool: wasm-pack@0.15.0
           fallback: none

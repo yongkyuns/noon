@@ -1,7 +1,8 @@
 """Project Rust-owned failure metadata into Python exceptions.
 
-This module performs no admission, handle validation, lifecycle transitions or
-message classification. Unmarked exceptions retain their original identity.
+This module performs no admission, handle validation or message classification.
+Unmarked exceptions retain their original identity; the optional browser host
+observes their original JS error before projection.
 """
 from __future__ import annotations
 
@@ -109,6 +110,15 @@ def map_engine_error(error: Exception, *, operation: str | None = None) -> Excep
 
 
 def raise_engine_error(error: Exception, *, operation: str | None = None) -> NoReturn:
+    original = getattr(error, "js_error", None)
+    if original is not None:
+        try:
+            from js import noonReportEngineTrap
+        except ImportError:
+            pass
+        else:
+            # The host checks the actual JS error type, never Python wording.
+            noonReportEngineTrap(original)
     mapped = map_engine_error(error, operation=operation)
     if mapped is error:
         raise error

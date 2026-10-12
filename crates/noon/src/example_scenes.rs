@@ -2,8 +2,15 @@
 
 pub mod affine_fade;
 pub mod analytic_profile;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod area_helpers;
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
+#[cfg(all(feature = "native-text", feature = "latex"))]
+pub mod bar_chart;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod brace_text;
+pub mod cyclic_replace;
 pub mod dimension_fitting;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
@@ -14,19 +21,48 @@ pub mod family_paint;
 pub mod family_placement;
 pub mod family_replacement;
 pub mod family_transform_indicate;
+pub mod following_graph_camera;
+pub mod foreground_matching;
+pub mod foreground_membership;
+pub mod graph_queries;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;
 pub mod live_updater_lifecycle;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod markup_text;
+#[cfg(feature = "latex")]
+pub mod matrix;
 pub mod mixed_scalar_composition;
 pub mod moving_around;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod moving_zoomed_scene_around;
+#[cfg(feature = "latex")]
+pub mod numeric_decimal;
 pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
 pub mod painter_order_overlap;
+pub mod pointer_input_trace;
+pub mod polar_plane;
+pub mod raster_image;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;
+pub mod retained_locality;
+pub mod sample_space;
+#[cfg(all(feature = "typst", feature = "bundled-fonts"))]
+pub mod spatial_camera_labels;
+pub mod spatial_mesh;
+pub mod spatial_primitives;
+pub mod spatial_surface;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod spatial_three_d_axes;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod special_camera_settings;
 pub mod specialized_geometry;
+pub mod svg_morph;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts", feature = "latex"))]
+pub mod table;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_fade;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
@@ -34,10 +70,18 @@ pub mod text_family_reveal;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_write;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod text_range_colors;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_source_parts;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_write;
 pub mod timed_composition;
+#[cfg(feature = "latex")]
+pub mod variable;
+pub mod vector_space;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod vector_space_features;
+pub mod zoomed_scene;
 
 #[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 use crate::{MathTypst, Typst};
@@ -123,7 +167,7 @@ impl LiveContinuation for OrdinaryDifferentRotations {
 
 pub fn ordinary_different_rotations_program(
 ) -> Result<LiveProgram<OrdinaryDifferentRotations>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut left = scene.square(2.0).map_err(|error| error.to_string())?;
     left.set_translation(-2.0, 0.0)
         .map_err(|error| error.to_string())?;
@@ -1627,7 +1671,7 @@ impl LiveContinuation for OrdinaryFadeContinuation {
 /// root membership change, and the final ordinary add reuses the original semantic handle.
 pub fn ordinary_fade_continuation_program() -> Result<LiveProgram<OrdinaryFadeContinuation>, String>
 {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(0.4).map_err(|error| error.to_string())?;
     circle
         .set_fill(0.0, 0.4, 1.0, 1.0)
@@ -1700,7 +1744,7 @@ impl LiveContinuation for OrdinaryCreateContinuation {
 /// Build the paired ordinary Create program without selecting a platform host.
 pub fn ordinary_create_continuation_program(
 ) -> Result<LiveProgram<OrdinaryCreateContinuation>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(1.0).map_err(|error| error.to_string())?;
     circle
         .set_fill(209.0 / 255.0, 71.0 / 255.0, 189.0 / 255.0, 0.5)
@@ -1863,7 +1907,7 @@ impl LiveContinuation for OrdinaryUncreateContinuation {
 
 pub fn ordinary_uncreate_continuation_program(
 ) -> Result<LiveProgram<OrdinaryUncreateContinuation>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let square = scene.square(2.0).map_err(|error| error.to_string())?;
     let semantic_id = square.node_id();
     scene
@@ -1952,7 +1996,7 @@ impl LiveContinuation for OrdinarySquareAndCircleCreateContinuation {
 /// Build the paired ordinary Square-and-Circle Create program without selecting a platform host.
 pub fn ordinary_square_and_circle_create_continuation_program(
 ) -> Result<LiveProgram<OrdinarySquareAndCircleCreateContinuation>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(1.0).map_err(|error| error.to_string())?;
     circle
         .set_fill(209.0 / 255.0, 71.0 / 255.0, 189.0 / 255.0, 0.5)
@@ -2064,7 +2108,7 @@ impl LiveContinuation for OrdinaryCreateThenContentMorph {
 /// Build the target-neutral Rust counterpart of Manim's ordinary SquareToCircle sequence.
 pub fn ordinary_create_then_content_morph_program(
 ) -> Result<LiveProgram<OrdinaryCreateThenContentMorph>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut square = scene.square(2.0).map_err(|error| error.to_string())?;
     square
         .rotate(std::f64::consts::FRAC_PI_4)
@@ -2573,6 +2617,9 @@ mod continuation_tests {
                 (noon_core::PathCommand::Close, noon_core::PathCommand::Close) => continue,
                 _ => panic!("square correspondence changed command shape"),
             };
+            // Resource points live in the reusable fixed frame; verify the
+            // point-correspondence midpoint in world space, as it is rendered.
+            let point = frame.render_transform(0).transform_point(point);
             assert!((point.x + 2.0).abs() < 1e-5);
             assert!(point.y.abs() < 1e-5);
         }
@@ -3252,6 +3299,8 @@ pub mod ordinary_focus_on;
 
 pub mod ordinary_rotating;
 
+pub mod apply_matrix;
+
 pub mod scale_in_place;
 
 pub mod family_membership_order;
@@ -3293,3 +3342,11 @@ pub mod boolean_geometry;
 pub mod path_alignment;
 
 pub mod animated_priority;
+
+pub mod graph;
+pub mod implicit_plotting;
+pub mod number_plane;
+pub mod pointer_selection;
+
+#[cfg(feature = "latex")]
+pub mod latex_text;

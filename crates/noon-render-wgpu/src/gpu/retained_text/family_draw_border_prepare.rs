@@ -1,5 +1,7 @@
 use super::*;
-use noon_core::{RetainedFamilyAnimationPlan, TextAnimationGlyphRef};
+use noon_core::{
+    RetainedFamilyAnimationPlan, TextAnimationGlyphRef, TextAnimationMemberKind, TextResource,
+};
 use noon_runtime::RetainedFamilyFrame;
 use std::mem;
 
@@ -16,6 +18,7 @@ const DEFAULT_DRAW_BORDER_STROKE_WIDTH: f32 = 0.02;
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedFamilyDrawBorderPrepareError {
     Retained(RetainedPrepareError),
+    Members(RetainedFamilyPrepareError),
     Family(RetainedFamilyDrawBorderThenFillError),
     MissingSourceObject(ObjectId),
     InvalidTextRun {
@@ -34,6 +37,7 @@ impl std::fmt::Display for RetainedFamilyDrawBorderPrepareError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Retained(error) => error.fmt(formatter),
+            Self::Members(error) => error.fmt(formatter),
             Self::Family(error) => error.fmt(formatter),
             Self::MissingSourceObject(object) => write!(
                 formatter,
@@ -68,6 +72,12 @@ impl std::fmt::Display for RetainedFamilyDrawBorderPrepareError {
 
 impl std::error::Error for RetainedFamilyDrawBorderPrepareError {}
 
+impl From<RetainedFamilyPrepareError> for RetainedFamilyDrawBorderPrepareError {
+    fn from(value: RetainedFamilyPrepareError) -> Self {
+        Self::Members(value)
+    }
+}
+
 impl From<RetainedPrepareError> for RetainedFamilyDrawBorderPrepareError {
     fn from(value: RetainedPrepareError) -> Self {
         Self::Retained(value)
@@ -84,14 +94,13 @@ impl RetainedFramePreparer {
     /// Prepare a retained frame whose semantic family uses DrawBorderThenFill.
     ///
     /// Family traversal, member order, lag, easing, and reversal are already resolved
-    /// by the runtime state. This renderer layer only realizes each Text glyph's local
+    /// by the runtime state. This renderer layer only realizes each retained glyph or vector's local
     /// outline/fill phase. Completed runs stay on the atlas fast path; only runs with
     /// an in-flight member are materialized through the existing glyph-outline cache.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_family_draw_border_then_fill<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         texts: &(impl TextResourceLookup + ?Sized),
@@ -101,7 +110,7 @@ impl RetainedFramePreparer {
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyDrawBorderPrepareError> {
         let changes = FrameChanges::all();
         self.prepare_family_draw_border_then_fill_with_changes(
-            device, queue, frame, plan, &changes, texts, fonts, geometries, metrics,
+            device, frame, plan, &changes, texts, fonts, geometries, metrics,
         )
     }
 
@@ -109,7 +118,6 @@ impl RetainedFramePreparer {
     pub fn prepare_family_draw_border_then_fill_with_changes<'a>(
         &'a mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         frame: &RetainedFamilyFrame<'_>,
         plan: &RetainedFamilyAnimationPlan,
         changes: &FrameChanges,
@@ -118,9 +126,9 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyDrawBorderPrepareError> {
+        let images = self.stage_image_publication(device, frame.retained, changes, None)?;
         self.prepare_canonical_mixed_baseline(
             device,
-            queue,
             frame.retained,
             changes,
             texts,
@@ -141,23 +149,21 @@ impl RetainedFramePreparer {
 
         let geometry = self.geometry.prepare(&self.scratch);
         self.render_items.clear();
-        rebuild_mixed_order(
+        rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
+        reorder_mixed_items(
             &mut self.render_items,
-            &self.sources,
-            &self.snapshot_text_items,
-            &geometry,
+            frame.retained,
+            &self.painter_order_indices,
         );
+        rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         self.incremental_stats.mixed_order_rebuilds = self
             .incremental_stats
             .mixed_order_rebuilds
             .saturating_add(1);
-        let glyph_batches = self
-            .render_items
-            .iter()
-            .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
-            .count();
+        let glyph_batches = self.snapshot_text_object_slots.iter().map(Vec::len).sum();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             semantic_objects: frame.retained.objects.len(),
             geometry_slots: self.scratch.objects.len(),
             glyph_batches,
@@ -179,23 +185,40 @@ impl RetainedFramePreparer {
             mask_quads: &self.snapshot_mask_quads,
             color_quads: &self.snapshot_color_quads,
             items: &self.snapshot_text_items,
+            object_glyph_slots: &self.snapshot_text_object_slots,
             stats: self.snapshot_text_stats,
             atlas: self.text.atlas(),
             partial_upload_base_generation: None,
             dirty_mask_ranges: &self.dirty_mask_ranges,
             dirty_color_ranges: &self.dirty_color_ranges,
         };
-        Ok(PreparedRetainedGpuFrame {
+        let mut prepared = PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
             geometry,
             text_generation: self.text_generation,
             text,
             render_items: &self.render_items,
+            image_draw: PreparedImageDrawState {
+                items: &mut self.image_render_items,
+                visible_items: &mut self.visible_image_render_items,
+                keys: &mut self.image_draw_keys,
+                incremental_stats: &mut self.incremental_stats,
+                visible: false,
+            },
+            object_indices: &self.object_indices,
+            painter_ranks: &self.painter_ranks,
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,
-        })
+            capture_items: Some(PreparedSourceItems {
+                items: &self.render_items,
+                ranges: &self.render_item_ranges,
+            }),
+        };
+        prepared.commit_images(images, None);
+        Ok(prepared)
     }
 
     pub(super) fn apply_family_draw_border_then_fill_to_scratch(
@@ -214,14 +237,33 @@ impl RetainedFramePreparer {
                     object_id,
                     scratch_id,
                 } => {
-                    let object_index = frame
-                        .retained
-                        .objects
-                        .iter()
-                        .position(|object| object.id == object_id)
-                        .ok_or(RetainedFamilyDrawBorderPrepareError::MissingSourceObject(
+                    let object_index = *self.object_indices.get(&object_id).ok_or(
+                        RetainedFamilyDrawBorderPrepareError::MissingSourceObject(object_id),
+                    )?;
+                    let scratch_slot = usize::try_from(scratch_id.get()).map_err(|_| {
+                        RetainedFamilyPrepareError::MissingScratchObject(scratch_id)
+                    })?;
+                    let text_vector = self
+                        .text_vector_member_by_scratch_slot
+                        .get(&scratch_slot)
+                        .copied()
+                        .filter(|(owner, _)| *owner == object_index);
+                    if let Some((_, vector_index)) = text_vector {
+                        self.apply_family_vector_draw_border(
+                            frame,
+                            plan,
+                            object_index,
                             object_id,
-                        ))?;
+                            vector_index,
+                            scratch_slot,
+                            texts,
+                        )?;
+                        self.sources.push(SourceItem::Geometry {
+                            object_id,
+                            scratch_id,
+                        });
+                        continue;
+                    }
                     if let Some(mut members) =
                         retained_family_draw_border_then_fill_members_for_object(
                             frame,
@@ -281,6 +323,90 @@ impl RetainedFramePreparer {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn apply_family_vector_draw_border(
+        &mut self,
+        frame: &RetainedFamilyFrame<'_>,
+        plan: &RetainedFamilyAnimationPlan,
+        object_index: usize,
+        object_id: ObjectId,
+        vector_index: u32,
+        scratch_slot: usize,
+        texts: &(impl TextResourceLookup + ?Sized),
+    ) -> Result<(), RetainedFamilyPrepareError> {
+        let Some(progress) = self.family_text_vector_progress(
+            frame,
+            plan,
+            object_index,
+            object_id,
+            vector_index,
+            texts,
+        )?
+        else {
+            return Ok(());
+        };
+        let object = frame
+            .retained
+            .objects
+            .get(object_index)
+            .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?;
+        let resource = texts
+            .get(
+                object
+                    .text()
+                    .ok_or(RetainedFamilyPrepareError::MissingSourceObject(object_id))?,
+            )
+            .ok_or(RetainedPrepareError::MissingTextResource)?;
+        self.set_draw_border_vector_phase(
+            object,
+            resource,
+            vector_index,
+            scratch_slot,
+            RetainedDrawBorderThenFillPhase::from_member_progress(progress),
+        )
+    }
+
+    pub(super) fn set_draw_border_vector_phase(
+        &mut self,
+        object: &FrameObjectState,
+        resource: &TextResource,
+        vector_index: u32,
+        scratch_slot: usize,
+        phase: RetainedDrawBorderThenFillPhase,
+    ) -> Result<(), RetainedFamilyPrepareError> {
+        let vector = resource.vector_items.get(vector_index as usize).ok_or(
+            RetainedFamilyPrepareError::InvalidTextVector {
+                object: object.id,
+                vector_index,
+            },
+        )?;
+        let scratch = self
+            .scratch
+            .objects
+            .get_mut(scratch_slot)
+            .ok_or(RetainedFamilyPrepareError::MissingScratchObject(object.id))?;
+        scratch.transform = object.transform;
+        let style = resolved_text_vector_style(object.style, vector);
+        // Stroke-only decorations are already outlines: reveal their authored
+        // stroke without inventing a fill transition. Their widths are in text
+        // coordinates and scale with the object, unlike the screen-space border
+        // used to outline filled glyphs. Mixing those units makes rules swell.
+        scratch.style = if style.fill.is_none() && style.stroke.is_some() {
+            style
+        } else {
+            draw_border_style(style, phase)
+        };
+        scratch.appearance = object.appearance;
+        self.scratch.presences[scratch_slot] = true;
+        self.scratch.reveals[scratch_slot] = match phase {
+            RetainedDrawBorderThenFillPhase::Outline { reveal } => reveal.max(0.0),
+            RetainedDrawBorderThenFillPhase::Fill { .. } => 1.0,
+        };
+        self.scratch.morphs[scratch_slot] = 0.0;
+        self.scratch.render_transforms[scratch_slot] = None;
+        Ok(())
+    }
+
     pub(super) fn family_text_run_needs_draw_border_paths(
         &self,
         frame: &RetainedFamilyFrame<'_>,
@@ -297,7 +423,11 @@ impl RetainedFramePreparer {
         };
         for member in members {
             let member = member?;
-            if member.glyph.run_index == run_index
+            let TextAnimationMemberKind::Glyph(glyph) = member.member else {
+                continue;
+            };
+            let glyph = glyph.glyph;
+            if glyph.run_index == run_index
                 && (stable_rows
                     || !matches!(member.phase, RetainedDrawBorderThenFillPhase::Fill { progress } if progress >= 1.0))
             {
@@ -348,7 +478,11 @@ impl RetainedFramePreparer {
         };
         for member in members {
             let member = member?;
-            if member.glyph.run_index != run_index {
+            let TextAnimationMemberKind::Glyph(glyph) = member.member else {
+                continue;
+            };
+            let glyph = glyph.glyph;
+            if glyph.run_index != run_index {
                 continue;
             }
             let reveal = match member.phase {
@@ -358,10 +492,10 @@ impl RetainedFramePreparer {
             if reveal <= 0.0 && !stable_rows {
                 continue;
             }
-            let positioned = run.glyphs.get(member.glyph.glyph_index as usize).ok_or(
+            let positioned = run.glyphs.get(glyph.glyph_index as usize).ok_or(
                 RetainedFamilyDrawBorderPrepareError::InvalidTextGlyph {
                     object: object_id,
-                    glyph: member.glyph,
+                    glyph,
                 },
             )?;
             let (_, outline) = self.outlines.outline(fonts, run, positioned.glyph_id)?;
@@ -387,7 +521,7 @@ impl RetainedFramePreparer {
                 self.family_plan_scratch_slots
                     .entry(object_index)
                     .or_default()
-                    .insert(member.glyph, scratch_slot);
+                    .insert(glyph, scratch_slot);
             }
         }
         Ok(())
@@ -399,11 +533,24 @@ pub(super) fn draw_border_glyph_style(
     object_style: Style,
     phase: RetainedDrawBorderThenFillPhase,
 ) -> Style {
-    let final_fill = run.fill.or(object_style.fill).unwrap_or(Color::WHITE);
+    draw_border_style(
+        Style {
+            fill: Some(run.fill.or(object_style.fill).unwrap_or(Color::WHITE)),
+            ..object_style
+        },
+        phase,
+    )
+}
+
+pub(super) fn draw_border_style(
+    object_style: Style,
+    phase: RetainedDrawBorderThenFillPhase,
+) -> Style {
+    let final_fill = object_style.fill;
     let final_stroke = object_style
         .stroke
         .filter(|_| object_style.stroke_width > 0.0);
-    let outline_color = final_stroke.unwrap_or(final_fill);
+    let outline_color = final_stroke.or(final_fill).unwrap_or(Color::WHITE);
 
     match phase {
         RetainedDrawBorderThenFillPhase::Outline { .. } => Style {
@@ -417,7 +564,7 @@ pub(super) fn draw_border_glyph_style(
         },
         RetainedDrawBorderThenFillPhase::Fill { progress } => {
             let progress = progress.clamp(0.0, 1.0);
-            let fill = Some(scale_color_alpha(final_fill, progress));
+            let fill = final_fill.map(|color| scale_color_alpha(color, progress));
             let (stroke, stroke_width, stroke_width_mode, stroke_join, stroke_cap) =
                 if let Some(final_stroke) = final_stroke {
                     (
@@ -567,6 +714,8 @@ mod draw_border_tests {
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
         let object = noon_runtime::FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(20),
             content: noon_core::ObjectContentRef::Text(text),
@@ -585,6 +734,8 @@ mod draw_border_tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                glow: None,
+                spatial: None,
                 z_index: 0.0,
                 id: ObjectId::new(20),
                 content: ObjectContentRef::Text(text),

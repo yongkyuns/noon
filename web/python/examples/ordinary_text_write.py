@@ -3,8 +3,11 @@ from noon import *
 
 class OrdinaryTextWrite(Scene):
     def construct(self):
-        moving = Text("MOVE").shift(2 * LEFT + DOWN)
-        writing = Text("WRITE").shift(LEFT + UP)
+        # Reuse an exact embedded face; glyph shaping and residency stay in Rust.
+        font = NativeFontFace.bundled("DejaVu Sans Mono")
+        moving = Text("MOVE", font=font).shift(2 * LEFT + DOWN)
+        writing = Text("WRITE", font=font).shift(LEFT + UP)
+        self.add(moving)
         self.play(
             moving.animate.shift(2 * RIGHT),
             Write(writing),

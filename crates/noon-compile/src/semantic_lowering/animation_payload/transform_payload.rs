@@ -1,6 +1,7 @@
 use noon_core::{
-    resolve_animation_options, AnimationDefaults, AnimationOptions, AnimationOptionsError,
-    ResolvedAnimationOptions, SemanticNodeId, SemanticSceneOperationError, SemanticStore,
+    resolve_transform_animation_options, AnimationDefaults, AnimationOptions,
+    AnimationOptionsError, ResolvedAnimationOptions, SemanticNodeId, SemanticSceneOperationError,
+    SemanticStore, MANIM_STRAIGHT_PATH_ARC_THRESHOLD,
 };
 
 /// One affine transform component that cannot enter the current 2D payload.
@@ -29,6 +30,7 @@ pub(super) enum TransformPayloadValidationIssue {
     BindingChange,
     DepthChange(SemanticAffineAnimationField),
     Lifecycle { remover: bool, introducer: bool },
+    PathArcPayload,
 }
 
 /// Read-only validation failure for a TransformTo payload.
@@ -51,6 +53,7 @@ pub enum SemanticTransformToPayloadError {
         remover: bool,
         introducer: bool,
     },
+    UnsupportedPathArcPayload,
 }
 
 impl std::fmt::Display for SemanticTransformToPayloadError {
@@ -83,6 +86,7 @@ impl SemanticTransformToPayloadError {
                 | Self::UnsupportedBindingChange
                 | Self::UnsupportedDepthChange(_)
                 | Self::UnsupportedLifecycle { .. }
+                | Self::UnsupportedPathArcPayload
         )
     }
 }
@@ -103,6 +107,7 @@ impl From<TransformPayloadValidationIssue> for SemanticTransformToPayloadError {
                 remover,
                 introducer,
             },
+            TransformPayloadValidationIssue::PathArcPayload => Self::UnsupportedPathArcPayload,
         }
     }
 }
@@ -128,7 +133,7 @@ pub fn validate_semantic_transform_to_payload(
             node: target_state,
             error,
         })?;
-    let options = resolve_animation_options(AnimationDefaults::MANIM, options, options)
+    let options = resolve_transform_animation_options(AnimationDefaults::MANIM, options, options)
         .map_err(SemanticTransformToPayloadError::Options)?;
     validate_transform_payload_shape(source, target_object, options).map_err(Into::into)
 }
@@ -138,6 +143,20 @@ pub(super) fn validate_transform_payload_shape(
     target: &noon_core::SemanticObjectState,
     options: ResolvedAnimationOptions,
 ) -> Result<(), TransformPayloadValidationIssue> {
+    let source_rotation =
+        source
+            .transform
+            .planar_rotation()
+            .ok_or(TransformPayloadValidationIssue::DepthChange(
+                SemanticAffineAnimationField::RotationZ,
+            ))?;
+    let target_rotation =
+        target
+            .transform
+            .planar_rotation()
+            .ok_or(TransformPayloadValidationIssue::DepthChange(
+                SemanticAffineAnimationField::RotationZ,
+            ))?;
     if options.remover || options.introducer {
         return Err(TransformPayloadValidationIssue::Lifecycle {
             remover: options.remover,
@@ -166,6 +185,15 @@ pub(super) fn validate_transform_payload_shape(
             SemanticAffineAnimationField::Scale,
         ));
     }
+    if options.path_arc.abs() >= MANIM_STRAIGHT_PATH_ARC_THRESHOLD
+        && (source.content != target.content
+            || source.style != target.style
+            || source.transform.scale != target.transform.scale
+            || source_rotation != target_rotation
+            || source.z_index() != target.z_index())
+    {
+        return Err(TransformPayloadValidationIssue::PathArcPayload);
+    }
     Ok(())
 }
 
@@ -178,6 +206,9 @@ pub(super) fn is_supported_content_morph(
     matches!(
         (source.content.geometry(), target.content.geometry()),
         (
+            Some(StoredGeometry::Line { .. }),
+            Some(StoredGeometry::Line { .. })
+        ) | (
             Some(StoredGeometry::Circle { .. }),
             Some(StoredGeometry::Rectangle { .. })
         ) | (

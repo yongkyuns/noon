@@ -1,18 +1,18 @@
-import init, { RetainedTypstCanvasRenderer } from "./pkg/noon_web.js";
+import init, { createDirectSingleTypstCanvasRenderer } from "./pkg/noon_web.js";
 
 const canvas = document.querySelector("#scene");
 if (!(canvas instanceof HTMLCanvasElement)) {
-  throw new Error("retained Typst raster canvas is missing");
+  throw new Error("direct Typst raster canvas is missing");
 }
 
 const initialized = init();
 let rendered = false;
 
-window.noonRetainedTypstRaster = {
+window.noonDirectTypstRaster = {
   ready: () => initialized,
   async render({ source, math, fontSize, width, height }) {
     if (rendered) {
-      throw new Error("retained Typst raster host supports one fixture per page");
+      throw new Error("direct Typst raster host supports one fixture per page");
     }
     rendered = true;
     await initialized;
@@ -21,7 +21,7 @@ window.noonRetainedTypstRaster = {
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     const offscreen = canvas.transferControlToOffscreen();
-    const renderer = await RetainedTypstCanvasRenderer.createSingle(
+    const renderer = await createDirectSingleTypstCanvasRenderer(
       offscreen,
       source,
       Boolean(math),

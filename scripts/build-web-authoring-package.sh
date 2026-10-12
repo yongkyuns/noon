@@ -55,7 +55,7 @@ for symbol in RetainedNativeTextAuthoringHandle RetainedTypstAuthoringHandle; do
   fi
 done
 
-for symbol in ExecutionCanvasRenderer RetainedExecutionCanvasRenderer RetainedTypstCanvasRenderer; do
+for symbol in ExecutionCanvasRenderer RetainedExecutionCanvasRenderer createDirectTypstCanvasRenderer createDirectSingleTypstCanvasRenderer; do
   if grep -q "$symbol" "$js_file"; then
     echo "authoring-only package unexpectedly exposes renderer symbol: $symbol" >&2
     exit 1

@@ -9,6 +9,8 @@ store rather than from a Python-owned text document.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
+from numbers import Integral
 from _noon_errors import engine_call
 
 import math
@@ -23,12 +25,123 @@ except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_text_handle = None
 
 try:
+    from js import noonTextColorBatch as _new_text_color_batch
+except ImportError:
+    _new_text_color_batch = None
+
+try:
+    from js import noonCreateAuthoringMarkupTextHandle as _create_authoring_markup_text_handle
+except ImportError:  # Import remains possible for source-only CPython tests.
+    _create_authoring_markup_text_handle = None
+
+try:
     from js import noonCreateAuthoringTypstHandle as _create_authoring_typst_handle
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_typst_handle = None
 
+try:
+    from js import noonNativeFontFace as _create_native_font_face
+except ImportError:  # Import remains possible for source-only CPython tests.
+    _create_native_font_face = None
+
+try:
+    from js import noonBundledNativeFontFace as _create_bundled_native_font_face
+except ImportError:  # Import remains possible for source-only CPython tests.
+    _create_bundled_native_font_face = None
+
+try:
+    from pyodide.ffi import to_js as _to_js
+except ImportError:  # Import remains possible for source-only CPython tests.
+    _to_js = None
+
 
 _DEFAULT_NATIVE_FONT = "DejaVu Sans Mono"
+_USE_TEXT_DEFAULT = object()
+
+
+class NativeFontFace:
+    """Immutable font bytes shared with Rust for native text shaping.
+
+    The constructor accepts the family's native metadata name, exact font bytes,
+    and the face index within a collection. This wrapper is reusable: each Text
+    constructor passes an owned ``cloneFace()`` wrapper to Rust.
+    """
+
+    __slots__ = ("_family", "_face_index", "_handle")
+
+    def __init__(self, family: str, data: bytes | bytearray | memoryview, face_index: int = 0):
+        if not isinstance(family, str) or family.strip() == "":
+            raise ValueError("font family must be a non-empty string")
+        if isinstance(face_index, bool) or not isinstance(face_index, Integral):
+            raise TypeError("face_index must be a non-negative integer")
+        face_index = int(face_index)
+        if not 0 <= face_index <= 0xFFFF_FFFF:
+            raise ValueError("face_index must be between 0 and 4294967295")
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("font data must be bytes-like")
+        raw = bytes(data)
+        if not raw:
+            raise ValueError("font data must not be empty")
+        if _create_native_font_face is None or _to_js is None:
+            raise RuntimeError("NativeFontFace requires the shared Rust authoring host")
+        handle = engine_call(
+            _create_native_font_face,
+            family,
+            _to_js(memoryview(raw)),
+            face_index,
+        )
+        self._initialize_handle(handle, family, face_index)
+
+    def _initialize_handle(self, handle: object, family: str, face_index: int) -> None:
+        object.__setattr__(self, "_family", family)
+        object.__setattr__(self, "_face_index", face_index)
+        object.__setattr__(self, "_handle", handle)
+
+    @classmethod
+    def bundled(cls, family: str) -> NativeFontFace:
+        """Use a font embedded with Noon, without transferring font bytes."""
+        if not isinstance(family, str):
+            raise TypeError("font family must be a non-empty string")
+        if family.strip() == "":
+            raise ValueError("font family must be a non-empty string")
+        if _create_bundled_native_font_face is None:
+            raise RuntimeError("bundled NativeFontFace requires Noon's shared Rust authoring host")
+        handle = engine_call(_create_bundled_native_font_face, family)
+        resolved_family = handle.family
+        face_index = handle.faceIndex
+        result = object.__new__(cls)
+        result._initialize_handle(handle, str(resolved_family), int(face_index))
+        return result
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("NativeFontFace is immutable")
+
+    @property
+    def family(self) -> str:
+        return self._family
+
+    @property
+    def face_index(self) -> int:
+        return self._face_index
+
+    def _clone_for_text(self):
+        return engine_call(self._handle.cloneFace)
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    def __repr__(self) -> str:
+        return f"NativeFontFace(family={self.family!r}, face_index={self.face_index})"
+
+
+def _native_font_input(font: str | NativeFontFace) -> tuple[str, NativeFontFace | None]:
+    if isinstance(font, NativeFontFace):
+        return font.family, font
+    return font, None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +160,32 @@ class TextSourcePart:
     first_vector: int
     vector_count: int
     semantic_key: str | None
+
+
+def _copy_text_parts(raw_parts: object) -> tuple[TextSourcePart, ...]:
+    """Copy Rust-owned source-part observations before releasing WASM wrappers."""
+
+    try:
+        parts: list[TextSourcePart] = []
+        for index in range(int(raw_parts.length)):
+            raw = engine_call(raw_parts.item, index)
+            try:
+                parts.append(
+                    TextSourcePart(
+                        source_start=int(raw.sourceStart),
+                        source_end=int(raw.sourceEnd),
+                        first_cluster=int(raw.firstCluster),
+                        cluster_count=int(raw.clusterCount),
+                        first_vector=int(raw.firstVector),
+                        vector_count=int(raw.vectorCount),
+                        semantic_key=(None if raw.semanticKey is None else str(raw.semanticKey)),
+                    )
+                )
+            finally:
+                raw.free()
+        return tuple(parts)
+    finally:
+        raw_parts.free()
 
 
 def _validated_font_size(value: float) -> float:
@@ -102,13 +241,85 @@ def _new_native_text_handle(
     font_family: str,
     font_size: float,
     line_spacing: float,
+    *,
+    markup: bool = False,
+    colors=(),
+    base_color=_base.WHITE,
+    font_face: NativeFontFace | None = None,
 ):
     source, font_family, font_size, line_spacing = _validated_native_text_options(
         source, font_family, font_size, line_spacing
     )
-    if _create_authoring_text_handle is None:
-        raise RuntimeError("Text requires Noon's shared Rust authoring runtime")
-    return engine_call(_create_authoring_text_handle, source, font_family, font_size, line_spacing)
+    constructor = (
+        _create_authoring_markup_text_handle if markup else _create_authoring_text_handle
+    )
+    label = "MarkupText" if markup else "Text"
+    if constructor is None:
+        raise RuntimeError(f"{label} requires Noon's shared Rust authoring runtime")
+    return _invoke_native_text_constructor(
+        constructor,
+        (source, font_family, font_size, line_spacing),
+        colors,
+        base_color,
+        font_face,
+        has_color_slot=not markup,
+    )
+
+
+def _text_colors(value):
+    """Coerce Python arguments; Rust resolves selectors and validates overlaps."""
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping):
+        raise TypeError("t2c/text2color must be a mapping of strings to colors")
+    colors = []
+    for selector, color in value.items():
+        if not isinstance(selector, str):
+            raise TypeError("text color selectors must be strings")
+        colors.append((selector, _compat._as_color("text range color", color)))
+    return colors
+
+
+def _invoke_native_text_constructor(
+    constructor,
+    arguments,
+    colors,
+    base_color,
+    font_face: NativeFontFace | None = None,
+    *,
+    has_color_slot: bool = False,
+):
+    if not colors:
+        if font_face is None:
+            return engine_call(constructor, *arguments)
+        # Clone immediately before the by-value constructor call. The native
+        # wrapper is transferred to Rust and must not be freed here.
+        face_clone = font_face._clone_for_text()
+        if has_color_slot:
+            return engine_call(constructor, *arguments, None, face_clone)
+        return engine_call(constructor, *arguments, face_clone)
+    if _new_text_color_batch is None:
+        raise RuntimeError("Text range colors require Noon's shared Rust authoring runtime")
+    batch = _new_text_color_batch()
+    try:
+        engine_call(batch.setBaseColor, base_color.red, base_color.green, base_color.blue, base_color.alpha)
+        for selector, color in colors:
+            engine_call(batch.push, selector, color.red, color.green, color.blue, color.alpha)
+    except BaseException:
+        batch.free()
+        raise
+    if font_face is None:
+        # The by-value WASM argument transfers ownership. Rust drops it on
+        # success or constructor failure; freeing it here would double-free.
+        return engine_call(constructor, *arguments, batch)
+    try:
+        face_clone = font_face._clone_for_text()
+    except BaseException:
+        batch.free()
+        raise
+    # Both by-value WASM arguments transfer ownership. Rust drops them on
+    # success or constructor failure; Python must not free either wrapper.
+    return engine_call(constructor, *arguments, batch, face_clone)
 
 
 def _as_color(value: object) -> _base.Color:
@@ -186,28 +397,47 @@ class _RetainedTextMobject(_base.Mobject):
             raise NotImplementedError(
                 "text source-part queries require the shared Rust authoring handle"
             )
-        raw_parts = engine_call(handle.textSourcePartsFor, needle)
+        return _copy_text_parts(engine_call(handle.textSourcePartsFor, needle))
+
+    def text_parts(self) -> tuple[TextSourcePart, ...]:
+        """Return the compiler-authored top-level partition in source order."""
+
+        handle = self._semantic_handle
+        if not hasattr(handle, "textParts"):
+            raise NotImplementedError(
+                "text indexing requires the shared Rust text-part handle"
+            )
+        return _copy_text_parts(engine_call(handle.textParts))
+
+    def _set_text_source_colors(
+        self, colors: tuple[tuple[TextSourcePart, _base.Color], ...]
+    ) -> _RetainedTextMobject:
+        if _new_text_color_batch is None:
+            raise RuntimeError("Text source colors require Noon's shared Rust authoring runtime")
+        batch = _new_text_color_batch()
         try:
-            parts: list[TextSourcePart] = []
-            for index in range(int(raw_parts.length)):
-                raw = engine_call(raw_parts.item, index)
-                try:
-                    parts.append(
-                        TextSourcePart(
-                            source_start=int(raw.sourceStart),
-                            source_end=int(raw.sourceEnd),
-                            first_cluster=int(raw.firstCluster),
-                            cluster_count=int(raw.clusterCount),
-                            first_vector=int(raw.firstVector),
-                            vector_count=int(raw.vectorCount),
-                            semantic_key=(None if raw.semanticKey is None else str(raw.semanticKey)),
-                        )
-                    )
-                finally:
-                    raw.free()
-            return tuple(parts)
-        finally:
-            raw_parts.free()
+            for part, color in colors:
+                value = _as_color(color)
+                engine_call(
+                    batch.pushSource,
+                    part.source_start,
+                    part.source_end,
+                    value.red,
+                    value.green,
+                    value.blue,
+                    value.alpha,
+                )
+        except BaseException:
+            batch.free()
+            raise
+        import _manim_semantic_handles as semantic
+
+        context = semantic._live_mutation_context(self)
+        if context is None:
+            engine_call(self._semantic_handle.setTextSourceColors, batch)
+        else:
+            engine_call(context.liveSetTextSourceColors, self._semantic_handle, batch)
+        return self
 
     @property
     def id(self) -> int:
@@ -341,41 +571,86 @@ class MathTypst(_RetainedTypstMobject):
 class Text(_RetainedTextMobject):
     """Deterministic native plain text compiled and rendered entirely by Rust."""
 
+    _markup = False
+    _default_font: str | NativeFontFace = _DEFAULT_NATIVE_FONT
+
+    @classmethod
+    def set_default(cls, font=_USE_TEXT_DEFAULT) -> None:
+        """Set this class's Python constructor default, or restore its built-in default.
+
+        This affects only future calls that omit ``font``. It does not change
+        engine defaults or existing Text objects.
+        """
+        if font is _USE_TEXT_DEFAULT:
+            cls._default_font = _DEFAULT_NATIVE_FONT
+            return
+        family, _font_face = _native_font_input(font)
+        _validated_native_text_options("", family, 48.0, -1.0)
+        cls._default_font = font
+
     def __init__(
         self,
         text: str,
         *,
-        font: str = _DEFAULT_NATIVE_FONT,
+        font: str | NativeFontFace | object = _USE_TEXT_DEFAULT,
         font_size: float = 48.0,
         line_spacing: float = -1.0,
         color: _base.Color = _base.WHITE,
+        t2c=None,
         **kwargs: Any,
     ) -> None:
+        colors = _text_colors(kwargs.pop("text2color", t2c))
+        if self._markup and colors:
+            raise NotImplementedError("MarkupText range colors must use foreground markup")
         opacity = _validated_opacity(kwargs.pop("opacity", 1.0))
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
             raise NotImplementedError(f"unsupported Text option(s): {unsupported}")
-        text, font, font_size, line_spacing = _validated_native_text_options(
-            text, font, font_size, line_spacing
+        if font is _USE_TEXT_DEFAULT:
+            font = type(self)._default_font
+        font_family, font_face = _native_font_input(font)
+        text, font_family, font_size, line_spacing = _validated_native_text_options(
+            text, font_family, font_size, line_spacing
         )
         color = _as_color(color)
         live_context = _live_text_context()
         if live_context is None:
-            handle = _new_native_text_handle(text, font, font_size, line_spacing)
-        else:
-            handle = engine_call(
-                live_context.liveCreateManimText,
+            handle = _new_native_text_handle(
                 text,
-                font,
+                font_family,
                 font_size,
                 line_spacing,
-                float(color.red),
-                float(color.green),
-                float(color.blue),
-                float(color.alpha),
-                opacity,
+                markup=self._markup,
+                colors=colors,
+                base_color=color,
+                font_face=font_face,
             )
-        self._font = str(font)
+        else:
+            live_constructor = (
+                live_context.liveCreateManimMarkupText
+                if self._markup
+                else live_context.liveCreateManimText
+            )
+            handle = _invoke_native_text_constructor(
+                live_constructor,
+                (
+                    text,
+                    font_family,
+                    font_size,
+                    line_spacing,
+                    float(color.red),
+                    float(color.green),
+                    float(color.blue),
+                    float(color.alpha),
+                    opacity,
+                ),
+                colors,
+                color,
+                font_face,
+                has_color_slot=not self._markup,
+            )
+        self._font = font_family
+        self._font_face = font_face
         self._line_spacing = float(line_spacing)
         if live_context is not None:
             self._canonical_live_target_context = live_context
@@ -446,3 +721,10 @@ class Text(_RetainedTextMobject):
             float(engine_call(handle.criticalX, float(axis.x), float(axis.y))),
             float(engine_call(handle.criticalY, float(axis.x), float(axis.y))),
         )
+
+
+class MarkupText(Text):
+    """Native text whose authored source is decoded as markup by Rust."""
+
+    _markup = True
+    _default_font: str | NativeFontFace = _DEFAULT_NATIVE_FONT

@@ -4,33 +4,106 @@ use std::{
 };
 
 use noon_core::{
-    Camera2DState, GeometryRef, ObjectContentRef, ObjectId, Rect, Style, TextResourceHandle,
-    Transform2D,
+    Camera2DState, Color, GeometryRef, Glow, GlowRadius, GlowSource, GlowUpdate, Inset2DViewState,
+    ObjectContentRef, ObjectId, PublicationContext, Rect, SemanticNodeId, SemanticProjection3D,
+    SemanticRotation3D, SemanticSpatialMaterial, SemanticVec3, SemanticWorldTransform3D, Style,
+    TextResourceHandle, Transform2D,
 };
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use serde::{Deserialize, Serialize};
 
-use crate::TransportSlotId;
+use crate::{TransportImageResourceHandle, TransportImageSampling, TransportSlotId};
+
+pub(crate) mod incremental_render_resources;
 
 /// Resource-aware execution channel for the retained geometry/text runtime.
 ///
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 3;
+// V17 combines master's render-geometry retirement with exact, validated glow in the *genuine* execution/render worker
+// envelope. Older readers must reject rather than silently discard the halo.
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 17;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportGlowSource {
+    Painted,
+    Silhouette,
+}
+
+impl From<GlowSource> for TransportGlowSource {
+    fn from(source: GlowSource) -> Self {
+        match source {
+            GlowSource::Painted => Self::Painted,
+            GlowSource::Silhouette => Self::Silhouette,
+        }
+    }
+}
+
+impl From<TransportGlowSource> for GlowSource {
+    fn from(source: TransportGlowSource) -> Self {
+        match source {
+            TransportGlowSource::Painted => Self::Painted,
+            TransportGlowSource::Silhouette => Self::Silhouette,
+        }
+    }
+}
+
+/// Wire-only effective treatment for a true cross-worker boundary. This is
+/// never a second in-process authored or mutable effect representation.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TransportGlowState {
+    pub attachment: SemanticNodeId,
+    pub color: Color,
+    pub radius: GlowRadius,
+    pub intensity: f64,
+    pub source: TransportGlowSource,
+}
+
+impl From<&noon_compile::CompiledGlow> for TransportGlowState {
+    fn from(glow: &noon_compile::CompiledGlow) -> Self {
+        Self {
+            attachment: glow.attachment,
+            color: glow.definition.color(),
+            radius: glow.definition.radius(),
+            intensity: glow.definition.intensity(),
+            source: glow.definition.source().into(),
+        }
+    }
+}
+
+impl TransportGlowState {
+    fn to_compiled(self) -> Option<noon_compile::CompiledGlow> {
+        // Deserialization can materialize invalid f32/f64 values even when a
+        // source-side authoring API would reject them. Validate atomically at
+        // the receiving boundary, before any mirror row or sequence changes.
+        let definition = Glow::new(
+            GlowUpdate::default()
+                .color(self.color)
+                .radius(self.radius)
+                .intensity(self.intensity)
+                .source(self.source.into()),
+        )
+        .ok()?;
+        Some(noon_compile::CompiledGlow {
+            attachment: self.attachment,
+            definition,
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
+    pub arena: u64,
     pub id: u64,
     pub version: u64,
 }
 
 impl TransportTextResourceHandle {
-    /// Encode a source handle as an opaque key scoped to the paired resource bundle.
-    /// The worker must resolve this key through `InstalledRetainedResources`; it is
-    /// deliberately not a serializable core arena handle.
     pub(crate) const fn from_source_handle(value: TextResourceHandle) -> Self {
         Self {
+            arena: value.arena,
             id: value.id.get(),
             version: value.version,
         }
@@ -40,15 +113,233 @@ impl TransportTextResourceHandle {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TransportObjectContent {
-    Geometry { geometry: GeometryRef },
-    Text { text: TransportTextResourceHandle },
+    Image {
+        image: TransportImageResourceHandle,
+        sampling: TransportImageSampling,
+    },
+    Geometry {
+        geometry: GeometryRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<crate::TransportGeometryResourceHandle>,
+    },
+    Text {
+        text: TransportTextResourceHandle,
+    },
+}
+
+/// Exact f64 spatial declaration carried only across the Python-worker boundary.
+/// It is reconstructed into the ordinary compiled spatial row on receipt.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TransportSpatialState {
+    pub draw_kind: noon_compile::CompiledSpatialDrawKind,
+    pub composition_domain: noon_core::SemanticSpatialCompositionDomain,
+    pub fixed_orientation_center: Option<[f64; 3]>,
+    pub translation: [f64; 3],
+    pub rotation_wxyz: [f64; 4],
+    pub scale: [f64; 3],
+    pub camera_projection: Option<TransportProjection3D>,
+    pub material: TransportSpatialMaterial,
+    pub point_light: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cairo_path_appearance: Option<Box<noon_compile::CompiledCairoPathAppearance>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TransportProjection3D {
+    Perspective {
+        vertical_fov_radians: f64,
+        near: f64,
+        far: f64,
+    },
+    Orthographic {
+        height: f64,
+        near: f64,
+        far: f64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportSpatialMaterial {
+    #[default]
+    Unlit,
+    PointLit,
+    CairoSurface,
+    CairoPath,
+}
+
+impl TransportSpatialState {
+    fn from_compiled(value: &noon_compile::CompiledSpatialState) -> Self {
+        let world = value.world;
+        let camera_projection = value.camera_projection.map(|projection| match projection {
+            SemanticProjection3D::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            } => TransportProjection3D::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            },
+            SemanticProjection3D::Orthographic { height, near, far } => {
+                TransportProjection3D::Orthographic { height, near, far }
+            }
+        });
+        Self {
+            draw_kind: value.draw_kind,
+            composition_domain: value.composition_domain,
+            fixed_orientation_center: value.fixed_orientation_center.map(|v| [v.x, v.y, v.z]),
+            translation: [
+                world.translation.x,
+                world.translation.y,
+                world.translation.z,
+            ],
+            rotation_wxyz: world.rotation.components(),
+            scale: [world.scale.x, world.scale.y, world.scale.z],
+            camera_projection,
+            material: match value.material {
+                SemanticSpatialMaterial::Unlit => TransportSpatialMaterial::Unlit,
+                SemanticSpatialMaterial::PointLit => TransportSpatialMaterial::PointLit,
+                SemanticSpatialMaterial::CairoSurface => TransportSpatialMaterial::CairoSurface,
+                SemanticSpatialMaterial::CairoPath => TransportSpatialMaterial::CairoPath,
+            },
+            point_light: value.point_light,
+            cairo_path_appearance: value.cairo_path_appearance.clone(),
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        use noon_compile::CompiledSpatialDrawKind as Draw;
+        use noon_core::SemanticSpatialCompositionDomain as Domain;
+        if (self.material == TransportSpatialMaterial::CairoPath)
+            != self.cairo_path_appearance.is_some()
+            || self
+                .cairo_path_appearance
+                .as_deref()
+                .is_some_and(|appearance| {
+                    self.draw_kind != Draw::Planar
+                        || self.composition_domain != Domain::World
+                        || !appearance.is_valid()
+                        || (appearance.gradient_direction.is_some()
+                            && appearance.world_family_bounds.is_none())
+                })
+            || (self.camera_projection.is_some() || self.point_light)
+                && self.composition_domain != Domain::World
+            || self.draw_kind == Draw::Mesh && self.composition_domain != Domain::World
+            || self.material == TransportSpatialMaterial::PointLit && self.draw_kind != Draw::Mesh
+            || self.material == TransportSpatialMaterial::CairoSurface
+                && self.draw_kind != Draw::Mesh
+            || self.material == TransportSpatialMaterial::PointLit
+                && self.scale.into_iter().any(|component| component == 0.0)
+            || self.camera_projection.is_some() && self.point_light
+            || (self.camera_projection.is_some() || self.point_light)
+                && (self.draw_kind != Draw::Planar
+                    || self.scale != [1.0; 3]
+                    || self.material != TransportSpatialMaterial::Unlit)
+            || (self.composition_domain == Domain::FixedOrientation)
+                != self.fixed_orientation_center.is_some()
+            || self
+                .fixed_orientation_center
+                .is_some_and(|v| !v.into_iter().all(f64::is_finite))
+        {
+            return false;
+        }
+        let [w, x, y, z] = self.rotation_wxyz;
+        let Some(rotation) = SemanticRotation3D::from_validated_components(w, x, y, z) else {
+            return false;
+        };
+        SemanticWorldTransform3D::new(
+            SemanticVec3::new(
+                self.translation[0],
+                self.translation[1],
+                self.translation[2],
+            ),
+            rotation,
+            SemanticVec3::new(self.scale[0], self.scale[1], self.scale[2]),
+        )
+        .is_some()
+            && self
+                .camera_projection
+                .is_none_or(|projection| match projection {
+                    TransportProjection3D::Perspective {
+                        vertical_fov_radians,
+                        near,
+                        far,
+                    } => SemanticProjection3D::Perspective {
+                        vertical_fov_radians,
+                        near,
+                        far,
+                    }
+                    .is_valid(),
+                    TransportProjection3D::Orthographic { height, near, far } => {
+                        SemanticProjection3D::Orthographic { height, near, far }.is_valid()
+                    }
+                })
+    }
+
+    fn to_compiled(&self) -> Option<noon_compile::CompiledSpatialState> {
+        if !self.is_valid() {
+            return None;
+        }
+        let [w, x, y, z] = self.rotation_wxyz;
+        let rotation = SemanticRotation3D::from_validated_components(w, x, y, z)?;
+        let world = SemanticWorldTransform3D::new(
+            SemanticVec3::new(
+                self.translation[0],
+                self.translation[1],
+                self.translation[2],
+            ),
+            rotation,
+            SemanticVec3::new(self.scale[0], self.scale[1], self.scale[2]),
+        )?;
+        let camera_projection = self.camera_projection.map(|projection| match projection {
+            TransportProjection3D::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            } => SemanticProjection3D::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            },
+            TransportProjection3D::Orthographic { height, near, far } => {
+                SemanticProjection3D::Orthographic { height, near, far }
+            }
+        });
+        Some(noon_compile::CompiledSpatialState {
+            draw_kind: self.draw_kind,
+            composition_domain: self.composition_domain,
+            spatial_anchor_family: None,
+            fixed_orientation_center: self
+                .fixed_orientation_center
+                .map(|v| SemanticVec3::new(v[0], v[1], v[2])),
+            world,
+            camera_projection,
+            camera_profile: None,
+            camera_motions: None,
+            material: match self.material {
+                TransportSpatialMaterial::Unlit => SemanticSpatialMaterial::Unlit,
+                TransportSpatialMaterial::PointLit => SemanticSpatialMaterial::PointLit,
+                TransportSpatialMaterial::CairoSurface => SemanticSpatialMaterial::CairoSurface,
+                TransportSpatialMaterial::CairoPath => SemanticSpatialMaterial::CairoPath,
+            },
+            point_light: self.point_light,
+            cairo_path_appearance: self.cairo_path_appearance.clone(),
+        })
+    }
 }
 
 impl From<&ObjectContentRef> for TransportObjectContent {
     fn from(value: &ObjectContentRef) -> Self {
         match value {
+            ObjectContentRef::Image(image) => Self::Image {
+                image: image.resource().into(),
+                sampling: image.sampling().into(),
+            },
             ObjectContentRef::Geometry(geometry) => Self::Geometry {
                 geometry: geometry.clone(),
+                resource: None,
             },
             ObjectContentRef::Text(text) => Self::Text {
                 text: TransportTextResourceHandle::from_source_handle(*text),
@@ -62,8 +353,14 @@ pub struct RetainedTransportObjectState {
     pub slot: TransportSlotId,
     pub order: u32,
     pub object: ObjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glow: Option<TransportGlowState>,
+    /// Effective layer of this published row, not its painter rank.
+    pub z_index: f64,
     pub content: TransportObjectContent,
     pub transform: Transform2D,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<TransportSpatialState>,
     pub style: Style,
     pub appearance: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,16 +371,50 @@ pub struct RetainedTransportObjectState {
     pub render_geometry: Option<GeometryRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_transform: Option<Transform2D>,
-    /// Index into the immutable geometry table installed with this session's bundle.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub render_geometry_resource: Option<u32>,
+    /// Generation-qualified arena reference, encoded as a decimal string so JS
+    /// metadata parsing cannot round a high generation before Rust receives it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "render_geometry_id_json"
+    )]
+    pub render_geometry_resource: Option<u64>,
 }
 
-/// One final-order splice over stable retained transport slots.
-///
-/// `slots` is the authoritative final segment beginning at `start`. Rows keep
-/// their dense mirror indices; only the renderer's derived painter permutation
-/// changes.
+/// Existing-row update for hot fields in dense, nonstructural frames.
+/// The slot generation and object identity must match the installed row.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetainedTransportObjectPatch {
+    pub slot: TransportSlotId,
+    pub object: ObjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<Transform2D>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<Style>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub morph: Option<f32>,
+    /// Move an already active derived frame without repeating its linear part.
+    /// Absence leaves it unchanged; other override changes require a complete row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_translation: Option<noon_core::Vec2>,
+}
+
+mod render_geometry_id_json {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(id: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+        id.map(|id| id.to_string()).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|id| id.parse().map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetainedPainterOrderDelta {
     pub start: u32,
@@ -97,11 +428,17 @@ pub struct RetainedExecutionDeltaEnvelope {
     pub protocol_version: u32,
     pub session: u32,
     pub sequence: u64,
+    /// Exact runtime publication authority associated with these effective rows.
+    pub publication_context: PublicationContext,
     pub snapshot: bool,
     pub time: f64,
     #[serde(default)]
     pub camera: Camera2DState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inset_2d_views: Vec<Inset2DViewState>,
     pub objects: Vec<RetainedTransportObjectState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_patches: Vec<RetainedTransportObjectPatch>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed_slots: Vec<TransportSlotId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,33 +453,79 @@ pub enum RetainedTransportApplyOutcome {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedExecutionTransportError {
+    UnknownImageResource(TransportImageResourceHandle),
+    ImageRenderGeometry(TransportSlotId),
     InvalidChannel(String),
     UnsupportedVersion(u32),
     InvalidTime(f64),
     SequenceExhausted,
-    SessionRequiresSnapshot { session: u32, sequence: u64 },
-    SequenceGap { expected: u64, actual: u64 },
+    SessionRequiresSnapshot {
+        session: u32,
+        sequence: u64,
+    },
+    SequenceGap {
+        expected: u64,
+        actual: u64,
+    },
     IncrementalBeforeSnapshot,
     StructuralChangeRequiresSnapshot,
     FrameShapeMismatch,
     InvalidObjectIndex(usize),
+    InvalidGlowState(TransportSlotId),
+    InvalidSpatialState(TransportSlotId),
+    MultipleCamera3D,
+    InvalidZIndex(TransportSlotId),
     InvalidOrder(u32),
     DuplicateSlot(TransportSlotId),
     DuplicateObject(ObjectId),
     UnknownSlot(TransportSlotId),
+    InvalidObjectPatch(TransportSlotId),
     SlotIdentityChanged(TransportSlotId),
-    ContentIdentityChanged(TransportSlotId),
     TextRenderGeometry(TransportSlotId),
-    InvalidRenderGeometryResource(u32),
+    InvalidRenderGeometryResource(u64),
     AmbiguousRenderGeometry(TransportSlotId),
     MissingCompiledRenderResource(TransportSlotId),
     InvalidRenderTransform(TransportSlotId),
+    InvalidInset2DView(ObjectId),
+    StalePublicationContext {
+        received: PublicationContext,
+        installed: PublicationContext,
+    },
     UnknownTextResource(TransportTextResourceHandle),
+    UnknownGeometryResource(crate::TransportGeometryResourceHandle),
+    InvalidGeometryResourceReference(TransportSlotId),
 }
 
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidGlowState(slot) => write!(
+                formatter,
+                "retained worker slot {}:{} contains invalid or unsupported glow",
+                slot.slot, slot.generation
+            ),
+            Self::InvalidSpatialState(slot) => write!(
+                formatter,
+                "retained slot {}:{} has invalid spatial state",
+                slot.slot, slot.generation
+            ),
+            Self::MultipleCamera3D => formatter.write_str(
+                "retained execution snapshot contains more than one effective Camera3D row",
+            ),
+            Self::StalePublicationContext {
+                received,
+                installed,
+            } => write!(
+                formatter,
+                "retained publication context {received:?} precedes installed context {installed:?}",
+            ),
+            Self::UnknownImageResource(handle) => {
+                write!(formatter, "unknown raster image resource {handle:?}")
+            }
+            Self::ImageRenderGeometry(slot) => write!(
+                formatter,
+                "image slot {slot:?} cannot carry vector reveal, morph, or render geometry"
+            ),
             Self::InvalidChannel(channel) => {
                 write!(
                     formatter,
@@ -174,6 +557,11 @@ impl std::fmt::Display for RetainedExecutionTransportError {
             Self::InvalidObjectIndex(index) => {
                 write!(formatter, "invalid retained frame object index {index}")
             }
+            Self::InvalidZIndex(slot) => write!(
+                formatter,
+                "retained slot {}:{} has a non-finite z-index",
+                slot.slot, slot.generation
+            ),
             Self::InvalidOrder(order) => {
                 write!(formatter, "invalid retained execution render order {order}")
             }
@@ -192,14 +580,14 @@ impl std::fmt::Display for RetainedExecutionTransportError {
                 "unknown retained execution slot {}:{}",
                 slot.slot, slot.generation
             ),
+            Self::InvalidObjectPatch(slot) => write!(
+                formatter,
+                "invalid retained execution patch for slot {}:{}",
+                slot.slot, slot.generation
+            ),
             Self::SlotIdentityChanged(slot) => write!(
                 formatter,
                 "retained execution slot {}:{} changed object identity without a snapshot",
-                slot.slot, slot.generation
-            ),
-            Self::ContentIdentityChanged(slot) => write!(
-                formatter,
-                "retained execution slot {}:{} changed content identity without a snapshot",
                 slot.slot, slot.generation
             ),
             Self::TextRenderGeometry(slot) => write!(
@@ -226,10 +614,25 @@ impl std::fmt::Display for RetainedExecutionTransportError {
                 "retained slot {}:{} has an invalid render transform",
                 slot.slot, slot.generation
             ),
+            Self::InvalidInset2DView(display) => write!(
+                formatter,
+                "retained inset view for display {} is invalid or references a missing object",
+                display.get()
+            ),
             Self::UnknownTextResource(handle) => write!(
                 formatter,
                 "unknown retained transport text resource {}@{}",
                 handle.id, handle.version
+            ),
+            Self::UnknownGeometryResource(handle) => write!(
+                formatter,
+                "unknown retained geometry resource {}@{}",
+                handle.id, handle.version
+            ),
+            Self::InvalidGeometryResourceReference(slot) => write!(
+                formatter,
+                "retained slot {}:{} has an invalid external geometry resource reference",
+                slot.slot, slot.generation
             ),
         }
     }
@@ -242,16 +645,13 @@ pub struct RetainedExecutionDeltaEncoder {
     session: u32,
     next_sequence: u64,
     initialized: bool,
-    // Explicit worker-boundary projection: runtime tombstones have no wire row.
     snapshot_orders: Vec<Option<u32>>,
-    // Retain the Arcs so pointer keys cannot be recycled during this encoder's lifetime.
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
-    render_geometry_indices: Option<HashMap<usize, u32>>,
+    render_geometry_indices: Option<HashMap<usize, u64>>,
+    published_render_geometries: Vec<Option<Arc<GeometryRef>>>,
 }
 
 impl RetainedExecutionDeltaEncoder {
-    /// Observe the current transport incarnation without advancing its sequence.
-    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) const fn session(&self) -> u32 {
         self.session
     }
@@ -264,6 +664,7 @@ impl RetainedExecutionDeltaEncoder {
             snapshot_orders: Vec::new(),
             render_geometries: None,
             render_geometry_indices: None,
+            published_render_geometries: Vec::new(),
         }
     }
 
@@ -278,7 +679,7 @@ impl RetainedExecutionDeltaEncoder {
             .map(|(index, geometry)| {
                 (
                     Arc::as_ptr(geometry) as usize,
-                    u32::try_from(index).expect("compiled geometry table exceeds u32"),
+                    u64::try_from(index).expect("compiled geometry table exceeds u64"),
                 )
             })
             .collect();
@@ -293,6 +694,7 @@ impl RetainedExecutionDeltaEncoder {
         &self,
         frame: &FrameState,
         index: usize,
+        reuse_inline_geometry: bool,
     ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
         let resource = frame
             .render_geometries
@@ -309,7 +711,21 @@ impl RetainedExecutionDeltaEncoder {
                 .as_ref()
                 .is_some_and(|items| (index as usize) < items.len())
         }));
-        let object = transport_object(frame, index, resource)?;
+        let mut object = transport_object(frame, index, resource)?;
+        let render_geometry = render_geometry_identity(frame, index);
+        if reuse_inline_geometry
+            && resource.is_none()
+            && object.render_transform.is_some()
+            && object.render_geometry.is_some()
+            && self
+                .published_render_geometries
+                .get(index)
+                .and_then(Option::as_ref)
+                .zip(render_geometry.as_ref())
+                .is_some_and(|(published, current)| Arc::ptr_eq(published, current))
+        {
+            object.render_geometry = None;
+        }
         if self.render_geometry_indices.is_some()
             && object.render_transform.is_some()
             && object.render_geometry_resource.is_none()
@@ -321,77 +737,93 @@ impl RetainedExecutionDeltaEncoder {
         Ok(object)
     }
 
-    pub fn encode_snapshot(
+    pub fn encode_snapshot_with_context(
         &mut self,
         frame: &FrameState,
         camera: Camera2DState,
+        publication_context: PublicationContext,
     ) -> Result<RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError> {
-        self.encode_snapshot_indices(frame, camera, 0..frame.objects.len())
+        self.encode_snapshot_indices_with_context(
+            frame,
+            camera,
+            publication_context,
+            0..frame.objects.len(),
+        )
     }
 
-    /// Encode live runtime rows without copying or compacting the engine frame.
-    /// Indices are supplied in painter order; subsequent deltas retain their
-    /// original runtime slot and use the dense order established here.
-    pub fn encode_snapshot_indices(
+    pub fn encode_snapshot_indices_with_context(
         &mut self,
         frame: &FrameState,
         camera: Camera2DState,
+        publication_context: PublicationContext,
         indices: impl IntoIterator<Item = usize>,
     ) -> Result<RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError> {
         validate_frame_shape(frame)?;
         validate_time(frame.time)?;
+        let indices = indices.into_iter().collect::<Vec<_>>();
         let mut orders = vec![None; frame.objects.len()];
+        let mut render_geometries = vec![None; frame.objects.len()];
         let objects = indices
             .into_iter()
             .enumerate()
             .map(|(order, index)| {
-                let mut object = self.transport_object(frame, index)?;
+                let mut object = self.transport_object(frame, index, false)?;
                 if orders[index].is_some() {
                     return Err(RetainedExecutionTransportError::DuplicateSlot(object.slot));
                 }
                 object.order = u32::try_from(order)
                     .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
                 orders[index] = Some(object.order);
+                render_geometries[index] = render_geometry_identity(frame, index);
                 Ok(object)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let sequence = self.take_sequence()?;
         self.initialized = true;
         self.snapshot_orders = orders;
+        self.published_render_geometries = render_geometries;
         Ok(RetainedExecutionDeltaEnvelope {
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: self.session,
             sequence,
+            publication_context,
             snapshot: true,
             time: frame.time,
             camera,
+            inset_2d_views: Vec::new(),
             objects,
+            object_patches: Vec::new(),
             removed_slots: Vec::new(),
             painter_order: None,
         })
     }
 
-    pub fn encode_incremental(
+    pub fn encode_incremental_with_context(
         &mut self,
         frame: &FrameState,
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: PublicationContext,
     ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
-        self.encode_incremental_inner(frame, changes, camera, None)
+        self.encode_incremental_inner(frame, changes, camera, publication_context, None)
     }
 
-    /// Encode a sparse structural/order publication over stable worker rows.
-    /// Only dirty/new object rows, removed slot identities, and the affected
-    /// final painter segment cross the genuine worker boundary.
-    pub fn encode_incremental_with_painter_order(
+    pub fn encode_incremental_with_painter_order_and_context(
         &mut self,
         frame: &FrameState,
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: PublicationContext,
         painter_order: &[u32],
     ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
-        self.encode_incremental_inner(frame, changes, camera, Some(painter_order))
+        self.encode_incremental_inner(
+            frame,
+            changes,
+            camera,
+            publication_context,
+            Some(painter_order),
+        )
     }
 
     fn encode_incremental_inner(
@@ -399,6 +831,7 @@ impl RetainedExecutionDeltaEncoder {
         frame: &FrameState,
         changes: &FrameChanges,
         camera: Camera2DState,
+        publication_context: PublicationContext,
         painter_order: Option<&[u32]>,
     ) -> Result<Option<RetainedExecutionDeltaEnvelope>, RetainedExecutionTransportError> {
         validate_frame_shape(frame)?;
@@ -417,30 +850,36 @@ impl RetainedExecutionDeltaEncoder {
                 .filter_map(|(index, order)| order.map(|_| index))
                 .collect::<Vec<_>>();
             return self
-                .encode_snapshot_indices(frame, camera, indices)
+                .encode_snapshot_indices_with_context(frame, camera, publication_context, indices)
                 .map(Some);
         }
         if changes.is_empty() {
             return Ok(None);
         }
+        let final_live_indices = painter_order
+            .map(|order| {
+                order
+                    .iter()
+                    .map(|&index| index as usize)
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
         let removed_rows = changes
             .removed_indices()
             .iter()
             .copied()
             .map(|index| {
-                self.transport_object(frame, index)
+                self.transport_object(frame, index, true)
                     .map(|object| (index, object.slot))
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(index, _)| !final_live_indices.contains(index))
+            .collect::<Vec<_>>();
         let excluded_indices = removed_rows
             .iter()
             .map(|(index, _)| *index)
             .collect::<HashSet<_>>();
-        // Several semantic publications may accumulate before the next worker
-        // delta. An object can therefore be re-added and removed again while its
-        // worker row remains absent throughout. Publish only removals that were
-        // live in the encoder's last worker state; still exclude every final
-        // removal from the changed-row payload below.
         let removed_rows = removed_rows
             .into_iter()
             .filter(|(index, _)| {
@@ -476,7 +915,7 @@ impl RetainedExecutionDeltaEncoder {
                                 RetainedExecutionTransportError::InvalidObjectIndex(index)
                             })?;
                             updates.push((index, rank));
-                            self.transport_object(frame, index)
+                            self.transport_object(frame, index, true)
                                 .map(|object| object.slot)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
@@ -508,7 +947,7 @@ impl RetainedExecutionDeltaEncoder {
             .copied()
             .filter(|index| !excluded_indices.contains(index))
             .map(|index| {
-                let mut object = self.transport_object(frame, index)?;
+                let mut object = self.transport_object(frame, index, true)?;
                 object.order = order_update_map
                     .get(&index)
                     .copied()
@@ -529,15 +968,32 @@ impl RetainedExecutionDeltaEncoder {
         for (index, rank) in order_updates {
             self.snapshot_orders[index] = Some(rank);
         }
+        if self.published_render_geometries.len() < frame.objects.len() {
+            self.published_render_geometries
+                .resize(frame.objects.len(), None);
+        }
+        for &index in changes.object_indices() {
+            if !excluded_indices.contains(&index) {
+                self.published_render_geometries[index] = render_geometry_identity(frame, index);
+            }
+        }
+        for &index in &excluded_indices {
+            if let Some(geometry) = self.published_render_geometries.get_mut(index) {
+                *geometry = None;
+            }
+        }
         Ok(Some(RetainedExecutionDeltaEnvelope {
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: self.session,
             sequence,
+            publication_context,
             snapshot: false,
             time: frame.time,
             camera,
+            inset_2d_views: Vec::new(),
             objects,
+            object_patches: Vec::new(),
             removed_slots,
             painter_order,
         }))
@@ -560,10 +1016,15 @@ pub struct RetainedExecutionFrameMirror {
     slots: Vec<TransportSlotId>,
     slot_indices: HashMap<TransportSlotId, usize>,
     object_indices: HashMap<ObjectId, usize>,
-    render_geometries: Arc<[Arc<GeometryRef>]>,
+    render_geometries: Vec<crate::retained_resource_transport::RenderGeometrySlot>,
     resource_session: Option<u32>,
+    image_handles: HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
+    geometry_handles:
+        HashMap<crate::TransportGeometryResourceHandle, noon_core::GeometryResourceHandle>,
     camera: Camera2DState,
+    publication_context: PublicationContext,
+    inset_2d_views: Vec<Inset2DViewState>,
     frame: Option<FrameState>,
     painter_order: Vec<u32>,
     painter_ranks: Vec<Option<u32>>,
@@ -576,14 +1037,47 @@ struct PreparedPainterOrder {
 }
 
 impl RetainedExecutionFrameMirror {
+    pub(crate) fn extend_installed_image_handles(
+        &mut self,
+        additions: &HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
+    ) {
+        self.image_handles
+            .extend(additions.iter().map(|(&key, &value)| (key, value)));
+    }
+    pub(crate) fn remove_installed_image_handles<'a>(
+        &mut self,
+        handles: impl IntoIterator<Item = &'a TransportImageResourceHandle>,
+    ) {
+        for handle in handles {
+            self.image_handles.remove(handle);
+        }
+    }
+    pub(crate) fn extend_installed_geometry_handles(
+        &mut self,
+        additions: &HashMap<
+            crate::TransportGeometryResourceHandle,
+            noon_core::GeometryResourceHandle,
+        >,
+    ) {
+        self.geometry_handles
+            .extend(additions.iter().map(|(&key, &value)| (key, value)));
+    }
+    pub(crate) fn remove_installed_geometry_handles<'a>(
+        &mut self,
+        handles: impl IntoIterator<Item = &'a crate::TransportGeometryResourceHandle>,
+    ) {
+        for handle in handles {
+            self.geometry_handles.remove(handle);
+        }
+    }
     pub(crate) fn with_installed_resources(
         session: Option<u32>,
-        geometries: Arc<[Arc<GeometryRef>]>,
+        geometries: &[crate::retained_resource_transport::RenderGeometrySlot],
         text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     ) -> Self {
         Self {
             resource_session: session,
-            render_geometries: geometries,
+            render_geometries: geometries.to_vec(),
             text_handles,
             ..Self::default()
         }
@@ -614,8 +1108,22 @@ impl RetainedExecutionFrameMirror {
         content: &TransportObjectContent,
     ) -> Result<ObjectContentRef, RetainedExecutionTransportError> {
         match content {
-            TransportObjectContent::Geometry { geometry } => {
-                Ok(ObjectContentRef::Geometry(geometry.clone()))
+            TransportObjectContent::Image { image, sampling } => self
+                .image_handles
+                .get(image)
+                .map(|content| ObjectContentRef::Image(content.with_sampling((*sampling).into())))
+                .ok_or(RetainedExecutionTransportError::UnknownImageResource(
+                    *image,
+                )),
+            TransportObjectContent::Geometry { geometry, resource } => {
+                if let Some(resource) = resource {
+                    let local = self.geometry_handles.get(resource).ok_or(
+                        RetainedExecutionTransportError::UnknownGeometryResource(*resource),
+                    )?;
+                    Ok(ObjectContentRef::Geometry(GeometryRef::External(local.id)))
+                } else {
+                    Ok(ObjectContentRef::Geometry(geometry.clone()))
+                }
             }
             TransportObjectContent::Text { text } => self
                 .text_handles
@@ -632,12 +1140,16 @@ impl RetainedExecutionFrameMirror {
         session: u32,
     ) -> Result<Option<Arc<GeometryRef>>, RetainedExecutionTransportError> {
         match object.render_geometry_resource {
-            Some(index) if self.resource_session == Some(session) => self
-                .render_geometries
-                .get(index as usize)
-                .cloned()
-                .map(Some)
-                .ok_or(RetainedExecutionTransportError::InvalidRenderGeometryResource(index)),
+            Some(index) if self.resource_session == Some(session) => {
+                let (slot, generation) =
+                    crate::retained_resource_transport::render_geometry_parts(index);
+                self.render_geometries
+                    .get(slot as usize)
+                    .filter(|entry| entry.generation == generation)
+                    .and_then(|entry| entry.geometry.clone())
+                    .map(Some)
+                    .ok_or(RetainedExecutionTransportError::InvalidRenderGeometryResource(index))
+            }
             Some(index) => {
                 Err(RetainedExecutionTransportError::InvalidRenderGeometryResource(index))
             }
@@ -652,36 +1164,51 @@ impl RetainedExecutionFrameMirror {
         self.session
     }
 
-    /// Sequence of the currently applied retained publication.
     pub fn applied_sequence(&self) -> Option<u64> {
         self.session.and_then(|_| self.next_sequence.checked_sub(1))
     }
 
-    /// Resolve one durable transport slot without searching the frame.
     pub fn frame_index_for_slot(&self, slot: TransportSlotId) -> Option<usize> {
         self.slot_indices.get(&slot).copied()
     }
 
-    /// Resolve one semantic execution identity without searching the dense frame.
     pub(crate) fn frame_index_for_object(&self, object: ObjectId) -> Option<usize> {
         self.object_indices.get(&object).copied()
     }
 
-    /// Resolve the authored fields of one sparse transport row without mutating the mirror.
     pub(crate) fn resolve_transport_object_state(
         &self,
         object: &RetainedTransportObjectState,
     ) -> Result<FrameObjectState, RetainedExecutionTransportError> {
         validate_object_state(object)?;
         let content = self.resolve_content(&object.content)?;
-        Ok(frame_object(object, content))
+        frame_object(object, content)
     }
 
     pub const fn camera(&self) -> Camera2DState {
         self.camera
     }
 
-    /// Dense mirror-row indices in authoritative engine painter order.
+    /// Exact source runtime context of the currently installed worker frame.
+    pub const fn publication_context(&self) -> PublicationContext {
+        self.publication_context
+    }
+
+    pub fn inset_2d_views(&self) -> &[Inset2DViewState] {
+        &self.inset_2d_views
+    }
+
+    /// Resolve the effective Camera3D from the transported semantic row.
+    /// The separate `camera` envelope field remains the 2D inspection/HUD view.
+    pub fn camera_3d_object(&self) -> Option<&FrameObjectState> {
+        self.frame.as_ref()?.objects.iter().find(|object| {
+            object
+                .spatial
+                .as_deref()
+                .is_some_and(|state| state.camera_projection.is_some())
+        })
+    }
+
     pub fn painter_order(&self) -> &[u32] {
         &self.painter_order
     }
@@ -725,10 +1252,20 @@ impl RetainedExecutionFrameMirror {
             Some(_) => {}
         }
 
+        self.validate_inset_2d_views(&delta)?;
+
         let next_sequence = delta
             .sequence
             .checked_add(1)
             .ok_or(RetainedExecutionTransportError::SequenceExhausted)?;
+        if self.session == Some(delta.session)
+            && publication_context_is_stale(delta.publication_context, self.publication_context)
+        {
+            return Err(RetainedExecutionTransportError::StalePublicationContext {
+                received: delta.publication_context,
+                installed: self.publication_context,
+            });
+        }
         let changes = if delta.snapshot {
             self.apply_snapshot(&delta)?;
             FrameChanges::all()
@@ -737,17 +1274,79 @@ impl RetainedExecutionFrameMirror {
         };
         self.session = Some(delta.session);
         self.next_sequence = next_sequence;
+        self.publication_context = delta.publication_context;
         self.camera = delta.camera;
+        self.inset_2d_views = delta.inset_2d_views.clone();
         if let Some(frame) = &mut self.frame {
             frame.time = delta.time;
         }
         Ok((RetainedTransportApplyOutcome::Applied, changes))
     }
 
+    fn validate_inset_2d_views(
+        &self,
+        delta: &RetainedExecutionDeltaEnvelope,
+    ) -> Result<(), RetainedExecutionTransportError> {
+        let mut live = if delta.snapshot {
+            HashSet::new()
+        } else {
+            self.object_indices.keys().copied().collect()
+        };
+        if !delta.snapshot {
+            for slot in &delta.removed_slots {
+                if let Some(index) = self.slot_indices.get(slot) {
+                    if let Some(object) = self
+                        .frame
+                        .as_ref()
+                        .and_then(|frame| frame.objects.get(*index))
+                    {
+                        live.remove(&object.id);
+                    }
+                }
+            }
+        }
+        live.extend(delta.objects.iter().map(|object| object.object));
+        let mut displays = HashSet::new();
+        for view in &delta.inset_2d_views {
+            let finite = [
+                view.camera.center.x,
+                view.camera.center.y,
+                view.camera.height,
+                view.display_center.x,
+                view.display_center.y,
+                view.display_size.x,
+                view.display_size.y,
+                view.display_stroke_width,
+            ]
+            .into_iter()
+            .all(f32::is_finite);
+            if !finite
+                || view.camera.height <= 0.0
+                || view.display_size.x <= 0.0
+                || view.display_size.y <= 0.0
+                || view.display_stroke_width < 0.0
+                || view.camera_bounds().is_none()
+                || !live.contains(&view.camera_frame)
+                || !live.contains(&view.display)
+                || !displays.insert(view.display)
+            {
+                return Err(RetainedExecutionTransportError::InvalidInset2DView(
+                    view.display,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn apply_snapshot(
         &mut self,
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), RetainedExecutionTransportError> {
+        if let Some(patch) = delta.object_patches.first() {
+            return Err(RetainedExecutionTransportError::InvalidObjectPatch(
+                patch.slot,
+            ));
+        }
         let mut objects = delta.objects.clone();
         objects.sort_by_key(|object| object.order);
         let mut seen_slots = HashSet::with_capacity(objects.len());
@@ -767,7 +1366,24 @@ impl RetainedExecutionFrameMirror {
                 ));
             }
             validate_object_state(object)?;
+            if object.render_transform.is_some()
+                && object.render_geometry.is_none()
+                && object.render_geometry_resource.is_none()
+            {
+                return Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                    object.slot,
+                ));
+            }
         }
+        validate_single_camera(objects.iter().map(|object| {
+            (
+                object.object,
+                object
+                    .spatial
+                    .as_ref()
+                    .is_some_and(|state| state.camera_projection.is_some()),
+            )
+        }))?;
 
         let render_geometries = objects
             .iter()
@@ -777,7 +1393,7 @@ impl RetainedExecutionFrameMirror {
             .iter()
             .map(|object| {
                 self.resolve_content(&object.content)
-                    .map(|content| frame_object(object, content))
+                    .and_then(|content| frame_object(object, content))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let slots = objects.iter().map(|object| object.slot).collect::<Vec<_>>();
@@ -833,7 +1449,6 @@ impl RetainedExecutionFrameMirror {
             }
             validate_object_state(object)?;
             let content = self.resolve_content(&object.content)?;
-            let geometry = self.resolve_render_geometry(object, delta.session)?;
             let (index, added) = if let Some(&index) = self.slot_indices.get(&object.slot) {
                 let current = &frame.objects[index];
                 if current.id != object.object {
@@ -841,11 +1456,8 @@ impl RetainedExecutionFrameMirror {
                         object.slot,
                     ));
                 }
-                if !incremental_content_identity_matches(&current.content, &content) {
-                    return Err(RetainedExecutionTransportError::ContentIdentityChanged(
-                        object.slot,
-                    ));
-                }
+                // Typed resource resolution above already validates new content.
+                // Content replacement does not change this retained object's identity.
                 (index, false)
             } else {
                 if self.object_indices.contains_key(&object.object)
@@ -859,6 +1471,28 @@ impl RetainedExecutionFrameMirror {
                 next_slot_count += 1;
                 added_slot_indices.insert(object.slot, index);
                 (index, true)
+            };
+            let geometry = if object.render_transform.is_some()
+                && object.render_geometry.is_none()
+                && object.render_geometry_resource.is_none()
+            {
+                if added {
+                    return Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                        object.slot,
+                    ));
+                }
+                Some(
+                    frame
+                        .render_geometries
+                        .get(index)
+                        .cloned()
+                        .flatten()
+                        .ok_or(RetainedExecutionTransportError::InvalidRenderTransform(
+                            object.slot,
+                        ))?,
+                )
+            } else {
+                self.resolve_render_geometry(object, delta.session)?
             };
             updates.push((index, added, object, geometry, content));
         }
@@ -877,16 +1511,82 @@ impl RetainedExecutionFrameMirror {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Validate the complete patch set before changing any installed row.
+        let mut patch_updates = Vec::with_capacity(delta.object_patches.len());
+        for patch in &delta.object_patches {
+            if !seen_slots.insert(patch.slot) || seen_removed.contains(&patch.slot) {
+                return Err(RetainedExecutionTransportError::DuplicateSlot(patch.slot));
+            }
+            let index = self
+                .slot_indices
+                .get(&patch.slot)
+                .copied()
+                .ok_or(RetainedExecutionTransportError::UnknownSlot(patch.slot))?;
+            if frame.objects[index].id != patch.object {
+                return Err(RetainedExecutionTransportError::SlotIdentityChanged(
+                    patch.slot,
+                ));
+            }
+            if patch.transform.is_none()
+                && patch.style.is_none()
+                && patch.morph.is_none()
+                && patch.render_translation.is_none()
+            {
+                return Err(RetainedExecutionTransportError::InvalidObjectPatch(
+                    patch.slot,
+                ));
+            }
+            if frame.objects[index].content.image().is_some()
+                && patch.morph.is_some_and(|morph| morph != 0.0)
+            {
+                return Err(RetainedExecutionTransportError::ImageRenderGeometry(
+                    patch.slot,
+                ));
+            }
+            if let Some(translation) = patch.render_translation {
+                validate_render_translation(patch.slot, translation)?;
+                if frame.render_transforms[index].is_none()
+                    || frame.render_geometries[index].is_none()
+                {
+                    return Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                        patch.slot,
+                    ));
+                }
+            }
+            patch_updates.push((index, patch));
+        }
+
         let painter_update = self.validate_painter_order_delta(
             delta.painter_order.as_ref(),
             &added_slot_indices,
             &seen_removed,
             &seen_slots,
         )?;
-        // `order` establishes the dense painter order of a snapshot. Incremental
-        // publications retain stable sparse rows, so their authoritative order is
-        // the painter-order splice validated above. In particular, a row may keep
-        // stable slot 2 while becoming the sole live row at painter rank 0.
+        let mut camera_rows = frame
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !removed_indices_contains_slot(&self.slots, &seen_removed, *index))
+            .map(|(_, object)| {
+                (
+                    object.id,
+                    object
+                        .spatial
+                        .as_deref()
+                        .is_some_and(|state| state.camera_projection.is_some()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for object in &delta.objects {
+            camera_rows.insert(
+                object.object,
+                object
+                    .spatial
+                    .as_ref()
+                    .is_some_and(|state| state.camera_projection.is_some()),
+            );
+        }
+        validate_single_camera(camera_rows)?;
         let added_indices = updates
             .iter()
             .filter_map(|(index, added, _, _, _)| {
@@ -895,23 +1595,22 @@ impl RetainedExecutionFrameMirror {
             })
             .collect::<Vec<_>>();
         let removed_indices = _validated_removed_indices;
-        // Validate all rows and resource references before mutating the live mirror.
         let frame = self.frame.as_mut().expect("validated retained frame");
-        let mut changed = Vec::with_capacity(updates.len());
+        let mut changed = Vec::with_capacity(updates.len() + patch_updates.len());
         for (index, is_added, object, geometry, content) in updates {
             if is_added {
                 debug_assert_eq!(index, frame.objects.len());
                 self.slots.push(object.slot);
                 self.slot_indices.insert(object.slot, index);
                 self.object_indices.insert(object.object, index);
-                frame.objects.push(frame_object(object, content));
+                frame.objects.push(frame_object(object, content)?);
                 frame.presences.push(object.presence);
                 frame.reveals.push(object.reveal);
                 frame.morphs.push(object.morph);
                 frame.render_geometries.push(geometry);
                 frame.render_transforms.push(object.render_transform);
             } else {
-                frame.objects[index] = frame_object(object, content);
+                frame.objects[index] = frame_object(object, content)?;
                 frame.presences[index] = object.presence;
                 frame.reveals[index] = object.reveal;
                 frame.morphs[index] = object.morph;
@@ -920,11 +1619,24 @@ impl RetainedExecutionFrameMirror {
             }
             changed.push(index);
         }
-        // Removed rows remain allocated so their stable transport slots can be
-        // reused safely, but they must stop contributing retained render state.
-        // Removed objects are intentionally omitted from an incremental row
-        // payload, so apply the authoritative absence here and discard any
-        // transient render override left by the preceding frame.
+        for (index, patch) in patch_updates {
+            if let Some(transform) = patch.transform {
+                frame.objects[index].transform = transform;
+            }
+            if let Some(style) = patch.style {
+                frame.objects[index].style = style;
+            }
+            if let Some(morph) = patch.morph {
+                frame.morphs[index] = morph;
+            }
+            if let Some(translation) = patch.render_translation {
+                frame.render_transforms[index]
+                    .as_mut()
+                    .expect("validated active render frame")
+                    .translation = translation;
+            }
+            changed.push(index);
+        }
         for &index in &removed_indices {
             frame.presences[index] = false;
             frame.render_geometries[index] = None;
@@ -1037,17 +1749,6 @@ impl RetainedExecutionFrameMirror {
     }
 }
 
-fn incremental_content_identity_matches(
-    current: &ObjectContentRef,
-    next: &ObjectContentRef,
-) -> bool {
-    match (current, next) {
-        (ObjectContentRef::Geometry(_), ObjectContentRef::Geometry(_)) => true,
-        (ObjectContentRef::Text(current), ObjectContentRef::Text(next)) => current == next,
-        _ => false,
-    }
-}
-
 fn validate_envelope_header(
     delta: &RetainedExecutionDeltaEnvelope,
 ) -> Result<(), RetainedExecutionTransportError> {
@@ -1086,10 +1787,15 @@ fn validate_frame_shape(frame: &FrameState) -> Result<(), RetainedExecutionTrans
     }
 }
 
+fn render_geometry_identity(frame: &FrameState, index: usize) -> Option<Arc<GeometryRef>> {
+    frame.render_transforms.get(index).copied().flatten()?;
+    frame.render_geometries.get(index).cloned().flatten()
+}
+
 fn transport_object(
     frame: &FrameState,
     index: usize,
-    render_geometry_resource: Option<u32>,
+    render_geometry_resource: Option<u64>,
 ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
     let object = frame
         .objects
@@ -1104,8 +1810,14 @@ fn transport_object(
         },
         order: slot_index,
         object: object.id,
+        glow: object.glow.as_deref().map(TransportGlowState::from),
+        z_index: object.z_index,
         content: (&object.content).into(),
         transform: object.transform,
+        spatial: object
+            .spatial
+            .as_deref()
+            .map(TransportSpatialState::from_compiled),
         style: object.style,
         appearance: object.appearance,
         text_bounds: object.text_bounds,
@@ -1120,28 +1832,73 @@ fn transport_object(
         render_transform: frame.render_transforms[index],
         render_geometry_resource,
     };
-    validate_object_state(&state)?;
+    // Resource-aware encoding binds versioned source handles after this typed
+    // row is captured. Validate the complete reference at the wire boundary.
+    validate_object_fields(&state)?;
     Ok(state)
 }
 
 fn validate_object_state(
     object: &RetainedTransportObjectState,
 ) -> Result<(), RetainedExecutionTransportError> {
-    if let Some(transform) = object.render_transform {
-        if !transform.translation.x.is_finite()
-            || !transform.translation.y.is_finite()
-            || !transform.scale.x.is_finite()
-            || !transform.scale.y.is_finite()
-            || !transform.rotation.is_finite()
-            || (object.render_geometry.is_none() && object.render_geometry_resource.is_none())
-        {
-            return Err(RetainedExecutionTransportError::InvalidRenderTransform(
-                object.slot,
-            ));
+    if let TransportObjectContent::Geometry { geometry, resource } = &object.content {
+        match (geometry, resource) {
+            (GeometryRef::External(id), Some(handle)) if handle.id == id.get() => {}
+            (GeometryRef::External(_), _) | (_, Some(_)) => {
+                return Err(
+                    RetainedExecutionTransportError::InvalidGeometryResourceReference(object.slot),
+                );
+            }
+            (_, None) => {}
         }
+    }
+    validate_object_fields(object)
+}
+
+fn validate_object_fields(
+    object: &RetainedTransportObjectState,
+) -> Result<(), RetainedExecutionTransportError> {
+    if object.glow.is_some_and(|glow| glow.to_compiled().is_none())
+        || (object.glow.is_some()
+            && (!glow_content_is_supported(&object.content)
+                || object.spatial.is_some()
+                || !object.reveal.is_finite()
+                || !(0.0..=1.0).contains(&object.reveal)
+                || object.morph != 0.0))
+    {
+        return Err(RetainedExecutionTransportError::InvalidGlowState(
+            object.slot,
+        ));
+    }
+    if !object.z_index.is_finite() {
+        return Err(RetainedExecutionTransportError::InvalidZIndex(object.slot));
+    }
+    if let Some(transform) = object.render_transform {
+        validate_render_transform(object.slot, transform)?;
+    }
+    if object
+        .spatial
+        .as_ref()
+        .is_some_and(|spatial| !spatial.is_valid())
+    {
+        return Err(RetainedExecutionTransportError::InvalidSpatialState(
+            object.slot,
+        ));
     }
     if object.render_geometry.is_some() && object.render_geometry_resource.is_some() {
         return Err(RetainedExecutionTransportError::AmbiguousRenderGeometry(
+            object.slot,
+        ));
+    }
+    if matches!(&object.content, TransportObjectContent::Image { .. })
+        && (object.render_geometry.is_some()
+            || object.render_geometry_resource.is_some()
+            || object.render_transform.is_some()
+            || object.reveal != 1.0
+            || object.morph != 0.0
+            || object.text_bounds.is_some())
+    {
+        return Err(RetainedExecutionTransportError::ImageRenderGeometry(
             object.slot,
         ));
     }
@@ -1157,19 +1914,124 @@ fn validate_object_state(
     Ok(())
 }
 
+fn glow_content_is_supported(content: &TransportObjectContent) -> bool {
+    match content {
+        TransportObjectContent::Geometry { geometry, resource } => match geometry {
+            GeometryRef::Circle { radius } => {
+                resource.is_none() && radius.is_finite() && *radius > 0.0
+            }
+            GeometryRef::Rectangle { size } => {
+                resource.is_none()
+                    && size.x.is_finite()
+                    && size.y.is_finite()
+                    && size.x > 0.0
+                    && size.y > 0.0
+            }
+            GeometryRef::Line { start, end } => {
+                resource.is_none()
+                    && start.x.is_finite()
+                    && start.y.is_finite()
+                    && end.x.is_finite()
+                    && end.y.is_finite()
+                    && (start.x != end.x || start.y != end.y)
+            }
+            GeometryRef::VectorPath(path) => {
+                resource.is_none() && path.is_finite() && path.has_drawable_segments()
+            }
+            // A typed row is validated before the versioned source-resource
+            // table binds this handle. Full id/version validation follows in
+            // validate_object_state at the receiver boundary.
+            GeometryRef::External(_) => true,
+        },
+        TransportObjectContent::Text { .. } => true,
+        TransportObjectContent::Image { .. } => false,
+    }
+}
+
+fn validate_single_camera(
+    rows: impl IntoIterator<Item = (ObjectId, bool)>,
+) -> Result<(), RetainedExecutionTransportError> {
+    let mut camera = None;
+    for (object, is_camera) in rows {
+        if is_camera && camera.replace(object).is_some() {
+            return Err(RetainedExecutionTransportError::MultipleCamera3D);
+        }
+    }
+    Ok(())
+}
+
+fn validate_render_transform(
+    slot: TransportSlotId,
+    transform: Transform2D,
+) -> Result<(), RetainedExecutionTransportError> {
+    validate_render_translation(slot, transform.translation)?;
+    if !transform.scale.x.is_finite()
+        || !transform.scale.y.is_finite()
+        || !transform.rotation.is_finite()
+    {
+        return Err(RetainedExecutionTransportError::InvalidRenderTransform(
+            slot,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_render_translation(
+    slot: TransportSlotId,
+    translation: noon_core::Vec2,
+) -> Result<(), RetainedExecutionTransportError> {
+    if !translation.x.is_finite() || !translation.y.is_finite() {
+        return Err(RetainedExecutionTransportError::InvalidRenderTransform(
+            slot,
+        ));
+    }
+    Ok(())
+}
+
+fn publication_context_is_stale(
+    received: PublicationContext,
+    installed: PublicationContext,
+) -> bool {
+    received.frame_epoch().get() < installed.frame_epoch().get()
+        || (received.frame_epoch() == installed.frame_epoch() && received != installed)
+}
+
+fn removed_indices_contains_slot(
+    slots: &[TransportSlotId],
+    removed: &HashSet<TransportSlotId>,
+    index: usize,
+) -> bool {
+    slots.get(index).is_some_and(|slot| removed.contains(slot))
+}
+
 fn frame_object(
     object: &RetainedTransportObjectState,
     content: ObjectContentRef,
-) -> FrameObjectState {
-    FrameObjectState {
-        z_index: 0.0,
+) -> Result<FrameObjectState, RetainedExecutionTransportError> {
+    let spatial = match object.spatial.as_ref() {
+        Some(spatial) => Some(spatial.to_compiled().ok_or(
+            RetainedExecutionTransportError::InvalidSpatialState(object.slot),
+        )?),
+        None => None,
+    };
+    Ok(FrameObjectState {
+        glow: object
+            .glow
+            .map(|value| {
+                value.to_compiled().map(Arc::new).ok_or(
+                    RetainedExecutionTransportError::InvalidGlowState(object.slot),
+                )
+            })
+            .transpose()?,
+        spatial: spatial.map(Box::new),
+        z_index: object.z_index,
         id: object.object,
         content,
         transform: object.transform,
         style: object.style,
         appearance: object.appearance,
         text_bounds: object.text_bounds,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1199,7 +2061,7 @@ mod tests {
             )
         })
         .collect();
-        RetainedExecutionFrameMirror::with_installed_resources(None, Arc::from([]), handles)
+        RetainedExecutionFrameMirror::with_installed_resources(None, &[], handles)
     }
 
     fn test_mirror_with_render_geometries(
@@ -1208,7 +2070,15 @@ mod tests {
     ) -> RetainedExecutionFrameMirror {
         let mut mirror = test_mirror();
         mirror.resource_session = Some(session);
-        mirror.render_geometries = geometries;
+        mirror.render_geometries = geometries
+            .iter()
+            .map(
+                |geometry| crate::retained_resource_transport::RenderGeometrySlot {
+                    generation: 0,
+                    geometry: Some(geometry.clone()),
+                },
+            )
+            .collect();
         mirror
     }
 
@@ -1224,6 +2094,8 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
@@ -1233,6 +2105,8 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(12),
                     content: ObjectContentRef::Text(text),
@@ -1254,11 +2128,695 @@ mod tests {
     }
 
     #[test]
+    fn effective_glow_survives_snapshot_delta_removal_and_json_without_new_identity() {
+        let mut frame = mixed_frame();
+        let glow = Arc::new(noon_compile::CompiledGlow {
+            attachment: noon_core::SemanticNodeId::new(77, 3),
+            definition: Glow::new(
+                GlowUpdate::default()
+                    .color(Color::rgba(0.25, 0.5, 0.75, 0.125))
+                    .radius(noon_core::Pixels(12.5))
+                    .intensity(0.5)
+                    .source(GlowSource::Silhouette),
+            )
+            .unwrap(),
+        });
+        frame.objects[0].glow = Some(glow.clone());
+        let camera = Camera2DState::default();
+        let context = noon_core::PublicationContext::default();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let snapshot = encoder
+            .encode_snapshot_with_context(&frame, camera, context)
+            .unwrap();
+        assert_eq!(snapshot.protocol_version, 17);
+        assert_eq!(
+            snapshot.objects[0].glow.unwrap().attachment,
+            glow.attachment
+        );
+        assert!(snapshot.objects[1].glow.is_none());
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert_eq!(
+            json.matches("\"glow\"").count(),
+            1,
+            "no-effect rows omit the wire field"
+        );
+        let decoded: RetainedExecutionDeltaEnvelope = serde_json::from_str(&json).unwrap();
+        let mut mirror = test_mirror();
+        assert_eq!(
+            mirror.apply(decoded).unwrap().0,
+            RetainedTransportApplyOutcome::Applied
+        );
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].glow.as_deref(),
+            Some(glow.as_ref())
+        );
+        assert!(mirror.frame().unwrap().objects[1].glow.is_none());
+
+        // A parameter-only publication keeps the same generational attachment.
+        let changed = Arc::new(noon_compile::CompiledGlow {
+            attachment: glow.attachment,
+            definition: GlowUpdate::default()
+                .intensity(1.25)
+                .apply_to(glow.definition)
+                .unwrap(),
+        });
+        frame.objects[0].glow = Some(changed.clone());
+        let delta = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                camera,
+                context,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!delta.snapshot);
+        assert_eq!(delta.objects.len(), 1);
+        let wire: RetainedExecutionDeltaEnvelope =
+            serde_json::from_str(&serde_json::to_string(&delta).unwrap()).unwrap();
+        mirror.apply(wire).unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].glow.as_deref(),
+            Some(changed.as_ref())
+        );
+
+        // Removing the exact effect clears its renderer-derived scope; the old
+        // generation is not recycled or replaced by a transport allocator.
+        frame.objects[0].glow = None;
+        let removed = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                camera,
+                context,
+            )
+            .unwrap()
+            .unwrap();
+        mirror.apply(removed).unwrap();
+        assert!(mirror.frame().unwrap().objects[0].glow.is_none());
+
+        // Both independently evolved predecessors must fail closed: V15 glow
+        // and V16 geometry retirement are not the combined V17 schema.
+        let next_sequence = mirror.next_sequence;
+        for version in [14, 15, 16] {
+            let mut old = snapshot.clone();
+            old.protocol_version = version;
+            assert_eq!(
+                mirror.apply(old),
+                Err(RetainedExecutionTransportError::UnsupportedVersion(version))
+            );
+            assert_eq!(mirror.next_sequence, next_sequence);
+        }
+    }
+
+    #[test]
+    fn invalid_worker_glow_rejects_atomically_before_snapshot_or_delta_sequence() {
+        let mut frame = mixed_frame();
+        let valid = Arc::new(noon_compile::CompiledGlow {
+            attachment: SemanticNodeId::new(99, 7),
+            definition: Glow::default(),
+        });
+        frame.objects[0].glow = Some(valid.clone());
+        let camera = Camera2DState::default();
+        let context = PublicationContext::default();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(9);
+        let snapshot = encoder
+            .encode_snapshot_with_context(&frame, camera, context)
+            .unwrap();
+        let mut mirror = test_mirror();
+
+        for corrupt in [
+            {
+                let mut corrupt = snapshot.clone();
+                corrupt.objects[0].glow.as_mut().unwrap().intensity = 9.0;
+                corrupt
+            },
+            {
+                let mut corrupt = snapshot.clone();
+                corrupt.objects[0].glow.as_mut().unwrap().radius = GlowRadius::Scene(-1.0);
+                corrupt
+            },
+            {
+                let mut corrupt = snapshot.clone();
+                corrupt.objects[0].glow.as_mut().unwrap().color.red = f32::NAN;
+                corrupt
+            },
+            {
+                let mut corrupt = snapshot.clone();
+                corrupt.objects[0].reveal = 1.5;
+                corrupt
+            },
+            {
+                let mut corrupt = snapshot.clone();
+                corrupt.objects[0].content = TransportObjectContent::Image {
+                    image: crate::TransportImageResourceHandle {
+                        arena: 1,
+                        id: 1,
+                        version: 0,
+                    },
+                    sampling: crate::TransportImageSampling::Linear,
+                };
+                corrupt
+            },
+        ] {
+            let bad_slot = corrupt
+                .objects
+                .iter()
+                .find(|row| row.glow.is_some() && validate_object_fields(row).is_err())
+                .unwrap()
+                .slot;
+            assert_eq!(
+                mirror.apply(corrupt),
+                Err(RetainedExecutionTransportError::InvalidGlowState(bad_slot))
+            );
+            assert!(mirror.frame().is_none());
+            assert!(mirror.session().is_none());
+        }
+
+        mirror.apply(snapshot).unwrap();
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].glow.as_deref(),
+            Some(valid.as_ref())
+        );
+        let next_sequence = mirror.next_sequence;
+        let mut delta = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                camera,
+                context,
+            )
+            .unwrap()
+            .unwrap();
+        delta.objects[0].glow.as_mut().unwrap().intensity = f64::INFINITY;
+        assert_eq!(
+            mirror.apply(delta),
+            Err(RetainedExecutionTransportError::InvalidGlowState(
+                TransportSlotId {
+                    slot: 0,
+                    generation: 0
+                }
+            ))
+        );
+        assert_eq!(mirror.next_sequence, next_sequence);
+        assert_eq!(
+            mirror.frame().unwrap().objects[0].glow.as_deref(),
+            Some(valid.as_ref())
+        );
+
+        frame.objects[1].glow = Some(valid.clone());
+        frame.reveals[1] = 0.5;
+        frame.objects[1].style = Style {
+            stroke: Some(Color::WHITE),
+            ..Style::default()
+        };
+        // The source text handle is resolved by the separately installed text
+        // resource table; row validation admits its content and partial reveal.
+        assert!(encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![1]),
+                camera,
+                context,
+            )
+            .unwrap()
+            .is_some());
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::VectorPath(
+            noon_core::VectorPath::new()
+                .move_to(noon_core::Vec2::ZERO)
+                .line_to(noon_core::Vec2::new(1.0, 1.0)),
+        ));
+        frame.objects[0].style = Style {
+            stroke: Some(Color::WHITE),
+            ..Style::default()
+        };
+        frame.reveals[0] = 0.25;
+        assert!(encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                camera,
+                context,
+            )
+            .unwrap()
+            .is_some());
+        frame.objects[1].content =
+            ObjectContentRef::Image(noon_core::RasterImageContentRef::from_resource(
+                noon_core::SemanticImageContent::new(noon_core::RasterImageResourceHandle {
+                    arena: 1,
+                    id: noon_core::RasterImageResourceId::new(1),
+                    version: 0,
+                }),
+                &noon_core::RasterImageResource::from_rgba8(1, 1, [255_u8; 4]).unwrap(),
+            ));
+        let before_sequence = encoder.next_sequence;
+        assert_eq!(
+            encoder.encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![1]),
+                camera,
+                context
+            ),
+            Err(RetainedExecutionTransportError::InvalidGlowState(
+                TransportSlotId {
+                    slot: 1,
+                    generation: 0
+                }
+            ))
+        );
+        assert_eq!(encoder.next_sequence, before_sequence);
+    }
+
+    #[test]
+    fn worker_transport_round_trips_effective_spatial_pose_camera_and_material() {
+        let mut frame = mixed_frame();
+        let rotation = noon_core::SemanticRotation3D::from_axis_angle(
+            noon_core::SemanticVec3::new(1.0, 2.0, -3.0),
+            0.731,
+        )
+        .unwrap();
+        frame.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Mesh,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            world: noon_core::SemanticWorldTransform3D::new(
+                noon_core::SemanticVec3::new(1.0 / 3.0, -1.0e60, 1.0e-100),
+                rotation,
+                noon_core::SemanticVec3::new(0.75, 2.0, 1.25),
+            )
+            .unwrap(),
+            camera_projection: None,
+            material: noon_core::SemanticSpatialMaterial::PointLit,
+            point_light: false,
+            cairo_path_appearance: None,
+            camera_profile: None,
+            camera_motions: None,
+        }));
+        frame.objects[1].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            world: noon_core::SemanticWorldTransform3D::new(
+                noon_core::SemanticVec3::new(0.0, 0.0, 8.0),
+                rotation,
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap(),
+            camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
+                vertical_fov_radians: 1.0,
+                near: 0.1,
+                far: 30.0,
+            }),
+            material: noon_core::SemanticSpatialMaterial::Unlit,
+            point_light: false,
+            cairo_path_appearance: None,
+            camera_profile: None,
+            camera_motions: None,
+        }));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let publication_context = noon_core::PublicationContext::new(
+            noon_core::SceneRevision::new(9_007_199_254_740_999),
+            noon_core::ExecutionRevision::new(9_007_199_254_741_001),
+            noon_core::FrameEpoch::new(9_007_199_254_741_003),
+        );
+        let snapshot = encoder
+            .encode_snapshot_with_context(&frame, Camera2DState::default(), publication_context)
+            .unwrap();
+        let wire = serde_json::to_vec(&snapshot).unwrap();
+        let decoded: RetainedExecutionDeltaEnvelope = serde_json::from_slice(&wire).unwrap();
+        let mut mirror = test_mirror();
+        assert_eq!(
+            mirror.apply(decoded).unwrap().0,
+            RetainedTransportApplyOutcome::Applied
+        );
+        assert_eq!(mirror.frame().unwrap(), &frame);
+        assert_eq!(mirror.publication_context(), snapshot.publication_context);
+        assert_eq!(
+            mirror.camera_3d_object().unwrap().camera_projection(),
+            frame.objects[1].camera_projection()
+        );
+        assert_eq!(
+            mirror.frame().unwrap().objects[0]
+                .world_transform()
+                .unwrap()
+                .rotation
+                .components(),
+            rotation.components()
+        );
+    }
+
+    #[test]
+    fn invalid_spatial_snapshot_is_rejected_without_installing_frame() {
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let mut delta = encoder
+            .encode_snapshot_with_context(
+                &mixed_frame(),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        delta.objects[0].spatial = Some(TransportSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Mesh,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            fixed_orientation_center: None,
+            translation: [0.0; 3],
+            rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
+            scale: [1.0; 3],
+            camera_projection: Some(TransportProjection3D::Perspective {
+                vertical_fov_radians: f64::NAN,
+                near: 0.1,
+                far: 30.0,
+            }),
+            material: TransportSpatialMaterial::Unlit,
+            point_light: false,
+            cairo_path_appearance: None,
+        });
+        let mut mirror = RetainedExecutionFrameMirror::default();
+        assert!(matches!(
+            mirror.apply(delta),
+            Err(RetainedExecutionTransportError::InvalidSpatialState(_))
+        ));
+        assert!(mirror.frame().is_none());
+    }
+
+    #[test]
+    fn worker_spatial_rows_preserve_domains_and_reject_inconsistent_roles() {
+        use noon_compile::CompiledSpatialDrawKind as Draw;
+        use noon_core::SemanticSpatialCompositionDomain as Domain;
+        let valid = TransportSpatialState {
+            draw_kind: Draw::Planar,
+            composition_domain: Domain::FixedOrientation,
+            fixed_orientation_center: Some([1.0 / 3.0, -2.5, 4.0]),
+            translation: [0.0; 3],
+            rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
+            scale: [1.0; 3],
+            camera_projection: None,
+            material: TransportSpatialMaterial::Unlit,
+            point_light: false,
+            cairo_path_appearance: None,
+        };
+        let wire = serde_json::to_vec(&valid).unwrap();
+        let decoded: TransportSpatialState = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(decoded, valid);
+        let compiled = decoded.to_compiled().unwrap();
+        assert_eq!(compiled.composition_domain, Domain::FixedOrientation);
+        assert_eq!(compiled.spatial_anchor_family, None);
+        assert_eq!(compiled.camera_profile, None);
+        assert!(compiled.camera_motions.is_none());
+        assert_eq!(TransportSpatialState::from_compiled(&compiled), valid);
+
+        let cairo_surface = TransportSpatialState {
+            draw_kind: Draw::Mesh,
+            composition_domain: Domain::World,
+            fixed_orientation_center: None,
+            material: TransportSpatialMaterial::CairoSurface,
+            ..valid.clone()
+        };
+        assert!(cairo_surface.is_valid());
+        let compiled = cairo_surface.to_compiled().unwrap();
+        assert_eq!(
+            compiled.material,
+            noon_core::SemanticSpatialMaterial::CairoSurface
+        );
+        assert_eq!(
+            TransportSpatialState::from_compiled(&compiled),
+            cairo_surface
+        );
+
+        let camera = TransportSpatialState {
+            composition_domain: Domain::World,
+            fixed_orientation_center: None,
+            camera_projection: Some(TransportProjection3D::Perspective {
+                vertical_fov_radians: 1.0,
+                near: 0.1,
+                far: 100.0,
+            }),
+            ..valid.clone()
+        };
+        assert!(camera.is_valid());
+        let invalid = [
+            TransportSpatialState {
+                fixed_orientation_center: None,
+                ..valid.clone()
+            },
+            TransportSpatialState {
+                fixed_orientation_center: Some([f64::NAN, 0.0, 0.0]),
+                ..valid.clone()
+            },
+            TransportSpatialState {
+                draw_kind: Draw::Mesh,
+                ..valid.clone()
+            },
+            TransportSpatialState {
+                material: TransportSpatialMaterial::PointLit,
+                ..valid.clone()
+            },
+            TransportSpatialState {
+                material: TransportSpatialMaterial::CairoSurface,
+                ..valid.clone()
+            },
+            TransportSpatialState {
+                point_light: true,
+                ..valid.clone()
+            },
+            TransportSpatialState {
+                scale: [2.0; 3],
+                ..camera.clone()
+            },
+            TransportSpatialState {
+                draw_kind: Draw::Mesh,
+                ..camera.clone()
+            },
+            TransportSpatialState {
+                material: TransportSpatialMaterial::PointLit,
+                ..camera.clone()
+            },
+            TransportSpatialState {
+                point_light: true,
+                ..camera.clone()
+            },
+            TransportSpatialState {
+                composition_domain: Domain::FixedFrame,
+                ..camera.clone()
+            },
+        ];
+        for row in invalid {
+            assert!(!row.is_valid(), "invalid role/domain combination: {row:?}");
+            assert!(row.to_compiled().is_none());
+        }
+    }
+
+    #[test]
+    fn cairo_path_worker_rows_round_trip_and_reject_incomplete_gradient_bounds_atomically() {
+        use noon_compile::{
+            CompiledCairoPathAppearance, CompiledSpatialDrawKind, CompiledWorldBounds3D64,
+        };
+        use noon_core::SemanticSpatialCompositionDomain;
+        let row = TransportSpatialState {
+            draw_kind: CompiledSpatialDrawKind::Planar,
+            composition_domain: SemanticSpatialCompositionDomain::World,
+            fixed_orientation_center: None,
+            translation: [1.0 / 3.0, -2.0, 4.0],
+            rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
+            scale: [1.0; 3],
+            camera_projection: None,
+            material: TransportSpatialMaterial::CairoPath,
+            point_light: false,
+            cairo_path_appearance: Some(Box::new(CompiledCairoPathAppearance {
+                sheen_factor: 0.2,
+                gradient_direction: Some(SemanticVec3::new(-7.0, -9.0, 10.0)),
+                world_family_bounds: Some(CompiledWorldBounds3D64 {
+                    min: SemanticVec3::new(-5.25, -0.175, 0.0),
+                    max: SemanticVec3::new(5.25, 0.175, 0.0),
+                }),
+            })),
+        };
+        assert!(row.is_valid());
+        let decoded: TransportSpatialState =
+            serde_json::from_slice(&serde_json::to_vec(&row).unwrap()).unwrap();
+        assert_eq!(decoded, row);
+        let compiled = decoded.to_compiled().unwrap();
+        assert_eq!(compiled.material, SemanticSpatialMaterial::CairoPath);
+        assert_eq!(TransportSpatialState::from_compiled(&compiled), row);
+
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let mut snapshot = encoder
+            .encode_snapshot_with_context(
+                &mixed_frame(),
+                Camera2DState::default(),
+                PublicationContext::default(),
+            )
+            .unwrap();
+        snapshot.objects[0].spatial = Some(row.clone());
+        let mut mirror = test_mirror();
+        mirror.apply(snapshot.clone()).unwrap();
+        let installed = mirror.frame().unwrap().clone();
+        let mut invalid = row.clone();
+        invalid
+            .cairo_path_appearance
+            .as_deref_mut()
+            .unwrap()
+            .world_family_bounds = None;
+        assert!(!invalid.is_valid());
+        snapshot.sequence = 1;
+        snapshot.objects[0].spatial = Some(invalid);
+        assert!(matches!(
+            mirror.apply(snapshot),
+            Err(RetainedExecutionTransportError::InvalidSpatialState(_))
+        ));
+        assert_eq!(mirror.frame().unwrap(), &installed);
+        let mut invalid = row.clone();
+        invalid
+            .cairo_path_appearance
+            .as_deref_mut()
+            .unwrap()
+            .world_family_bounds
+            .as_mut()
+            .unwrap()
+            .min
+            .x = 6.0;
+        assert!(!invalid.is_valid());
+        let mut invalid = row.clone();
+        invalid.material = TransportSpatialMaterial::Unlit;
+        assert!(!invalid.is_valid());
+        let mut invalid = row.clone();
+        invalid.cairo_path_appearance = None;
+        assert!(!invalid.is_valid());
+        let ordinary = TransportSpatialState {
+            material: TransportSpatialMaterial::Unlit,
+            cairo_path_appearance: None,
+            ..row
+        };
+        let json = serde_json::to_value(ordinary).unwrap();
+        assert!(json.get("cairo_path_appearance").is_none());
+    }
+
+    #[test]
+    fn incremental_spatial_world_track_replaces_one_effective_row_atomically() {
+        let mut start = mixed_frame();
+        start.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            world: noon_core::SemanticWorldTransform3D::IDENTITY,
+            camera_projection: Some(noon_core::SemanticProjection3D::Orthographic {
+                height: 8.0,
+                near: 0.1,
+                far: 100.0,
+            }),
+            material: noon_core::SemanticSpatialMaterial::Unlit,
+            point_light: false,
+            cairo_path_appearance: None,
+            camera_profile: None,
+            camera_motions: None,
+        }));
+        let mut encoder = RetainedExecutionDeltaEncoder::new(9);
+        let start_context = noon_core::PublicationContext::new(
+            noon_core::SceneRevision::new(3),
+            noon_core::ExecutionRevision::new(8),
+            noon_core::FrameEpoch::new(8),
+        );
+        let snapshot = encoder
+            .encode_snapshot_with_context(&start, Camera2DState::default(), start_context)
+            .unwrap();
+        let mut mirror = test_mirror();
+        mirror.apply(snapshot).unwrap();
+        assert_eq!(mirror.publication_context(), start_context);
+
+        let mut end = start.clone();
+        end.time = 0.75;
+        end.objects[0].spatial = Some(Box::new(noon_compile::CompiledSpatialState {
+            draw_kind: noon_compile::CompiledSpatialDrawKind::Planar,
+            composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            world: noon_core::SemanticWorldTransform3D::new(
+                noon_core::SemanticVec3::new(2.25, -4.5, 7.0),
+                noon_core::SemanticRotation3D::from_axis_angle(
+                    noon_core::SemanticVec3::new(0.0, 1.0, 0.0),
+                    0.8,
+                )
+                .unwrap(),
+                noon_core::SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap(),
+            camera_projection: start.objects[0].camera_projection(),
+            material: noon_core::SemanticSpatialMaterial::Unlit,
+            point_light: false,
+            cairo_path_appearance: None,
+            camera_profile: None,
+            camera_motions: None,
+        }));
+        let end_context = noon_core::PublicationContext::new(
+            noon_core::SceneRevision::new(3),
+            noon_core::ExecutionRevision::new(8),
+            noon_core::FrameEpoch::new(9),
+        );
+        let delta = encoder
+            .encode_incremental_with_context(
+                &end,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                end_context,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(delta.objects.len(), 1);
+        assert!(delta.object_patches.is_empty());
+        let (_, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(mirror.publication_context(), end_context);
+        assert_eq!(changes.object_indices(), &[0]);
+        assert_eq!(mirror.frame().unwrap(), &end);
+        assert_eq!(
+            mirror.camera_3d_object().unwrap().world_transform(),
+            end.objects[0].world_transform()
+        );
+
+        let mut stale_context = encoder
+            .encode_incremental_with_context(
+                &end,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                start_context,
+            )
+            .unwrap()
+            .unwrap();
+        stale_context.publication_context = start_context;
+        assert!(matches!(
+            mirror.apply(stale_context),
+            Err(RetainedExecutionTransportError::StalePublicationContext { .. })
+        ));
+        assert_eq!(mirror.publication_context(), end_context);
+
+        let mut next_session = RetainedExecutionDeltaEncoder::new(10);
+        let replacement_session = next_session
+            .encode_snapshot_with_context(
+                &end,
+                Camera2DState::default(),
+                noon_core::PublicationContext::new(
+                    noon_core::SceneRevision::new(1),
+                    noon_core::ExecutionRevision::new(1),
+                    noon_core::FrameEpoch::new(1),
+                ),
+            )
+            .unwrap();
+        mirror.apply(replacement_session).unwrap();
+        assert_eq!(mirror.publication_context().frame_epoch().get(), 1);
+    }
+
+    #[test]
     fn mixed_geometry_and_text_snapshot_round_trips_in_one_order_stream() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
         let delta = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         assert_eq!(delta.objects.len(), 2);
         assert_eq!(delta.objects[0].order, 0);
@@ -1282,10 +2840,69 @@ mod tests {
     }
 
     #[test]
+    fn inset_view_round_trips_and_invalid_reference_is_rejected_atomically() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(41);
+        let mut initial = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        let view = Inset2DViewState {
+            camera_frame: ObjectId::new(11),
+            display: ObjectId::new(12),
+            camera: Camera2DState {
+                center: Vec2::new(0.25, -0.5),
+                height: 0.45,
+            },
+            display_center: Vec2::new(4.6, 2.0),
+            display_size: Vec2::new(3.0, 3.0),
+            display_stroke_width: 0.03,
+            capture_own_display: false,
+        };
+        initial.inset_2d_views.push(view);
+        let mut mirror = test_mirror();
+        mirror.apply(initial).unwrap();
+        assert_eq!(mirror.inset_2d_views(), &[view]);
+
+        let mut next_frame = frame.clone();
+        next_frame.time = 0.25;
+        next_frame.objects[0].transform.translation.x = 0.5;
+        let mut invalid = encoder
+            .encode_incremental_with_context(
+                &next_frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        invalid.inset_2d_views.push(Inset2DViewState {
+            camera_frame: ObjectId::new(999),
+            ..view
+        });
+        let expected_sequence = mirror.next_sequence;
+        assert_eq!(
+            mirror.apply(invalid),
+            Err(RetainedExecutionTransportError::InvalidInset2DView(
+                view.display
+            ))
+        );
+        assert_eq!(mirror.next_sequence, expected_sequence);
+        assert_eq!(mirror.inset_2d_views(), &[view]);
+    }
+
+    #[test]
     fn wire_text_requires_an_installed_resource_remap() {
         let frame = mixed_frame();
         let delta = RetainedExecutionDeltaEncoder::new(4)
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = RetainedExecutionFrameMirror::default();
         assert!(matches!(
@@ -1300,7 +2917,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(8);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1309,10 +2930,11 @@ mod tests {
         updated.time = 0.5;
         updated.objects[0].content = ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 1.0));
         let delta = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &updated,
                 &FrameChanges::objects(vec![0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1323,11 +2945,189 @@ mod tests {
     }
 
     #[test]
+    fn object_patch_updates_existing_row_and_rejects_conflicts_atomically() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(81);
+        let initial = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        let slot = initial.objects[0].slot;
+        let object = initial.objects[0].object;
+        let mut mirror = test_mirror();
+        let mut invalid_snapshot = initial.clone();
+        invalid_snapshot
+            .object_patches
+            .push(RetainedTransportObjectPatch {
+                slot,
+                object,
+                transform: None,
+                style: None,
+                morph: Some(0.25),
+                render_translation: None,
+            });
+        assert_eq!(
+            mirror.apply(invalid_snapshot),
+            Err(RetainedExecutionTransportError::InvalidObjectPatch(slot))
+        );
+        assert!(mirror.frame().is_none());
+        mirror.apply(initial).unwrap();
+
+        let mut next = frame.clone();
+        next.time = 0.5;
+        next.objects[0].transform.translation = Vec2::new(3.0, 4.0);
+        next.objects[0].style.fill = Some(Color::WHITE);
+        next.morphs[0] = 0.25;
+        let mut delta = encoder
+            .encode_incremental_with_context(
+                &next,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        delta.objects.clear();
+        delta.object_patches.push(RetainedTransportObjectPatch {
+            slot,
+            object,
+            transform: Some(next.objects[0].transform),
+            style: Some(next.objects[0].style),
+            morph: Some(next.morphs[0]),
+            render_translation: None,
+        });
+        let json = serde_json::to_string(&delta).unwrap();
+        let decoded = serde_json::from_str(&json).unwrap();
+        let mut conflict = delta.clone();
+        conflict
+            .object_patches
+            .push(conflict.object_patches[0].clone());
+        assert_eq!(
+            mirror.apply(conflict),
+            Err(RetainedExecutionTransportError::DuplicateSlot(slot))
+        );
+        assert_eq!(mirror.applied_sequence(), Some(0));
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        let (_, changes) = mirror.apply(decoded).unwrap();
+        assert_eq!(changes.object_indices(), &[0]);
+        assert_eq!(mirror.frame(), Some(&next));
+    }
+
+    #[test]
+    fn render_translation_patch_preserves_frame_and_rejects_invalid_updates_atomically() {
+        let mut frame = mixed_frame();
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE),
+        )));
+        frame.render_transforms[0] = Some(Transform2D {
+            scale: Vec2::new(2.0, 3.0),
+            rotation: 0.5,
+            ..Transform2D::IDENTITY
+        });
+        let mut encoder = RetainedExecutionDeltaEncoder::new(82);
+        let initial = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        let slot = initial.objects[0].slot;
+        let object = initial.objects[0].object;
+        let mut mirror = test_mirror();
+        mirror.apply(initial.clone()).unwrap();
+        let installed_geometry = mirror.frame().unwrap().render_geometries[0]
+            .clone()
+            .unwrap();
+        let mut next = frame.clone();
+        next.time = 0.5;
+        next.objects[1].transform.translation = Vec2::new(3.0, 4.0);
+        next.render_transforms[0].as_mut().unwrap().translation = Vec2::new(8.0, 9.0);
+        let mut delta = encoder
+            .encode_incremental_with_context(
+                &next,
+                &FrameChanges::objects(vec![0, 1]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        delta.objects.retain(|row| row.object != object);
+        delta.object_patches.push(RetainedTransportObjectPatch {
+            slot,
+            object,
+            transform: None,
+            style: None,
+            morph: None,
+            render_translation: next.render_transforms[0].map(|transform| transform.translation),
+        });
+        // The valid full text row must also remain unapplied when a later patch
+        // is rejected. Every component uses the same finite validation as rows.
+        for component in 0..2 {
+            let mut invalid = delta.clone();
+            let translation = invalid.object_patches[0]
+                .render_translation
+                .as_mut()
+                .unwrap();
+            match component {
+                0 => translation.x = f32::NAN,
+                _ => translation.y = f32::INFINITY,
+            }
+            assert_eq!(
+                mirror.apply(invalid),
+                Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                    slot
+                ))
+            );
+            assert_eq!(mirror.frame(), Some(&frame));
+            assert_eq!(mirror.applied_sequence(), Some(0));
+        }
+        let mut inactive = delta.clone();
+        inactive.objects.clear();
+        inactive.object_patches[0].slot = initial.objects[1].slot;
+        inactive.object_patches[0].object = initial.objects[1].object;
+        assert_eq!(
+            mirror.apply(inactive),
+            Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                initial.objects[1].slot
+            ))
+        );
+        assert_eq!(mirror.frame(), Some(&frame));
+        assert_eq!(mirror.applied_sequence(), Some(0));
+
+        let decoded = serde_json::from_slice(&serde_json::to_vec(&delta).unwrap()).unwrap();
+        let (_, changes) = mirror.apply(decoded).unwrap();
+        assert_eq!(changes.object_indices(), &[0, 1]);
+        assert_eq!(mirror.frame(), Some(&next));
+        assert!(Arc::ptr_eq(
+            &installed_geometry,
+            mirror.frame().unwrap().render_geometries[0]
+                .as_ref()
+                .unwrap()
+        ));
+        let (outcome, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::DroppedStale);
+        assert!(changes.object_indices().is_empty());
+        assert_eq!(mirror.frame(), Some(&next));
+        assert_eq!(mirror.applied_sequence(), Some(1));
+    }
+
+    #[test]
     fn incremental_transform_keeps_text_content_identity() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(9);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1336,10 +3136,11 @@ mod tests {
         updated.time = 0.5;
         updated.objects[1].transform.translation = Vec2::new(2.0, -1.0);
         let delta = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &updated,
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1359,16 +3160,21 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(19);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
 
         let reorder = encoder
-            .encode_incremental_with_painter_order(
+            .encode_incremental_with_painter_order_and_context(
                 &frame,
                 &FrameChanges::painter_order(0..2),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[1, 0],
             )
             .unwrap()
@@ -1382,6 +3188,8 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),
             content: ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 1.0)),
@@ -1398,10 +3206,11 @@ mod tests {
         let structural =
             FrameChanges::with_structure(vec![0, 2], vec![2], vec![0]).with_painter_order(0..2);
         let replace = encoder
-            .encode_incremental_with_painter_order(
+            .encode_incremental_with_painter_order_and_context(
                 &replaced,
                 &structural,
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[2, 1],
             )
             .unwrap()
@@ -1433,7 +3242,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(29);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1444,10 +3257,11 @@ mod tests {
         let changes =
             FrameChanges::with_structure(vec![1], Vec::new(), vec![1]).with_painter_order(1..2);
         let delta = encoder
-            .encode_incremental_with_painter_order(
+            .encode_incremental_with_painter_order_and_context(
                 &removed,
                 &changes,
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[0],
             )
             .unwrap()
@@ -1468,7 +3282,11 @@ mod tests {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(23);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1476,7 +3294,13 @@ mod tests {
         let removed = FrameChanges::with_structure(vec![0, 1], Vec::new(), vec![0, 1])
             .with_painter_order(0..2);
         let empty = encoder
-            .encode_incremental_with_painter_order(&frame, &removed, Camera2DState::default(), &[])
+            .encode_incremental_with_painter_order_and_context(
+                &frame,
+                &removed,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+                &[],
+            )
             .unwrap()
             .unwrap();
         mirror.apply(empty).unwrap();
@@ -1484,6 +3308,8 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(13),
             content: ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 1.0)),
@@ -1497,16 +3323,14 @@ mod tests {
         replaced.morphs.push(0.0);
         replaced.render_geometries.push(None);
         replaced.render_transforms.push(None);
-        // Re-add the old pair and replace it before publishing another frame.
-        // The accumulated changes retain 0/1 in both added and removed sets,
-        // although those rows stayed absent at the worker boundary.
         let structural = FrameChanges::with_structure(vec![0, 1, 2], vec![0, 1, 2], vec![0, 1])
             .with_painter_order(0..2);
         let replacement = encoder
-            .encode_incremental_with_painter_order(
+            .encode_incremental_with_painter_order_and_context(
                 &replaced,
                 &structural,
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
                 &[2],
             )
             .unwrap()
@@ -1517,15 +3341,14 @@ mod tests {
 
         replaced.objects[2].appearance = 0.5;
         let mut later = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &replaced,
                 &FrameChanges::objects(vec![2]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
-        // Incremental row order is legacy metadata. The sparse stable slot and
-        // the retained painter permutation remain separate identities.
         later.objects[0].order = 2;
         mirror.apply(later).unwrap();
         assert_eq!(mirror.painter_order(), &[2]);
@@ -1533,11 +3356,56 @@ mod tests {
     }
 
     #[test]
-    fn incremental_text_resource_change_requires_snapshot() {
+    fn coalesced_remove_readd_of_live_row_publishes_final_live_state() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(31);
+        let initial = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        let mut mirror = test_mirror();
+        mirror.apply(initial).unwrap();
+
+        let mut readded = frame.clone();
+        readded.time = 0.5;
+        readded.reveals[0] = 0.5;
+        let structural =
+            FrameChanges::with_structure(vec![0], vec![0], vec![0]).with_painter_order(0..1);
+        let delta = encoder
+            .encode_incremental_with_painter_order_and_context(
+                &readded,
+                &structural,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+                &[0, 1],
+            )
+            .unwrap()
+            .unwrap();
+
+        assert!(delta.removed_slots.is_empty());
+        assert_eq!(delta.objects.len(), 1);
+        assert_eq!(delta.objects[0].object, ObjectId::new(11));
+        assert_eq!(delta.objects[0].reveal, 0.5);
+        let (_, applied) = mirror.apply(delta).unwrap();
+        assert!(applied.added_indices().is_empty());
+        assert!(applied.removed_indices().is_empty());
+        assert_eq!(mirror.painter_order(), &[0, 1]);
+        assert_eq!(mirror.frame().unwrap().reveals[0], 0.5);
+    }
+
+    #[test]
+    fn incremental_text_resource_change_preserves_slot_identity() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(10);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1549,25 +3417,29 @@ mod tests {
             version: 1,
         });
         let delta = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &changed,
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
-        assert!(matches!(
-            mirror.apply(delta),
-            Err(RetainedExecutionTransportError::ContentIdentityChanged(_))
-        ));
+        let (_, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(changes.object_indices(), &[1]);
+        assert_eq!(mirror.frame().unwrap(), &changed);
     }
 
     #[test]
-    fn incremental_content_swap_requires_snapshot() {
+    fn incremental_content_swap_preserves_slot_and_unrelated_rows() {
         let frame = mixed_frame();
         let mut encoder = RetainedExecutionDeltaEncoder::new(3);
         let initial = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror();
         mirror.apply(initial).unwrap();
@@ -1575,17 +3447,20 @@ mod tests {
         let mut changed = frame.clone();
         changed.objects[1].content = ObjectContentRef::Geometry(GeometryRef::circle(0.5));
         let delta = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &changed,
                 &FrameChanges::objects(vec![1]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
-        assert!(matches!(
-            mirror.apply(delta),
-            Err(RetainedExecutionTransportError::ContentIdentityChanged(_))
-        ));
+        let (outcome, changes) = mirror.apply(delta).unwrap();
+        assert_eq!(outcome, RetainedTransportApplyOutcome::Applied);
+        assert_eq!(changes.object_indices(), &[1]);
+        assert!(changes.added_indices().is_empty());
+        assert!(changes.removed_indices().is_empty());
+        assert_eq!(mirror.frame().unwrap(), &changed);
     }
 
     #[test]
@@ -1594,9 +3469,124 @@ mod tests {
         frame.render_geometries[1] = Some(Arc::new(GeometryRef::circle(0.25)));
         let mut encoder = RetainedExecutionDeltaEncoder::new(1);
         assert!(matches!(
-            encoder.encode_snapshot(&frame, Camera2DState::default()),
+            encoder.encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default()
+            ),
             Err(RetainedExecutionTransportError::TextRenderGeometry(_))
         ));
+    }
+
+    #[test]
+    fn continuation_morph_geometry_is_inlined_once_then_reused_by_slot() {
+        let mut frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(37);
+        let mut mirror = test_mirror();
+        let initial = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        mirror.apply(initial).unwrap();
+
+        let path = Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 0.0)),
+        ));
+        frame.time = 0.25;
+        frame.morphs[0] = 0.25;
+        frame.render_geometries[0] = Some(path.clone());
+        frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+        let first = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(first.objects[0].render_geometry.is_some());
+        assert!(serde_json::to_string(&first).unwrap().contains("line_to"));
+        mirror.apply(first).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        frame.time = 0.5;
+        frame.morphs[0] = 0.5;
+        let reused = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(reused.objects[0].render_geometry.is_none());
+        assert!(reused.objects[0].render_geometry_resource.is_none());
+        assert!(reused.objects[0].render_transform.is_some());
+        assert!(!serde_json::to_string(&reused).unwrap().contains("line_to"));
+        mirror.apply(reused).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        frame.time = 0.75;
+        frame.morphs[0] = 0.75;
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 0.0)),
+        )));
+        let changed = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(changed.objects[0].render_geometry.is_some());
+        mirror.apply(changed).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        frame.time = 1.0;
+        frame.morphs[0] = 1.0;
+        frame.render_geometries[0] = None;
+        frame.render_transforms[0] = None;
+        let cleared = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(cleared.objects[0].render_geometry.is_none());
+        assert!(cleared.objects[0].render_transform.is_none());
+        mirror.apply(cleared).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        frame.time = 1.25;
+        frame.morphs[0] = 0.25;
+        frame.render_geometries[0] = Some(path);
+        frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+        let reentered = encoder
+            .encode_incremental_with_context(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(reentered.objects[0].render_geometry.is_some());
+        mirror.apply(reentered).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
     }
 
     #[test]
@@ -1618,14 +3608,19 @@ mod tests {
             frame.morphs[0] = time as f32;
             let delta = if step == 0 || step == 3 {
                 encoder
-                    .encode_snapshot(&frame, Camera2DState::default())
+                    .encode_snapshot_with_context(
+                        &frame,
+                        Camera2DState::default(),
+                        noon_core::PublicationContext::default(),
+                    )
                     .unwrap()
             } else {
                 encoder
-                    .encode_incremental(
+                    .encode_incremental_with_context(
                         &frame,
                         &FrameChanges::objects(vec![0]),
                         Camera2DState::default(),
+                        noon_core::PublicationContext::default(),
                     )
                     .unwrap()
                     .unwrap()
@@ -1652,7 +3647,11 @@ mod tests {
         frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(path)));
         frame.render_transforms[0] = Some(Transform2D::IDENTITY);
         assert!(matches!(
-            encoder.encode_snapshot(&frame, Camera2DState::default()),
+            encoder.encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default()
+            ),
             Err(RetainedExecutionTransportError::MissingCompiledRenderResource(_))
         ));
     }
@@ -1665,7 +3664,11 @@ mod tests {
         mirror
             .apply(
                 encoder
-                    .encode_snapshot(&frame, Camera2DState::default())
+                    .encode_snapshot_with_context(
+                        &frame,
+                        Camera2DState::default(),
+                        noon_core::PublicationContext::default(),
+                    )
                     .unwrap(),
             )
             .unwrap();
@@ -1673,10 +3676,11 @@ mod tests {
         changed.time = 0.5;
         changed.objects[1].transform.translation.x = 2.0;
         let mut valid = encoder
-            .encode_incremental(
+            .encode_incremental_with_context(
                 &changed,
                 &FrameChanges::objects(vec![1, 0]),
                 Camera2DState::default(),
+                noon_core::PublicationContext::default(),
             )
             .unwrap()
             .unwrap();
@@ -1701,7 +3705,11 @@ mod tests {
         let mut encoder =
             RetainedExecutionDeltaEncoder::with_render_geometries(5, resources.clone());
         let delta = encoder
-            .encode_snapshot(&frame, Camera2DState::default())
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
             .unwrap();
         let mut mirror = test_mirror_with_render_geometries(4, resources);
         assert!(matches!(
@@ -1710,4 +3718,27 @@ mod tests {
         ));
         assert!(mirror.frame().is_none());
     }
+
+    #[test]
+    fn high_generation_render_resource_survives_json_metadata_roundtrip() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(4);
+        let mut delta = encoder
+            .encode_snapshot_with_context(
+                &frame,
+                Camera2DState::default(),
+                noon_core::PublicationContext::default(),
+            )
+            .unwrap();
+        let id = crate::retained_resource_transport::render_geometry_id(7, 2_200_000);
+        assert!(id > (1_u64 << 53));
+        delta.objects[0].render_geometry_resource = Some(id);
+        let json = serde_json::to_string(&delta).unwrap();
+        assert!(json.contains(&format!("\"render_geometry_resource\":\"{id}\"")));
+        let reparsed: RetainedExecutionDeltaEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(reparsed.objects[0].render_geometry_resource, Some(id));
+    }
 }
+
+#[cfg(test)]
+mod z_index_tests;

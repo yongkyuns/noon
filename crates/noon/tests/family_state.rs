@@ -12,7 +12,15 @@ fn leaves(family: &MobjectFamily) -> Vec<noon::SemanticNodeId> {
         .unwrap()
 }
 
-fn family(scene: &Scene) -> MobjectFamily {
+fn direct_members(family: &MobjectFamily) -> Vec<noon::SemanticNodeId> {
+    family
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(family.node_id())
+        .unwrap()
+}
+
+fn family(scene: &mut Scene) -> MobjectFamily {
     let a = scene.square(1.0).unwrap();
     let mut b = scene.rectangle(1.0, 2.0).unwrap();
     b.shift(2.0, 0.0).unwrap();
@@ -20,10 +28,28 @@ fn family(scene: &Scene) -> MobjectFamily {
     scene.family(&[(&a).into(), (&nested).into()]).unwrap()
 }
 
+fn object_state(scene: &Scene, id: noon::SemanticNodeId) -> noon::SemanticObjectState {
+    scene
+        .integration_store()
+        .borrow()
+        .semantic_object_state_checked(id)
+        .unwrap()
+        .clone()
+}
+
+fn assert_become_visual_state(
+    receiver: &noon::SemanticObjectState,
+    target: &noon::SemanticObjectState,
+) {
+    assert_eq!(receiver.content, target.content);
+    assert_eq!(receiver.transform, target.transform);
+    assert_eq!(receiver.style, target.style);
+}
+
 #[test]
 fn family_become_and_restore_preserve_alias_identity_and_share_content() {
-    let scene = Scene::new();
-    let source = family(&scene);
+    let mut scene = Scene::new();
+    let source = family(&mut scene);
     let saved = source.copy_family().unwrap();
     let target = source.copy_family().unwrap();
     target.root().shift(4.0, -2.0).unwrap();
@@ -58,10 +84,145 @@ fn family_become_and_restore_preserve_alias_identity_and_share_content() {
 }
 
 #[test]
+fn unequal_family_become_reuses_receiver_identity_and_never_imports_target_ids() {
+    let mut scene = Scene::new();
+    let source_leaf = scene.square(1.0).unwrap();
+    source_leaf.set_z_index(7.0).unwrap();
+    let source_state = object_state(&scene, source_leaf.node_id());
+    let source = scene.family(&[(&source_leaf).into()]).unwrap();
+    let source_root = source.node_id();
+    let first_target = scene.circle(2.0).unwrap();
+    first_target.set_z_index(-4.0).unwrap();
+    let mut second_target = scene.rectangle(3.0, 1.0).unwrap();
+    second_target.shift(4.0, 1.0).unwrap();
+    second_target.set_z_index(11.0).unwrap();
+    let target = scene
+        .family(&[(&first_target).into(), (&second_target).into()])
+        .unwrap();
+    let target_ids = leaves(&target);
+    let target_states = target_ids
+        .iter()
+        .map(|&id| object_state(&scene, id))
+        .collect::<Vec<_>>();
+    let revision = scene.revision();
+
+    source.become_family(&target, Default::default()).unwrap();
+
+    assert_eq!(source.node_id(), source_root);
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let receiver_ids = leaves(&source);
+    assert_eq!(receiver_ids.len(), 2);
+    assert_eq!(receiver_ids[0], source_leaf.node_id());
+    assert!(!target_ids.contains(&receiver_ids[0]));
+    assert!(!target_ids.contains(&receiver_ids[1]));
+    assert_ne!(receiver_ids[1], source_leaf.node_id());
+    let receiver_states = receiver_ids
+        .iter()
+        .map(|&id| object_state(&scene, id))
+        .collect::<Vec<_>>();
+    for (receiver, target) in receiver_states.iter().zip(&target_states) {
+        assert_become_visual_state(receiver, target);
+        assert_eq!(receiver.z_index(), source_state.z_index());
+        assert_eq!(receiver.role(), source_state.role());
+        assert_eq!(receiver.signal_bindings(), source_state.signal_bindings());
+    }
+    assert_eq!(
+        receiver_states[0].insertion_order(),
+        source_state.insertion_order()
+    );
+    assert_ne!(
+        receiver_states[1].insertion_order(),
+        target_states[1].insertion_order()
+    );
+    assert!(receiver_states[1].insertion_order() > receiver_states[0].insertion_order());
+    assert_eq!(
+        target_ids
+            .iter()
+            .map(|&id| object_state(&scene, id))
+            .collect::<Vec<_>>(),
+        target_states
+    );
+
+    let empty = scene.family(&[]).unwrap();
+    let expanded_ids = receiver_ids.clone();
+    let revision = scene.revision();
+    source.become_family(&empty, Default::default()).unwrap();
+    assert_eq!(source.node_id(), source_root);
+    assert!(leaves(&source).is_empty());
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    {
+        let store = scene.integration_store().borrow();
+        for &id in &expanded_ids {
+            assert!(store.node(id).is_some());
+        }
+    }
+
+    source.become_family(&target, Default::default()).unwrap();
+    let reexpanded_ids = leaves(&source);
+    assert_eq!(reexpanded_ids.len(), target_ids.len());
+    assert!(reexpanded_ids.iter().all(|id| !target_ids.contains(id)));
+    let store = scene.integration_store().borrow();
+    for id in expanded_ids {
+        assert!(store.node(id).is_some());
+    }
+}
+
+#[test]
+fn live_unequal_family_become_preserves_same_z_receiver_painter_order() {
+    use noon_compile::semantic_execution_object_id;
+
+    let mut scene = Scene::new();
+    let source_leaf = scene.square(2.0).unwrap();
+    source_leaf.set_z_index(5.0).unwrap();
+    let source = scene.family(&[(&source_leaf).into()]).unwrap();
+    let peer = scene.square(2.0).unwrap();
+    peer.set_z_index(5.0).unwrap();
+
+    let first_target = scene.circle(1.0).unwrap();
+    first_target.set_z_index(-10.0).unwrap();
+    let second_target = scene.circle(1.0).unwrap();
+    second_target.set_z_index(20.0).unwrap();
+    let target = scene
+        .family(&[(&first_target).into(), (&second_target).into()])
+        .unwrap();
+    let target_ids = leaves(&target);
+
+    scene.add_many(&[(&source).into(), (&peer).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    scene
+        .live(&mut session)
+        .become_family(&source, &target, Default::default())
+        .unwrap();
+
+    let receiver_ids = leaves(&source);
+    assert_eq!(receiver_ids.len(), 2);
+    for &receiver in &receiver_ids {
+        assert_eq!(object_state(&scene, receiver).z_index(), 5.0);
+    }
+    let actual = session
+        .painter_order()
+        .iter()
+        .map(|&row| session.frame().objects[row as usize].id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        [
+            semantic_execution_object_id(receiver_ids[0]),
+            semantic_execution_object_id(receiver_ids[1]),
+            semantic_execution_object_id(peer.node_id()),
+        ]
+    );
+    assert!(target_ids
+        .iter()
+        .map(|&id| semantic_execution_object_id(id))
+        .all(|id| !actual.contains(&id)));
+}
+
+#[test]
 fn dimension_matching_uses_aggregate_bounds_and_center_not_individual_leaf_sizes() {
-    let scene = Scene::new();
-    let source = family(&scene);
-    let target = family(&scene);
+    let mut scene = Scene::new();
+    let source = family(&mut scene);
+    let target = family(&mut scene);
     target.scale(2.0, 3.0).unwrap();
     target.shift(5.0, 3.0).unwrap();
     let before = source.layout().unwrap();
@@ -96,41 +257,44 @@ fn dimension_matching_uses_aggregate_bounds_and_center_not_individual_leaf_sizes
 }
 
 #[test]
-fn topology_alias_foreign_and_rotated_stretch_rejections_are_atomic() {
-    let scene = Scene::new();
-    let source = family(&scene);
-    let different = scene.family(&[]).unwrap();
-    let foreign = family(&Scene::new());
+fn invalid_family_become_is_atomic_and_rotated_stretch_preserves_dimensions() {
+    let mut scene = Scene::new();
+    let source = family(&mut scene);
+    let mut foreign_scene = Scene::new();
+    let foreign = family(&mut foreign_scene);
     let saved = source.layout_bounds().unwrap();
     let revision = scene.revision();
-    for target in [&different, &foreign] {
-        assert!(source.become_family(target, Default::default()).is_err());
-        assert_eq!(source.layout_bounds().unwrap(), saved);
-        assert_eq!(scene.revision(), revision);
-    }
-    let target = family(&scene);
+    assert!(source.become_family(&foreign, Default::default()).is_err());
+    assert_eq!(source.layout_bounds().unwrap(), saved);
+    assert_eq!(scene.revision(), revision);
+    let target = family(&mut scene);
     target
         .rotate(0.3, noon::ManimRotationPivot::Center)
         .unwrap();
-    assert!(source
+    source
         .become_family(
             &target,
             ManimBecomeOptions {
                 stretch: true,
+                match_center: true,
                 ..Default::default()
-            }
+            },
         )
-        .is_err());
-    assert_eq!(source.layout_bounds().unwrap(), saved);
-    different
-        .become_family(&different, Default::default())
         .unwrap();
+    let after = source.layout_bounds().unwrap().unwrap();
+    let before = saved.unwrap();
+    close(after.width(), before.width());
+    close(after.height(), before.height());
+    let empty = scene.family(&[]).unwrap();
+    let revision = scene.revision();
+    empty.become_family(&empty, Default::default()).unwrap();
+    assert_eq!(scene.revision(), revision);
 }
 
 #[test]
 fn live_capture_restores_current_completed_state_in_one_publication() {
     let mut scene = Scene::new();
-    let source = family(&scene);
+    let source = family(&mut scene);
     let target = source.copy_family().unwrap();
     target.root().shift(3.0, 0.0).unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
@@ -169,11 +333,20 @@ fn paired_program_animates_and_restores_through_coherent_completion() {
         program.resume().unwrap(),
         LiveProgramStatus::Awaiting(_)
     ));
+    let center = |program: &noon::LiveProgram<noon::example_scenes::family_state::FamilyState>| {
+        let frame = program.session().frame();
+        frame
+            .render_geometry(0)
+            .unwrap()
+            .world_bounds(frame.render_transform(0))
+            .unwrap()
+            .center()
+    };
+    let initial = center(&program);
     program.drive_to(&mut callbacks, 0.2).unwrap();
-    close(
-        f64::from(program.session().frame().render_transform(0).translation.x),
-        -0.5,
-    );
+    let midpoint = center(&program);
+    close(f64::from(midpoint.x - initial.x), 0.5);
+    close(f64::from(midpoint.y - initial.y), 0.5);
     for time in [0.4, 0.6000000000000001] {
         assert!(matches!(
             program.drive_to(&mut callbacks, time).unwrap(),
@@ -183,15 +356,13 @@ fn paired_program_animates_and_restores_through_coherent_completion() {
         program.admit_publication(context).unwrap();
         program.resume().unwrap();
     }
-    close(
-        f64::from(program.session().frame().render_transform(0).translation.x),
-        -2.0,
-    );
+    close(f64::from(center(&program).x), -2.0);
+    close(f64::from(center(&program).y), 0.0);
 }
 
 #[test]
-fn pairing_memoizes_shared_family_dags_and_rejects_different_family_aliases() {
-    let scene = Scene::new();
+fn pairing_memoizes_shared_family_dags_and_persistent_become_reconciles_alias_shape() {
+    let mut scene = Scene::new();
     let a = scene.square(1.0).unwrap();
     let mut root = scene.family(&[(&a).into()]).unwrap();
     for _ in 0..20 {
@@ -215,15 +386,28 @@ fn pairing_memoizes_shared_family_dags_and_rejects_different_family_aliases() {
         .unwrap();
     copied_right.remove((&copied_shared).into()).unwrap();
     copied_right.add((&distinct).into()).unwrap();
-    assert!(source
+    let revision = scene.revision();
+
+    source
         .become_family(target.root(), Default::default())
-        .is_err());
+        .unwrap();
+
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(leaves(&source), [a.node_id()]);
+    let right_member = direct_members(&right)[0];
+    assert_ne!(right_member, shared.node_id());
+    assert_ne!(right_member, distinct.node_id());
+    let store = scene.integration_store().borrow();
+    assert_eq!(
+        store.semantic_family_members_checked(right_member).unwrap(),
+        [a.node_id()]
+    );
 }
 
 #[test]
 fn cross_alias_targets_observe_staged_writes_unless_matching_captures_a_copy() {
     for match_center in [false, true] {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut a = scene.square(1.0).unwrap();
         let mut b = scene.square(1.0).unwrap();
         a.shift(-1.0, 0.0).unwrap();

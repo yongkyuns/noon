@@ -253,6 +253,9 @@ export class PythonAuthoringClient {
         const pending = this.#pendingFor(message.requestId);
         if (pending === null) return;
         const result = parseAuthoringResult(message.resultJson);
+        if (message.workerRunTiming !== undefined && message.workerRunTiming !== null) {
+          result.workerRunTiming = validateWorkerRunTiming(message.workerRunTiming);
+        }
         const registrationCompletion = pending.continuationRegistrationCompletion;
         if (registrationCompletion === undefined) {
           this.#settle(message.requestId, ({ resolve }) => resolve(result));
@@ -387,6 +390,22 @@ export class PythonAuthoringClient {
     this.#pending.clear();
     this.#continuations.clear();
   }
+}
+
+function validateWorkerRunTiming(timing) {
+  if (timing === undefined || timing === null) return null;
+  if (typeof timing !== "object" ||
+      !Number.isFinite(timing.performanceTimeOriginMs) ||
+      !Number.isFinite(timing.startedAtMs) ||
+      !Number.isFinite(timing.completedAtMs) ||
+      timing.startedAtMs > timing.completedAtMs) {
+    throw new Error("Python authoring worker returned invalid run timing");
+  }
+  return Object.freeze({
+    performanceTimeOriginMs: timing.performanceTimeOriginMs,
+    startedAtMs: timing.startedAtMs,
+    completedAtMs: timing.completedAtMs,
+  });
 }
 
 export function parseAuthoringResult(resultJson) {

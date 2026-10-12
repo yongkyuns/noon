@@ -124,7 +124,7 @@ impl LiveContinuation for TextFamilyFade {
 }
 
 pub fn program() -> Result<LiveProgram<TextFamilyFade>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut left = scene.text("LEFT").map_err(|error| error.to_string())?;
     left.set_translation(-2.0, 0.5)
         .map_err(|error| error.to_string())?;

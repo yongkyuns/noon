@@ -7,6 +7,24 @@ from pathlib import Path
 
 
 class ManimAnimationConstructorOptionsTests(unittest.TestCase):
+    def test_compiled_text_write_rejects_unsupported_outline_style(self) -> None:
+        python_dir = Path(__file__).resolve().parent
+        source = textwrap.dedent("""
+            from noon import Text, MarkupText, Typst, MathTypst, Write, Unwrite
+            from _manim_latex import MathTexPart
+            for text_type in (Text, MarkupText, Typst, MathTypst, MathTexPart):
+                target = object.__new__(text_type)
+                for animation in (Write, Unwrite):
+                    animation(target)
+                    for options in ({"stroke_width": 3}, {"stroke_color": "red"}):
+                        try:
+                            animation(target, **options)
+                            raise AssertionError("compiled text silently ignored custom outline style")
+                        except NotImplementedError:
+                            pass
+        """)
+        subprocess.run([sys.executable, "-c", source], cwd=python_dir, check=True)
+
     def test_constructor_options_remain_inert_shared_requests(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
@@ -67,8 +85,9 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             from _typed_geometry_test_support import identity_only_wrapper as identity
             import noon
             names = ("Transform", "ReplacementTransform", "TransformFromCopy",
-                     "TransformMatchingShapes", "Create", "Uncreate", "FadeIn",
-                     "FadeOut", "Indicate", "ScaleInPlace", "ShrinkToCenter")
+                     "TransformMatchingShapes", "ApplyMatrix", "CyclicReplace", "Swap",
+                     "Create", "Uncreate", "FadeIn", "FadeOut", "Indicate",
+                     "ScaleInPlace", "ShrinkToCenter")
             exports = {name: getattr(noon, name) for name in names}
             # Public requests accept options before Scene/bootstrap imports. Later
             # imports must preserve class identity and existing instances.
@@ -89,12 +108,24 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             assert not hasattr(_manim_animate, "_expanded_schedule")
             assert not hasattr(_manim_lifecycle, "_compile_with_plan")
 
-            from noon import Circle, Create, FadeIn, Scene, Square, Transform, linear, smooth
+            from noon import (
+                Circle, Create, CyclicReplace, FadeIn, Scene, Square, Swap, Transform,
+                VGroup, linear, smooth,
+            )
 
             # Constructor options are part of the public animation object, not a
             # Noon-only Scene.play workaround.
             transform = Transform(identity(Square), identity(Circle), run_time=1.25, path_arc=0.3)
             assert transform.anim_args == {"run_time": 1.25, "path_arc": 0.3}
+
+            group = identity(VGroup)
+            cyclic = CyclicReplace(group, run_time=1.5)
+            assert isinstance(cyclic, Transform)
+            assert cyclic.group is group and cyclic.source is group
+            assert cyclic.anim_args == {"run_time": 1.5, "path_arc": math.pi / 2.0}
+            swap = Swap(group, path_arc=-0.75)
+            assert isinstance(swap, CyclicReplace)
+            assert swap.anim_args == {"path_arc": -0.75}
 
             square, circle = identity(Square), identity(Circle)
             create = Create(square, run_time=2.0, rate_func=linear)

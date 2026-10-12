@@ -7,7 +7,7 @@
 //! interpret layout semantics. Those remain renderer concerns built on top of the
 //! retained `TextResource` and `noon-text` contracts.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Mutex};
 
 use noon_text::raster::{GlyphRaster, GlyphRasterFormat, GlyphRasterKey};
 
@@ -64,6 +64,7 @@ pub struct GlyphAtlasStats {
     pub color_entries: usize,
     pub empty_entries: usize,
     pub texture_allocations: usize,
+    /// Cumulative staging bytes, including transfer-row padding.
     pub bytes_uploaded: usize,
     pub hits: u64,
     pub misses: u64,
@@ -77,6 +78,7 @@ pub enum GlyphAtlasError {
     InvalidExtent,
     InvalidPageCount,
     DimensionOverflow,
+    StagingMapping(String),
     ImageTooLarge {
         width: u32,
         height: u32,
@@ -98,6 +100,9 @@ impl std::fmt::Display for GlyphAtlasError {
             Self::InvalidExtent => write!(formatter, "glyph atlas extent is too small"),
             Self::InvalidPageCount => write!(formatter, "glyph atlas page count must be positive"),
             Self::DimensionOverflow => write!(formatter, "glyph atlas dimensions overflow"),
+            Self::StagingMapping(error) => {
+                write!(formatter, "glyph staging buffer mapping failed: {error}")
+            }
             Self::ImageTooLarge {
                 width,
                 height,
@@ -320,6 +325,15 @@ fn page_allocation(
     })
 }
 
+struct PendingGlyphUpload {
+    plane: GlyphAtlasPlane,
+    page: u32,
+    buffer: wgpu::Buffer,
+    origin: [u32; 2],
+    size: [u32; 2],
+    bytes_per_row: u32,
+}
+
 struct AtlasPlaneState {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -385,6 +399,7 @@ pub struct GpuGlyphAtlas {
     entries: HashMap<GlyphRasterKey, GlyphAtlasEntry>,
     stats: GlyphAtlasStats,
     generation: u64,
+    pending_uploads: Mutex<Vec<PendingGlyphUpload>>,
 }
 
 impl GpuGlyphAtlas {
@@ -405,6 +420,7 @@ impl GpuGlyphAtlas {
             entries: HashMap::new(),
             stats: GlyphAtlasStats::default(),
             generation: 1,
+            pending_uploads: Mutex::new(Vec::new()),
         })
     }
 
@@ -477,15 +493,14 @@ impl GpuGlyphAtlas {
         self.entries.get(&key).copied()
     }
 
-    /// Upload one cached CPU raster if it is not already resident.
+    /// Stage one cached CPU raster if it is not already resident.
     ///
     /// A one-texel transparent gutter is uploaded around every image so later
-    /// linear sampling cannot bleed from adjacent glyphs. `Queue::write_texture`
-    /// permits tightly packed rows, so no 256-byte staging-row padding is required.
+    /// linear sampling cannot bleed from adjacent glyphs. Misses stage 256-byte-row
+    /// transfer buffers; callers must encode and acknowledge pending uploads before sampling.
     pub fn insert(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         key: GlyphRasterKey,
         raster: &GlyphRaster,
     ) -> Result<GlyphAtlasEntry, GlyphAtlasError> {
@@ -550,35 +565,65 @@ impl GpuGlyphAtlas {
             image.placement.height,
             bytes_per_pixel,
         )?;
-        let allocation = self.allocate(plane, image.placement.width, image.placement.height)?;
-        let extent = self.extent;
-        let state = self.ensure_page(device, plane, allocation.page)?;
-        let bytes_per_row = allocation.outer_size[0]
+        let outer_size = [
+            image.placement.width + gutter_twice,
+            image.placement.height + gutter_twice,
+        ];
+        let bytes_per_row = outer_size[0]
             .checked_mul(bytes_per_pixel as u32)
             .ok_or(GlyphAtlasError::DimensionOverflow)?;
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &state.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: allocation.outer_origin[0],
-                    y: allocation.outer_origin[1],
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            &upload,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(allocation.outer_size[1]),
-            },
-            wgpu::Extent3d {
-                width: allocation.outer_size[0],
-                height: allocation.outer_size[1],
-                depth_or_array_layers: 1,
-            },
-        );
+        let transfer_row = bytes_per_row
+            .checked_add(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT - 1)
+            .map(|value| {
+                value / wgpu::COPY_BYTES_PER_ROW_ALIGNMENT * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+            })
+            .ok_or(GlyphAtlasError::DimensionOverflow)?;
+        let rows =
+            usize::try_from(outer_size[1]).map_err(|_| GlyphAtlasError::DimensionOverflow)?;
+        let source_row =
+            usize::try_from(bytes_per_row).map_err(|_| GlyphAtlasError::DimensionOverflow)?;
+        let transfer_row_usize =
+            usize::try_from(transfer_row).map_err(|_| GlyphAtlasError::DimensionOverflow)?;
+        let transfer_len = transfer_row_usize
+            .checked_mul(rows)
+            .ok_or(GlyphAtlasError::DimensionOverflow)?;
+        // Encode incremental texture updates with the frame. WebKit's idle
+        // write_texture path can erase previously uploaded atlas texels. A mapped
+        // source also avoids retaining queue writes for frames never submitted.
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Noon glyph atlas transfer staging"),
+            size: u64::try_from(transfer_len).map_err(|_| GlyphAtlasError::DimensionOverflow)?,
+            usage: wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: true,
+        });
+        {
+            let mut mapped = buffer
+                .slice(..)
+                .get_mapped_range_mut()
+                .map_err(|error| GlyphAtlasError::StagingMapping(error.to_string()))?;
+            for (row, source) in upload.chunks_exact(source_row).enumerate() {
+                let destination = row * transfer_row_usize;
+                mapped
+                    .slice(destination..destination + source_row)
+                    .copy_from_slice(source);
+            }
+        }
+        buffer.unmap();
+        // Finish fallible staging before changing placement or evicting a resident page.
+        let allocation = self.allocate(plane, image.placement.width, image.placement.height)?;
+        let extent = self.extent;
+        self.ensure_page(device, plane, allocation.page)?;
+        self.pending_uploads
+            .get_mut()
+            .expect("atlas upload mutex is not poisoned")
+            .push(PendingGlyphUpload {
+                plane,
+                page: allocation.page,
+                buffer,
+                origin: allocation.outer_origin,
+                size: allocation.outer_size,
+                bytes_per_row: transfer_row,
+            });
 
         let origin = allocation.inner_origin;
         let size = [image.placement.width, image.placement.height];
@@ -600,7 +645,7 @@ impl GpuGlyphAtlas {
         let entry = GlyphAtlasEntry::Image(atlas_image);
         self.entries.insert(key, entry);
         self.stats.entries = self.entries.len();
-        self.stats.bytes_uploaded = self.stats.bytes_uploaded.saturating_add(upload.len());
+        self.stats.bytes_uploaded = self.stats.bytes_uploaded.saturating_add(transfer_len);
         match plane {
             GlyphAtlasPlane::Mask => {
                 self.stats.mask_entries = self.stats.mask_entries.saturating_add(1)
@@ -610,6 +655,69 @@ impl GpuGlyphAtlas {
             }
         }
         Ok(entry)
+    }
+
+    /// Records outstanding cache-miss uploads before a retained render pass.
+    /// Call [`Self::acknowledge_pending_uploads`] only after the enclosing encode succeeds
+    /// and its command buffer will be submitted. Discarded encoders leave uploads retryable.
+    pub fn encode_pending_uploads(&self, encoder: &mut wgpu::CommandEncoder) -> bool {
+        let uploads = self
+            .pending_uploads
+            .lock()
+            .expect("atlas upload mutex is not poisoned");
+        for upload in uploads.iter() {
+            let texture = self
+                .texture_for_page(upload.plane, upload.page)
+                .expect("pending atlas upload keeps its page resident");
+            encoder.copy_buffer_to_texture(
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &upload.buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(upload.bytes_per_row),
+                        rows_per_image: Some(upload.size[1]),
+                    },
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: upload.origin[0],
+                        y: upload.origin[1],
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: upload.size[0],
+                    height: upload.size[1],
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        !uploads.is_empty()
+    }
+
+    /// Acknowledges transfer copies after the host has successfully encoded its frame.
+    /// Dropping their buffers makes clean frames O(1) and releases staging storage.
+    pub fn acknowledge_pending_uploads(&self) {
+        self.pending_uploads
+            .lock()
+            .expect("atlas upload mutex is not poisoned")
+            .clear();
+    }
+
+    pub fn pending_upload_count(&self) -> usize {
+        self.pending_uploads
+            .lock()
+            .expect("atlas upload mutex is not poisoned")
+            .len()
+    }
+
+    fn texture_for_page(&self, plane: GlyphAtlasPlane, page: u32) -> Option<&wgpu::Texture> {
+        self.page_states(plane)
+            .get(usize::try_from(page).ok()?)
+            .map(|state| &state.texture)
     }
 
     fn allocate(
@@ -656,6 +764,11 @@ impl GpuGlyphAtlas {
         plane: GlyphAtlasPlane,
         page_index: usize,
     ) -> Result<(), GlyphAtlasError> {
+        let page = u32::try_from(page_index).map_err(|_| GlyphAtlasError::DimensionOverflow)?;
+        self.pending_uploads
+            .get_mut()
+            .expect("atlas upload mutex is not poisoned")
+            .retain(|upload| upload.plane != plane || upload.page != page);
         match plane {
             GlyphAtlasPlane::Mask => self.mask_allocator.reset_page(page_index)?,
             GlyphAtlasPlane::Color => self.color_allocator.reset_page(page_index)?,

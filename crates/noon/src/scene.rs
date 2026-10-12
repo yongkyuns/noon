@@ -1,23 +1,122 @@
 //! Direct authoring scope over one family in the shared semantic store.
+mod image;
 use crate::{
-    AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectFamilyMember,
-    SceneMembershipRequest,
+    AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
+    SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
-    AnimationOptions, GeometryRef, RateFunction, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticStore,
-    SemanticStyle, VectorPath,
+    AnimationOptions, RateFunction, SemanticClickIndicate, SemanticMutationImpact,
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
+    SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
-/// A scene owns only its shared semantic store, root identity, and authoring cursor.
-/// Direct membership edits prepare a subsequent execution session. Use
-/// [`LiveSession`] to publish supported membership changes into an existing session.
+/// Presentation/export intent attached to one authored section boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SectionType {
+    #[default]
+    Normal,
+    Skip,
+}
+
+/// One ordered non-rendering marker on the Scene-owned authored timeline.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneSection {
+    pub name: String,
+    pub section_type: SectionType,
+    pub time: f64,
+}
+
+pub(crate) fn publish_geometry_options(
+    options: crate::ManimGeometryOptions,
+    store: &mut SemanticStore,
+    publish: impl FnOnce(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticNodeId, AuthoringError> {
+    options.with_state(store, |store, state| {
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(SemanticNodeCreation::object(state));
+        let result = publish(store, transaction)?;
+        let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached geometry creation has one exact semantic impact")
+        };
+        Ok(*node)
+    })
+}
+
+pub(crate) fn click_indicate_declaration(
+    indication: crate::IndicateOptions,
+    options: AnimationOptions,
+) -> Result<SemanticClickIndicate, AuthoringError> {
+    if !matches!(options.rate_func, None | Some(RateFunction::ThereAndBack))
+        || options.lag_ratio.unwrap_or(0.0) != 0.0
+        || options.path_arc.unwrap_or(0.0) != 0.0
+        || options.reverse_rate_function.unwrap_or(false)
+        || options.remover.unwrap_or(false)
+        || options.introducer.unwrap_or(false)
+    {
+        return Err(AuthoringError::InvalidClickIndicateOptions);
+    }
+    Ok(SemanticClickIndicate::new(
+        indication.scale_factor,
+        indication.color,
+        options.run_time.unwrap_or(1.0),
+    ))
+}
+
+/// Publish a detached family of ordinary path leaves through this Scene's one
+/// semantic publication route. Paths are admitted only after preparation has
+/// completed, and admission, family creation, and leaf creation share one
+/// rollback boundary.
+pub(crate) fn publish_path_family(
+    scene: &mut Scene,
+    paths: Vec<(VectorPath, noon_core::SemanticStyle)>,
+) -> Result<MobjectFamily, AuthoringError> {
+    let root = scene.root;
+    let store_rc = Rc::clone(&scene.store);
+    if let Some(execution) = scene.execution.as_mut() {
+        {
+            let store = store_rc.borrow();
+            execution
+                .require_resource_creation_at_root(&store, root)
+                .map_err(AuthoringError::from)?;
+        }
+        let family = crate::family_authoring::publish_path_family_with(
+            &mut store_rc.borrow_mut(),
+            paths,
+            |store, transaction| {
+                execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(AuthoringError::from)
+            },
+        )?;
+        return MobjectFamily::from_node(store_rc, family);
+    }
+    let family = crate::family_authoring::publish_path_family_with(
+        &mut store_rc.borrow_mut(),
+        paths,
+        |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+    )?;
+    MobjectFamily::from_node(store_rc, family)
+}
+
+/// A scene owns its shared semantic store/root and, after bootstrap, the one
+/// execution component lowered from them. The optional execution slot is control
+/// ownership only; Runtime state remains owned by the contained [`ExecutionSession`].
+/// Direct integration callers may still create standalone sessions during migration.
 #[derive(Debug)]
 pub struct Scene {
     store: Rc<RefCell<SemanticStore>>,
     root: SemanticNodeId,
     cursor: f64,
+    sections: Vec<SceneSection>,
+    execution: Option<ExecutionSession>,
+    // Source generations advance even when declarations are unchanged. Keep
+    // the watermark with the scene owner so replacing a reconciler cannot
+    // admit an older asynchronous result after a successful no-op generation.
+    pub(crate) source_generation: Option<crate::SourceGeneration>,
 }
 impl Default for Scene {
     fn default() -> Self {
@@ -45,14 +144,17 @@ impl Scene {
             store,
             root: *root,
             cursor: 0.0,
+            sections: Vec::new(),
+            execution: None,
+            source_generation: None,
         }
     }
     /// Raw shared arena access for explicit integration, not live mutation.
     ///
     /// External edits can invalidate generational handles and leave an existing
-    /// execution session on a stale scene revision. Use `Scene::live` and its
-    /// coherent publication operations for edits after lowering. No revision
-    /// validation is bypassed by this accessor; see [`crate::integration`].
+    /// execution session on a stale scene revision. Use Scene-owned persistent
+    /// operations after lowering. No revision validation is bypassed by this
+    /// accessor; see [`crate::integration`].
     pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
@@ -61,22 +163,68 @@ impl Scene {
         self.store.borrow().scene_revision()
     }
 
-    /// Construct detached geometry through the shared authoring implementation.
-    /// Use `LiveSession::create_manim_geometry` after initial lowering instead.
+    /// Construct one detached Manim geometry object through the Scene-owned
+    /// semantic publication path. The operation is valid before and after
+    /// execution bootstrap; membership remains an explicit later operation.
     pub fn geometry(
-        &self,
+        &mut self,
         options: crate::ManimGeometryOptions,
     ) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::from_manim_geometry(Rc::clone(&self.store), options)
+        let root = self.root;
+        let store_rc = Rc::clone(&self.store);
+        let node = match self.execution.as_mut() {
+            Some(execution) => {
+                {
+                    let store = store_rc.borrow();
+                    execution
+                        .require_resource_creation_at_root(&store, root)
+                        .map_err(AuthoringError::from)?;
+                }
+                let mut store = store_rc.borrow_mut();
+                publish_geometry_options(options, &mut store, |store, transaction| {
+                    execution
+                        .apply_semantic_transaction_at_root(store, root, transaction)
+                        .map_err(AuthoringError::from)
+                })?
+            }
+            None => {
+                let mut store = store_rc.borrow_mut();
+                publish_geometry_options(options, &mut store, |store, transaction| {
+                    transaction.apply(store).map_err(AuthoringError::from)
+                })?
+            }
+        };
+        Mobject::from_node(store_rc, node)
     }
 
-    /// Construct one detached Arrow-family object through the shared Rust
-    /// transaction. The options select Arrow, Vector, or DoubleArrow semantics.
+    /// Construct one detached Arrow family before or after execution bootstrap.
+    /// The options select Arrow, Vector, or DoubleArrow semantics. Membership
+    /// remains explicit, and both tip resources share the atomic publication scope.
     pub fn manim_arrow(
-        &self,
+        &mut self,
         options: crate::ManimArrowOptions,
     ) -> Result<crate::ManimArrow, crate::AuthoringError> {
-        crate::ManimArrow::create(Rc::clone(&self.store), options)
+        let Some(execution) = self.execution.as_mut() else {
+            return crate::ManimArrow::create(Rc::clone(&self.store), options);
+        };
+        let store_rc = Rc::clone(&self.store);
+        let root = self.root;
+        {
+            let store = store_rc.borrow();
+            execution
+                .require_resource_creation_at_root(&store, root)
+                .map_err(AuthoringError::from)?;
+        }
+        let committed = crate::arrow_authoring::publish_arrow_options(
+            options,
+            &mut store_rc.borrow_mut(),
+            |store, transaction| {
+                execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(AuthoringError::from)
+            },
+        )?;
+        crate::ManimArrow::from_committed(store_rc, committed)
     }
 
     pub fn root(&self) -> SemanticNodeId {
@@ -92,105 +240,668 @@ impl Scene {
         self.cursor += duration;
         Ok(())
     }
-    pub fn circle(&self, radius: f64) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::manim_circle(Rc::clone(&self.store), radius)
+
+    /// Record one non-rendering boundary at the current authored Scene time.
+    ///
+    /// Section declarations deliberately do not publish a semantic mutation: they
+    /// are ordered export/presentation metadata owned by the same Scene that owns
+    /// the authored cursor. They therefore cannot dirty or relower execution state.
+    pub fn next_section(
+        &mut self,
+        name: impl Into<String>,
+        section_type: SectionType,
+    ) -> Result<&SceneSection, String> {
+        self.next_section_at(name, section_type, self.cursor)
     }
-    pub fn square(&self, side: f64) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::manim_square(Rc::clone(&self.store), side)
+
+    /// Atomically synchronize the authored metadata cursor and record a section.
+    /// Validation completes before either the cursor or section list changes.
+    pub fn next_section_at(
+        &mut self,
+        name: impl Into<String>,
+        section_type: SectionType,
+        time: f64,
+    ) -> Result<&SceneSection, String> {
+        let name = name.into();
+        if name.contains(['\n', '\r', '\0']) {
+            return Err("section name must not contain newline or NUL characters".into());
+        }
+        if !time.is_finite() {
+            return Err("section time must be finite".into());
+        }
+        if time < self.cursor {
+            return Err("section timeline cannot move backwards".into());
+        }
+        self.cursor = time;
+        self.sections.push(SceneSection {
+            name,
+            section_type,
+            time,
+        });
+        Ok(self.sections.last().expect("section was just appended"))
     }
-    pub fn rectangle(&self, width: f64, height: f64) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::manim_rectangle(Rc::clone(&self.store), width, height)
+
+    pub fn sections(&self) -> &[SceneSection] {
+        &self.sections
+    }
+    /// Construct a detached circle through the Scene-owned publication path.
+    pub fn circle(&mut self, radius: f64) -> Result<Mobject, crate::AuthoringError> {
+        self.geometry(crate::ManimGeometryOptions::circle(radius)?)
+    }
+    /// Construct a detached square through the Scene-owned publication path.
+    pub fn square(&mut self, side: f64) -> Result<Mobject, crate::AuthoringError> {
+        self.geometry(crate::ManimGeometryOptions::square(side)?)
+    }
+    /// Construct a detached rectangle through the Scene-owned publication path.
+    pub fn rectangle(&mut self, width: f64, height: f64) -> Result<Mobject, crate::AuthoringError> {
+        self.geometry(crate::ManimGeometryOptions::rectangle(width, height)?)
     }
     pub fn line(
-        &self,
+        &mut self,
         start: (f64, f64),
         end: (f64, f64),
     ) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::manim_line(Rc::clone(&self.store), start.0, start.1, end.0, end.1)
+        self.geometry(crate::ManimGeometryOptions::line(
+            start.0, start.1, end.0, end.1,
+        )?)
     }
     pub fn path(
-        &self,
+        &mut self,
         path: VectorPath,
         style: SemanticStyle,
     ) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::from_geometry(Rc::clone(&self.store), GeometryRef::path(path), style)
+        self.geometry(crate::ManimGeometryOptions::path_with_style(path, style))
     }
     pub fn add(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.edit_membership(SceneMembershipRequest::Add(&[
-            MobjectFamilyMember::Mobject(object),
-        ]))
+        self.edit_membership(SceneMembershipRequest::Add(&[MobjectTarget::Object(
+            object,
+        )]))
         .map(|_| ())
     }
 
     /// Prepare and apply one atomic authored membership edit.
     ///
-    /// Errors preserve semantic identities and causes in [`AuthoringError`].
-    /// After execution bootstrap, use [`LiveSession::edit_membership`] instead:
-    /// direct authored edits invalidate that session's publication revision.
+    /// Before execution bootstrap this commits only to the Semantic Scene. Once
+    /// this Scene owns execution, the same transaction is published atomically
+    /// through that execution component. No external Scene/session pairing is
+    /// required for persistent membership edits.
     pub fn edit_membership(
         &mut self,
         request: SceneMembershipRequest<'_>,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         let transaction =
             crate::scene_membership::prepare_scene_membership(&self.store, self.root, request)?;
-        crate::scene_membership::apply_scene_membership(&self.store, transaction)
+        self.apply_semantic_transaction(transaction)
+    }
+
+    /// Publish one canonical persistent transaction through a coherent running
+    /// Scene root. Compatibility live facades reuse this route instead of owning
+    /// another store/session publication branch.
+    pub(crate) fn publish_running_transaction(
+        store: &Rc<RefCell<SemanticStore>>,
+        root: SemanticNodeId,
+        execution: &mut ExecutionSession,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, crate::ExecutionSessionPublicationError> {
+        let mut store = store.borrow_mut();
+        execution.apply_semantic_transaction_at_root(&mut store, root, transaction)
+    }
+
+    /// Route one canonical persistent semantic transaction through the Scene's
+    /// current control state. This is the ownership seam for ordinary mutation:
+    /// cold Scenes commit authored state directly; running Scenes use the existing
+    /// prepared execution publication protocol without relowering or mirroring.
+    pub(crate) fn apply_semantic_transaction(
+        &mut self,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        let root = self.root;
+        let store = &self.store;
+        if let Some(execution) = self.execution.as_mut() {
+            return Self::publish_running_transaction(store, root, execution, transaction)
+                .map_err(AuthoringError::from);
+        }
+        transaction
+            .apply(&mut self.store.borrow_mut())
+            .map_err(AuthoringError::from)
+    }
+
+    /// Run fallible resource preparation and exactly one semantic transaction
+    /// inside the Scene-owned publication boundary.
+    ///
+    /// Composite constructors use this when resources and transaction-local
+    /// identities must share one rollback/commit scope. The caller may prepare
+    /// against the borrowed store, but durable semantic mutation is only allowed
+    /// through the supplied publisher.
+    pub(crate) fn with_semantic_publication<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut SemanticStore,
+            &mut dyn FnMut(
+                &mut SemanticStore,
+                SemanticMutationTransaction,
+            ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+        ) -> Result<T, AuthoringError>,
+    ) -> Result<T, AuthoringError> {
+        let root = self.root;
+        let store_rc = Rc::clone(&self.store);
+        if let Some(execution) = self.execution.as_mut() {
+            let mut store = store_rc.borrow_mut();
+            let mut publish =
+                |store: &mut SemanticStore, transaction: SemanticMutationTransaction| {
+                    execution
+                        .apply_semantic_transaction_at_root(store, root, transaction)
+                        .map_err(AuthoringError::from)
+                };
+            return operation(&mut store, &mut publish);
+        }
+
+        let mut store = store_rc.borrow_mut();
+        let mut publish = |store: &mut SemanticStore, transaction: SemanticMutationTransaction| {
+            transaction.apply(store).map_err(AuthoringError::from)
+        };
+        operation(&mut store, &mut publish)
+    }
+
+    pub(crate) fn with_running_execution<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &Rc<RefCell<SemanticStore>>,
+            SemanticNodeId,
+            &mut ExecutionSession,
+        ) -> Result<T, AuthoringError>,
+    ) -> Result<T, AuthoringError> {
+        let execution = self.execution.as_mut().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        operation(&self.store, self.root, execution)
     }
 
     pub fn add_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Add(members))
     }
 
     pub fn remove_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+        members: &[MobjectTarget<'_>],
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(members))
     }
 
-    pub fn clear(
-        &mut self,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+    pub fn clear(&mut self) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Clear)
     }
 
     pub fn replace(
         &mut self,
-        old: MobjectFamilyMember<'_>,
-        new: MobjectFamilyMember<'_>,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+        old: MobjectTarget<'_>,
+        new: MobjectTarget<'_>,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Replace { old, new })
     }
 
     /// Create one detached semantic family with authoritative ordered members.
+    ///
+    /// Construction uses this Scene's ordinary durable mutation route. Before
+    /// execution bootstrap it commits authored state directly; while running it
+    /// prepares and publishes the detached family atomically with the current
+    /// execution revision. Membership remains an explicit later operation.
     pub fn family(
-        &self,
-        members: &[MobjectFamilyMember<'_>],
+        &mut self,
+        members: &[MobjectTarget<'_>],
     ) -> Result<MobjectFamily, crate::AuthoringError> {
         self.family_with_z_index(members, 0.0)
     }
 
-    /// Construct a detached family with priority on its root only.
+    /// Construct a detached family with priority on its root only through this
+    /// Scene's ordinary durable mutation route.
     pub fn family_with_z_index(
-        &self,
-        members: &[MobjectFamilyMember<'_>],
+        &mut self,
+        members: &[MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<MobjectFamily, crate::AuthoringError> {
-        MobjectFamily::create_with_z_index(Rc::clone(&self.store), members, z_index)
+        let (transaction, family) =
+            crate::family_authoring::family_creation_transaction(&self.store, members, z_index)?;
+        let result = self.apply_semantic_transaction(transaction)?;
+        let node = result
+            .resolve(family)
+            .expect("committed family token resolves to one semantic identity");
+        MobjectFamily::from_node(Rc::clone(&self.store), node)
     }
+    /// Create and scope a scalar input signal through this Scene's durable
+    /// authoring route.
+    ///
+    /// Before bootstrap the signal is committed to authored state. While
+    /// running, creation and reactive enrollment publish atomically through
+    /// this Scene's owned execution component.
+    pub fn value_tracker(&mut self, initial: f64) -> Result<ValueTracker, AuthoringError> {
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::integration::publish_value_tracker_creation(
+                &self.store,
+                self.root,
+                execution,
+                initial,
+            );
+        }
+        let creation = SemanticNodeCreation::input_signal(initial).map_err(AuthoringError::from)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_node(creation);
+        transaction.scope_signal(self.root, pending);
+        let result = transaction
+            .apply(&mut self.store.borrow_mut())
+            .map_err(AuthoringError::from)?;
+        let node = result
+            .resolve(pending)
+            .expect("committed tracker creation resolves its transaction-local token");
+        Ok(ValueTracker::from_semantic_node(
+            Rc::clone(&self.store),
+            node,
+        ))
+    }
+
+    /// Associate a detached scalar input through this Scene's durable
+    /// authoring route.
+    pub fn associate_value_tracker(
+        &mut self,
+        tracker: &ValueTracker,
+    ) -> Result<(), AuthoringError> {
+        tracker.require_store(&self.store)?;
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::integration::publish_value_tracker_association(
+                &self.store,
+                self.root,
+                execution,
+                tracker,
+            );
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.scope_signal(self.root, tracker.node_id());
+        transaction
+            .apply(&mut self.store.borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
     pub fn remove(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.edit_membership(SceneMembershipRequest::Remove(&[
-            MobjectFamilyMember::Mobject(object),
-        ]))
+        self.edit_membership(SceneMembershipRequest::Remove(&[MobjectTarget::Object(
+            object,
+        )]))
         .map(|_| ())
     }
+    /// Capture exact current path controls and transform from one coherent
+    /// Runtime publication. Cold Scenes fail explicitly rather than falling back
+    /// to authored geometry.
+    pub fn effective_path_query(
+        &self,
+        object: &Mobject,
+    ) -> Result<crate::PathQuery, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_path_query(&self.store, execution, object)
+    }
+
+    /// Read one persistent authored/base object declaration.
+    ///
+    /// This deliberately does not inspect the running Runtime. Use
+    /// [`Self::effective`] when the current published frame value is required.
+    pub fn authored(
+        &self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticObjectState, AuthoringError> {
+        self.require_object(object)?;
+        object.state()
+    }
+
+    /// Read one object's current effective Runtime value from this Scene's
+    /// coherent publication.
+    ///
+    /// Cold Scenes fail explicitly instead of substituting authored/base state.
+    pub fn effective(
+        &self,
+        object: &Mobject,
+    ) -> Result<crate::EffectiveMobjectState, AuthoringError> {
+        self.require_object(object)?;
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        let store = self.store.borrow();
+        let observed = execution
+            .effective_semantic_object(&store, object.node_id())
+            .map_err(AuthoringError::from)?;
+        Ok(crate::EffectiveMobjectState {
+            z_index: observed.object.z_index,
+            transform: observed.object.transform,
+            style: observed.object.style,
+            appearance: observed.object.appearance,
+            publication: observed.publication,
+        })
+    }
+
+    /// Match one object's persistent geometry/transform against another object.
+    /// Cold Scenes use authored target state. Running Scenes capture the target
+    /// from one coherent Runtime publication and publish through the Scene-owned
+    /// execution component; unsupported derived presentation fails before commit.
+    pub fn match_points(
+        &mut self,
+        source: &Mobject,
+        target: &Mobject,
+    ) -> Result<(), AuthoringError> {
+        let root = self.root;
+        let store = &self.store;
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::point_matching::publish_match_points(
+                store, root, execution, source, target,
+            );
+        }
+        self.require_object(source)?;
+        self.require_object(target)?;
+        let transaction = crate::point_matching::prepare_match_points(source, target.state()?)?;
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
+    /// Align two persistent paths using authored state while cold and one coherent
+    /// effective Runtime publication while running. Resource admission and publication
+    /// stay owned by this Scene; no borrowed LiveSession facade is created.
+    pub fn align_points(&mut self, left: &Mobject, right: &Mobject) -> Result<(), AuthoringError> {
+        let root = self.root;
+        let store = &self.store;
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::path_alignment::publish_alignment(store, root, execution, left, right);
+        }
+        self.require_object(left)?;
+        self.require_object(right)?;
+        left.align_points(right)
+    }
+
+    /// Create one detached subcurve from the current coherent effective source state.
+    ///
+    /// Running execution is required because authored-only subcurve creation remains
+    /// available directly on Mobject::subcurve. Resource admission, effective
+    /// capture, immutable geometry installation, and semantic node publication stay
+    /// behind the Scene-owned running publication boundary.
+    pub fn subcurve(
+        &mut self,
+        source: &Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<Mobject, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::path_editing::publish_running_subcurve(store, root, execution, source, a, b)
+        })
+    }
+
+    /// Observe one family's effective Runtime layout without creating a borrowed
+    /// LiveSession control facade. Cold Scenes fail explicitly rather than returning
+    /// authored bounds as if they were an effective publication.
+    pub fn effective_family_layout(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<crate::EffectiveMobjectLayout, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::family_layout::effective_family_layout(&self.store, execution, family)
+    }
+
+    /// Shift a family through one persistent transaction before or after bootstrap.
+    /// Each aliased leaf is translated once; running publication remains local.
+    pub fn shift_family(
+        &mut self,
+        family: &MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::family_layout::publish_shift_family(
+                &self.store,
+                self.root,
+                execution,
+                family,
+                x,
+                y,
+            );
+        }
+        MobjectTarget::Family(family).require_store(&self.store)?;
+        let transaction = crate::family_authoring::FamilyTranslation::begin(
+            &self.store.borrow(),
+            family.node_id(),
+            x,
+            y,
+        )?
+        .transaction(&self.store.borrow())?;
+        self.apply_semantic_transaction(transaction)
+    }
+
+    /// Arrange a family atomically before or after bootstrap. Cold placement
+    /// measures authored bounds; running placement observes coherent effective
+    /// bounds and rejects unresolved affine drivers rather than overwriting them.
+    pub fn arrange_family_with_options(
+        &mut self,
+        family: &MobjectFamily,
+        options: &crate::FamilyArrangeOptions,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::family_layout::publish_arrange_family(
+                &self.store,
+                self.root,
+                execution,
+                family,
+                options,
+            );
+        }
+        MobjectTarget::Family(family).require_store(&self.store)?;
+        let transaction = crate::family_arrangement::FamilyArrangePlan::begin(family, options)?
+            .authored_transaction(&self.store)?;
+        self.apply_semantic_transaction(transaction)
+    }
+
+    /// Arrange a family grid through the same durable route before and after
+    /// bootstrap, with the observation policy of [`Self::arrange_family_with_options`].
+    pub fn arrange_family_in_grid_with_options(
+        &mut self,
+        family: &MobjectFamily,
+        options: &crate::FamilyGridOptions,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::family_layout::publish_arrange_family_in_grid(
+                &self.store,
+                self.root,
+                execution,
+                family,
+                options,
+            );
+        }
+        MobjectTarget::Family(family).require_store(&self.store)?;
+        let transaction = crate::family_arrangement::FamilyArrangePlan::grid(family, options)?
+            .authored_transaction(&self.store)?;
+        self.apply_semantic_transaction(transaction)
+    }
+
+    /// Move one object using authored layout while cold or coherent effective layout while running.
+    pub fn move_to(
+        &mut self,
+        object: &Mobject,
+        target: crate::LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction =
+                crate::family_layout::prepare_move_to(&self.store, object, target, edge, mask)?;
+            return self.apply_semantic_transaction(transaction);
+        }
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_move_to(
+                store, root, execution, object, target, edge, mask,
+            )
+        })
+    }
+
+    /// Move a family using authored layout while cold or coherent effective layout while running.
+    pub fn move_family_to(
+        &mut self,
+        family: &MobjectFamily,
+        target: crate::LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction = crate::family_layout::prepare_move_family_to(
+                &self.store,
+                family,
+                target,
+                edge,
+                mask,
+            )?;
+            return self.apply_semantic_transaction(transaction);
+        }
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_move_family_to(
+                store, root, execution, family, target, edge, mask,
+            )
+        })
+    }
+
+    /// Place a family next to an authored target while cold or effective target while running.
+    pub fn next_family_to(
+        &mut self,
+        family: &MobjectFamily,
+        target: crate::LiveLayoutTarget<'_>,
+        args: crate::ManimNextToArgs,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction =
+                crate::family_layout::prepare_next_family_to(&self.store, family, target, args)?;
+            return self.apply_semantic_transaction(transaction);
+        }
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_next_family_to(
+                store, root, execution, family, target, args,
+            )
+        })
+    }
+
+    /// Align a family to the default frame using authored or coherent effective bounds.
+    pub fn align_family_on_frame(
+        &mut self,
+        family: &MobjectFamily,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction = crate::family_layout::prepare_align_family_on_frame(
+                &self.store,
+                family,
+                direction,
+                buff,
+            )?;
+            return self.apply_semantic_transaction(transaction);
+        }
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_align_family_on_frame(
+                store, root, execution, family, direction, buff,
+            )
+        })
+    }
+
+    /// Align a family to an authored target while cold or effective target while running.
+    pub fn align_family_to(
+        &mut self,
+        family: &MobjectFamily,
+        target: crate::LiveLayoutTarget<'_>,
+        axis: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction =
+                crate::family_layout::prepare_align_family_to(&self.store, family, target, axis)?;
+            return self.apply_semantic_transaction(transaction);
+        }
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_align_family_to(
+                store, root, execution, family, target, axis,
+            )
+        })
+    }
+
+    /// Place one selected layout using authored observation cold or effective observation running.
+    pub fn next_layout_to_aligned(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: crate::LiveLayoutTarget<'_>,
+        aligner: &crate::LayoutAnchor,
+        args: crate::ManimNextToArgs,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if self.execution.is_none() {
+            let transaction = crate::family_layout::prepare_next_layout_to_aligned(
+                &self.store,
+                source,
+                target,
+                aligner,
+                args,
+            )?;
+            return self.apply_semantic_transaction(transaction);
+        }
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_next_layout_to_aligned(
+                store, root, execution, source, target, aligner, args,
+            )
+        })
+    }
+
+    /// Observe effective Runtime priority without creating a borrowed LiveSession facade.
+    /// Cold Scenes fail explicitly rather than returning authored state as effective state.
+    pub fn effective_z_index(&self, source: &crate::LayoutAnchor) -> Result<f64, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::z_index::effective_z_index(&self.store, execution, source)
+    }
+
+    /// Prepare boolean geometry from the current coherent Runtime publication.
+    /// Cold Scenes fail explicitly rather than substituting authored geometry.
+    pub fn effective_boolean_geometry_options(
+        &self,
+        operation: crate::BooleanOperation,
+        operands: &[Mobject],
+    ) -> Result<crate::ManimGeometryOptions, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::boolean_authoring::effective_boolean_geometry_options(
+            &self.store,
+            execution,
+            operation,
+            operands,
+        )
+    }
+
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {
         if !Rc::ptr_eq(&self.store, object.integration_store()) {
             return Err(crate::AuthoringError::ForeignStore);
         }
         object.validate()
+    }
+
+    /// Author one restoring `click -> Indicate` declaration for an analytic
+    /// Circle or Rectangle. Runtime invocation remains an execution-session
+    /// concern; this only publishes language-neutral semantic intent.
+    pub fn on_click_indicate(
+        &mut self,
+        target: &Mobject,
+        indication: crate::IndicateOptions,
+        options: AnimationOptions,
+    ) -> Result<(), crate::AuthoringError> {
+        self.require_object(target)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_click_indicate(
+            target.node_id(),
+            Some(click_indicate_declaration(indication, options)?),
+        );
+        self.apply_semantic_transaction(transaction).map(|_| ())
     }
     /// Validate the bounded ordinary leaf-affine operation without creating a
     /// declaration, session, track, or runtime identity.
@@ -259,11 +970,180 @@ impl Scene {
         .map_err(|error| error.to_string())
     }
 
-    /// Borrow the already-published execution session for supported live membership,
-    /// property edits, and effective-value queries. This facade retains no scene/runtime state.
+    pub(crate) fn change_chart_values(
+        &mut self,
+        chart: &mut crate::ManimBarChart,
+        values: &[f64],
+        update_colors: bool,
+    ) -> Result<(), crate::CoordinateAuthoringError> {
+        if !Rc::ptr_eq(&self.store, chart.family().integration_store()) {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        if self.execution.is_some() {
+            chart.change_bar_values_live(&mut self.owned_live(), values, update_colors)
+        } else {
+            chart.change_bar_values_cold(values, update_colors)
+        }
+    }
+
+    /// Install the execution component lowered from this exact Scene.
+    ///
+    /// This is private migration plumbing for the Scene-owned live path. External
+    /// integration entry points may still construct standalone sessions until the
+    /// broader control-surface migration removes that compatibility shape.
+    pub(crate) fn install_execution(&mut self, execution: ExecutionSession) {
+        assert!(
+            self.execution.is_none(),
+            "scene execution component may only be installed once"
+        );
+        self.execution = Some(execution);
+    }
+
+    pub(crate) const fn owned_execution(&self) -> &ExecutionSession {
+        match &self.execution {
+            Some(execution) => execution,
+            None => panic!("scene execution component is not initialized"),
+        }
+    }
+
+    pub(crate) fn composite_entry_state(
+        &self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticObjectState, AuthoringError> {
+        crate::family_layout::composite_entry_state(
+            &self.store,
+            self.execution.as_ref(),
+            self.root,
+            object,
+        )
+    }
+
+    pub(crate) fn owned_execution_mut(&mut self) -> &mut ExecutionSession {
+        self.execution
+            .as_mut()
+            .expect("scene execution component is not initialized")
+    }
+
+    /// Borrow the Scene-owned execution component when this Scene has crossed
+    /// the execution boundary. Feature admissions use this to publish their
+    /// prepared resources through the same atomic root transaction as geometry.
+    pub(crate) fn running_execution_mut(&mut self) -> Option<&mut ExecutionSession> {
+        self.execution.as_mut()
+    }
+
+    pub(crate) fn running_execution(&self) -> Option<&ExecutionSession> {
+        self.execution.as_ref()
+    }
+
+    pub(crate) fn owned_live(&mut self) -> LiveSession<'_> {
+        let root = self.root;
+        let store = &self.store;
+        let execution = self
+            .execution
+            .as_mut()
+            .expect("scene execution component is not initialized");
+        LiveSession::new(store, root, execution)
+    }
+
+    /// Borrow an explicitly supplied execution session for compatibility during
+    /// the control-surface migration. Scene-owned persistent operations do not
+    /// require this pairing once execution is installed in the Scene itself.
     pub fn live<'a>(&'a self, session: &'a mut ExecutionSession) -> LiveSession<'a> {
         LiveSession::new(&self.store, self.root, session)
     }
 }
 #[cfg(test)]
+mod arrow_atomicity_tests;
+mod brace;
+#[cfg(test)]
+mod geometry_atomicity_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(feature = "latex")]
+impl Scene {
+    /// Compile real TeX and atomically publish one detached text Mobject.
+    ///
+    /// The backend is an explicit host boundary; compiled vectors, fonts, and
+    /// the semantic node enter together through the same cold/live transaction.
+    pub fn tex(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, crate::TextAuthoringError> {
+        let admission = crate::latex_authoring::prepare_tex(text, backend)?;
+        self.publish_latex_admission(admission)
+    }
+
+    /// Compile real display math and atomically publish one detached text Mobject.
+    pub fn math_tex(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<Mobject, crate::TextAuthoringError> {
+        let admission = crate::latex_authoring::prepare_math_tex(text, backend)?;
+        self.publish_latex_admission(admission)
+    }
+
+    /// Construct one detached, tracker-driven `label = value` composite through
+    /// a single resource and semantic publication boundary.
+    #[cfg(feature = "latex")]
+    pub fn variable(
+        &mut self,
+        backend: &mut impl crate::LatexBackend,
+        label: impl Into<String>,
+        initial: f64,
+        format: noon_core::DecimalFormat,
+        font_size: f32,
+    ) -> Result<crate::Variable, crate::VariableAuthoringError> {
+        crate::variable_authoring::construct_variable(
+            &self.store,
+            self.root,
+            self.execution.as_mut(),
+            backend,
+            label.into(),
+            initial,
+            format,
+            font_size,
+        )
+    }
+
+    fn publish_latex_admission(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<Mobject, crate::TextAuthoringError> {
+        let root = self.root;
+        let store_rc = Rc::clone(&self.store);
+        let result = match self.execution.as_mut() {
+            Some(execution) => {
+                {
+                    let store = store_rc.borrow();
+                    execution
+                        .require_resource_creation_at_root(&store, root)
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(crate::TextAuthoringError::Semantic)?;
+                }
+                let mut store = store_rc.borrow_mut();
+                admission.publish(&mut store, |store, transaction| {
+                    execution
+                        .apply_semantic_transaction_at_root(store, root, transaction)
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(crate::TextAuthoringError::Semantic)
+                })?
+            }
+            None => {
+                let mut store = store_rc.borrow_mut();
+                admission.publish(&mut store, |store, transaction| {
+                    transaction
+                        .apply(store)
+                        .map_err(crate::AuthoringError::from)
+                        .map_err(crate::TextAuthoringError::Semantic)
+                })?
+            }
+        };
+        let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one LaTeX admission creates one detached semantic node")
+        };
+        Mobject::from_node(store_rc, *node).map_err(crate::TextAuthoringError::Semantic)
+    }
+}

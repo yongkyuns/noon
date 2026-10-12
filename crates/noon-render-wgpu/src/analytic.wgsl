@@ -47,6 +47,21 @@ struct VertexOutput {
     @location(7) line_stroke_enabled: f32,
 };
 
+struct RectangleVertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) local: vec2<f32>,
+    @location(1) geometry: vec2<f32>,
+    @location(2) fill: vec4<f32>,
+    @location(3) stroke: vec4<f32>,
+    @location(4) metrics: vec2<f32>,
+    @location(5) @interpolate(flat) flags: vec2<f32>,
+    @location(6) object_scale: vec2<f32>,
+    @location(7) @interpolate(flat) polygon_a: vec2<f32>,
+    @location(8) @interpolate(flat) polygon_b: vec2<f32>,
+    @location(9) @interpolate(flat) polygon_c: vec2<f32>,
+    @location(10) @interpolate(flat) polygon_d: vec2<f32>,
+};
+
 fn rotate_vector(local: vec2<f32>, rotation: f32) -> vec2<f32> {
     let c = cos(rotation);
     let s = sin(rotation);
@@ -161,7 +176,7 @@ fn vs_circle(input: VertexInput) -> VertexOutput {
 }
 
 @vertex
-fn vs_rectangle(input: VertexInput) -> VertexOutput {
+fn vs_rectangle(input: VertexInput) -> RectangleVertexOutput {
     let half_size = abs(input.geometry) * 0.5;
     let padding = local_axis_padding(input.scale, input.rotation);
     let half_width = max(input.metrics.x, 0.0) * 0.5;
@@ -178,7 +193,21 @@ fn vs_rectangle(input: VertexInput) -> VertexOutput {
         stroke_is_enabled(input.flags),
     );
     let local = input.unit * (half_size + outline_padding + padding);
-    return make_output(input, local);
+    var output: RectangleVertexOutput;
+    let world = transform_point(local, input.translation, input.scale, input.rotation);
+    output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
+    output.local = local;
+    output.geometry = input.geometry;
+    output.fill = input.fill;
+    output.stroke = input.stroke;
+    output.metrics = input.metrics;
+    output.flags = vec2<f32>(f32(input.flags.x), f32(input.flags.y));
+    output.object_scale = input.scale;
+    output.polygon_a = world_to_pixel(transform_point(vec2<f32>(-half_size.x, -half_size.y), input.translation, input.scale, input.rotation));
+    output.polygon_b = world_to_pixel(transform_point(vec2<f32>(half_size.x, -half_size.y), input.translation, input.scale, input.rotation));
+    output.polygon_c = world_to_pixel(transform_point(vec2<f32>(half_size.x, half_size.y), input.translation, input.scale, input.rotation));
+    output.polygon_d = world_to_pixel(transform_point(vec2<f32>(-half_size.x, half_size.y), input.translation, input.scale, input.rotation));
+    return output;
 }
 
 @vertex
@@ -257,20 +286,6 @@ fn outside_coverage(signed_distance: f32) -> f32 {
     return smoothstep(-half_width, half_width, signed_distance);
 }
 
-fn cairo_source_color(color: vec4<f32>, opacity: f32) -> vec4<f32> {
-    // Cairo stores solid-pattern channels through a rounded 16-bit intermediate,
-    // then takes the high byte of the premultiplied result. Quantize the source
-    // before fixed-function source-over so WebGPU/WebGL match Cairo's ARGB32
-    // compositing instead of applying the render target's nearest-UNORM rounding
-    // directly to full-precision float colors.
-    let alpha = clamp(color.a * opacity, 0.0, 1.0);
-    let rgb16 = floor(clamp(color.rgb * alpha, vec3<f32>(0.0), vec3<f32>(1.0)) * 65535.0 + vec3<f32>(0.5));
-    let alpha16 = floor(alpha * 65535.0 + 0.5);
-    let rgb8 = floor(rgb16 / 256.0);
-    let alpha8 = floor(alpha16 / 256.0);
-    return vec4<f32>(rgb8 / 255.0, alpha8 / 255.0);
-}
-
 fn covered_color(color: vec4<f32>, opacity: f32, coverage: f32) -> vec4<f32> {
     // Raster coverage is a separate Cairo mask; keep it outside the solid-source
     // quantization so antialiasing continues to operate at fragment precision.
@@ -332,8 +347,23 @@ fn styled_shape_color(
     );
 }
 
-fn styled_line_color(input: VertexOutput, signed_distance: f32) -> vec4<f32> {
-    let coverage = inside_coverage(signed_distance);
+fn interval_box_coverage(center: f32, half_extent: f32, pixel_width: f32) -> f32 {
+    let width = max(pixel_width, 0.000001);
+    let covered_right = clamp((half_extent - center) / width + 0.5, 0.0, 1.0);
+    let covered_left = clamp((-half_extent - center) / width + 0.5, 0.0, 1.0);
+    return max(covered_right - covered_left, 0.0);
+}
+
+fn butt_line_coverage(local: vec2<f32>, half_length: f32, radius: f32) -> f32 {
+    // Integrate the line's signed local-coordinate cross section over one pixel.
+    // Using fwidth(local.y) remains nonzero on the centerline, unlike the
+    // derivative of abs(local.y) or a signed-distance value there.
+    let across = interval_box_coverage(local.y, radius, fwidth(local.y));
+    let along = interval_box_coverage(local.x, half_length, fwidth(local.x));
+    return across * along;
+}
+
+fn styled_line_color(input: VertexOutput, coverage: f32) -> vec4<f32> {
     if input.line_stroke_enabled >= 0.5 {
         return covered_color(input.stroke, input.metrics.y, coverage);
     }
@@ -348,16 +378,23 @@ fn rectangle_signed_distance(position: vec2<f32>, half_size: vec2<f32>) -> f32 {
     return length(max(offset, vec2<f32>(0.0))) + min(max(offset.x, offset.y), 0.0);
 }
 
-fn rectangle_fill_coverage(position: vec2<f32>, half_size: vec2<f32>) -> f32 {
-    // A nearest-edge SDF is a good edge AA approximation while opposite sides are
-    // separated by at least a pixel. Once a rectangle becomes subpixel, however,
-    // both sides of an axis occupy the same filter footprint and the SDF overcounts
-    // the covered area. Cairo rasterizes the box area instead. Independent axis masks
-    // preserve the existing large-rectangle edge profile and naturally collapse a
-    // tiny box toward its projected area without a geometry-size cutoff.
-    let x_coverage = inside_coverage(abs(position.x) - half_size.x);
-    let y_coverage = inside_coverage(abs(position.y) - half_size.y);
-    return x_coverage * y_coverage;
+fn world_to_pixel(world: vec2<f32>) -> vec2<f32> {
+    let clip = (world - camera.center) * camera.clip_scale;
+    return vec2<f32>(
+        (clip.x + 1.0) * camera.viewport_size.x * 0.5,
+        (1.0 - clip.y) * camera.viewport_size.y * 0.5,
+    );
+}
+
+fn rectangle_fill_coverage(input: RectangleVertexOutput) -> f32 {
+    let pixel_minimum = floor(input.position.xy);
+    return polygon_pixel_coverage(
+        input.polygon_a - pixel_minimum,
+        input.polygon_b - pixel_minimum,
+        input.polygon_c - pixel_minimum,
+        input.polygon_d - pixel_minimum,
+        4u,
+    );
 }
 
 fn rectangle_local_normal(position: vec2<f32>, half_size: vec2<f32>) -> vec2<f32> {
@@ -419,14 +456,10 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
     let head_angle = reveal * tau;
     let head_center = radius * vec2<f32>(cos(head_angle), sin(head_angle));
     let start_center = vec2<f32>(radius, 0.0);
-    let local_head_distance = length(input.local - head_center) - half_stroke_width;
-    let local_start_distance = length(input.local - start_center) - half_stroke_width;
-    let world_head_distance = length((input.local - head_center) * input.object_scale)
-        - max(input.metrics.x, 0.0) * 0.5;
-    let world_start_distance = length((input.local - start_center) * input.object_scale)
-        - max(input.metrics.x, 0.0) * 0.5;
-    let head_cap = inside_coverage(select(local_head_distance, world_head_distance, screen_space_stroke));
-    let start_cap = inside_coverage(select(local_start_distance, world_start_distance, screen_space_stroke));
+    let fill_chord_edge = head_center - start_center;
+    let fill_chord_side = fill_chord_edge.x * (input.local.y - start_center.y)
+        - fill_chord_edge.y * (input.local.x - start_center.x);
+    let fill_segment_coverage = fill_coverage * inside_coverage(fill_chord_side);
 
     if reveal >= 1.0 {
         return final_color;
@@ -435,21 +468,20 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    // Circle Create remains entirely analytic. The SDF gives an exact circle;
-    // angular progress reveals its outline and an analytic disk supplies the
-    // moving round head, so there is no faceted temporary mesh or endpoint pop.
+    // Circle Create stays analytic: the outline uses angular progress, while
+    // the fill follows the revealed arc closed by its endpoint chord, as in
+    // Manim's partial closed path.
     let body_reveal = 1.0 - smoothstep(reveal, reveal + progress_edge, progress);
     let has_creation_stroke = stroke_width > 0.0 && (stroke_enabled || fill_enabled);
     let stroke_coverage = select(
         0.0,
-        max(ring_coverage * body_reveal, max(head_cap, start_cap)),
+        ring_coverage * body_reveal,
         has_creation_stroke,
     );
 
-    let fill_alpha = smoothstep(0.0, 1.0, reveal);
     let fill_layer = select(
         vec4<f32>(0.0),
-        covered_color(input.fill, input.metrics.y * fill_alpha, fill_coverage),
+        covered_color(input.fill, input.metrics.y, fill_segment_coverage),
         fill_enabled,
     );
     let derive_creation_stroke = fill_enabled && !stroke_enabled;
@@ -468,10 +500,10 @@ fn fs_circle(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_rectangle(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_rectangle(input: RectangleVertexOutput) -> @location(0) vec4<f32> {
     let half_size = max(abs(input.geometry) * 0.5, vec2<f32>(0.000001));
     let signed_distance = rectangle_signed_distance(input.local, half_size);
-    let fill_coverage = rectangle_fill_coverage(input.local, half_size);
+    let fill_coverage = rectangle_fill_coverage(input);
     let stroke_flags = u32(input.flags.y);
     let stroke_width = local_stroke_width_for_normal(
         input.metrics.x,
@@ -511,6 +543,18 @@ fn fs_line(input: VertexOutput) -> @location(0) vec4<f32> {
             vec2<f32>(half_length + radius, radius),
         );
     }
+    // Evaluate derivative-based coverage for every cap mode before selecting,
+    // so fragment derivatives remain valid across non-uniform control flow.
+    let sdf_coverage = inside_coverage(signed_distance);
+    let butt_coverage = butt_line_coverage(input.local, half_length, radius);
+    // A round cap changes the endpoints, not the straight body's cross section.
+    // Smoothstep on that body modulates narrow-stroke energy as the camera moves
+    // across pixel phases. Reuse the already evaluated box coverage where the
+    // entire pixel footprint lies between the endpoints. Keep the capsule SDF
+    // for pixels touching either cap (including short/zero-length segments).
+    let inside_body = abs(input.local.x) + 0.5 * fwidth(input.local.x) <= half_length;
+    let use_box_coverage = cap_mode == 1u || (cap_mode == 0u && inside_body);
+    let coverage = select(sdf_coverage, butt_coverage, use_box_coverage);
     let visible = select(0.0, 1.0, input.geometry.y > 0.0);
-    return styled_line_color(input, signed_distance) * visible;
+    return styled_line_color(input, coverage) * visible;
 }

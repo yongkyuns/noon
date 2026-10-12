@@ -12,11 +12,19 @@ use super::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticReferenceKind {
     SignalDependency,
-    SignalBinding { property: SemanticObjectProperty },
+    EffectOwner,
+    SignalBinding {
+        property: SemanticObjectProperty,
+    },
     ScopedSignal,
+    ForegroundMember,
+    Inset2DCameraFrame,
+    SpatialAnchorFamily,
     AnimationTarget,
     AnimationTargetState,
     AnimationChild,
+    /// Hard authored topology dependency owned by one graph family root.
+    GraphDependency,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,10 +42,21 @@ impl SemanticIncomingReference {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticRemoveNodeEffect {
     NodeRemoved(SemanticNodeId),
+    EffectAttachmentChanged {
+        owner: SemanticNodeId,
+        effect: SemanticNodeId,
+    },
+    ForegroundMembersChanged {
+        scope: SemanticNodeId,
+    },
     SubscriptionRemoved {
         object: SemanticNodeId,
         property: SemanticObjectProperty,
     },
+    ObjectRoleReplaced(SemanticNodeId),
+    /// A surviving FixedOrientation object now self-anchors because its shared
+    /// family root was removed.
+    SpatialAnchorCleared(SemanticNodeId),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -57,6 +76,40 @@ impl SemanticRemoveNodeOutcome {
 }
 
 impl SemanticStore {
+    /// Return live object owners whose FixedOrientation anchor is one of the
+    /// supplied identities. The query follows the retained reverse-reference
+    /// index and preserves target/reference order.
+    pub(crate) fn spatial_anchor_owners_for_target(
+        &self,
+        target: SemanticNodeId,
+    ) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        self.incoming_references
+            .get(&target)
+            .into_iter()
+            .flatten()
+            .filter(move |reference| {
+                reference.kind == SemanticReferenceKind::SpatialAnchorFamily
+                    && self.node(reference.owner).is_some_and(|node| {
+                        node.semantic_object_state()
+                            .is_some_and(|state| state.spatial_anchor_family() == Some(target))
+                    })
+            })
+            .map(|reference| reference.owner)
+    }
+
+    /// Derived reverse references keep inset validation local to an edited frame.
+    pub(crate) fn inset_displays_for_camera(
+        &self,
+        camera: SemanticNodeId,
+    ) -> impl Iterator<Item = SemanticNodeId> + '_ {
+        self.incoming_references
+            .get(&camera)
+            .into_iter()
+            .flatten()
+            .filter(|reference| reference.kind == SemanticReferenceKind::Inset2DCameraFrame)
+            .map(|reference| reference.owner)
+    }
+
     /// Whether this signal participates in any scene execution scope.
     ///
     /// Work is proportional to the signal's direct incoming references; scene
@@ -82,6 +135,44 @@ impl SemanticStore {
             .is_some_and(|incoming| incoming.contains(&reference))
     }
 
+    /// Return graph declaration owners whose validity directly depends on
+    /// `target`, plus `target` itself when it owns a graph declaration.
+    ///
+    /// Work is proportional to the target's reverse-reference aliases; unrelated
+    /// graph roots and scene nodes are never scanned.
+    pub(crate) fn semantic_graph_owners_for_invariant_target(
+        &self,
+        target: SemanticNodeId,
+    ) -> Vec<SemanticNodeId> {
+        let mut owners = Vec::new();
+        let mut seen = HashSet::new();
+        if self
+            .node(target)
+            .and_then(SemanticNode::graph_declaration)
+            .is_some()
+            && seen.insert(target)
+        {
+            owners.push(target);
+        }
+        if let Some(incoming) = self.incoming_references.get(&target) {
+            for reference in incoming.iter().copied() {
+                if reference.kind != SemanticReferenceKind::GraphDependency
+                    || self.node(reference.owner).is_none()
+                    || !self.owner_still_references(
+                        reference.owner,
+                        target,
+                        SemanticReferenceKind::GraphDependency,
+                    )
+                    || !seen.insert(reference.owner)
+                {
+                    continue;
+                }
+                owners.push(reference.owner);
+            }
+        }
+        owners
+    }
+
     pub(crate) fn register_semantic_scoped_signal_reference(
         &mut self,
         scope: SemanticNodeId,
@@ -90,6 +181,45 @@ impl SemanticStore {
         let reference = SemanticIncomingReference::new(scope, SemanticReferenceKind::ScopedSignal);
         let incoming = self.incoming_references.entry(signal).or_default();
         if !incoming.contains(&reference) {
+            incoming.push(reference);
+        }
+    }
+
+    /// Replace only this declaration's reverse edges. Do not enumerate this
+    /// root's display members, signals, or any unrelated semantic scopes.
+    pub(crate) fn replace_semantic_foreground_members(
+        &mut self,
+        scope: SemanticNodeId,
+        members: Vec<SemanticNodeId>,
+    ) {
+        let previous = std::mem::replace(
+            self.node_mut(scope)
+                .expect("preflighted foreground scope")
+                .foreground_members_mut(),
+            members,
+        );
+        let reference =
+            SemanticIncomingReference::new(scope, SemanticReferenceKind::ForegroundMember);
+        for member in previous {
+            let empty = if let Some(incoming) = self.incoming_references.get_mut(&member) {
+                incoming.retain(|candidate| *candidate != reference);
+                incoming.is_empty()
+            } else {
+                false
+            };
+            if empty {
+                self.incoming_references.remove(&member);
+            }
+        }
+        // Split borrows across node storage and the reverse-reference index.
+        let declared = &self.slots[scope.slot() as usize]
+            .node
+            .as_ref()
+            .expect("preflighted foreground scope")
+            .foreground_members;
+        for &member in declared {
+            let incoming = self.incoming_references.entry(member).or_default();
+            debug_assert!(!incoming.contains(&reference));
             incoming.push(reference);
         }
     }
@@ -171,11 +301,16 @@ impl SemanticStore {
                 }
                 match reference.kind {
                     SemanticReferenceKind::SignalBinding { .. }
-                    | SemanticReferenceKind::ScopedSignal => {}
-                    SemanticReferenceKind::SignalDependency
+                    | SemanticReferenceKind::ScopedSignal
+                    | SemanticReferenceKind::ForegroundMember
+                    | SemanticReferenceKind::Inset2DCameraFrame => {}
+                    SemanticReferenceKind::SpatialAnchorFamily => {}
+                    SemanticReferenceKind::EffectOwner
+                    | SemanticReferenceKind::SignalDependency
                     | SemanticReferenceKind::AnimationTarget
                     | SemanticReferenceKind::AnimationTargetState
-                    | SemanticReferenceKind::AnimationChild => stack.push(reference.owner),
+                    | SemanticReferenceKind::AnimationChild
+                    | SemanticReferenceKind::GraphDependency => stack.push(reference.owner),
                 }
             }
         }
@@ -262,6 +397,72 @@ impl SemanticStore {
                             });
                     }
                 }
+                SemanticReferenceKind::ForegroundMember => {
+                    let scope = reference.owner;
+                    let members = self
+                        .node_mut(scope)
+                        .expect("indexed foreground owner is live")
+                        .foreground_members_mut();
+                    let previous_len = members.len();
+                    members.retain(|member| *member != id);
+                    if members.len() != previous_len {
+                        outcome.written_slots.insert(scope);
+                        outcome
+                            .effects
+                            .push(SemanticRemoveNodeEffect::ForegroundMembersChanged { scope });
+                    }
+                }
+                SemanticReferenceKind::Inset2DCameraFrame => {
+                    let owner = reference.owner;
+                    let matches = self
+                        .node(owner)
+                        .and_then(SemanticNode::semantic_object_state)
+                        .is_some_and(|state| {
+                            matches!(
+                                state.role(),
+                                crate::SemanticObjectRole::Inset2DView(role)
+                                    if role.camera_frame == id
+                            )
+                        });
+                    if matches {
+                        self.replace_semantic_object_role(
+                            owner,
+                            crate::SemanticObjectRole::Ordinary,
+                        );
+                        outcome.written_slots.insert(owner);
+                        outcome
+                            .effects
+                            .push(SemanticRemoveNodeEffect::ObjectRoleReplaced(owner));
+                    }
+                }
+                SemanticReferenceKind::SpatialAnchorFamily => {
+                    let owner = reference.owner;
+                    let matches = self
+                        .node(owner)
+                        .and_then(SemanticNode::semantic_object_state)
+                        .is_some_and(|state| state.spatial_anchor_family() == Some(id));
+                    if matches {
+                        self.unregister_semantic_references_for_owner(owner);
+                        let state = self
+                            .node_mut(owner)
+                            .expect("indexed anchor owner is live")
+                            .semantic_object_state_mut()
+                            .expect("anchor owner remains an object");
+                        state
+                            .set_spatial_composition_domain_with_anchor(
+                                crate::SemanticSpatialCompositionDomain::FixedOrientation,
+                                None,
+                            )
+                            .expect(
+                                "clearing an anchor preserves valid fixed-orientation metadata",
+                            );
+                        self.register_semantic_references_for_owner(owner);
+                        outcome.written_slots.insert(owner);
+                        outcome
+                            .effects
+                            .push(SemanticRemoveNodeEffect::SpatialAnchorCleared(owner));
+                    }
+                }
                 SemanticReferenceKind::ScopedSignal => {
                     let scope = reference.owner;
                     let removed = self
@@ -271,10 +472,12 @@ impl SemanticStore {
                         outcome.written_slots.insert(scope);
                     }
                 }
-                SemanticReferenceKind::SignalDependency
+                SemanticReferenceKind::EffectOwner
+                | SemanticReferenceKind::SignalDependency
                 | SemanticReferenceKind::AnimationTarget
                 | SemanticReferenceKind::AnimationTargetState
-                | SemanticReferenceKind::AnimationChild => {
+                | SemanticReferenceKind::AnimationChild
+                | SemanticReferenceKind::GraphDependency => {
                     self.remove_node_with_reverse_cleanup_inner(
                         reference.owner,
                         outcome,
@@ -288,6 +491,16 @@ impl SemanticStore {
             .node(id)
             .expect("node remains live until its reverse referrers are cleaned")
             .clone();
+        if let Some(effect) = node.semantic_effect_state() {
+            let owner = effect.owner();
+            self.unlink_effect(id, owner);
+            if self.node(owner).is_some() {
+                outcome.written_slots.insert(owner);
+                outcome
+                    .effects
+                    .push(SemanticRemoveNodeEffect::EffectAttachmentChanged { owner, effect: id });
+            }
+        }
         record_direct_remove_writes(&node, &mut outcome.written_slots);
         self.remove_node(id)?;
         visiting.remove(&id);
@@ -300,9 +513,21 @@ impl SemanticStore {
         target: SemanticNodeId,
         kind: SemanticReferenceKind,
     ) -> bool {
-        self.semantic_outgoing_references(owner)
-            .into_iter()
-            .any(|candidate| candidate == (target, kind))
+        let Some(node) = self.node(owner) else {
+            return false;
+        };
+        match kind {
+            SemanticReferenceKind::ForegroundMember => node.foreground_members().contains(&target),
+            SemanticReferenceKind::SpatialAnchorFamily => node
+                .semantic_object_state()
+                .is_some_and(|state| state.spatial_anchor_family() == Some(target)),
+            SemanticReferenceKind::GraphDependency => node
+                .graph_declaration()
+                .is_some_and(|graph| graph.references_node(target)),
+            _ => outgoing_references(node)
+                .into_iter()
+                .any(|candidate| candidate == (target, kind)),
+        }
     }
 }
 
@@ -318,6 +543,14 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 },
             )
         }));
+        if let crate::SemanticObjectRole::Inset2DView(role) = state.role() {
+            references.push((role.camera_frame, SemanticReferenceKind::Inset2DCameraFrame));
+        }
+        references.extend(
+            state
+                .spatial_anchor_family()
+                .map(|anchor| (anchor, SemanticReferenceKind::SpatialAnchorFamily)),
+        );
     }
 
     references.extend(
@@ -327,7 +560,25 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
             .map(|signal| (signal, SemanticReferenceKind::ScopedSignal)),
     );
 
+    references.extend(
+        node.foreground_members()
+            .iter()
+            .copied()
+            .map(|member| (member, SemanticReferenceKind::ForegroundMember)),
+    );
+
+    if let Some(graph) = node.graph_declaration() {
+        references.extend(
+            graph
+                .referenced_nodes()
+                .map(|target| (target, SemanticReferenceKind::GraphDependency)),
+        );
+    }
+
     match node.kind() {
+        SemanticNodeKind::Effect(state) => {
+            references.push((state.owner(), SemanticReferenceKind::EffectOwner))
+        }
         SemanticNodeKind::Signal(state) => {
             if let SemanticSignalSource::Derived(expression) = state.source() {
                 collect_signal_dependencies(expression, &mut references);
@@ -349,7 +600,21 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
                 references.push((*target_state, SemanticReferenceKind::AnimationTargetState));
             }
+            SemanticAnimationIntent::MoveAlongPath { target, path } => {
+                references.push((*target, SemanticReferenceKind::AnimationTarget));
+                references.push((*path, SemanticReferenceKind::AnimationTargetState));
+            }
+            SemanticAnimationIntent::FamilyTransformTo {
+                source,
+                target_state,
+                ..
+            } => {
+                references.push((*source, SemanticReferenceKind::AnimationTarget));
+                references.push((*target_state, SemanticReferenceKind::AnimationTargetState));
+            }
             SemanticAnimationIntent::Rotate { target, .. }
+            | SemanticAnimationIntent::WorldTransformTo { target, .. }
+            | SemanticAnimationIntent::CameraProfileTo { target, .. }
             | SemanticAnimationIntent::Indicate { target, .. }
             | SemanticAnimationIntent::DrawBorderThenFill { target, .. }
             | SemanticAnimationIntent::PassingFlash { target, .. }

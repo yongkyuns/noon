@@ -21,6 +21,29 @@ pub struct SemanticLocalNodeToken {
     ordinal: u32,
 }
 
+/// A transaction-scoped name for one immutable resource payload that has not
+/// entered a store arena. It is valid only while the owning transaction remains
+/// unpublished; materialization replaces it with the store-owned resource handle
+/// inside the final resource/publication scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SemanticLocalResourceToken {
+    transaction: u32,
+    ordinal: u32,
+}
+
+impl SemanticLocalResourceToken {
+    pub(super) const fn new(transaction: u32, ordinal: u32) -> Self {
+        Self {
+            transaction,
+            ordinal,
+        }
+    }
+
+    pub(super) const fn belongs_to(self, transaction: u32) -> bool {
+        self.transaction == transaction
+    }
+}
+
 impl SemanticLocalNodeToken {
     pub(super) const fn new(transaction: u32, ordinal: u32) -> Self {
         Self {
@@ -84,6 +107,69 @@ pub(super) struct TransactionNodeCatalog<'a> {
 }
 
 impl<'a> TransactionNodeCatalog<'a> {
+    pub(super) fn is_static_vector_path(
+        &self,
+        node: SemanticTransactionNodeRef,
+        state: &crate::SemanticObjectState,
+    ) -> bool {
+        if !state.signal_bindings().is_empty() {
+            return false;
+        }
+        if let SemanticTransactionNodeRef::Pending(token) = node {
+            if self.pending.get(&token).is_some_and(|pending| {
+                matches!(
+                    pending,
+                    PendingSemanticNode::Creation(SemanticNodeCreation::PendingPathObject { .. })
+                )
+            }) {
+                return true;
+            }
+        }
+        state
+            .content
+            .geometry()
+            .and_then(crate::StoredGeometry::resource_handle)
+            .and_then(|handle| self.store.geometry_resources().get(handle))
+            .is_some_and(|resource| {
+                matches!(resource, crate::GeometryResource::VectorPath(path) if path.has_drawable_segments() && path.retained_command_count() <= crate::MAX_PATH_MOTION_COMMANDS)
+            })
+    }
+
+    pub(super) fn last_member(
+        &self,
+        family: SemanticTransactionNodeRef,
+    ) -> Option<SemanticTransactionNodeRef> {
+        family
+            .existing()
+            .and_then(|family| self.store.node(family))
+            .and_then(|node| node.last_member())
+            .map(Into::into)
+    }
+
+    pub(super) fn next_member(
+        &self,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    ) -> Option<SemanticTransactionNodeRef> {
+        let (family, member) = (family.existing()?, member.existing()?);
+        self.store
+            .node(family)
+            .and_then(|node| node.next_member(member))
+            .map(Into::into)
+    }
+
+    pub(super) fn previous_member(
+        &self,
+        family: SemanticTransactionNodeRef,
+        member: SemanticTransactionNodeRef,
+    ) -> Option<SemanticTransactionNodeRef> {
+        let (family, member) = (family.existing()?, member.existing()?);
+        self.store
+            .node(family)
+            .and_then(|node| node.previous_member(member))
+            .map(Into::into)
+    }
+
     pub(super) fn existing_node_is_scene_owned_or_parented(
         &self,
         node: SemanticNodeId,
@@ -105,10 +191,7 @@ impl<'a> TransactionNodeCatalog<'a> {
         match (mode, state.content) {
             (_, crate::SemanticObjectContent::Geometry(_)) if family_member.is_some() => {}
             (_, crate::SemanticObjectContent::Text(handle)) => {
-                let Some(resource) = self.store.text_resources().get(handle) else {
-                    return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
-                };
-                if resource.kind != crate::TextSourceKind::Plain {
+                if self.store.text_resources().get(handle).is_none() {
                     return Err(SemanticMutationTransactionError::InvalidTextWriteTarget { index });
                 }
             }
@@ -292,7 +375,9 @@ impl<'a> TransactionNodeCatalog<'a> {
                 if !matches!(
                     self.pending[&token],
                     PendingSemanticNode::Creation(
-                        SemanticNodeCreation::Object { .. } | SemanticNodeCreation::Family { .. }
+                        SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                            | SemanticNodeCreation::Family { .. }
                     )
                 ) {
                     return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
@@ -304,6 +389,38 @@ impl<'a> TransactionNodeCatalog<'a> {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn ensure_object(
+        &self,
+        node: SemanticTransactionNodeRef,
+        index: usize,
+    ) -> Result<(), SemanticMutationTransactionError> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .semantic_object_state_checked(node)
+                .map(|_| ())
+                .map_err(|error| SemanticMutationTransactionError::Object { index, error }),
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_pending(node, index)?;
+                if matches!(
+                    self.pending[&token],
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                    )
+                ) {
+                    Ok(())
+                } else {
+                    Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
+                        index,
+                        token,
+                        expected: SemanticPendingNodeKind::Object,
+                    })
+                }
+            }
+        }
     }
 
     pub(super) fn ensure_animation(
@@ -386,7 +503,10 @@ impl<'a> TransactionNodeCatalog<'a> {
                 self.validate_pending(node, index)?;
                 if matches!(
                     self.pending[&token],
-                    PendingSemanticNode::Creation(SemanticNodeCreation::Object { .. })
+                    PendingSemanticNode::Creation(
+                        SemanticNodeCreation::Object { .. }
+                            | SemanticNodeCreation::PendingPathObject { .. }
+                    )
                 ) {
                     Ok(())
                 } else {
@@ -464,7 +584,10 @@ impl<'a> TransactionNodeCatalog<'a> {
                         state, ..
                     }) => (**state).clone(),
                     PendingSemanticNode::Creation(
-                        SemanticNodeCreation::Family { .. } | SemanticNodeCreation::Signal { .. },
+                        SemanticNodeCreation::PendingPathObject { .. }
+                        | SemanticNodeCreation::Family { .. }
+                        | SemanticNodeCreation::Effect { .. }
+                        | SemanticNodeCreation::Signal { .. },
                     )
                     | PendingSemanticNode::Animation(_) => {
                         return Err(SemanticMutationTransactionError::PendingNodeKindMismatch {
@@ -495,9 +618,21 @@ pub(super) fn replace_object_binding(
         .position(|binding| binding.property() == property);
     match (position, signal) {
         (Some(position), Some(signal)) => {
-            bindings[position] = SemanticSignalBinding::new(signal, property)
+            let order = bindings[position].authored_order();
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(order);
+            bindings[position] = binding;
         }
-        (None, Some(signal)) => bindings.push(SemanticSignalBinding::new(signal, property)),
+        (None, Some(signal)) => {
+            let order = bindings
+                .iter()
+                .map(|entry| entry.authored_order())
+                .max()
+                .map_or(0, |order| order + 1);
+            let mut binding = SemanticSignalBinding::new(signal, property);
+            binding.set_authored_order(order);
+            bindings.push(binding);
+        }
         (Some(position), None) => {
             bindings.remove(position);
         }
@@ -525,7 +660,15 @@ pub(super) fn duplicate_mutation_error(
 ) -> SemanticMutationTransactionError {
     let pending = match key {
         SemanticMutationKey::ObjectProperty { object, .. }
+        | SemanticMutationKey::ObjectTransform(object)
         | SemanticMutationKey::ObjectContent(object)
+        | SemanticMutationKey::ClickIndicate(object)
+        | SemanticMutationKey::ObjectBarMetadata(object)
+        | SemanticMutationKey::ObjectRole(object)
+        | SemanticMutationKey::SpatialCompositionDomain(object)
+        | SemanticMutationKey::CameraMotions(object)
+        | SemanticMutationKey::DecimalNumber(object)
+        | SemanticMutationKey::TextPresentationBaseline(object)
         | SemanticMutationKey::ObjectStyle(object)
         | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
@@ -540,12 +683,19 @@ pub(super) fn duplicate_mutation_error(
                 SemanticTransactionNodeRef::Existing(_) => None,
             })
         }
-        SemanticMutationKey::Signal(_) => None,
+        SemanticMutationKey::EffectParameter { .. } | SemanticMutationKey::Signal(_) => None,
     };
     if let Some(node) = pending {
         return SemanticMutationTransactionError::DuplicatePendingMutation { index, node };
     }
     match key {
+        SemanticMutationKey::EffectParameter { effect, parameter } => {
+            SemanticMutationTransactionError::DuplicateEffectParameter {
+                index,
+                effect,
+                parameter,
+            }
+        }
         SemanticMutationKey::Signal(target) => {
             SemanticMutationTransactionError::DuplicateTarget { index, target }
         }
@@ -560,6 +710,26 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectContent(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateContent { index, object }
         }
+        SemanticMutationKey::ClickIndicate(SemanticTransactionNodeRef::Existing(object)) => {
+            SemanticMutationTransactionError::DuplicateClickIndicate { index, object }
+        }
+        SemanticMutationKey::ObjectBarMetadata(SemanticTransactionNodeRef::Existing(object)) => {
+            SemanticMutationTransactionError::DuplicateBarMetadata { index, object }
+        }
+        SemanticMutationKey::ObjectTransform(SemanticTransactionNodeRef::Existing(target))
+        | SemanticMutationKey::ObjectRole(SemanticTransactionNodeRef::Existing(target))
+        | SemanticMutationKey::SpatialCompositionDomain(SemanticTransactionNodeRef::Existing(
+            target,
+        ))
+        | SemanticMutationKey::CameraMotions(SemanticTransactionNodeRef::Existing(target)) => {
+            SemanticMutationTransactionError::DuplicateTarget { index, target }
+        }
+        SemanticMutationKey::DecimalNumber(SemanticTransactionNodeRef::Existing(object)) => {
+            SemanticMutationTransactionError::DuplicateContent { index, object }
+        }
+        SemanticMutationKey::TextPresentationBaseline(SemanticTransactionNodeRef::Existing(
+            object,
+        )) => SemanticMutationTransactionError::DuplicateContent { index, object },
         SemanticMutationKey::ZIndex(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateZIndex { index, node }
         }

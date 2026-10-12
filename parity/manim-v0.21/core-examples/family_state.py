@@ -8,8 +8,8 @@ class OrdinaryFamilyState(Scene):
         nested = VGroup(a, b)
         family = VGroup(a, nested)
         family.save_state()
-        replacement = family.copy().shift(RIGHT).scale(1.5)
-        family.become(replacement, match_width=True)
+        replacement = family.copy().shift(RIGHT).scale(1.5).rotate(0.3)
+        family.become(replacement, stretch=True)
         assert family[0] is a and family[1][0] is a
         self.add(family)
         family.generate_target()

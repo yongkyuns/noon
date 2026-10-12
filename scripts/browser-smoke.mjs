@@ -31,6 +31,7 @@ await mkdir(artifactDir, { recursive: true });
 // the shared Python corpus. These fixtures protect renderer-specific raster work.
 const examples = [
   { name: "Animated priority", factory: "createDirectAnimatedPrioritySmokeRenderer", objectCount: 2, duration: 3.25 },
+  { name: "Spatial mesh", factory: "createDirectSpatialMeshSmokeRenderer", objectCount: 3, duration: 2 },
   { name: "Path alignment", factory: "createDirectPathAlignmentSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Boolean geometry", factory: "createDirectBooleanGeometrySmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Path construction", factory: "createDirectPathConstructionSmokeRenderer", objectCount: 2, duration: 0.2 },
@@ -39,6 +40,8 @@ const examples = [
   { name: "Path subcurves", factory: "createDirectPathSubcurvesSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Path smoothing", factory: "createDirectPathSmoothingSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Text source parts", factory: "createDirectTextSourcePartsSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "MarkupText", factory: "createDirectMarkupTextSmokeRenderer", objectCount: 1, duration: 0.2 },
+  { name: "Text range colors", factory: "createDirectTextRangeColorsSmokeRenderer", objectCount: 1, duration: 0.2 },
   { name: "Path editing", factory: "createDirectPathEditingSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Paint queries and gradients", factory: "createDirectPaintQueriesGradientsSmokeRenderer", objectCount: 5, duration: 0.2 },
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
@@ -53,11 +56,12 @@ const examples = [
   { name: "Canonical curve layout", factory: "createDirectCanonicalCurveLayoutSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Point matching", factory: "createDirectPointMatchingSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Animated stroke width", factory: "createDirectAnimatedStrokeWidthSmokeRenderer", objectCount: 1, duration: 2 },
-  { name: "Path queries", factory: "createDirectPathQueriesSmokeRenderer", objectCount: 10, duration: 0.2 },
+  { name: "Path queries", factory: "createDirectPathQueriesSmokeRenderer", objectCount: 10, duration: 2.2 },
   { name: "Z-index", factory: "createDirectZIndexSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Scale pivots", factory: "createDirectScalePivotsSmokeRenderer", objectCount: 4, duration: 1.0 },
   { name: "Family grid", factory: "createDirectFamilyGridSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Create shapes", factory: "createDirectCreateShapesRenderer", objectCount: 4, duration: 3.2 },
+  { name: "Mixed Text-Circle Reveal", factory: "createDirectMixedFamilyRevealSmokeRenderer", objectCount: 2, duration: 3.2 },
   { name: "Morph stress · 1,000", factory: "createDirectMorphStressRenderer", objectCount: 1000, duration: 3.4 },
   { name: "Instanced field · 1,000", factory: "createDirectAnalyticProfileRenderer", args: [1000, "fit", 16 / 9, 3.4], objectCount: 1001, duration: 3.4 },
 ];
@@ -162,6 +166,62 @@ function visiblePixelStats(buffer, name) {
   return { changedPixels, bounds: { minX, minY, maxX, maxY } };
 }
 
+function visiblePixelsInRegion(buffer, region) {
+  const png = PNG.sync.read(buffer);
+  const background = [png.data[0], png.data[1], png.data[2]];
+  const minX = Math.floor(region.minX * png.width);
+  const maxX = Math.ceil(region.maxX * png.width);
+  const minY = Math.floor(region.minY * png.height);
+  const maxY = Math.ceil(region.maxY * png.height);
+  let visible = 0;
+  for (let y = minY; y < maxY; y += 1) {
+    for (let x = minX; x < maxX; x += 1) {
+      const offset = (y * png.width + x) * 4;
+      const distance = Math.abs(png.data[offset] - background[0])
+        + Math.abs(png.data[offset + 1] - background[1])
+        + Math.abs(png.data[offset + 2] - background[2]);
+      if (distance >= 32) visible += 1;
+    }
+  }
+  return visible;
+}
+
+function markupTextColorStats(buffer) {
+  const png = PNG.sync.read(buffer);
+  let cyan = 0;
+  let orange = 0;
+  let upperInk = 0;
+  let lowerInk = 0;
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const r = png.data[offset];
+    const g = png.data[offset + 1];
+    const b = png.data[offset + 2];
+    const y = Math.floor(offset / 4 / png.width);
+    if (b > r + 20 && g > r + 20) cyan += 1;
+    if (r > g + 30 && g > b + 20) orange += 1;
+    if (r + g + b > 180) {
+      if (y < png.height / 2) upperInk += 1;
+      else lowerInk += 1;
+    }
+  }
+  return { cyan, orange, upperInk, lowerInk };
+}
+
+function textRangeColorStats(buffer) {
+  const png = PNG.sync.read(buffer);
+  const counts = { red: 0, blue: 0, green: 0, white: 0 };
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const r = png.data[offset];
+    const g = png.data[offset + 1];
+    const b = png.data[offset + 2];
+    if (r > 170 && g < 130 && b < 130) counts.red += 1;
+    if (b > 130 && r < 130 && g < 170) counts.blue += 1;
+    if (g > 130 && r < 150 && b < 150) counts.green += 1;
+    if (r > 180 && g > 180 && b > 180) counts.white += 1;
+  }
+  return counts;
+}
+
 function differingPixelCount(beforeBuffer, afterBuffer, region) {
   const before = PNG.sync.read(beforeBuffer);
   const after = PNG.sync.read(afterBuffer);
@@ -263,8 +323,10 @@ async function renderAndCapture(page, time, screenshotPath) {
 }
 
 async function directExecutionProof(page, expectedBackend) {
+  // This runs dozens of independent real-GPU scenes, including 100k-object setup.
+  // The bound covers total qualification time, not a playback performance budget.
   await page.waitForFunction(() => window.noonDirectExecutionSmoke?.ready === true, null, {
-    timeout: 60_000,
+    timeout: 120_000,
   });
   const direct = await page.evaluate(() => window.noonDirectExecutionSmoke);
   assert.equal(direct.error, null, `direct Rust/WASM execution proof failed: ${direct.error}`);
@@ -671,6 +733,19 @@ try {
     `browser smoke selected ${initial.rendererBackend}; expected ${expectedRendererBackend}`,
   );
   const directMetrics = await directExecutionProof(page, expectedRendererBackend);
+  const retainedTiming = directMetrics.retainedLocality?.frameTiming;
+  assert.equal(retainedTiming?.rafIntervalsMs?.samples, 63,
+    "100k locality proof did not measure 64 real browser animation frames");
+  assert.ok(Number.isFinite(retainedTiming.rafIntervalsMs.p50) &&
+    Number.isFinite(retainedTiming.rafIntervalsMs.p95) &&
+    Number.isFinite(retainedTiming.rafIntervalsMs.p99),
+  "100k locality proof did not report RAF interval percentiles");
+  assert.equal(directMetrics.retainedLocality.frameDrawCalls?.length, 64,
+    "100k locality proof did not capture draw calls for each RAF sample");
+  assert.equal(directMetrics.retainedLocality.frameUploads?.length, 64,
+    "100k locality proof did not capture uploads for each RAF sample");
+  assert.equal(directMetrics.retainedLocality.tickUploads?.length, 64,
+    "100k locality proof did not preserve all synthetic locality samples");
 
   for (const [index, example] of examples.entries()) {
     const expectedObjects = example.objectCount;
@@ -691,6 +766,48 @@ try {
       assert.ok(metrics.instances > 0, `${example.name}: renderer emitted no instances at t=${time}`);
 
       const { changedPixels: visiblePixels } = visiblePixelStats(screenshot, example.name);
+
+      if (example.name === "Text range colors") {
+        const colors = textRangeColorStats(screenshot);
+        assert.ok(colors.red > 10, `Text range colors: expected red substring, got ${colors.red}`);
+        assert.ok(colors.blue > 10, `Text range colors: expected blue range, got ${colors.blue}`);
+        assert.ok(colors.green > 10, `Text range colors: expected green negative range, got ${colors.green}`);
+        assert.ok(colors.white > 10, `Text range colors: expected white base text, got ${colors.white}`);
+      }
+
+      if (example.name === "MarkupText") {
+        const colors = markupTextColorStats(screenshot);
+        assert.ok(colors.cyan > 10, `MarkupText: expected visible cyan foreground span, got ${colors.cyan}`);
+        assert.ok(colors.orange > 10, `MarkupText: expected visible orange foreground span, got ${colors.orange}`);
+        assert.ok(colors.upperInk > 20 && colors.lowerInk > 20,
+          `MarkupText: expected ink on both multiline rows, got ${JSON.stringify(colors)}`);
+      }
+
+      if (example.name === "Spatial mesh") {
+        const center = pixelAt(screenshot, 0.5, 0.5);
+        if (Math.abs(time - latestEnd * 0.35) < 1e-6) {
+          assert.ok(center[0] > center[2] * 1.5,
+            `Spatial mesh: nearer animated mesh should occlude the rear mesh, got ${center}`);
+        }
+        if (time === latestEnd) {
+          assert.ok(center[2] > center[0] * 1.5,
+            `Spatial mesh: rear mesh should become visible after the front mesh moves behind it, got ${center}`);
+        }
+      }
+
+      if (
+        example.name === "Mixed Text-Circle Reveal"
+        && (Math.abs(time - latestEnd * 0.6) < 1e-6 || time === latestEnd)
+      ) {
+        const textPixels = visiblePixelsInRegion(screenshot, {
+          minX: 0.25, maxX: 0.49, minY: 0.2, maxY: 0.8,
+        });
+        const circlePixels = visiblePixelsInRegion(screenshot, {
+          minX: 0.51, maxX: 0.78, minY: 0.2, maxY: 0.8,
+        });
+        assert.ok(textPixels > 20, `${example.name}: Text was not visible at ${time}s`);
+        assert.ok(circlePixels > 20, `${example.name}: Circle was not visible at ${time}s`);
+      }
 
       if (visiblePixels < 100) {
         visualFailures.push(
@@ -826,7 +943,7 @@ try {
     `browser visual smoke failures:\n${visualFailures.join("\n")}`,
   );
   console.log(
-    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} typed Rust renderer fixtures at four semantic checkpoints each; direct Rust/WASM execution presented ${directMetrics.drawCalls} draw calls on ${directMetrics.backend}; ${browserAuthoredManimCount} public source-equivalent Manim scenes are validated by the browser authoring corpus.`,
+    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} typed Rust renderer fixtures at four semantic checkpoints each; 100k mixed-scene RAF p50/p95/p99 ${retainedTiming.rafIntervalsMs.p50.toFixed(2)}/${retainedTiming.rafIntervalsMs.p95.toFixed(2)}/${retainedTiming.rafIntervalsMs.p99.toFixed(2)} ms with ${retainedTiming.rafIntervalsMs.missedAt16_67ms} intervals over 16.67 ms, advance CPU p50/p95 ${retainedTiming.advanceCpuMs.p50.toFixed(3)}/${retainedTiming.advanceCpuMs.p95.toFixed(3)} ms, render-submit CPU p50/p95 ${retainedTiming.renderSubmitCpuMs.p50.toFixed(3)}/${retainedTiming.renderSubmitCpuMs.p95.toFixed(3)} ms; direct Rust/WASM execution presented ${directMetrics.drawCalls} draw calls on ${directMetrics.backend}; ${browserAuthoredManimCount} public source-equivalent Manim scenes are validated by the browser authoring corpus.`,
   );
 } finally {
   await browser?.close();

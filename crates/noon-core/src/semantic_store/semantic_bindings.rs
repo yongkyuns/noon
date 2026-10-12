@@ -137,11 +137,14 @@ impl SemanticStore {
             });
         }
 
+        let order = self.next_authored_updater_order(target);
+        let mut binding = SemanticSignalBinding::new(signal, property);
+        binding.set_authored_order(order);
         self.node_mut(target)
             .and_then(|node| node.semantic_object_state_mut())
             .expect("semantic binding target validated before mutation")
             .signal_bindings_mut()
-            .push(SemanticSignalBinding::new(signal, property));
+            .push(binding);
         self.register_semantic_references_for_owner(target);
         self.set_last_mutation_writes(1);
         Ok(true)

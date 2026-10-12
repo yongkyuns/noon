@@ -1,22 +1,24 @@
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    plan_semantic_scene_membership, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticNodeId, SemanticSceneMembershipRequest, SemanticStore,
+    plan_semantic_scene_membership, SemanticMutationTransaction, SemanticNodeId,
+    SemanticSceneMembershipRequest, SemanticStore,
 };
 
-use crate::{AuthoringError, MobjectFamilyMember};
+use crate::{AuthoringError, MobjectTarget};
 
 /// One ordered, atomic membership edit over a Scene's authoritative root family.
 #[derive(Clone, Copy)]
 pub enum SceneMembershipRequest<'a> {
-    Add(&'a [MobjectFamilyMember<'a>]),
-    BringToBack(&'a [MobjectFamilyMember<'a>]),
-    Remove(&'a [MobjectFamilyMember<'a>]),
+    Add(&'a [MobjectTarget<'a>]),
+    AddForeground(&'a [MobjectTarget<'a>]),
+    RemoveForeground(&'a [MobjectTarget<'a>]),
+    BringToBack(&'a [MobjectTarget<'a>]),
+    Remove(&'a [MobjectTarget<'a>]),
     Clear,
     Replace {
-        old: MobjectFamilyMember<'a>,
-        new: MobjectFamilyMember<'a>,
+        old: MobjectTarget<'a>,
+        new: MobjectTarget<'a>,
     },
 }
 
@@ -25,13 +27,7 @@ pub(crate) fn prepare_scene_membership(
     root: SemanticNodeId,
     request: SceneMembershipRequest<'_>,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
-    let validate = |member: MobjectFamilyMember<'_>| -> Result<SemanticNodeId, AuthoringError> {
-        if !Rc::ptr_eq(owner, member.integration_store()) {
-            return Err(AuthoringError::ForeignStore);
-        }
-        member.validate()?;
-        Ok(member.node_id())
-    };
+    let validate = |target: MobjectTarget<'_>| target.require_store(owner);
     let store = owner.borrow();
     match request {
         SceneMembershipRequest::Add(members) => {
@@ -41,6 +37,21 @@ pub(crate) fn prepare_scene_membership(
                 .map(validate)
                 .collect::<Result<Vec<_>, _>>()?;
             plan_semantic_scene_membership(&store, root, SemanticSceneMembershipRequest::Add(&ids))
+        }
+        SceneMembershipRequest::AddForeground(members)
+        | SceneMembershipRequest::RemoveForeground(members) => {
+            let ids = members
+                .iter()
+                .copied()
+                .map(validate)
+                .collect::<Result<Vec<_>, _>>()?;
+            let request = match request {
+                SceneMembershipRequest::AddForeground(_) => {
+                    SemanticSceneMembershipRequest::AddForeground(&ids)
+                }
+                _ => SemanticSceneMembershipRequest::RemoveForeground(&ids),
+            };
+            plan_semantic_scene_membership(&store, root, request)
         }
         SceneMembershipRequest::BringToBack(members) => {
             let ids = members
@@ -82,29 +93,20 @@ pub(crate) fn prepare_scene_membership(
     .map_err(Into::into)
 }
 
-pub(crate) fn apply_scene_membership(
-    store: &Rc<RefCell<SemanticStore>>,
-    transaction: SemanticMutationTransaction,
-) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-    transaction
-        .apply(&mut store.borrow_mut())
-        .map_err(Into::into)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::error::Error;
 
     #[test]
-    fn transaction_application_keeps_preflight_error_and_commits_nothing() {
-        let scene = crate::Scene::new();
+    fn scene_router_keeps_preflight_error_and_commits_nothing() {
+        let mut scene = crate::Scene::new();
         let object = scene.circle(1.0).unwrap();
         let revision = scene.integration_store().borrow().scene_revision();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_member(scene.root(), object.node_id());
         transaction.add_member(object.node_id(), scene.root());
-        let error = apply_scene_membership(scene.integration_store(), transaction).unwrap_err();
+        let error = scene.apply_semantic_transaction(transaction).unwrap_err();
         let AuthoringError::Transaction(cause) = &error else {
             panic!("transaction errors must retain their category")
         };

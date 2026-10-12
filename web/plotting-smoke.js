@@ -1,0 +1,530 @@
+import { qualifyNumberLabels } from "./number-label-smoke.js";
+
+// Executed by the existing Manim/Pyodide smoke gate, not a mocked Python host.
+import { WasmAuthoringStore, WasmCoordinateOptions, WasmPlotSamplingPlan } from "./pkg/noon_web.js";
+
+function near(actual, expected, label) {
+  if (actual.length !== expected.length || actual.some((value, i) =>
+      !Number.isFinite(value) || Math.abs(value - expected[i]) > 2e-5)) {
+    throw new Error(`${label}: ${actual} != ${expected}`);
+  }
+}
+
+function implicitPrecisionPreparation() {
+  for (const range of [[1e9, 1e9 + 10, 1], [-1e9 - 10, -1e9, 1],
+      [-1e-60, 1e-60, 1e-60], [-1e45, 1e45, 1e45]]) {
+    const store = new WasmAuthoringStore();
+    let axes, frame;
+    try {
+      const options = WasmCoordinateOptions.axes(range, [-1, 1, 1], 10, 4);
+      options.setTicks(false, 0.1, true);
+      axes = store.createCoordinates(options);
+      frame = axes.axesFrame();
+      const span = range[1] - range[0];
+      const root = range[0] + span * 0.375;
+      for (const smooth of [false, true]) {
+        const curve = store.createManimGeometry(
+          frame.implicitPlot((x, y) => (x - root) / span, 3, 256, smooth));
+        let path;
+        try {
+          path = curve.pathQuery();
+          const start = Array.from(path.start());
+          const end = Array.from(path.end());
+          if (path.curveCount < 1 || !start.concat(end).every(Number.isFinite) ||
+              Math.abs(start[0] + 1.25) > 0.025 || Math.abs(end[0] + 1.25) > 0.025 ||
+              Math.abs(end[1] - start[1]) < 3.5) {
+            throw new Error(`implicit precision lost: ${range} ${smooth} ${start} ${end}`);
+          }
+        } finally { path?.free(); curve.free(); }
+      }
+    } finally { frame?.free(); axes?.free(); store.free(); }
+  }
+}
+
+function qualifyExactRiemannPlan() {
+  const store = new WasmAuthoringStore();
+  let axes, frame, plot, graph, plan;
+  const check = (values, expected) => {
+    const rectangles = plan.publish(values, []);
+    let members = [];
+    try {
+      members = Array.from(rectangles.directMobjects());
+      if (members.length !== 4) throw new Error("exact Riemann plan lost rectangles");
+      for (const [index, member] of members.entries()) {
+        const path = member.pathQuery();
+        try {
+          near(Array.from(path.start()), [-0.5 + index * 0.5, expected[index]],
+            "exact scalar rectangle geometry");
+        } finally { path.free(); }
+      }
+    } finally { members.forEach(member => member.free()); rectangles.free(); }
+  };
+  try {
+    const options = WasmCoordinateOptions.axes([-1, 1, 1], [-1, 1, 1], 2, 2);
+    options.setTicks(false, 0.1, true);
+    axes = store.createCoordinates(options);
+    frame = axes.axesFrame();
+    plot = frame.plotPlan([-1, 1, 1], [], undefined, undefined);
+    graph = store.createManimGeometry(plot.functionSamples([1, 0, 1], false));
+    plan = axes.riemannSamplePlan(graph,
+      WasmCoordinateOptions.riemann([-1, 1], 0.5, 2, 1), graph, false);
+    near(Array.from(plan.starts()), [-1, -0.5, 0, 0.5], "Riemann starts");
+    near(Array.from(plan.samples()), [-0.75, -0.25, 0.25, 0.75], "Riemann midpoint samples");
+    const exact = Array.from(plan.samples(), x => x * x);
+    check(exact, [0.5625, 0.0625, 0.0625, 0.5625]);
+    // The fallback is observably different; invoking a callback without using
+    // its returned values cannot satisfy this geometry oracle.
+    check([], [0.75, 0.25, 0.25, 0.75]);
+    for (const invalid of [[1], [1, 1, 1, 1, 1], [NaN, 0, 0, 0], [Infinity, 0, 0, 0]]) {
+      let rejected = false;
+      try { const unexpected = plan.publish(invalid, []); unexpected.free(); }
+      catch (error) { rejected = error.category === "invalid_input"; }
+      if (!rejected) throw new Error("invalid Riemann values escaped typed validation");
+    }
+    check(exact, [0.5625, 0.0625, 0.0625, 0.5625]);
+  } finally {
+    plan?.free(); graph?.free(); plot?.free(); frame?.free(); axes?.free(); store.free();
+  }
+}
+
+function directWasmPreparation() {
+  implicitPrecisionPreparation();
+  qualifyExactRiemannPlan();
+  const store = new WasmAuthoringStore();
+  const axes = store.createCoordinates(WasmCoordinateOptions.axes([2, 6, 1], [-6, -2, 1], 8, 4));
+  const frame = axes.axesFrame();
+  const plan = frame.plotPlan([2, 6, 1], [], undefined, undefined);
+  const parameters = plan.parameters();
+  near(Array.from(parameters), [2, 3, 4, 5, 6], "shared sample order");
+  near(Array.from(frame.coordsToPoint(4, -4)), [0, 0], "positive/negative range midpoint");
+  const curve = store.createManimGeometry(plan.functionSamples(parameters.map(() => -4), false));
+  const path = curve.pathQuery();
+  near(Array.from(path.start()), [-4, 0], "mapped native sample start");
+  near(Array.from(path.end()), [4, 0], "mapped native sample end");
+  let rejected = false;
+  try {
+    plan.functionSamples([1], false);
+  } catch (error) {
+    rejected = error.category === "invalid_input";
+  }
+  if (!rejected) throw new Error("sample-count mismatch must retain typed input rejection");
+  path.free();
+  curve.free();
+  plan.free();
+  frame.free();
+  axes.free();
+  store.free();
+
+  // Adjacent large data values have no representable midpoint. The shared
+  // mapper must still preserve the intended scene rectangle and curve bounds.
+  const offsetStore = new WasmAuthoringStore();
+  try {
+    for (const range of [[1e16, 1e16 + 2, 2], [-1e16 - 2, -1e16, 2]]) {
+      const options = WasmCoordinateOptions.axes(range, range, 8, 4);
+      options.setTicks(false, 0.1, true);
+      const offsetAxes = offsetStore.createCoordinates(options);
+      const offsetFrame = offsetAxes.axesFrame();
+      try {
+        near(Array.from(offsetFrame.coordsToPoint(range[0], range[0])), [-4, -2], "large-offset start");
+        near(Array.from(offsetFrame.coordsToPoint(range[1], range[1])), [4, 2], "large-offset end");
+        const timed = offsetFrame.timeSeriesPlan([range[0], range[0], range[1], range[1]], 1);
+        try {
+          near(Array.from(timed.cursorPoints()), [-4, 0, 4, 0], "large-offset cursor centers");
+        } finally { timed.free(); }
+        const mapped = offsetStore.createManimGeometry(
+          offsetFrame.sampledPlot([range[0], range[0], range[1], range[1]]));
+        const mappedPath = mapped.pathQuery();
+        try {
+          near(Array.from(mappedPath.start()), [-4, -2], "large-offset data start");
+          near(Array.from(mappedPath.end()), [4, 2], "large-offset data end");
+        } finally { mappedPath.free(); mapped.free(); }
+      } finally { offsetFrame.free(); offsetAxes.free(); }
+    }
+  } finally { offsetStore.free(); }
+
+  // Exact parameter assertions matter here: a scene-space tolerance could
+  // conceal a missing start on the tiny domains. Both points count to the cap.
+  for (const range of [[0, 1e-300, 1e100], [0, Number.MIN_VALUE, 2], [1e308, 1.25e308, 1e308]]) {
+    const boundary = WasmPlotSamplingPlan.parametric(range, [], undefined, 2);
+    try {
+      const values = Array.from(boundary.parameters());
+      if (values.length !== 2 || values[0] !== range[0] || values[1] !== range[1]) {
+        throw new Error(`extreme plot range lost its endpoints: ${values}`);
+      }
+    } finally { boundary.free(); }
+    let limited = false;
+    try {
+      const unexpected = WasmPlotSamplingPlan.parametric(range, [], undefined, 1);
+      unexpected.free();
+    } catch (error) {
+      limited = error.category === "resource_limit" && error.code === "plot.preparation";
+    }
+    if (!limited) throw new Error("two-endpoint plot did not retain exact budget rejection");
+  }
+
+  // The rectangle constructor must use the same represented arange samples
+  // as plots, including duplicates and a regular sample rounded onto the end.
+  for (const [range, length, end, dx, expected] of [
+    [[1e16, 1e16 + 12, 4], 12, 1e16 + 8, 3, [-2, 2, 6]],
+    [[-1e16, -1e16 + 12, 4], 12, -1e16 + 8, 3, [-2, 2, 6]],
+    [[1, 1 + Number.EPSILON, Number.EPSILON], 4, 1 + Number.EPSILON,
+      Number.EPSILON / 4, [-2, -2, -2, -2]],
+  ]) {
+    const partitionStore = new WasmAuthoringStore();
+    let partitionAxes, partitionFrame, partitionPlan, graph, rectangles;
+    let members = [];
+    try {
+      const options = WasmCoordinateOptions.axes(range, [0, 2, 1], length, 2);
+      options.setTicks(false, 0.1, true);
+      partitionAxes = partitionStore.createCoordinates(options);
+      partitionFrame = partitionAxes.axesFrame();
+      partitionPlan = partitionFrame.plotPlan(range, [], undefined, undefined);
+      graph = partitionStore.createManimGeometry(
+        partitionPlan.functionSamples(partitionPlan.parameters().map(() => 1), false));
+      rectangles = partitionAxes.riemannRectangles(graph,
+        WasmCoordinateOptions.riemann([range[0], end], dx, 0, 1), graph, false);
+      members = Array.from(rectangles.directMobjects());
+      if (members.length !== expected.length) {
+        throw new Error(`Riemann partition lost members: ${members.length} != ${expected.length}`);
+      }
+      for (const [index, member] of members.entries()) {
+        const rectanglePath = member.pathQuery();
+        try {
+          near(Array.from(rectanglePath.start()), [expected[index], 0], "Riemann rectangle start");
+        } finally { rectanglePath.free(); }
+      }
+    } finally {
+      members.forEach(member => member.free());
+      rectangles?.free();
+      graph?.free();
+      partitionPlan?.free();
+      partitionFrame?.free();
+      partitionAxes?.free();
+      partitionStore.free();
+    }
+  }
+
+  const split = WasmPlotSamplingPlan.parametric([-1, 1, 0.25], [0], 0.05, undefined);
+  if (Array.from(split.parameters()).includes(0)) throw new Error("discontinuity gap was sampled");
+  split.free();
+}
+
+const source = `
+from noon import *
+from math import sin, cos, pi
+
+
+def near(actual, expected):
+    assert len(actual) == len(expected)
+    assert all(abs(a - b) < 2e-5 for a, b in zip(actual, expected)), (actual, expected)
+
+
+class PlottingQualification(Scene):
+    def construct(self):
+        # Exercise actual Rust mapping through Pyodide, not Python arithmetic.
+        for limits in ((1e16, 1e16 + 2, 2), (-1e16 - 2, -1e16, 2)):
+            offset = Axes(limits, limits, x_length=8, y_length=4, include_ticks=False)
+            near(offset.c2p(limits[0], limits[0]), (-4, -2))
+            near(offset.c2p(limits[1], limits[1]), (4, 2))
+            mapped = offset.plot_samples(((limits[0], limits[0]), (limits[1], limits[1])))
+            near(mapped.get_start(), (-4, -2))
+            near(mapped.get_end(), (4, 2))
+            timed = offset.time_series_plan(((limits[0], limits[0]), (limits[1], limits[1])), run_time=1)
+            near(timed.cursor_points[0], (-4, 0))
+            near(timed.cursor_points[1], (4, 0))
+            offset.shift(RIGHT)
+            near(offset.c2p(limits[0], limits[0]), (-3, -2))
+            shifted = offset.time_series_plan(((limits[0], limits[0]), (limits[1], limits[1])), run_time=1)
+            near(shifted.cursor_points[0], (-3, 0))
+            near(timed.cursor_points[0], (-4, 0))
+
+        # Real Python wrappers must publish the same family sizes and physical
+        # rectangle starts as the native/direct-WASM boundary regressions.
+        for limits, length, end, dx, expected in (
+            ((1e16, 1e16 + 12, 4), 12, 1e16 + 8, 3, (-2, 2, 6)),
+            ((-1e16, -1e16 + 12, 4), 12, -1e16 + 8, 3, (-2, 2, 6)),
+            ((1, 1 + 2**-52, 2**-52), 4, 1 + 2**-52, 2**-54, (-2, -2, -2, -2)),
+        ):
+            partition_axes = Axes(limits, [0, 2, 1], x_length=length, y_length=2, include_ticks=False)
+            graph = partition_axes.plot(lambda x: 1, limits, use_smoothing=False)
+            partitions = partition_axes.get_riemann_rectangles(
+                graph, [limits[0], end], dx=dx, width_scale_factor=1)
+            assert len(partitions.submobjects) == len(expected)
+            for rectangle, x in zip(partitions.submobjects, expected):
+                near(rectangle.get_start(), (x, 0))
+
+        # Keep this oracle axis-aligned so physical rectangle corners, not
+        # merely callback counts, distinguish exact values from interpolation.
+        sample_axes = Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2, include_ticks=False)
+        sample_calls = []
+        def quadratic(x):
+            sample_calls.append(x)
+            return x*x
+        sample_graph = sample_axes.plot(quadratic, [-1, 1, 1], use_smoothing=False)
+        midpoint_values = (0.5625, 0.0625, 0.0625, 0.5625)
+        def rectangles_on_sample_axes(graph, bound=None):
+            return sample_axes.get_riemann_rectangles(
+                graph, [-1, 1], dx=0.5, input_sample_type="center",
+                bounded_graph=bound, width_scale_factor=1)
+        def check_sample_rectangles(rectangles, values, offset=(0, 0)):
+            assert len(rectangles.submobjects) == 4
+            for index, (rectangle, value) in enumerate(zip(rectangles.submobjects, values)):
+                near(rectangle.get_start(), (-0.5 + index*0.5 + offset[0], value + offset[1]))
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph), midpoint_values)
+        assert sample_calls == [-1, 0, 1, -0.75, -0.25, 0.25, 0.75], sample_calls
+        lower_graph = sample_axes.plot(lambda x: -0.25, [-1, 1, 1], use_smoothing=False)
+        del lower_graph.underlying_function
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph, lower_graph), midpoint_values)
+        del sample_graph.underlying_function
+        lower_graph.underlying_function = lambda x: -0.25
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph, lower_graph), (0.75, 0.25, 0.25, 0.75))
+        sample_graph.underlying_function = quadratic
+        callback_failure = RuntimeError("Riemann scalar callback failed")
+        def failing_sample(x):
+            raise callback_failure
+        sample_graph.underlying_function = failing_sample
+        try:
+            rectangles_on_sample_axes(sample_graph)
+        except RuntimeError as caught:
+            assert caught is callback_failure
+        else:
+            raise AssertionError("Riemann callback failure was swallowed")
+        sample_graph.underlying_function = lambda x: float('nan')
+        try:
+            rectangles_on_sample_axes(sample_graph)
+        except NoonValueError:
+            pass
+        else:
+            raise AssertionError("nonfinite Riemann scalar was accepted")
+        sample_graph.underlying_function = quadratic
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph), midpoint_values)
+
+        # A callable is arbitrary host code: moving an axis while evaluating it
+        # must not change the immutable coordinate snapshot captured at entry.
+        moved = []
+        def moving_sample(x):
+            if not moved:
+                sample_axes.shift(UP)
+                moved.append(True)
+            return x*x
+        sample_graph.underlying_function = moving_sample
+        check_sample_rectangles(rectangles_on_sample_axes(sample_graph), midpoint_values)
+        near(sample_axes.c2p(0, 0), (0, 1))
+        sample_axes.shift(DOWN)
+        sample_graph.underlying_function = quadratic
+
+        # Extreme parameter values may still map to ordinary visible geometry.
+        # The callback must see both exact endpoints, once each, in that order.
+        endpoint_visits = []
+        for limits in ((0, 1e-300, 1e100), (0, 5e-324, 2), (1e308, 1.25e308, 1e308)):
+            visited = []
+            def normalized(t):
+                visited.append(t)
+                alpha = (t - limits[0]) / (limits[1] - limits[0])
+                return (alpha, alpha)
+            boundary_curve = ParametricFunction(normalized, limits, use_smoothing=False)
+            assert visited == [limits[0], limits[1]], visited
+            near(boundary_curve.get_start(), (0, 0))
+            near(boundary_curve.get_end(), (1, 1))
+            assert boundary_curve.get_num_curves() == 1
+            endpoint_visits.append(visited)
+
+        # Actual Python callbacks and the WASM adapter must preserve scalar
+        # coordinate precision, not merely pass a Rust-only unit test.
+        implicit_counts = []
+        for limits in ((1e9, 1e9 + 10, 1), (-1e9 - 10, -1e9, 1),
+                       (-1e-60, 1e-60, 1e-60), (-1e45, 1e45, 1e45)):
+            precision_axes = Axes(limits, [-1, 1, 1], x_length=10, y_length=4, include_ticks=False)
+            span = limits[1] - limits[0]
+            root = limits[0] + span * 0.375
+            for smooth_contour in (False, True):
+                visits = [0]
+                def implicit_field(x, y):
+                    visits[0] += 1
+                    return (x - root) / span
+                implicit_curve = precision_axes.plot_implicit_curve(
+                    implicit_field, min_depth=3, max_quads=256, use_smoothing=smooth_contour)
+                first, last = implicit_curve.get_start(), implicit_curve.get_end()
+                assert implicit_curve.get_num_curves() > 0
+                assert abs(first[0] + 1.25) < 0.025, (limits, first)
+                assert abs(last[0] + 1.25) < 0.025, (limits, last)
+                assert abs(last[1] - first[1]) > 3.5, (first, last)
+                assert visits[0] > 0
+                implicit_counts.append((visits, visits[0]))
+
+        # The exact same source contour remains a translated curve, including
+        # interior spline points, when positive scene coordinates change the
+        # signed closure test that would be incorrect after mapping.
+        spline_axes = Axes([1, 3, 1], [1, 3, 1], x_length=4, y_length=4, include_ticks=False)
+        def round_contour(x, y):
+            return (x - 2)**2 + (y - 2)**2 - 0.36
+        before = spline_axes.plot_implicit_curve(round_contour, min_depth=2, max_quads=64)
+        spline_axes.shift((10, 10))
+        after = spline_axes.plot_implicit_curve(round_contour, min_depth=2, max_quads=64)
+        assert before.get_num_curves() == after.get_num_curves()
+        for proportion in (0, 0.003, 0.019, 0.071, 0.333, 0.877, 0.995, 1):
+            left = before.point_from_proportion(proportion)
+            right = after.point_from_proportion(proportion)
+            near(right, (left[0] + 10, left[1] + 10))
+
+        line = NumberLine([2, 6, 1], length=8, rotation=pi / 2)
+        near(line.n2p(4), (0, 0))
+        near(line.n2p(6), (0, 4))
+        assert abs(line.p2n((0, 2)) - 5) < 2e-5
+        assert abs(line.get_unit_size() - 2) < 2e-5
+        assert len(line.ticks.submobjects) == 5
+        copied_line = line.copy().shift(RIGHT)
+        assert copied_line.x_range == line.x_range
+        near(copied_line.n2p(4), (1, 0))
+        near(line.n2p(4), (0, 0))
+
+        axes = Axes([-2, 2, 1], [-1, 1, 0.5], x_length=6, y_length=3)
+        axes.scale(0.8).rotate(0.25).shift(LEFT)
+        for point in [(0, 0), (1, 0.5), (-3, 2)]:
+            near(axes.p2c(axes.c2p(*point)), point)
+        copy = axes.copy().shift(UP)
+        near(copy.c2p(0, 0), axes.c2p(0, 0) + UP)
+
+        calls = []
+        def function(x):
+            calls.append(x)
+            return x * x / 2
+        curve = axes.plot(function, [-1, 1, 0.5], use_smoothing=False, color=BLUE)
+        assert calls == [-1, -0.5, 0, 0.5, 1], calls
+        near(curve.get_start(), axes.c2p(-1, 0.5))
+        near(curve.get_end(), axes.c2p(1, 0.5))
+        data = axes.plot_samples([(1, 0), (1, 1), (-1, 0.25)], color=YELLOW)
+        assert data.get_num_curves() == 2
+        near(data.get_start(), axes.c2p(1, 0))
+        near(data.get_end(), axes.c2p(-1, 0.25))
+
+        # Riemann helpers must evaluate authored functions at the exact
+        # Rust-planned sample positions instead of interpolating retained points.
+        exact_calls = []
+        def exact_function(x):
+            exact_calls.append(x)
+            return x * x
+        exact_graph = axes.plot(exact_function, [-1, 1, 1], use_smoothing=False)
+        assert exact_calls == [-1, 0, 1], exact_calls
+        exact_rectangles = axes.get_riemann_rectangles(
+            exact_graph, [-1, 1], dx=0.5, input_sample_type="center")
+        assert exact_calls == [-1, 0, 1, -0.75, -0.25, 0.25, 0.75], exact_calls
+        assert len(exact_rectangles.submobjects) == 4
+
+        bound_calls = []
+        def exact_bound(x):
+            bound_calls.append(x)
+            return -0.25
+        exact_bound_graph = axes.plot(exact_bound, [-1, 1, 1], use_smoothing=False)
+        assert bound_calls == [-1, 0, 1], bound_calls
+        axes.get_riemann_rectangles(
+            exact_graph, [-1, 1], dx=0.5, input_sample_type="center",
+            bounded_graph=exact_bound_graph)
+        assert exact_calls[-4:] == [-0.75, -0.25, 0.25, 0.75], exact_calls
+        assert bound_calls == [-1, 0, 1, -1, -0.5, 0, 0.5], bound_calls
+
+        split = FunctionGraph(lambda x: 1 / x, [-1, 1, 0.1],
+                              discontinuities=[0], dt=0.05, use_smoothing=False)
+        assert len(split.get_subpaths()) == 2
+        parametric = ParametricFunction(lambda t: (cos(t), sin(t), 0), [0, pi, 0.1])
+        near(parametric.get_start(), (1, 0))
+        near(parametric.get_end(), (-1, 0))
+
+        failure = RuntimeError("intentional plot evaluation failure")
+        def rejected_function(x):
+            raise failure
+        try:
+            axes.plot(rejected_function)
+        except RuntimeError as caught:
+            assert caught is failure
+        else:
+            raise AssertionError("callback failure was swallowed")
+        try:
+            axes.plot(lambda x: float('nan'))
+        except NoonValueError:
+            pass
+        else:
+            raise AssertionError("nonfinite plot sample was accepted")
+        try:
+            NumberLine([0, 1, 0])
+        except NoonValueError:
+            pass
+        else:
+            raise AssertionError("invalid coordinate range was accepted")
+
+        sentinel = Dot((4, 2), color=GREEN)
+        sample_calls_before_play = len(sample_calls)
+        self.add(sample_axes, sample_graph)
+        self.add(axes, data, sentinel)
+        self.play(Create(curve), run_time=0.2, rate_func=linear)
+        assert len(sample_calls) == sample_calls_before_play, "static playback invoked a graph callable"
+        live_rectangles = rectangles_on_sample_axes(sample_graph)
+        self.add(live_rectangles)
+        check_sample_rectangles(live_rectangles, midpoint_values)
+        self.remove(live_rectangles, sample_axes, sample_graph)
+        origin = axes.c2p(0, 0)
+        self.play(axes.animate.shift(RIGHT), run_time=0.2, rate_func=linear)
+        near(axes.c2p(0, 0), origin + RIGHT)
+        near(axes.p2c(axes.c2p(0.75, 0.25)), (0.75, 0.25))
+        near(sentinel.get_center(), (4, 2))
+        assert len(calls) == 5, "static curve was reevaluated during playback"
+
+        # Resumed authoring must sample against the completed effective axes and
+        # publish a new detached path through the same retained execution owner.
+        later = axes.plot(lambda x: -x / 2, [-1, 1, 0.5], color=RED)
+        near(later.get_start(), axes.c2p(-1, 0.5))
+        self.play(Create(later), run_time=0.2, rate_func=linear)
+        near(sentinel.get_center(), (4, 2))
+        assert len(calls) == 5
+        area = axes.get_area(later, [-0.75, 0.75], color=GREEN, opacity=0.4)
+        rectangles = axes.get_riemann_rectangles(later, [-1, 1], dx=0.5, input_sample_type="center", fill_opacity=0.6)
+        self.add(area, rectangles)
+        near(area.get_start(), axes.c2p(-0.75, 0))
+        assert len(rectangles.submobjects) == 4
+        assert abs(rectangles.submobjects[0].get_fill_opacity() - 0.6) < 1e-6
+        self.remove(area, rectangles)
+        assert len(calls) == 5, "area queries must not reevaluate unrelated callbacks"
+        for bad_length in (float("nan"), -1, 0):
+            try:
+                Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=bad_length)
+            except NoonValueError:
+                pass
+            else:
+                raise AssertionError("invalid live axis length was accepted")
+        fresh = Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2)
+        fresh.shift(LEFT)
+        line = NumberLine([0, 2, 1], length=2).shift(DOWN)
+        for observe in (lambda: fresh.c2p(0, 0), lambda: line.n2p(1)):
+            try:
+                observe()
+            except NotImplementedError:
+                pass
+            else:
+                raise AssertionError("unsupported detached live query was silently accepted")
+        self.add(fresh, line)
+        near(fresh.c2p(0, 0), LEFT)
+        near(fresh.p2c(fresh.c2p(0.5, 0.25)), (0.5, 0.25))
+        assert abs(line.p2n(line.n2p(1)) - 1) < 2e-5
+        self.play(fresh.animate.shift(UP), run_time=0.2, rate_func=linear)
+        near(fresh.c2p(0, 0), LEFT + UP)
+        self.remove(fresh, line)
+        near(sentinel.get_center(), (4, 2))
+        assert all(len(visited) == 2 for visited in endpoint_visits)
+        assert all(visits[0] == count for visits, count in implicit_counts), "implicit callback escaped preparation"
+`;
+
+export async function qualifyPlotting(runLive) {
+  directWasmPreparation();
+  const result = await runLive(source);
+  // Six ticks, two shafts, two tips, and four retained data/curve objects.
+  if (Math.abs(result.duration - 0.8) > 1e-6 || result.metrics.objectCount !== 14) {
+    throw new Error(`plotting lifecycle produced unexpected duration/membership: duration=${result.duration}, objectCount=${result.metrics.objectCount}`);
+  }
+  if (!result.metrics.ready || !result.metrics.retained || result.metrics.presentedFrames < 1 ||
+      result.metrics.drawCalls < 1 || result.metrics.instancesDrawn < 1) {
+    throw new Error("plotting did not present through the retained renderer");
+  }
+  const numberLabels = await qualifyNumberLabels(runLive);
+  return { numberLabels, backend: result.metrics.backend, objectCount: result.metrics.objectCount,
+    presentedFrames: result.metrics.presentedFrames, duration: result.duration };
+}

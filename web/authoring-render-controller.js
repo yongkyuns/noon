@@ -5,6 +5,7 @@ import {
   drainRendererGpuDiagnostics,
   formatGpuDiagnostic,
 } from "./render-gpu-diagnostics.js";
+import { SampleWindow } from "./frame-metrics.js";
 import {
   EXECUTION_TRANSPORT_SHARED,
   EXECUTION_TRANSPORT_TRANSFERABLE,
@@ -55,6 +56,7 @@ export function createAuthoringRenderController(host) {
   let height = 1;
   let bootstrapQueue = [];
   let bootstrapPromise = null;
+  let rendererStartupPending = false;
   let transitionRequestId = null;
   let transitionResponseType = null;
   let transitionMode = null;
@@ -65,6 +67,7 @@ export function createAuthoringRenderController(host) {
   // present exposes. It is an acknowledgement only, never scene or time state.
   let pendingPresentationPublication = null;
   let lastPresentedPublication = null;
+  let lastPointerReceipt = null;
   let pendingRendererObservationRequest = null;
   let pendingRendererObservationPublication = null;
   let running = false;
@@ -77,9 +80,28 @@ export function createAuthoringRenderController(host) {
   let scheduledFrame = null;
   let scheduleTicket = 0;
   let presentedFrames = 0;
+  let firstPresentedAtMs = null;
+  let lastDeltaApplyMs = null;
+  let lastRendererCallMs = null;
+  let presentedSession = null;
+  let firstPresentedSessionAtMs = null;
+  // Observe successful submissions only. Rust's continuous wake scopes the
+  // window, so authored holds and paused/replaced sessions are not hitches.
+  const presentationIntervals = new SampleWindow(120);
+  let lastContinuousPresentationAtMs = null;
+  let continuousPresentation = false;
+  let rendererReadyAtMs = null;
   let modeSwitches = 0;
   let rendererRebuilds = 0;
+  // Profiling is enabled only by an explicit metrics request. Keep a small
+  // rolling window so diagnostics cannot grow with a long-running session.
+  let publicationStageProfiling = false;
+  let renderSubstageProfiling = false;
+  let gpuCompletionProfiling = false;
+  const publicationStageSamples = [];
+  let pendingPublicationStageSample = null;
   let webglRecoveryPromise = null;
+  let webglContextLost = false;
 
     return Object.freeze({
       dispatch: dispatchAuthoringRenderMessage,
@@ -124,7 +146,26 @@ export function createAuthoringRenderController(host) {
           return;
         case "metrics":
           if (!drainGpuDiagnostics()) return;
-          respond(message.requestId, { type: "metrics", metrics: currentMetrics() });
+          if (message.profilePublicationStages === true) publicationStageProfiling = true;
+          if (message.profileRenderSubstages === true) {
+            renderSubstageProfiling = true;
+            renderer?.setRenderSubstageProfiling(true);
+          }
+          if (message.profileGpuCompletion === true) {
+            gpuCompletionProfiling = true;
+            renderer?.setGpuCompletionProfiling(true);
+          }
+          {
+            const metrics = currentMetrics();
+            if (gpuCompletionProfiling && !drainGpuDiagnostics()) return;
+            if (message.includeGpuIdentity === true) {
+              if (renderer === null || typeof renderer.rendererAdapterInfo !== "function") {
+                throw new Error("renderer GPU identity diagnostics are unavailable");
+              }
+              metrics.rendererGpuIdentity = JSON.parse(renderer.rendererAdapterInfo());
+            }
+            respond(message.requestId, { type: "metrics", metrics });
+          }
           return;
         case "stop":
           stop();
@@ -171,6 +212,7 @@ export function createAuthoringRenderController(host) {
     await initializeWasmModule();
     if (stopped) return false;
     canvas.addEventListener("webglcontextrestored", wakeAfterWebGlContextRestored);
+    canvas.addEventListener("webglcontextlost", suspendForWebGlContextLoss);
     canvas.addEventListener("webglcontextcreationerror", recordSurfaceCreationError);
     return true;
   }
@@ -179,22 +221,37 @@ export function createAuthoringRenderController(host) {
     surfaceCreationError = event.statusMessage || "WebGL context creation failed";
   }
 
+  function suspendForWebGlContextLoss(event) {
+    event.preventDefault();
+    webglContextLost = true;
+    resetPresentationIntervals();
+    invalidatePointerReceipt();
+    cancelScheduledFrame();
+  }
+
   function wakeAfterWebGlContextRestored() {
-    // Rust records context restoration synchronously. Defer the platform wake
-    // until every restore listener has run, then rebuild before presenting even
-    // when the execution owner has settled to idle.
-    queueMicrotask(() => void recoverAndPresentWebGlContext());
+    invalidatePointerReceipt();
+    // Browsers can checkpoint microtasks between event listeners. Use a new
+    // task so Rust's later-registered restoration listener has recorded the
+    // loss/restoration before recovery checks it, including while idle.
+    setTimeout(() => void recoverAndPresentWebGlContext(), 0);
   }
 
   async function recoverAndPresentWebGlContext() {
     const restoringRenderer = renderer;
-    if (stopped || restoringRenderer === null || webglRecoveryPromise !== null) return;
-    const recovery = Promise.resolve(restoringRenderer.recoverWebGlContext?.());
+    if (stopped || webglRecoveryPromise !== null) return;
+    if (restoringRenderer === null) {
+      webglContextLost = false;
+      drainTransport();
+      return;
+    }
+    const recovery = Promise.resolve().then(() => restoringRenderer.recoverWebGlContext());
     webglRecoveryPromise = recovery;
     try {
-      await recovery;
-      if (stopped || renderer !== restoringRenderer) return;
+      const recovered = await recovery;
+      if (stopped || renderer !== restoringRenderer || !recovered) return;
       webglRecoveryPromise = null;
+      webglContextLost = false;
       renderer.resize(width, height);
       if (!drainGpuDiagnostics()) return;
       needsPresent = true;
@@ -204,7 +261,7 @@ export function createAuthoringRenderController(host) {
       }
       scheduleFrame();
     } catch (error) {
-      fail(error, null);
+      if (!stopped && renderer === restoringRenderer) fail(error, null);
     } finally {
       if (webglRecoveryPromise === recovery) webglRecoveryPromise = null;
     }
@@ -313,12 +370,13 @@ export function createAuthoringRenderController(host) {
     const nextWidth = normalizedDimension(message.width);
     const nextHeight = normalizedDimension(message.height);
     const dimensionsChanged = nextWidth !== width || nextHeight !== height;
+    if (dimensionsChanged) invalidatePointerReceipt();
     width = nextWidth;
     height = nextHeight;
     if (renderer === null) {
       return;
     }
-    if (webglRecoveryPromise !== null) {
+    if (webglContextLost || webglRecoveryPromise !== null) {
       needsPresent = true;
       return;
     }
@@ -345,6 +403,7 @@ export function createAuthoringRenderController(host) {
     transitionFrameLoopWasRunning = false;
     detachRenderPort();
     canvas?.removeEventListener?.("webglcontextrestored", wakeAfterWebGlContextRestored);
+    canvas?.removeEventListener?.("webglcontextlost", suspendForWebGlContextLoss);
     canvas?.removeEventListener?.("webglcontextcreationerror", recordSurfaceCreationError);
     disposeRenderer();
     canvas = null;
@@ -371,6 +430,8 @@ export function createAuthoringRenderController(host) {
   function detachRenderPort() {
     cancelScheduledFrame();
     engineWake = null;
+    continuousPresentation = false;
+    resetPresentationIntervals();
     renderPort?.close?.();
     renderPort = null;
   }
@@ -381,7 +442,9 @@ export function createAuthoringRenderController(host) {
     bootstrapQueue = [];
     bootstrapPromise = null;
     pendingPresentationPublication = null;
+    pendingPublicationStageSample = null;
     lastPresentedPublication = null;
+    lastPointerReceipt = null;
     pendingRendererObservationRequest = null;
     pendingRendererObservationPublication = null;
   }
@@ -398,10 +461,15 @@ export function createAuthoringRenderController(host) {
              (!Number.isFinite(timerAfterMilliseconds) || timerAfterMilliseconds < 0))) {
           throw new Error("invalid semantic execution wake directive");
         }
+        // This directive replaces the in-flight drive's reserved refresh.
+        // Animation reuses the RAF; idle/timer retires it through scheduleFrame.
+        if (scheduledFrame !== null) scheduledFrame.reservedRefresh = false;
         engineWake = {
           cadence,
           deadline: cadence === "timer" ? performance.now() + timerAfterMilliseconds : null,
         };
+        continuousPresentation = cadence === "animation_frame";
+        if (!continuousPresentation) resetPresentationIntervals();
         scheduleFrame();
       } catch (error) {
         fail(error, null);
@@ -497,6 +565,9 @@ export function createAuthoringRenderController(host) {
   }
 
   function consumeDelta(json, publication = null) {
+    // Backpressure applies to bootstrap and replay handoff too: constructing a
+    // new GPU device against a lost canvas can trap inside the WebGL backend.
+    if (webglContextLost || webglRecoveryPromise !== null) return false;
     if (transitionMode !== null) {
       return commitRendererTransition(json, publication);
     }
@@ -515,23 +586,23 @@ export function createAuthoringRenderController(host) {
       return true;
     }
 
-    if (webglRecoveryPromise !== null) {
-      return false;
-    }
-
     if (mode === MODE_RETAINED && reconnectResourceBundlePending) {
       throw new Error("retained authoring reconnect snapshot arrived before its resource bundle");
     }
     if (needsPresent) {
       return false;
     }
-    const applied = renderer.applyDeltaJson(json);
+    const stageSample = publicationStageProfiling && publication !== null
+      ? { session: publication.session, sequence: publication.sequence, receivedAtMs: performance.now() }
+      : null;
+    const applied = applyRendererDelta(json);
     if (!applied) {
       acknowledgeAlreadyPresented(publication);
       return true;
     }
     armRendererObservation(publication);
     pendingPresentationPublication = publication;
+    pendingPublicationStageSample = stageSample;
     needsPresent = true;
     tryPresent();
     if (engineWake !== null) scheduleFrame();
@@ -561,7 +632,9 @@ export function createAuthoringRenderController(host) {
     reconnectResourceBundlePending = false;
     needsPresent = false;
     pendingPresentationPublication = null;
+    pendingPublicationStageSample = null;
     lastPresentedPublication = null;
+    lastPointerReceipt = null;
     pendingRendererObservationPublication = null;
     mode = nextMode;
     bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);
@@ -570,16 +643,23 @@ export function createAuthoringRenderController(host) {
 
   async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = null) {
     const bootstrapGeneration = frameLoopGeneration;
+    rendererStartupPending = true;
     surfaceCreationError = null;
     try {
       const createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
+      if (renderSubstageProfiling) createdRenderer.setRenderSubstageProfiling(true);
+      if (gpuCompletionProfiling) createdRenderer.setGpuCompletionProfiling(true);
+      // create() resolves after GPU setup; keep this separate from first render.
+      rendererReadyAtMs ??= performance.now();
       if (stopped) {
         createdRenderer.free?.();
         return;
       }
       renderer = createdRenderer;
+      lastDeltaApplyMs = null;
+      lastRendererCallMs = null;
       resourceBytes = null;
-      const applied = renderer.applyDeltaJson(initial);
+      const applied = applyRendererDelta(initial);
       if (!applied) {
         throw new Error("retained authoring renderer must begin from an applied snapshot");
       }
@@ -587,6 +667,7 @@ export function createAuthoringRenderController(host) {
       renderer.resize(width, height);
       if (!drainGpuDiagnostics()) return;
       pendingPresentationPublication = publication;
+      pendingPublicationStageSample = null;
       needsPresent = true;
       while (!tryPresent()) {
         if (
@@ -601,7 +682,17 @@ export function createAuthoringRenderController(host) {
           return;
         }
       }
+      // First submission may still be compiling/realizing GPU work after
+      // render() returns. Admit the source clock only after that cold work;
+      // subsequent presentations never fence the queue or restart its epoch.
+      if (renderer.rendererBackend() === "WebGPU") {
+        await renderer.waitForSubmittedWork();
+        if (stopped || bootstrapGeneration !== frameLoopGeneration) return;
+        if (!(await flushGpuDiagnostics())) return;
+      }
       if (stopped || bootstrapGeneration !== frameLoopGeneration || !drainGpuDiagnostics()) return;
+      rendererStartupPending = false;
+      acknowledgePresented(lastPresentedPublication);
 
       const ready = {
         mode,
@@ -635,6 +726,7 @@ export function createAuthoringRenderController(host) {
         running = false;
       }
     } catch (error) {
+      if (stopped || bootstrapGeneration !== frameLoopGeneration) return;
       const requestId = transitionRequestId;
       transitionRequestId = null;
       transitionResponseType = null;
@@ -649,24 +741,57 @@ export function createAuthoringRenderController(host) {
   function tryPresent() {
     if (
       renderer === null ||
+      webglContextLost ||
       webglRecoveryPromise !== null ||
       !needsPresent ||
       !drainGpuDiagnostics()
     ) {
       return false;
     }
+    const renderStartedAtMs = performance.now();
     if (!renderer.render()) {
+      invalidatePointerReceipt();
       drainGpuDiagnostics();
       return false;
     }
+    const presentedAtMs = performance.now();
+    lastRendererCallMs = Math.max(0, presentedAtMs - renderStartedAtMs);
     needsPresent = false;
     presentedFrames += 1;
+    firstPresentedAtMs ??= presentedAtMs;
     const publication = pendingPresentationPublication;
+    if (publication !== null && presentedSession !== publication.session) {
+      resetPresentationIntervals();
+    }
+    if (continuousPresentation) {
+      if (lastContinuousPresentationAtMs !== null) {
+        presentationIntervals.record(presentedAtMs - lastContinuousPresentationAtMs);
+      }
+      lastContinuousPresentationAtMs = presentedAtMs;
+    }
+    const candidateStageSample = pendingPublicationStageSample;
+    const stageSample = samePublication(candidateStageSample, publication)
+      ? candidateStageSample
+      : null;
     const observationPublication = pendingRendererObservationPublication;
     pendingPresentationPublication = null;
+    pendingPublicationStageSample = null;
+    if (stageSample !== null) {
+      // Preserve the displayed authored time even when metrics polling is late.
+      stageSample.time = renderer.time();
+      stageSample.presentation = presentedFrames;
+      stageSample.presentedAtMs = presentedAtMs;
+      stageSample.applyMs = lastDeltaApplyMs;
+      stageSample.receiveToPresentMs = Math.max(0, presentedAtMs - stageSample.receivedAtMs);
+      stageSample.renderMs = lastRendererCallMs;
+    }
     pendingRendererObservationPublication = null;
     if (publication !== null) {
       lastPresentedPublication = publication;
+      if (presentedSession !== publication.session) {
+        presentedSession = publication.session;
+        firstPresentedSessionAtMs = performance.now();
+      }
     }
     try {
       acknowledgeRendererObservation(observationPublication, publication);
@@ -674,8 +799,30 @@ export function createAuthoringRenderController(host) {
       fail(error, null);
       return false;
     }
-    acknowledgePresented(publication);
+    const displayed = publication ?? lastPresentedPublication;
+    if (displayed?.pointerView) {
+      if (!Number.isSafeInteger(presentedFrames)) throw new Error("presentation counter exhausted");
+      lastPointerReceipt = Object.freeze({
+        session: displayed.session, sequence: displayed.sequence,
+        presentation: presentedFrames, view_revision: displayed.pointerView.revision,
+      });
+    } else lastPointerReceipt = null;
+    const ackStartedAtMs = stageSample === null ? 0 : performance.now();
+    acknowledgePresented(displayed);
+    if (stageSample !== null) {
+      stageSample.ackPostMs = Math.max(0, performance.now() - ackStartedAtMs);
+      stageSample.renderToAckMs = Math.max(0, performance.now() - presentedAtMs);
+      publicationStageSamples.push(stageSample);
+      if (publicationStageSamples.length > 32) publicationStageSamples.shift();
+    }
     return drainGpuDiagnostics();
+  }
+
+  function applyRendererDelta(json) {
+    const startedAtMs = performance.now();
+    const applied = renderer.applyDeltaJson(json);
+    if (applied) lastDeltaApplyMs = Math.max(0, performance.now() - startedAtMs);
+    return applied;
   }
 
   function samePublication(left, right) {
@@ -684,14 +831,21 @@ export function createAuthoringRenderController(host) {
   }
 
   function acknowledgePresented(publication) {
-    if (publication === null || renderPort === null) {
+    if (rendererStartupPending || publication === null || renderPort === null) {
       return;
     }
     renderPort.postMessage({
       type: "execution_presented",
       session: publication.session,
       sequence: publication.sequence,
+      ...(lastPointerReceipt === null ? {} : { pointerReceipt: lastPointerReceipt }),
     });
+  }
+
+  function invalidatePointerReceipt() {
+    if (lastPointerReceipt === null) return;
+    renderPort?.postMessage({ type: "pointer_presentation_invalidated", receipt: lastPointerReceipt });
+    lastPointerReceipt = null;
   }
 
   function acknowledgeRendererObservation(observationPublication, presentedPublication) {
@@ -724,18 +878,19 @@ export function createAuthoringRenderController(host) {
   }
 
   function flushBootstrapQueue() {
-    if (renderer === null) {
+    if (renderer === null || webglContextLost || webglRecoveryPromise !== null) {
       return;
     }
     while (!needsPresent && bootstrapQueue.length > 0) {
       const { json, publication } = bootstrapQueue.shift();
-      const applied = renderer.applyDeltaJson(json);
+      const applied = applyRendererDelta(json);
       if (!applied) {
         acknowledgeAlreadyPresented(publication);
         continue;
       }
       armRendererObservation(publication);
       pendingPresentationPublication = publication;
+      pendingPublicationStageSample = null;
       needsPresent = true;
       if (!tryPresent()) {
         break;
@@ -816,16 +971,27 @@ export function createAuthoringRenderController(host) {
     }
   }
 
-  function scheduleFrame(generation = frameLoopGeneration) {
-    cancelScheduledFrame();
-    if (!running || webglRecoveryPromise !== null) return;
-    const needsAnimationFrame = needsPresent || engineWake === null ||
+  function scheduleFrame(generation = frameLoopGeneration, reserveRefresh = false) {
+    if (!running || webglContextLost || webglRecoveryPromise !== null) {
+      cancelScheduledFrame();
+      return;
+    }
+    const needsAnimationFrame = reserveRefresh || scheduledFrame?.reservedRefresh === true ||
+      needsPresent || engineWake === null ||
       engineWake.cadence === "animation_frame";
+    // Keep an already-requested refresh opportunity when a wake or delta still
+    // needs it. Canceling after the browser snapshots callbacks can defer the
+    // replacement to the following refresh. Only lifecycle/cadence changes retire it.
+    if (needsAnimationFrame && scheduledFrame?.kind === "animation" &&
+        scheduledFrame.generation === generation) return;
+    cancelScheduledFrame();
     if (!needsAnimationFrame && engineWake.cadence === "idle") return;
     const ticket = scheduleTicket;
     if (needsAnimationFrame && typeof host?.requestAnimationFrame === "function") {
       scheduledFrame = {
         kind: "animation",
+        generation,
+        reservedRefresh: reserveRefresh,
         handle: host.requestAnimationFrame((timestamp) => frame(timestamp, generation, ticket)),
       };
     } else {
@@ -840,7 +1006,7 @@ export function createAuthoringRenderController(host) {
   function frame(timestamp, generation, ticket) {
     if (ticket !== scheduleTicket || generation !== frameLoopGeneration || !running) return;
     scheduledFrame = null;
-    if (webglRecoveryPromise !== null || !drainGpuDiagnostics()) return;
+    if (webglContextLost || webglRecoveryPromise !== null || !drainGpuDiagnostics()) return;
     lastFrameTimestamp = timestamp;
     if (needsPresent && tryPresent()) {
       flushBootstrapQueue();
@@ -851,6 +1017,11 @@ export function createAuthoringRenderController(host) {
       drainTransport();
     }
     if (!running || !drainGpuDiagnostics()) return;
+    // Reserve one browser refresh before the source response arrives. It may
+    // present that response or service its next Rust directive; without one it
+    // sends no tick and settles. This never polls a blocked required callback.
+    const reserveRefresh = engineWake?.cadence === "animation_frame" &&
+      typeof host?.requestAnimationFrame === "function";
     const tickDue = engineWake === null || engineWake.cadence === "animation_frame" ||
       (engineWake.cadence === "timer" && performance.now() >= engineWake.deadline);
     if (tickDue) {
@@ -859,7 +1030,7 @@ export function createAuthoringRenderController(host) {
       if (engineWake !== null) engineWake = { cadence: "idle", deadline: null };
       renderPort?.postMessage({ type: "tick", timestamp });
     }
-    scheduleFrame(generation);
+    scheduleFrame(generation, tickDue && reserveRefresh);
   }
 
   async function flushGpuDiagnostics() {
@@ -902,12 +1073,38 @@ export function createAuthoringRenderController(host) {
       ...modeFlags(),
       transportMode,
       presentedFrames,
+      presentationIntervalMs: presentationIntervals.summary(),
+      presentationIntervalSamples: presentationIntervals.size,
+      lastDeltaApplyMs,
+      lastRendererCallMs,
       modeSwitches,
       rendererRebuilds,
+      sampledAtMs: performance.now(),
+      performanceTimeOriginMs: performance.timeOrigin,
+      rendererReadyAtMs,
+      firstPresentedAtMs,
+      presentedSession,
+      firstPresentedSessionAtMs,
       transitionMode,
       lastFrameTimestamp,
       bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
       needsPresent,
+      ...(publicationStageProfiling ? {
+        publicationStageProfiling: true,
+      publicationStageSamples: publicationStageSamples.slice(),
+    } : {}),
+    ...(renderSubstageProfiling ? {
+      renderSubstageProfiling: true,
+      renderSubstageSamples: renderer === null
+        ? []
+        : JSON.parse(renderer.takeRenderSubstageSamplesJson()),
+    } : {}),
+    ...(gpuCompletionProfiling ? {
+      gpuCompletionProfiling: true,
+      gpuCompletion: renderer === null
+        ? null
+        : JSON.parse(renderer.takeGpuCompletionSamplesJson()),
+    } : {}),
     };
     if (renderer === null) {
       return {
@@ -935,12 +1132,29 @@ export function createAuthoringRenderController(host) {
     return metrics;
   }
 
+  function resetPresentationIntervals() {
+    lastContinuousPresentationAtMs = null;
+    presentationIntervals.reset();
+  }
+
   function disposeRenderer() {
     if (renderer === null) {
       return;
     }
-    renderer.free?.();
+    pendingPublicationStageSample = null;
+    const retiredRenderer = renderer;
     renderer = null;
+    lastDeltaApplyMs = null;
+    lastRendererCallMs = null;
+    if (webglRecoveryPromise !== null) {
+      // An async WASM recovery holds a mutable borrow until it settles.
+      void webglRecoveryPromise.then(
+        () => retiredRenderer.free?.(),
+        () => retiredRenderer.free?.(),
+      );
+    } else {
+      retiredRenderer.free?.();
+    }
   }
 
   function modeFlags() {

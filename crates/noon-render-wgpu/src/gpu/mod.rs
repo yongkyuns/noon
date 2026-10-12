@@ -1,16 +1,37 @@
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
-use noon_core::Vec2;
-use wgpu::util::DeviceExt;
+use noon_core::{Inset2DViewState, Vec2};
+use noon_runtime::{FrameChanges, FrameState};
 
+mod analytic_glow;
+mod derived_display;
+mod source_capture;
+pub use analytic_glow::{AnalyticGlowRequest, AnalyticGlowStats, PublishedAnalyticGlowRequest};
+mod glow_filter;
+pub use glow_filter::{
+    GlowCapture, GlowCaptureTile, GlowFilter, GlowParameters, GlowPixelBounds, GlowPrepareError,
+    GlowRasterStats, GlowScope,
+};
+mod overlay;
+mod path_batching;
 mod presentation;
+pub use overlay::{AnalyticOverlay, OverlayGpuState, OverlayPrepareError};
+mod inset_capture;
+mod mesh;
+mod spatial_path;
+pub use mesh::{SpatialPrepareError, SpatialUploadStats};
+pub use spatial_path::SpatialPathError;
+mod raster_image_gpu;
+mod raster_image_prepare;
+use derived_display::DerivedDisplayGpu;
 pub use presentation::OutputTransfer;
 use presentation::PresentationBridge;
+pub use raster_image_prepare::RasterImagePrepareError;
 
 use crate::{
-    CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedFrame,
-    RectangleInstance, RenderPrimitive,
+    CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathInstance, PathVertex,
+    PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
@@ -124,6 +145,47 @@ const LINE_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 10] = [
 
 const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
+const POLYGON_PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    0 => Float32x2,
+    1 => Float32x2,
+    2 => Uint32,
+    11 => Float32x4,
+    12 => Float32x4,
+    13 => Float32x4
+];
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct CompactPathVertex {
+    position: [f32; 2],
+    target_position: [f32; 2],
+    surface: u32,
+}
+
+impl From<PathVertex> for CompactPathVertex {
+    fn from(vertex: PathVertex) -> Self {
+        Self {
+            position: vertex.position,
+            target_position: vertex.target_position,
+            surface: vertex.surface,
+        }
+    }
+}
+
+fn update_compact_path_vertices(
+    compact: &mut Vec<CompactPathVertex>,
+    source: &[PathVertex],
+    dirty_ranges: &[std::ops::Range<usize>],
+) {
+    compact.resize(source.len(), CompactPathVertex::zeroed());
+    for range in dirty_ranges {
+        let end = range.end.min(source.len());
+        let start = range.start.min(end);
+        for (target, source) in compact[start..end].iter_mut().zip(&source[start..end]) {
+            *target = (*source).into();
+        }
+    }
+}
 const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
@@ -174,6 +236,14 @@ struct AnalyticPipelineDescriptor {
     instance_layout: wgpu::VertexBufferLayout<'static>,
 }
 
+struct PathPipelineDescriptor {
+    instance_layout: wgpu::VertexBufferLayout<'static>,
+    vertex_layout: wgpu::VertexBufferLayout<'static>,
+    vertex_entry: &'static str,
+    fragment_entry: &'static str,
+    label: &'static str,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 struct CameraUniform {
@@ -187,6 +257,12 @@ struct CameraUniform {
 pub struct Camera2D {
     pub center: Vec2,
     pub world_size: Vec2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Inset2DGpuView {
+    state: Inset2DViewState,
+    capture_size: [u32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,6 +317,84 @@ impl Default for Camera2D {
     }
 }
 
+/// One validated secondary viewport over the renderer's existing retained frame.
+///
+/// This descriptor owns no scene, execution, resources, or camera buffer. It is a
+/// pure composition request that can be encoded against the same prepared frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SecondaryViewport {
+    pub camera: Camera2D,
+    /// Destination rectangle in physical output pixels: [x, y, width, height].
+    pub destination: [u32; 4],
+}
+
+/// One complete retained-frame composition request.
+///
+/// Grouping the frame inputs makes composition ownership explicit without
+/// proliferating renderer entry-point arguments. The request only borrows
+/// prepared CPU-side state; GPU resources remain owned by the renderer.
+pub struct FrameComposition<'a, 'frame> {
+    pub prepared: &'a PreparedFrame<'frame>,
+    pub presentations: Option<&'a PreparedDerivedDisplay>,
+    pub secondary_viewports: &'a [SecondaryViewport],
+    pub overlay: Option<&'a OverlayGpuState>,
+    pub clear_color: wgpu::Color,
+    pub query_set: Option<&'a wgpu::QuerySet>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecondaryViewportError {
+    EmptyDestination,
+    DestinationOutOfBounds,
+    MultisampledContentUnsupported,
+    GlowSecondaryViewUnsupported,
+}
+
+impl std::fmt::Display for SecondaryViewportError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::EmptyDestination => "secondary viewport destination must be non-empty",
+            Self::DestinationOutOfBounds => {
+                "secondary viewport destination must fit inside the output viewport"
+            }
+            Self::GlowSecondaryViewUnsupported => {
+                "glow captures for secondary views are not prepared"
+            }
+            Self::MultisampledContentUnsupported => {
+                "secondary viewport currently supports single-sample analytic content only"
+            }
+        })
+    }
+}
+
+impl std::error::Error for SecondaryViewportError {}
+
+impl SecondaryViewport {
+    pub fn new(
+        camera: Camera2D,
+        destination: [u32; 4],
+        output_size: [u32; 2],
+    ) -> Result<Self, SecondaryViewportError> {
+        let [x, y, width, height] = destination;
+        if width == 0 || height == 0 {
+            return Err(SecondaryViewportError::EmptyDestination);
+        }
+        let Some(end_x) = x.checked_add(width) else {
+            return Err(SecondaryViewportError::DestinationOutOfBounds);
+        };
+        let Some(end_y) = y.checked_add(height) else {
+            return Err(SecondaryViewportError::DestinationOutOfBounds);
+        };
+        if end_x > output_size[0] || end_y > output_size[1] {
+            return Err(SecondaryViewportError::DestinationOutOfBounds);
+        }
+        Ok(Self {
+            camera,
+            destination,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UploadStats {
     pub bytes_uploaded: usize,
@@ -267,6 +421,17 @@ pub(crate) type UploadWriteTrace<'a> =
 pub struct DrawStats {
     pub draw_calls: usize,
     pub instances_drawn: usize,
+}
+
+// Valid only within one pass/camera/sample-count run; foreign draws invalidate it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeometryBinding {
+    Circle,
+    Rectangle,
+    Line,
+    Path,
+    Polygon,
+    MegaPath,
 }
 
 #[derive(Clone, Debug)]
@@ -325,6 +490,9 @@ impl std::error::Error for PathPreloadUploadError {}
 
 #[derive(Debug)]
 pub struct GpuRenderer {
+    analytic_glows: Option<Box<analytic_glow::AnalyticGlowGpu>>,
+    retained_glow: retained_text::glow_publication::RetainedGlowPublication,
+    spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
@@ -332,12 +500,24 @@ pub struct GpuRenderer {
     rectangle_pipeline_single_sample: wgpu::RenderPipeline,
     line_pipeline_single_sample: wgpu::RenderPipeline,
     path_pipeline: wgpu::RenderPipeline,
+    /// Full path vertices carry the renderer-local exact-triangle coordinates.
+    /// Transient presentation paths also retain this full format.
+    full_path_pipeline: wgpu::RenderPipeline,
     mega_path_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    camera_bind_group_layout: wgpu::BindGroupLayout,
+    inset_camera_buffers: Vec<wgpu::Buffer>,
+    inset_camera_bind_groups: Vec<wgpu::BindGroup>,
+    inset_views: Vec<Inset2DGpuView>,
+    inset_targets: Vec<inset_capture::InsetCaptureTarget>,
+    inset_camera_by_display: std::collections::HashMap<noon_core::ObjectId, usize>,
     camera: Camera2D,
     viewport_size: [u32; 2],
+    // Logical presentation dimensions may differ from integer backing pixels.
+    // This is view metadata, not an effect or semantic scene authority.
+    logical_viewport_size: Vec2,
     target_format: wgpu::TextureFormat,
     presentation: PresentationBridge,
     path_msaa_texture: wgpu::Texture,
@@ -346,30 +526,64 @@ pub struct GpuRenderer {
     rectangle_buffer: wgpu::Buffer,
     line_buffer: wgpu::Buffer,
     path_vertex_buffer: wgpu::Buffer,
+    compact_path_vertex_buffer: wgpu::Buffer,
+    compact_path_vertices: Vec<CompactPathVertex>,
     path_index_buffer: wgpu::Buffer,
     path_instance_buffer: wgpu::Buffer,
     mega_path_index_buffer: wgpu::Buffer,
     mega_path_vertex_instance_buffer: wgpu::Buffer,
-    path_render_bundle: Option<wgpu::RenderBundle>,
-    path_render_bundle_batches: Vec<PathBatch>,
-    path_render_bundle_rebuilds: usize,
+    derived_display: DerivedDisplayGpu,
+    images: Option<raster_image_gpu::RasterImageGpuRenderer>,
     circle_capacity_bytes: usize,
     rectangle_capacity_bytes: usize,
     line_capacity_bytes: usize,
     path_vertex_capacity_bytes: usize,
+    compact_path_vertex_capacity_bytes: usize,
     path_index_capacity_bytes: usize,
     path_instance_capacity_bytes: usize,
     mega_path_index_capacity_bytes: usize,
     mega_path_vertex_instance_capacity_bytes: usize,
 }
 
+#[derive(Clone, Copy)]
+struct FramePassOptions<'a> {
+    clear_color: wgpu::Color,
+    query_set: Option<&'a wgpu::QuerySet>,
+    overlay: Option<&'a OverlayGpuState>,
+    finalize: bool,
+}
+impl<'a> FramePassOptions<'a> {
+    fn new(clear_color: wgpu::Color, query_set: Option<&'a wgpu::QuerySet>) -> Self {
+        Self {
+            clear_color,
+            query_set,
+            overlay: None,
+            finalize: true,
+        }
+    }
+
+    fn deferred(clear_color: wgpu::Color, query_set: Option<&'a wgpu::QuerySet>) -> Self {
+        Self {
+            clear_color,
+            query_set,
+            overlay: None,
+            finalize: false,
+        }
+    }
+}
+
 impl GpuRenderer {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        Self::new_with_output_transfer(device, target_format, OutputTransfer::Direct)
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
+        Self::new_with_output_transfer(device, queue, target_format, OutputTransfer::Direct)
     }
 
     pub fn new_with_output_transfer(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         output_transfer: OutputTransfer,
     ) -> Self {
@@ -390,11 +604,13 @@ impl GpuRenderer {
             PresentationBridge::new(device, surface_format, output_transfer, viewport_size);
         let target_format = presentation.scene_format();
         let camera_uniform = camera.uniform(viewport_size);
-        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Noon camera uniform"),
-            contents: bytemuck::bytes_of(&camera_uniform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let camera_buffer = create_buffer_with_data(
+            device,
+            queue,
+            Some("Noon camera uniform"),
+            bytemuck::bytes_of(&camera_uniform),
+            wgpu::BufferUsages::UNIFORM,
+        );
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon camera bind group layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -416,8 +632,18 @@ impl GpuRenderer {
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
-
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../analytic.wgsl"));
+        let polygon_coverage = include_str!("../polygon_coverage.wgsl");
+        let cairo_color = include_str!("../cairo_color.wgsl");
+        let analytic_source = format!(
+            "{}\n{}\n{}",
+            include_str!("../analytic.wgsl"),
+            cairo_color,
+            polygon_coverage
+        );
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon analytic shader"),
+            source: wgpu::ShaderSource::Wgsl(analytic_source.into()),
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon analytic pipeline layout"),
             bind_group_layouts: &[Some(&camera_layout)],
@@ -501,22 +727,40 @@ impl GpuRenderer {
                 instance_layout: line_instance_layout(),
             },
         );
-        let path_shader = device.create_shader_module(wgpu::include_wgsl!("../path.wgsl"));
+        let path_source = format!(
+            "{}\n{}\n{}",
+            include_str!("../path.wgsl"),
+            include_str!("../cairo_color.wgsl"),
+            polygon_coverage
+        );
+        let path_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon path shader"),
+            source: wgpu::ShaderSource::Wgsl(path_source.into()),
+        });
         let path_pipeline =
             create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
+        let full_path_pipeline =
+            create_full_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let mega_path_pipeline =
             create_mega_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
-        let quad_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Noon unit quad"),
-            contents: bytemuck::cast_slice(&QUAD_VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        let quad_buffer = create_buffer_with_data(
+            device,
+            queue,
+            Some("Noon unit quad"),
+            bytemuck::cast_slice(&QUAD_VERTICES),
+            wgpu::BufferUsages::VERTEX,
+        );
         let circle_buffer = empty_instance_buffer(device, "Noon circle instances");
         let rectangle_buffer = empty_instance_buffer(device, "Noon rectangle instances");
         let line_buffer = empty_instance_buffer(device, "Noon line instances");
         let path_vertex_buffer = empty_buffer(
             device,
             "Noon path vertices",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        );
+        let compact_path_vertex_buffer = empty_buffer(
+            device,
+            "Noon compact path vertices",
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         );
         let path_index_buffer = empty_buffer(
@@ -532,10 +776,12 @@ impl GpuRenderer {
         );
         let mega_path_vertex_instance_buffer =
             empty_instance_buffer(device, "Noon packed path vertex attributes");
+        let derived_display = DerivedDisplayGpu::new(device);
         let (path_msaa_texture, path_msaa_view) =
             create_path_msaa_target(device, target_format, viewport_size);
 
         Self {
+            spatial: mesh::SpatialGpuState::default(),
             circle_pipeline,
             rectangle_pipeline,
             line_pipeline,
@@ -543,12 +789,20 @@ impl GpuRenderer {
             rectangle_pipeline_single_sample,
             line_pipeline_single_sample,
             path_pipeline,
+            full_path_pipeline,
             mega_path_pipeline,
             quad_buffer,
             camera_buffer,
             camera_bind_group,
+            camera_bind_group_layout: camera_layout,
+            inset_camera_buffers: Vec::new(),
+            inset_camera_bind_groups: Vec::new(),
+            inset_views: Vec::new(),
+            inset_targets: Vec::new(),
+            inset_camera_by_display: std::collections::HashMap::new(),
             camera,
             viewport_size,
+            logical_viewport_size: Vec2::new(viewport_size[0] as f32, viewport_size[1] as f32),
             target_format,
             presentation,
             path_msaa_texture,
@@ -557,17 +811,21 @@ impl GpuRenderer {
             rectangle_buffer,
             line_buffer,
             path_vertex_buffer,
+            compact_path_vertex_buffer,
+            compact_path_vertices: Vec::new(),
             path_index_buffer,
             path_instance_buffer,
             mega_path_index_buffer,
             mega_path_vertex_instance_buffer,
-            path_render_bundle: None,
-            path_render_bundle_batches: Vec::new(),
-            path_render_bundle_rebuilds: 0,
+            derived_display,
+            images: None,
+            analytic_glows: None,
+            retained_glow: Default::default(),
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
             line_capacity_bytes: 0,
             path_vertex_capacity_bytes: 0,
+            compact_path_vertex_capacity_bytes: 0,
             path_index_capacity_bytes: 0,
             path_instance_capacity_bytes: 0,
             mega_path_index_capacity_bytes: 0,
@@ -580,6 +838,64 @@ impl GpuRenderer {
         self.write_camera_uniform(queue);
     }
 
+    /// Derive mesh residency and effective camera uniforms from the same runtime
+    /// publication consumed by retained 2D/text preparation. No authored store is
+    /// consulted here and no frame motion rebuilds immutable vertices.
+    pub fn prepare_spatial(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        publication: &noon_runtime::RendererPublication<'_>,
+    ) -> Result<SpatialUploadStats, SpatialPrepareError> {
+        self.spatial.prepare(
+            device,
+            queue,
+            self.target_format,
+            self.viewport_size,
+            publication,
+            self.camera,
+        )
+    }
+
+    /// Prepare spatial draws from an already-installed worker frame and its
+    /// immutable geometry arena. The supplied context is the worker's exact
+    /// installed publication context, so spatial uploads share the same
+    /// stale/retry semantics as the runtime-owned publication path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_spatial_with_resources(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        context: noon_core::PublicationContext,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        geometry_resources: &dyn noon_core::GeometryResourceLookup,
+        text_resources: &dyn noon_core::TextResourceLookup,
+        font_resources: &dyn noon_core::FontResourceLookup,
+        painter_order: &[u32],
+    ) -> Result<SpatialUploadStats, SpatialPrepareError> {
+        self.spatial.prepare_with_resources(
+            device,
+            queue,
+            self.target_format,
+            self.viewport_size,
+            context,
+            frame,
+            changes,
+            geometry_resources,
+            text_resources,
+            font_resources,
+            painter_order,
+            self.camera,
+        )
+    }
+
+    /// Start a new installed retained session whose source publication context
+    /// may begin at an earlier frame epoch than the session just replaced.
+    pub fn reset_spatial_publication_context(&mut self) {
+        self.spatial.reset_publication_context();
+    }
+
     pub fn set_viewport(
         &mut self,
         device: &wgpu::Device,
@@ -587,11 +903,34 @@ impl GpuRenderer {
         width: u32,
         height: u32,
     ) {
-        self.viewport_size = [width.max(1), height.max(1)];
-        (self.path_msaa_texture, self.path_msaa_view) =
-            create_path_msaa_target(device, self.target_format, self.viewport_size);
-        self.presentation.resize(device, self.viewport_size);
+        let viewport_size = [width.max(1), height.max(1)];
+        self.logical_viewport_size = Vec2::new(viewport_size[0] as f32, viewport_size[1] as f32);
+        if self.viewport_size != viewport_size {
+            self.viewport_size = viewport_size;
+            (self.path_msaa_texture, self.path_msaa_view) =
+                create_path_msaa_target(device, self.target_format, self.viewport_size);
+            self.presentation.resize(device, self.viewport_size);
+        }
         self.write_camera_uniform(queue);
+    }
+
+    /// Set physical backing pixels together with the logical view used by the
+    /// camera and pointer projection. Browser CSS bounds need not have exactly
+    /// the backing aspect after borders, fractional layout and DPR rounding.
+    /// Validation precedes any GPU or renderer mutation. Ordinary set_viewport
+    /// restores the default mapping of one logical unit per backing pixel.
+    pub fn set_viewport_with_logical_size(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        logical_size: Vec2,
+    ) -> Result<(), CameraError> {
+        Camera2D::new(Vec2::ZERO, logical_size)?;
+        self.set_viewport(device, queue, width, height);
+        self.logical_viewport_size = logical_size;
+        Ok(())
     }
 
     fn write_camera_uniform(&self, queue: &wgpu::Queue) {
@@ -618,19 +957,7 @@ impl GpuRenderer {
         queue: &wgpu::Queue,
         prepared: &PreparedFrame<'_>,
     ) -> Result<UploadStats, PathPreloadUploadError> {
-        if !prepared.circles.is_empty()
-            || !prepared.rectangles.is_empty()
-            || !prepared.lines.is_empty()
-            || !prepared.paths.is_empty()
-            || !prepared.path_batches.is_empty()
-            || !prepared.render_batches.is_empty()
-            || prepared.ordered_render_chunks().next().is_some()
-            || !prepared.mega_path_indices.is_empty()
-            || !prepared.mega_path_vertex_instances.is_empty()
-            || !prepared.mega_path_batches.is_empty()
-        {
-            return Err(PathPreloadUploadError::NonEmptyDrawState);
-        }
+        validate_empty_preload_frame(prepared)?;
         let limit = device.limits().max_buffer_size;
         validate_preload_allocation(
             "path vertices",
@@ -645,6 +972,84 @@ impl GpuRenderer {
             limit,
         )?;
         Ok(self.upload(device, queue, prepared))
+    }
+
+    /// Replace the resident path buffers with exact-size buffers for a complete,
+    /// empty-draw preload frame. The replacements are staged before any active
+    /// renderer state changes; old submitted command buffers retain their old
+    /// buffer handles through wgpu's normal resource lifetime tracking.
+    pub(crate) fn replace_preloaded_path_buffers(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedFrame<'_>,
+    ) -> Result<UploadStats, PathPreloadUploadError> {
+        validate_empty_preload_frame(prepared)?;
+
+        let vertices = bytemuck::cast_slice(prepared.path_vertices);
+        let indices = bytemuck::cast_slice(prepared.path_indices);
+        let mut compact_vertices = Vec::new();
+        if !prepared.path_vertices.is_empty() {
+            let full_vertex_range = 0..prepared.path_vertices.len();
+            update_compact_path_vertices(
+                &mut compact_vertices,
+                prepared.path_vertices,
+                std::slice::from_ref(&full_vertex_range),
+            );
+        }
+        let compact_vertex_bytes = bytemuck::cast_slice(&compact_vertices);
+        let vertex_bytes_len = vertices.len();
+        let compact_vertex_bytes_len = compact_vertex_bytes.len();
+        let index_bytes_len = indices.len();
+        for (buffer, size) in [
+            ("path vertices", vertices.len()),
+            ("compact path vertices", compact_vertex_bytes.len()),
+            ("path indices", indices.len()),
+        ] {
+            if size > device.limits().max_buffer_size as usize {
+                return Err(PathPreloadUploadError::BufferLimit {
+                    buffer,
+                    requested: size,
+                    limit: device.limits().max_buffer_size,
+                });
+            }
+        }
+
+        let path_vertex_buffer = replacement_path_buffer(
+            device,
+            queue,
+            "Noon path vertices",
+            vertices,
+            wgpu::BufferUsages::VERTEX,
+        );
+        let compact_path_vertex_buffer = replacement_path_buffer(
+            device,
+            queue,
+            "Noon compact path vertices",
+            compact_vertex_bytes,
+            wgpu::BufferUsages::VERTEX,
+        );
+        let path_index_buffer = replacement_path_buffer(
+            device,
+            queue,
+            "Noon path indices",
+            indices,
+            wgpu::BufferUsages::INDEX,
+        );
+        let bytes_uploaded = vertex_bytes_len + compact_vertex_bytes_len + index_bytes_len;
+
+        self.path_vertex_buffer = path_vertex_buffer;
+        self.compact_path_vertex_buffer = compact_path_vertex_buffer;
+        self.path_index_buffer = path_index_buffer;
+        self.compact_path_vertices = compact_vertices;
+        self.path_vertex_capacity_bytes = vertex_bytes_len;
+        self.compact_path_vertex_capacity_bytes = compact_vertex_bytes_len;
+        self.path_index_capacity_bytes = index_bytes_len;
+
+        Ok(UploadStats {
+            bytes_uploaded,
+            buffer_reallocations: 3,
+        })
     }
 
     pub fn upload(
@@ -739,7 +1144,21 @@ impl GpuRenderer {
             "Noon path vertices",
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         );
-        buffer_reallocations += usize::from(path_vertex_reallocated);
+        update_compact_path_vertices(
+            &mut self.compact_path_vertices,
+            prepared.path_vertices,
+            prepared.path_vertex_dirty_ranges,
+        );
+        let compact_path_vertex_reallocated = ensure_capacity_with_usage(
+            device,
+            &mut self.compact_path_vertex_buffer,
+            &mut self.compact_path_vertex_capacity_bytes,
+            self.compact_path_vertices.len() * size_of::<CompactPathVertex>(),
+            "Noon compact path vertices",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        );
+        buffer_reallocations +=
+            usize::from(path_vertex_reallocated) + usize::from(compact_path_vertex_reallocated);
         let path_index_reallocated = ensure_capacity_with_usage(
             device,
             &mut self.path_index_buffer,
@@ -775,12 +1194,6 @@ impl GpuRenderer {
         );
         buffer_reallocations += usize::from(mega_path_vertex_instance_reallocated);
 
-        self.prepare_path_render_bundle(
-            device,
-            prepared,
-            path_vertex_reallocated || path_index_reallocated || path_instance_reallocated,
-        );
-
         let bytes_uploaded = upload_dirty(
             queue,
             &self.circle_buffer,
@@ -788,6 +1201,14 @@ impl GpuRenderer {
             prepared.circle_dirty_ranges,
             circle_reallocated,
             "circle",
+            &mut trace,
+        ) + upload_dirty(
+            queue,
+            &self.compact_path_vertex_buffer,
+            &self.compact_path_vertices,
+            prepared.path_vertex_dirty_ranges,
+            compact_path_vertex_reallocated,
+            "compact_path_vertex",
             &mut trace,
         ) + upload_dirty(
             queue,
@@ -853,53 +1274,6 @@ impl GpuRenderer {
         }
     }
 
-    fn prepare_path_render_bundle(
-        &mut self,
-        device: &wgpu::Device,
-        prepared: &PreparedFrame<'_>,
-        path_buffer_reallocated: bool,
-    ) {
-        if prepared.path_batches.is_empty() {
-            self.path_render_bundle = None;
-            self.path_render_bundle_batches.clear();
-            return;
-        }
-
-        let layout_changed = self.path_render_bundle_batches != prepared.path_batches;
-        if self.path_render_bundle.is_some() && !path_buffer_reallocated && !layout_changed {
-            return;
-        }
-
-        let color_formats = [Some(self.target_format)];
-        let mut bundle =
-            device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
-                label: Some("Noon path render bundle encoder"),
-                color_formats: &color_formats,
-                depth_stencil: None,
-                sample_count: PATH_SAMPLE_COUNT,
-                multiview: None,
-            });
-        bundle.set_bind_group(0, &self.camera_bind_group, &[]);
-        bundle.set_pipeline(&self.path_pipeline);
-        bundle.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
-        bundle.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
-        bundle.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        for batch in prepared
-            .path_batches
-            .iter()
-            .filter(|batch| !batch.index_range.is_empty())
-        {
-            bundle.draw_indexed(batch.index_range.clone(), 0, batch.instance_range.clone());
-        }
-        self.path_render_bundle = Some(bundle.finish(&wgpu::RenderBundleDescriptor {
-            label: Some("Noon path render bundle"),
-        }));
-        self.path_render_bundle_batches.clear();
-        self.path_render_bundle_batches
-            .extend_from_slice(prepared.path_batches);
-        self.path_render_bundle_rebuilds += 1;
-    }
-
     pub fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -907,7 +1281,154 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         clear_color: wgpu::Color,
     ) -> DrawStats {
-        self.encode_inner(encoder, view, prepared, clear_color, None)
+        self.encode_inner(
+            encoder,
+            view,
+            prepared,
+            None,
+            FramePassOptions::new(clear_color, None),
+        )
+    }
+
+    /// Encode one complete retained composition in presentation order.
+    ///
+    /// The primary scene is encoded first without finalization, then every
+    /// secondary analytic viewport is appended, then the optional session overlay
+    /// is drawn once and the output is presented once. All secondary requests are
+    /// validated before the primary pass begins, so a rejected composition leaves
+    /// the target untouched.
+    ///
+    /// GPU timestamps, when supplied, cover the primary scene pass only.
+    pub fn encode_composed_frame(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        composition: FrameComposition<'_, '_>,
+    ) -> Result<DrawStats, SecondaryViewportError> {
+        let FrameComposition {
+            prepared,
+            presentations,
+            secondary_viewports,
+            overlay,
+            clear_color,
+            query_set,
+        } = composition;
+
+        if !secondary_viewports.is_empty() && self.has_analytic_glows() {
+            return Err(SecondaryViewportError::GlowSecondaryViewUnsupported);
+        }
+        for secondary in secondary_viewports {
+            SecondaryViewport::new(secondary.camera, secondary.destination, self.viewport_size)?;
+        }
+        if !secondary_viewports.is_empty()
+            && self.scene_render_sample_count(prepared, presentations) != 1
+        {
+            return Err(SecondaryViewportError::MultisampledContentUnsupported);
+        }
+
+        let mut stats = self.encode_inner(
+            encoder,
+            view,
+            prepared,
+            presentations,
+            FramePassOptions::deferred(clear_color, query_set),
+        );
+        for secondary in secondary_viewports {
+            stats += self.encode_secondary_viewport_validated(
+                device,
+                queue,
+                encoder,
+                view,
+                &composition,
+                *secondary,
+            );
+        }
+        stats += self.finalize_frame(encoder, view, overlay);
+        Ok(stats)
+    }
+
+    fn scene_render_sample_count(
+        &self,
+        prepared: &PreparedFrame<'_>,
+        presentations: Option<&PreparedDerivedDisplay>,
+    ) -> u32 {
+        let visible_derived_paths = presentations.is_some_and(|presentations| {
+            presentations
+                .path_batches
+                .iter()
+                .any(|batch| !batch.index_range.is_empty())
+        });
+        ordered_render_sample_count(
+            prepared.path_batches,
+            self.spatial.has_active_paths() || visible_derived_paths,
+        )
+    }
+
+    fn encode_secondary_viewport_validated(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        composition: &FrameComposition<'_, '_>,
+        secondary: SecondaryViewport,
+    ) -> DrawStats {
+        let prepared = composition.prepared;
+        let presentations = composition.presentations;
+        let [x, y, width, height] = secondary.destination;
+        let camera_uniform = secondary.camera.uniform([width, height]);
+        let secondary_camera_buffer = create_buffer_with_data(
+            device,
+            queue,
+            Some("Noon secondary viewport camera uniform"),
+            bytemuck::bytes_of(&camera_uniform),
+            wgpu::BufferUsages::UNIFORM,
+        );
+        let secondary_camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Noon secondary viewport camera bind group"),
+            layout: &self.camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: secondary_camera_buffer.as_entire_binding(),
+            }],
+        });
+
+        let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: self.presentation.scene_view(view),
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Noon secondary viewport render pass"),
+            color_attachments: &color_attachments,
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0.0, 1.0);
+        pass.set_scissor_rect(x, y, width, height);
+        match presentations {
+            Some(presentations) => self.draw_with_derived_camera(
+                &mut pass,
+                prepared,
+                presentations,
+                true,
+                &secondary_camera_bind_group,
+            ),
+            None => self.draw_ordered_with_camera(
+                &mut pass,
+                prepared,
+                true,
+                &secondary_camera_bind_group,
+            ),
+        }
     }
 
     /// Encodes a render pass with beginning/end GPU timestamp writes.
@@ -919,7 +1440,13 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: &wgpu::QuerySet,
     ) -> DrawStats {
-        self.encode_inner(encoder, view, prepared, clear_color, Some(query_set))
+        self.encode_inner(
+            encoder,
+            view,
+            prepared,
+            None,
+            FramePassOptions::new(clear_color, Some(query_set)),
+        )
     }
 
     fn encode_inner(
@@ -927,11 +1454,23 @@ impl GpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         prepared: &PreparedFrame<'_>,
-        clear_color: wgpu::Color,
-        query_set: Option<&wgpu::QuerySet>,
+        derived: Option<&PreparedDerivedDisplay>,
+        options: FramePassOptions<'_>,
     ) -> DrawStats {
+        let FramePassOptions {
+            clear_color,
+            query_set,
+            overlay,
+            finalize,
+        } = options;
         let scene_view = self.presentation.scene_view(view);
-        let sample_count = ordered_render_sample_count(prepared.path_batches);
+        let sample_count = self.scene_render_sample_count(prepared, derived);
+        let spatial_stats = self.encode_spatial(encoder, scene_view, clear_color, sample_count);
+        let load = if self.spatial.is_active() {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(clear_color)
+        };
         let stats = if sample_count == 1 {
             // Analytic SDF primitives already use derivative-based edge coverage. When
             // no visible vector path participates in painter order, avoid 4x sample
@@ -941,7 +1480,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color),
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -958,7 +1497,10 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.draw_ordered(&mut pass, prepared, true)
+            match derived {
+                Some(derived) => self.draw_with_derived(&mut pass, prepared, derived, true),
+                None => self.draw_ordered(&mut pass, prepared, true),
+            }
         } else {
             // Mixed vector/analytic content still shares one 4x multisampled target so
             // pipeline switches follow semantic painter order. Splitting these primitives
@@ -968,7 +1510,7 @@ impl GpuRenderer {
                 depth_slice: None,
                 resolve_target: Some(scene_view),
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear_color),
+                    load,
                     store: wgpu::StoreOp::Discard,
                 },
             })];
@@ -985,8 +1527,41 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.draw_ordered(&mut pass, prepared, false)
+            match derived {
+                Some(derived) => self.draw_with_derived(&mut pass, prepared, derived, false),
+                None => self.draw_ordered(&mut pass, prepared, false),
+            }
         };
+        let mut stats = stats;
+        stats += spatial_stats;
+        if finalize {
+            stats += self.finalize_frame(encoder, view, overlay);
+        }
+        stats
+    }
+
+    fn encode_spatial(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &wgpu::TextureView,
+        clear: wgpu::Color,
+        samples: u32,
+    ) -> DrawStats {
+        if samples == 1 {
+            self.spatial.encode(encoder, scene, None, clear, samples)
+        } else {
+            self.spatial
+                .encode(encoder, &self.path_msaa_view, Some(scene), clear, samples)
+        }
+    }
+
+    pub(crate) fn finalize_frame(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        overlay: Option<&OverlayGpuState>,
+    ) -> DrawStats {
+        let stats = self.encode_overlay(encoder, view, overlay);
         self.presentation.encode_present(encoder, view);
         stats
     }
@@ -997,9 +1572,25 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         single_sample_analytics: bool,
     ) -> DrawStats {
+        self.draw_ordered_with_camera(
+            pass,
+            prepared,
+            single_sample_analytics,
+            &self.camera_bind_group,
+        )
+    }
+
+    fn draw_ordered_with_camera<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        single_sample_analytics: bool,
+        camera_bind_group: &'a wgpu::BindGroup,
+    ) -> DrawStats {
         let mut stats = DrawStats::default();
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(0, camera_bind_group, &[]);
         let mut pending = None::<ResolvedOrderedBatch>;
+        let mut binding = None;
         for resolved in prepared.ordered_render_batches() {
             let next = ResolvedOrderedBatch {
                 batch: resolved.batch.clone(),
@@ -1014,14 +1605,20 @@ impl GpuRenderer {
                     prepared,
                     &current,
                     single_sample_analytics,
+                    &mut binding,
                 );
                 stats.draw_calls += drawn.draw_calls;
                 stats.instances_drawn += drawn.instances_drawn;
             }
         }
         if let Some(current) = pending {
-            let drawn =
-                self.draw_resolved_ordered_batch(pass, prepared, &current, single_sample_analytics);
+            let drawn = self.draw_resolved_ordered_batch(
+                pass,
+                prepared,
+                &current,
+                single_sample_analytics,
+                &mut binding,
+            );
             stats.draw_calls += drawn.draw_calls;
             stats.instances_drawn += drawn.instances_drawn;
         }
@@ -1034,74 +1631,182 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         resolved: &ResolvedOrderedBatch,
         single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
     ) -> DrawStats {
-        let circle_pipeline = if single_sample_analytics {
-            &self.circle_pipeline_single_sample
-        } else {
-            &self.circle_pipeline
-        };
-        let rectangle_pipeline = if single_sample_analytics {
-            &self.rectangle_pipeline_single_sample
-        } else {
-            &self.rectangle_pipeline
-        };
-        let line_pipeline = if single_sample_analytics {
-            &self.line_pipeline_single_sample
-        } else {
-            &self.line_pipeline
-        };
+        if let Some(stats) = self.draw_analytic_glow_batch(
+            pass,
+            prepared,
+            resolved,
+            single_sample_analytics,
+            binding,
+        ) {
+            return stats;
+        }
+        self.draw_plain_ordered_batch(pass, prepared, resolved, single_sample_analytics, binding)
+    }
+
+    fn draw_plain_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+    ) -> DrawStats {
+        let mut stats = DrawStats::default();
+        for instance_range in prepared.contributing_instance_ranges(&resolved.batch) {
+            let segment = ResolvedOrderedBatch {
+                batch: OrderedRenderBatch {
+                    primitive: resolved.batch.primitive,
+                    instance_range,
+                },
+                mega: resolved.mega.clone(),
+            };
+            stats += self.draw_contributing_ordered_batch(
+                pass,
+                prepared,
+                &segment,
+                single_sample_analytics,
+                binding,
+            );
+        }
+        stats
+    }
+
+    fn draw_contributing_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+    ) -> DrawStats {
+        self.draw_isolated_ordered_batch(
+            pass,
+            prepared,
+            resolved,
+            single_sample_analytics,
+            binding,
+            None,
+        )
+    }
+
+    fn draw_isolated_ordered_batch<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        prepared: &PreparedFrame<'_>,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+        binding: &mut Option<GeometryBinding>,
+        isolated: Option<wgpu::BufferSlice<'a>>,
+    ) -> DrawStats {
         let batch = &resolved.batch;
-        match batch.primitive {
-            RenderPrimitive::Circle => {
-                pass.set_pipeline(circle_pipeline);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
-                pass.draw(0..6, batch.instance_range.clone());
-            }
-            RenderPrimitive::Rectangle => {
-                pass.set_pipeline(rectangle_pipeline);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
-                pass.draw(0..6, batch.instance_range.clone());
-            }
-            RenderPrimitive::Line => {
-                pass.set_pipeline(line_pipeline);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.line_buffer.slice(..));
-                pass.draw(0..6, batch.instance_range.clone());
-            }
-            RenderPrimitive::MegaPath { .. } => {
-                let mega = resolved
-                    .mega
-                    .as_ref()
-                    .expect("resolved mega-path draw must carry metadata");
-                if mega.index_range.is_empty() {
-                    return DrawStats::default();
-                }
-                pass.set_pipeline(&self.mega_path_pipeline);
-                pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.mega_path_vertex_instance_buffer.slice(..));
-                pass.set_index_buffer(
-                    self.mega_path_index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
-                pass.draw_indexed(mega.index_range.clone(), 0, 0..1);
-                return DrawStats {
-                    draw_calls: 1,
-                    instances_drawn: mega.path_count,
-                };
-            }
-            RenderPrimitive::Path { batch: path_batch } => {
-                let path = &prepared.path_batches[path_batch];
+        let (next, pipeline, vertices, instances, indices) = match batch.primitive {
+            RenderPrimitive::Circle => (
+                GeometryBinding::Circle,
+                if single_sample_analytics {
+                    &self.circle_pipeline_single_sample
+                } else {
+                    &self.circle_pipeline
+                },
+                &self.quad_buffer,
+                &self.circle_buffer,
+                None,
+            ),
+            RenderPrimitive::Rectangle => (
+                GeometryBinding::Rectangle,
+                if single_sample_analytics {
+                    &self.rectangle_pipeline_single_sample
+                } else {
+                    &self.rectangle_pipeline
+                },
+                &self.quad_buffer,
+                &self.rectangle_buffer,
+                None,
+            ),
+            RenderPrimitive::Line => (
+                GeometryBinding::Line,
+                if single_sample_analytics {
+                    &self.line_pipeline_single_sample
+                } else {
+                    &self.line_pipeline
+                },
+                &self.quad_buffer,
+                &self.line_buffer,
+                None,
+            ),
+            RenderPrimitive::Path { batch } => {
+                let path = &prepared.path_batches[batch];
                 if path.index_range.is_empty() {
                     return DrawStats::default();
                 }
-                pass.set_pipeline(&self.path_pipeline);
-                pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
-                pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
-                pass.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(path.index_range.clone(), 0, batch.instance_range.clone());
+                if path_batch_uses_polygon_coverage(prepared, path) {
+                    (
+                        GeometryBinding::Polygon,
+                        &self.full_path_pipeline,
+                        &self.path_vertex_buffer,
+                        &self.path_instance_buffer,
+                        Some(&self.path_index_buffer),
+                    )
+                } else {
+                    (
+                        GeometryBinding::Path,
+                        &self.path_pipeline,
+                        &self.compact_path_vertex_buffer,
+                        &self.path_instance_buffer,
+                        Some(&self.path_index_buffer),
+                    )
+                }
             }
+            RenderPrimitive::MegaPath { .. } => {
+                if resolved
+                    .mega
+                    .as_ref()
+                    .expect("resolved mega metadata")
+                    .index_range
+                    .is_empty()
+                {
+                    return DrawStats::default();
+                }
+                (
+                    GeometryBinding::MegaPath,
+                    &self.mega_path_pipeline,
+                    &self.compact_path_vertex_buffer,
+                    &self.mega_path_vertex_instance_buffer,
+                    Some(&self.mega_path_index_buffer),
+                )
+            }
+        };
+        if isolated.is_some() || *binding != Some(next) {
+            pass.set_pipeline(pipeline);
+            pass.set_vertex_buffer(0, vertices.slice(..));
+            pass.set_vertex_buffer(1, isolated.unwrap_or_else(|| instances.slice(..)));
+            if let Some(indices) = indices {
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            }
+            *binding = Some(next);
+        }
+        match batch.primitive {
+            RenderPrimitive::Path { batch: path } => {
+                pass.draw_indexed(
+                    prepared.path_batches[path].index_range.clone(),
+                    0,
+                    batch.instance_range.clone(),
+                );
+            }
+            RenderPrimitive::MegaPath { .. } => {
+                let mega = resolved.mega.as_ref().expect("resolved mega metadata");
+                let mut stats = DrawStats::default();
+                for (index_range, path_count) in
+                    prepared.contributing_mega_index_ranges(mega.index_range.clone())
+                {
+                    pass.draw_indexed(index_range, 0, 0..1);
+                    stats.draw_calls += 1;
+                    stats.instances_drawn += path_count;
+                }
+                return stats;
+            }
+            _ => pass.draw(0..6, batch.instance_range.clone()),
         }
         DrawStats {
             draw_calls: 1,
@@ -1114,41 +1819,7 @@ impl GpuRenderer {
         pass: &mut wgpu::RenderPass<'a>,
         prepared: &PreparedFrame<'_>,
     ) -> DrawStats {
-        let mut stats = DrawStats::default();
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-
-        if !prepared.circles.is_empty() {
-            let count = u32::try_from(prepared.circles.len())
-                .expect("circle instance count exceeds wgpu draw limits");
-            pass.set_pipeline(&self.circle_pipeline);
-            pass.set_vertex_buffer(1, self.circle_buffer.slice(..));
-            pass.draw(0..6, 0..count);
-            stats.draw_calls += 1;
-            stats.instances_drawn += prepared.circles.len();
-        }
-
-        if !prepared.rectangles.is_empty() {
-            let count = u32::try_from(prepared.rectangles.len())
-                .expect("rectangle instance count exceeds wgpu draw limits");
-            pass.set_pipeline(&self.rectangle_pipeline);
-            pass.set_vertex_buffer(1, self.rectangle_buffer.slice(..));
-            pass.draw(0..6, 0..count);
-            stats.draw_calls += 1;
-            stats.instances_drawn += prepared.rectangles.len();
-        }
-
-        if !prepared.lines.is_empty() {
-            let count = u32::try_from(prepared.lines.len())
-                .expect("line instance count exceeds wgpu draw limits");
-            pass.set_pipeline(&self.line_pipeline);
-            pass.set_vertex_buffer(1, self.line_buffer.slice(..));
-            pass.draw(0..6, 0..count);
-            stats.draw_calls += 1;
-            stats.instances_drawn += prepared.lines.len();
-        }
-
-        stats
+        self.draw_ordered(pass, prepared, false)
     }
 
     pub const fn circle_capacity_bytes(&self) -> usize {
@@ -1182,10 +1853,6 @@ impl GpuRenderer {
     pub const fn mega_path_vertex_instance_capacity_bytes(&self) -> usize {
         self.mega_path_vertex_instance_capacity_bytes
     }
-
-    pub const fn path_render_bundle_rebuilds(&self) -> usize {
-        self.path_render_bundle_rebuilds
-    }
 }
 
 pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -1214,9 +1881,17 @@ pub fn line_instance_layout() -> wgpu::VertexBufferLayout<'static> {
 
 pub fn path_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
-        array_stride: size_of::<PathVertex>() as wgpu::BufferAddress,
+        array_stride: size_of::<CompactPathVertex>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &PATH_VERTEX_ATTRIBUTES,
+    }
+}
+
+pub fn polygon_path_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: size_of::<PathVertex>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &POLYGON_PATH_VERTEX_ATTRIBUTES,
     }
 }
 
@@ -1274,15 +1949,21 @@ fn create_pipeline(
     })
 }
 
-fn ordered_render_sample_count(path_batches: &[PathBatch]) -> u32 {
-    if path_batches
-        .iter()
-        .any(|batch| !batch.index_range.is_empty())
+fn ordered_render_sample_count(path_batches: &[PathBatch], other_visible_paths: bool) -> u32 {
+    if other_visible_paths
+        || path_batches
+            .iter()
+            .any(|batch| !batch.index_range.is_empty())
     {
         PATH_SAMPLE_COUNT
     } else {
         1
     }
+}
+
+fn path_batch_uses_polygon_coverage(prepared: &PreparedFrame<'_>, batch: &PathBatch) -> bool {
+    let _ = prepared;
+    batch.polygon_coverage
 }
 
 fn create_path_pipeline(
@@ -1296,8 +1977,13 @@ fn create_path_pipeline(
         layout,
         shader,
         target_format,
-        path_instance_layout(),
-        "Noon vector path pipeline",
+        PathPipelineDescriptor {
+            instance_layout: path_instance_layout(),
+            label: "Noon vector path pipeline",
+            vertex_layout: path_vertex_layout(),
+            vertex_entry: "vs_path_compact",
+            fragment_entry: "fs_path_compact",
+        },
     )
 }
 
@@ -1312,8 +1998,34 @@ fn create_mega_path_pipeline(
         layout,
         shader,
         target_format,
-        mega_path_instance_layout(),
-        "Noon packed mega-path pipeline",
+        PathPipelineDescriptor {
+            instance_layout: mega_path_instance_layout(),
+            label: "Noon packed mega-path pipeline",
+            vertex_layout: path_vertex_layout(),
+            vertex_entry: "vs_path_compact",
+            fragment_entry: "fs_path_compact",
+        },
+    )
+}
+
+fn create_full_path_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    create_path_pipeline_with_instance_layout(
+        device,
+        layout,
+        shader,
+        target_format,
+        PathPipelineDescriptor {
+            instance_layout: path_instance_layout(),
+            label: "Noon full path pipeline",
+            vertex_layout: polygon_path_vertex_layout(),
+            vertex_entry: "vs_path",
+            fragment_entry: "fs_path",
+        },
     )
 }
 
@@ -1322,21 +2034,23 @@ fn create_path_pipeline_with_instance_layout(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
-    instance_layout: wgpu::VertexBufferLayout<'static>,
-    label: &'static str,
+    descriptor: PathPipelineDescriptor,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
+        label: Some(descriptor.label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_path"),
+            entry_point: Some(descriptor.vertex_entry),
             compilation_options: Default::default(),
-            buffers: &[Some(path_vertex_layout()), Some(instance_layout)],
+            buffers: &[
+                Some(descriptor.vertex_layout),
+                Some(descriptor.instance_layout),
+            ],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_path"),
+            entry_point: Some(descriptor.fragment_entry),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
@@ -1355,6 +2069,33 @@ fn create_path_pipeline_with_instance_layout(
     })
 }
 
+/// Initialize an aligned typed buffer through the queue instead of a
+/// mapped-at-creation range. This avoids the mapped-range exception observed
+/// in browser WebGPU while preserving the buffer's exact upload contract.
+pub(super) fn create_buffer_with_data(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: wgpu::Label<'_>,
+    contents: &[u8],
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    assert!(
+        !contents.is_empty()
+            && contents
+                .len()
+                .is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT as usize),
+        "typed buffer initialization must have a non-zero copy-aligned length"
+    );
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label,
+        size: contents.len() as wgpu::BufferAddress,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buffer, 0, contents);
+    buffer
+}
+
 fn empty_instance_buffer(device: &wgpu::Device, label: &str) -> wgpu::Buffer {
     empty_buffer(
         device,
@@ -1370,6 +2111,39 @@ fn empty_buffer(device: &wgpu::Device, label: &str, usage: wgpu::BufferUsages) -
         usage,
         mapped_at_creation: false,
     })
+}
+
+fn replacement_path_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    contents: &[u8],
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    if contents.is_empty() {
+        empty_buffer(device, label, usage | wgpu::BufferUsages::COPY_DST)
+    } else {
+        create_buffer_with_data(device, queue, Some(label), contents, usage)
+    }
+}
+
+fn validate_empty_preload_frame(
+    prepared: &PreparedFrame<'_>,
+) -> Result<(), PathPreloadUploadError> {
+    if !prepared.circles.is_empty()
+        || !prepared.rectangles.is_empty()
+        || !prepared.lines.is_empty()
+        || !prepared.paths.is_empty()
+        || !prepared.path_batches.is_empty()
+        || !prepared.render_batches.is_empty()
+        || prepared.ordered_render_chunks().next().is_some()
+        || !prepared.mega_path_indices.is_empty()
+        || !prepared.mega_path_vertex_instances.is_empty()
+        || !prepared.mega_path_batches.is_empty()
+    {
+        return Err(PathPreloadUploadError::NonEmptyDrawState);
+    }
+    Ok(())
 }
 
 fn create_path_msaa_target(
@@ -1545,6 +2319,31 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn compact_path_uploads_follow_only_dirty_vertex_ranges() {
+        let mut compact = vec![
+            CompactPathVertex {
+                position: [9.0, 9.0],
+                target_position: [9.0, 9.0],
+                surface: 9,
+            };
+            3
+        ];
+        let source = (0..3)
+            .map(|value| PathVertex {
+                position: [value as f32, 0.0],
+                target_position: [value as f32, 1.0],
+                surface: value,
+                polygon: [[[0.0; 2]; 2]; 3],
+            })
+            .collect::<Vec<_>>();
+        let dirty_range = 1..2;
+        update_compact_path_vertices(&mut compact, &source, std::slice::from_ref(&dirty_range));
+        assert_eq!(compact[0].surface, 9);
+        assert_eq!(compact[1].surface, 1);
+        assert_eq!(compact[2].surface, 9);
+    }
+
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
     fn test_frame() -> FrameState {
@@ -1554,6 +2353,8 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.25)),
@@ -1563,6 +2364,8 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(3),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::line(
@@ -1575,6 +2378,8 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(
@@ -1605,9 +2410,11 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    glow: None,
                     z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::path(path)),
+                    spatial: None,
                     text_bounds: None,
                     transform: Transform2D::IDENTITY,
                     style: Style {
@@ -1621,6 +2428,8 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    glow: None,
+                    spatial: None,
                     z_index: 0.0,
                     id: ObjectId::new(2),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.2)),
@@ -1640,19 +2449,28 @@ mod tests {
 
     #[test]
     fn analytic_only_rendering_avoids_multisampling_but_visible_paths_keep_it() {
-        assert_eq!(ordered_render_sample_count(&[]), 1);
+        assert_eq!(ordered_render_sample_count(&[], false), 1);
+        assert_eq!(ordered_render_sample_count(&[], true), PATH_SAMPLE_COUNT);
         assert_eq!(
-            ordered_render_sample_count(&[PathBatch {
-                index_range: 0..0,
-                instance_range: 0..1,
-            }]),
+            ordered_render_sample_count(
+                &[PathBatch {
+                    index_range: 0..0,
+                    instance_range: 0..1,
+                    polygon_coverage: false,
+                }],
+                false
+            ),
             1
         );
         assert_eq!(
-            ordered_render_sample_count(&[PathBatch {
-                index_range: 0..3,
-                instance_range: 0..1,
-            }]),
+            ordered_render_sample_count(
+                &[PathBatch {
+                    index_range: 0..3,
+                    instance_range: 0..1,
+                    polygon_coverage: false,
+                }],
+                false
+            ),
             PATH_SAMPLE_COUNT
         );
     }
@@ -1712,6 +2530,13 @@ mod tests {
             path_vertex_layout.attributes[2].format,
             wgpu::VertexFormat::Uint32
         );
+        let triangle_layout = polygon_path_vertex_layout();
+        assert_eq!(triangle_layout.array_stride, 68);
+        assert_eq!(triangle_layout.attributes.len(), 6);
+        assert_eq!(triangle_layout.attributes[3].offset, 20);
+        assert_eq!(triangle_layout.attributes[5].offset, 52);
+        assert_eq!(triangle_layout.attributes[3].shader_location, 11);
+        assert_eq!(triangle_layout.attributes[5].shader_location, 13);
 
         let path_instance_layout = path_instance_layout();
         assert_eq!(path_instance_layout.array_stride, 80);
@@ -1748,7 +2573,7 @@ mod tests {
     #[test]
     fn noop_device_validates_pipelines_camera_upload_and_draw_encoding() {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         let camera =
             Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0)).expect("valid camera");
         renderer.set_viewport(&device, &queue, 64, 64);
@@ -1808,11 +2633,64 @@ mod tests {
     }
 
     #[test]
+    fn viewport_updates_reuse_targets_until_clamped_dimensions_change() {
+        const WEBGL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut renderer = GpuRenderer::new_with_output_transfer(
+            &device,
+            &queue,
+            WEBGL_FORMAT,
+            OutputTransfer::BrowserWebGlSrgb,
+        );
+        let camera =
+            Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0)).expect("valid camera");
+        renderer.set_camera(&queue, camera);
+
+        let initial_msaa_target = renderer.path_msaa_texture.clone();
+        let initial_presentation_target = renderer
+            .presentation
+            .scene_target_for_tests()
+            .expect("WebGL presentation target")
+            .clone();
+        renderer.set_viewport(&device, &queue, 0, 0);
+        assert_eq!(renderer.viewport_size(), [1, 1]);
+        assert_eq!(renderer.path_msaa_texture, initial_msaa_target);
+        assert_eq!(
+            renderer.presentation.scene_target_for_tests(),
+            Some(&initial_presentation_target)
+        );
+
+        renderer.set_viewport(&device, &queue, 96, 54);
+        let msaa_target = renderer.path_msaa_texture.clone();
+        let presentation_target = renderer
+            .presentation
+            .scene_target_for_tests()
+            .expect("WebGL presentation target")
+            .clone();
+        renderer.set_viewport(&device, &queue, 96, 54);
+        assert_eq!(renderer.camera(), camera);
+        assert_eq!(renderer.path_msaa_texture, msaa_target);
+        assert_eq!(
+            renderer.presentation.scene_target_for_tests(),
+            Some(&presentation_target)
+        );
+
+        renderer.set_viewport(&device, &queue, 192, 108);
+        assert_eq!(renderer.viewport_size(), [192, 108]);
+        assert_ne!(renderer.path_msaa_texture, msaa_target);
+        assert_ne!(
+            renderer.presentation.scene_target_for_tests(),
+            Some(&presentation_target)
+        );
+    }
+
+    #[test]
     fn noop_device_validates_webgl_presentation_transfer() {
         const WEBGL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut renderer = GpuRenderer::new_with_output_transfer(
             &device,
+            &queue,
             WEBGL_FORMAT,
             OutputTransfer::BrowserWebGlSrgb,
         );
@@ -1855,7 +2733,7 @@ mod tests {
             ..Default::default()
         };
         let (device, queue) = wgpu::Device::noop(&descriptor);
-        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, 64, 64);
 
         let frame = test_frame_with_path();
@@ -1908,16 +2786,16 @@ mod tests {
     #[test]
     fn noop_device_validates_multisampled_path_and_analytic_passes() {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, 64, 64);
         let frame = test_frame_with_path();
         let mut preparer = FramePreparer::new();
         let prepared = preparer.prepare(&frame);
 
         let upload = renderer.upload(&device, &queue, &prepared);
-        assert_eq!(upload.buffer_reallocations, 6);
+        // The compact ordinary-path stream is a distinct retained GPU buffer.
+        assert_eq!(upload.buffer_reallocations, 7);
         assert!(upload.bytes_uploaded > size_of::<CircleInstance>());
-        assert_eq!(renderer.path_render_bundle_rebuilds(), 1);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Noon path noop render target"),
@@ -1946,7 +2824,6 @@ mod tests {
         let unchanged_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(unchanged_upload.buffer_reallocations, 0);
         assert_eq!(unchanged_upload.bytes_uploaded, 0);
-        assert_eq!(renderer.path_render_bundle_rebuilds(), 1);
     }
 }
 

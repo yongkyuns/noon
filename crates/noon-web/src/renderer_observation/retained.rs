@@ -22,6 +22,7 @@ pub struct RendererMirroredObjectObservation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RendererPreparedKind {
+    Image,
     Geometry,
     Text,
     Mixed,
@@ -30,6 +31,7 @@ pub enum RendererPreparedKind {
 impl From<RetainedPreparedObjectKind> for RendererPreparedKind {
     fn from(value: RetainedPreparedObjectKind) -> Self {
         match value {
+            RetainedPreparedObjectKind::Image => Self::Image,
             RetainedPreparedObjectKind::Geometry => Self::Geometry,
             RetainedPreparedObjectKind::Text => Self::Text,
             RetainedPreparedObjectKind::Mixed => Self::Mixed,
@@ -199,6 +201,8 @@ pub struct RendererUploadObservation {
     pub target_text_writes: Vec<RendererUploadWriteObservation>,
     pub geometry_bytes_uploaded: usize,
     pub text_bytes_uploaded: usize,
+    pub image_pixel_bytes_uploaded: usize,
+    pub image_instance_bytes_uploaded: usize,
     pub buffer_reallocations: usize,
 }
 
@@ -208,6 +212,7 @@ pub struct RendererDrawObservation {
     pub geometry_draw_calls: usize,
     pub geometry_instances_drawn: usize,
     pub text_draw_calls: usize,
+    pub image_draw_calls: usize,
     pub text_instances_drawn: usize,
 }
 
@@ -441,6 +446,8 @@ pub(crate) fn finish_renderer_observation(
             target_text_writes,
             geometry_bytes_uploaded: upload.geometry.bytes_uploaded,
             text_bytes_uploaded: upload.text.bytes_uploaded,
+            image_pixel_bytes_uploaded: upload.images.pixel_bytes_uploaded,
+            image_instance_bytes_uploaded: upload.images.instance_bytes_uploaded,
             buffer_reallocations: upload
                 .geometry
                 .buffer_reallocations
@@ -451,6 +458,7 @@ pub(crate) fn finish_renderer_observation(
             geometry_draw_calls: draw.geometry.draw_calls,
             geometry_instances_drawn: draw.geometry.instances_drawn,
             text_draw_calls: draw.text.draw_calls,
+            image_draw_calls: draw.images,
             text_instances_drawn: draw.text.instances_drawn,
         },
         presentation: RendererPresentationObservation {
@@ -531,17 +539,22 @@ mod tests {
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 7,
             sequence: 0,
+            publication_context: noon_core::PublicationContext::default(),
             snapshot: true,
             time: 1.5,
             camera: Camera2DState::default(),
+            inset_2d_views: Vec::new(),
             objects: vec![RetainedTransportObjectState {
                 slot,
                 order: 0,
                 object: ObjectId::new(21),
+                glow: None,
+                z_index: 0.0,
                 content: TransportObjectContent::from(&ObjectContentRef::Geometry(
                     GeometryRef::circle(1.0),
                 )),
                 transform,
+                spatial: None,
                 style: Style::default(),
                 appearance: 1.0,
                 text_bounds: None,
@@ -552,6 +565,7 @@ mod tests {
                 render_transform: None,
                 render_geometry_resource: None,
             }],
+            object_patches: Vec::new(),
             removed_slots: Vec::new(),
             painter_order: None,
         };
@@ -645,6 +659,7 @@ mod tests {
             Ok(prepared),
             &writes,
             RetainedUploadStats {
+                images: Default::default(),
                 geometry: UploadStats {
                     bytes_uploaded: 80,
                     buffer_reallocations: 0,
@@ -652,6 +667,7 @@ mod tests {
                 text: Default::default(),
             },
             RetainedDrawStats {
+                images: 0,
                 geometry: DrawStats {
                     draw_calls: 1,
                     instances_drawn: 1,

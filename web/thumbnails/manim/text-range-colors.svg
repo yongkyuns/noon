@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+<rect width="640" height="360" fill="#181818"/>
+<text x="32" y="150" font-family="DejaVu Sans Mono,monospace" font-size="42" fill="#EF4444">No</text>
+<text x="90" y="150" font-family="DejaVu Sans Mono,monospace" font-size="42" fill="#f5f5f5">on  </text>
+<text x="220" y="150" font-family="DejaVu Sans Mono,monospace" font-size="42" fill="#3B82F6">café</text>
+<text x="32" y="205" font-family="DejaVu Sans Mono,monospace" font-size="42" fill="#EF4444">No</text>
+<text x="90" y="205" font-family="DejaVu Sans Mono,monospace" font-size="42" fill="#f5f5f5">on </text>
+<text x="175" y="205" font-family="DejaVu Sans Mono,monospace" font-size="42" fill="#22C55E">Ω</text>
+</svg>

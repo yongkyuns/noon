@@ -19,6 +19,7 @@ export class SemanticPreviewSession {
   #rejectAbort;
   #limits;
   #cleanupErrors = [];
+  #continuation = false;
 
   constructor({ createAuthoringClient, createExecutionClient, timeoutMs = 30_000,
     maxSourceBytes = 1_000_000, maxSamples = 36_001, maxTimeSeconds = 600 }) {
@@ -77,37 +78,51 @@ export class SemanticPreviewSession {
       let resolveAttached;
       const attached = new Promise((resolve) => { resolveAttached = resolve; });
       let registered = false;
+      const attach = async (descriptor, continuation) => {
+        this.#assertActive();
+        if (registered) throw new Error("preview source registered multiple execution contexts");
+        registered = true;
+        this.#continuation = continuation;
+        this.#execution = this.#makeExecution({ onError: (error) => this.#fail(error) });
+        this.#assertActive();
+        // prepare() owns the candidate before awaiting asynchronous startup.
+        // terminate() can therefore retire it even if startup never completes.
+        await this.#execution.prepare({ transportMode: "transferable" });
+        this.#assertActive();
+        await this.#execution.startSemanticExecution(descriptor, {
+          authoringClient: this.#authoring,
+          loopDurationSeconds,
+          transportMode: "transferable",
+          ...(continuation ? { pacing: "external_samples" } : { initiallyPaused: true }),
+        });
+        this.#assertActive();
+        resolveAttached();
+      };
       const run = this.#authoring.run(source, context, {
         onSemanticContinuation: async (registration) => {
           try {
-            this.#assertActive();
-            if (registered) throw new Error("preview source registered multiple execution contexts");
-            registered = true;
-            this.#execution = this.#makeExecution({ onError: (error) => this.#fail(error) });
-            this.#assertActive();
-            // prepare() owns the candidate before awaiting asynchronous startup.
-            // terminate() can therefore retire it even if startup never completes.
-            await this.#execution.prepare({ transportMode: "transferable" });
-            this.#assertActive();
-            await this.#execution.startSemanticExecution(registration.semanticExecution, {
-              authoringClient: this.#authoring,
-              loopDurationSeconds,
-              transportMode: "transferable",
-              pacing: "external_samples",
-            });
-            this.#assertActive();
-            resolveAttached();
+            await attach(registration.semanticExecution, true);
           } catch (error) {
             this.#fail(error);
             throw error;
           }
         },
       });
-      Promise.resolve(run).then((result) => {
+      Promise.resolve(run).then(async (result) => {
         if (this.#state === "closed" || this.#state === "failed") return;
-        if (!registered) throw new Error("preview source produced no semantic continuation");
         if (!Number.isFinite(result.duration) || result.duration < 0) {
           throw new Error("preview source returned an invalid duration");
+        }
+        if (!registered) {
+          // A static construct returns the existing completed semantic context.
+          // Timed sources still require their live continuation; never replace
+          // their forward execution with an endpoint-only scene.
+          if (result.kind !== "semantic_scene" || result.duration !== 0
+              || !result.semanticExecution
+              || result.semanticExecution.continuationGeneration != null) {
+            throw new Error("preview source produced no semantic continuation");
+          }
+          await attach(result.semanticExecution, false);
         }
         this.#duration = result.duration;
         this.#sourceState = "completed";
@@ -121,20 +136,26 @@ export class SemanticPreviewSession {
     });
   }
 
-  async sample(timeSeconds) {
+  async sample(timeSeconds, { stopAtSourceCompletion = false } = {}) {
     this.#assertReady();
     if (this.#busy) throw new Error("preview operation already in progress");
     if (typeof timeSeconds !== "number" || !Number.isFinite(timeSeconds) || timeSeconds < 0) {
       throw new RangeError("preview time must be a non-negative finite number");
     }
+    if (typeof stopAtSourceCompletion !== "boolean") {
+      throw new TypeError("stopAtSourceCompletion must be a boolean");
+    }
     if (timeSeconds < this.#lastRequestedTime) {
       throw new RangeError("preview playback cannot move backwards");
+    }
+    if (!this.#continuation && timeSeconds !== 0) {
+      throw new RangeError("static preview has only its authored time-zero frame");
     }
     if (timeSeconds > this.#limits.maxTimeSeconds || this.#samples >= this.#limits.maxSamples) {
       throw new RangeError("preview sampling limit exceeded");
     }
     return this.#perform(async () => {
-      await this.#capture(timeSeconds);
+      await this.#capture(timeSeconds, stopAtSourceCompletion);
       return this.snapshot;
     });
   }
@@ -152,8 +173,14 @@ export class SemanticPreviewSession {
     return this.snapshot;
   }
 
-  async #capture(time) {
-    const sample = await this.#execution.sampleToAuthoredTime(time);
+  async #capture(time, stopAtSourceCompletion = false) {
+    // Forward the existing endpoint option; normal samples remain strict.
+    // A completion probe retains the actual endpoint, never its requested bound.
+    const sample = !this.#continuation
+      ? await this.#execution.advanceTo(time)
+      : stopAtSourceCompletion
+      ? await this.#execution.sampleToAuthoredTime(time, { stopAtSourceCompletion: true })
+      : await this.#execution.sampleToAuthoredTime(time);
     this.#assertActive();
     const report = await this.#execution.metrics();
     this.#assertActive();
@@ -165,6 +192,7 @@ export class SemanticPreviewSession {
     this.#frame = {
       requestedTime: time,
       publishedTime: sample.time,
+      ...(stopAtSourceCompletion ? { sourceCompleted: sample.sourceCompleted === true } : {}),
       rendererBackend: metrics.backend,
       objectCount: metrics.objectCount ?? null,
       drawCalls: metrics.drawCalls ?? null,

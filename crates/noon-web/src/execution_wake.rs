@@ -197,13 +197,29 @@ impl BrowserExecutionWakeClock {
         wall_time_ms: f64,
         current_scene_time: f64,
     ) -> Option<BrowserExecutionWakeDirective> {
+        self.directive_for_source(plan, wall_time_ms, current_scene_time, false)
+    }
+
+    /// Keep one monotonic epoch while a source is temporarily quiescent at a
+    /// renderer-publication or authoring-continuation barrier. Only a genuinely
+    /// idle/finished source gives up this mapping. This is host lifecycle, not
+    /// another animation scheduler.
+    pub fn directive_for_source(
+        &mut self,
+        plan: BrowserExecutionWakePlan,
+        wall_time_ms: f64,
+        current_scene_time: f64,
+        source_active: bool,
+    ) -> Option<BrowserExecutionWakeDirective> {
         if !wall_time_ms.is_finite() || !current_scene_time.is_finite() {
             return None;
         }
 
         let wake = match plan.cadence() {
             BrowserExecutionCadence::Idle => {
-                self.anchor = None;
+                if !source_active {
+                    self.anchor = None;
+                }
                 BrowserHostWake::Idle
             }
             BrowserExecutionCadence::AnimationFrame => {
@@ -399,6 +415,58 @@ mod tests {
         clock.reanchor(9_000.0, 0.5).unwrap();
         assert_eq!(clock.scene_time_at(9_000.0), Some(0.5));
         assert_eq!(clock.scene_time_at(9_016.0), Some(0.516));
+    }
+
+    #[test]
+    fn active_source_keeps_its_epoch_across_idle_publication_and_late_callbacks() {
+        let mut clock = BrowserExecutionWakeClock::default();
+        let wait =
+            BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Deadline(1.0 / 64.0));
+        assert_eq!(
+            clock
+                .directive_for_source(wait, 1_000.0, 0.0, true)
+                .unwrap()
+                .wake(),
+            BrowserHostWake::TimerAfterMilliseconds(15.625)
+        );
+
+        // The runtime suppresses timeline wakes until its renderer publication
+        // is admitted, but the source is still active. Eight seconds of wall
+        // time here must not be silently counted as a user pause.
+        let publication_barrier =
+            BrowserExecutionWakePlan::from_parts(true, TimelineWakeState::Quiescent);
+        assert_eq!(
+            clock
+                .directive_for_source(publication_barrier, 9_000.0, 1.0 / 64.0, true)
+                .unwrap()
+                .wake(),
+            BrowserHostWake::Idle
+        );
+        assert_eq!(clock.scene_time_at(9_000.0), Some(8.0));
+        let next_wait =
+            BrowserExecutionWakePlan::from_parts(false, TimelineWakeState::Deadline(2.0 / 64.0));
+        assert_eq!(
+            clock
+                .directive_for_source(next_wait, 9_000.0, 1.0 / 64.0, true)
+                .unwrap()
+                .wake(),
+            BrowserHostWake::TimerAfterMilliseconds(0.0)
+        );
+
+        // A truly retired source (including a new independent activation) is
+        // not charged wall time spent idle.
+        clock
+            .directive_for_source(publication_barrier, 9_100.0, 2.0 / 64.0, false)
+            .unwrap();
+        assert_eq!(clock.scene_time_at(9_200.0), None);
+        assert_eq!(
+            clock
+                .directive_for_source(next_wait, 12_000.0, 2.0 / 64.0, true)
+                .unwrap()
+                .wake(),
+            BrowserHostWake::TimerAfterMilliseconds(0.0)
+        );
+        assert_eq!(clock.scene_time_at(12_000.0), Some(2.0 / 64.0));
     }
 
     #[test]

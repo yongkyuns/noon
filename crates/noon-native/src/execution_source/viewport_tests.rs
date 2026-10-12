@@ -1,0 +1,408 @@
+//! Native-host/renderer regressions included in the workspace library gate.
+//! The no-op device checks upload and draw command construction, not physical GPU execution.
+
+use super::*;
+use noon::integration::PointerFillOutcome;
+use noon::{AnimationOptions, ExecutionSession, RateFunction, Scene};
+use noon_core::{
+    NativeInputModifiers, NativePointerId, NativePointerInput, NativePointerInputKind,
+    NativePointerPosition, SemanticMutationTransaction, SemanticObjectProperty,
+    SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Vec2,
+};
+use noon_render_wgpu::text::TextDeviceMetrics;
+use noon_render_wgpu::{CircleInstance, FramePreparer, GpuRenderer, RetainedFramePreparer};
+
+fn viewport() -> Rect {
+    Rect::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0))
+}
+
+fn expansion_source(with_second: bool) -> (Scene, StaticExecutionSource, noon::ExecutionSegment) {
+    let mut scene = Scene::new();
+    let mut left = scene.circle(0.5).unwrap();
+    left.shift(-20.0, 0.0).unwrap();
+    let mut right = scene.circle(0.5).unwrap();
+    right.shift(-18.0, 0.0).unwrap();
+    let source = if with_second {
+        scene.family(&[(&left).into(), (&right).into()])
+    } else {
+        scene.family(&[(&left).into()])
+    }
+    .unwrap();
+
+    let mut target_left = scene.circle(0.5).unwrap();
+    target_left.shift(-20.0, 0.0).unwrap();
+    let mut target_extra = scene.circle(0.5).unwrap();
+    target_extra.shift(20.0, 0.0).unwrap();
+    let mut target_right = scene.circle(0.5).unwrap();
+    target_right
+        .shift(if with_second { -18.0 } else { 22.0 }, 0.0)
+        .unwrap();
+    // Alignment is [s0, copy(s0), s1] or [s0, copy(s0), copy(s0)].
+    let target = scene
+        .family(&[
+            (&target_left).into(),
+            (&target_extra).into(),
+            (&target_right).into(),
+        ])
+        .unwrap();
+
+    let mut visible = scene.circle(0.25).unwrap();
+    visible.shift(0.0, 1.25).unwrap();
+    let mut unrelated = scene.circle(0.5).unwrap();
+    unrelated.shift(80.0, 0.0).unwrap();
+    scene
+        .add_many(&[(&source).into(), (&visible).into(), (&unrelated).into()])
+        .unwrap();
+
+    let mut session = scene.execution_session().unwrap();
+    let segment = {
+        let mut live = scene.live(&mut session);
+        live.declare_and_activate_family_transform_to(
+            &source,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap()
+    };
+    (
+        scene,
+        StaticExecutionSource::new(session, RustHostCallbackTable::new()),
+        segment,
+    )
+}
+
+fn assert_canonical(query: &ExecutionViewportQuery, publication: &RendererPublication<'_>) {
+    // A whole-order oracle is appropriate in a test, never in production projection.
+    let expected = publication
+        .painter_order()
+        .iter()
+        .map(|&index| index as usize)
+        .filter(|index| query.object_indices().contains(index))
+        .collect::<Vec<_>>();
+    assert_eq!(query.object_indices(), expected.as_slice());
+}
+
+#[test]
+fn native_viewport_prepares_onscreen_copy_with_offscreen_anchor() {
+    let (_scene, mut source, _segment) = expansion_source(true);
+    source.advance_to(0.5).unwrap();
+    let stable_count = source.session.frame().objects.len();
+    let spatial = source.session.query_viewports(&[viewport()]);
+    let query = source.query_viewports(&[viewport()]);
+    assert_eq!(source.session.frame().objects.len(), stable_count);
+    assert_eq!(spatial.object_indices().len(), 1);
+    assert_eq!(query.object_indices().len(), 2);
+    assert_eq!(query.spatial_stats(), spatial.spatial_stats());
+
+    let publication = source.take_renderer_publication();
+    assert_canonical(&query, &publication);
+    assert_eq!(publication.transient_presentations().len(), 1);
+    let occurrence = &publication.transient_presentations()[0];
+    let anchor = occurrence.anchor_object_index() as usize;
+    let copy_x = occurrence
+        .state()
+        .effective_render_transform()
+        .translation
+        .x;
+    assert!(copy_x.abs() < 1.0e-5);
+    assert_eq!(
+        publication.frame().objects[anchor].transform.translation.x,
+        -20.0
+    );
+    assert!(!spatial.object_indices().contains(&anchor));
+    assert!(query.object_indices().contains(&anchor));
+
+    let mut preparer = RetainedFramePreparer::new();
+    let missing = preparer
+        .prepare_transient_presentations_visible(&publication, spatial.object_indices())
+        .unwrap();
+    assert!(
+        missing.slots.is_empty(),
+        "the old spatial-only route loses the copy"
+    );
+    let packed = preparer
+        .prepare_transient_presentations_visible(&publication, query.object_indices())
+        .unwrap();
+    assert_eq!(packed.slots.len(), 1);
+    assert_eq!(packed.slots[0].anchor_object_index as usize, anchor);
+    assert_eq!(packed.stats.painter_positions_visited, 0);
+
+    let mut geometry = FramePreparer::new();
+    geometry.set_painter_order(publication.frame(), publication.painter_order());
+    let stable = geometry
+        .prepare_incremental_visible(
+            publication.frame(),
+            publication.changes(),
+            query.object_indices(),
+        )
+        .unwrap();
+    assert!(stable.observe_object(anchor).is_ok());
+    let submitted: usize = stable
+        .ordered_render_batches()
+        .map(|item| (item.batch.instance_range.end - item.batch.instance_range.start) as usize)
+        .sum();
+    assert_eq!(
+        submitted, 2,
+        "unrelated offscreen stable rows must stay culled"
+    );
+}
+
+#[test]
+fn native_viewport_admits_a_shared_anchor_only_once() {
+    let (_scene, mut source, _segment) = expansion_source(false);
+    source.advance_to(0.5).unwrap();
+    let spatial = source.session.query_viewports(&[viewport()]);
+    let query = source.query_viewports(&[viewport()]);
+    assert_eq!(
+        query.object_indices().len(),
+        spatial.object_indices().len() + 1
+    );
+    let publication = source.take_renderer_publication();
+    assert_canonical(&query, &publication);
+    let occurrences = publication.transient_presentations();
+    assert_eq!(occurrences.len(), 2);
+    let anchor = occurrences[0].anchor_object_index();
+    assert_eq!(occurrences[1].anchor_object_index(), anchor);
+    assert_eq!(
+        query
+            .object_indices()
+            .iter()
+            .filter(|&&index| index == anchor as usize)
+            .count(),
+        1
+    );
+    let mut preparer = RetainedFramePreparer::new();
+    let packed = preparer
+        .prepare_transient_presentations_visible(&publication, query.object_indices())
+        .unwrap();
+    assert_eq!(packed.slots.len(), 2);
+    assert_eq!(packed.stats.painter_positions_visited, 0);
+}
+
+#[test]
+fn native_viewport_leaves_visible_anchor_candidates_unchanged() {
+    let (_scene, mut source, _segment) = expansion_source(true);
+    source.advance_to(0.5).unwrap();
+    let bounds = Rect::new(Vec2::new(-22.0, -2.0), Vec2::new(-16.0, 2.0));
+    let spatial = source.session.query_viewports(&[bounds]);
+    let query = source.query_viewports(&[bounds]);
+    assert_eq!(query, spatial);
+    let publication = source.take_renderer_publication();
+    let anchor = publication.transient_presentations()[0].anchor_object_index() as usize;
+    assert!(query.object_indices().contains(&anchor));
+}
+
+#[test]
+fn native_viewport_seek_matches_forward_presentation() {
+    let (_forward_scene, mut forward, _forward_segment) = expansion_source(true);
+    forward.advance_to(0.25).unwrap();
+    drop(forward.take_renderer_publication());
+    forward.advance_to(0.5).unwrap();
+    let forward_query = forward.query_viewports(&[viewport()]);
+    let forward_occurrences = forward
+        .take_renderer_publication()
+        .transient_presentations()
+        .to_vec();
+
+    let (_direct_scene, mut direct, _direct_segment) = expansion_source(true);
+    direct.session.seek(0.5).unwrap();
+    let direct_query = direct.query_viewports(&[viewport()]);
+    let direct_occurrences = direct
+        .take_renderer_publication()
+        .transient_presentations()
+        .to_vec();
+    assert_eq!(
+        forward_query.object_indices(),
+        direct_query.object_indices()
+    );
+    assert_eq!(forward_occurrences, direct_occurrences);
+}
+
+#[test]
+fn native_viewport_releases_transient_anchors_after_completion() {
+    let (scene, mut source, segment) = expansion_source(true);
+    source.session.advance_segment_to(segment, 1.0).unwrap();
+    scene
+        .live(&mut source.session)
+        .complete_segment(segment)
+        .unwrap();
+    let spatial = source.session.query_viewports(&[viewport()]);
+    let query = source.query_viewports(&[viewport()]);
+    assert_eq!(query, spatial);
+    assert!(source
+        .take_renderer_publication()
+        .transient_presentations()
+        .is_empty());
+}
+
+#[test]
+fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_churn() {
+    const POINTER: NativePointerId = NativePointerId {
+        source: 4,
+        pointer: 7,
+    };
+
+    let mut store = SemanticStore::new();
+    let mut target = None;
+    for index in 0..100_000 {
+        let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        state.transform.translation = if index == 0 {
+            SemanticVec3::new(0.0, 0.0, 0.0)
+        } else {
+            SemanticVec3::new(
+                100.0 + f64::from(index % 400) * 4.0,
+                100.0 + f64::from(index / 400) * 4.0,
+                0.0,
+            )
+        };
+        let node = store.insert_semantic_object(state);
+        store.attach_to_scene(node).unwrap();
+        if index == 0 {
+            target = Some(node);
+        }
+    }
+    let target = target.unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.configure_native_pointer_input(POINTER, 1).unwrap();
+    session.take_frame_changes();
+    let mut source = StaticExecutionSource::new(session, RustHostCallbackTable::new());
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut preparer = RetainedFramePreparer::new();
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer.set_viewport(&device, &queue, 400, 200);
+    let mut text_state = renderer.create_retained_text_state(&device, &queue);
+    let target_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Noon native locality test target"),
+        size: wgpu::Extent3d {
+            width: 400,
+            height: 200,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let target_view = target_texture.create_view(&Default::default());
+    let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+
+    let mut previous = Vec2::ZERO;
+    let mut sequence = 0;
+    for turn in 0..64 {
+        let next = if turn % 2 == 0 {
+            Vec2::new(8.0, 0.0)
+        } else {
+            Vec2::ZERO
+        };
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_property(
+            target,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(f64::from(next.x), f64::from(next.y), 0.0),
+        );
+        source
+            .session
+            .apply_semantic_transaction(&mut store, transaction)
+            .unwrap();
+
+        // Exercise the native adapter's normalized input lane before comparing
+        // the viewport projection and precise picker at the same publication.
+        let token = source.native_pointer_input_token().unwrap();
+        let position = NativePointerPosition::new(next, Vec2::new(400.0, 200.0)).unwrap();
+        source
+            .submit_native_pointer_input(
+                &token,
+                NativePointerInput::new(
+                    sequence,
+                    POINTER,
+                    token.context(),
+                    NativeInputModifiers::default(),
+                    NativePointerInputKind::Move(position),
+                ),
+            )
+            .unwrap();
+
+        let bounds = Rect::new(next - Vec2::new(1.1, 1.1), next + Vec2::new(1.1, 1.1));
+        let spatial = source.session.query_viewports(&[bounds]);
+        assert_eq!(source.session.last_spatial_update_stats().full_rebuilds, 0);
+        assert_eq!(
+            source.session.last_spatial_update_stats().leaves_upserted,
+            1
+        );
+        let native = source.query_viewports(&[bounds]);
+        assert_eq!(native.object_indices(), spatial.object_indices());
+        assert_eq!(native.spatial_stats(), spatial.spatial_stats());
+        assert_eq!(native.object_indices(), &[0]);
+        assert_eq!(native.spatial_stats().full_scan_fallbacks, 0);
+        assert!(native.spatial_stats().candidates_tested <= 16);
+        let publication = source.take_renderer_publication();
+        let prepared = preparer
+            .prepare_planned_publication_visible(
+                &device,
+                &publication,
+                native.object_indices(),
+                metrics,
+            )
+            .unwrap();
+        let upload = renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
+        // Initial residency uploads every static circle once. Subsequent local
+        // changes update one instance even though the scene still has 100k rows.
+        assert_eq!(
+            upload.bytes_uploaded(),
+            if turn == 0 {
+                100_000 * std::mem::size_of::<CircleInstance>()
+            } else {
+                std::mem::size_of::<CircleInstance>()
+            },
+            "turn {turn} must upload only the expected retained rows"
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let draw = renderer
+            .encode_retained(
+                &mut encoder,
+                &target_view,
+                &prepared,
+                &text_state,
+                wgpu::Color::BLACK,
+                None,
+            )
+            .unwrap();
+        assert_eq!(draw.instances_drawn(), 1);
+        assert_eq!(draw.draw_calls(), 1);
+        queue.submit([encoder.finish()]);
+        let pointer_token = source.native_pointer_input_token().unwrap();
+        let picked = source
+            .session
+            .pick_native_pointer_fill(
+                &pointer_token,
+                NativePointerInput::new(
+                    sequence + 1,
+                    POINTER,
+                    pointer_token.context(),
+                    NativeInputModifiers::default(),
+                    NativePointerInputKind::Move(position),
+                ),
+                |_| true,
+            )
+            .unwrap();
+        assert_eq!(picked.outcome(), PointerFillOutcome::Hit(target));
+        assert_eq!(picked.precise_tests(), 1);
+        assert_eq!(picked.spatial_stats().full_scan_fallbacks, 0);
+        assert!(picked.spatial_stats().candidates_tested <= 16);
+
+        let previous_bounds = Rect::new(
+            previous - Vec2::new(1.1, 1.1),
+            previous + Vec2::new(1.1, 1.1),
+        );
+        assert!(source
+            .query_viewports(&[previous_bounds])
+            .object_indices()
+            .is_empty());
+        previous = next;
+        sequence += 2;
+    }
+}

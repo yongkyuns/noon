@@ -1,10 +1,11 @@
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
     FontResourceArena, GeometryRef, GeometryResourceArena, ObjectContentRef, ObjectId, Style,
     TextResourceArena, Transform2D, Vec2, VectorPath,
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{RenderPrimitive, RetainedFramePreparer};
-use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState, SceneInstance};
 
 fn retained_geometry_frame(
     semantic_geometry: GeometryRef,
@@ -17,6 +18,8 @@ fn retained_geometry_frame(
         family_animation_plan_indices: Vec::new(),
         time: 0.5,
         objects: vec![FrameObjectState {
+            glow: None,
+            spatial: None,
             z_index: 0.0,
             id: ObjectId::new(1),
             content: ObjectContentRef::Geometry(semantic_geometry),
@@ -33,19 +36,18 @@ fn retained_geometry_frame(
     }
 }
 
-fn assert_prepares_path(frame: &FrameState) {
+fn assert_prepares_path(frame: &FrameState, expect_path: bool) {
     let texts = TextResourceArena::new();
     let fonts = FontResourceArena::new();
     let geometries = GeometryResourceArena::new();
     let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     preparer.set_painter_order(&[0]);
 
     let prepared = preparer
         .prepare_with_changes(
             &device,
-            &queue,
             frame,
             &FrameChanges::all(),
             &texts,
@@ -55,10 +57,18 @@ fn assert_prepares_path(frame: &FrameState) {
         )
         .unwrap();
 
-    assert!(prepared
+    let has_path = prepared
         .geometry_render_chunks()
         .flat_map(|chunk| chunk.render_batches.iter())
-        .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
+        .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. }));
+    assert_eq!(has_path, expect_path);
+    if !expect_path {
+        assert!(prepared
+            .geometry_render_chunks()
+            .flat_map(|chunk| chunk.render_batches.iter())
+            .any(|batch| batch.primitive == RenderPrimitive::Circle));
+        assert_eq!(prepared.geometry_stats().geometry_cache_misses, 0);
+    }
     if frame.render_transforms[0].is_some() {
         assert_eq!(prepared.geometry_stats().geometry_cache_misses, 1);
         let mut next = frame.clone();
@@ -69,7 +79,6 @@ fn assert_prepares_path(frame: &FrameState) {
         let warm = preparer
             .prepare_with_changes(
                 &device,
-                &queue,
                 &next,
                 &FrameChanges::objects(vec![0]),
                 &texts,
@@ -85,9 +94,64 @@ fn assert_prepares_path(frame: &FrameState) {
 }
 
 #[test]
-fn retained_analytic_create_uses_prepared_path_primitive_in_painter_order() {
+fn leased_external_path_reaches_retained_renderer_and_retires_on_release() {
+    let object = ObjectId::new(1);
+    let compiled = CompiledScene::compile_objects(
+        vec![CompiledObject::new(
+            object,
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        )],
+        &[],
+    )
+    .unwrap();
+    let mut runtime = SceneInstance::new(compiled);
+    let mut source = GeometryResourceArena::new();
+    let handle = source.insert_path(
+        VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close(),
+    );
+    let prepared = runtime
+        .prepare_effective_geometry_replacement(object, handle, &source, None)
+        .unwrap();
+    let lease = runtime
+        .commit_effective_content_replacement(prepared)
+        .unwrap();
+    drop(source);
+
+    let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let mut preparer = RetainedFramePreparer::new();
+    let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+    {
+        let publication = runtime.take_renderer_publication();
+        let frame = preparer
+            .prepare_publication(&device, &publication, metrics)
+            .unwrap();
+        assert!(frame
+            .geometry_render_chunks()
+            .flat_map(|chunk| chunk.render_batches.iter())
+            .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
+    }
+
+    runtime.release_effective_content(lease).unwrap();
+    let publication = runtime.take_renderer_publication();
+    let frame = preparer
+        .prepare_publication(&device, &publication, metrics)
+        .unwrap();
+    assert!(!frame
+        .geometry_render_chunks()
+        .flat_map(|chunk| chunk.render_batches.iter())
+        .any(|batch| matches!(batch.primitive, RenderPrimitive::Path { .. })));
+}
+
+#[test]
+fn retained_circle_create_uses_analytic_primitive_in_painter_order() {
     let frame = retained_geometry_frame(GeometryRef::circle(1.0), None, 0.5, 0.0);
-    assert_prepares_path(&frame);
+    assert_prepares_path(&frame, false);
 }
 
 #[test]
@@ -115,5 +179,5 @@ fn retained_transform_preserves_runtime_effective_render_geometry() {
     };
     frame.render_transforms[0] = Some(Transform2D::IDENTITY);
 
-    assert_prepares_path(&frame);
+    assert_prepares_path(&frame, true);
 }

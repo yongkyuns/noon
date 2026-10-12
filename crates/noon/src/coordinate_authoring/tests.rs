@@ -1,0 +1,892 @@
+use super::*;
+use crate::{
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus,
+    LiveSession, ManimRotationPivot, RateFunction, RustHostCallbackTable,
+};
+
+fn near(actual: [f64; 2], expected: [f64; 2]) {
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        assert!((actual - expected).abs() < 2.0e-5, "{actual} != {expected}");
+    }
+}
+
+fn axes_options() -> ManimAxesOptions {
+    ManimAxesOptions::new([-2.0, 2.0, 1.0], [-1.0, 1.0, 1.0], 4.0, 2.0)
+}
+
+fn polar_options() -> ManimPolarPlaneOptions {
+    ManimPolarPlaneOptions {
+        radius_max: 2.0,
+        size: Some(4.0),
+        radius_step: 1.0,
+        azimuth_step: Some(4.0),
+        azimuth_offset: std::f64::consts::FRAC_PI_2,
+        azimuth_direction: PolarAzimuthDirection::Clockwise,
+        faded_line_ratio: 2,
+        ..Default::default()
+    }
+}
+
+fn resources(scene: &Scene) -> usize {
+    scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len()
+}
+
+#[test]
+fn polar_plane_reuses_cartesian_frame_with_decorative_azimuth() {
+    let mut scene = Scene::new();
+    let plane = scene.polar_plane(&polar_options()).unwrap();
+    let frame = plane.authored_polar_frame().unwrap();
+
+    near(frame.polar_to_point(2.0, 0.0).unwrap(), [2.0, 0.0]);
+    near(
+        frame
+            .polar_to_point(2.0, std::f64::consts::FRAC_PI_2)
+            .unwrap(),
+        [0.0, 2.0],
+    );
+    near(frame.point_to_polar([2.0, 0.0]).unwrap(), [2.0, 0.0]);
+
+    let root = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(plane.family().node_id())
+        .unwrap();
+    assert_eq!(root.len(), 4);
+    assert_eq!(root[0], plane.faded_lines().unwrap().node_id());
+    assert_eq!(root[1], plane.background_lines().unwrap().node_id());
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn number_line_range_and_ticks_live_in_the_semantic_family() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberLineOptions::new([2.0, 6.0, 1.0]);
+    options.length = Some(8.0);
+    let line = scene.number_line(&options).unwrap();
+    assert_eq!(line.range().unwrap(), [2.0, 6.0, 1.0]);
+    let frame = line.authored_frame().unwrap();
+    near(frame.number_to_point(4.0).unwrap(), [0.0, 0.0]);
+    assert_eq!(frame.unit_size(), 2.0);
+    let ticks = line.ticks().unwrap();
+    let store = scene.integration_store().borrow();
+    let tick_nodes = store
+        .semantic_family_members_checked(ticks.node_id())
+        .unwrap();
+    assert_eq!(tick_nodes.len(), 5);
+    let first = tick_nodes[0];
+    drop(store);
+    let tick = Mobject::from_node(Rc::clone(scene.integration_store()), first).unwrap();
+    assert!((tick.path_query().unwrap().arc_length(None).unwrap() - 0.2).abs() < 1.0e-6);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn axes_positive_negative_ranges_use_numerical_midpoints() {
+    let mut scene = Scene::new();
+    let axes = scene
+        .axes(&ManimAxesOptions::new(
+            [2.0, 6.0, 1.0],
+            [-6.0, -2.0, 1.0],
+            8.0,
+            4.0,
+        ))
+        .unwrap();
+    let frame = axes.authored_frame().unwrap();
+    near(frame.coords_to_point(4.0, -4.0).unwrap(), [0.0, 0.0]);
+    near(frame.coords_to_point(2.0, -6.0).unwrap(), [-4.0, -2.0]);
+    near(frame.point_to_coords([4.0, 2.0]).unwrap(), [6.0, -2.0]);
+    near(frame.x().start(), [-4.0, 2.0]);
+    near(frame.y().start(), [-4.0, -2.0]);
+}
+
+#[test]
+fn manim_axes_profile_normalizes_ranges_and_retains_filled_tips() {
+    let defaults = ManimAxesOptions::default();
+    assert_eq!(defaults.x_range, [-7.0, 7.0, 1.0]);
+    assert_eq!(defaults.y_range, [-4.0, 4.0, 1.0]);
+    assert_eq!(defaults.x_length, 12.0);
+    assert_eq!(defaults.y_length, 6.0);
+    assert!(defaults.tips);
+
+    let options =
+        ManimAxesOptions::from_ranges(Some(&[-1.0, 10.0]), Some(&[-1.0, 10.0, 2.0]), None, None)
+            .unwrap();
+    assert_eq!(options.x_range, [-1.0, 10.0, 1.0]);
+    assert_eq!(options.y_range, [-1.0, 10.0, 2.0]);
+
+    // The historical explicit constructor remains tipless, preserving existing
+    // coordinate-family output for examples that supply all four arguments.
+    let explicit = ManimAxesOptions::new([-2.0, 2.0, 1.0], [-1.0, 1.0, 1.0], 4.0, 2.0);
+    assert!(!explicit.tips);
+    let mut scene = Scene::new();
+    let tipless = scene.axes(&explicit).unwrap();
+    assert_eq!(resources(&scene), 0);
+    assert_eq!(
+        tipless.authored_frame().unwrap().x().range(),
+        [-2.0, 2.0, 1.0]
+    );
+
+    let axes = scene.axes(&options).unwrap();
+    let root = axes.family().node_id();
+    let store_rc = Rc::clone(axes.family().integration_store());
+    let store = store_rc.borrow();
+    let axis_groups = store.semantic_family_members_checked(root).unwrap();
+    assert_eq!(axis_groups.len(), 2);
+    for group_id in axis_groups {
+        let members = store.semantic_family_members_checked(group_id).unwrap();
+        assert_eq!(members.len(), 3); // shaft, tick family, retained tip
+        let tip = store.semantic_object_state_checked(members[2]).unwrap();
+        assert!(matches!(
+            tip.content.geometry(),
+            Some(StoredGeometry::Resource(_))
+        ));
+        assert_eq!(tip.style.fill, tip.style.stroke);
+        assert_eq!(tip.style.fill_opacity, 1.0);
+        assert_eq!(tip.style.stroke_width, 0.0);
+    }
+    drop(store);
+    assert_eq!(resources(&scene), 2);
+    let copied = axes.family().copy_family().unwrap();
+    let copy = ManimAxes::from_family(copied.root().clone()).unwrap();
+    assert_ne!(copy.family().node_id(), axes.family().node_id());
+    assert_eq!(
+        copy.authored_frame().unwrap(),
+        axes.authored_frame().unwrap()
+    );
+}
+
+#[test]
+fn axes_range_coercion_and_tip_failure_are_checked_before_publication() {
+    assert!(ManimAxesOptions::from_ranges(Some(&[1.0]), None, None, None).is_err());
+    assert!(ManimAxesOptions::from_ranges(Some(&[0.0, 1.0, 0.0]), None, None, None).is_err());
+    let mut scene = Scene::new();
+    let revision = scene.revision();
+    let mut options = ManimAxesOptions::default();
+    options.style.stroke = None;
+    assert!(scene.axes(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn affine_family_edits_keep_ranges_and_round_trips() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    axes.family().scale(-1.5, 2.0).unwrap();
+    axes.family()
+        .rotate(0.7, ManimRotationPivot::Center)
+        .unwrap();
+    axes.family().shift(3.0, -2.0).unwrap();
+    let frame = axes.authored_frame().unwrap();
+    for point in [[0.0, 0.0], [1.0, 0.5], [-3.0, 2.0]] {
+        let world = frame.coords_to_point(point[0], point[1]).unwrap();
+        near(frame.point_to_coords(world).unwrap(), point);
+    }
+    assert_eq!(axes.x_axis().unwrap().range().unwrap(), [-2.0, 2.0, 1.0]);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn second_axis_failure_and_tick_budget_are_atomic() {
+    let mut scene = Scene::new();
+    let sentinel = scene.circle(0.5).unwrap();
+    let before = sentinel.state().unwrap();
+    let revision = scene.revision();
+    let mut options = axes_options();
+    options.y_length = f64::NAN;
+    assert!(scene.axes(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    options.y_length = 2.0;
+    options.ticks.limit = 1;
+    assert!(scene.axes(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(sentinel.state().unwrap(), before);
+    assert_eq!(resources(&scene), 0);
+    assert!(scene.axes(&axes_options()).is_ok());
+}
+
+#[test]
+fn shared_family_copy_reconstructs_ranges_without_wrapper_metadata() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    axes.family().shift(2.0, 3.0).unwrap();
+    let copied = axes.family().copy_family().unwrap();
+    let copy = ManimAxes::from_family(copied.root().clone()).unwrap();
+    assert_ne!(copy.family().node_id(), axes.family().node_id());
+    assert_eq!(
+        copy.authored_frame().unwrap(),
+        axes.authored_frame().unwrap()
+    );
+    copy.family().shift(1.0, 0.0).unwrap();
+    near(
+        axes.authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [2.0, 3.0],
+    );
+    near(
+        copy.authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [3.0, 3.0],
+    );
+}
+
+#[test]
+fn membership_edits_do_not_leave_a_cached_axis_behind() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let x = axes.x_axis().unwrap();
+    axes.family().remove_many(&[x.family().into()]).unwrap();
+    assert!(matches!(
+        axes.authored_frame(),
+        Err(CoordinateAuthoringError::InvalidTopology)
+    ));
+}
+
+#[test]
+fn cold_scene_effective_query_does_not_fall_back() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    assert!(scene.effective_axes_frame(&axes).is_err());
+    assert!(axes.authored_frame().is_ok());
+}
+
+#[test]
+fn mapped_curves_share_the_coordinate_snapshot_and_data_order() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    axes.family().shift(2.0, 1.0).unwrap();
+    let calls = std::cell::Cell::new(0usize);
+    let graph = axes
+        .plot(
+            |x| {
+                calls.set(calls.get() + 1);
+                x * x
+            },
+            Some(&[-1.0, 1.0, 0.5]),
+            false,
+        )
+        .unwrap();
+    assert_eq!(calls.get(), 5);
+    assert_eq!(graph.path_query().unwrap().start().unwrap(), (1.0, 2.0));
+    assert_eq!(graph.path_query().unwrap().end().unwrap(), (3.0, 2.0));
+    let data = axes
+        .plot_samples(&[[1.0, 0.0], [1.0, 1.0], [-1.0, 0.0]])
+        .unwrap();
+    assert_eq!(data.path_query().unwrap().curve_count(), 2);
+    assert_eq!(data.path_query().unwrap().start().unwrap(), (3.0, 1.0));
+    assert_eq!(data.path_query().unwrap().end().unwrap(), (1.0, 1.0));
+    scene
+        .add_many(&[axes.family().into(), (&graph).into(), (&data).into()])
+        .unwrap();
+    let session = scene.execution_session().unwrap();
+    assert!(!session.frame().objects.is_empty());
+    assert_eq!(calls.get(), 5);
+}
+
+#[test]
+fn graph_input_queries_evaluate_once_before_capturing_current_axes() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes
+        .plot(|x| x * x, Some(&[-1.0, 1.0, 0.5]), false)
+        .unwrap();
+    let content = graph.state().unwrap().content;
+    assert_eq!(graph.function_plot_range().unwrap(), [-1.0, 1.0]);
+    let calls = std::cell::Cell::new(0);
+    let point = axes
+        .input_to_graph_point(0.5, |x| {
+            calls.set(calls.get() + 1);
+            axes.family().shift(2.0, 1.0).unwrap();
+            x * x
+        })
+        .unwrap();
+    near(point, [2.5, 1.25]);
+    assert_eq!(calls.get(), 1);
+    // Queries use the current axes; they do not resample the retained curve.
+    assert_eq!(graph.state().unwrap().content, content);
+    assert_eq!(graph.path_query().unwrap().start().unwrap(), (-1.0, 1.0));
+    let revision = scene.revision();
+    let resource_count = resources(&scene);
+    near(
+        axes.input_to_graph_point(-0.5, |x| x * x).unwrap(),
+        [1.5, 1.25],
+    );
+    assert!(axes.input_to_graph_point(0.0, |_| f64::NAN).is_err());
+    assert!(axes.input_to_graph_point(f64::INFINITY, |_| 0.0).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(resources(&scene), resource_count);
+}
+
+#[test]
+fn scene_coordinate_query_metadata_does_not_admit_axes_area_operations() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = scene
+        .function_plot(
+            &PlotSamplingOptions::parametric(&[-1.0, 1.0, 0.5]).unwrap(),
+            |x| x * x,
+            false,
+        )
+        .unwrap();
+    let copy = graph.copy_handle().unwrap();
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let resource_count = resources(&scene);
+    for graph in [&graph, &copy] {
+        assert_eq!(graph.function_plot_range().unwrap(), [-1.0, 1.0]);
+        assert!(matches!(
+            axes.get_area(graph, None, None),
+            Err(CoordinateAuthoringError::InvalidOptions(
+                "area helpers require an Axes graph"
+            ))
+        ));
+        assert!(axes
+            .riemann_plan(graph, RiemannRectangleOptions::default())
+            .is_err());
+    }
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), resource_count);
+    let mapped = axes
+        .plot(|x| x * x, Some(&[-1.0, 1.0, 0.5]), false)
+        .unwrap();
+    assert!(axes.get_area(&mapped, None, None).is_ok());
+}
+
+#[test]
+fn axes_plot_creates_one_detached_object_in_the_axes_store() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let nodes_before = scene.integration_store().borrow().len();
+    let resources_before = resources(&scene);
+
+    let graph = axes.plot(|x| x, Some(&[-1.0, 1.0, 1.0]), false).unwrap();
+
+    assert!(Rc::ptr_eq(
+        graph.integration_store(),
+        axes.family().integration_store()
+    ));
+    let store = scene.integration_store().borrow();
+    assert_eq!(store.len(), nodes_before + 1);
+    assert_eq!(store.geometry_resources().len(), resources_before + 1);
+    assert!(store
+        .semantic_family_members_checked(scene.root())
+        .unwrap()
+        .is_empty());
+    assert!(store.semantic_object_state_checked(graph.node_id()).is_ok());
+}
+
+#[test]
+fn axes_plot_preparation_errors_allocate_no_identity_or_resource() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let resource_count = resources(&scene);
+    let calls = std::cell::Cell::new(0usize);
+
+    assert!(axes
+        .plot(
+            |x| {
+                calls.set(calls.get() + 1);
+                x
+            },
+            Some(&[-1.0, 1.0, 0.0]),
+            false,
+        )
+        .is_err());
+    assert_eq!(calls.get(), 0);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), resource_count);
+}
+
+#[test]
+fn axes_plot_rejects_invalid_topology_before_running_the_callback() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let x = axes.x_axis().unwrap();
+    axes.family().remove_many(&[x.family().into()]).unwrap();
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let resource_count = resources(&scene);
+    let calls = std::cell::Cell::new(0usize);
+
+    assert!(matches!(
+        axes.plot(
+            |x| {
+                calls.set(calls.get() + 1);
+                x
+            },
+            None,
+            false,
+        ),
+        Err(CoordinateAuthoringError::InvalidTopology)
+    ));
+    assert_eq!(calls.get(), 0);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), resource_count);
+}
+
+struct MovingAxes {
+    source: ManimAxes,
+    target: MobjectFamily,
+    started: bool,
+}
+
+impl LiveContinuation for MovingAxes {
+    type Error = String;
+
+    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+        if self.started {
+            return Ok(ContinuationStep::Finished);
+        }
+        self.started = true;
+        live.declare_and_activate_family_transform_to(
+            self.source.family(),
+            &self.target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .map(ContinuationStep::Await)
+        .map_err(|error| error.to_string())
+    }
+}
+
+fn moving_axes() -> (ManimAxes, LiveProgram<MovingAxes>) {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let copy = axes.family().copy_family().unwrap();
+    copy.root().shift(2.0, 4.0).unwrap();
+    scene.add_many(&[axes.family().into()]).unwrap();
+    let program = scene
+        .into_live_program(MovingAxes {
+            source: axes.clone(),
+            target: copy.root().clone(),
+            started: false,
+        })
+        .unwrap();
+    (axes, program)
+}
+
+#[test]
+fn effective_axis_queries_follow_active_drivers_without_semantic_churn() {
+    let (axes, mut program) = moving_axes();
+    assert!(matches!(
+        program.resume().unwrap(),
+        LiveProgramStatus::Awaiting(_)
+    ));
+    let revision = axes.family().integration_store().borrow().scene_revision();
+    let mut callbacks = RustHostCallbackTable::new();
+    assert!(matches!(
+        program.drive_to(&mut callbacks, 0.5).unwrap(),
+        LiveProgramStatus::Awaiting(_)
+    ));
+    near(
+        axes.authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [0.0, 0.0],
+    );
+    let frame = axes.effective_frame(program.session()).unwrap();
+    near(frame.coords_to_point(0.0, 0.0).unwrap(), [1.0, 2.0]);
+    near(frame.point_to_coords([1.5, 2.25]).unwrap(), [0.5, 0.25]);
+    assert_eq!(
+        axes.family().integration_store().borrow().scene_revision(),
+        revision
+    );
+    let status = program.drive_to(&mut callbacks, 1.0).unwrap();
+    assert!(matches!(status, LiveProgramStatus::PublicationPending(_)));
+    let context = program.take_renderer_publication().context();
+    program.admit_publication(context).unwrap();
+    near(
+        axes.authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [2.0, 4.0],
+    );
+}
+
+#[test]
+fn graph_input_queries_choose_authored_or_effective_axes_without_publication() {
+    let (axes, mut program) = moving_axes();
+    program.resume().unwrap();
+    program
+        .drive_to(&mut RustHostCallbackTable::new(), 0.5)
+        .unwrap();
+    let store = axes.family().integration_store();
+    let revision = store.borrow().scene_revision();
+    let resource_count = store.borrow().geometry_resources().len();
+    near(
+        axes.input_to_graph_point(0.5, |x| x * x).unwrap(),
+        [0.5, 0.25],
+    );
+    let calls = std::cell::Cell::new(0);
+    near(
+        axes.effective_input_to_graph_point(program.session(), 0.5, |x| {
+            calls.set(calls.get() + 1);
+            x * x
+        })
+        .unwrap(),
+        [1.5, 2.25],
+    );
+    assert_eq!(calls.get(), 1);
+    assert_eq!(store.borrow().scene_revision(), revision);
+    assert_eq!(store.borrow().geometry_resources().len(), resource_count);
+}
+
+#[test]
+fn direct_and_forward_effective_coordinate_samples_agree() {
+    let (direct_axes, mut direct) = moving_axes();
+    let (forward_axes, mut forward) = moving_axes();
+    direct.resume().unwrap();
+    forward.resume().unwrap();
+    let mut direct_callbacks = RustHostCallbackTable::new();
+    let mut forward_callbacks = RustHostCallbackTable::new();
+    direct.drive_to(&mut direct_callbacks, 0.5).unwrap();
+    forward.drive_to(&mut forward_callbacks, 0.25).unwrap();
+    forward.drive_to(&mut forward_callbacks, 0.5).unwrap();
+    assert_eq!(
+        direct_axes.effective_frame(direct.session()).unwrap(),
+        forward_axes.effective_frame(forward.session()).unwrap(),
+    );
+}
+
+#[test]
+fn large_offset_axes_map_retained_data_without_midpoint_rounding() {
+    let mut scene = Scene::new();
+    let low = 1.0e16;
+    let high = low + 2.0;
+    let mut options = ManimAxesOptions::new([low, high, 2.0], [-1.0, 1.0, 1.0], 8.0, 4.0);
+    options.ticks.enabled = false;
+    let axes = scene.axes(&options).unwrap();
+    let frame = axes.authored_frame().unwrap();
+    near(frame.coords_to_point(low, -1.0).unwrap(), [-4.0, -2.0]);
+    near(frame.coords_to_point(high, 1.0).unwrap(), [4.0, 2.0]);
+    let points = [[low, -1.0], [high, 1.0]];
+    let data = ManimGeometryOptions::axes_sampled_plot(frame, &points).unwrap();
+    let curve = scene.geometry(data).unwrap();
+    assert_eq!(curve.path_query().unwrap().start().unwrap(), (-4.0, -2.0));
+    assert_eq!(curve.path_query().unwrap().end().unwrap(), (4.0, 2.0));
+    assert_eq!(axes.x_axis().unwrap().range().unwrap(), [low, high, 2.0]);
+}
+
+#[test]
+fn exact_tick_capacity_constructs_and_one_less_rejects_atomically() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);
+    options.ticks.limit = 5;
+    let line = scene.number_line(&options).unwrap();
+    let ticks = line.ticks().unwrap();
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .semantic_family_members_checked(ticks.node_id())
+            .unwrap()
+            .len(),
+        5
+    );
+    let revision = scene.revision();
+    let shaft_before = line.shaft().unwrap().state().unwrap();
+    options.ticks.limit = 4;
+    assert!(scene.number_line(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(line.shaft().unwrap().state().unwrap(), shaft_before);
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn unit_interval_elongates_endpoints_and_preserves_coordinate_range() {
+    let mut scene = Scene::new();
+    let line = scene
+        .number_line(&ManimNumberLineOptions::unit_interval())
+        .unwrap();
+    let frame = line.authored_frame().unwrap();
+    assert_eq!(frame.range(), [0.0, 1.0, 0.1]);
+    near(frame.number_to_point(0.25).unwrap(), [-2.5, 0.0]);
+    let ticks = line.ticks().unwrap();
+    let ids = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(ticks.node_id())
+        .unwrap();
+    assert_eq!(ids.len(), 11);
+    for (index, id) in ids.into_iter().enumerate() {
+        let tick = Mobject::from_node(Rc::clone(scene.integration_store()), id).unwrap();
+        let length = tick.path_query().unwrap().arc_length(None).unwrap();
+        let expected = if index == 0 || index == 10 { 0.4 } else { 0.2 };
+        assert!((length - expected).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn elongated_tick_offsets_match_pinned_tolerance_and_validate_atomically() {
+    let mut options = ManimNumberLineOptions::new([1_000.0, 1_001.0, 0.5]);
+    options.numbers_with_elongated_ticks = vec![1_000.000000001, 1_000.500001];
+    options.longer_tick_multiple = 3.0;
+    let mut scene = Scene::new();
+    let line = scene.number_line(&options).unwrap();
+    let ids = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(line.ticks().unwrap().node_id())
+        .unwrap();
+    assert_eq!(ids.len(), 3);
+    for (index, id) in ids.into_iter().enumerate() {
+        let tick = Mobject::from_node(Rc::clone(scene.integration_store()), id).unwrap();
+        let length = tick.path_query().unwrap().arc_length(None).unwrap();
+        let expected = if index < 2 { 0.6 } else { 0.2 };
+        assert!((length - expected).abs() < 1e-6);
+    }
+    let revision = scene.revision();
+    options.longer_tick_multiple = f64::INFINITY;
+    assert!(scene.number_line(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    options.longer_tick_multiple = 2.0;
+    options.ticks.limit = 1;
+    assert!(scene.number_line(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+}
+
+#[test]
+fn area_clips_graph_ranges_and_closes_against_the_axis_baseline() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes.plot(|x| x, Some(&[-1.0, 1.0, 1.0]), false).unwrap();
+    let area = axes.get_area(&graph, Some([-2.0, 2.0]), None).unwrap();
+    let frame = axes.authored_frame().unwrap();
+    let points = area.path_query().unwrap().anchors();
+    near(
+        [points[0].0, points[0].1],
+        frame.coords_to_point(-1.0, 0.0).unwrap(),
+    );
+    assert!(points.iter().any(|point| {
+        let expected = frame.coords_to_point(1.0, 0.0).unwrap();
+        (point.0 - expected[0]).abs() < 1e-6 && (point.1 - expected[1]).abs() < 1e-6
+    }));
+}
+
+#[test]
+fn area_baseline_is_the_physical_axis_when_zero_is_outside_the_y_range() {
+    let mut scene = Scene::new();
+    let axes = scene
+        .axes(&ManimAxesOptions::new(
+            [-2.0, 2.0, 1.0],
+            [2.0, 6.0, 1.0],
+            4.0,
+            4.0,
+        ))
+        .unwrap();
+    let graph = axes.plot(|_| 3.0, Some(&[-1.0, 1.0, 1.0]), false).unwrap();
+    let area = axes.get_area(&graph, None, None).unwrap();
+    let frame = axes.authored_frame().unwrap();
+    assert!(area.path_query().unwrap().anchors().iter().any(|point| {
+        let expected = frame.coords_to_point(1.0, 2.0).unwrap();
+        (point.0 - expected[0]).abs() < 1e-6 && (point.1 - expected[1]).abs() < 1e-6
+    }));
+}
+
+#[test]
+fn bounded_area_reverses_the_lower_graph_and_riemann_partition_is_half_open() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let top = axes
+        .plot(|x| x + 1.0, Some(&[-1.0, 1.0, 1.0]), false)
+        .unwrap();
+    let bottom = axes
+        .plot(|x| x - 1.0, Some(&[-0.5, 0.5, 0.5]), false)
+        .unwrap();
+    let area = axes
+        .get_area(&top, Some([-1.0, 1.0]), Some(&bottom))
+        .unwrap();
+    let frame = axes.authored_frame().unwrap();
+    let points = area.path_query().unwrap().anchors();
+    near(
+        [points[0].0, points[0].1],
+        frame.coords_to_point(-0.5, 0.5).unwrap(),
+    );
+    assert!(points.iter().any(|point| {
+        let expected = frame.coords_to_point(-0.5, -1.5).unwrap();
+        (point.0 - expected[0]).abs() < 1e-6 && (point.1 - expected[1]).abs() < 1e-6
+    }));
+    let rectangles = axes
+        .get_riemann_rectangles(
+            &top,
+            RiemannRectangleOptions {
+                x_range: Some([-1.0, 1.0]),
+                dx: 0.5,
+                sample: RiemannSample::Right,
+                width_scale_factor: 1.0,
+                bounded_graph: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .node(rectangles.node_id())
+            .unwrap()
+            .member_count(),
+        4
+    );
+}
+
+#[test]
+fn riemann_family_is_one_atomic_scene_publication() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes
+        .plot(|x| x + 1.0, Some(&[-1.0, 1.0, 0.5]), false)
+        .unwrap();
+    scene
+        .add_many(&[axes.family().into(), (&graph).into()])
+        .unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+
+    let before_revision = scene.revision();
+    let before_nodes = scene.integration_store().borrow().len();
+    let before_resources = resources(&scene);
+    let rectangles = scene
+        .effective_riemann_rectangles(
+            &axes,
+            &graph,
+            RiemannRectangleOptions {
+                dx: 0.5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(scene.revision().get(), before_revision.get() + 1);
+    assert_eq!(scene.integration_store().borrow().len(), before_nodes + 5);
+    assert_eq!(resources(&scene), before_resources + 4);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .node(rectangles.node_id())
+            .unwrap()
+            .member_count(),
+        4
+    );
+}
+
+#[test]
+fn riemann_preparation_failure_has_no_partial_family_or_resources() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes.plot(|x| x, Some(&[-1.0, 1.0, 0.5]), false).unwrap();
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let paths = resources(&scene);
+
+    assert!(matches!(
+        axes.get_riemann_rectangles(
+            &graph,
+            RiemannRectangleOptions {
+                dx: f64::NAN,
+                ..Default::default()
+            },
+        ),
+        Err(CoordinateAuthoringError::InvalidOptions(_))
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), paths);
+}
+
+#[test]
+fn riemann_right_sample_extends_past_nondivisible_interval_and_controls_bbox() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes.plot(|x| x, Some(&[-1.0, 2.0, 0.5]), false).unwrap();
+    let rectangles = axes
+        .get_riemann_rectangles(
+            &graph,
+            RiemannRectangleOptions {
+                x_range: Some([0.0, 1.1]),
+                dx: 0.5,
+                sample: RiemannSample::Right,
+                width_scale_factor: 0.25,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let members = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(rectangles.node_id())
+        .unwrap();
+    assert_eq!(members.len(), 3);
+    let last = Mobject::from_node(Rc::clone(scene.integration_store()), members[2]).unwrap();
+    let frame = axes.authored_frame().unwrap();
+    let bounds = last.boundary_bounds().unwrap().unwrap();
+    assert!((bounds.max_x - frame.coords_to_point(1.5, 0.0).unwrap()[0]).abs() < 1e-5);
+}
+
+#[test]
+fn riemann_paints_signed_gradient_and_rejects_invalid_style_atomically() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let graph = axes.plot(|x| x, Some(&[-1.0, 1.0, 0.5]), false).unwrap();
+    let options = RiemannRectangleOptions {
+        dx: 1.0,
+        blend: true,
+        ..Default::default()
+    };
+    let rectangles = axes
+        .get_riemann_rectangles(&graph, options.clone())
+        .unwrap();
+    let members = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(rectangles.node_id())
+        .unwrap();
+    assert_eq!(members.len(), 2);
+    let first = Mobject::from_node(Rc::clone(scene.integration_store()), members[0])
+        .unwrap()
+        .state()
+        .unwrap();
+    let color = noon_core::BLUE;
+    let expected = SemanticPaint::Solid(noon_core::Color::rgba(
+        1.0 - color.red,
+        1.0 - color.green,
+        1.0 - color.blue,
+        1.0,
+    ));
+    assert_eq!(first.style.fill, Some(expected.clone()));
+    assert_eq!(first.style.stroke, Some(expected));
+    assert_eq!(first.style.fill_opacity, 1.0);
+    assert_eq!(first.style.stroke_width, 0.01);
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let before = resources(&scene);
+    assert!(axes
+        .get_riemann_rectangles(
+            &graph,
+            RiemannRectangleOptions {
+                fill_opacity: f64::NAN,
+                ..options
+            }
+        )
+        .is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), before);
+}

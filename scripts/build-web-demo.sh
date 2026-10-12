@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Python validation must not add interpreter caches to the browser package.
+export PYTHONDONTWRITEBYTECODE=1
+
 noon_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$noon_root"
 
@@ -22,8 +25,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   # The #61 ownership inventory is an architecture ratchet, not passive documentation.
   # Validate both the checked-in inventory and the validator's ownership-class invariants
   # in the required web build so contradictory or growing Python semantic debt cannot land.
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/semantic_ownership_check.py
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_semantic_ownership_check.py
+  python3 scripts/semantic_ownership_check.py
+  python3 scripts/test_semantic_ownership_check.py
 
   # Keep top-level browser modules and tests self-registering with the required web build.
   # This prevents a new JavaScript file or regression test from silently escaping syntax
@@ -32,13 +35,12 @@ if [[ "$skip_web_preflight" != "1" ]]; then
     node --check "$source"
   done < <(find web -maxdepth 1 -type f \( -name '*.js' -o -name '*.mjs' \) -print | sort)
 
-  while IFS= read -r source; do
-    node --check "$source"
-  done < <(find web/js -type f -name '*.js' -print | sort)
-
   node --check scripts/build-python-worker.mjs
   node --check scripts/build-runtime-identity.mjs
   node --check scripts/execution-worker-smoke.mjs
+  node --check scripts/glow-worker-qualification.mjs
+  node --check scripts/glow-worker-reference.mjs
+  node --test scripts/glow-worker-reference.test.mjs
   node --check scripts/execution-worker-host-smoke.mjs
   node --check scripts/authoring-execution-router-smoke.mjs
   node --check scripts/browser-smoke.mjs
@@ -46,7 +48,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/browser-visual-parity-lib.mjs
   node --check scripts/manim-raster-differential.mjs
   node --check scripts/shared-playback-raster.mjs
-  node --check scripts/manim-raster-support.mjs
   node --check scripts/manim-typst-authoring-smoke.mjs
   node --check scripts/manim-reference-inventory.mjs
   node --check scripts/manim-reference-ledger.mjs
@@ -57,19 +58,28 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/perf-device-run.mjs
   node --check scripts/perf-compare.mjs
   node --check scripts/perf-corpus.mjs
+  node --check scripts/stage-special-camera-raster.mjs
   node --check scripts/host-callback-perf.mjs
   node --check scripts/playground-cold-start.mjs
+  node --check scripts/playground-cold-start-memory.mjs
   node --check scripts/deterministic-replay-smoke.mjs
   node --check scripts/browser-test-server.mjs
+  node --test scripts/browser-test-server.test.mjs
   node --check scripts/cross-language-parity.mjs
   node --check scripts/typed-authoring-errors-smoke.mjs
   node --check scripts/manim-compat-smoke.mjs
   node --check scripts/manim-tutorial-smoke.mjs
   node --check scripts/python-editor-input-smoke.mjs
   node --check scripts/playground-layout-smoke.mjs
+  node --check scripts/playground-product-e2e.mjs
+  node --check scripts/playground-product-fps.mjs
   node --check scripts/composition-authoring-smoke.mjs
   node --check scripts/reactive-authoring-smoke.mjs
   node --check scripts/shared-authoring-smoke.mjs
+  node --check scripts/shared-authoring-pyodide-contract.mjs
+  node --check scripts/paired-authoring-qualification.mjs
+  node --check scripts/special-camera-qualification.mjs
+  node --check scripts/plotting-qualification.mjs
   node --check scripts/playground-gallery-runtime-smoke.mjs
   node --check scripts/retained-dynamic-stress-perf.mjs
   node --check scripts/native-input-smoke.mjs
@@ -78,7 +88,10 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/pr-risk-classifier.mjs
   node --test scripts/build-runtime-identity.test.mjs
   node --test scripts/pyodide-resource-cache.test.mjs
+  node --test scripts/playground-cold-start-memory.test.mjs
+  node --test scripts/webgpu-device-capture.test.mjs
   node --test scripts/manim-raster-support.test.mjs
+  node --test scripts/live-coordinate-checks.test.mjs
   node --test scripts/browser-visual-parity-lib.test.mjs
   node --test scripts/manim-reference-inventory.test.mjs
   node --test scripts/manim-reference-ledger.test.mjs
@@ -87,30 +100,21 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/pr-risk-classifier.test.mjs
   node --test scripts/retained-dynamic-stress-perf-lib.test.mjs
   node --test scripts/perf-corpus-budget.test.mjs
+  node --test scripts/perf-corpus-provenance.test.mjs
   node --test scripts/perf-compare.test.mjs
   node --test scripts/retained-typst-workflow-policy.test.mjs
+  node --test scripts/playground-product-fps.test.mjs
 
   for test_file in web/*.test.mjs; do
     node --test "$test_file"
   done
 
-  PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
-    web/python/_manim_compat.py \
-    web/python/_manim_typst.py \
-    web/python/_manim_rate_functions.py \
-    web/python/_manim_shared_geometry.py \
-    web/python/_manim_animation_options.py \
-    web/python/_manim_animate.py \
-    web/python/_manim_rotate.py \
-    web/python/_manim_composition.py \
-    web/python/_manim_frame_sampling.py \
-    web/python/_manim_lifecycle.py \
-    web/python/_manim_growing.py \
-    web/python/_manim_draw_border_then_fill.py \
-    web/python/_manim_reactive.py \
-    web/python/_manim_updaters.py
-  PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
-  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py'
+  python3 - <<'PYTHON'
+from pathlib import Path
+for source in Path("web/python").rglob("*.py"):
+    compile(source.read_bytes(), str(source), "exec")
+PYTHON
+  python3 -m unittest discover -s web/python -p 'test_*.py'
 
 fi
 

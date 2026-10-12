@@ -10,6 +10,7 @@
     <script type="module">
       import init from "./pkg/noon_web.js";
       import { PythonAuthoringClient } from "./authoring-client.js";
+      import { qualifyPlotting } from "./plotting-smoke.js";
 
       const client = new PythonAuthoringClient();
       async function runLiveSources(sources) {
@@ -242,12 +243,14 @@ class RetainedSequentialFamilySmoke(Scene):
               throw new Error("default Text Unwrite must remove its target after one second");
             }
             writeRenderResult = await renderSequentialFamilySwitch();
+            const plotting = await qualifyPlotting(runLive);
 
             return {
               create,
               write: writeResult,
               unwrite,
               writeRender: writeRenderResult,
+              plotting,
             };
           })();
         }

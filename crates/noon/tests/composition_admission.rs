@@ -119,7 +119,7 @@ fn mixed_create_uncreate_publishes_one_coherent_completion() {
 
 #[test]
 fn rejected_composition_cannot_partially_admit_uncreate() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let target = scene.square(1.0).unwrap();
     let foreign = Scene::new().square(1.0).unwrap();
     let mut execution = scene.execution_session().unwrap();

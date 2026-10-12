@@ -433,3 +433,199 @@ fn independent_presence_edits_visit_linear_metadata_in_a_large_batch() {
         assert_eq!(stats.track_metadata_visits, size * 3);
     }
 }
+
+#[test]
+fn added_spatial_object_accepts_transform_and_world_track_in_same_sparse_batch() {
+    let (compiled, _) = compiled_circles([]);
+    let id = ObjectId::new(90);
+    let world = noon_core::SemanticWorldTransform3D::IDENTITY;
+    let mut object = CompiledObject::new(
+        id,
+        GeometryRef::circle(1.0),
+        noon_core::Transform2D::IDENTITY,
+        Style::default(),
+    );
+    object.spatial = Some(Box::new(crate::CompiledSpatialState {
+        world,
+        camera_projection: None,
+        camera_profile: None,
+        camera_motions: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+        draw_kind: crate::CompiledSpatialDrawKind::Planar,
+        spatial_anchor_family: None,
+        fixed_orientation_center: None,
+        cairo_path_appearance: None,
+    }));
+    let endpoint = noon_core::WorldTransformTrackEndpoint::from_world(world);
+    let transaction = ExecutionMutationTransaction::from_mutations([
+        ExecutionPatch::CreateObject(object),
+        ExecutionPatch::SetSemanticTransform {
+            object: id,
+            transform: noon_core::SemanticTransform::default(),
+        },
+        ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(90),
+            object: id,
+            property: noon_core::Property::WorldTransform,
+            values: TrackValues::WorldTransform {
+                from: endpoint,
+                to: endpoint,
+            },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: noon_core::CompositionTimeMap::identity(),
+        }),
+    ]);
+    compiled
+        .preflight_execution_transaction(&transaction)
+        .unwrap();
+}
+
+#[test]
+fn spatial_transaction_rejects_camera_scale_and_planar_pose_mutations() {
+    let id = ObjectId::new(91);
+    let mut camera = CompiledObject::new(
+        id,
+        GeometryRef::circle(1.0),
+        noon_core::Transform2D::IDENTITY,
+        Style::default(),
+    );
+    camera.spatial = Some(Box::new(crate::CompiledSpatialState {
+        world: noon_core::SemanticWorldTransform3D::IDENTITY,
+        camera_projection: Some(noon_core::SemanticProjection3D::Perspective {
+            vertical_fov_radians: 1.0,
+            near: 0.1,
+            far: 100.0,
+        }),
+        camera_profile: None,
+        camera_motions: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+        draw_kind: crate::CompiledSpatialDrawKind::Planar,
+        spatial_anchor_family: None,
+        fixed_orientation_center: None,
+        cairo_path_appearance: None,
+    }));
+    let endpoint = |scale| {
+        noon_core::WorldTransformTrackEndpoint::from_world(
+            noon_core::SemanticWorldTransform3D::new(
+                noon_core::SemanticVec3::ZERO,
+                noon_core::SemanticRotation3D::IDENTITY,
+                scale,
+            )
+            .unwrap(),
+        )
+    };
+    let compiled = CompiledScene::compile_objects(vec![camera], &[]).unwrap();
+    let before = compiled.clone();
+    let bad_camera_track =
+        ExecutionMutationTransaction::from_mutations([ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(92),
+            object: id,
+            property: noon_core::Property::WorldTransform,
+            values: TrackValues::WorldTransform {
+                from: endpoint(noon_core::SemanticVec3::new(1.0, 1.0, 1.0)),
+                to: endpoint(noon_core::SemanticVec3::new(2.0, 1.0, 1.0)),
+            },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: noon_core::CompositionTimeMap::identity(),
+        })]);
+    assert!(matches!(
+        compiled.preflight_execution_transaction(&bad_camera_track),
+        Err(CompilePatchError::InvalidTrack(
+            noon_core::TimelineError::InvalidWorldTransformValues
+        ))
+    ));
+    assert_eq!(compiled, before);
+
+    let planar_pose =
+        ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetTransform {
+            object: id,
+            transform: noon_core::Transform2D::IDENTITY,
+        }]);
+    assert!(matches!(
+        compiled.preflight_execution_transaction(&planar_pose),
+        Err(CompilePatchError::InvalidObjectState { object, .. }) if object == id
+    ));
+    let planar_track =
+        ExecutionMutationTransaction::from_mutations([ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(93),
+            object: id,
+            property: noon_core::Property::Position,
+            values: TrackValues::Vec2 {
+                from: noon_core::Vec2::ZERO,
+                to: noon_core::Vec2::ONE,
+            },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: noon_core::CompositionTimeMap::identity(),
+        })]);
+    assert!(matches!(
+        compiled.preflight_execution_transaction(&planar_track),
+        Err(CompilePatchError::InvalidTrack(
+            noon_core::TimelineError::InvalidWorldTransformValues
+        ))
+    ));
+    assert_eq!(compiled, before);
+}
+
+#[test]
+fn spatial_domain_change_rejects_incompatible_planar_track_atomically() {
+    let id = ObjectId::new(94);
+    let mut object = CompiledObject::new(
+        id,
+        GeometryRef::circle(1.0),
+        noon_core::Transform2D::IDENTITY,
+        Style::default(),
+    );
+    object.spatial = Some(Box::new(crate::CompiledSpatialState {
+        world: noon_core::SemanticWorldTransform3D::IDENTITY,
+        camera_projection: None,
+        camera_profile: None,
+        camera_motions: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::FixedFrame,
+        draw_kind: crate::CompiledSpatialDrawKind::Planar,
+        spatial_anchor_family: None,
+        fixed_orientation_center: None,
+        cairo_path_appearance: None,
+    }));
+    let track = TrackDefinition {
+        id: TrackId::new(94),
+        object: id,
+        property: noon_core::Property::Position,
+        values: TrackValues::Vec2 {
+            from: noon_core::Vec2::ZERO,
+            to: noon_core::Vec2::ONE,
+        },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: noon_core::CompositionTimeMap::identity(),
+    };
+    let compiled = CompiledScene::compile_objects(vec![object], &[track]).unwrap();
+    let before = compiled.clone();
+    let world_state = crate::CompiledSpatialState {
+        world: noon_core::SemanticWorldTransform3D::IDENTITY,
+        camera_projection: None,
+        camera_profile: None,
+        camera_motions: None,
+        material: noon_core::SemanticSpatialMaterial::Unlit,
+        point_light: false,
+        composition_domain: noon_core::SemanticSpatialCompositionDomain::World,
+        draw_kind: crate::CompiledSpatialDrawKind::Planar,
+        spatial_anchor_family: None,
+        fixed_orientation_center: None,
+        cairo_path_appearance: None,
+    };
+    let change = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetSpatialState {
+        object: id,
+        base_transform: noon_core::Transform2D::IDENTITY,
+        spatial: Some(world_state),
+    }]);
+    assert!(matches!(
+        compiled.preflight_execution_transaction(&change),
+        Err(CompilePatchError::InvalidObjectState { object, .. }) if object == id
+    ));
+    assert_eq!(compiled, before);
+}

@@ -18,7 +18,10 @@ fn retained_path(options: Options) -> VectorPath {
             let resources = session.geometry_resources();
             let GeometryResource::VectorPath(path) = resources
                 .get(resources.current_handle(*id).unwrap())
-                .unwrap();
+                .unwrap()
+            else {
+                panic!("expected retained path geometry resource")
+            };
             (**path).clone()
         }
         other => panic!("expected retained path geometry, got {other:?}"),
@@ -181,7 +184,7 @@ fn paired_arc_example_uses_the_shared_execution_session() {
 
 #[test]
 fn arc_layout_distinguishes_anchor_center_and_control_hull_dimensions() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let arc = scene
         .geometry(Options::arc(1.25, -0.3, 1.8, 9, -2., 0.8).unwrap())
         .unwrap();

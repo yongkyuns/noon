@@ -1,0 +1,448 @@
+//! Immutable text dependencies in the same resource scope as semantic geometry.
+use super::SemanticStore;
+use crate::{
+    FontResourceArena, GeometryResource, GeometryResourceArena, TextResource, TextResourceArena,
+    TextResourceHandle,
+};
+
+const MAX_COMPILED_TEXT_IDENTITIES: usize = 128;
+const MAX_COMPILED_TEXT_IDENTITY_BYTES: usize = 32 * 1024 * 1024;
+
+/// A compiled text payload rejected before any dependency is imported.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SemanticTextImportError {
+    Validation(crate::TextResourceValidationError),
+    MissingFont(crate::FontResourceKey),
+    Font(crate::FontResourceError),
+    MissingGeometry(crate::GeometryResourceHandle),
+    NonFiniteGeometry(crate::GeometryResourceHandle),
+    UnsupportedGeometry(crate::GeometryResourceHandle),
+}
+
+impl std::fmt::Display for SemanticTextImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Validation(error) => error.fmt(f),
+            Self::MissingFont(key) => write!(f, "missing text font dependency {key:?}"),
+            Self::Font(error) => error.fmt(f),
+            Self::MissingGeometry(handle) => write!(f, "missing text vector dependency {handle:?}"),
+            Self::NonFiniteGeometry(handle) => {
+                write!(f, "text vector dependency {handle:?} is not finite")
+            }
+            Self::UnsupportedGeometry(handle) => {
+                write!(f, "text dependency {handle:?} is not vector path geometry")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SemanticTextImportError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Validation(error) => Some(error),
+            Self::Font(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl SemanticStore {
+    pub(super) fn forget_compiled_text_resource(
+        &mut self,
+        identity: &crate::TextCompilationIdentity,
+    ) {
+        if let Some(handle) = self.compiled_text_resources.remove(identity) {
+            self.release_compiled_text_resource(handle);
+            self.compiled_text_resource_retained_bytes = self
+                .compiled_text_resource_retained_bytes
+                .saturating_sub(compiled_identity_bytes(identity));
+            if let Some(index) = self
+                .compiled_text_resource_order
+                .iter()
+                .position(|candidate| candidate == identity)
+            {
+                self.compiled_text_resource_order.remove(index);
+            }
+        }
+    }
+    pub(crate) fn forget_compiled_text_resources_for(&mut self, handle: TextResourceHandle) {
+        let identities = self
+            .compiled_text_resources
+            .iter()
+            .filter_map(|(identity, candidate)| (*candidate == handle).then_some(identity.clone()))
+            .collect::<Vec<_>>();
+        for identity in identities {
+            self.forget_compiled_text_resource(&identity);
+        }
+    }
+    pub(super) fn remember_compiled_text_resource(
+        &mut self,
+        identity: crate::TextCompilationIdentity,
+        handle: TextResourceHandle,
+    ) -> bool {
+        if compiled_identity_bytes(&identity) > MAX_COMPILED_TEXT_IDENTITY_BYTES {
+            return false;
+        }
+        match self
+            .compiled_text_resources
+            .insert(identity.clone(), handle)
+        {
+            None => {
+                self.retain_compiled_text_resource(handle);
+                self.compiled_text_resource_retained_bytes = self
+                    .compiled_text_resource_retained_bytes
+                    .saturating_add(compiled_identity_bytes(&identity));
+                self.compiled_text_resource_order.push_back(identity);
+            }
+            Some(previous) if previous != handle => {
+                self.release_compiled_text_resource(previous);
+                self.retain_compiled_text_resource(handle);
+            }
+            Some(_) => {}
+        }
+        while self.compiled_text_resource_order.len() > MAX_COMPILED_TEXT_IDENTITIES
+            || self.compiled_text_resource_retained_bytes > MAX_COMPILED_TEXT_IDENTITY_BYTES
+        {
+            if let Some(expired) = self.compiled_text_resource_order.pop_front() {
+                self.forget_compiled_text_resource(&expired);
+            }
+        }
+        self.reclaim_semantic_resource_candidates();
+        true
+    }
+    pub fn text_resources(&self) -> &TextResourceArena {
+        &self.text_resources
+    }
+    pub fn font_resources(&self) -> &FontResourceArena {
+        &self.font_resources
+    }
+
+    /// Import a compiled immutable payload once, before attaching its semantic
+    /// object. Dependency validation precedes every resource write. This is
+    /// resource registration, not a second authored scene or execution boundary.
+    pub fn import_text_resource(
+        &mut self,
+        mut resource: TextResource,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+    ) -> Result<TextResourceHandle, SemanticTextImportError> {
+        resource
+            .validate()
+            .map_err(SemanticTextImportError::Validation)?;
+        for run in resource.runs.iter() {
+            let incoming = fonts.get_for_face(&run.font).ok_or_else(|| {
+                SemanticTextImportError::MissingFont(crate::FontResourceKey::from_face(&run.font))
+            })?;
+            if let Some(existing) = self.font_resources.get_for_face(&run.font) {
+                if !std::sync::Arc::ptr_eq(&existing.data, &incoming.data)
+                    && existing.data != incoming.data
+                {
+                    return Err(SemanticTextImportError::Font(
+                        crate::FontResourceError::ConflictingResource(
+                            crate::FontResourceKey::from_face(&run.font),
+                        ),
+                    ));
+                }
+            }
+        }
+        for vector in resource.vector_items.iter() {
+            let resource = geometries
+                .get(vector.geometry)
+                .ok_or(SemanticTextImportError::MissingGeometry(vector.geometry))?;
+            let GeometryResource::VectorPath(path) = resource else {
+                return Err(SemanticTextImportError::UnsupportedGeometry(
+                    vector.geometry,
+                ));
+            };
+            if !path.is_finite() {
+                return Err(SemanticTextImportError::NonFiniteGeometry(vector.geometry));
+            }
+        }
+        for run in resource.runs.iter() {
+            let incoming = fonts
+                .get_for_face(&run.font)
+                .expect("font dependency preflighted");
+            self.font_resources
+                .intern_face(&run.font, incoming.data.clone())
+                .expect("immutable font identity preflighted");
+        }
+        let mut imported = std::collections::HashMap::new();
+        for vector in std::sync::Arc::make_mut(&mut resource.vector_items) {
+            vector.geometry = *imported.entry(vector.geometry).or_insert_with(|| {
+                let resource = geometries
+                    .get(vector.geometry)
+                    .expect("vector dependency preflighted");
+                let GeometryResource::VectorPath(path) = resource else {
+                    unreachable!("preflight rejects non-path geometry")
+                };
+                self.geometry_resources.insert_path(path.as_ref().clone())
+            });
+        }
+        let handle = self
+            .text_resources
+            .insert(resource)
+            .expect("text resource preflighted");
+        self.register_semantic_text_resource_dependencies(handle);
+        Ok(handle)
+    }
+
+    /// Import a normalized compiled resource, or reuse its existing immutable
+    /// payload in this semantic store. The key is compiler-owned complete input
+    /// identity, never a presentation or node identity.
+    pub fn import_compiled_text_resource(
+        &mut self,
+        identity: crate::TextCompilationIdentity,
+        resource: TextResource,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+    ) -> Result<TextResourceHandle, SemanticTextImportError> {
+        if let Some(handle) = self.compiled_text_resources.get(&identity).copied() {
+            if self.text_resources.get(handle).is_some() {
+                return Ok(handle);
+            }
+            self.forget_compiled_text_resource(&identity);
+        }
+        let handle = self.import_text_resource(resource, fonts, geometries)?;
+        let _ = self.remember_compiled_text_resource(identity, handle);
+        Ok(handle)
+    }
+}
+
+fn compiled_identity_bytes(identity: &crate::TextCompilationIdentity) -> usize {
+    identity.descriptor.len().saturating_add(
+        identity
+            .font_contents
+            .iter()
+            .map(|font| font.len())
+            .sum::<usize>(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{Rect, TextSourceKind, Vec2};
+
+    fn empty_text() -> TextResource {
+        TextResource {
+            source: Arc::from(""),
+            kind: TextSourceKind::Plain,
+            runs: Arc::from([]),
+            vector_items: Arc::from([]),
+            render_items: Arc::from([]),
+            parts: Arc::from([]),
+            bounds: Rect::new(Vec2::ZERO, Vec2::ZERO),
+            baseline: 0.0,
+            layout_artifact: None,
+        }
+    }
+
+    fn identity(label: &str) -> crate::TextCompilationIdentity {
+        crate::TextCompilationIdentity {
+            descriptor: Arc::from(label.as_bytes()),
+            font_contents: Arc::from([Arc::<[u8]>::from([1_u8, 2, 3])]),
+        }
+    }
+
+    fn import_cached(
+        store: &mut SemanticStore,
+        key: crate::TextCompilationIdentity,
+    ) -> TextResourceHandle {
+        store
+            .import_compiled_text_resource(
+                key,
+                empty_text(),
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn retired_compiled_resource_is_reimported_without_duplicate_accounting() {
+        let mut store = SemanticStore::new();
+        let key = identity("retired");
+        let first = import_cached(&mut store, key.clone());
+        let retained_bytes = store.compiled_text_resource_retained_bytes;
+        store.text_resources.remove(first.id).unwrap();
+        let replacement = import_cached(&mut store, key.clone());
+        assert_ne!(first, replacement);
+        assert!(store.text_resources().get(first).is_none());
+        assert!(store.text_resources().get(replacement).is_some());
+        assert_eq!(store.compiled_text_resource_retained_bytes, retained_bytes);
+        assert_eq!(store.compiled_text_resource_order.len(), 1);
+        assert_eq!(import_cached(&mut store, key), replacement);
+        assert_eq!(store.text_resources().len(), 1);
+    }
+
+    #[test]
+    fn cloned_compiled_resources_rebind_live_handles_and_drop_retired_identities() {
+        let mut store = SemanticStore::new();
+        let live_key = identity("live");
+        let live = import_cached(&mut store, live_key.clone());
+        let retired_key = identity("retired");
+        let retired = import_cached(&mut store, retired_key.clone());
+        store.text_resources.remove(retired.id).unwrap();
+        let mut cloned = store.clone();
+        let cloned_live = import_cached(&mut cloned, live_key.clone());
+        assert_ne!(cloned_live.arena, live.arena);
+        assert!(cloned.text_resources().get(cloned_live).is_some());
+        assert!(cloned.text_resources().get(live).is_none());
+        assert_eq!(
+            cloned.compiled_text_resource_retained_bytes,
+            compiled_identity_bytes(&live_key)
+        );
+        assert_eq!(cloned.compiled_text_resource_order.len(), 1);
+        assert!(!cloned.compiled_text_resources.contains_key(&retired_key));
+        let restored = import_cached(&mut cloned, retired_key);
+        assert!(cloned.text_resources().get(restored).is_some());
+        assert_eq!(cloned.text_resources().len(), 2);
+    }
+
+    #[test]
+    fn failed_compiled_import_does_not_cache_an_identity() {
+        let mut store = SemanticStore::new();
+        let key = identity("invalid");
+        let mut invalid = empty_text();
+        invalid.render_items = Arc::from([crate::TextRenderItem::Vector(0)]);
+        assert!(store
+            .import_compiled_text_resource(
+                key.clone(),
+                invalid,
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new()
+            )
+            .is_err());
+        assert_eq!(store.compiled_text_resource_retained_bytes, 0);
+        assert!(store.compiled_text_resource_order.is_empty());
+        assert!(store.compiled_text_resources.is_empty());
+        let restored = import_cached(&mut store, key);
+        assert!(store.text_resources().get(restored).is_some());
+    }
+
+    #[test]
+    fn oversized_compiled_identity_does_not_reclaim_its_raw_import() {
+        let mut store = SemanticStore::new();
+        let identity = crate::TextCompilationIdentity {
+            descriptor: vec![0_u8; 32 * 1024 * 1024 + 1].into(),
+            font_contents: Arc::from([]),
+        };
+        let handle = store
+            .import_compiled_text_resource(
+                identity,
+                empty_text(),
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+        assert!(store.text_resources().get(handle).is_some());
+        assert!(store.compiled_text_resources.is_empty());
+        assert_eq!(store.compiled_text_resource_retained_bytes, 0);
+    }
+
+    #[test]
+    fn canonical_import_rebinds_text_to_the_target_store_arena() {
+        let mut source_texts = TextResourceArena::new();
+        let source = source_texts.insert(empty_text()).unwrap();
+        let source_resource = source_texts.get(source).unwrap().clone();
+        let mut target = SemanticStore::new();
+        let local = target
+            .import_text_resource(
+                source_resource,
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+
+        assert_ne!(source.arena, local.arena);
+        assert!(target.text_resources().get(source).is_none());
+        assert!(target.text_resources().get(local).is_some());
+    }
+
+    fn resource_counts(store: &SemanticStore) -> (usize, usize, usize) {
+        (
+            store.geometry_resources().len(),
+            store.text_resources().len(),
+            store.font_resources().len(),
+        )
+    }
+
+    #[test]
+    fn invalid_text_retains_validation_cause_before_resource_writes_and_recovers() {
+        use std::error::Error;
+        let mut store = SemanticStore::new();
+        let mut invalid = empty_text();
+        invalid.render_items = Arc::from([crate::TextRenderItem::Vector(0)]);
+        let error = store
+            .import_text_resource(
+                invalid,
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(error, SemanticTextImportError::Validation(_)));
+        assert!(error
+            .source()
+            .unwrap()
+            .is::<crate::TextResourceValidationError>());
+        assert_eq!(resource_counts(&store), (0, 0, 0));
+        store
+            .import_text_resource(
+                empty_text(),
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap();
+        assert_eq!(resource_counts(&store), (0, 1, 0));
+    }
+
+    #[test]
+    fn missing_and_nonfinite_text_vectors_preserve_identity_and_import_nothing() {
+        let mut source = GeometryResourceArena::new();
+        let good = source.insert_path(
+            crate::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 1.0)),
+        );
+        let bad =
+            source.insert_path(crate::VectorPath::new().move_to(Vec2::new(f32::INFINITY, 0.0)));
+        let vector = |geometry| crate::TextVectorItem {
+            geometry,
+            transform: crate::TextAffineTransform::IDENTITY,
+            style: crate::TextVectorStyle::default(),
+            source_span: None,
+            semantic_key: None,
+        };
+        let mut resource = empty_text();
+        resource.vector_items = Arc::from([vector(good), vector(bad)]);
+        resource.render_items = Arc::from([
+            crate::TextRenderItem::Vector(0),
+            crate::TextRenderItem::Vector(1),
+        ]);
+        let mut store = SemanticStore::new();
+        assert_eq!(
+            store.import_text_resource(
+                resource.clone(),
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new()
+            ),
+            Err(SemanticTextImportError::MissingGeometry(good))
+        );
+        assert_eq!(resource_counts(&store), (0, 0, 0));
+        assert_eq!(
+            store.import_text_resource(resource, &FontResourceArena::new(), &source),
+            Err(SemanticTextImportError::NonFiniteGeometry(bad))
+        );
+        // In particular, the first valid vector was not imported before the second failed.
+        assert_eq!(resource_counts(&store), (0, 0, 0));
+        let mut valid = empty_text();
+        valid.vector_items = Arc::from([vector(good)]);
+        valid.render_items = Arc::from([crate::TextRenderItem::Vector(0)]);
+        store
+            .import_text_resource(valid, &FontResourceArena::new(), &source)
+            .unwrap();
+        assert_eq!(resource_counts(&store), (1, 1, 0));
+    }
+}

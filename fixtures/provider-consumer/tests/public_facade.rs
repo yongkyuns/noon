@@ -2,7 +2,7 @@
 //! Provider-feature CI runs these tests natively and compiles them for WASM.
 use noon::{
     AnimationOptions, ExecutionSessionPublicationError, LiveSessionError, ManimGeometryOptions,
-    MobjectFamilyMember, RateFunction, Scene, Vec2,
+    MobjectTarget, RateFunction, Scene, Vec2,
 };
 
 #[test]
@@ -57,7 +57,7 @@ fn integration_access_keeps_one_arena_and_stale_publication_protection(
     let arena = Rc::new(RefCell::new(SemanticStore::new()));
     let mut scene = Scene::with_integration_store(Rc::clone(&arena));
     let circle = scene.circle(1.0)?;
-    let family = scene.family(&[MobjectFamilyMember::Mobject(&circle)])?;
+    let family = scene.family(&[MobjectTarget::Object(&circle)])?;
     assert!(Rc::ptr_eq(scene.integration_store(), &arena));
     assert!(Rc::ptr_eq(circle.integration_store(), &arena));
     assert!(Rc::ptr_eq(family.integration_store(), &arena));

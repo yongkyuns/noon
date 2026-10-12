@@ -1,16 +1,16 @@
-import init, { RetainedTypstCanvasRenderer } from "./pkg/noon_web.js";
+import init, { createDirectTypstCanvasRenderer } from "./pkg/noon_web.js";
 
 const canvas = document.querySelector("#scene");
 const status = document.querySelector("#status");
 
 if (!(canvas instanceof HTMLCanvasElement) || !(status instanceof HTMLOutputElement)) {
-  throw new Error("retained Typst demo DOM is incomplete");
+  throw new Error("direct Typst demo DOM is incomplete");
 }
 
 await init();
 
 const offscreen = canvas.transferControlToOffscreen();
-const renderer = await RetainedTypstCanvasRenderer.create(
+const renderer = await createDirectTypstCanvasRenderer(
   offscreen,
   "*Hello* from _Noon Typst!_",
   "frac(x^2 + y^2, 2) = sum_(k=1)^n k",

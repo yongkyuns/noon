@@ -49,7 +49,41 @@ pub(super) struct ResidentPathRanges {
     pub indices: Range<u32>,
 }
 
+/// A validated/tessellated resident suffix that has not displaced the current
+/// disposable frame geometry yet. This lets the host check GPU allocation limits
+/// before committing the new immutable prefix.
+#[derive(Debug)]
+pub(crate) struct PathMeshAppendPlan {
+    cache_indices: Vec<usize>,
+    geometry_cache_misses: usize,
+    next_vertex_count: usize,
+    next_index_count: usize,
+}
+
+impl PathMeshAppendPlan {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.cache_indices.is_empty()
+    }
+
+    pub(crate) fn next_vertex_count(&self) -> usize {
+        self.next_vertex_count
+    }
+
+    pub(crate) fn next_index_count(&self) -> usize {
+        self.next_index_count
+    }
+}
+
 impl FramePreparer {
+    pub(crate) fn resident_path_mesh_count(&self) -> usize {
+        self.resident_mesh_count
+    }
+
+    pub(crate) fn resident_path_byte_count(&self) -> usize {
+        self.resident_vertex_count * std::mem::size_of::<PathVertex>()
+            + self.resident_index_count * std::mem::size_of::<u32>()
+    }
+
     pub(crate) fn preload_paths(
         &mut self,
         requests: &[PathMeshPreload<'_>],
@@ -62,17 +96,23 @@ impl FramePreparer {
                     "path preload requires vector geometry".into(),
                 ));
             };
-            let (index, _) = self.cache_path_mesh(path, request.style, request.transform)?;
+            let (index, _) = match self.cache_path_mesh(path, request.style, request.transform) {
+                Ok(cached) => cached,
+                Err(_) if sampled_morph::prepare_sampled_path(path, request.style).is_ok() => {
+                    continue
+                }
+                Err(error) => return Err(error),
+            };
             if self.path_mesh_cache[index].resident.is_some() {
                 continue;
             }
             checked_packed_end(
                 self.path_vertices.len(),
-                self.path_mesh_cache[index].mesh.vertices.len(),
+                packed_path_vertex_count(&self.path_mesh_cache[index].mesh),
             )?;
             checked_packed_end(
                 self.path_indices.len(),
-                self.path_mesh_cache[index].mesh.indices.len(),
+                packed_path_index_count(&self.path_mesh_cache[index].mesh),
             )?;
             let ranges = append_mesh(
                 &self.path_mesh_cache[index].mesh,
@@ -80,9 +120,11 @@ impl FramePreparer {
                 &mut self.path_indices,
             );
             self.path_mesh_cache[index].resident = Some(ranges);
+            self.resident_mesh_count += 1;
         }
         self.resident_vertex_count = self.path_vertices.len();
         self.resident_index_count = self.path_indices.len();
+        self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
         self.path_geometry_dirty =
             self.resident_vertex_count != 0 || self.resident_index_count != 0;
         if self.resident_vertex_count != 0 {
@@ -94,6 +136,178 @@ impl FramePreparer {
                 .push(0..self.resident_index_count);
         }
         Ok(())
+    }
+
+    /// Tessellate and validate only the requested incremental resident suffix.
+    /// Existing resident ranges and current-frame packed geometry remain untouched
+    /// until `commit_path_mesh_append` is called after device-limit validation.
+    pub(crate) fn prepare_path_mesh_append(
+        &mut self,
+        requests: &[PathMeshPreload<'_>],
+    ) -> Result<PathMeshAppendPlan, noon_geometry::GeometryError> {
+        debug_assert!(self.individual_path_draws);
+        let cache_start = self.path_mesh_cache.len();
+        let mut cache_indices = Vec::new();
+        let mut geometry_cache_misses = 0usize;
+
+        for request in requests {
+            let result = (|| {
+                validate_request(request)?;
+                let GeometryRef::VectorPath(path) = request.geometry else {
+                    return Err(noon_geometry::GeometryError::Tessellation(
+                        "path preload requires vector geometry".into(),
+                    ));
+                };
+                let (index, cache_miss) =
+                    match self.cache_path_mesh(path, request.style, request.transform) {
+                        Ok(cached) => cached,
+                        Err(_)
+                            if sampled_morph::prepare_sampled_path(path, request.style).is_ok() =>
+                        {
+                            return Ok(())
+                        }
+                        Err(error) => return Err(error),
+                    };
+                geometry_cache_misses += usize::from(cache_miss);
+                if self.path_mesh_cache[index].resident.is_none() && !cache_indices.contains(&index)
+                {
+                    cache_indices.push(index);
+                }
+                Ok::<_, noon_geometry::GeometryError>(())
+            })();
+            if let Err(error) = result {
+                self.rollback_cached_path_suffix(cache_start);
+                return Err(error);
+            }
+        }
+
+        let mut next_vertex_count = self.resident_vertex_count;
+        let mut next_index_count = self.resident_index_count;
+        for &index in &cache_indices {
+            let mesh = &self.path_mesh_cache[index].mesh;
+            match checked_packed_end(next_vertex_count, packed_path_vertex_count(mesh)) {
+                Ok(end) => next_vertex_count = end as usize,
+                Err(error) => {
+                    self.rollback_cached_path_suffix(cache_start);
+                    return Err(error);
+                }
+            }
+            match checked_packed_end(next_index_count, packed_path_index_count(mesh)) {
+                Ok(end) => next_index_count = end as usize,
+                Err(error) => {
+                    self.rollback_cached_path_suffix(cache_start);
+                    return Err(error);
+                }
+            }
+        }
+
+        Ok(PathMeshAppendPlan {
+            cache_indices,
+            geometry_cache_misses,
+            next_vertex_count,
+            next_index_count,
+        })
+    }
+
+    /// Commit one already validated resident suffix. The previous frame's packed
+    /// path suffix is disposable, so dropping it does not copy old geometry. The
+    /// next prepare rebuilds that suffix after the immutable prefix has grown.
+    pub(crate) fn commit_path_mesh_append(&mut self, plan: PathMeshAppendPlan) -> RenderStats {
+        if plan.cache_indices.is_empty() {
+            return RenderStats {
+                geometry_cache_misses: plan.geometry_cache_misses,
+                ..RenderStats::default()
+            };
+        }
+
+        let vertex_start = self.resident_vertex_count;
+        let index_start = self.resident_index_count;
+        self.path_vertices.truncate(vertex_start);
+        self.path_indices.truncate(index_start);
+        self.path_vertex_free_ranges.clear();
+        self.path_index_free_ranges.clear();
+        self.path_vertex_dirty_ranges.clear();
+        self.path_index_dirty_ranges.clear();
+
+        self.resident_mesh_count = self
+            .resident_mesh_count
+            .saturating_add(plan.cache_indices.len());
+        for index in plan.cache_indices {
+            debug_assert!(self.path_mesh_cache[index].resident.is_none());
+            let ranges = append_mesh(
+                &self.path_mesh_cache[index].mesh,
+                &mut self.path_vertices,
+                &mut self.path_indices,
+            );
+            self.path_mesh_cache[index].resident = Some(ranges);
+        }
+
+        self.resident_vertex_count = self.path_vertices.len();
+        self.resident_index_count = self.path_indices.len();
+        self.path_mesh_cache_prune_baseline = self.path_mesh_cache.len();
+        debug_assert_eq!(self.resident_vertex_count, plan.next_vertex_count);
+        debug_assert_eq!(self.resident_index_count, plan.next_index_count);
+        self.path_vertex_dirty_ranges
+            .push(vertex_start..self.resident_vertex_count);
+        self.path_index_dirty_ranges
+            .push(index_start..self.resident_index_count);
+        self.path_geometry_dirty = true;
+        // Existing draw descriptors refer to the disposable suffix we just dropped.
+        // They are never submitted again: the next retained preparation rebuilds them.
+        self.initialized = false;
+
+        RenderStats {
+            geometry_cache_misses: plan.geometry_cache_misses,
+            path_vertices_repacked: self.resident_vertex_count - vertex_start,
+            path_indices_repacked: self.resident_index_count - index_start,
+            ..RenderStats::default()
+        }
+    }
+
+    /// Empty-draw upload view over the cumulative resident prefix. It intentionally
+    /// hides stale per-frame draw descriptors while retaining the exact dirty suffix,
+    /// so the existing preload uploader can write only new resident ranges.
+    pub(crate) fn resident_upload_frame(&self, stats: RenderStats) -> PreparedFrame<'_> {
+        PreparedFrame {
+            time: 0.0,
+            circle_ids: &[],
+            circles: &[],
+            rectangle_ids: &[],
+            rectangles: &[],
+            line_ids: &[],
+            lines: &[],
+            path_ids: &[],
+            paths: &[],
+            path_vertices: &self.path_vertices,
+            path_indices: &self.path_indices,
+            path_batches: &[],
+            path_mesh_cache: &self.path_mesh_cache,
+            path_batch_cache_indices: &[],
+            mega_path_indices: &[],
+            mega_path_vertex_instances: &[],
+            mega_path_batches: &[],
+            render_batches: &[],
+            render_chunks: &[],
+            render_chunks_active: false,
+            unsupported: &[],
+            circle_dirty_ranges: &[],
+            rectangle_dirty_ranges: &[],
+            line_dirty_ranges: &[],
+            path_dirty_ranges: &[],
+            path_vertex_dirty_ranges: &self.path_vertex_dirty_ranges,
+            path_index_dirty_ranges: &self.path_index_dirty_ranges,
+            mega_path_instance_dirty_ranges: &[],
+            mega_path_index_dirty_ranges: &[],
+            mega_path_index_dirty: false,
+            path_geometry_dirty: self.path_geometry_dirty,
+            stats,
+            slots: &[],
+            slot_presences: &[],
+            complete_submission: false,
+            submitted_source_slots: None,
+            zero_contribution: &self.zero_contribution,
+            mega_path_offsets: &self.mega_path_offsets,
+        }
     }
 
     pub(crate) fn preloaded_frame(&self) -> PreparedFrame<'_> {
@@ -137,6 +351,7 @@ impl FramePreparer {
                 index_range: ranges.indices,
                 instance_range: u32::try_from(start).expect("path instance limit")
                     ..u32::try_from(self.paths.len()).expect("path instance limit"),
+                polygon_coverage: crate::single_filled_convex_polygon(&entry.mesh).is_some(),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
@@ -166,6 +381,14 @@ impl FramePreparer {
         self.path_geometry_dirty = changed;
         self.packed_path_mesh_cache_generation = self.path_mesh_cache_generation;
         (offsets, repacked.0, repacked.1)
+    }
+
+    fn rollback_cached_path_suffix(&mut self, cache_start: usize) {
+        self.path_mesh_cache.truncate(cache_start);
+        self.path_mesh_lookup.retain(|_, indices| {
+            indices.retain(|&index| index < cache_start);
+            !indices.is_empty()
+        });
     }
 }
 
@@ -220,13 +443,10 @@ fn append_mesh_at(
 ) -> ResidentPathRanges {
     let vertex_start = u32::try_from(vertex_base + vertices.len()).expect("path vertex limit");
     let index_start = u32::try_from(index_base + indices.len()).expect("path index limit");
-    vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
-        position: [vertex.position.x, vertex.position.y],
-        target_position: [vertex.target_position.x, vertex.target_position.y],
-        surface: pack_path_surface(vertex.surface, vertex.path_progress),
-    }));
+    let (packed_vertices, local_indices) = pack_path_mesh(mesh);
+    vertices.extend_from_slice(&packed_vertices);
     indices.extend(
-        mesh.indices
+        local_indices
             .iter()
             .map(|index| index.checked_add(vertex_start).expect("path index limit")),
     );
