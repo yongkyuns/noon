@@ -200,6 +200,20 @@ test("reserves a fresh start and cancellation during host probing cannot transfe
   assert.equal(canvas.transfers, 0);
 });
 
+test("semantic startup forwards the initial platform view to the authoring owner", async () => {
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const authoring = new FakeSemanticAuthoringClient();
+  const view = { revision: 9, width: 640, height: 360 };
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("scene", authoring, {
+      transportMode: "transferable", initialPointerView: view,
+    });
+    await finishStartup(starting, authoring, offset);
+    assert.deepEqual(authoring.attachments.at(-1).options.initialPointerView, view);
+  } finally { client.terminate(); }
+});
+
 test("engine and render requests use independent issuance spaces", async () => {
   const errors = [];
   const { client, engine, render } = await startClient(errors);
