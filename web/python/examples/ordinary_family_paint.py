@@ -9,6 +9,8 @@ class OrdinaryFamilyPaint(Scene):
         family = VGroup(VGroup(a, b), a)
         family.set_fill(Color(1, 0, 0), 0.8)
         family.set_stroke(Color(0, 0, 1), width=4, opacity=1)
+        a.fade()
+        assert a.get_fill_opacity() == 0.4
         self.add(family)
         self.wait(0.1)
         family.set_color(Color(0.2, 0.6, 1.0))
@@ -16,4 +18,8 @@ class OrdinaryFamilyPaint(Scene):
         for member in (a, b):
             assert member.get_fill_opacity() == 0.5
             assert member.get_stroke_opacity() == 0.5
+        a.fade(0.5, family=False)
+        family.fade(0.5)
+        assert a.get_fill_opacity() == a.get_stroke_opacity() == 0.0625
+        assert b.get_fill_opacity() == b.get_stroke_opacity() == 0.25
         self.wait(0.1)

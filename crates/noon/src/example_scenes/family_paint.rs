@@ -19,6 +19,8 @@ pub fn session() -> Result<ExecutionSession, String> {
     family
         .set_stroke(Some(Color::rgba(0.0, 0.0, 1.0, 1.0)), Some(0.04), Some(1.0))
         .map_err(|error| error.to_string())?;
+    a.fade(0.5).map_err(|error| error.to_string())?;
+    assert_eq!(a.fill_opacity().map_err(|e| e.to_string())?, 0.4);
     scene
         .add_many(&[(&family).into()])
         .map_err(|error| error.to_string())?;
@@ -37,6 +39,13 @@ pub fn session() -> Result<ExecutionSession, String> {
             let effective = live.effective(object).map_err(|e| e.to_string())?;
             assert_eq!(effective.fill_opacity(), 0.5);
             assert_eq!(effective.stroke_opacity(), 0.5);
+        }
+        live.fade(&a, 0.5).map_err(|e| e.to_string())?;
+        live.fade_family(&family, 0.5).map_err(|e| e.to_string())?;
+        for (object, opacity) in [(&a, 0.0625), (&b, 0.25)] {
+            let effective = live.effective(object).map_err(|e| e.to_string())?;
+            assert_eq!(effective.fill_opacity(), opacity);
+            assert_eq!(effective.stroke_opacity(), opacity);
         }
         let wait = live.wait_segment(0.1).map_err(|e| e.to_string())?;
         live.advance_segment_to(wait, wait.end_time())

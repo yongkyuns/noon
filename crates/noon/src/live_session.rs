@@ -22,7 +22,7 @@ use crate::execution_session::{EffectiveSemanticObject, NativePointerInputToken}
 use crate::{
     semantic_mobject::authoring_render_f64,
     semantic_mobject::{
-        edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
+        edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fill, edit_fill_color,
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
         edit_stroke_opacity,
     },
@@ -2859,6 +2859,15 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_manim_opacity(style, opacity))
     }
 
+    /// Publish one validated fade of an object's authored fill/stroke channels.
+    pub fn fade(
+        &mut self,
+        mobject: &Mobject,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(mobject, |style| edit_fade(style, darkness))
+    }
+
     /// Set the independent object-composite opacity domain.
     pub fn set_object_opacity(
         &mut self,
@@ -3088,6 +3097,34 @@ mod tests {
     use noon_core::{
         AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
     };
+
+    #[test]
+    fn leaf_fade_agrees_before_and_after_publication_and_rejects_invalid_edits_atomically() {
+        let mut scene = Scene::new();
+        let mut object = scene.square(1.0).unwrap();
+        object.set_fill(1.0, 0.0, 0.0, 0.8).unwrap();
+        object.set_stroke_opacity(0.5).unwrap();
+        object.set_object_opacity(0.3).unwrap();
+        object.fade(0.5).unwrap();
+        assert_eq!(object.fill_opacity().unwrap(), 0.4);
+        assert_eq!(object.stroke_opacity().unwrap(), 0.25);
+        scene.add(&object).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        live.fade(&object, 0.5).unwrap();
+        let observed = live.effective(&object).unwrap();
+        assert_eq!(observed.fill_opacity(), f64::from(0.2_f32));
+        assert_eq!(observed.stroke_opacity(), 0.125);
+        assert_eq!(observed.style.opacity, 0.3);
+        let authored = live.authored(&object).unwrap();
+        let publication = live.session.publication_context();
+        for darkness in [-1.0, 2.0, f64::NAN, f64::INFINITY] {
+            assert!(live.fade(&object, darkness).is_err());
+            assert_eq!(live.authored(&object).unwrap(), authored);
+            assert_eq!(live.session.publication_context(), publication);
+            assert_eq!(live.effective(&object).unwrap(), observed);
+        }
+    }
 
     #[test]
     fn target_style_capture_rejects_resource_paint_without_a_legacy_conversion() {
