@@ -9,6 +9,7 @@ on:
       - "web/python/_manim_svg.py"
       - "web/python/noon.py"
       - "parity/manim-v0.21/core-examples/svg_static_import.py"
+      - "parity/manim-v0.21/core-examples/svg_default_fallback.py"
       - "parity/manim-v0.21/svg-manifest.json"
       - "scripts/manim-raster-differential.mjs"
       - "scripts/manim-raster-enforce.mjs"
