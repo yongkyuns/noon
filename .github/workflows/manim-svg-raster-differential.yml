@@ -55,6 +55,8 @@ jobs:
       - name: Use repository-pinned Rust and WASM target
         run: |
           rustup install
+          # Preinstalled runner toolchains can be missing their base components.
+          rustup component add rustc cargo rust-std
           rustup show active-toolchain
           rustc --version --verbose
           rustup target add wasm32-unknown-unknown
