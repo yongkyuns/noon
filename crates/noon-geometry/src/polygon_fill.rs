@@ -2,7 +2,7 @@ use noon_core::{PathCommand, Vec2, VectorPath};
 
 const MAX_POLYGON_FILL_COMMANDS: usize = 4_097;
 
-/// Tests a line-only path with Lyon's default non-zero fill rule.
+/// Tests a line-only path with the shared non-zero fill rule.
 ///
 /// `None` means the path is outside this bounded polygon policy: it exceeds
 /// 4,097 commands, contains curves, morphs or malformed/non-finite coordinates.
