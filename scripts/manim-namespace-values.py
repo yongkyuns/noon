@@ -45,6 +45,26 @@ def expected_values(source_root):
     return colors, constants, axes
 
 
+def expected_enums(source_root):
+    result = {}
+    for filename in ("manim/constants.py", "manim/scene/section.py"):
+        for node in ast.parse((source_root / filename).read_text()).body:
+            if not isinstance(node, ast.ClassDef) or node.name not in {
+                "RendererType", "LineJointType", "CapStyleType", "DefaultSectionType"
+            }:
+                continue
+            members = {}
+            for statement in node.body:
+                if isinstance(statement, ast.Assign):
+                    for target in statement.targets:
+                        if isinstance(target, ast.Name):
+                            members[target.id] = literal(statement.value)
+            result[node.name] = (ast.unparse(node.bases[0]), members)
+    if len(result) != 4 or any(not members for _, members in result.values()):
+        raise ValueError("pinned enum source contracts are incomplete")
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("manim_source", type=Path)
@@ -74,7 +94,22 @@ def main():
             actual = value
         if actual != expected:
             errors.append(f"{name}: {actual!r} differs from pinned {expected!r}")
-    print(json.dumps({"colors": len(colors), "scalar_constants": len(constants), "axis_aliases": len(axes), "errors": errors}, indent=2))
+    from enum import Enum, StrEnum
+    enums = expected_enums(args.manim_source)
+    for name, (base, members) in enums.items():
+        if name not in noon.__all__:
+            errors.append(f"{name}: missing public export")
+            continue
+        enum = getattr(noon, name)
+        if enum.__name__ != name or enum.__bases__ != ((StrEnum if base == "StrEnum" else Enum),):
+            errors.append(f"{name}: incorrect Python enum type")
+            continue
+        actual = {key: value.value for key, value in enum.__members__.items()}
+        if actual != members:
+            errors.append(f"{name}: {actual!r} differs from pinned {members!r}")
+    print(json.dumps({"colors": len(colors), "scalar_constants": len(constants), "axis_aliases": len(axes),
+                      "enum_types": len(enums), "enum_members": sum(len(members) for _, members in enums.values()),
+                      "errors": errors}, indent=2))
     return bool(errors)
 
 

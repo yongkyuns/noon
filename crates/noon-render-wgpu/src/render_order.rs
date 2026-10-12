@@ -1,8 +1,8 @@
 use std::{collections::HashSet, ops::Range};
 
 use crate::{
-    FramePreparer, MegaPathBatch, PreparedFrame, PreparedRenderChunk, PreparedSlot, RenderStats,
-    VisibleProjectionKey,
+    FramePreparer, MegaPathBatch, PathCoverage, PreparedFrame, PreparedRenderChunk, PreparedSlot,
+    RenderStats, VisibleProjectionKey,
 };
 use noon_runtime::{FrameChanges, FrameState};
 
@@ -433,8 +433,10 @@ fn render_chunk_boundary_merge(
             RenderPrimitive::MegaPath { batch: left_index },
             RenderPrimitive::MegaPath { batch: right_index },
         ) => {
-            let merge = left.mega_path_batches[*left_index].index_range.end
-                == right.mega_path_batches[*right_index].index_range.start;
+            let left = &left.mega_path_batches[*left_index];
+            let right = &right.mega_path_batches[*right_index];
+            let merge =
+                left.index_range.end == right.index_range.start && left.coverage == right.coverage;
             (merge, merge)
         }
         _ => {
@@ -485,8 +487,9 @@ fn project_mega_render_batches(
 
         if let Some(mega_index) = active_mega {
             let mega = &mut mega_path_batches[mega_index];
-            if mega.index_range.end == segment.start {
-                mega.polygon_coverage |= preparer.path_batches[path_batch_index].polygon_coverage;
+            if mega.index_range.end == segment.start
+                && mega.coverage == preparer.path_batches[path_batch_index].coverage
+            {
                 mega.index_range.end = segment.end;
                 mega.path_count += 1;
                 let ordered = render_batches
@@ -501,7 +504,7 @@ fn project_mega_render_batches(
         mega_path_batches.push(MegaPathBatch {
             index_range: segment,
             path_count: 1,
-            polygon_coverage: preparer.path_batches[path_batch_index].polygon_coverage,
+            coverage: preparer.path_batches[path_batch_index].coverage,
         });
         render_batches.push(OrderedRenderBatch {
             primitive: RenderPrimitive::MegaPath { batch: mega_index },
@@ -1682,9 +1685,8 @@ fn pack_derived_display_object(
                     .map(|resident| resident.indices.clone());
                 if let Some(indices) = resident_indices {
                     prepared.stats.resident_path_reuses += 1;
-                    let polygon_coverage = crate::path_uses_exact_coverage(
-                        &path_preparer.path_mesh_cache[cache_index].mesh,
-                    );
+                    let coverage =
+                        crate::path_coverage(&path_preparer.path_mesh_cache[cache_index].mesh);
                     pack_derived_path_instance(
                         prepared,
                         indices,
@@ -1692,7 +1694,7 @@ fn pack_derived_display_object(
                         render_transform,
                         style,
                         DerivedPathGeometrySource::Retained,
-                        polygon_coverage,
+                        coverage,
                     )
                 } else {
                     let (mesh, _) = path_preparer
@@ -1756,7 +1758,7 @@ fn pack_derived_path_mesh(
         render_transform,
         style,
         DerivedPathGeometrySource::Transient,
-        crate::path_uses_exact_coverage(mesh),
+        crate::path_coverage(mesh),
     )
 }
 
@@ -1767,7 +1769,7 @@ fn pack_derived_path_instance(
     render_transform: noon_core::Transform2D,
     style: crate::PackedStyle,
     source: DerivedPathGeometrySource,
-    polygon_coverage: bool,
+    coverage: PathCoverage,
 ) -> (DerivedDisplayPrimitive, usize) {
     let index = prepared.paths.len();
     prepared.paths.push(crate::PathInstance {
@@ -1781,7 +1783,7 @@ fn pack_derived_path_instance(
     prepared.path_batches.push(crate::PathBatch {
         index_range,
         instance_range: instance_start..instance_start + 1,
-        polygon_coverage,
+        coverage,
     });
     (DerivedDisplayPrimitive::Path { batch, source }, index)
 }

@@ -1,7 +1,9 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
+  { sourcePath: "python/_manim_config_utils.py", runtimePath: "/tmp/_manim_config_utils.py", label: "Noon Python dictionary helpers" },
   { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },
   { sourcePath: "python/_noon_effects.py", runtimePath: "/tmp/_noon_effects.py", label: "Noon effect declaration adapter" },
   { sourcePath: "python/noon.py", runtimePath: "/tmp/noon.py", label: "Noon Python API" },
+  { sourcePath: "python/_manim_enums.py", runtimePath: "/tmp/_manim_enums.py", label: "Manim enum tokens" },
   { sourcePath: "python/_manim_namespace.py", runtimePath: "/tmp/_manim_namespace.py", label: "Noon Manim namespace compatibility" },
   { sourcePath: "python/_noon_spatial.py", runtimePath: "/tmp/_noon_spatial.py", label: "Noon typed spatial authoring" },
   { sourcePath: "python/_manim_spatial_geometry.py", runtimePath: "/tmp/_manim_spatial_geometry.py", label: "Noon bounded Manim-shaped spatial geometry adapters" },
