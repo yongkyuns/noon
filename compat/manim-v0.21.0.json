@@ -12,6 +12,7 @@
     "missing"
   ],
   "overrides": {
+    "stretch_array_to_length": {"status": "supported", "category": "namespace", "evidence": "scripts/manim-array-utilities.py; web/python/test_manim_array_utilities.py", "reason": "Pinned NumPy user-data shape, dtype, copy, empty and warning behavior is qualified; optional NumPy loads on use. Internal iterable utilities are checked separately without adding top-level exports."},
     "adjacent_n_tuples": {"status": "supported", "category": "namespace", "evidence": "scripts/manim-iterable-utilities.py; web/python/test_manim_iterable_utilities.py", "reason": "Pinned Python user-iterable behavior, ordering, consumption, aliasing and empty/error cases are qualified; no engine state or scene policy."},
     "adjacent_pairs": {"status": "supported", "category": "namespace", "evidence": "scripts/manim-iterable-utilities.py; web/python/test_manim_iterable_utilities.py", "reason": "Pinned Python user-iterable behavior, ordering, consumption, aliasing and empty/error cases are qualified; no engine state or scene policy."},
     "all_elements_are_instances": {"status": "supported", "category": "namespace", "evidence": "scripts/manim-iterable-utilities.py; web/python/test_manim_iterable_utilities.py", "reason": "Pinned Python user-iterable behavior, ordering, consumption, aliasing and empty/error cases are qualified; no engine state or scene policy."},

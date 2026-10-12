@@ -883,6 +883,7 @@ _PUBLIC_EXPORTS = {
     "make_even_by_cycling": "_manim_iterables",
     "remove_list_redundancies": "_manim_iterables",
     "remove_nones": "_manim_iterables",
+    "stretch_array_to_length": "_manim_iterables",
     "RendererType": "_manim_enums",
     "LineJointType": "_manim_enums",
     "CapStyleType": "_manim_enums",
