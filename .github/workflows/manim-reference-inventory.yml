@@ -21,6 +21,9 @@ on:
       - 'scripts/manim-reference-classification-lock.test.mjs'
       - 'scripts/manim-reference-dispositions.py'
       - 'scripts/test_manim_reference_dispositions.py'
+      - 'scripts/manim-namespace-values.py'
+      - 'web/python/_manim_namespace.py'
+      - 'web/python/test_manim_namespace.py'
   workflow_dispatch:
 
 permissions:
@@ -49,6 +52,13 @@ jobs:
           ref: ${{ env.MANIM_REFERENCE_SHA }}
           path: manim-v0.21.0
           persist-credentials: false
+      - name: Verify lightweight namespace values against pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C manim-v0.21.0 rev-parse HEAD)"
+          test "$actual_sha" = "$MANIM_REFERENCE_SHA"
+          python3 noon/scripts/manim-namespace-values.py manim-v0.21.0
       - name: Extract and validate reference inventory
         shell: bash
         run: |

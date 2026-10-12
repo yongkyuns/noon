@@ -51,6 +51,23 @@ class ManimNamespaceTests(unittest.TestCase):
             self.assertEqual((color.red, color.green, color.blue), rgb)
             self.assertIn(name, _base.__all__)
 
+    def test_named_shade_aliases_and_independent_pinned_values(self) -> None:
+        for first, second in (("GRAY_B", "LIGHT_GREY"), ("GRAY_E", "DARKER_GRAY"), ("BLUE_E", "DARK_BLUE")):
+            self.assertEqual(getattr(_base, first), getattr(_base, second))
+        self.assertEqual(_base.GOLD_E, _base.color_from_hex("#C78D46"))
+        self.assertEqual(_base.MAROON_C, _base.color_from_hex("#C55F73"))
+        self.assertEqual(_base.LOGO_RED, _base.color_from_hex("#E07A5F"))
+
+    def test_font_tokens_defaults_and_axis_values(self) -> None:
+        self.assertEqual((_base.BOLD, _base.ITALIC, _base.ULTRALIGHT), ("BOLD", "ITALIC", "ULTRALIGHT"))
+        self.assertEqual((_base.DEFAULT_FONT_SIZE, _base.DEFAULT_STROKE_WIDTH, _base.DEFAULT_WAIT_TIME), (48, 4, 1.0))
+        self.assertEqual(_base.SCALE_FACTOR_PER_FONT_POINT, 1 / 960)
+        self.assertIs(_base.X_AXIS, _base.RIGHT)
+        self.assertIs(_base.Y_AXIS, _base.UP)
+        self.assertIs(_base.Z_AXIS, _base.OUT)
+        namespace.install()
+        self.assertEqual(len(_base.__all__), len(set(_base.__all__)))
+
 
 if __name__ == "__main__":
     unittest.main()
