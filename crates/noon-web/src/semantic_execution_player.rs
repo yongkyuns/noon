@@ -1357,6 +1357,16 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_fade(
+        &mut self,
+        mobject: &noon::Mobject,
+        darkness: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.fade(mobject, darkness))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_object_opacity(
         &mut self,
         mobject: &noon::Mobject,

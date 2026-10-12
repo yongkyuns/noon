@@ -12,6 +12,7 @@ on:
       - 'web/manim-compat-smoke.html'
       - 'scripts/plotting-qualification.mjs'
       - 'scripts/paired-authoring-qualification.mjs'
+      - 'scripts/paint-fade-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
       - 'scripts/live-coordinate-checks.mjs'
       - 'scripts/animated-plotting-checks.mjs'
@@ -83,6 +84,10 @@ jobs:
           npx playwright install chromium
       - name: Qualify paired plotting and resumed Python authoring
         run: node scripts/plotting-qualification.mjs
+      - name: Qualify leaf and recursive family paint fades
+        env:
+          NOON_PAINT_FADE_ARTIFACTS: plotting-artifacts/paint-fade
+        run: node scripts/paint-fade-qualification.mjs
       - name: Qualify animated axes and graph reveals
         run: node scripts/time-series-plotting-qualification.mjs coordinates
       - name: Qualify animated NumberLine and transformed live queries

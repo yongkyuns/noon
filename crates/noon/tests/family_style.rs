@@ -99,7 +99,7 @@ fn live_paint_batches_unique_leaves_and_rejects_foreign_or_invalid_edits_atomica
 }
 
 #[test]
-fn live_family_fade_publishes_one_atomic_style_only_update() {
+fn live_recursive_alias_fade_publishes_one_atomic_style_only_update() {
     let (mut scene, family, [mut a, mut b], _) = family();
     a.set_fill(1.0, 0.0, 0.0, 0.8).unwrap();
     a.set_stroke_color(0.0, 0.0, 1.0, 1.0).unwrap();
@@ -117,8 +117,10 @@ fn live_family_fade_publishes_one_atomic_style_only_update() {
     assert_eq!(scene.revision(), before_revision.checked_next().unwrap());
     let faded_a = live.effective(&a).unwrap();
     let faded_b = live.effective(&b).unwrap();
-    assert!((faded_a.fill_opacity() - 0.6).abs() < 1e-7);
-    assert!((faded_a.stroke_opacity() - 0.45).abs() < 1e-7);
+    // Pinned Manim recursively visits a through both nested and direct paths:
+    // its paint is multiplied by 0.75 twice, while b is visited once.
+    assert!((faded_a.fill_opacity() - 0.45).abs() < 1e-7);
+    assert!((faded_a.stroke_opacity() - 0.3375).abs() < 1e-7);
     assert_eq!(faded_a.style.opacity, 0.7_f32);
     assert!((faded_b.fill_opacity() - 0.375).abs() < 1e-7);
     assert_eq!(a.state().unwrap().content, a_content);
