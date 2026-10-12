@@ -173,8 +173,8 @@ fn compute(@builtin(global_invocation_id) id: vec3<u32>) {
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
     let data = readback.get_mapped_range(..).unwrap();
-    for (input, bytes) in inputs.iter().zip(data.chunks_exact(4)) {
-        let actual = f32::from_ne_bytes(bytes.try_into().unwrap());
+    for (input, bytes) in inputs.iter().zip(data.as_chunks::<4>().0) {
+        let actual = f32::from_ne_bytes(*bytes);
         let expected = clipped_area(input);
         // Less than a quarter of one 8-bit channel, even for long thin edges.
         assert!(
