@@ -1,6 +1,8 @@
 """Callable bookkeeping delegates interval changes to the shared context."""
 
+import gc
 import unittest
+import weakref
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -29,17 +31,18 @@ class UpdaterLifecycleTests(unittest.TestCase):
         self.context = RecordingContext()
         self.scene = SimpleNamespace(time=0.0, _canonical_authoring_context=self.context)
         self.handle = SimpleNamespace(semanticSlot=7, semanticGeneration=3)
-        self.mobject = SimpleNamespace(
-            _scene=None, _object=object(), _semantic_handle=self.handle,
-        )
+        # Exercise the actual Python identity wrapper; no engine values are
+        # synthesized here because the context below only records registration.
+        self.mobject = object.__new__(updaters._base.Mobject)
+        self.mobject._scene = None
+        self.mobject._object = object()
+        self.mobject._semantic_handle = self.handle
 
     def tearDown(self):
         session = getattr(self.scene, "_noon_canonical_callback_session", None)
         if session is not None:
             updaters.release_session(session.session_id)
-        updaters._TRACKED_MOBJECTS[:] = [
-            item for item in updaters._TRACKED_MOBJECTS if item is not self.mobject
-        ]
+        updaters._TRACKED_MOBJECTS.pop(id(self.mobject), None)
 
     def bind(self):
         self.mobject._scene = self.scene
@@ -104,6 +107,100 @@ class UpdaterLifecycleTests(unittest.TestCase):
         updaters.add_updater(self.mobject, callback)
         self.assertEqual(self.context.calls, [("add", self.handle, "0", 0.0, None)])
         self.assertIs(session.callbacks[0], callback)
+
+
+class WeakUpdaterDiscoveryTests(unittest.TestCase):
+    def make_mobject(self, cls=None):
+        value = object.__new__(cls or updaters._base.Mobject)
+        value._scene = None
+        value._object = None
+        value._semantic_handle = None
+        return value
+
+    def test_abandoned_detached_registration_does_not_root_its_wrapper(self):
+        before = set(updaters._TRACKED_MOBJECTS)
+        value = self.make_mobject()
+        updaters.add_updater(value, lambda obj, dt: None)
+        ref = weakref.ref(value)
+        key = id(value)
+        self.assertIn(key, updaters._TRACKED_MOBJECTS)
+        del value
+        gc.collect()
+        self.assertIsNone(ref(), "updater discovery must not own a detached wrapper")
+        self.assertNotIn(key, updaters._TRACKED_MOBJECTS)
+        self.assertTrue(set(updaters._TRACKED_MOBJECTS).issubset(before))
+
+    def test_discovery_does_not_keep_a_callback_capture_cycle_alive(self):
+        class Payload:
+            pass
+        value = self.make_mobject()
+        payload = Payload()
+        payload_ref, object_ref = weakref.ref(payload), weakref.ref(value)
+        # Self/callback cycles are ordinary Python authoring, not Scene roots.
+        callback = lambda obj, dt, captured=payload, target=value: None
+        updaters.add_updater(value, callback)
+        del value, payload, callback
+        gc.collect()
+        self.assertIsNone(object_ref())
+        self.assertIsNone(payload_ref())
+
+    def test_live_wrappers_keep_identity_order_without_hash_or_equality(self):
+        class UnhashableMobject(updaters._base.Mobject):
+            __hash__ = None
+            def __eq__(self, other):
+                raise AssertionError("discovery must not call author equality")
+        first = self.make_mobject(UnhashableMobject)
+        second = self.make_mobject(UnhashableMobject)
+        callback = lambda obj: None
+        keys = [id(first), id(second)]
+        updaters.add_updater(first, callback)
+        updaters.add_updater(second, callback)
+        updaters.add_updater(first, callback)
+        gc.collect()
+        self.assertEqual([key for key in updaters._TRACKED_MOBJECTS if key in keys], keys)
+        self.assertIs(updaters._TRACKED_MOBJECTS[keys[0]], first)
+        self.assertIs(updaters._TRACKED_MOBJECTS[keys[1]], second)
+        self.assertEqual(updaters.get_updaters(first), [callback, callback])
+        del first, second
+        gc.collect()
+        self.assertFalse(any(key in updaters._TRACKED_MOBJECTS for key in keys))
+
+    def test_session_owns_target_until_release_even_after_detachment(self):
+        context = RecordingContext()
+        scene = SimpleNamespace(time=0.0, _canonical_authoring_context=context)
+        value = self.make_mobject()
+        value._semantic_handle = SimpleNamespace(semanticSlot=71, semanticGeneration=3)
+        value._scene = scene
+        updaters.add_updater(value, lambda obj, dt: None)
+        session = scene._noon_canonical_callback_session
+        ref, key = weakref.ref(value), id(value)
+        value._scene = None
+        del value
+        gc.collect()
+        self.assertIsNotNone(ref(), "the active callback session still owns its target")
+        updaters.release_session(session.session_id)
+        gc.collect()
+        self.assertIsNone(ref(), "released detached targets must not leak through discovery")
+        self.assertNotIn(key, updaters._TRACKED_MOBJECTS)
+
+    def test_one_session_release_preserves_another_sessions_targets(self):
+        values, sessions = [], []
+        for slot in (80, 81):
+            context = RecordingContext()
+            scene = SimpleNamespace(time=0.0, _canonical_authoring_context=context)
+            value = self.make_mobject()
+            value._semantic_handle = SimpleNamespace(semanticSlot=slot, semanticGeneration=3)
+            value._scene = scene
+            updaters.add_updater(value, lambda obj: None)
+            values.append(value)
+            sessions.append(scene._noon_canonical_callback_session)
+        try:
+            updaters.release_session(sessions[0].session_id)
+            self.assertNotIn(id(values[0]), updaters._TRACKED_MOBJECTS)
+            self.assertIs(updaters._TRACKED_MOBJECTS[id(values[1])], values[1])
+            self.assertIs(sessions[1].targets[(81, 3)], values[1])
+        finally:
+            updaters.release_session(sessions[1].session_id)
 
 
 class CallbackEntryTests(unittest.IsolatedAsyncioTestCase):

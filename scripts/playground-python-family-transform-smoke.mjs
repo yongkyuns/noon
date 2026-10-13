@@ -100,8 +100,27 @@ try {
     timeout: 45000,
   });
   // Do not join the gallery's initial run and mistake its completion for ours.
-  await page.waitForFunction(() => !window.__noonExampleGallery.runInFlight &&
-    document.querySelector('#patch-status')?.dataset.state === 'applied', null, { timeout: 90000 });
+  // Fail closed with the pinned dependency error instead of labeling an
+  // unavailable Pyodide bootstrap as an unequal-family semantic regression.
+  let dependencyWatch;
+  const pinnedDependencyFailure = new Promise((_, reject) => {
+    dependencyWatch = setInterval(() => {
+      const diagnostics = runtimeCache.stats();
+      if (diagnostics.upstreamFailures > 0) {
+        reject(new Error('Pinned Pyodide resource fetch failed before the fixture ran: ' +
+          JSON.stringify(diagnostics.upstreamFailureDetails)));
+      }
+    }, 200);
+  });
+  try {
+    await Promise.race([
+      page.waitForFunction(() => !window.__noonExampleGallery.runInFlight &&
+        document.querySelector('#patch-status')?.dataset.state === 'applied', null, { timeout: 90000 }),
+      pinnedDependencyFailure,
+    ]);
+  } finally {
+    clearInterval(dependencyWatch);
+  }
   await page.evaluate((pythonSource) => {
     const editor = document.querySelector('#python-scene-source');
     if (!(editor instanceof HTMLTextAreaElement)) {

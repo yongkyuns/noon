@@ -37,17 +37,20 @@ def _alignment_is_mobject(value: object) -> bool:
 _ir = _base._ir
 
 try:
-    from js import noonAuthoringGeometryOptions as _geometry_options
-    from js import noonAuthoringVectorPath as _authoring_vector_path
-    from js import noonCreateAuthoringGeometryHandle as _create_geometry_handle
+    from _noon_host import noonAuthoringGeometryOptions as _geometry_options
+    from _noon_host import noonCreateAuthoringGeometryHandle as _create_geometry_handle
 except ImportError:  # Native CPython tests do not have the browser bridge.
     _geometry_options = None
-    _authoring_vector_path = None
     _create_geometry_handle = None
 
 try:
-    from js import noonCreateAuthoringFamilyHandle as _create_family_handle
-    from js import noonAuthoringMembershipBatch as _new_membership_batch
+    from _noon_host import noonAuthoringVectorPath as _authoring_vector_path
+except ImportError:
+    _authoring_vector_path = None
+
+try:
+    from _noon_host import noonCreateAuthoringFamilyHandle as _create_family_handle
+    from _noon_host import noonAuthoringMembershipBatch as _new_membership_batch
 except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _create_family_handle = None
     _new_membership_batch = None
@@ -193,7 +196,7 @@ def _layout_center(value: _base.Mobject) -> _base.Vec2:
     return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
 
-def _bound_layout_observation(value: _base.Mobject):
+def _bound_layout_observation(value: _base.Mobject, query_name="queryMobjectLayout"):
     """Ask the owning Rust context for one coherent ordinary live observation."""
 
     if (
@@ -205,7 +208,7 @@ def _bound_layout_observation(value: _base.Mobject):
     if handle is None:
         return None
     context = getattr(value._scene, "_canonical_authoring_context", None)
-    query = getattr(context, "queryMobjectLayout", None)
+    query = getattr(context, query_name, None)
     return None if query is None else engine_call(query, handle)
 
 
@@ -237,6 +240,10 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
     The target is an inert Rust geometry candidate. Rust validates semantic
     state before publication; Python only applies public argument coercions.
     """
+    # No Python options means no coercion work. The Rust geometry candidate was
+    # already created/validated by the caller and still follows normal admission.
+    if not kwargs:
+        return
     options = dict(kwargs)
     allowed = {
         "position", "rotation", "scale", "fill", "stroke",
@@ -650,13 +657,15 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
     if _is_shared_family(self):
         layout = _group_layout_observation(self)
         return _base.Vec2(float(layout.centerX), float(layout.centerY))
-    observed = _bound_layout_observation(self)
-    if observed is not None:
-        return _base.Vec2(float(observed.centerX), float(observed.centerY))
-    handle = _handle_for(self)
-    if handle is not None:
-        return _layout_center(self)
-    raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
+    # A value-only projection keeps the same coherent Rust observation without
+    # owning a WASM layout object and making two extra WASM property calls.
+    coordinates = _bound_layout_observation(self, "queryMobjectCenter")
+    if coordinates is None:
+        handle = _handle_for(self)
+        if handle is None:
+            raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
+        coordinates = engine_call(handle.centerCoordinates)
+    return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
 
 
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:

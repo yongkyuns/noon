@@ -1129,58 +1129,13 @@ async function runAuthoringSource(pyodide, source, context) {
       `
 import json
 import _manim_updaters
-from _manim_scene import (
-    execute_construct,
-    await_source_barrier,
-    await_module_source_barrier,
-    execution_context,
-)
-from _manim_source_execution import (
-    BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL, compile_authoring_source,
-    authoring_source_scope, execute_authoring_module,
-)
+from _manim_scene import execution_context
+from _noon_source import execute_source
 from noon import Scene
 
-__noon_namespace = {
-    "context": json.loads(__noon_context_json),
-    "__name__": "__main__",
-}
-__noon_code, __noon_portable_constructs = compile_authoring_source(
-    __noon_source
+__noon_result = await execute_source(
+    __noon_source, json.loads(__noon_context_json)
 )
-if __noon_portable_constructs:
-    __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
-if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
-    __noon_namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
-with authoring_source_scope():
-    await execute_authoring_module(__noon_code, __noon_namespace)
-
-if "result" in __noon_namespace:
-    __noon_result = __noon_namespace["result"]
-else:
-    __noon_scene_classes = [
-        value
-        for value in __noon_namespace.values()
-        if isinstance(value, type)
-        and issubclass(value, Scene)
-        and value is not Scene
-        and getattr(value, "__module__", None) == "__main__"
-    ]
-    if not __noon_scene_classes:
-        raise RuntimeError(
-            "Python authoring source must either assign result or define one Scene subclass"
-        )
-    if len(__noon_scene_classes) != 1:
-        __noon_names = ", ".join(cls.__name__ for cls in __noon_scene_classes)
-        raise RuntimeError(
-            "Python authoring source defines multiple Scene subclasses; "
-            f"select one explicitly via result = SceneClass(): {__noon_names}"
-        )
-    __noon_result = __noon_scene_classes[0]()
-    await execute_construct(
-        __noon_result,
-        portable_constructs=__noon_portable_constructs,
-    )
 
 if isinstance(__noon_result, Scene):
     from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration

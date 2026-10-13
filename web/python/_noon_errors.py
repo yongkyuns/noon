@@ -19,7 +19,7 @@ class NoonErrorCause:
 
 
 class NoonError(Exception):
-    """A shared-engine failure, retaining the exact original JS exception."""
+    """A shared-engine failure, retaining the exact original host exception."""
 
     def __init__(self, diagnostic: NoonErrorCause, js_error: object, operation: str | None):
         super().__init__(diagnostic.message)
@@ -101,7 +101,7 @@ def map_engine_error(error: Exception, *, operation: str | None = None) -> Excep
     """Map only the typed Noon boundary. Unknown/ordinary Python errors pass through."""
     if isinstance(error, NoonError):
         return error
-    original = getattr(error, "js_error", None)
+    original = getattr(error, "js_error", error)
     diagnostic = _diagnostic(original)
     if diagnostic is None:
         return error
@@ -139,3 +139,17 @@ async def engine_await(awaitable, *, operation: str | None = None):
         return await awaitable
     except Exception as error:
         raise_engine_error(error, operation=operation)
+
+
+def callback_failure(error: Exception, *, operation="Scene.continuation") -> NoonCallbackError:
+    """Project a Python callback failure identically after Rust has latched it.
+
+    The Python exception is host-language data, not a second engine error policy.
+    The transport's incidental JavaScript/native exception type is not public API.
+    """
+    failure = NoonCallbackError(
+        NoonErrorCause("callback_failure", "python.callback_failed", str(error)),
+        error, operation,
+    )
+    failure.python_cause = error
+    return failure

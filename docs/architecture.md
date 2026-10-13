@@ -72,6 +72,49 @@ Runtime -> Renderer
 
 The Semantic Scene remains alive and authoritative across execution-plan revisions. An Execution Plan is a derived, replaceable specialization of the currently published semantics; it is not a compiled representation of the entire future host program.
 
+### Python host conformance invariant
+
+Native CPython and browser Pyodide are two deployments of the same Python
+frontend, not two Noon source languages. For a capability available in both,
+unchanged Python source must preserve operation admission, logical completion,
+authored/effective queries, callback phase ordering and Python context, failure
+atomicity, cancellation, and teardown. Equivalent pixels or a native Rust example
+alone do not establish this same-source contract.
+
+The common Python wrappers and source lifecycle select a thin host binding.
+Native bindings call typed Rust operations in process; the browser binding calls
+the same operations compiled to WASM. Both enter shared semantic operations
+before lowering. Bindings convert arguments and error representations, retain
+language-wrapper identity, and service Rust-issued completion/callback requests.
+They do not own scene values, animation interpolation, rollback, another semantic
+identity space, or an alternate execution plan.
+
+Explicit async source has the same eager-admission and completion contract on
+both hosts. Qualified synchronous execution may use different suspension
+mechanisms without changing that contract. The bounded portable source compiler
+is not a general Python translator and does not define a browser-only semantic
+profile. Callback `Scene.time` observes the Rust-issued phase timestamp even
+when a browser player is leased to its execution endpoint.
+
+**Current implementation.** `noon-python` is an optional owner-thread-confined
+CPython extension. `noon_native` provides a finite, explicitly sampled,
+renderer-free execution host. Its first conformance profile covers analytic 2D
+geometry, ordinary transform/create/fade/composition, membership, effective
+queries, and property callbacks. Native realtime window integration, text/LaTeX,
+family/spatial construction, and callback structural/content producers are not
+claimed by that profile. Unsupported bindings must fail explicitly rather than
+emulate browser objects or approximate semantic behavior. The existing browser
+renderer and native Rust window host remain separate platform integrations.
+
+Finite sample timestamps are host inputs; Rust still owns segment clamping,
+callback barriers, completion, and wake policy. The native sampled driver runs
+in Rust between genuine Python callback/completion boundaries and skips quiet
+intervals using runtime wake directives. It is not realtime pacing, preemptive
+Python execution, or a claim of responsive arbitrary CPU-bound user code.
+`parity/python-host` contains unchanged source scenarios; real CPython and
+Pyodide runs compare their observations at controlled logical samples. Issue
+#1874 tracks qualification and remaining capability breadth.
+
 ### Direct Rust execution invariant
 
 Native Rust and Rust compiled to WASM use the same typed engine path; only the platform shell changes:

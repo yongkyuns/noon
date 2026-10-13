@@ -68,7 +68,12 @@ function interpreter({ load, execute, requiredPackages = [], missingPackages } =
     },
     async runPythonAsync(bootstrap, { globals }) {
       events.push(["execute", globals.values.get("__noon_source")]);
-      assert.match(bootstrap, /await execute_authoring_module\(__noon_code, __noon_namespace\)/);
+      // Both Python hosts use the common source lifecycle. This worker owns
+      // only package readiness and its bridge namespace, not another compiler.
+      assert.match(bootstrap, /from _noon_source import execute_source/);
+      assert.match(bootstrap, /await execute_source\(\s*__noon_source, json\.loads\(__noon_context_json\)\s*\)/);
+      assert.equal(bootstrap.match(/await execute_source\(/g)?.length, 1);
+      assert.doesNotMatch(bootstrap, /compile_authoring_source|execute_authoring_module|execute_construct/);
       return execute ? execute(bootstrap, globals) : "source-result";
     },
   };

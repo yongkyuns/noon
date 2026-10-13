@@ -259,7 +259,7 @@ The accepted cumulative source remains pinned to `58135c40` in
 Both source comparisons use the same validated manifest workload list and retain
 separate evidence. The source/configuration/package verifier remains shared.
 
-The comparison uses three serial pairs in a fixed B/C, C/B, B/C order. Each
+The adjacent-base comparison uses three serial pairs with fixed alternating B/C, C/B order. Each
 browser run completes a cold pass before measuring a warm pass. The existing
 square/circle fixture scores authored seconds 1–4 with a half-second endpoint
 hold. The curated camera lesson runs verbatim on both packages and scores only
@@ -319,20 +319,36 @@ the window. No GPU timestamp queries or source-owner work are added. Reports ret
 raw observations and the comparison recomputes these costs before image decoding.
 Each run hashes the locally derived generated artifact inventory against its
 producer manifest and reports uncompressed file bytes, excluding the dependency
-lockfile. This is package size, not compressed HTTP transfer size. All three trials
+lockfile. This is package size, not compressed HTTP transfer size. All seven trials
 must retain the same package inventory and sizes. These costs are descriptive;
-the existing latency/FPS/visual thresholds remain unchanged.
+the strict host qualification separately evaluates paired render-call CPU cost.
+It is not a measurement of total GPU or system cost.
 
-The existing latency/FPS thresholds apply to arithmetic means across all three
-runs. Every raw sample, per-run report and fixed-frame image is retained. The
-comparison reports ranges and percentiles as dispersion, and checks every pair's
-image independently. Dependency-free preflight runs invalid-report/cohort controls;
+The broad product latency/FPS thresholds apply to arithmetic means across all
+seven runs. The strict host qualification additionally requires the paired 95%
+FPS ratio interval to have a lower bound of at least 0.97. An interval wholly
+below 0.97 demonstrates a regression; overlap is inconclusive and still blocks
+sign-off. Render-call CPU cost is independent: a passing CPU result cannot clear
+inconclusive FPS. Fixed-work host comparisons retain their 1.03 point-ratio and
+1.05 upper-confidence limits. Diagnostic profiles and same-package worker-history
+controls run after the prescribed timings and cannot replace their verdicts.
+Every raw sample, per-run report and fixed-frame image is retained. The comparison
+reports ranges and percentiles as dispersion, and checks every pair's image
+independently. Dependency-free preflight runs invalid-report/cohort controls;
 Product Gate explicitly enables the PNG/seeded-regression controls after its
 existing dependency setup. This is software-WebGL qualification, not physical-device
 60 FPS evidence. Physical camera pacing and denser/additional workload coverage
 remain owned by #1653. All ten comparison invocations run even if an earlier
 comparison rejects, retaining the negative result and failing the job afterward.
 A failed measurement still fails its cohort; it is never replaced or retried.
+
+The strict host audit enumerates the same validated manifest, rather than a
+hardcoded square/camera subset. Every adjacent-base workload requires the current three
+pairs and the unchanged FPS, independent renderer-cost and strict latency checks.
+Missing/malformed evidence remains blocking while all other declared cohorts
+are audited once. `host-cost/product-qualification.json` retains their individual
+verdicts, including failed or inconclusive results. Each adjacent and cumulative scope supplies its own complete three-pair cohort. Fixed-work sampling, warmups,
+thresholds and subsequent diagnostic-only profiles/history controls are unchanged.
 
 Any diagnostic rerun must repeat the entire declared cohort with those exact
 packages, without rebuilding Rust or selecting a passing observation. A passing

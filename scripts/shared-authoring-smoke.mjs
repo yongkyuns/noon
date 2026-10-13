@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { PNG } from "pngjs";
 import playwright from "playwright";
+import { qualifyUnsupportedJspi } from "./shared-authoring-jspi.mjs";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -212,39 +213,6 @@ const exportBoundarySentinelSource = `from noon import *
 import builtins
 
 assert builtins._noon_export_boundary_setup_count == 0
-result = Scene()
-`;
-
-const unsupportedJspiSource = `from noon import *
-import builtins
-import pyodide.ffi
-
-builtins._noon_unsupported_jspi_original = pyodide.ffi.can_run_sync
-pyodide.ffi.can_run_sync = lambda: False
-
-class UnsupportedJspiContinuation(Scene):
-    def construct(self):
-        circle = Circle(radius=0.4)
-        self.add(circle)
-        builtins._noon_unsupported_jspi_scene = self
-        self.play(circle.animate.shift((2.0, 0.0, 0.0)), run_time=1.0, rate_func=linear)
-`;
-
-const restoreUnsupportedJspiSource = `from noon import *
-import builtins
-import pyodide.ffi
-
-try:
-    scene = builtins._noon_unsupported_jspi_scene
-    context = scene._canonical_authoring_context
-    assert context.liveExecutionOwnership() == "none"
-    assert context.authoredDuration() == 0.0
-    assert scene.time == 0.0
-finally:
-    pyodide.ffi.can_run_sync = builtins._noon_unsupported_jspi_original
-    del builtins._noon_unsupported_jspi_original
-    del builtins._noon_unsupported_jspi_scene
-
 result = Scene()
 `;
 
@@ -840,8 +808,6 @@ try {
     { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
     { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_replacement.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
-    { filename: "ordinary_family_affine.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
-    { filename: "ordinary_paint_queries_gradients.py", objectCount: 5, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_style_operations.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     // Runs actual Python -> WASM/Rust declarations, then verifies explicit rejection
     // and cleanup. Its final plain frame is not an enabled-glow visual oracle.
@@ -855,6 +821,8 @@ try {
       finalPixelPredicate: (red, green, blue, x) =>
         x > 370 && Math.min(red, green, blue) > 230,
     },
+    { filename: "ordinary_family_affine.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_paint_queries_gradients.py", objectCount: 5, expectedDuration: 0.2, endpointTime: null },
     // Actual Python -> shared Rust -> retained worker; the matching ordinary
     // circle is an in-frame no-effect negative control for off-source pixels.
     { filename: "glow_scene_worker_pixels.py", objectCount: 2, expectedDuration: 0.25, endpointTime: null, expectedGlowPair: true },
@@ -1302,25 +1270,10 @@ author(result)
     await stopSampledSource(page);
   }
 
-  // A supported ordinary segment must fail at its JSPI capability gate instead
-  // of silently using endpoint-only execution. The restore request verifies the
-  // same worker-resident context never activated a player or advanced time.
-  const unsupportedJspi = await page.evaluate(async ({ source, restoreSource }) => {
-    const harness = window.sharedAuthoringSmoke;
-    let error = null;
-    try {
-      await harness.authoring.run(source, {});
-    } catch (failure) {
-      error = String(failure);
-    } finally {
-      await harness.authoring.run(restoreSource, {});
-    }
-    return { error };
-  }, { source: unsupportedJspiSource, restoreSource: restoreUnsupportedJspiSource });
-  assert.match(
-    unsupportedJspi.error ?? "",
-    /ordinary synchronous canonical play\/wait requires Pyodide JS Promise Integration/,
-  );
+  // A real no-JSPI worker must reject synchronous helper barriers before
+  // admission and remain usable afterward. Do not patch an already-bound API
+  // or poison the shared worker used by the remaining scenarios.
+  await qualifyUnsupportedJspi(browser, baseUrl);
 
   // Async Python construct suspends on the worker-owned semantic endpoint. The
   // early descriptor starts the existing execution client while runPythonAsync

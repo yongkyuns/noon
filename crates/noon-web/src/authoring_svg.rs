@@ -10,37 +10,12 @@ use js_sys::Array;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    authoring_error::{js_error, AuthoringFailure},
+    authoring_error::js_error,
     WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoringStore,
     WasmManimGeometryOptions,
 };
 
 const SVG_DEFAULT_TRANSPORT_TAG: &str = "noon.svg-default.v1";
-
-impl From<noon::SvgAuthoringError> for AuthoringFailure {
-    fn from(error: noon::SvgAuthoringError) -> Self {
-        use noon::SvgAuthoringError as E;
-        let message = error.to_string();
-        match error {
-            E::Xml(_) => Self::new("invalid_input", "svg.invalid_xml", message),
-            E::Parse(_) => Self::new("invalid_input", "svg.parse", message),
-            E::Unsupported(_) => Self::new("unsupported_operation", "svg.unsupported", message),
-            E::InvalidTargetDimension { .. } => {
-                Self::new("invalid_input", "svg.invalid_target_dimension", message)
-            }
-            E::Authoring(cause) => {
-                let nested = AuthoringFailure::from(cause);
-                Self {
-                    category: nested.category,
-                    code: "svg.authoring",
-                    message,
-                    cause: Some(Box::new(nested)),
-                }
-            }
-            _ => Self::new("invalid_input", "svg.authoring", message),
-        }
-    }
-}
 
 #[wasm_bindgen]
 impl WasmManimGeometryOptions {
