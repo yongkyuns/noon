@@ -37,6 +37,14 @@ class ManimNamespaceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "requires optional package 'numpy'"):
                 pending.log
 
+    def test_array_helpers_load_numpy_for_direct_aliased_and_module_calls(self) -> None:
+        for source in ["stretch_array_to_length(values, 3)",
+                       "from manim import stretch_array_to_length as stretch\nstretch(values, 3)",
+                       "import noon\nnoon.stretch_array_to_length(values, 3)",
+                       "np.array([1]); stretch_array_to_length(values, 3)"]:
+            self.assertEqual(namespace.required_packages(source), ("numpy",))
+        self.assertEqual(namespace.required_packages("message = 'stretch_array_to_length'"), ())
+
     def test_pure_colors_match_manim_v021(self) -> None:
         expected = {
             "PURE_RED": (1.0, 0.0, 0.0),

@@ -895,6 +895,7 @@ _PUBLIC_EXPORTS = {
     "make_even_by_cycling": "_manim_iterables",
     "remove_list_redundancies": "_manim_iterables",
     "remove_nones": "_manim_iterables",
+    "stretch_array_to_length": "_manim_iterables",
     "DictAsObject": "_manim_config_utils",
     "merge_dicts_recursively": "_manim_config_utils",
     "update_dict_recursively": "_manim_config_utils",
