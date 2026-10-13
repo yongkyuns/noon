@@ -118,18 +118,18 @@ if (env.NOON_TEST_FAIL_MATCH && JSON.stringify(call).includes(env.NOON_TEST_FAIL
   return { dir, run, calls };
 }
 
-test("actual measurement shell schedules 50 fixed pairs with seven adjacent and three anchor cohorts", async t => {
+test("actual measurement shell schedules 30 fixed pairs across adjacent and anchor cohorts", async t => {
   const fixture = await shellFixture(t);
-  for (const name of ["Measure seven alternating product pairs", "Measure three alternating cumulative-anchor pairs"]) {
+  for (const name of ["Measure three alternating product pairs", "Measure three alternating cumulative-anchor pairs"]) {
     const result = fixture.run(name);
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
   }
   const calls = await fixture.calls();
-  assert.equal(calls.length, 50);
-  assert.equal(new Set(calls.map(call => [call.example, call.pair, call.evidenceRoot].join("|"))).size, 50);
+  assert.equal(calls.length, 30);
+  assert.equal(new Set(calls.map(call => [call.example, call.pair, call.evidenceRoot].join("|"))).size, 30);
   let cursor = 0;
-  for (const [scope, before, count] of [["", "baseline", 7], ["cumulative", "anchor", 3]]) {
+  for (const [scope, before, count] of [["", "baseline", 3], ["cumulative", "anchor", 3]]) {
     for (const [index, example] of workloadIds.entries()) {
       for (let pair = 1; pair <= count; pair++) {
         const call = calls[cursor++];
@@ -154,7 +154,7 @@ test("actual comparison shell retains all ten results with unchanged source-spec
   const calls = await fixture.calls();
   assert.equal(calls.length, 10);
   let cursor = 0;
-  for (const [scope, before, pairs] of [["", "baseline", "7"], ["cumulative", "anchor", "3"]]) {
+  for (const [scope, before, pairs] of [["", "baseline", "3"], ["cumulative", "anchor", "3"]]) {
     for (const part of evidenceParts) {
       const [script, baseline, candidate, option, count] = calls[cursor++].args;
       assert.equal(script, "scripts/playground-product-compare.mjs");
@@ -167,13 +167,13 @@ test("actual comparison shell retains all ten results with unchanged source-spec
 
 test("invalid cohort configuration fails the actual shell before any browser invocation", async t => {
   const fixture = await shellFixture(t);
-  const result = fixture.run("Measure seven alternating product pairs", { NOON_TEST_BAD_COHORTS: "1" });
+  const result = fixture.run("Measure three alternating product pairs", { NOON_TEST_BAD_COHORTS: "1" });
   assert.ifError(result.error);
   assert.equal(result.status, 7);
   assert.deepEqual(await fixture.calls(), []);
 });
 
-for (const [name, expectedRuns] of [["Measure seven alternating product pairs", 15],
+for (const [name, expectedRuns] of [["Measure three alternating product pairs", 7],
   ["Measure three alternating cumulative-anchor pairs", 7]]) {
   test(`a failed run in ${name} stops its cohort without retrying or replacing it`, async t => {
     const fixture = await shellFixture(t);

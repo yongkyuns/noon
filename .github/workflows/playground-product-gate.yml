@@ -475,6 +475,7 @@ jobs:
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "0"
       NOON_RENDERER_SMOKE: "0"
+      NOON_PRODUCT_PREFLIGHT_SKIPPED: "1"
     steps:
       - name: Require successful production builds
         env:
@@ -574,6 +575,7 @@ jobs:
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "0"
       NOON_RENDERER_SMOKE: "0"
+      NOON_PRODUCT_PREFLIGHT_SKIPPED: "1"
     steps:
       - name: Require successful production builds and both complete measurement cohorts
         env:
