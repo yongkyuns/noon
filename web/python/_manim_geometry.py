@@ -13,6 +13,7 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
+from _manim_polygon import RegularPolygon
 
 DEFAULT_DOT_RADIUS = 0.08
 PURE_YELLOW = _base.color_from_hex("#FFFF00")
@@ -42,12 +43,11 @@ class Ellipse(_compat.Circle):
         _ellipse_init(self, width, height, **kwargs)
 
 
-class Triangle(_compat.Path):
+class Triangle(RegularPolygon):
     """Manim-compatible equilateral ``Triangle`` with RegularPolygon defaults."""
 
     def __init__(self, **kwargs: Any) -> None:
-        from _manim_shared_geometry import _triangle_init
-        _triangle_init(self, **kwargs)
+        super().__init__(n=3, **kwargs)
 
 
 class TangentLine(_compat.Line):

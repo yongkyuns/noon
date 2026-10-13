@@ -12,6 +12,7 @@ mod path_residency;
 mod render_order;
 mod reveal;
 mod sampled_morph;
+mod stroke_coverage;
 pub mod text;
 
 pub use gpu::*;
@@ -158,12 +159,36 @@ pub struct PathVertex {
     pub polygon: [[[f32; 2]; 2]; 3],
 }
 
+impl PathVertex {
+    /// Recover the local source/target corner represented by this packed vertex.
+    /// Covered strokes store their shared polygon in each conservative vertex;
+    /// partial reveals use this same corner selection in the GPU shader.
+    pub fn local_corner(&self, target: bool) -> [f32; 2] {
+        let corner = (self.surface >> POLYGON_CORNER_SHIFT) & 3;
+        if self.surface & POLYGON_COVERAGE_FLAG != 0 && corner != 0 {
+            self.polygon[corner as usize - 1][usize::from(target)]
+        } else if target {
+            self.target_position
+        } else {
+            self.position
+        }
+    }
+}
+
+/// Disposable GPU coverage specialization derived from a retained path mesh.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PathCoverage {
+    #[default]
+    Tessellated,
+    ConvexFill,
+    PolygonalStroke,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PathBatch {
     pub index_range: Range<u32>,
     pub instance_range: Range<u32>,
-    /// Use the renderer-local exact convex-polygon vertex stream for this draw.
-    pub polygon_coverage: bool,
+    pub coverage: PathCoverage,
 }
 
 /// One ordered draw slice in the packed unique-path index stream.
@@ -171,6 +196,7 @@ pub struct PathBatch {
 pub struct MegaPathBatch {
     pub index_range: Range<u32>,
     pub path_count: usize,
+    pub coverage: PathCoverage,
 }
 
 /// A bounded painter-order partition with independently coalesced draw metadata.
@@ -1240,8 +1266,7 @@ impl FramePreparer {
         self.path_batches.push(PathBatch {
             index_range,
             instance_range: instance_start..instance_start + 1,
-            polygon_coverage: single_filled_convex_polygon(&self.path_mesh_cache[cache_index].mesh)
-                .is_some(),
+            coverage: path_coverage(&self.path_mesh_cache[cache_index].mesh),
         });
         self.path_batch_cache_indices.push(cache_index);
         if !self.individual_path_draws {
@@ -1468,8 +1493,7 @@ impl FramePreparer {
         };
         self.path_batch_cache_indices[batch] = cache_index;
         self.transient_path_groups_packed = false;
-        self.path_batches[batch].polygon_coverage =
-            single_filled_convex_polygon(&self.path_mesh_cache[cache_index].mesh).is_some();
+        self.path_batches[batch].coverage = path_coverage(&self.path_mesh_cache[cache_index].mesh);
         if let PreparedSlot::Path {
             analytic_reveal,
             partial_reveal_bits,
@@ -1771,7 +1795,7 @@ impl FramePreparer {
                 instance_range: u32::try_from(instance_start)
                     .expect("path instance count exceeds renderer limits")
                     ..instance_end,
-                polygon_coverage: single_filled_convex_polygon(mesh).is_some(),
+                coverage: path_coverage(mesh),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
@@ -2668,6 +2692,7 @@ fn pack_path(
 const POLYGON_COVERAGE_FLAG: u32 = 1 << 25;
 const POLYGON_QUAD_FLAG: u32 = 1 << 26;
 const POLYGON_CORNER_SHIFT: u32 = 27;
+const POLYGON_TIGHT_FLAG: u32 = 1 << 29;
 /// Eligibility only examines bounded planner output so morph preparation stays
 /// local even when an authored contour contains many segments.
 const MAX_CONVEX_MORPH_VERTICES: usize = 129;
@@ -2719,6 +2744,8 @@ fn tessellated_path_bounds(mesh: &TessellatedPath) -> Option<[noon_core::Rect; 2
 pub(crate) fn packed_path_vertex_count(mesh: &TessellatedPath) -> usize {
     if single_filled_convex_polygon(mesh).is_some() {
         4
+    } else if let Some((vertices, _)) = stroke_coverage::pack(mesh) {
+        vertices.len()
     } else {
         mesh.vertices.len()
     }
@@ -2727,6 +2754,8 @@ pub(crate) fn packed_path_vertex_count(mesh: &TessellatedPath) -> usize {
 pub(crate) fn packed_path_index_count(mesh: &TessellatedPath) -> usize {
     if single_filled_convex_polygon(mesh).is_some() {
         6
+    } else if let Some((_, indices)) = stroke_coverage::pack(mesh) {
+        indices.len()
     } else {
         mesh.indices.len()
     }
@@ -2755,6 +2784,9 @@ pub(crate) fn pack_path_mesh(mesh: &TessellatedPath) -> (Vec<PathVertex>, Vec<u3
             TRIANGLE_QUAD_INDICES.to_vec(),
         );
     }
+    if let Some(packed) = stroke_coverage::pack(mesh) {
+        return packed;
+    }
     (
         mesh.vertices
             .iter()
@@ -2767,6 +2799,16 @@ pub(crate) fn pack_path_mesh(mesh: &TessellatedPath) -> (Vec<PathVertex>, Vec<u3
             .collect(),
         mesh.indices.clone(),
     )
+}
+
+pub(crate) fn path_coverage(mesh: &TessellatedPath) -> PathCoverage {
+    if single_filled_convex_polygon(mesh).is_some() {
+        PathCoverage::ConvexFill
+    } else if stroke_coverage::eligible(mesh) {
+        PathCoverage::PolygonalStroke
+    } else {
+        PathCoverage::Tessellated
+    }
 }
 
 pub(crate) fn single_filled_convex_polygon(mesh: &TessellatedPath) -> Option<[[[f32; 2]; 2]; 4]> {

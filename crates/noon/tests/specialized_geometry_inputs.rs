@@ -45,8 +45,15 @@ fn close(actual: f64, expected: f64) {
 fn triangle_retains_manim_orientation_and_closed_path() {
     let (_, triangle) = path(Options::triangle().unwrap());
     let commands = triangle.commands();
-    assert_eq!(commands.len(), 4);
-    assert_eq!(commands[3], PathCommand::Close);
+    // Manim Polygram explicitly returns to the first vertex before closure.
+    assert_eq!(commands.len(), 5);
+    assert_eq!(
+        commands[3],
+        PathCommand::LineTo {
+            to: point(&commands[0])
+        }
+    );
+    assert_eq!(commands[4], PathCommand::Close);
     close(point(&commands[0]).x.into(), 0.0);
     close(point(&commands[0]).y.into(), 1.0);
     close(point(&commands[1]).x.into(), -3.0_f64.sqrt() / 2.0);

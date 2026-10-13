@@ -1221,6 +1221,9 @@ export async function attachSemanticEngine(
       transport = new SharedExecutionDeltaWriter(mailbox);
       renderPort.postMessage({ type: "transport_setup", mode: transportMode, mailbox });
     } else transport = new TransferableExecutionDeltaSender(renderPort, { maxInFlight: 2, onWritable: drain });
+    if (request.initialPointerView !== undefined) {
+      applyNativeInput({ type: "browser_pointer_view", view: request.initialPointerView });
+    }
     await publishCallbackPhase(player.initialCallbackPhaseJson(), { initial: true });
     controlPort.start();
     renderPort.start();

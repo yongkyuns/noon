@@ -164,6 +164,92 @@ impl WasmManimGeometryOptions {
             .map_err(js_error)
     }
 
+    /// The language adapter supplies only flattened XY inputs and group lengths.
+    pub fn polygram(coordinates: &[f64], lengths: &[u32]) -> Result<Self, JsValue> {
+        if !coordinates.len().is_multiple_of(2)
+            || lengths.iter().map(|&n| u64::from(n)).sum::<u64>() != (coordinates.len() / 2) as u64
+        {
+            return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
+                coordinates.len(),
+            )));
+        }
+        let mut offset = 0;
+        let groups: Vec<_> = lengths
+            .iter()
+            .map(|&length| {
+                let end = offset + length as usize * 2;
+                let group = coordinates[offset..end]
+                    .chunks_exact(2)
+                    .map(|xy| (xy[0], xy[1]))
+                    .collect();
+                offset = end;
+                group
+            })
+            .collect();
+        noon::ManimGeometryOptions::polygram(&groups)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = regularPolygram)]
+    pub fn regular_polygram(
+        n: u32,
+        density: u32,
+        radius: f64,
+        start_angle: Option<f64>,
+    ) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::regular_polygram(n, density, radius, start_angle)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    pub fn star(
+        n: u32,
+        outer_radius: f64,
+        inner_radius: Option<f64>,
+        density: u32,
+        start_angle: Option<f64>,
+    ) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::star(n, outer_radius, inner_radius, density, start_angle)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn angle(
+        coordinates: &[f64],
+        radius: Option<f64>,
+        quadrant_x: f64,
+        quadrant_y: f64,
+        other_angle: bool,
+        elbow: bool,
+        num_components: u32,
+    ) -> Result<Self, JsValue> {
+        if coordinates.len() != 8 {
+            return Err(js_error(noon::AuthoringError::InvalidAngleOptions(
+                "Angle requires two XY line endpoint pairs",
+            )));
+        }
+        let first = [
+            (coordinates[0], coordinates[1]),
+            (coordinates[2], coordinates[3]),
+        ];
+        let second = [
+            (coordinates[4], coordinates[5]),
+            (coordinates[6], coordinates[7]),
+        ];
+        let options = noon::ManimAngleOptions {
+            radius,
+            quadrant: (quadrant_x, quadrant_y),
+            other_angle,
+            elbow,
+            num_components,
+        };
+        noon::ManimGeometryOptions::angle_from_endpoints(first, second, options)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
     pub fn ellipse(width: f64, height: f64) -> Result<Self, JsValue> {
         noon::ManimGeometryOptions::ellipse(width, height)
             .map(Self::from_options)
@@ -347,6 +433,44 @@ pub(crate) fn points(values: &[f64]) -> Result<Vec<Vec2>, JsValue> {
         .chunks_exact(2)
         .map(|pair| point(pair[0], pair[1]))
         .collect()
+}
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createPolygonConstructorsRenderer)]
+pub async fn create_polygon_constructors_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::polygon_example::program().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name=createAngleConstructorsRenderer)]
+pub async fn create_angle_constructors_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::angle_example::program().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createTriangleOptionsRenderer)]
+pub async fn create_triangle_options_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::triangle_example::program().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 #[wasm_bindgen]

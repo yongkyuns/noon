@@ -72,7 +72,9 @@ async function startInputClient(t, canvas = new FakeCanvas(), callbacks = {}) {
   replyRender(render, "start_engine", "engine_started");
   await started;
   authoring.autoRespond = false;
-  return { client, authoring, render, engine: authoring.attachments.at(-1).controlPort.peer };
+  const engine = authoring.attachments.at(-1).controlPort.peer;
+  engine.initialPointerView = authoring.attachments.at(-1).options.initialPointerView;
+  return { client, authoring, render, engine };
 }
 
 function pointerCanvas(t) {
@@ -104,6 +106,45 @@ function pointerCanvas(t) {
     return event;
   } };
 }
+
+test("startup reuses its registered viewport without a second engine operation", async t => {
+  const dom = pointerCanvas(t);
+  const { authoring, engine } = await startInputClient(t, dom.canvas);
+  const view = authoring.attachments.at(-1).options.initialPointerView;
+  assert.deepEqual(view, { revision: 1, width: 640, height: 360 });
+  assert.equal(engine.messages.filter(message => message.type === "browser_pointer_view").length, 0);
+  presentForWheel(engine);
+  dom.emit("pointerdown"); await inputTurn();
+  assert.equal(pointerMessages(engine)[0].view_revision, view.revision);
+  assert.equal(pointerMessages(engine)[0].presentation.view_revision, view.revision);
+  acknowledgePointers(engine);
+  dom.rect.left += 20;
+  dom.win.dispatchEvent(new Event("scroll"));
+  await inputTurn();
+  const changed = engine.messages.findLast(message => message.type === "browser_pointer_view");
+  assert.ok(changed.view.revision > view.revision);
+  assert.deepEqual(pointerMessages(engine).map(message => message.kind), ["press", "cancel"]);
+});
+
+test("a viewport changed while startup waits registers its actual dimensions", async t => {
+  const dom = pointerCanvas(t);
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new AuthoringExecutionClient(dom.canvas);
+  t.after(() => client.terminate());
+  const render = await prepare(client);
+  const started = client.startSemanticExecution({ contextId: "original" }, { authoringClient: authoring });
+  await waitForRequest(render, "start_engine");
+  dom.rect.width = dom.canvas.clientWidth = 320;
+  dom.rect.height = dom.canvas.clientHeight = 180;
+  replyRender(render, "start_engine", "engine_started");
+  await started;
+  const attachment = authoring.attachments.at(-1);
+  const engine = attachment.controlPort.peer;
+  const changed = engine.messages.findLast(message => message.type === "browser_pointer_view");
+  assert.ok(changed.view.revision > attachment.options.initialPointerView.revision);
+  assert.equal(changed.view.width, 320);
+  assert.equal(changed.view.height, 180);
+});
 
 // Unwrap only for the pre-existing collector assertions; worker receipt tests
 // below assert the full immutable wire envelope independently.
@@ -450,7 +491,7 @@ test("an unbound held coalesced pointer keeps ordinary parent validation without
 
 const workerWheel = { clientX: 330, clientY: 200, deltaMode: 0, deltaX: 0, deltaY: -100 };
 function presentForWheel(engine, presentation = 1, sequence = 0) {
-  const view = engine.messages.findLast(m => m.type === "browser_pointer_view").view;
+  const view = engine.messages.findLast(m => m.type === "browser_pointer_view")?.view ?? engine.initialPointerView;
   const receipt = { session: 1, sequence, presentation, view_revision: view.revision };
   engine.emitMessage(envelope("noon.engine", "pointer_presented", { receipt }));
   return receipt;

@@ -508,7 +508,11 @@ impl GpuRenderer {
                 // Derived paths retain the full `PathVertex` format. The compact
                 // pipeline is reserved for the stable ordinary/mega streams, so
                 // binding it here would decode this buffer at the wrong stride.
-                pass.set_pipeline(&self.full_path_pipeline);
+                pass.set_pipeline(if path.coverage == crate::PathCoverage::PolygonalStroke {
+                    &self.stroke_path_pipeline
+                } else {
+                    &self.full_path_pipeline
+                });
                 pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, self.derived_display.path_instance_buffer.slice(..));
                 pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);

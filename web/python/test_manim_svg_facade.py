@@ -1,5 +1,10 @@
+import os
+import subprocess
+import sys
+import textwrap
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 import noon
 import _manim_compat as compat
@@ -25,6 +30,87 @@ class _FamilyHandle:
 
 
 class SvgFacadeTests(unittest.TestCase):
+    def test_lazy_public_exports_bind_only_after_success(self):
+        python_dir = Path(__file__).resolve().parent
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(python_dir)
+        source = textwrap.dedent(
+            """
+            import importlib
+            import sys
+            import types
+            sys.modules["js"] = types.ModuleType("js")
+            import noon
+
+            provider = types.ModuleType("_cached_export_provider")
+            provider.CachedExport = object()
+            sys.modules[provider.__name__] = provider
+            noon._PUBLIC_EXPORTS["CachedExport"] = provider.__name__
+            calls = [0]
+            original = noon.__getattr__
+            def counted(name):
+                calls[0] += 1
+                return original(name)
+            noon.__getattr__ = counted
+
+            first = getattr(noon, "CachedExport")
+            assert getattr(noon, "CachedExport") is first
+            assert first is provider.CachedExport and calls == [1]
+
+            noon._PUBLIC_EXPORTS["RetryExport"] = "_missing_export_provider"
+            try:
+                noon.RetryExport
+            except ModuleNotFoundError:
+                pass
+            else:
+                raise AssertionError("missing provider unexpectedly imported")
+            assert "RetryExport" not in noon.__dict__
+            retry_provider = types.ModuleType("_missing_export_provider")
+            retry_provider.RetryExport = object()
+            sys.modules[retry_provider.__name__] = retry_provider
+            assert noon.RetryExport is retry_provider.RetryExport
+
+            noon._PUBLIC_EXPORTS["LateExport"] = "_late_export_provider"
+            late_provider = types.ModuleType("_late_export_provider")
+            sys.modules[late_provider.__name__] = late_provider
+            try:
+                noon.LateExport
+            except AttributeError:
+                pass
+            else:
+                raise AssertionError("missing provider attribute unexpectedly resolved")
+            assert "LateExport" not in noon.__dict__
+            late_provider.LateExport = object()
+            assert noon.LateExport is late_provider.LateExport
+
+            try:
+                noon.NotAPublicExport
+            except AttributeError as error:
+                assert "NotAPublicExport" in str(error)
+            else:
+                raise AssertionError("unknown public attribute unexpectedly resolved")
+
+            # This provider imports noon while it is being initialized.
+            svg_export = noon.SVGMobject
+            svg_provider = importlib.import_module("_manim_svg")
+            assert svg_export is svg_provider.SVGMobject
+            assert noon.SVGMobject is svg_export
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", source],
+            check=False,
+            cwd=python_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            f"lazy export subprocess failed:\nstdout:{completed.stdout}\nstderr:{completed.stderr}",
+        )
+
     def test_public_noon_export_is_lazy_svg_facade(self):
         self.assertIs(noon.SVGMobject, svg.SVGMobject)
         self.assertIn("SVGMobject", noon.__all__)

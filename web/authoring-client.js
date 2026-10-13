@@ -88,6 +88,7 @@ export class PythonAuthoringClient {
       initiallyPaused = false,
       pacing = "realtime",
       replaceExistingEndpoint = false,
+      initialPointerView = undefined,
     },
   ) {
     validateSemanticExecutionContextId(contextId);
@@ -146,6 +147,7 @@ export class PythonAuthoringClient {
       pacing,
       replaceExistingEndpoint,
     };
+    if (initialPointerView !== undefined) payload.initialPointerView = initialPointerView;
     if (callbackSessionId !== null) payload.callbackSessionId = callbackSessionId;
     if (continuationGeneration !== null) {
       payload.continuationGeneration = continuationGeneration;

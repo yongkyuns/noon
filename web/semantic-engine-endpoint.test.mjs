@@ -859,6 +859,41 @@ test("continuation sends coherent intermediate publications before its endpoint"
   } finally { endpoint?.stop(); f.close(); }
 });
 
+test("startup installs the browser view before callbacks, snapshot and clock admission", async () => {
+  const view = { revision: 4, width: 640, height: 360 };
+  const calls = [];
+  const f = fixture("transferable", null, {
+    generation: 126, onComplete() {}, onError(_generation, error) { throw error; },
+  }, { initialPointerView: view });
+  let endpoint;
+  f.player.setBrowserPointerViewJson = json => { assert.deepEqual(JSON.parse(json), view); calls.push("view"); };
+  f.player.initialCallbackPhaseJson = () => { calls.push("callbacks"); return null; };
+  const snapshot = f.player.initialDeltaJson;
+  f.player.initialDeltaJson = () => { calls.push("snapshot"); return snapshot(); };
+  f.player.liveSegmentWake = () => { calls.push("clock"); return { cadence: "animation_frame" }; };
+  try {
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach();
+    const publication = await initial;
+    assert.deepEqual(calls, ["view", "callbacks", "snapshot"]);
+    const wake = nextMatching(f.render.port2, message => message.type === "execution_wake" && message.cadence === "animation_frame");
+    present(f.render.port2, publication);
+    await wake;
+    assert.deepEqual(calls, ["view", "callbacks", "snapshot", "clock"]);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("invalid startup browser view fails before emitting a snapshot", async () => {
+  const f = fixture("transferable", null, null, {
+    initialPointerView: { revision: 1, width: -1, height: 360 },
+  });
+  try {
+    await assert.rejects(f.attach(), /invalid or retired browser pointer view/);
+    assert.equal(f.stats().initialSnapshots, 0);
+    assert.equal(f.stats().returned, 1, "startup rejection returns the leased player");
+  } finally { f.close(); }
+});
+
 test("initial continuation waits for presentation before starting its first clock wake", { timeout: 5000 }, async () => {
   const completions = [];
   const f = fixture("transferable", null, {

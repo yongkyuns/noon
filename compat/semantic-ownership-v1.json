@@ -63,6 +63,7 @@
     {"path": "web/python/noon.py", "token": "_ir.Mobject(", "maximum": 0, "migration_issue": "#61"}
   ],
   "operations": [
+    {"id": "python.user-numerical-helpers", "host_callback": true, "surface": "binary_search, choose, clip, sigmoid on user data", "classification": "host-language-required", "owner": {"language": "python", "path": "web/python/_manim_simple_functions.py", "symbol": "binary_search/choose/clip/sigmoid"}, "adapters": [], "reason": "Explicit Python user-data comparisons, callback calls, numerical types and bounded host cache. No semantic geometry, animation scheduling, frame execution or engine state is represented."},
     {
       "id": "mobject.circle",
       "surface": "Circle",

@@ -390,6 +390,10 @@ class Mobject:
         from _manim_geometry import _mobject_get_color
         return _mobject_get_color(self)
 
+    def match_color(self, mobject: Mobject) -> Mobject:
+        """Match the donor's observed color through the existing shared setter."""
+        return self.set_color(mobject.get_color())
+
     def match_points(self, mobject: object) -> Mobject:
         from _manim_geometry import match_points
         return match_points(self, mobject)
@@ -883,6 +887,10 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "binary_search": "_manim_simple_functions",
+    "choose": "_manim_simple_functions",
+    "clip": "_manim_simple_functions",
+    "sigmoid": "_manim_simple_functions",
     "adjacent_n_tuples": "_manim_iterables",
     "adjacent_pairs": "_manim_iterables",
     "all_elements_are_instances": "_manim_iterables",
@@ -895,6 +903,7 @@ _PUBLIC_EXPORTS = {
     "make_even_by_cycling": "_manim_iterables",
     "remove_list_redundancies": "_manim_iterables",
     "remove_nones": "_manim_iterables",
+    "stretch_array_to_length": "_manim_iterables",
     "DictAsObject": "_manim_config_utils",
     "merge_dicts_recursively": "_manim_config_utils",
     "update_dict_recursively": "_manim_config_utils",
@@ -1030,6 +1039,13 @@ _PUBLIC_EXPORTS = {
     "Dot": "_manim_geometry",
     "Ellipse": "_manim_geometry",
     "Triangle": "_manim_geometry",
+    "Polygram": "_manim_polygon",
+    "Polygon": "_manim_polygon",
+    "RegularPolygram": "_manim_polygon",
+    "RegularPolygon": "_manim_polygon",
+    "Star": "_manim_polygon",
+    "Angle": "_manim_angle",
+    "RightAngle": "_manim_angle",
     "TangentLine": "_manim_geometry",
     "ApplyMethod": "_manim_geometry",
     "DEFAULT_DOT_RADIUS": "_manim_geometry",
@@ -1062,7 +1078,9 @@ def __getattr__(name: str):
     module = _PUBLIC_EXPORTS.get(name)
     if module is not None:
         from importlib import import_module
-        return getattr(import_module(module), name)
+        value = getattr(import_module(module), name)
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

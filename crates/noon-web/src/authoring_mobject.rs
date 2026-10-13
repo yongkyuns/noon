@@ -1415,6 +1415,16 @@ mod wasm {
         pub(crate) value: noon::PathQuery,
     }
 
+    fn point_groups(groups: Vec<Vec<(f64, f64)>>) -> js_sys::Array {
+        groups
+            .into_iter()
+            .map(|points| {
+                let coordinates: Vec<_> = points.into_iter().flat_map(|(x, y)| [x, y]).collect();
+                JsValue::from(js_sys::Float64Array::from(coordinates.as_slice()))
+            })
+            .collect()
+    }
+
     impl WasmPathQuery {
         pub(crate) fn from_query(value: noon::PathQuery) -> Self {
             Self { value }
@@ -1439,15 +1449,11 @@ mod wasm {
             self.value.is_closed().map_err(js_error)
         }
         pub fn subpaths(&self) -> js_sys::Array {
-            self.value
-                .subpaths()
-                .into_iter()
-                .map(|points| {
-                    let coordinates: Vec<_> =
-                        points.into_iter().flat_map(|(x, y)| [x, y]).collect();
-                    JsValue::from(js_sys::Float64Array::from(coordinates.as_slice()))
-                })
-                .collect()
+            point_groups(self.value.subpaths())
+        }
+        #[wasm_bindgen(js_name = vertexGroups)]
+        pub fn vertex_groups(&self) -> js_sys::Array {
+            point_groups(self.value.vertex_groups())
         }
         #[wasm_bindgen(js_name = startAnchors)]
         pub fn start_anchors(&self) -> Vec<f64> {
@@ -1709,6 +1715,11 @@ mod wasm {
                 .local_path_query()
                 .map(WasmPathQuery::from_query)
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = angleValue)]
+        pub fn angle_value(&self, degrees: bool) -> Result<f64, JsValue> {
+            self.handle.angle_value(degrees).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = manimLineEndpoints)]

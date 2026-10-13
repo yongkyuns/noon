@@ -299,6 +299,17 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::InvalidGridOption(_) => {
                 Self::new("invalid_input", "authoring.invalid_grid_option", message)
             }
+            AuthoringError::InvalidPolygonOptions(_) => Self::new(
+                "invalid_input",
+                "authoring.invalid_polygon_options",
+                message,
+            ),
+            AuthoringError::MissingAngleValue => {
+                Self::new("invalid_input", "angle.value_missing", message)
+            }
+            AuthoringError::InvalidAngleOptions(_) => {
+                Self::new("invalid_input", "authoring.invalid_angle_options", message)
+            }
             AuthoringError::InsufficientGridCapacity { .. } => Self::new(
                 "invalid_input",
                 "authoring.insufficient_grid_capacity",

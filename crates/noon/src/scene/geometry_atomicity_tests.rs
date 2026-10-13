@@ -1,5 +1,5 @@
 use super::*;
-use crate::{geometry_authoring::manim_triangle_path, ManimGeometryOptions};
+use crate::ManimGeometryOptions;
 use noon_core::{FrameEpoch, SemanticStyle, SemanticVec3, Vec2, VectorPath};
 
 #[test]
@@ -285,7 +285,10 @@ fn running_geometry_rejects_stale_execution_before_importing_resources() {
         .stats();
 
     let error = scene
-        .path(manim_triangle_path(), SemanticStyle::default())
+        .path(
+            crate::polygon_authoring::regular_polygram_path(3, 1, 1.0, None).unwrap(),
+            SemanticStyle::default(),
+        )
         .unwrap_err();
     assert!(matches!(
         error,
@@ -353,7 +356,10 @@ fn geometry_publication_scope_rolls_back_path_after_late_runtime_error() {
         let store_rc = Rc::clone(scene.integration_store());
         let mut store = store_rc.borrow_mut();
         publish_geometry_options(
-            ManimGeometryOptions::path(crate::geometry_authoring::manim_triangle_path()).unwrap(),
+            ManimGeometryOptions::path(
+                crate::polygon_authoring::regular_polygram_path(3, 1, 1.0, None).unwrap(),
+            )
+            .unwrap(),
             &mut store,
             |store, _transaction| {
                 assert_ne!(store.geometry_resources().stats(), before_resources);

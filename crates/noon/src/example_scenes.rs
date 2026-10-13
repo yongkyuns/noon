@@ -60,6 +60,7 @@ pub mod spatial_three_d_axes;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod special_camera_settings;
 pub mod specialized_geometry;
+pub mod static_hold;
 pub mod svg_morph;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts", feature = "latex"))]
 pub mod table;

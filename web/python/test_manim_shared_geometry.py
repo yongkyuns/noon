@@ -84,8 +84,8 @@ class ManimSharedGeometryTests(unittest.TestCase):
                     y,
                 ))
 
-            def triangle():
-                calls.append(("triangle",))
+            def regular_polygram(n, density, radius, start_angle):
+                calls.append(("regular", n, density, radius, start_angle))
                 return FakeHandle(snapshot(
                     {"vector_path": {"commands": [
                         {"move_to": {"to": {"x": 0.0, "y": 1.0}}},
@@ -100,7 +100,7 @@ class ManimSharedGeometryTests(unittest.TestCase):
 
             _geometry_test.install_js_bridge(fake_js, generic_snapshot)
             _geometry_test.install_option_factory(fake_js, "dot", dot)
-            _geometry_test.install_option_factory(fake_js, "triangle", triangle)
+            _geometry_test.install_option_factory(fake_js, "regularPolygram", regular_polygram)
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -127,7 +127,7 @@ class ManimSharedGeometryTests(unittest.TestCase):
             dot_obj = Dot((2.0, -3.0, 0.0), radius=0.2)
             triangle_obj = Triangle()
 
-            assert calls == [("dot", 2.0, -3.0, 0.2), ("triangle",)]
+            assert calls == [("dot", 2.0, -3.0, 0.2), ("regular", 3, 1, 1.0, None)]
             assert dot_obj.radius == 0.2
             assert dot_obj.geometry == {"circle": {"radius": 0.2}}
             assert dot_obj.transform["translation"] == {"x": 2.0, "y": -3.0}

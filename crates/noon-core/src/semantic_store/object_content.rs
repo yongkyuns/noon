@@ -33,6 +33,8 @@ impl TextPresentationBaseline {
 
 mod coordinate_role;
 pub use coordinate_role::SemanticNumberLineRole;
+mod angle_role;
+pub use angle_role::SemanticAngleRole;
 mod function_plot_role;
 pub use function_plot_role::SemanticFunctionPlotRole;
 mod decimal_number;
@@ -261,6 +263,8 @@ pub enum SemanticObjectRole {
     NumberLine(SemanticNumberLineRole),
     /// Parameter interval of an ordinary sampled graph path.
     FunctionPlot(SemanticFunctionPlotRole),
+    /// Nominal constructor value of an ordinary Angle arc; no renderer specialization.
+    Angle(SemanticAngleRole),
     /// Identifies an ordinary retained rectangle in a Manim SampleSpace horizontal partition.
     SampleSpaceHorizontalPart,
     /// Identifies an ordinary retained rectangle in a Manim SampleSpace vertical partition.
@@ -273,6 +277,7 @@ impl SemanticObjectRole {
             Self::ArrowShaft(policy) => policy.is_valid(),
             Self::NumberLine(range) => range.is_valid(),
             Self::FunctionPlot(range) => range.is_valid(),
+            Self::Angle(value) => value.is_valid(),
             Self::Ordinary
             | Self::Camera2D
             | Self::Camera3D

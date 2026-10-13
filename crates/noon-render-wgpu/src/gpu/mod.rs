@@ -30,8 +30,8 @@ use presentation::PresentationBridge;
 pub use raster_image_prepare::RasterImagePrepareError;
 
 use crate::{
-    CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathInstance, PathVertex,
-    PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,
+    CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathCoverage, PathInstance,
+    PathVertex, PreparedDerivedDisplay, PreparedFrame, RectangleInstance, RenderPrimitive,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
@@ -431,7 +431,10 @@ enum GeometryBinding {
     Line,
     Path,
     Polygon,
+    StrokePolygon,
     MegaPath,
+    MegaPolygon,
+    MegaStrokePolygon,
 }
 
 #[derive(Clone, Debug)]
@@ -443,7 +446,10 @@ struct ResolvedOrderedBatch {
 impl ResolvedOrderedBatch {
     fn merge(&mut self, next: &Self) -> bool {
         match (&mut self.mega, &next.mega) {
-            (Some(current), Some(next)) if current.index_range.end == next.index_range.start => {
+            (Some(current), Some(next))
+                if current.index_range.end == next.index_range.start
+                    && current.coverage == next.coverage =>
+            {
                 current.index_range.end = next.index_range.end;
                 current.path_count += next.path_count;
                 true
@@ -503,7 +509,10 @@ pub struct GpuRenderer {
     /// Full path vertices carry the renderer-local exact-triangle coordinates.
     /// Transient presentation paths also retain this full format.
     full_path_pipeline: wgpu::RenderPipeline,
+    stroke_path_pipeline: wgpu::RenderPipeline,
     mega_path_pipeline: wgpu::RenderPipeline,
+    mega_full_path_pipeline: wgpu::RenderPipeline,
+    mega_stroke_path_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -739,10 +748,40 @@ impl GpuRenderer {
         });
         let path_pipeline =
             create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
-        let full_path_pipeline =
-            create_full_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
+        let full_path_pipeline = create_covered_path_pipeline(
+            device,
+            &pipeline_layout,
+            &path_shader,
+            target_format,
+            false,
+            PathCoverage::ConvexFill,
+        );
+        let stroke_path_pipeline = create_covered_path_pipeline(
+            device,
+            &pipeline_layout,
+            &path_shader,
+            target_format,
+            false,
+            PathCoverage::PolygonalStroke,
+        );
         let mega_path_pipeline =
             create_mega_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
+        let mega_full_path_pipeline = create_covered_path_pipeline(
+            device,
+            &pipeline_layout,
+            &path_shader,
+            target_format,
+            true,
+            PathCoverage::ConvexFill,
+        );
+        let mega_stroke_path_pipeline = create_covered_path_pipeline(
+            device,
+            &pipeline_layout,
+            &path_shader,
+            target_format,
+            true,
+            PathCoverage::PolygonalStroke,
+        );
         let quad_buffer = create_buffer_with_data(
             device,
             queue,
@@ -790,7 +829,10 @@ impl GpuRenderer {
             line_pipeline_single_sample,
             path_pipeline,
             full_path_pipeline,
+            stroke_path_pipeline,
             mega_path_pipeline,
+            mega_full_path_pipeline,
+            mega_stroke_path_pipeline,
             quad_buffer,
             camera_buffer,
             camera_bind_group,
@@ -1758,23 +1800,30 @@ impl GpuRenderer {
                 if path.index_range.is_empty() {
                     return DrawStats::default();
                 }
-                if path_batch_uses_polygon_coverage(prepared, path) {
-                    (
-                        GeometryBinding::Polygon,
-                        &self.full_path_pipeline,
-                        &self.path_vertex_buffer,
-                        &self.path_instance_buffer,
-                        Some(&self.path_index_buffer),
-                    )
-                } else {
-                    (
+                let (binding, pipeline, vertices) = match path.coverage {
+                    PathCoverage::Tessellated => (
                         GeometryBinding::Path,
                         &self.path_pipeline,
                         &self.compact_path_vertex_buffer,
-                        &self.path_instance_buffer,
-                        Some(&self.path_index_buffer),
-                    )
-                }
+                    ),
+                    PathCoverage::ConvexFill => (
+                        GeometryBinding::Polygon,
+                        &self.full_path_pipeline,
+                        &self.path_vertex_buffer,
+                    ),
+                    PathCoverage::PolygonalStroke => (
+                        GeometryBinding::StrokePolygon,
+                        &self.stroke_path_pipeline,
+                        &self.path_vertex_buffer,
+                    ),
+                };
+                (
+                    binding,
+                    pipeline,
+                    vertices,
+                    &self.path_instance_buffer,
+                    Some(&self.path_index_buffer),
+                )
             }
             RenderPrimitive::MegaPath { .. } => {
                 if resolved
@@ -1786,10 +1835,32 @@ impl GpuRenderer {
                 {
                     return DrawStats::default();
                 }
+                let coverage = resolved
+                    .mega
+                    .as_ref()
+                    .expect("resolved mega metadata")
+                    .coverage;
+                let (binding, pipeline, vertices) = match coverage {
+                    PathCoverage::Tessellated => (
+                        GeometryBinding::MegaPath,
+                        &self.mega_path_pipeline,
+                        &self.compact_path_vertex_buffer,
+                    ),
+                    PathCoverage::ConvexFill => (
+                        GeometryBinding::MegaPolygon,
+                        &self.mega_full_path_pipeline,
+                        &self.path_vertex_buffer,
+                    ),
+                    PathCoverage::PolygonalStroke => (
+                        GeometryBinding::MegaStrokePolygon,
+                        &self.mega_stroke_path_pipeline,
+                        &self.path_vertex_buffer,
+                    ),
+                };
                 (
-                    GeometryBinding::MegaPath,
-                    &self.mega_path_pipeline,
-                    &self.compact_path_vertex_buffer,
+                    binding,
+                    pipeline,
+                    vertices,
                     &self.mega_path_vertex_instance_buffer,
                     Some(&self.mega_path_index_buffer),
                 )
@@ -1979,11 +2050,6 @@ fn ordered_render_sample_count(path_batches: &[PathBatch], other_visible_paths: 
     }
 }
 
-fn path_batch_uses_polygon_coverage(prepared: &PreparedFrame<'_>, batch: &PathBatch) -> bool {
-    let _ = prepared;
-    batch.polygon_coverage
-}
-
 fn create_path_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -2026,11 +2092,13 @@ fn create_mega_path_pipeline(
     )
 }
 
-fn create_full_path_pipeline(
+fn create_covered_path_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
+    mega: bool,
+    coverage: PathCoverage,
 ) -> wgpu::RenderPipeline {
     create_path_pipeline_with_instance_layout(
         device,
@@ -2038,11 +2106,21 @@ fn create_full_path_pipeline(
         shader,
         target_format,
         PathPipelineDescriptor {
-            instance_layout: path_instance_layout(),
-            label: "Noon full path pipeline",
+            instance_layout: if mega {
+                mega_path_instance_layout()
+            } else {
+                path_instance_layout()
+            },
+            label: "Noon covered path pipeline",
             vertex_layout: polygon_path_vertex_layout(),
             vertex_entry: "vs_path",
-            fragment_entry: "fs_path",
+            fragment_entry: match coverage {
+                PathCoverage::ConvexFill => "fs_path",
+                PathCoverage::PolygonalStroke => "fs_path_stroke",
+                PathCoverage::Tessellated => {
+                    unreachable!("covered pipeline requires polygon coordinates")
+                }
+            },
         },
     )
 }
@@ -2474,7 +2552,7 @@ mod tests {
                 &[PathBatch {
                     index_range: 0..0,
                     instance_range: 0..1,
-                    polygon_coverage: false,
+                    coverage: PathCoverage::Tessellated,
                 }],
                 false
             ),
@@ -2485,7 +2563,7 @@ mod tests {
                 &[PathBatch {
                     index_range: 0..3,
                     instance_range: 0..1,
-                    polygon_coverage: false,
+                    coverage: PathCoverage::Tessellated,
                 }],
                 false
             ),
