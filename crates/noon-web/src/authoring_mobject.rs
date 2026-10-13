@@ -171,6 +171,18 @@ mod wasm {
 
     use crate::authoring_error::js_error;
 
+    fn family_query_keys(target: noon::MobjectTarget<'_>) -> Result<Vec<String>, JsValue> {
+        target
+            .family_nodes()
+            .map(|nodes| {
+                nodes
+                    .into_iter()
+                    .map(|id| format!("{}:{}", id.slot(), id.generation()))
+                    .collect()
+            })
+            .map_err(typed_js_error)
+    }
+
     pub(crate) type SharedSemanticStore = Rc<RefCell<SemanticStore>>;
 
     #[wasm_bindgen]
@@ -1365,15 +1377,7 @@ mod wasm {
         /// Observe authoritative family order when a frontend requests members.
         #[wasm_bindgen(js_name = familyKeys)]
         pub fn family_keys(&self) -> Result<Vec<String>, JsValue> {
-            noon::MobjectTarget::from(&self.family)
-                .family_nodes()
-                .map(|nodes| {
-                    nodes
-                        .into_iter()
-                        .map(|id| format!("{}:{}", id.slot(), id.generation()))
-                        .collect()
-                })
-                .map_err(typed_js_error)
+            family_query_keys(noon::MobjectTarget::from(&self.family))
         }
 
         /// Observe authoritative direct membership when a frontend requests members.
@@ -1763,15 +1767,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = familyKeys)]
         pub fn family_keys(&self) -> Result<Vec<String>, JsValue> {
-            noon::MobjectTarget::from(&self.handle)
-                .family_nodes()
-                .map(|nodes| {
-                    nodes
-                        .into_iter()
-                        .map(|id| format!("{}:{}", id.slot(), id.generation()))
-                        .collect()
-                })
-                .map_err(typed_js_error)
+            family_query_keys(noon::MobjectTarget::from(&self.handle))
         }
         #[wasm_bindgen(js_name = cloneHandle)]
         pub fn clone_handle(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
