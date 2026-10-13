@@ -61,7 +61,7 @@ impl Mobject {
 }
 
 impl MobjectFamily {
-    /// Color each unique semantic leaf in family order through one transaction.
+    /// Color each unique leaf in Manim's last-occurrence family order atomically.
     /// Geometry/resources and existing paint opacity remain unchanged.
     pub fn set_color_by_gradient(&self, colors: &[Color]) -> Result<(), AuthoringError> {
         self.gradient_transaction(colors)?
@@ -75,7 +75,7 @@ impl MobjectFamily {
         colors: &[Color],
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
         validate_colors(colors)?;
-        self.style_transaction_indexed(|index, count, style| {
+        self.style_transaction_last_occurrence(|index, count, style| {
             let color = gradient_color(colors, index, count);
             edit_color(
                 style,

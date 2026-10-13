@@ -171,13 +171,24 @@ impl SemanticStore {
     ///
     /// A non-family object is its own leaf. Families are flattened depth-first in
     /// member order. Shared descendants are emitted once at their first occurrence,
-    /// matching Manim's ordered family de-duplication instead of animating aliases
-    /// multiple times.
+    /// instead of animating aliases multiple times. Manim's public family query
+    /// retains the last occurrence; use `ordered_last_occurrence_leaf_nodes` for
+    /// that distinct ordering contract.
     pub fn ordered_leaf_nodes(
         &self,
         root: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, SemanticStoreError> {
-        self.ordered_nodes(root, false)
+        self.ordered_nodes(root, false, false)
+    }
+
+    /// Unique leaves in depth-first order of their last membership occurrence.
+    /// This matches Manim's family query ordering without expanding every alias
+    /// path: reverse traversal visits each semantic node and its edges once.
+    pub fn ordered_last_occurrence_leaf_nodes(
+        &self,
+        root: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticStoreError> {
+        self.ordered_nodes(root, false, true)
     }
 
     /// Unique leaves in first-occurrence order, with the number of membership
@@ -238,13 +249,22 @@ impl SemanticStore {
         &self,
         root: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, SemanticStoreError> {
-        self.ordered_nodes(root, true)
+        self.ordered_nodes(root, true, false)
+    }
+
+    /// Include family roots in Manim's last-occurrence de-duplication order.
+    pub fn ordered_last_occurrence_authoring_nodes(
+        &self,
+        root: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticStoreError> {
+        self.ordered_nodes(root, true, true)
     }
 
     fn ordered_nodes(
         &self,
         root: SemanticNodeId,
         include_families: bool,
+        keep_last: bool,
     ) -> Result<Vec<SemanticNodeId>, SemanticStoreError> {
         fn collect(
             store: &SemanticStore,
@@ -252,6 +272,7 @@ impl SemanticStore {
             seen: &mut HashSet<SemanticNodeId>,
             leaves: &mut Vec<SemanticNodeId>,
             include_families: bool,
+            keep_last: bool,
         ) -> Result<(), SemanticStoreError> {
             let node = store
                 .node(node_id)
@@ -264,11 +285,18 @@ impl SemanticStore {
                     leaves.push(node_id);
                 }
                 SemanticNodeKind::Family(_) => {
-                    if include_families {
+                    if include_families && !keep_last {
                         leaves.push(node_id);
                     }
-                    for member in node.members() {
-                        collect(store, member, seen, leaves, include_families)?;
+                    let mut members = node.members();
+                    if keep_last {
+                        members.reverse();
+                    }
+                    for member in members {
+                        collect(store, member, seen, leaves, include_families, keep_last)?;
+                    }
+                    if include_families && keep_last {
+                        leaves.push(node_id);
                     }
                 }
                 SemanticNodeKind::Signal(_)
@@ -284,7 +312,17 @@ impl SemanticStore {
 
         let mut leaves = Vec::new();
         let mut seen = HashSet::new();
-        collect(self, root, &mut seen, &mut leaves, include_families)?;
+        collect(
+            self,
+            root,
+            &mut seen,
+            &mut leaves,
+            include_families,
+            keep_last,
+        )?;
+        if keep_last {
+            leaves.reverse();
+        }
         Ok(leaves)
     }
 }
@@ -294,6 +332,101 @@ mod tests {
     use crate::{SemanticObjectState, StoredGeometry};
 
     use super::*;
+
+    #[test]
+    fn last_occurrence_order_preserves_roots_and_late_shared_leaf_position() {
+        let mut store = SemanticStore::new();
+        let a = store.insert_authoring_object();
+        let b = store.insert_authoring_object();
+        let nested = store.insert_family();
+        let root = store.insert_family();
+        store.add_member(nested, a).unwrap();
+        store.add_member(nested, b).unwrap();
+        store.add_member(root, nested).unwrap();
+        store.add_member(root, a).unwrap();
+        assert_eq!(store.ordered_leaf_nodes(root).unwrap(), vec![a, b]);
+        assert_eq!(
+            store.ordered_last_occurrence_leaf_nodes(root).unwrap(),
+            vec![b, a]
+        );
+        assert_eq!(
+            store.ordered_last_occurrence_authoring_nodes(root).unwrap(),
+            vec![root, nested, b, a]
+        );
+        assert_eq!(
+            store.ordered_last_occurrence_leaf_nodes(a).unwrap(),
+            vec![a]
+        );
+        let empty = store.insert_family();
+        assert!(store
+            .ordered_last_occurrence_leaf_nodes(empty)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .ordered_last_occurrence_authoring_nodes(empty)
+                .unwrap(),
+            vec![empty]
+        );
+    }
+
+    #[test]
+    fn last_occurrence_order_agrees_with_expanded_paths_in_small_shared_dags() {
+        fn expand(store: &SemanticStore, node: SemanticNodeId, out: &mut Vec<SemanticNodeId>) {
+            out.push(node);
+            for child in store.node(node).unwrap().members() {
+                expand(store, child, out);
+            }
+        }
+        for pattern in 0_u32..64 {
+            let mut store = SemanticStore::new();
+            let leaves: Vec<_> = (0..3).map(|_| store.insert_authoring_object()).collect();
+            let families: Vec<_> = (0..3).map(|_| store.insert_family()).collect();
+            for (index, family) in families.iter().enumerate() {
+                for (slot, leaf) in leaves.iter().enumerate() {
+                    if pattern & (1 << ((index + slot) % 6)) != 0 {
+                        store.add_member(*family, *leaf).unwrap();
+                    }
+                }
+                if index > 0 {
+                    store.add_member(*family, families[index - 1]).unwrap();
+                }
+            }
+            let root = store.insert_family();
+            for family in &families {
+                store.add_member(root, *family).unwrap();
+            }
+            for leaf in &leaves {
+                store.add_member(root, *leaf).unwrap();
+            }
+            let mut expanded = Vec::new();
+            expand(&store, root, &mut expanded);
+            let expected: Vec<_> = expanded
+                .iter()
+                .enumerate()
+                .filter_map(|(index, node)| {
+                    (!expanded[index + 1..].contains(node)).then_some(*node)
+                })
+                .collect();
+            assert_eq!(
+                store.ordered_last_occurrence_authoring_nodes(root).unwrap(),
+                expected
+            );
+            let expected_leaves: Vec<_> = expected
+                .into_iter()
+                .filter(|node| {
+                    matches!(
+                        store.node(*node).unwrap().kind(),
+                        SemanticNodeKind::AuthoringObject
+                    )
+                })
+                .collect();
+            assert_eq!(
+                store.ordered_last_occurrence_leaf_nodes(root).unwrap(),
+                expected_leaves
+            );
+        }
+    }
 
     #[test]
     fn leaf_target_is_its_own_ordered_leaf_sequence() {

@@ -61,7 +61,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
         with:
           tool: wasm-pack@0.15.0
           fallback: none
