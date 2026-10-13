@@ -2,6 +2,23 @@ import {
   parseAuthoringDiagnostic, presentAuthoringDiagnostic, authoringDiagnosticSourceRange,
 } from "./authoring-diagnostic.js";
 
+// When structured metadata is unavailable (for example at Python startup or
+// during a dependency fetch), retain the original error's first useful line.
+// This only displays facts; it never guesses error category, scope or recovery.
+export function fallbackFailureMessage(error) {
+  const unavailable = "Noon could not complete this operation.";
+  let raw;
+  try {
+    raw = typeof error?.message === "string" ? error.message : String(error);
+  } catch {
+    return unavailable;
+  }
+  const firstLine = raw.slice(0, 4096).split(/\r\n|\r|\n/).find(line => line.trim().length > 0);
+  if (!firstLine) return unavailable;
+  // Do not cut an emoji/surrogate pair. Full context remains in Technical details.
+  return [...firstLine].slice(0, 400).join("");
+}
+
 /** Presentation only. Does not restart workers, decide recovery, or mutate a scene. */
 export function createPlaygroundDiagnostics({ editor, details, traceback }) {
   const document = editor.ownerDocument;
@@ -97,7 +114,7 @@ export function createPlaygroundDiagnostics({ editor, details, traceback }) {
       diagnostic = next;
       const presentation = presentAuthoringDiagnostic(next);
       title.textContent = presentation?.title ?? fallbackTitle;
-      message.textContent = presentation?.message ?? "Noon could not complete this operation.";
+      message.textContent = presentation?.message ?? fallbackFailureMessage(error);
       hint.textContent = presentation?.hint ?? "Your source is unchanged. Open the technical details to identify the failure.";
       operation.textContent = [presentation?.operation, presentation?.code].filter(Boolean).join(" · ");
       operation.hidden = !operation.textContent;
