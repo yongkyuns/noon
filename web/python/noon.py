@@ -899,6 +899,8 @@ _PUBLIC_EXPORTS = {
     "guarantee_existence": "_manim_file_paths",
     "guarantee_empty_existence": "_manim_file_paths",
     "seek_full_path_from_defaults": "_manim_file_paths",
+    "ensure_executable": "_manim_file_paths",
+    "modify_atime": "_manim_file_paths",
     "binary_search": "_manim_simple_functions",
     "choose": "_manim_simple_functions",
     "clip": "_manim_simple_functions",

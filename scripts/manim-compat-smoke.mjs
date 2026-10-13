@@ -566,6 +566,8 @@ for cls, group, base in [(Mobject, Group, Mobject), (Group, Group, Mobject),
     assert cls.get_mobject_type_class() is base
 from pathlib import Path
 import tempfile
+import os
+from unittest.mock import patch
 path = Path("movie.mp4")
 assert add_extension_if_not_present(path, ".mp4") is path
 assert add_extension_if_not_present(path, ".png") == Path("movie.mp4.png")
@@ -577,6 +579,14 @@ with tempfile.TemporaryDirectory() as directory:
     assert list(target.iterdir()) == []
     (target / "picture.png").write_text("keep")
     assert seek_full_path_from_defaults("picture", target, [".svg", ".png"]) == target / "picture.png"
+    executable = target / "tool"
+    executable.write_text("user data")
+    assert ensure_executable(executable) == os.access(executable, os.X_OK)
+    os.utime(executable, times=(1000000000.0, 1100000000.0))
+    with patch("time.time", return_value=1234567890.0):
+        assert modify_atime(str(executable)) is None
+    assert executable.stat().st_atime == 1234567890.0
+    assert executable.stat().st_mtime == 1100000000.0
 assert choose(6, 2) == 15
 assert clip(5, 10, 0) == 10
 assert batch_by_property([1, 1, 2, 1], lambda value: value) == [([1, 1], 1), ([2], 2), ([1], 1)]
