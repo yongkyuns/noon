@@ -39,6 +39,9 @@ LAUNCH_POINT = xy((826, 536))[:2]
 LAUNCH_ANGLE_DEGREES = 17.375
 BOUNCES = 36
 FLIGHT_SECONDS = 8.0
+# Deliberate readable first four flights before the faster trace fills the mirror.
+SLOW_BOUNCES = 4
+SLOW_FLIGHT_SECONDS = 4.8
 COLOR_BOUNCES = 48
 COLOR_FLIGHT_SECONDS = 5.0
 DENSE_BOUNCES = 10000
@@ -57,6 +60,12 @@ def validate_showcase_controls():
                         ("DENSE_BOUNCES", DENSE_BOUNCES)):
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f"{name} must be a positive integer")
+    if (isinstance(SLOW_BOUNCES, bool) or not isinstance(SLOW_BOUNCES, int)
+            or not 1 <= SLOW_BOUNCES < BOUNCES):
+        raise ValueError("SLOW_BOUNCES must be at least one and smaller than BOUNCES")
+    if (isinstance(SLOW_FLIGHT_SECONDS, bool) or not math.isfinite(SLOW_FLIGHT_SECONDS)
+            or not 0 < SLOW_FLIGHT_SECONDS < FLIGHT_SECONDS):
+        raise ValueError("SLOW_FLIGHT_SECONDS must be between zero and FLIGHT_SECONDS")
     if BOUNCES + COLOR_BOUNCES + DENSE_BOUNCES > MAX_TOTAL_BOUNCES:
         raise ValueError(f"Reduce bounce counts: this editable demo allows at most {MAX_TOTAL_BOUNCES} total reflections")
     for name, value in (("FLIGHT_SECONDS", FLIGHT_SECONDS),
@@ -139,6 +148,20 @@ def flight_durations(points, seconds):
         raise ValueError("The ray path must contain finite, non-zero segments")
     total = math.fsum(lengths)
     return [seconds * length / total for length in lengths]
+
+
+def pink_flight_durations(points, seconds):
+    """Expose real moving light during a slow opening, then accelerate.
+
+    Each part has constant distance-per-second velocity. The brief speed
+    change is deliberate (dramatic fast-forward), not a collision pause.
+    """
+    if len(points) != BOUNCES + 1:
+        raise ValueError("Pink flight requires BOUNCES + 1 path vertices")
+    if not math.isclose(seconds, FLIGHT_SECONDS):
+        raise ValueError("Pink flight must use the declared FLIGHT_SECONDS")
+    return (flight_durations(points[:SLOW_BOUNCES + 1], SLOW_FLIGHT_SECONDS)
+            + flight_durations(points[SLOW_BOUNCES:], seconds - SLOW_FLIGHT_SECONDS))
 
 
 def direction_hue(a, b):
@@ -339,8 +362,10 @@ def laboratory_artwork():
         for i in range(1, 23 if left < 0 else 20):
             t = i / (23 if left < 0 else 20)
             x, y = left + (right - left) * t, 24 + sag * math.sin(math.pi * t)
-            objects += [oval(x, y + 9, 13, 17, "#f4d69c", 0.06), oval(x, y + 9, 8, 12, "#f5d08e", 0.11),
-                        artwork_path([(x, y), (x, y + 6)], "#52442b", 2), oval(x, y + 10, 3.6, 5.2, "#f2d497")]
+            # Preserve the warm string-light silhouette with two retained shapes
+            # instead of four per bulb (~80 fewer steady-state draw calls).
+            objects += [oval(x, y + 9, 10, 14, "#f5d08e", 0.11),
+                        oval(x, y + 10, 3.6, 5.2, "#f2d497")]
     for cx, cy in ((470, 65), (1338, 47)):
         objects += [artwork_path([(cx, 0), (cx, cy - 27)], "#594d39", 2), panel(cx - 5, cy - 28, 10, 10, "#b29351", 2),
                     artwork_path([(cx - 39, cy + 7), (cx - 32, cy - 11), (cx - 17, cy - 22), (cx + 17, cy - 22),
@@ -512,7 +537,9 @@ class TriangleLightShowcase(Scene):
         for section, begin, end, seconds in ((0, 0, BOUNCES, FLIGHT_SECONDS),
                                              (1, BOUNCES, visible_count, COLOR_FLIGHT_SECONDS)):
             section_points = points[begin:end + 1]
-            for index, duration in enumerate(flight_durations(section_points, seconds), begin):
+            for index, duration in enumerate(
+                    pink_flight_durations(section_points, seconds) if section == 0
+                    else flight_durations(section_points, seconds), begin):
                 a, b = points[index:index + 2]
                 hue = direction_hue(a, b)
                 color = ink("#ff7097") if section == 0 else Color(*colorsys.hsv_to_rgb(hue, 0.63, 0.93))

@@ -25,17 +25,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      SOURCE_SHA: ${{ github.sha }}
       NOON_SHOWCASE_BACKEND: webgl
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
       - name: Focused source and package regressions
         run: |
           python3 -m unittest discover -s web/python -p 'test_showcase_triangle_light*.py' -v
           python3 scripts/showcase-triangle-light-preview.test.py -v
           python3 scripts/showcase-triangle-light-deps.test.py -v
+          node --test scripts/showcase-triangle-light-motion.test.mjs
       # The existing capture and replay oracles deliberately bind scene checkout
       # and compiled runtime to one exact revision. Reusing an earlier Pages
       # artifact is valid only for informal authoring, not this review gate.
@@ -76,6 +77,9 @@ jobs:
         id: candidate
         if: ${{ success() }}
         run: node scripts/showcase-triangle-light-candidate.mjs
+      - name: Qualify visible photon motion inside the first uninterrupted bounce
+        if: ${{ success() && steps.candidate.outcome == 'success' }}
+        run: node scripts/showcase-triangle-light-motion.mjs browser-smoke-artifacts/triangle-light/webgl
       - name: Retain actual frames, playback video, replay results and failures
         if: always()
         uses: actions/upload-artifact@v7
