@@ -134,4 +134,4 @@ jobs:
         with:
           name: plotting-${{ github.event.pull_request.head.sha || github.sha }}
           path: plotting-artifacts/
-          retention-days: 7
+          retention-days: 3

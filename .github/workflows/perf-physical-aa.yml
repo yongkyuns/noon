@@ -183,4 +183,4 @@ jobs:
             evidence/
             baseline-peer/browser-smoke-artifacts/product-gate/host-cost/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
