@@ -1,4 +1,5 @@
 import { validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
+import { parseAuthoringDiagnostic } from "./authoring-diagnostic.js";
 
 export const AUTHORING_CHANNEL = "noon.authoring";
 export const AUTHORING_PROTOCOL_VERSION = 7;
@@ -242,6 +243,8 @@ export class PythonAuthoringClient {
           message.diagnostic?.stack,
         ].filter(Boolean);
         const error = new Error(String(details.join("\n") || "Python authoring failed"));
+        const diagnostic = parseAuthoringDiagnostic(message.authoringDiagnostic);
+        if (diagnostic !== null) error.authoringDiagnostic = diagnostic;
         if (message.requestId === null) {
           this.#fail(error);
           return;

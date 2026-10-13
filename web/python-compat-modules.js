@@ -4,6 +4,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_iterables.py", runtimePath: "/tmp/_manim_iterables.py", label: "Noon Python iterable helpers" },
   { sourcePath: "python/_manim_config_utils.py", runtimePath: "/tmp/_manim_config_utils.py", label: "Noon Python dictionary helpers" },
   { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },
+  { sourcePath: "python/_noon_diagnostics.py", runtimePath: "/tmp/_noon_diagnostics.py", label: "Noon Python source diagnostics" },
   { sourcePath: "python/_noon_effects.py", runtimePath: "/tmp/_noon_effects.py", label: "Noon effect declaration adapter" },
   { sourcePath: "python/noon.py", runtimePath: "/tmp/noon.py", label: "Noon Python API" },
   { sourcePath: "python/_manim_enums.py", runtimePath: "/tmp/_manim_enums.py", label: "Manim enum tokens" },

@@ -32,7 +32,7 @@ class RecoveryScene(Scene):
 class RuntimeFailure(Scene):
     def construct(self):
         self.add(Square())
-        self.add(MissingShape())
+        label = "😀한글"; self.add(MissingShape())
 `,
   oneObject: `from noon import *
 
@@ -90,8 +90,31 @@ async function snapshot(page) {
       playing: status?.dataset.playbackPlaying === "true",
       canvasHidden: getComputedStyle(document.querySelector("canvas")).visibility === "hidden",
       traceback: document.querySelector("#python-traceback")?.textContent ?? "",
+      problemVisible: document.querySelector("#authoring-problem")?.hidden === false,
+      problemTitle: document.querySelector("#authoring-problem strong")?.textContent ?? "",
+      detailsOpen: document.querySelector("#python-diagnostics")?.open ?? false,
     };
   });
+}
+
+async function assertSourceDiagnostic(page, observed, { type, line, selectedText = null }) {
+  assert.equal(observed.problemVisible, true, "the production error panel must be visible");
+  assert.equal(observed.problemTitle, `Python raised ${type}`);
+  assert.equal(observed.detailsOpen, false, "technical details must be collapsed by default");
+  assert.match(observed.traceback, /noon-s\d+-r\d+\.py/, "raw traceback must name the executed revision");
+  await page.getByRole("button", { name: `Go to line ${line}`, exact: true }).click();
+  const selection = await page.evaluate(() => {
+    const view = document.querySelector("#python-scene-source").editorView;
+    const { from, to } = view.state.selection.main;
+    return { line: view.state.doc.lineAt(from).number, text: view.state.sliceDoc(from, to) };
+  });
+  assert.equal(selection.line, line, "source link must target the user's actual line");
+  if (selectedText !== null) assert.equal(selection.text, selectedText);
+}
+
+function assertDiagnosticCleared(observed) {
+  assert.equal(observed.problemVisible, false, "edited/corrected source must clear the old panel");
+  assert.equal(observed.traceback, "", "old technical details must not survive into the next run");
 }
 
 async function assertStoppedPreview(page, observed) {
@@ -255,7 +278,7 @@ try {
   assert.match(edited.patchText, /restarting/);
   assert.equal(edited.objectCount, diagnostics.snapshots.baseline.objectCount);
   diagnostics.snapshots.syntaxError = await runEditedSource(page, { expectedState: "error" });
-  assert.match(diagnostics.snapshots.syntaxError.patchText, /Python failed:/);
+  assert.equal(diagnostics.snapshots.syntaxError.patchText, "Python raised SyntaxError");
   assert.notEqual(diagnostics.snapshots.syntaxError.runtimeState, "error");
   assert.equal(diagnostics.snapshots.syntaxError.rendererBackend, diagnostics.snapshots.baseline.rendererBackend);
   assert.equal(
@@ -270,16 +293,19 @@ try {
   );
   await assertStoppedPreview(page, diagnostics.snapshots.syntaxError);
   assert.match(diagnostics.snapshots.syntaxError.traceback, /SyntaxError/);
+  await assertSourceDiagnostic(page, diagnostics.snapshots.syntaxError, { type: "SyntaxError", line: 3 });
   await page.screenshot({ path: path.join(artifactDir, "syntax-error.png"), fullPage: true });
 
   phase = "syntax-recovery";
   await setEditorSource(page, SOURCES.twoObjects);
   edited = await snapshot(page);
+  assertDiagnosticCleared(edited);
   assert.match(edited.patchText, /restarting/);
   diagnostics.snapshots.syntaxRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 2,
   });
+  assertDiagnosticCleared(diagnostics.snapshots.syntaxRecovered);
   assert.match(diagnostics.snapshots.syntaxRecovered.patchText, /2 objects/);
   assert.notEqual(diagnostics.snapshots.syntaxRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.syntaxRecovered.rendererBackend, "WebGL2");
@@ -290,7 +316,7 @@ try {
   assert.match(edited.patchText, /restarting/);
   assert.equal(edited.objectCount, "2");
   diagnostics.snapshots.runtimeError = await runEditedSource(page, { expectedState: "error" });
-  assert.match(diagnostics.snapshots.runtimeError.patchText, /Python failed:/);
+  assert.equal(diagnostics.snapshots.runtimeError.patchText, "Python raised NameError");
   assert.notEqual(diagnostics.snapshots.runtimeError.runtimeState, "error");
   assert.equal(diagnostics.snapshots.runtimeError.rendererBackend, "WebGL2");
   assert.equal(
@@ -305,16 +331,21 @@ try {
   );
   await assertStoppedPreview(page, diagnostics.snapshots.runtimeError);
   assert.match(diagnostics.snapshots.runtimeError.traceback, /MissingShape/);
+  await assertSourceDiagnostic(page, diagnostics.snapshots.runtimeError, {
+    type: "NameError", line: 6, selectedText: "MissingShape",
+  });
   await page.screenshot({ path: path.join(artifactDir, "runtime-error.png"), fullPage: true });
 
   phase = "runtime-recovery";
   await setEditorSource(page, SOURCES.oneObject);
   edited = await snapshot(page);
+  assertDiagnosticCleared(edited);
   assert.match(edited.patchText, /restarting/);
   diagnostics.snapshots.runtimeRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 1,
   });
+  assertDiagnosticCleared(diagnostics.snapshots.runtimeRecovered);
   assert.match(diagnostics.snapshots.runtimeRecovered.patchText, /1 objects/);
   assert.notEqual(diagnostics.snapshots.runtimeRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.runtimeRecovered.rendererBackend, "WebGL2");
