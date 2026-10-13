@@ -15,8 +15,9 @@ class OrdinaryFamilyMembershipOrder(Scene):
         family.add(b)
         assert list(family) == [a, b]
         self.add(family)
-        live = self.live_execution()
+        self.wait(0.05)
+        assert family.get_family() == [family, a, b]
         family.add(a)
         assert list(family) == [b, a]
         assert family.get_family() == [family, b, a]
-        live.wait(0.2)
+        self.wait(0.15)

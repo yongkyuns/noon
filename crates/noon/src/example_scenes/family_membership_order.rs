@@ -28,8 +28,11 @@ pub fn session() -> Result<ExecutionSession, String> {
         let mut session = scene.execution_session()?;
         {
             let mut live = scene.live(&mut session);
+            let initial = live.wait_segment(0.05)?;
+            live.advance_segment_to(initial, initial.end_time())?;
+            live.complete_segment(initial)?;
             live.add_family_members(&family, &[(&a).into()])?;
-            let wait = live.wait_segment(0.2)?;
+            let wait = live.wait_segment(0.15)?;
             live.advance_segment_to(wait, wait.end_time())?;
             live.complete_segment(wait)?;
         }
