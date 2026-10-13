@@ -1057,7 +1057,9 @@ def __getattr__(name: str):
     module = _PUBLIC_EXPORTS.get(name)
     if module is not None:
         from importlib import import_module
-        return getattr(import_module(module), name)
+        value = getattr(import_module(module), name)
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
