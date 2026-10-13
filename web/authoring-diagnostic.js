@@ -95,6 +95,13 @@ export function presentAuthoringDiagnostic(value) {
   const error = diagnostic.exception;
   let title = `Python raised ${error.type}`;
   let hint = "Inspect the source location and technical details to identify the cause.";
+  if (error.engine === null && diagnostic.phase === "dependencies") {
+    title = "Python dependencies could not load";
+    hint = "Inspect the failed dependency in the technical details, then retry. This may not require a source change.";
+  } else if (error.module === "builtins" && ["SyntaxError", "IndentationError", "TabError"].includes(error.type)) {
+    title = "Python syntax error";
+    hint = "Correct the syntax at the reported source location, then run again.";
+  }
   switch (error.engine?.category) {
     case "unsupported_operation":
       title = "Operation not supported";

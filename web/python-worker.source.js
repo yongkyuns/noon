@@ -1,3 +1,4 @@
+import { attachAuthoringDiagnostic } from "./authoring-error.js";
 import initNoonWeb, {
   WasmAuthoringStore,
   WasmGlow,
@@ -940,6 +941,7 @@ async function handleRequest(request) {
           pyodide,
           request.source,
           request.context,
+          request.sourceDocument ?? { filename: `scene-request-${requestId}.py`, revision: `request-${requestId}` },
         );
         const workerRunCompletedAtMs = performance.now();
         if (run.continuation !== null) {
@@ -1115,101 +1117,130 @@ _manim_namespace.bind_loaded_packages_json(__noon_required_packages_json)
   }
 }
 
-async function runAuthoringSource(pyodide, source, context) {
-  await prepareAuthoringDependencies(pyodide, source);
+async function runAuthoringSource(pyodide, source, context, sourceDocument) {
 
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
   dictConstructor.destroy();
   globals.set("__noon_source", source);
   globals.set("__noon_context_json", JSON.stringify(context));
+  globals.set("__noon_source_document_json", JSON.stringify(sourceDocument));
+  // Compile the actual user source before import discovery. A syntax error
+  // belongs to that source, not to the package scanner's internal Python code.
+  // The existing dependency loader runs while this coroutine is suspended;
+  // scene source still executes exactly once after its dependencies are ready.
+  globals.set("__noon_prepare_dependencies", () => prepareAuthoringDependencies(pyodide, source));
 
   try {
     const resultJson = await pyodide.runPythonAsync(
       `
 import json
-import _manim_updaters
-from _manim_scene import (
-    execute_construct,
-    await_source_barrier,
-    await_module_source_barrier,
-    execution_context,
-)
-from _manim_source_execution import (
-    BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL, compile_authoring_source,
-    authoring_source_scope, execute_authoring_module,
-)
-from noon import Scene
-
-__noon_namespace = {
-    "context": json.loads(__noon_context_json),
-    "__name__": "__main__",
-}
-__noon_code, __noon_portable_constructs = compile_authoring_source(
-    __noon_source
-)
-if __noon_portable_constructs:
-    __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
-if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
-    __noon_namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
-with authoring_source_scope():
-    await execute_authoring_module(__noon_code, __noon_namespace)
-
-if "result" in __noon_namespace:
-    __noon_result = __noon_namespace["result"]
-else:
-    __noon_scene_classes = [
-        value
-        for value in __noon_namespace.values()
-        if isinstance(value, type)
-        and issubclass(value, Scene)
-        and value is not Scene
-        and getattr(value, "__module__", None) == "__main__"
-    ]
-    if not __noon_scene_classes:
-        raise RuntimeError(
-            "Python authoring source must either assign result or define one Scene subclass"
-        )
-    if len(__noon_scene_classes) != 1:
-        __noon_names = ", ".join(cls.__name__ for cls in __noon_scene_classes)
-        raise RuntimeError(
-            "Python authoring source defines multiple Scene subclasses; "
-            f"select one explicitly via result = SceneClass(): {__noon_names}"
-        )
-    __noon_result = __noon_scene_classes[0]()
-    await execute_construct(
-        __noon_result,
-        portable_constructs=__noon_portable_constructs,
+__noon_diagnostic_json = None
+__noon_source_document = json.loads(__noon_source_document_json)
+__noon_phase = "compile"
+try:
+    import _manim_updaters
+    from _manim_scene import (
+        execute_construct,
+        await_source_barrier,
+        await_module_source_barrier,
+        execution_context,
     )
+    from _manim_source_execution import (
+        BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL, compile_authoring_source,
+        authoring_source_scope, execute_authoring_module,
+    )
+    from noon import Scene
 
-if isinstance(__noon_result, Scene):
-    from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration
-    __noon_context = execution_context(__noon_result)
-    __noon_live_duration = __noon_context.liveHandoffDuration()
-    __noon_semantic = {
-        "context_id": str(noonRegisterSemanticExecution(__noon_context)),
-        "callback_session_id": _manim_updaters.canonical_callback_session_id(__noon_result),
+    __noon_namespace = {
+        "context": json.loads(__noon_context_json),
+        "__name__": "__main__",
     }
-    __noon_continuation_generation = noonSemanticContinuationGeneration(__noon_context)
-    if __noon_continuation_generation is not None:
-        __noon_semantic["continuation_generation"] = int(__noon_continuation_generation)
-    __noon_duration = float(__noon_live_duration if __noon_live_duration is not None else __noon_context.authoredDuration())
+    __noon_code, __noon_portable_constructs = compile_authoring_source(
+        __noon_source, filename=__noon_source_document["filename"]
+    )
+    if __noon_portable_constructs:
+        __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
+    if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
+        __noon_namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
+    __noon_phase = "dependencies"
+    await __noon_prepare_dependencies()
+    __noon_phase = "construct"
+    with authoring_source_scope():
+        await execute_authoring_module(__noon_code, __noon_namespace)
 
-else:
-    raise TypeError("Python authoring result must be a noon.Scene")
-json.dumps(
-    {
-        "kind": "semantic_scene",
-        "semantic_execution": __noon_semantic,
-        "duration": __noon_duration,
-    },
-    separators=(",", ":"),
-    allow_nan=False,
-)
+    if "result" in __noon_namespace:
+        __noon_result = __noon_namespace["result"]
+    else:
+        __noon_scene_classes = [
+            value
+            for value in __noon_namespace.values()
+            if isinstance(value, type)
+            and issubclass(value, Scene)
+            and value is not Scene
+            and getattr(value, "__module__", None) == "__main__"
+        ]
+        if not __noon_scene_classes:
+            raise RuntimeError(
+                "Python authoring source must either assign result or define one Scene subclass"
+            )
+        if len(__noon_scene_classes) != 1:
+            __noon_names = ", ".join(cls.__name__ for cls in __noon_scene_classes)
+            raise RuntimeError(
+                "Python authoring source defines multiple Scene subclasses; "
+                f"select one explicitly via result = SceneClass(): {__noon_names}"
+            )
+        __noon_result = __noon_scene_classes[0]()
+        await execute_construct(
+            __noon_result,
+            portable_constructs=__noon_portable_constructs,
+        )
+
+    __noon_phase = "runtime"
+    if isinstance(__noon_result, Scene):
+        from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration
+        __noon_context = execution_context(__noon_result)
+        __noon_live_duration = __noon_context.liveHandoffDuration()
+        __noon_semantic = {
+            "context_id": str(noonRegisterSemanticExecution(__noon_context)),
+            "callback_session_id": _manim_updaters.canonical_callback_session_id(__noon_result),
+        }
+        __noon_continuation_generation = noonSemanticContinuationGeneration(__noon_context)
+        if __noon_continuation_generation is not None:
+            __noon_semantic["continuation_generation"] = int(__noon_continuation_generation)
+        __noon_duration = float(__noon_live_duration if __noon_live_duration is not None else __noon_context.authoredDuration())
+
+    else:
+        raise TypeError("Python authoring result must be a noon.Scene")
+    __noon_result_json = json.dumps(
+        {
+            "kind": "semantic_scene",
+            "semantic_execution": __noon_semantic,
+            "duration": __noon_duration,
+        },
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+except BaseException as __noon_error:
+    try:
+        # Lazy failure-only import. Do not retain the exception in a global
+        # mailbox, replace it, or inspect interpreter-global last-error state.
+        from _noon_diagnostics import capture_exception
+        __noon_diagnostic_json = json.dumps(capture_exception(
+            __noon_error, source=__noon_source,
+            filename=__noon_source_document["filename"],
+            revision=__noon_source_document["revision"], phase=__noon_phase,
+        ))
+    except BaseException:
+        pass
+    raise
+__noon_result_json
 `,
       { globals },
     );
     return resultJson;
+  } catch (error) {
+    throw attachAuthoringDiagnostic(error, globals);
   } finally {
     globals.destroy();
   }
@@ -1263,6 +1294,12 @@ function validateRequest(request) {
     }
     if (!isRecord(request.context)) {
       throw new Error("Python authoring context must be an object");
+    }
+    const document = request.sourceDocument;
+    if (document !== undefined && (!isRecord(document) ||
+        typeof document.filename !== "string" || !document.filename || document.filename.length > 512 ||
+        typeof document.revision !== "string" || !document.revision || document.revision.length > 128)) {
+      throw new Error("Python authoring source document identity is invalid");
     }
     return;
   }
@@ -1335,6 +1372,7 @@ function postError(requestId, error) {
     requestId,
     message: error instanceof Error ? error.message : String(error),
     diagnostic: error instanceof Error && error.stack ? { stack: error.stack } : null,
+    authoringDiagnostic: error?.authoringDiagnostic ?? null,
   });
 }
 

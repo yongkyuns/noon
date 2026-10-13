@@ -1,8 +1,12 @@
+import { authoringErrorFromMessage } from "./authoring-error.js";
+
+let nextDiagnosticClient = 0;
 export const AUTHORING_CHANNEL = "noon.authoring";
 export const AUTHORING_PROTOCOL_VERSION = 7;
 
 export class PythonAuthoringClient {
   #worker;
+  #diagnosticClient = nextDiagnosticClient++;
   #nextRequestId = 0;
   #pending = new Map();
   #continuations = new Map();
@@ -63,12 +67,14 @@ export class PythonAuthoringClient {
     }
     await this.ready();
     const requestId = this.#beginRequest();
-    const result = this.#resultFor(requestId, { onSemanticContinuation });
+    const sourceDocument = Object.freeze({ filename: `scene-${this.#diagnosticClient}-${requestId}.py`, revision: `${this.#diagnosticClient}/${requestId}` });
+    const result = this.#resultFor(requestId, { onSemanticContinuation, source, sourceDocument });
     this.#worker.postMessage(
       envelope("run", {
         requestId,
         source,
         context,
+        sourceDocument,
       }),
     );
     return result;
@@ -238,16 +244,13 @@ export class PythonAuthoringClient {
       }
 
       if (message.type === "error") {
-        const details = [
-          message.message,
-          message.diagnostic?.stack,
-        ].filter(Boolean);
-        const error = new Error(String(details.join("\n") || "Python authoring failed"));
         if (message.requestId === null) {
-          this.#fail(error);
+          this.#fail(authoringErrorFromMessage(message));
           return;
         }
-        this.#settle(message.requestId, ({ reject }) => reject(error));
+        this.#settle(message.requestId, (pending) => {
+          pending.reject(authoringErrorFromMessage(message, pending));
+        });
         return;
       }
 

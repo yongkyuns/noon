@@ -94,6 +94,27 @@ async function snapshot(page) {
   });
 }
 
+async function assertSourceDiagnostic(page, line, selectedText = null) {
+  await page.waitForSelector("#authoring-diagnostic:not([hidden])");
+  assert.equal(await page.locator("#python-diagnostics").evaluate(node => node.open), false,
+    "technical details should be collapsed by default");
+  const link = page.locator("#authoring-diagnostic .diagnostic-source");
+  assert.match(await link.textContent(), new RegExp(`^Go to scene-\\d+-\\d+\\.py:${line}$`));
+  await link.click();
+  const selection = await page.evaluate(() => {
+    const view = document.querySelector("#python-scene-source").editorView;
+    const { from, to } = view.state.selection.main;
+    return { line: view.state.doc.lineAt(from).number, text: view.state.doc.sliceString(from, to) };
+  });
+  assert.equal(selection.line, line);
+  if (selectedText !== null) assert.equal(selection.text, selectedText);
+}
+
+async function assertDiagnosticCleared(page) {
+  assert.equal(await page.locator("#authoring-diagnostic").isVisible(), false);
+  assert.equal(await page.locator("#python-diagnostics").isVisible(), false);
+}
+
 async function assertStoppedPreview(page, observed) {
   assert.equal(observed.playing, false, "invalid edits must pause the previous execution");
   if (!observed.hasExecution) return;
@@ -255,7 +276,7 @@ try {
   assert.match(edited.patchText, /restarting/);
   assert.equal(edited.objectCount, diagnostics.snapshots.baseline.objectCount);
   diagnostics.snapshots.syntaxError = await runEditedSource(page, { expectedState: "error" });
-  assert.match(diagnostics.snapshots.syntaxError.patchText, /Python failed:/);
+  assert.match(diagnostics.snapshots.syntaxError.patchText, /Python syntax error/);
   assert.notEqual(diagnostics.snapshots.syntaxError.runtimeState, "error");
   assert.equal(diagnostics.snapshots.syntaxError.rendererBackend, diagnostics.snapshots.baseline.rendererBackend);
   assert.equal(
@@ -270,6 +291,7 @@ try {
   );
   await assertStoppedPreview(page, diagnostics.snapshots.syntaxError);
   assert.match(diagnostics.snapshots.syntaxError.traceback, /SyntaxError/);
+  await assertSourceDiagnostic(page, 3);
   await page.screenshot({ path: path.join(artifactDir, "syntax-error.png"), fullPage: true });
 
   phase = "syntax-recovery";
@@ -283,6 +305,7 @@ try {
   assert.match(diagnostics.snapshots.syntaxRecovered.patchText, /2 objects/);
   assert.notEqual(diagnostics.snapshots.syntaxRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.syntaxRecovered.rendererBackend, "WebGL2");
+  await assertDiagnosticCleared(page);
 
   phase = "runtime-error";
   await setEditorSource(page, SOURCES.runtimeError);
@@ -290,7 +313,7 @@ try {
   assert.match(edited.patchText, /restarting/);
   assert.equal(edited.objectCount, "2");
   diagnostics.snapshots.runtimeError = await runEditedSource(page, { expectedState: "error" });
-  assert.match(diagnostics.snapshots.runtimeError.patchText, /Python failed:/);
+  assert.match(diagnostics.snapshots.runtimeError.patchText, /Python raised NameError/);
   assert.notEqual(diagnostics.snapshots.runtimeError.runtimeState, "error");
   assert.equal(diagnostics.snapshots.runtimeError.rendererBackend, "WebGL2");
   assert.equal(
@@ -305,6 +328,7 @@ try {
   );
   await assertStoppedPreview(page, diagnostics.snapshots.runtimeError);
   assert.match(diagnostics.snapshots.runtimeError.traceback, /MissingShape/);
+  await assertSourceDiagnostic(page, 6, "MissingShape");
   await page.screenshot({ path: path.join(artifactDir, "runtime-error.png"), fullPage: true });
 
   phase = "runtime-recovery";
@@ -318,6 +342,7 @@ try {
   assert.match(diagnostics.snapshots.runtimeRecovered.patchText, /1 objects/);
   assert.notEqual(diagnostics.snapshots.runtimeRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.runtimeRecovered.rendererBackend, "WebGL2");
+  await assertDiagnosticCleared(page);
   await page.screenshot({ path: path.join(artifactDir, "recovered.png"), fullPage: true });
 
   const syntaxConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "syntax-error");

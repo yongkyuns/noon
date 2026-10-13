@@ -1,0 +1,15 @@
+.playground-diagnostic {
+  max-height: 12rem;
+  overflow: auto;
+  padding: 0.6rem 0.7rem;
+  border-left: 2px solid var(--danger);
+  margin-bottom: 0.35rem;
+  text-align: left;
+  font-size: 0.75rem;
+}
+.playground-diagnostic p { margin: 0.3rem 0; }
+.diagnostic-title { display: block; color: var(--danger); }
+.diagnostic-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+.diagnostic-hint, .diagnostic-operation { color: var(--muted); }
+.diagnostic-source { margin-top: 0.3rem; }
+#python-traceback { max-height: 12rem; overflow: auto; }

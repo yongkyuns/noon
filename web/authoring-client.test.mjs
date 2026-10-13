@@ -84,7 +84,10 @@ test("correlates a Python request with a validated shared Scene response", async
     requestId: 0,
     source: "result = scene",
     context: { example: "scene" },
+    sourceDocument: worker.messages[0].sourceDocument,
   });
+  assert.match(worker.messages[0].sourceDocument.filename, /^scene-\d+-\d+\.py$/);
+  assert.equal(typeof worker.messages[0].sourceDocument.revision, "string");
 
   worker.emit(
     "message",

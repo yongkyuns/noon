@@ -1,3 +1,4 @@
+import { PlaygroundDiagnostics } from "./playground-diagnostics.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
@@ -22,6 +23,9 @@ const sceneButton = document.querySelector("#replace-scene");
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
 const sceneSourceEditor = document.querySelector("#python-scene-source");
+const diagnosticPanel = new PlaygroundDiagnostics(
+  sceneSourceEditor, document.querySelector("#python-diagnostics"), document.querySelector("#python-traceback"),
+);
 const sourceEditor = document.querySelector("#python-source");
 const sceneTab = document.querySelector("#scene-tab");
 const patchTab = document.querySelector("#patch-tab");
@@ -449,31 +453,27 @@ function beginBusy() {
 function showError(error) {
   resetPresentationRate();
   console.error(error);
-  setRuntimeStatus(`Error: ${error}`, "error");
-  patchStatus.value = "Runtime failed";
+  setRuntimeStatus("Preview unavailable · see error details", "error");
+  patchStatus.value = diagnosticPanel.show(error, "Preview unavailable");
   patchStatus.dataset.state = "error";
 }
 
 function showSceneError(error) {
   resetPresentationRate();
   console.error(error);
-  patchStatus.value = `Python failed: ${error}`;
+  patchStatus.value = diagnosticPanel.show(error, "Python execution failed");
   patchStatus.dataset.state = "error";
-  document.querySelector("#python-traceback").textContent = String(error.stack ?? error);
-  const diagnostics = document.querySelector("#python-diagnostics");
-  diagnostics.hidden = false;
-  diagnostics.open = true;
 }
 
 function showRecoverableSceneError(error) {
   console.warn("Recoverable Python callback error", error);
-  patchStatus.value = `Python callback failed: ${error}`;
+  patchStatus.value = diagnosticPanel.show(error, "A callback failed");
   patchStatus.dataset.state = "error";
 }
 
 function showPlaybackError(error) {
   console.error(error);
-  patchStatus.value = `Playback failed: ${error}`;
+  patchStatus.value = diagnosticPanel.show(error, "Playback failed");
   patchStatus.dataset.state = "error";
 }
 
@@ -920,7 +920,7 @@ function stopForSourceEdit() {
   status.dataset.playbackControls = "unavailable";
   status.dataset.playbackPhase = "stopped";
   status.dataset.playbackPlaying = "false";
-  document.querySelector("#python-diagnostics").hidden = true;
+  diagnosticPanel.clear();
   setRuntimeStatus("Preview stopped · waiting for edited Python…", "ready");
   return task;
 }
@@ -971,7 +971,7 @@ async function runScene() {
     let earlyContinuation = null;
     let authoringFailed = false;
     try {
-      document.querySelector("#python-diagnostics").hidden = true;
+      diagnosticPanel.clear();
       setRuntimeStatus("Building Python scene…", "running");
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
@@ -1183,7 +1183,7 @@ async function runScene() {
         return recordStale(runToken, "error");
       }
       if (authoringFailed) {
-        setRuntimeStatus("Python error · edit the source to retry", "ready");
+        setRuntimeStatus("Scene could not run · see error details", "ready");
         showSceneError(error);
       } else if (player === null || playerNeedsRestart) {
         showError(error);
@@ -1561,6 +1561,7 @@ try {
     "pagehide",
     () => {
       sourceRestart.dispose();
+      diagnosticPanel.dispose();
       disposeFullscreen();
       stopMetricsPolling();
       playbackControls?.destroy();

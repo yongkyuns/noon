@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { attachAuthoringDiagnostic } from "./authoring-error.js";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 const start = source.indexOf("async function prepareAuthoringDependencies(");
@@ -14,6 +15,7 @@ const { prepareAuthoringDependencies, runAuthoringSource } = vm.runInNewContext(
 ${source.slice(start, end)}
 return { prepareAuthoringDependencies, runAuthoringSource };
 })()`,
+  { attachAuthoringDiagnostic },
 );
 
 function interpreter({ load, execute, requiredPackages = [], missingPackages } = {}) {
@@ -37,6 +39,7 @@ function interpreter({ load, execute, requiredPackages = [], missingPackages } =
             values,
             destroyed: false,
             set: (key, value) => values.set(key, value),
+            get: (key) => values.get(key),
             destroy() {
               this.destroyed = true;
               events.push(["destroy"]);
@@ -67,6 +70,12 @@ function interpreter({ load, execute, requiredPackages = [], missingPackages } =
       throw new Error("unexpected runPython call in source-startup test");
     },
     async runPythonAsync(bootstrap, { globals }) {
+      // Model the production coroutine's dependency await. Actual Python
+      // compilation/capture is exercised in test_noon_worker_diagnostics.py.
+      events.push(["compile"]);
+      assert.ok(bootstrap.indexOf("compile_authoring_source(") < bootstrap.indexOf("await __noon_prepare_dependencies()"));
+      assert.ok(bootstrap.indexOf("await __noon_prepare_dependencies()") < bootstrap.indexOf("await execute_authoring_module("));
+      await globals.values.get("__noon_prepare_dependencies")();
       events.push(["execute", globals.values.get("__noon_source")]);
       assert.match(bootstrap, /await execute_authoring_module\(__noon_code, __noon_namespace\)/);
       return execute ? execute(bootstrap, globals) : "source-result";
@@ -92,22 +101,17 @@ test("explicit source imports finish loading before dependency inspection or aut
   const state = interpreter({ load: () => loading });
   const pending = runAuthoringSource(state.pyodide, numpyScene, { selected: "Demo" });
   await Promise.resolve();
-  assert.deepEqual(state.events, [["packages", numpyScene]]);
-  assert.equal(state.namespaces.length, 0);
+  assert.deepEqual(state.events, [["dict"], ["constructor-destroy"], ["compile"], ["packages", numpyScene]]);
+  assert.equal(authoringNamespaces(state).length, 1);
+  assert.equal(authoringNamespaces(state)[0].destroyed, false);
   release();
   assert.equal(await pending, "source-result");
 
   const kinds = state.events.map(event => event[0]);
   assert.deepEqual(kinds, [
-    "packages",
-    "dict",
-    "constructor-destroy",
-    "implicit-required",
-    "destroy",
-    "dict",
-    "constructor-destroy",
-    "execute",
-    "destroy",
+    "dict", "constructor-destroy", "compile", "packages",
+    "dict", "constructor-destroy", "implicit-required", "destroy",
+    "execute", "destroy",
   ]);
   const [namespace] = authoringNamespaces(state);
   assert.equal(namespace.values.get("__noon_source"), numpyScene);
@@ -119,8 +123,9 @@ test("package-load failure preserves its error and never executes user source", 
   const failure = new Error("package download failed");
   const state = interpreter({ load: async () => { throw failure; } });
   await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}), error => error === failure);
-  assert.deepEqual(state.events, [["packages", numpyScene]]);
-  assert.equal(state.namespaces.length, 0);
+  assert.deepEqual(state.events, [["dict"], ["constructor-destroy"], ["compile"], ["packages", numpyScene], ["destroy"]]);
+  assert.equal(authoringNamespaces(state).length, 1);
+  assert.equal(authoringNamespaces(state)[0].destroyed, true);
 });
 
 test("a failed package load does not poison a later source run", async () => {
@@ -134,8 +139,8 @@ test("a failed package load does not poison a later source run", async () => {
   assert.equal(await runAuthoringSource(state.pyodide, numpyScene, {}), "source-result");
   assert.equal(attempts, 2);
   assert.equal(state.events.filter(([kind]) => kind === "execute").length, 1);
-  assert.equal(authoringNamespaces(state).length, 1);
-  assert.equal(authoringNamespaces(state)[0].destroyed, true);
+  assert.equal(authoringNamespaces(state).length, 2);
+  assert.ok(authoringNamespaces(state).every(namespace => namespace.destroyed));
 });
 
 test("synchronous loader errors also stop before dependency inspection and authoring", async () => {
@@ -143,7 +148,7 @@ test("synchronous loader errors also stop before dependency inspection and autho
   const failure = new Error("invalid import syntax");
   state.pyodide.loadPackagesFromImports = () => { throw failure; };
   await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}), error => error === failure);
-  assert.deepEqual(state.events, []);
+  assert.deepEqual(state.events, [["dict"], ["constructor-destroy"], ["compile"], ["destroy"]]);
 });
 
 test("source execution failure still destroys its authoring namespace exactly once", async () => {
