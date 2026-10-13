@@ -22,6 +22,13 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
     "np": "numpy",
 }
 
+_OPTIONAL_HELPER_PACKAGES = {
+    "stretch_array_to_length": "numpy",
+    "resize_array": "numpy",
+    "resize_preserving_order": "numpy",
+    "resize_with_interpolation": "numpy",
+}
+
 # Literal values pinned to ManimCommunity/manim@861cd4849b17db1db3515b531ffe80b297848f93.
 _MANIM_COLORS = {
     "WHITE": 0xFFFFFF,
@@ -166,25 +173,30 @@ class _PendingOptionalNamespace:
 
 
 def _loaded_names(source: str) -> set[str]:
-    """Return identifier names actually read by syntactically valid Python source."""
+    """Collect loaded names, attribute access and explicit namespace imports."""
 
     tree = ast.parse(source, mode="exec")
-    return {
+    names = {
         node.id
         for node in ast.walk(tree)
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
     }
+    names.update(node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute))
+    names.update(alias.name for node in ast.walk(tree)
+                 if isinstance(node, ast.ImportFrom) and node.module in {"manim", "noon", "_manim_iterables"}
+                 for alias in node.names)
+    return names
 
 
 def required_packages(source: str) -> tuple[str, ...]:
-    """Return optional packages needed by implicit Manim namespace aliases."""
+    """Return packages needed by optional namespace aliases and data helpers."""
 
     names = _loaded_names(source)
-    return tuple(
+    return tuple(dict.fromkeys(
         package
-        for alias, package in _OPTIONAL_NAMESPACE_PACKAGES.items()
+        for alias, package in {**_OPTIONAL_NAMESPACE_PACKAGES, **_OPTIONAL_HELPER_PACKAGES}.items()
         if alias in names
-    )
+    ))
 
 
 def required_packages_json(source: str) -> str:

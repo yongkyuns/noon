@@ -535,31 +535,21 @@ fn variation_fingerprint(settings: &[FontVariationSetting]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_typst::{compile_typst_resource, TypstMode};
+    use crate::shaping::{
+        NativeFontFace, NativeTextCompiler, NativeTextOptions, NativeTextResourceArtifact,
+    };
 
-    #[test]
-    fn typst_glyphs_rasterize_from_retained_font_bytes() {
-        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
-        let run = artifact.resource.runs.first().unwrap();
-        let glyph = run.glyphs.first().unwrap();
-        let mut cache = GlyphRasterCache::new();
-
-        let raster = cache
-            .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 64.0)
-            .unwrap();
-        let GlyphRaster::Image(image) = raster.as_ref() else {
-            panic!("visible glyph should produce pixels");
-        };
-        assert!(image.placement.width > 0);
-        assert!(image.placement.height > 0);
-        assert!(!image.data.is_empty());
-        assert_eq!(cache.stats().entries, 1);
-        assert_eq!(cache.stats().font_faces, 1);
+    fn native_artifact(source: &str) -> NativeTextResourceArtifact {
+        let bytes = typst_assets::fonts().next().expect("bundled test font");
+        let font = NativeFontFace::new("Bundled Test Font", Arc::<[u8]>::from(bytes), 0).unwrap();
+        NativeTextCompiler::new()
+            .compile_plain(source, &font, &NativeTextOptions::new(48.0))
+            .unwrap()
     }
 
     #[test]
     fn repeated_requests_reuse_the_same_raster() {
-        let artifact = compile_typst_resource("AA", TypstMode::Markup).unwrap();
+        let artifact = native_artifact("AA");
         let run = artifact.resource.runs.first().unwrap();
         let glyph = run.glyphs.first().unwrap();
         let mut cache = GlyphRasterCache::new();
@@ -577,7 +567,7 @@ mod tests {
 
     #[test]
     fn entry_budget_evicts_the_least_recently_used_raster() {
-        let artifact = compile_typst_resource("ABC", TypstMode::Markup).unwrap();
+        let artifact = native_artifact("ABC");
         let run = artifact.resource.runs.first().unwrap();
         assert!(run.glyphs.len() >= 3);
         let a = run.glyphs[0].glyph_id;
@@ -614,7 +604,7 @@ mod tests {
 
     #[test]
     fn images_larger_than_the_byte_budget_are_not_admitted() {
-        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let artifact = native_artifact("A");
         let run = artifact.resource.runs.first().unwrap();
         let glyph = run.glyphs.first().unwrap();
         let mut cache = GlyphRasterCache::with_limits(GlyphRasterCacheLimits::new(16, 1));
@@ -641,7 +631,7 @@ mod tests {
 
     #[test]
     fn clearing_images_releases_cached_font_faces() {
-        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let artifact = native_artifact("A");
         let run = artifact.resource.runs.first().unwrap();
         let glyph = run.glyphs.first().unwrap();
         let mut cache = GlyphRasterCache::new();
@@ -658,7 +648,7 @@ mod tests {
 
     #[test]
     fn tightening_limits_evicts_immediately() {
-        let artifact = compile_typst_resource("AB", TypstMode::Markup).unwrap();
+        let artifact = native_artifact("AB");
         let run = artifact.resource.runs.first().unwrap();
         let mut cache = GlyphRasterCache::new();
         for glyph in run.glyphs.iter().take(2) {
@@ -675,32 +665,6 @@ mod tests {
     }
 
     #[test]
-    fn stroked_typst_runs_require_outline_rendering() {
-        let artifact = compile_typst_resource(
-            "#text(stroke: (paint: red, thickness: 1pt, dash: \"dashed\"))[A]",
-            TypstMode::Markup,
-        )
-        .unwrap();
-        let run = artifact
-            .resource
-            .runs
-            .iter()
-            .find(|run| run.stroke.is_some())
-            .expect("Typst should retain the text stroke");
-        let glyph = run.glyphs.first().unwrap();
-        let mut cache = GlyphRasterCache::new();
-
-        assert_eq!(
-            cache
-                .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 48.0)
-                .unwrap_err(),
-            GlyphRasterError::OutlineRequired
-        );
-        assert!(cache.is_empty());
-        assert_eq!(cache.stats().misses, 0);
-    }
-
-    #[test]
     fn pixel_size_and_variations_are_part_of_cache_identity() {
         let no_variation = variation_fingerprint(&[]);
         let weight = variation_fingerprint(&[FontVariationSetting {
@@ -713,7 +677,7 @@ mod tests {
 
     #[test]
     fn subpixel_phase_is_bounded_cache_identity_and_reuses_exact_matches() {
-        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let artifact = native_artifact("A");
         let run = artifact.resource.runs.first().unwrap();
         let glyph = run.glyphs.first().unwrap();
         let mut cache = GlyphRasterCache::with_limits(GlyphRasterCacheLimits::new(2, usize::MAX));
@@ -749,7 +713,7 @@ mod tests {
 
     #[test]
     fn invalid_pixel_size_is_rejected_before_font_lookup() {
-        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let artifact = native_artifact("A");
         let run = artifact.resource.runs.first().unwrap();
         let glyph = run.glyphs.first().unwrap();
         let mut cache = GlyphRasterCache::new();
