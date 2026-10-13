@@ -555,6 +555,19 @@ try {
 from noon import *
 import sys
 assert "numpy" not in sys.modules
+from pathlib import Path
+import tempfile
+path = Path("movie.mp4")
+assert add_extension_if_not_present(path, ".mp4") is path
+assert add_extension_if_not_present(path, ".png") == Path("movie.mp4.png")
+with tempfile.TemporaryDirectory() as directory:
+    target = Path(directory) / "nested" / "target"
+    assert guarantee_existence(target) == target.resolve(strict=True)
+    (target / "old.txt").write_text("remove")
+    assert guarantee_empty_existence(target) == target.resolve(strict=True)
+    assert list(target.iterdir()) == []
+    (target / "picture.png").write_text("keep")
+    assert seek_full_path_from_defaults("picture", target, [".svg", ".png"]) == target / "picture.png"
 assert choose(6, 2) == 15
 assert clip(5, 10, 0) == 10
 assert "numpy" not in sys.modules

@@ -6,6 +6,7 @@ import itertools
 import json
 from pathlib import Path
 import random
+import runpy
 import sys
 
 
@@ -92,9 +93,15 @@ def main():
             raise ValueError("installed Manim utility source differs from the pinned checkout")
         if observations(vars(config_ops)) != expected:
             errors.append("installed full Manim module differs from pinned-body observations")
+    qualify_paths = runpy.run_path(
+        str(Path(__file__).with_name("manim-file-paths.py")),
+        run_name="_file_path_qualification",
+    )["qualify"]
+    paths = qualify_paths(args.manim_source, installed_manim=args.installed_manim)
+    errors.extend(paths["errors"])
     print(json.dumps({"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                       "symbols": len(NAMES), "observations": len(expected),
-                      "installed_module_checked": args.installed_manim, "errors": errors}, indent=2))
+                      "installed_module_checked": args.installed_manim, "file_paths": paths, "errors": errors}, indent=2))
     return bool(errors)
 
 

@@ -887,6 +887,10 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "add_extension_if_not_present": "_manim_file_paths",
+    "guarantee_existence": "_manim_file_paths",
+    "guarantee_empty_existence": "_manim_file_paths",
+    "seek_full_path_from_defaults": "_manim_file_paths",
     "binary_search": "_manim_simple_functions",
     "choose": "_manim_simple_functions",
     "clip": "_manim_simple_functions",
