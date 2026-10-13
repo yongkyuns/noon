@@ -25,6 +25,8 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 _OPTIONAL_HELPER_PACKAGES = {
     "binary_search": "numpy",
     "sigmoid": "numpy",
+    "inverse_interpolate": "numpy",
+    "match_interpolate": "numpy",
     "stretch_array_to_length": "numpy",
     "resize_array": "numpy",
     "resize_preserving_order": "numpy",

@@ -63,7 +63,7 @@ async function runProfiler({ duration, frames, targetHz, warmupFrames = 0, conti
     performance: { now: () => ++now },
     requestAnimationFrame: callback => callback(frameTimestamps[animationFrame++] ?? now),
     fetch: async () => ({ ok: true, text: async () => "# mocked authoring source" }),
-    ProvenancedPythonAuthoringClient: MockAuthoringClient,
+    PythonAuthoringClient: MockAuthoringClient,
     AuthoringExecutionClient: MockExecutionClient,
     BrowserJankMonitor: class { start() {} stop() {} summary() { return []; } },
     FrameMetrics,

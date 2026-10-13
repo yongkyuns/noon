@@ -45,6 +45,12 @@ class ManimNamespaceTests(unittest.TestCase):
             self.assertEqual(namespace.required_packages(source), ("numpy",))
         self.assertEqual(namespace.required_packages("message = 'stretch_array_to_length'"), ())
 
+    def test_interpolation_requires_numpy_only_for_division_helpers(self):
+        for name in ["inverse_interpolate", "match_interpolate"]:
+            self.assertEqual(namespace.required_packages(f"from manim import {name} as helper\nhelper(0, 1, 0.5)"), ("numpy",))
+        for name in ["interpolate", "integer_interpolate", "mid"]:
+            self.assertEqual(namespace.required_packages(f"{name}(0, 1, 0.5)"), ())
+
     def test_pure_colors_match_manim_v021(self) -> None:
         expected = {
             "PURE_RED": (1.0, 0.0, 0.0),

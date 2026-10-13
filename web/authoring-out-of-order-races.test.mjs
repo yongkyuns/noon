@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { runtimeBuildIdentity } from "./test-support/runtime-build.mjs";
 
 import {
   AUTHORING_CHANNEL,
@@ -41,6 +42,7 @@ function workerMessage(type, payload = {}) {
     channel: AUTHORING_CHANNEL,
     protocolVersion: AUTHORING_PROTOCOL_VERSION,
     type,
+    ...(type === "ready" ? { buildIdentity: runtimeBuildIdentity() } : {}),
     ...payload,
   };
 }
