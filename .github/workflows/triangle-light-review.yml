@@ -1,0 +1,135 @@
+name: Triangle light pre-merge review
+
+# Temporary #2056 reviewer-delivery path. Remove with the candidate tooling after
+# visual approval. Required showcase/WebGPU/WebGL gates remain unchanged.
+on:
+  pull_request:
+    paths:
+      - 'web/python/examples/showcase_triangle_light*'
+      - 'web/python/test_showcase_triangle_light*'
+      - 'scripts/showcase-triangle-light-*'
+      - '.github/workflows/triangle-light-review.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: triangle-light-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Runnable preview and actual WebGL review
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      NOON_SHOWCASE_BACKEND: webgl
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Focused source and package regressions
+        run: |
+          python3 -m unittest discover -s web/python -p 'test_showcase_triangle_light*.py' -v
+          python3 scripts/showcase-triangle-light-preview.test.py -v
+      - name: Reuse only an identical built base engine, never a floating latest build
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'reused=false' >> "$GITHUB_OUTPUT"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          # Only example/test changes may differ in the served web product.
+          # Any engine/wrapper/build change forces a normal build of this head.
+          git diff --name-only "$BASE_SHA" HEAD -- crates Cargo.toml rust-toolchain.toml web scripts/build-web-demo.sh scripts/build-python-worker.mjs > "$RUNNER_TEMP/runtime-diff.txt"
+          if ! python3 - "$RUNNER_TEMP/runtime-diff.txt" <<'PY'
+          import pathlib, sys
+          allowed = lambda p: (p.startswith('web/python/examples/showcase_triangle_light')
+                               or p.startswith('web/python/test_showcase_triangle_light'))
+          sys.exit(0 if all(allowed(p) for p in pathlib.Path(sys.argv[1]).read_text().splitlines()) else 1)
+          PY
+          then
+            echo 'Engine inputs differ; build this PR instead.'
+            exit 0
+          fi
+          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$BASE_SHA&event=push&status=success&per_page=100" \
+            --jq '[.workflow_runs[] | select(.path == ".github/workflows/pages.yml")][0].id')"
+          if [[ -z "$run_id" || "$run_id" == null ]]; then
+            echo 'No successful built base runtime; build this PR instead.'
+            exit 0
+          fi
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+            --jq '[.artifacts[] | select(.name == "github-pages" and .expired == false)][0].id')"
+          if [[ -z "$artifact_id" || "$artifact_id" == null ]]; then
+            echo 'Base artifact expired; build this PR instead.'
+            exit 0
+          fi
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name github-pages --dir "$RUNNER_TEMP/triangle-base-runtime"
+          tar -xf "$RUNNER_TEMP/triangle-base-runtime/artifact.tar" -C web
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          identity = json.loads(Path('web/runtime-build-identity.json').read_text())
+          if identity['sourceRevision'] != os.environ['BASE_SHA']:
+              raise SystemExit('Cached runtime does not match the exact expected base SHA')
+          PY
+          echo 'reused=true' >> "$GITHUB_OUTPUT"
+      - name: Build this head when exact reusable runtime is unavailable
+        if: steps.runtime.outputs.reused != 'true'
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+      - name: Package the unchanged browser product with the candidate selected
+        run: python3 scripts/showcase-triangle-light-preview.py --output browser-smoke-artifacts/triangle-light-preview --source-revision "$SOURCE_SHA"
+      - name: Make the runnable package available before the visual checks finish
+        uses: actions/upload-artifact@v7
+        with:
+          name: triangle-light-preview
+          path: browser-smoke-artifacts/triangle-light-preview
+          retention-days: 7
+      - name: Preserve pinned browser-Python resources for reproducible offline inspection
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re, urllib.request
+          worker = pathlib.Path('web/python-worker.js').read_text()
+          match = re.search(r'from "(https://cdn\.jsdelivr\.net/pyodide/[^"\s]+/)pyodide\.mjs"', worker)
+          if not match:
+              raise SystemExit('Cannot identify the pinned Pyodide distribution')
+          output = pathlib.Path('browser-smoke-artifacts/triangle-light-browser-deps')
+          output.mkdir(parents=True, exist_ok=True)
+          urls = {}
+          for name in ('pyodide.mjs', 'pyodide.asm.js', 'pyodide.asm.wasm', 'python_stdlib.zip', 'pyodide-lock.json'):
+              url = match[1] + name
+              with urllib.request.urlopen(url, timeout=120) as response:
+                  (output / name).write_bytes(response.read())
+              urls[url] = name
+          (output / 'url-map.json').write_text(json.dumps(urls, indent=2))
+          PY
+      - name: Retain the exact external runtime inputs separately from the preview
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: triangle-light-browser-deps
+          path: browser-smoke-artifacts/triangle-light-browser-deps
+          retention-days: 3
+      - name: Install the repository-pinned browser tools
+        if: ${{ !cancelled() }}
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Capture and record the actual candidate through the existing Noon hosts
+        if: ${{ !cancelled() }}
+        run: node scripts/showcase-triangle-light-candidate.mjs
+      - name: Retain actual frames, playback video, replay results and failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: triangle-light-actual-review
+          path: browser-smoke-artifacts/triangle-light/webgl
+          if-no-files-found: warn
+          retention-days: 7

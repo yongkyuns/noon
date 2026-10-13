@@ -46,10 +46,18 @@ export async function qualifyTriangleLight(root, {
   catch (error) { if (error.code !== "ENOENT") throw error; }
   try {
     await writeFile(manifestPath, JSON.stringify(candidate, null, 2) + "\n");
-    // Use both existing qualification paths, not an imitation renderer or a
-    // weaker interpretation of replay. Neither command publishes or commits.
-    await run("showcase-capture.mjs");
-    await run("showcase-live-review.mjs");
+    // Capture failure must not hide independent ordinary-playback/replay evidence.
+    // Run both existing hosts and retain both failures, without turning either
+    // failure into a pass or publishing anything.
+    const errors = [];
+    for (const script of ["showcase-capture.mjs", "showcase-live-review.mjs"]) {
+      try { await run(script); }
+      catch (error) { errors.push(error); }
+    }
+    if (errors.length) {
+      throw new AggregateError(errors,
+        `Triangle-light qualification failed: ${errors.map(error => error.message ?? String(error)).join("; ")}`);
+    }
   } finally {
     try {
       // A fresh CI checkout has no result directory. Never overwrite old review

@@ -28,11 +28,18 @@ for (const fail of [false, true]) {
         await writeFile(path.join(output, "report.json"), "candidate-report");
         await writeFile(path.join(posters, "capture-evidence.json"), "candidate-evidence");
         await writeFile(path.join(posters, "showcase-triangle-light.png"), "candidate-poster");
-        if (fail) throw new Error("deliberate capture failure");
+        if (fail) throw new Error(`deliberate capture failure: ${script}`);
       } });
-      if (fail) await assert.rejects(execution, /deliberate capture failure/);
+      if (fail) await assert.rejects(execution, error => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors.length, 2, "neither failure is swallowed");
+        assert.match(error.message, /showcase-capture.mjs/);
+        assert.match(error.message, /showcase-live-review.mjs/);
+        return true;
+      });
       else await execution;
-      assert.deepEqual(calls, fail ? ["showcase-capture.mjs"] : ["showcase-capture.mjs", "showcase-live-review.mjs"]);
+      assert.deepEqual(calls, ["showcase-capture.mjs", "showcase-live-review.mjs"],
+        "ordinary playback and replay must still run after capture fails");
       assert.equal(await readFile(path.join(entries, "noon_showcase_manifest.json"), "utf8"), original);
       assert.equal(await readFile(path.join(posters, "capture-evidence.json"), "utf8"), "existing-public-evidence");
       assert.equal(await readFile(path.join(output, "report.json"), "utf8"), "existing-public-report");

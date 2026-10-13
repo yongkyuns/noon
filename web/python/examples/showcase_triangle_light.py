@@ -6,6 +6,7 @@ Pink flight -> direction-colored rays -> fast-forward ray-exposure accumulation.
 The dense finale is computed from the very same reflected trajectory, NOT noise
 or a white fill. Its seven exposures are an explicitly accelerated montage,
 not a claim to animate ten thousand individual collisions in real time.
+Colors encode travel direction, not wavelength or physically calibrated radiance.
 
 All animation is ordinary retained Noon animation. Python computes geometry and
 immutable raster resources once; it never runs a per-frame physics callback.
@@ -41,10 +42,28 @@ FLIGHT_SECONDS = 8.0
 COLOR_BOUNCES = 48
 COLOR_FLIGHT_SECONDS = 5.0
 DENSE_BOUNCES = 10000
-EXPOSURE_COUNTS = tuple(round(DENSE_BOUNCES * fraction) for fraction in (0.025, 0.05, 0.1, 0.2, 0.4, 0.7, 1.0))
+EXPOSURE_COUNTS = tuple(sorted({max(1, round(DENSE_BOUNCES * fraction))
+                               for fraction in (0.025, 0.05, 0.1, 0.2, 0.4, 0.7, 1.0)}))
+EXPOSURE_SECONDS = 7.0
+MAX_TOTAL_BOUNCES = 20000
 EXPOSURE_WIDTH = 480
 EXPOSURE_GAIN = 0.08
 RING_BINS = 72
+
+
+def validate_showcase_controls():
+    """Bound editable workloads before generating geometry or image buffers."""
+    for name, value in (("BOUNCES", BOUNCES), ("COLOR_BOUNCES", COLOR_BOUNCES),
+                        ("DENSE_BOUNCES", DENSE_BOUNCES)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+    if BOUNCES + COLOR_BOUNCES + DENSE_BOUNCES > MAX_TOTAL_BOUNCES:
+        raise ValueError(f"Reduce bounce counts: this editable demo allows at most {MAX_TOTAL_BOUNCES} total reflections")
+    for name, value in (("FLIGHT_SECONDS", FLIGHT_SECONDS),
+                        ("COLOR_FLIGHT_SECONDS", COLOR_FLIGHT_SECONDS),
+                        ("EXPOSURE_SECONDS", EXPOSURE_SECONDS)):
+        if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be finite and positive")
 
 
 def cross(a, b):
@@ -128,6 +147,8 @@ def direction_hue(a, b):
 
 
 def direction_histogram(points, bins=RING_BINS):
+    if isinstance(bins, bool) or not isinstance(bins, int) or not 1 <= bins <= 360:
+        raise ValueError("Direction histogram bins must be an integer from 1 to 360")
     counts = [0] * bins
     for a, b in zip(points, points[1:]):
         counts[min(bins - 1, int(direction_hue(a, b) * bins))] += 1
@@ -136,6 +157,8 @@ def direction_histogram(points, bins=RING_BINS):
 
 def rgba_png(width, height, rgba):
     """Encode an immutable RGBA resource with the standard library, no Pillow."""
+    if any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in (width, height)):
+        raise ValueError("PNG dimensions must be positive integers")
     if len(rgba) != width * height * 4:
         raise ValueError("RGBA buffer length does not match its dimensions")
     def chunk(kind, data):
@@ -159,7 +182,12 @@ def accumulate_ray_exposures(vertices, points, checkpoints, width=EXPOSURE_WIDTH
         raise ValueError("Exposure checkpoints must be increasing valid collision counts")
     xmin, xmax = min(p[0] for p in vertices), max(p[0] for p in vertices)
     ymin, ymax = min(p[1] for p in vertices), max(p[1] for p in vertices)
+    if not (math.isfinite(xmax - xmin) and math.isfinite(ymax - ymin)
+            and xmax > xmin and ymax > ymin):
+        raise ValueError("Exposure triangle must have finite, nonzero width and height")
     height = max(1, round(width * (ymax - ymin) / (xmax - xmin)))
+    if height > 1024:
+        raise ValueError("Exposure is too tall; reduce EXPOSURE_WIDTH or change the triangle aspect ratio")
     energy = array("f", [0.0]) * (width * height * 3)
     edge_sign = 1 if cross(difference(vertices[1], vertices[0]), difference(vertices[2], vertices[0])) > 0 else -1
     interior = []
@@ -181,7 +209,11 @@ def accumulate_ray_exposures(vertices, points, checkpoints, width=EXPOSURE_WIDTH
         dx, dy = abs(end_x - x), -abs(end_y - y)
         sx, sy = (1 if x < end_x else -1), (1 if y < end_y else -1)
         error = dx + dy
-        weight = math.hypot(dx, dy) / max(1, dx, -dy)
+        # Distribute the true (unrounded) pixel-space length over every visited
+        # sample, including both ends. Even a subpixel flight deposits energy.
+        length = math.hypot((b[0] - a[0]) * width / (xmax - xmin),
+                            (b[1] - a[1]) * height / (ymax - ymin))
+        weight = length / (max(dx, -dy) + 1)
         light = tuple(channel * weight for channel in colorsys.hsv_to_rgb(direction_hue(a, b), 0.72, 1.0))
         while True:
             at = (y * width + x) * 3
@@ -400,11 +432,35 @@ def laboratory_artwork():
     return objects, arms, mouth, clock_hands
 
 
+def offset_triangle(vertices, distance):
+    """Parallel outward offset; the physical wall is the rim's exact inner edge."""
+    winding = 1 if cross(difference(vertices[1], vertices[0]), difference(vertices[2], vertices[0])) > 0 else -1
+    normals = []
+    for i, vertex in enumerate(vertices):
+        edge = difference(vertices[(i + 1) % 3], vertex)
+        length = math.hypot(*edge)
+        normals.append((winding * edge[1] / length, -winding * edge[0] / length))
+    result = []
+    for i, vertex in enumerate(vertices):
+        before, after = normals[i - 1], normals[i]
+        denominator = 1 + before[0] * after[0] + before[1] * after[1]
+        if denominator <= 1e-12:
+            raise ValueError("Triangle is too thin for the illustrated mirror rim")
+        result.append(tuple(vertex[j] + distance * (before[j] + after[j]) / denominator for j in range(2)))
+    return result
+
+
 def mirror_artwork():
-    boundary = [(619, 704), (1381, 704), (941, 205), (619, 704)]
-    glass = artwork_path(boundary[:-1], "#1b1c30", 0, "#1b1c30", z=3)
-    rim = [artwork_path(boundary, color, width, z=30) for color, width in
-           (("#5c6682", 18), ("#98accb", 12), ("#d9e3f0", 7), ("#f8f8f3", 2))]
+    # A single geometry authority for physics, accumulated images and the frame.
+    # The widest rim is 18 illustration units: offset its centreline outward by
+    # half that width, so rays stop at the metal, not at an unrelated inset.
+    boundary = offset_triangle(TRIANGLE, 9 * ART_SCALE)
+    coords = [(*p, 0) for p in (*boundary, boundary[0])]
+    glass = VMobject(stroke_width=0, fill_color=ink("#1b1c30"),
+                     fill_opacity=1, z_index=3).set_points_as_corners(coords)
+    rim = [VMobject(stroke_color=ink(color), stroke_width=width * ART_SCALE / 0.01,
+                    fill_opacity=0, z_index=30).set_points_as_corners(coords)
+           for color, width in (("#5c6682", 18), ("#98accb", 12), ("#d9e3f0", 7), ("#f8f8f3", 2))]
     return glass, rim
 
 
@@ -413,13 +469,22 @@ def world_ray(a, b, color, width, z=10):
                     z_index=z).set_points_as_corners([(*a, 0), (*b, 0)])
 
 
+def ring_bar_lengths(counts):
+    """Square-root-scaled counts; zero means no bar, not a decorative baseline."""
+    if not counts or any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in counts):
+        raise ValueError("Direction counts must be nonnegative integers")
+    maximum = max(1, max(counts))
+    return [61 * math.sqrt(count / maximum) for count in counts]
+
+
 def direction_ring(counts):
     # Bar lengths are the actual finite direction histogram, not decorative noise.
-    maximum = max(1, max(counts))
     bars = []
-    for i, count in enumerate(counts):
+    for i, length in enumerate(ring_bar_lengths(counts)):
+        if length == 0:
+            continue
         angle = (i + 0.5) * math.tau / len(counts)
-        outer = 60 + 37 * math.sqrt(count / maximum)
+        outer = 36 + length
         points = [(1320 + r * math.cos(a), 314 + r * math.sin(a))
                   for r, a in ((36, angle - 0.026), (outer, angle - 0.026),
                                (outer, angle + 0.026), (36, angle + 0.026))]
@@ -430,6 +495,7 @@ def direction_ring(counts):
 
 class TriangleLightShowcase(Scene):
     def construct(self):
+        validate_showcase_controls()
         visible_count = BOUNCES + COLOR_BOUNCES
         points, _ = trace_ray(TRIANGLE, LAUNCH_POINT, LAUNCH_ANGLE_DEGREES, visible_count + DENSE_BOUNCES)
         checkpoints = tuple(visible_count + count for count in EXPOSURE_COUNTS)
@@ -451,8 +517,10 @@ class TriangleLightShowcase(Scene):
                 trail = world_ray(a, b, color, 0.95)
                 trail.set_opacity(0.22 if section == 0 else 0.65)
                 halo = world_ray(a, b, color, 3.2, z=21).set_opacity(0.7)
+                halo.set_glow(color=color, radius=Pixels(3), intensity=1.0)
                 core = world_ray(a, b, ink("#fff2f5"), 0.95, z=22)
                 next_beam = (halo, core)
+                photon.set_glow(color=color)
                 animations = [Create(trail), Create(halo), Create(core), photon.animate.move_to((*b, 0))]
                 if beam is not None:
                     animations.extend(FadeOut(part) for part in beam)
@@ -485,9 +553,10 @@ class TriangleLightShowcase(Scene):
             exposure = ImageMobject(png, height=ymax - ymin, resampling_algorithm="bilinear", z_index=18)
             exposure.move_to(((xmin + xmax) / 2, (ymin + ymax) / 2, 0))
             animations = [FadeIn(exposure)]
-            if previous is not None:
-                animations.append(FadeOut(previous))
-            else:
+            # Fade the new opaque image OVER its still-opaque predecessor.
+            # Fading both gives 25% background at the midpoint (a visible dark
+            # pulse). Retire the old image only after the new one covers it.
+            if previous is None:
                 animations.append(FadeOut(arc))
             if index == len(pngs) - 1:
                 # The full direction histogram appears with the full exposure,
@@ -496,6 +565,8 @@ class TriangleLightShowcase(Scene):
                 clock_targets = [artwork_path([(1502, 187), end], "#343c54", 3)
                                  for end in ((1490, 220), (1527, 188))]
                 animations += [Transform(old, new) for old, new in zip(clock_hands, clock_targets)]
-            self.play(*animations, run_time=1.0, rate_func=linear)
+            self.play(*animations, run_time=EXPOSURE_SECONDS / len(pngs), rate_func=linear)
+            if previous is not None:
+                self.remove(previous)
             previous = exposure
         self.wait(2.0)
