@@ -165,6 +165,16 @@ impl<'a> From<&'a MobjectFamily> for MobjectTarget<'a> {
 }
 
 impl MobjectTarget<'_> {
+    /// Observe this root and its descendants in Manim's last-occurrence order.
+    /// Each identity appears once; this query neither publishes nor changes paint.
+    pub fn family_nodes(&self) -> Result<Vec<SemanticNodeId>, AuthoringError> {
+        self.validate()?;
+        self.integration_store()
+            .borrow()
+            .ordered_last_occurrence_authoring_nodes(self.node_id())
+            .map_err(AuthoringError::from)
+    }
+
     pub(crate) fn require_store(
         &self,
         store: &Rc<RefCell<SemanticStore>>,
