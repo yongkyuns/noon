@@ -156,8 +156,18 @@ export class AuthoringExecutionClient {
     const player = this.#preparedPlayer ?? this.#createPlayer();
     const terminateCandidate = createIdempotentTerminator(player);
     try {
+      let initialPointerView;
+      if (typeof this.#canvas.getBoundingClientRect === "function" &&
+          typeof globalThis.window?.addEventListener === "function") {
+        // View registration can prepare native picking data. Keep that platform
+        // startup work before the first snapshot and the source clock epoch.
+        this.#advancePointerView();
+        const rect = this.#canvas.getBoundingClientRect();
+        initialPointerView = { revision: this.#pointerViewRevision, width: rect.width, height: rect.height };
+      }
       const ready = await player.startSemanticExecution(semantic.contextId, authoringClient, {
         ...options,
+        initialPointerView,
         callbackSessionId: semantic.callbackSessionId,
         continuationGeneration: semantic.continuationGeneration,
       });

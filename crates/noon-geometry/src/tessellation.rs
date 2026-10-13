@@ -43,6 +43,7 @@ pub struct TessellatedPath {
     pub stroke_length: f32,
     /// True when vertices contain distinct source/target morph endpoints.
     pub morphing: bool,
+    polygonal_stroke: bool,
     // Cached centerline measure used to place a procedural Create reveal head.
     // It is built only when geometry is tessellated, never per animation frame.
     reveal_points: Vec<RevealPoint>,
@@ -67,6 +68,10 @@ pub struct TessellatedScreenStroke {
 }
 
 impl TessellatedPath {
+    /// Whether the retained stroke has straight centerlines and polygonal caps/joins.
+    pub fn has_polygonal_stroke(&self) -> bool {
+        self.polygonal_stroke
+    }
     pub fn revealed_stroke_length(&self, reveal: f32) -> f32 {
         if !reveal.is_finite() {
             return 0.0;
@@ -724,7 +729,7 @@ fn tessellate_styled_with_fill_impl(
         FillTessellator::new()
             .tessellate_path(
                 &fill_path,
-                &FillOptions::default().with_tolerance(PATH_TESSELLATION_TOLERANCE),
+                &FillOptions::non_zero().with_tolerance(PATH_TESSELLATION_TOLERANCE),
                 &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex<'_>| {
                     TessellationVertex {
                         position: vec2(vertex.position().x, vertex.position().y),
@@ -785,6 +790,14 @@ fn tessellate_styled_with_fill_impl(
         bounds,
         stroke_length,
         morphing: false,
+        polygonal_stroke: stroke_join != StrokeJoin::Round
+            && stroke_cap != StrokeCap::Round
+            && path.commands().iter().all(|command| {
+                matches!(
+                    command,
+                    PathCommand::MoveTo { .. } | PathCommand::LineTo { .. } | PathCommand::Close
+                )
+            }),
         reveal_points,
     })
 }
@@ -1206,6 +1219,7 @@ fn tessellate_morph_path(
             bounds,
             stroke_length: 0.0,
             morphing: true,
+            polygonal_stroke: false,
             reveal_points: source_reveal_points,
         });
     }
@@ -1391,6 +1405,7 @@ fn tessellate_morph_path(
         bounds,
         stroke_length,
         morphing: true,
+        polygonal_stroke: false,
         reveal_points,
     })
 }
@@ -2043,6 +2058,43 @@ fn mesh_bounds(vertices: &[MeshVertex]) -> Option<Rect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compound_fill_matches_nonzero_winding_for_overlap_and_opposing_holes() {
+        let rectangle = |mut path: VectorPath, x: f32, reverse: bool| {
+            let points = if reverse {
+                [(x, 0.0), (x, 2.0), (x + 2.0, 2.0), (x + 2.0, 0.0)]
+            } else {
+                [(x, 0.0), (x + 2.0, 0.0), (x + 2.0, 2.0), (x, 2.0)]
+            };
+            path = path.move_to(Vec2::new(points[0].0, points[0].1));
+            for &(x, y) in &points[1..] {
+                path = path.line_to(Vec2::new(x, y));
+            }
+            path.close()
+        };
+        for (reverse, expected_area) in [(false, 6.0), (true, 4.0)] {
+            let path = rectangle(rectangle(VectorPath::new(), 0.0, false), 1.0, reverse);
+            let mesh = tessellate(&path, 0.0).unwrap();
+            let area: f32 = mesh
+                .indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|indices| {
+                    let a = mesh.vertices[indices[0] as usize].position;
+                    let b = mesh.vertices[indices[1] as usize].position;
+                    let c = mesh.vertices[indices[2] as usize].position;
+                    ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5
+                })
+                .sum();
+            assert!((area - expected_area).abs() < 1e-5);
+            assert_eq!(
+                crate::polygon_fill_contains(&path, [1.5, 1.0]),
+                Some(!reverse)
+            );
+        }
+    }
 
     #[test]
     fn screen_stroke_mesh_retains_smooth_centerline_and_finite_offsets() {

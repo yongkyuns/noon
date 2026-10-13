@@ -11,6 +11,7 @@ var<uniform> camera: Camera;
 const POLYGON_COVERAGE_FLAG: u32 = 33554432u;
 const POLYGON_QUAD_FLAG: u32 = 67108864u;
 const POLYGON_CORNER_SHIFT: u32 = 27u;
+const POLYGON_TIGHT_FLAG: u32 = 536870912u;
 const PATH_PROGRESS_MASK: u32 = 33554431u;
 
 struct PathVertexInput {
@@ -93,6 +94,43 @@ fn pixel_to_clip(pixel: vec2<f32>) -> vec2<f32> {
     );
 }
 
+// Expand a convex stroke quad by a pixel guard along its own perimeter. This
+// keeps thin diagonal strokes thin instead of shading their entire bounding box.
+fn padded_stroke_corner(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, d: vec2<f32>, corner: u32) -> vec2<f32> {
+    var p = a;
+    var previous = d;
+    var next = b;
+    switch corner {
+        case 1u: { p = b; previous = a; next = c; }
+        case 2u: { p = c; previous = b; next = d; }
+        case 3u: { p = d; previous = c; next = a; }
+        default: {}
+    }
+    let incoming = p - previous;
+    let outgoing = next - p;
+    let incoming_length = length(incoming);
+    let outgoing_length = length(outgoing);
+    let ab = b - a;
+    let ac = c - a;
+    let ad = d - a;
+    let area = ab.x * ac.y - ab.y * ac.x + ac.x * ad.y - ac.y * ad.x;
+    if min(incoming_length, outgoing_length) > 0.000001 && abs(area) > 0.000001 {
+        let winding = select(-1.0, 1.0, area > 0.0);
+        let n0 = vec2<f32>(incoming.y, -incoming.x) * (winding / incoming_length);
+        let n1 = vec2<f32>(outgoing.y, -outgoing.x) * (winding / outgoing_length);
+        let bisector = n0 + n1;
+        let denominator = dot(bisector, n0);
+        if denominator > 0.000001 {
+            return p + bisector * (1.25 / denominator);
+        }
+    }
+    let minimum = min(a, min(b, min(c, d))) - vec2<f32>(1.25);
+    let maximum = max(a, max(b, max(c, d))) + vec2<f32>(1.25);
+    return mix(minimum, maximum, vec2<f32>(
+        select(0.0, 1.0, corner == 1u || corner == 2u),
+        select(0.0, 1.0, corner >= 2u)));
+}
+
 @vertex
 fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     let is_stroke = (input.surface_and_progress & 1u) == 1u;
@@ -101,7 +139,10 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     let morph = clamp(input.path_params.y, 0.0, 1.0);
     let reveal = clamp(input.path_params.x, 0.0, 1.0);
     let local = mix(input.local, input.target_local, morph);
-    let exact_polygon = (input.surface_and_progress & POLYGON_COVERAGE_FLAG) != 0u;
+    let packed_polygon = (input.surface_and_progress & POLYGON_COVERAGE_FLAG) != 0u;
+    // Partial stroke reveals retain the original tessellation and progress
+    // interpolation. Fully revealed static strokes use area coverage.
+    let exact_polygon = packed_polygon && (!is_stroke || reveal >= 1.0);
 
     var output: PathVertexOutput;
     if exact_polygon {
@@ -119,7 +160,10 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
             select(0.0, 1.0, corner == 1u || corner == 2u),
             select(0.0, 1.0, corner >= 2u),
         );
-        let pixel = mix(minimum, maximum, quad_position);
+        var pixel = mix(minimum, maximum, quad_position);
+        if (input.surface_and_progress & POLYGON_TIGHT_FLAG) != 0u {
+            pixel = padded_stroke_corner(a, b, c, d, corner);
+        }
         output.position = vec4<f32>(pixel_to_clip(pixel), 0.0, 1.0);
         output.polygon_a = a;
         output.polygon_b = b;
@@ -127,7 +171,17 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
         output.polygon_d = d;
         output.polygon_count = select(3u, 4u, is_quad);
     } else {
-        let world = transform_path_point(local, input);
+        var point = local;
+        if packed_polygon && is_stroke {
+            let corner = (input.surface_and_progress >> POLYGON_CORNER_SHIFT) & 3u;
+            switch corner {
+                case 1u: { point = mix(input.polygon_b.xy, input.polygon_b.zw, morph); }
+                case 2u: { point = mix(input.polygon_c.xy, input.polygon_c.zw, morph); }
+                case 3u: { point = mix(input.polygon_d.xy, input.polygon_d.zw, morph); }
+                default: {}
+            }
+        }
+        let world = transform_path_point(point, input);
         output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
         output.polygon_a = vec2<f32>(0.0);
         output.polygon_b = vec2<f32>(0.0);
@@ -227,15 +281,35 @@ fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
         // Coverage is applied once from the exact pixel-box intersection rather
         // than multiplied by the hardware triangle sample mask.
         let pixel_minimum = floor(input.position.xy);
-        let coverage = polygon_pixel_coverage(
+        let a = input.polygon_a - pixel_minimum;
+        let b = input.polygon_b - pixel_minimum;
+        let c = input.polygon_c - pixel_minimum;
+        let d = input.polygon_d - pixel_minimum;
+        let coverage = polygon_pixel_coverage(a, b, c, d, input.polygon_count);
+        return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge) * coverage;
+    }
+    return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge);
+}
+
+// Keep the bounded stroke integral in its own fragment entry. Ordinary curves
+// and partially revealed tessellations do not inherit the clipping kernel's
+// register footprint through a mixed covered-path batch.
+@fragment
+fn fs_path_stroke(input: PathVertexOutput) -> @location(0) vec4<f32> {
+    let edge = max(fwidth(input.path_progress), 0.00001);
+    if input.reveal <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    var coverage = 1.0;
+    if input.polygon_count != 0u {
+        let pixel_minimum = floor(input.position.xy);
+        coverage = polygon_perimeter_pixel_coverage(
             input.polygon_a - pixel_minimum,
             input.polygon_b - pixel_minimum,
             input.polygon_c - pixel_minimum,
             input.polygon_d - pixel_minimum,
             input.polygon_count,
         );
-        let fill_alpha = smoothstep(0.0, 1.0, input.reveal);
-        return input.color * coverage * fill_alpha;
     }
-    return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge);
+    return revealed_path_color(input.color, input.reveal, input.is_stroke, input.path_progress, edge) * coverage;
 }

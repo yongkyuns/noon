@@ -51,13 +51,7 @@ fn stroke_bounds(vertices: &[PathVertex], target: bool) -> ([f32; 2], [f32; 2]) 
     let mut points = vertices
         .iter()
         .filter(|vertex| vertex.surface & 1 == 1)
-        .map(|vertex| {
-            if target {
-                vertex.target_position
-            } else {
-                vertex.position
-            }
-        });
+        .map(|vertex| vertex.local_corner(target));
     let first = points.next().expect("prepared stroke must have vertices");
     let mut min = first;
     let mut max = first;

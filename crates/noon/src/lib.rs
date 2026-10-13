@@ -113,6 +113,8 @@ mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
 mod graph_authoring;
+mod polygon_authoring;
+pub mod polygon_example;
 mod spatial_authoring;
 mod spatial_composition;
 mod world_affine;
