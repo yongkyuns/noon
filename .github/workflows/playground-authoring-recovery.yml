@@ -106,4 +106,4 @@ jobs:
             browser-smoke-artifacts/playground-authoring-recovery
             browser-smoke-artifacts/playground-stress-edit
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3

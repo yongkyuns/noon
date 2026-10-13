@@ -78,6 +78,7 @@ jobs:
         with:
           path: web
           include-hidden-files: true
+          retention-days: 1
 
   deploy:
     name: Deploy GitHub Pages

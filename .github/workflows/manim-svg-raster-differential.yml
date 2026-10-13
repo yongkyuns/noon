@@ -120,4 +120,4 @@ jobs:
             manim-svg-raster-artifacts
             ${{ runner.temp }}/noon-svg-raster.log
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3

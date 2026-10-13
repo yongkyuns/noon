@@ -40,7 +40,7 @@ jobs:
           name: test-inventory
           path: test-artifacts/test-inventory.*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
   rust:
     name: Rust coverage
@@ -69,7 +69,7 @@ jobs:
           name: rust-coverage
           path: test-artifacts/rust.lcov
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
   scripting:
     name: Python and JavaScript coverage
@@ -107,4 +107,4 @@ jobs:
             test-artifacts/python-coverage.txt
             test-artifacts/js
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
