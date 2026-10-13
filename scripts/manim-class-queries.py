@@ -42,30 +42,36 @@ def reference_classes(root):
             "Circle": type("Circle", (vector,), {}), "Square": type("Square", (vector,), {})}
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("manim_source", type=Path)
-    parser.add_argument("--installed-manim", action="store_true")
-    args = parser.parse_args()
-    expected = observations(reference_classes(args.manim_source))
+def qualify(manim_source, *, installed_manim=False):
+    manim_source = Path(manim_source)
+    expected = observations(reference_classes(manim_source))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web/python"))
     import noon
     actual = observations(vars(noon) | {name: getattr(noon, name) for name in ["Mobject", "Group", "VMobject", "VGroup", "Circle", "Square"]})
     errors = [] if actual == expected else ["class-query observations differ from pinned methods"]
     files = ["manim/mobject/mobject.py", "manim/mobject/types/vectorized_mobject.py"]
-    if args.installed_manim:
+    if installed_manim:
         import manim
         import manim.mobject.mobject as mobject
         import manim.mobject.types.vectorized_mobject as vector
         for relative, module in zip(files, [mobject, vector]):
-            if Path(module.__file__).read_bytes() != (args.manim_source / relative).read_bytes():
+            if Path(module.__file__).read_bytes() != (manim_source / relative).read_bytes():
                 raise ValueError("installed class module differs from pin")
         if observations(vars(manim)) != expected:
             errors.append("installed class-query observations differ")
-    print(json.dumps({"source_sha256": {relative: hashlib.sha256((args.manim_source / relative).read_bytes()).hexdigest() for relative in files},
-                      "observations": len(expected), "installed_module_checked": args.installed_manim,
-                      "errors": errors}, indent=2))
-    return bool(errors)
+    return {"source_sha256": {relative: hashlib.sha256((manim_source / relative).read_bytes()).hexdigest() for relative in files},
+                      "observations": len(expected), "installed_module_checked": installed_manim,
+                      "errors": errors}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("manim_source", type=Path)
+    parser.add_argument("--installed-manim", action="store_true")
+    args = parser.parse_args()
+    report = qualify(args.manim_source, installed_manim=args.installed_manim)
+    print(json.dumps(report, indent=2))
+    return bool(report["errors"])
 
 
 if __name__ == "__main__": raise SystemExit(main())
