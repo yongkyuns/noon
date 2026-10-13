@@ -950,6 +950,8 @@ _PUBLIC_EXPORTS = {
     "rush_into": "_manim_rate_functions",
     "rush_from": "_manim_rate_functions",
     "there_and_back": "_manim_rate_functions",
+    "not_quite_there": "_manim_rate_functions",
+    "squish_rate_func": "_manim_rate_functions",
     "Add": "_manim_composition",
     "AnimationGroup": "_manim_composition",
     "LaggedStart": "_manim_composition",

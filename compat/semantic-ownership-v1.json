@@ -443,6 +443,14 @@
       "replacement": "Emit the identifier to the shared resolver."
     },
     {
+      "id": "rate-function.callable-wrapper",
+      "surface": "not_quite_there/squish_rate_func explicit Python callable construction and evaluation",
+      "classification": "host-language-required",
+      "owner": {"language": "python", "path": "web/python/_manim_rate_functions.py", "symbol": "not_quite_there/squish_rate_func"},
+      "reason": "These helpers return Python closures and forward arbitrary user callback arguments and exceptions during explicit user evaluation. They do not select or execute engine playback rates; returned arbitrary callables remain rejected by the shared-rate adapter.",
+      "host_callback": true
+    },
+    {
       "id": "scene.updater-callback",
       "surface": "Mobject.add_updater/remove_updater/clear_updaters",
       "classification": "host-language-required",

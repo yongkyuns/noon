@@ -77,6 +77,28 @@ def there_and_back(t: float, inflection: float = INFLECTION) -> float:
 
 
 
+def not_quite_there(func: Callable[..., float] = smooth, proportion: float = 0.7):
+    """Wrap explicit user evaluation with Manim's output proportion."""
+    def result(t, *args, **kwargs):
+        return proportion * func(t, *args, **kwargs)
+    return result
+
+
+def squish_rate_func(func: Callable[..., float], a: float = 0.4, b: float = 0.6):
+    """Wrap user evaluation with Manim's interval mapping and callback dispatch."""
+    def result(t, *args, **kwargs):
+        if a == b:
+            return a
+        if t < a:
+            new_t = 0.0
+        elif t > b:
+            new_t = 1.0
+        else:
+            new_t = (t - a) / (b - a)
+        return func(new_t, *args, **kwargs)
+    return result
+
+
 def _step_start(t: float) -> float:
     """Internal retained step: source at t=0, target for every t>0."""
 
