@@ -1,4 +1,41 @@
-use noon::{MobjectFamily, Scene, SemanticNodeId};
+use noon::{MobjectFamily, MobjectTarget, Scene, SemanticNodeId};
+
+#[test]
+fn family_query_keeps_last_aliases_and_root_identity_without_mutation() {
+    let mut scene = Scene::new();
+    let a = scene.square(1.0).unwrap();
+    let b = scene.square(1.0).unwrap();
+    let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+    let root = scene.family(&[(&nested).into(), (&a).into()]).unwrap();
+    let revision = scene.revision();
+    let paint = a.state().unwrap();
+    assert_eq!(
+        MobjectTarget::from(&root).family_nodes().unwrap(),
+        [root.node_id(), nested.node_id(), b.node_id(), a.node_id()]
+    );
+    assert_eq!(
+        MobjectTarget::from(&a).family_nodes().unwrap(),
+        [a.node_id()]
+    );
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(a.state().unwrap(), paint);
+    root.remove((&a).into()).unwrap();
+    assert_eq!(
+        MobjectTarget::from(&root).family_nodes().unwrap(),
+        [root.node_id(), nested.node_id(), a.node_id(), b.node_id()]
+    );
+    let empty = scene.family(&[]).unwrap();
+    assert_eq!(
+        MobjectTarget::from(&empty).family_nodes().unwrap(),
+        [empty.node_id()]
+    );
+    scene
+        .integration_store()
+        .borrow_mut()
+        .remove_node(empty.node_id())
+        .unwrap();
+    assert!(MobjectTarget::from(&empty).family_nodes().is_err());
+}
 
 fn members(family: &MobjectFamily) -> Vec<SemanticNodeId> {
     family
@@ -84,6 +121,16 @@ fn live_reorder_keeps_alias_identity_and_updates_painter_order() {
         [c.node_id(), a.node_id(), b.node_id()].map(noon_compile::semantic_execution_object_id)
     );
     assert_eq!(a.state().unwrap(), before);
+    assert_eq!(
+        MobjectTarget::from(&family).family_nodes().unwrap(),
+        [
+            family.node_id(),
+            c.node_id(),
+            nested.node_id(),
+            a.node_id(),
+            b.node_id()
+        ]
+    );
 }
 
 #[test]
