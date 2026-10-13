@@ -1,22 +1,23 @@
 {
   "id": "showcase-triangle-light",
   "title": "Light in a triangle",
-  "lesson": "Follow one light ray through 44 exact mirror reflections: equal angles at each wall create a colored geometric trail.",
+  "lesson": "Watch a pink-white ray reflect in a silver triangular mirror, reveal direction-colored paths, then fast-forward to a dense light exposure in an illustrated laboratory.",
   "primary_feature": "specular-reflection-simulation",
   "category": "Physics and simulation",
   "path": "python/examples/showcase_triangle_light.py",
-  "features": ["ray-triangle intersections", "mirror reflections", "constant-speed motion", "persistent trail", "GPU glow", "Create"],
+  "features": ["exact mirror reflections", "scalene triangle", "illustrated laboratory", "glowing beam", "direction-colored paths", "ray-exposure accumulation", "direction histogram"],
   "duration": 25.0,
-  "thumbnail_time": 24.4,
+  "thumbnail_time": 15.6,
   "thumbnail": "thumbnails/showcase/showcase-triangle-light.png",
-  "thumbnail_alt": "A white triangular mirror filled with a cyan-to-pink reflected ray trail and a bright light point at its final wall contact",
+  "thumbnail_alt": "An illustrated scientist in a wooden laboratory beside a large silver-framed triangular mirror, multicolored reflected rays, and a glowing yellow corner-angle arc",
   "playback_capability": "deterministic-retained-replay",
-  "still_intervals": [[24.0, 25.0]],
+  "still_intervals": [[15.0, 16.0], [23.0, 25.0]],
   "beats": [
-    {"time": 1.0, "label": "Introduce the triangular mirror"},
-    {"time": 4.2, "label": "Follow the first reflections"},
-    {"time": 11.0, "label": "Build the geometric trail"},
-    {"time": 19.0, "label": "Repeated equal-angle reflections"},
-    {"time": 24.4, "label": "One ray, 44 reflections, one law"}
+    {"time": 0.8, "label": "Introduce the illustrated mirror laboratory"},
+    {"time": 6.0, "label": "Pink-white moving beam and dim older paths"},
+    {"time": 13.0, "label": "Direction-colored reflected paths"},
+    {"time": 15.6, "label": "The scalene mirror and its corner angle"},
+    {"time": 20.5, "label": "Fast-forward the accumulated ray exposure"},
+    {"time": 24.0, "label": "Dense near-white exposure and rainbow direction ring"}
   ]
 }
