@@ -3,15 +3,19 @@ import argparse
 import hashlib
 import inspect
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
+import time
+from unittest.mock import patch
 
 from pinned_python_helpers import load_helpers
 
 NAMES = {"add_extension_if_not_present", "guarantee_existence",
-         "guarantee_empty_existence", "seek_full_path_from_defaults"}
+         "guarantee_empty_existence", "seek_full_path_from_defaults",
+         "ensure_executable", "modify_atime"}
 
 
 def observations(namespace):
@@ -31,6 +35,32 @@ def observations(namespace):
     result.append(["path_protocol", namespace["add_extension_if_not_present"](UserPath(), ".png") is marker, calls.copy()])
     calls.clear()
     result.append(["directory_protocol", namespace["guarantee_existence"](UserPath()) is marker, calls.copy()])
+    # Fix host services rather than wall-clock values, executable availability,
+    # or platform-specific permission policy. Observe the original call order.
+    executable = namespace["ensure_executable"]
+    for candidate in [Path("python"), Path("tool.exe"), Path("./tool"),
+                      Path("folder/tool.exe"), Path("/absolute/tool")]:
+        for found in (None, "/resolved/tool"):
+            for allowed in (False, True):
+                events = []
+                def which(name):
+                    events.append(["which", name]); return found
+                def access(path, mode):
+                    events.append(["access", str(path), mode]); return allowed
+                with patch.object(shutil, "which", side_effect=which), \
+                     patch.object(os, "access", side_effect=access):
+                    result.append(["executable_protocol", str(candidate), found,
+                                   allowed, executable(candidate), events])
+    for candidate, service in [(Path("tool"), shutil), (Path("dir/tool"), os)]:
+        name = "which" if service is shutil else "access"
+        with patch.object(service, name, side_effect=PermissionError("host failure")):
+            try:
+                executable(candidate)
+            except Exception as error:
+                result.append(["executable_failure", str(candidate),
+                               type(error).__name__, str(error)])
+            else:
+                result.append(["executable_failure", str(candidate), "missing error"])
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         def normalize(value):
@@ -88,12 +118,29 @@ def observations(namespace):
         record("add_extension_if_not_present", "text.png", ".png")
         record("seek_full_path_from_defaults", explicit, default, None)
         record("seek_full_path_from_defaults", "absent", None, [".png"])
+        events = []
+        def clock(): events.append("clock"); return 1234567890.0
+        def utime(path, *, times):
+            events.append(["utime", str(path).replace(str(root), "<tmp>"), list(times)])
+        os.utime(sibling, times=(1000000000.0, 1100000000.0))
+        with patch.object(time, "time", side_effect=clock), \
+             patch.object(os, "utime", side_effect=utime):
+            record("modify_atime", str(sibling))
+            result.append(["timestamp_protocol", events.copy()])
+            events.clear()
+            record("modify_atime", str(root / "missing"))
+            result.append(["missing_timestamp_protocol", events.copy()])
+        with patch.object(time, "time", return_value=1234567890.0):
+            record("modify_atime", str(sibling))
+        stat = sibling.stat()
+        result.append(["timestamp_effect", stat.st_atime, stat.st_mtime])
     return result
 
 
 def qualify(manim_source, *, installed_manim=False):
     source = Path(manim_source) / "manim/utils/file_ops.py"
-    reference = load_helpers(source, NAMES, {"Path": Path, "shutil": shutil})
+    reference = load_helpers(source, NAMES,
+                             {"Path": Path, "shutil": shutil, "os": os, "time": time})
     expected = observations(reference)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web/python"))
     import noon
