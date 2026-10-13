@@ -1,4 +1,5 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
+  { sourcePath: "python/_manim_iterables.py", runtimePath: "/tmp/_manim_iterables.py", label: "Noon Python iterable helpers" },
   { sourcePath: "python/_manim_config_utils.py", runtimePath: "/tmp/_manim_config_utils.py", label: "Noon Python dictionary helpers" },
   { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },
   { sourcePath: "python/_noon_effects.py", runtimePath: "/tmp/_noon_effects.py", label: "Noon effect declaration adapter" },
@@ -32,6 +33,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_rate_functions.py", runtimePath: "/tmp/_manim_rate_functions.py", label: "Noon Manim rate functions" },
   { sourcePath: "python/_manim_geometry.py", runtimePath: "/tmp/_manim_geometry.py", label: "Noon Manim geometry layer" },
   { sourcePath: "python/_manim_shared_geometry.py", runtimePath: "/tmp/_manim_shared_geometry.py", label: "Noon shared Rust geometry adapter" },
+  { sourcePath: "python/_manim_polygon.py", runtimePath: "/tmp/_manim_polygon.py", label: "Noon shared polygon and star constructors" },
   { sourcePath: "python/_manim_arc.py", runtimePath: "/tmp/_manim_arc.py", label: "Noon shared Rust Arc adapter" },
   { sourcePath: "python/_manim_brace.py", runtimePath: "/tmp/_manim_brace.py", label: "Noon shared Rust Brace adapter" },
   { sourcePath: "python/_manim_arrow.py", runtimePath: "/tmp/_manim_arrow.py", label: "Noon shared Rust Arrow adapter" },

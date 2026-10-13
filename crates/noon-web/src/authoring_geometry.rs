@@ -164,6 +164,57 @@ impl WasmManimGeometryOptions {
             .map_err(js_error)
     }
 
+    /// The language adapter supplies only flattened XY inputs and group lengths.
+    pub fn polygram(coordinates: &[f64], lengths: &[u32]) -> Result<Self, JsValue> {
+        if !coordinates.len().is_multiple_of(2)
+            || lengths.iter().map(|&n| u64::from(n)).sum::<u64>() != (coordinates.len() / 2) as u64
+        {
+            return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
+                coordinates.len(),
+            )));
+        }
+        let mut offset = 0;
+        let groups: Vec<_> = lengths
+            .iter()
+            .map(|&length| {
+                let end = offset + length as usize * 2;
+                let group = coordinates[offset..end]
+                    .chunks_exact(2)
+                    .map(|xy| (xy[0], xy[1]))
+                    .collect();
+                offset = end;
+                group
+            })
+            .collect();
+        noon::ManimGeometryOptions::polygram(&groups)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = regularPolygram)]
+    pub fn regular_polygram(
+        n: u32,
+        density: u32,
+        radius: f64,
+        start_angle: Option<f64>,
+    ) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::regular_polygram(n, density, radius, start_angle)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
+    pub fn star(
+        n: u32,
+        outer_radius: f64,
+        inner_radius: Option<f64>,
+        density: u32,
+        start_angle: Option<f64>,
+    ) -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::star(n, outer_radius, inner_radius, density, start_angle)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
     pub fn ellipse(width: f64, height: f64) -> Result<Self, JsValue> {
         noon::ManimGeometryOptions::ellipse(width, height)
             .map(Self::from_options)
@@ -347,6 +398,19 @@ pub(crate) fn points(values: &[f64]) -> Result<Vec<Vec2>, JsValue> {
         .chunks_exact(2)
         .map(|pair| point(pair[0], pair[1]))
         .collect()
+}
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createPolygonConstructorsRenderer)]
+pub async fn create_polygon_constructors_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program =
+        noon::polygon_example::program().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 #[wasm_bindgen]

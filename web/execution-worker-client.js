@@ -233,6 +233,7 @@ export class ExecutionWorkerClient {
       continuationGeneration,
       initiallyPaused,
       pacing,
+      options.initialPointerView,
     );
   }
 
@@ -244,6 +245,7 @@ export class ExecutionWorkerClient {
     continuationGeneration,
     initiallyPaused,
     pacing,
+    initialPointerView,
   ) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
@@ -277,14 +279,14 @@ export class ExecutionWorkerClient {
         contextId,
         control.port2,
         render.port1,
-        this.#semanticAttachmentOptions(
+        { ...this.#semanticAttachmentOptions(
           loopDurationSeconds,
           this.#session,
           callbackSessionId,
           continuationGeneration,
           initiallyPaused,
           pacing,
-        ),
+        ), initialPointerView },
       );
       this.#ready = Promise.all([engineReady, renderReady, attached]).then(
         ([engine, renderResult]) => ({

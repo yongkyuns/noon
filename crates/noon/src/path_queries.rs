@@ -74,6 +74,21 @@ impl PathQuery {
     pub fn start_anchors(&self) -> Vec<(f64, f64)> {
         self.curve_column(0)
     }
+
+    /// Manim Polygram vertex runs end whenever a curve returns to their first
+    /// anchor. This also splits repeated starting vertices, as upstream does.
+    pub fn vertex_groups(&self) -> Vec<Vec<(f64, f64)>> {
+        let mut groups = Vec::new();
+        let mut group = Vec::new();
+        for index in 0..self.curve_count() {
+            let points = self.curve_points(index).expect("known curve index");
+            group.push(points[0]);
+            if points_coincide(points[3], group[0]) {
+                groups.push(std::mem::take(&mut group));
+            }
+        }
+        groups
+    }
     pub fn first_handles(&self) -> Vec<(f64, f64)> {
         self.curve_column(1)
     }

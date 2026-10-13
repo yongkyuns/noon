@@ -19,6 +19,21 @@ fn polygon_edge_pixel_area(p: vec2<f32>, q: vec2<f32>) -> f32 {
     return (y.y - y.x) * average;
 }
 
+// Small stroke pieces already have a closed convex perimeter. Integrate its
+// edges directly instead of materializing four successive clipped polygons.
+// The same edge integral is used by the retained Cairo mesh path.
+fn polygon_perimeter_pixel_coverage(
+    a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, d: vec2<f32>, count: u32,
+) -> f32 {
+    var area = polygon_edge_pixel_area(a, b) + polygon_edge_pixel_area(b, c);
+    if count == 4u {
+        area += polygon_edge_pixel_area(c, d) + polygon_edge_pixel_area(d, a);
+    } else {
+        area += polygon_edge_pixel_area(c, a);
+    }
+    return clamp(abs(area), 0.0, 1.0);
+}
+
 struct ClippedPolygon {
     // Keep the clipped vertices as fields rather than a dynamically indexed
     // array inside a function-space struct. FXC cannot materialize writes to
