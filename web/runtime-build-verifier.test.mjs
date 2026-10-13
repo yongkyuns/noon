@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { runtimeBuildIdentity as validIdentity } from "./test-support/runtime-build.mjs";
 
 import {
   loadRuntimeBuild,
@@ -8,23 +9,6 @@ import {
 } from "./runtime-build-verifier.js";
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
-
-function validIdentity() {
-  const core = {
-    schema: 1,
-    sourceRevision: "a".repeat(40),
-    files: {
-      worker: { path: "./python-worker.js", sha256: "b".repeat(64) },
-      wasm: { path: "./pkg/noon_web_bg.wasm", sha256: "c".repeat(64) },
-      glue: { path: "./pkg/noon_web.js", sha256: "d".repeat(64) },
-      verifier: { path: "./runtime-build-verifier.js", sha256: "e".repeat(64) },
-    },
-  };
-  return {
-    ...core,
-    buildId: digest(JSON.stringify(core)),
-  };
-}
 
 function identityForBytes(bytes) {
   const core = {
