@@ -1037,6 +1037,8 @@ _PUBLIC_EXPORTS = {
     "RegularPolygram": "_manim_polygon",
     "RegularPolygon": "_manim_polygon",
     "Star": "_manim_polygon",
+    "Angle": "_manim_angle",
+    "RightAngle": "_manim_angle",
     "TangentLine": "_manim_geometry",
     "ApplyMethod": "_manim_geometry",
     "DEFAULT_DOT_RADIUS": "_manim_geometry",

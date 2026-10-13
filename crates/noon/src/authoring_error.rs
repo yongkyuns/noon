@@ -175,6 +175,10 @@ pub enum AuthoringError {
     InvalidPointCoordinates(usize),
     /// A polygon or star constructor has invalid topology options.
     InvalidPolygonOptions(&'static str),
+    /// An Angle constructor has invalid line or geometry options.
+    InvalidAngleOptions(&'static str),
+    /// An elbow or non-Angle object has no nominal arc value.
+    MissingAngleValue,
     /// The requested object state contains non-finite values.
     NonFiniteObjectState,
     /// An imported compact transform contains non-finite values.
@@ -332,6 +336,8 @@ impl std::fmt::Display for AuthoringError {
             ),
             Self::NonFiniteGeometry => f.write_str("geometry must be finite"),
             Self::InvalidPolygonOptions(reason) => f.write_str(reason),
+            Self::InvalidAngleOptions(reason) => f.write_str(reason),
+            Self::MissingAngleValue => f.write_str("object has no nominal Angle arc value"),
             Self::NonFiniteObjectState => {
                 f.write_str("geometry, transform, and style must be finite")
             }

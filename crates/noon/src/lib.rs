@@ -54,10 +54,13 @@
 
 #![forbid(unsafe_code)]
 
+mod angle_authoring;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod animated_number_line_example;
 mod animation_authoring;
 mod arc_authoring;
+pub use angle_authoring::ManimAngleOptions;
+pub mod angle_example;
 mod arrow_authoring;
 mod arrow_endpoints;
 mod arrow_queries;
