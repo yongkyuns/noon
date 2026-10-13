@@ -24,6 +24,9 @@ on:
       - 'scripts/manim-namespace-values.py'
       - 'scripts/manim-iterable-utilities.py'
       - 'scripts/manim-array-utilities.py'
+      - 'scripts/manim-simple-functions.py'
+      - 'web/python/_manim_simple_functions.py'
+      - 'web/python/test_manim_simple_functions.py'
       - 'web/python/_manim_iterables.py'
       - 'web/python/test_manim_array_utilities.py'
       - 'web/python/_manim_namespace.py'
@@ -85,6 +88,8 @@ jobs:
           python3 -m venv array-oracle
           array-oracle/bin/pip install numpy==2.5.4
           array-oracle/bin/python noon/scripts/manim-array-utilities.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-simple-functions.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_simple_functions.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_array_utilities.py -v
       - name: Extract and validate reference inventory
         shell: bash

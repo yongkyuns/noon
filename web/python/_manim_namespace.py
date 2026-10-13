@@ -23,6 +23,8 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "binary_search": "numpy",
+    "sigmoid": "numpy",
     "stretch_array_to_length": "numpy",
     "resize_array": "numpy",
     "resize_preserving_order": "numpy",
@@ -183,7 +185,7 @@ def _loaded_names(source: str) -> set[str]:
     }
     names.update(node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute))
     names.update(alias.name for node in ast.walk(tree)
-                 if isinstance(node, ast.ImportFrom) and node.module in {"manim", "noon", "_manim_iterables"}
+                 if isinstance(node, ast.ImportFrom) and node.module in {"manim", "noon", "_manim_iterables", "_manim_simple_functions"}
                  for alias in node.names)
     return names
 
