@@ -22,6 +22,11 @@ on:
       - 'scripts/manim-reference-dispositions.py'
       - 'scripts/test_manim_reference_dispositions.py'
       - 'scripts/manim-namespace-values.py'
+      - 'scripts/manim-iterable-utilities.py'
+      - 'scripts/pinned_python_helpers.py'
+      - 'scripts/test_pinned_python_helpers.py'
+      - 'web/python/_manim_iterables.py'
+      - 'web/python/test_manim_iterable_utilities.py'
       - 'scripts/manim-config-utilities.py'
       - 'web/python/_manim_config_utils.py'
       - 'web/python/test_manim_config_utilities.py'
@@ -62,6 +67,8 @@ jobs:
           actual_sha="$(git -C manim-v0.21.0 rev-parse HEAD)"
           test "$actual_sha" = "$MANIM_REFERENCE_SHA"
           python3 noon/scripts/manim-namespace-values.py manim-v0.21.0
+          python3 noon/scripts/manim-iterable-utilities.py manim-v0.21.0
+          python3 noon/scripts/test_pinned_python_helpers.py
           python3 noon/scripts/manim-config-utilities.py manim-v0.21.0
       - name: Extract and validate reference inventory
         shell: bash
