@@ -194,7 +194,7 @@ jobs:
           name: glow-raster-correctness
           path: glow-raster-artifacts
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 3
 
   web-build:
     needs: qualification
@@ -401,7 +401,7 @@ jobs:
           name: browser-smoke-screenshots-webgpu
           path: browser-smoke-artifacts/webgpu
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 3
       - name: Upload WebGL browser smoke screenshots
         if: always()
         uses: actions/upload-artifact@v7
@@ -409,7 +409,7 @@ jobs:
           name: browser-smoke-screenshots-webgl
           path: browser-smoke-artifacts/webgl
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 3
       - name: Upload backend visual parity report
         if: always()
         uses: actions/upload-artifact@v7
@@ -417,4 +417,4 @@ jobs:
           name: browser-backend-visual-parity
           path: browser-backend-parity-report
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
