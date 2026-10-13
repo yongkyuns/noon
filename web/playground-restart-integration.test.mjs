@@ -112,6 +112,7 @@ function navigationFixture() {
     latestRunPhaseMetrics: null, canvas: { id: "original" }, playbackDurationSeconds: 1,
     document: { querySelector: () => diagnostics },
     authoringSourceDocument,
+    previousPreview: { hold() {}, showLive() {}, accept() {}, clear() {}, dispose() {} },
     diagnosticPanel: {
       beginRun(document, source) { diagnosticBegins.push({ document, source }); },
       invalidate() { diagnosticInvalidations += 1; },

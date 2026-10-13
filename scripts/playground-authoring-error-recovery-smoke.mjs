@@ -131,6 +131,55 @@ async function assertStoppedPreview(page, observed) {
   assert.equal(await frames(), before, "paused source must settle with no further presentations");
 }
 
+// A readback of the displayed placeholder, independent of the preview cache.
+// The negative control (a blank or missing image) cannot satisfy this reference.
+async function previewPixels(page, frozen = false) {
+  return page.evaluate(async (frozen) => {
+    const image = document.querySelector(frozen ? "#last-successful-preview img" : "#scene");
+    const width = frozen ? image.naturalWidth : image.width;
+    const height = frozen ? image.naturalHeight : image.height;
+    const scale = Math.min(1, 1536 / width, 1536 / height, Math.sqrt(1048576 / width / height));
+    const copy = document.createElement("canvas");
+    copy.width = Math.max(1, Math.floor(width * scale));
+    copy.height = Math.max(1, Math.floor(height * scale));
+    const context = copy.getContext("2d");
+    context.drawImage(image, 0, 0, copy.width, copy.height);
+    const bytes = context.getImageData(0, 0, copy.width, copy.height).data;
+    let different = 0;
+    for (let i = 4; i < bytes.length; i += 4) {
+      if (bytes[i] !== bytes[0] || bytes[i + 1] !== bytes[1] || bytes[i + 2] !== bytes[2] || bytes[i + 3] !== bytes[3]) different += 1;
+    }
+    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+      .map(byte => byte.toString(16).padStart(2, "0")).join("");
+    return { width: copy.width, height: copy.height, different, digest };
+  }, frozen);
+}
+
+async function pauseAndRecordPreview(page) {
+  const toggle = page.locator(".playback-toggle");
+  if (await toggle.getAttribute("aria-label") === "Pause animation") await toggle.click();
+  // Observe the compositor's placeholder update after the acknowledged pause.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const pixels = await previewPixels(page);
+  assert.ok(pixels.different > 50, "the successful scene must have visible nonuniform pixels");
+  return { pixels, runGeneration: await page.locator("#patch-status").getAttribute("data-run-generation") };
+}
+
+async function assertFrozenPreview(page, reference) {
+  await page.waitForFunction(() => {
+    const overlay = document.querySelector("#last-successful-preview");
+    const image = overlay?.querySelector("img");
+    return overlay?.hidden === false && image?.complete && image.naturalWidth > 0;
+  }, null, { timeout: 10_000 });
+  const overlay = page.locator("#last-successful-preview");
+  assert.match(await overlay.textContent(), /Previous successful preview.*Edited source failed/);
+  assert.equal(await overlay.getAttribute("data-run-generation"), reference.runGeneration);
+  assert.deepEqual(await previewPixels(page, true), reference.pixels, "invalid edits must preserve actual displayed pixels");
+  assert.equal(await page.locator(".playback-toggle").isDisabled(), true,
+    "the old execution must not resume behind its frozen preview");
+  assert.equal(await page.locator("canvas").count(), 1, "the frozen image must not create a second live canvas");
+}
+
 async function waitForInitialScene(page) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   await page.waitForSelector("#scene-editor-panel .python-code-editor[data-editor-ready='true'] .cm-content", {
@@ -272,6 +321,7 @@ try {
   assert.notEqual(diagnostics.snapshots.baseline.patchSequence, "");
   await page.screenshot({ path: path.join(artifactDir, "baseline.png"), fullPage: true });
 
+  diagnostics.previewBaseline = await pauseAndRecordPreview(page);
   phase = "syntax-error";
   await setEditorSource(page, SOURCES.syntaxError);
   let edited = await snapshot(page);
@@ -292,6 +342,7 @@ try {
     "syntax failure must retain the last successful object-count diagnostic",
   );
   await assertStoppedPreview(page, diagnostics.snapshots.syntaxError);
+  await assertFrozenPreview(page, diagnostics.previewBaseline);
   assert.match(diagnostics.snapshots.syntaxError.traceback, /SyntaxError/);
   await assertSourceDiagnostic(page, diagnostics.snapshots.syntaxError, { type: "SyntaxError", line: 3 });
   await page.screenshot({ path: path.join(artifactDir, "syntax-error.png"), fullPage: true });
@@ -310,6 +361,8 @@ try {
   assert.notEqual(diagnostics.snapshots.syntaxRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.syntaxRecovered.rendererBackend, "WebGL2");
 
+  assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
+  diagnostics.previewRecovered = await pauseAndRecordPreview(page);
   phase = "runtime-error";
   await setEditorSource(page, SOURCES.runtimeError);
   edited = await snapshot(page);
@@ -330,6 +383,7 @@ try {
     "authoring failure must retain the last successful object-count diagnostic",
   );
   await assertStoppedPreview(page, diagnostics.snapshots.runtimeError);
+  await assertFrozenPreview(page, diagnostics.previewRecovered);
   assert.match(diagnostics.snapshots.runtimeError.traceback, /MissingShape/);
   await assertSourceDiagnostic(page, diagnostics.snapshots.runtimeError, {
     type: "NameError", line: 6, selectedText: "MissingShape",
@@ -349,6 +403,7 @@ try {
   assert.match(diagnostics.snapshots.runtimeRecovered.patchText, /1 objects/);
   assert.notEqual(diagnostics.snapshots.runtimeRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.runtimeRecovered.rendererBackend, "WebGL2");
+  assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
   await page.screenshot({ path: path.join(artifactDir, "recovered.png"), fullPage: true });
 
   const syntaxConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "syntax-error");
