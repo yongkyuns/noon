@@ -46,7 +46,10 @@ fn live_matching_captures_current_donor_color_and_rejects_foreign_donor_atomical
     live.set_color(&donor, 0.0, 0.0, 1.0, 1.0).unwrap();
     let result = live.match_family_color(&family, &donor).unwrap();
     assert_eq!(result.impacts().len(), 1);
-    assert_eq!(live.effective_manim_color(&recipient).unwrap(), Color::rgb(0.0, 0.0, 1.0));
+    assert_eq!(
+        live.effective_manim_color(&recipient).unwrap(),
+        Color::rgb(0.0, 0.0, 1.0)
+    );
     let before = recipient.state().unwrap();
     assert!(live.match_color(&recipient, &foreign).is_err());
     assert_eq!(recipient.state().unwrap(), before);
