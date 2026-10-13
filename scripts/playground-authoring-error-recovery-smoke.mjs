@@ -40,6 +40,19 @@ class FinalRecovery(Scene):
     def construct(self):
         self.add(Circle())
 `,
+  explicitRerun: `from noon import *
+import builtins
+
+class ExplicitRerun(Scene):
+    def construct(self):
+        attempt = getattr(builtins, "_noon_test_preview_rerun", 0) + 1
+        builtins._noon_test_preview_rerun = attempt
+        if attempt == 2:
+            raise ValueError("Intentional explicit rerun failure")
+        square = Square()
+        self.add(square)
+        self.play(square.animate.shift(RIGHT), run_time=3)
+`,
 };
 
 await mkdir(artifactDir, { recursive: true });
@@ -406,11 +419,49 @@ try {
   assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
   await page.screenshot({ path: path.join(artifactDir, "recovered.png"), fullPage: true });
 
+  // Rerunning the same valid source can fail on a later invocation. No edit
+  // event pauses the previous replay here: Run itself must stop it first.
+  phase = "explicit-rerun-baseline";
+  await setEditorSource(page, SOURCES.explicitRerun);
+  diagnostics.snapshots.rerunBaseline = await runEditedSource(page, {
+    expectedState: "applied", expectedObjectCount: 1,
+  });
+  const replayToggle = page.locator(".playback-toggle");
+  assert.equal(await replayToggle.getAttribute("aria-label"), "Pause animation");
+  assert.equal(await replayToggle.isEnabled(), true);
+  const acceptedGeneration = await page.locator("#patch-status").getAttribute("data-run-generation");
+  phase = "explicit-rerun-error";
+  await page.locator("#replace-scene").click();
+  diagnostics.snapshots.rerunError = await waitForRunResult(page, { expectedState: "error" });
+  assert.equal(diagnostics.snapshots.rerunError.problemTitle, "Python raised ValueError");
+  await assertStoppedPreview(page, diagnostics.snapshots.rerunError);
+  await page.waitForFunction(() => {
+    const overlay = document.querySelector("#last-successful-preview");
+    const image = overlay?.querySelector("img");
+    return overlay?.hidden === false && image?.complete && image.naturalWidth > 0;
+  });
+  const rerunPixels = await previewPixels(page, true);
+  assert.ok(rerunPixels.different > 50, "the failed rerun must retain visible scene pixels");
+  // Running-frame capture is not compared to a different live instant. Check
+  // its accepted source identity and stability; earlier paused cases compare
+  // against independent exact displayed-pixel references.
+  await assertFrozenPreview(page, { pixels: rerunPixels, runGeneration: acceptedGeneration });
+  phase = "explicit-rerun-recovery";
+  await page.locator("#replace-scene").click();
+  diagnostics.snapshots.rerunRecovered = await waitForRunResult(page, {
+    expectedState: "applied", expectedObjectCount: 1,
+  });
+  assertDiagnosticCleared(diagnostics.snapshots.rerunRecovered);
+  assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
+
   const syntaxConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "syntax-error");
   const runtimeConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "runtime-error");
+  const rerunConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "explicit-rerun-error");
   const unexpectedConsole = diagnostics.consoleErrors.filter(
-    (entry) => entry.phase !== "syntax-error" && entry.phase !== "runtime-error",
+    (entry) => entry.phase !== "syntax-error" && entry.phase !== "runtime-error" && entry.phase !== "explicit-rerun-error",
   );
+  assert.ok(rerunConsole.some((entry) => /Intentional explicit rerun failure/.test(entry.text)),
+    `the explicit rerun should expose its actual exception: ${JSON.stringify(rerunConsole)}`);
   assert.ok(
     syntaxConsole.some((entry) => /SyntaxError|invalid syntax|expected ':'/i.test(entry.text)),
     `syntax failure should be diagnostic in the console: ${JSON.stringify(syntaxConsole)}`,

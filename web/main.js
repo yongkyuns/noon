@@ -993,6 +993,25 @@ async function runScene() {
         run_generation: runToken.runGeneration,
       } }), source);
       previousPreview.hold(canvas, "Building edited source");
+      // Explicit Run need not pass through the edit-stop path. Do not leave a
+      // completed source's replay/callbacks running behind the frozen image.
+      if (player !== null && !playerNeedsRestart) {
+        const retainedPlayer = player;
+        canvas.style.visibility = "hidden";
+        playbackControls?.setControllable(false);
+        stopMetricsPolling();
+        try {
+          await retainedPlayer.pause();
+        } catch {
+          // Same retirement policy as edit-stop: an unpausable owner cannot
+          // remain live behind the preview. The replacement gets a fresh owner.
+          if (isCurrentRun(runToken)) discardEarlyContinuationRuntime(retainedPlayer);
+        }
+        if (!isCurrentRun(runToken)) return recordStale(runToken, "after-preview-pause");
+        status.dataset.playbackPlaying = "false";
+        status.dataset.playbackPhase = "stopped";
+        status.dataset.playbackControls = "unavailable";
+      }
       setRuntimeStatus("Building Python scene…", "running");
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
@@ -1443,7 +1462,9 @@ async function updateWorkerMetrics() {
   } catch (error) {
     if (isCurrentMetricsObservation(observation)) showError(error);
   } finally {
-    if (playbackPending === observation) playbackPending = null;
+    if (playbackPending === observation) {
+      playbackPending = null;
+    }
   }
 }
 

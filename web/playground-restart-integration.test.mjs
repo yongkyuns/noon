@@ -109,7 +109,7 @@ function navigationFixture() {
     player: null, playerNeedsRestart: false, playbackControls: null, runtimePreparation: null,
     authoringClient: null,
     sceneRunPromise: null, activeSourceContinuation: null, activeRunRequest: null,
-    latestRunPhaseMetrics: null, canvas: { id: "original" }, playbackDurationSeconds: 1,
+    latestRunPhaseMetrics: null, canvas: { id: "original", style: {} }, playbackDurationSeconds: 1,
     document: { querySelector: () => diagnostics },
     authoringSourceDocument,
     previousPreview: { hold() {}, showLive() {}, accept() {}, clear() {}, dispose() {} },
@@ -144,7 +144,8 @@ function navigationFixture() {
     ensureRuntimePreparation() {
       const candidate = {
         canvas: context.canvas, terminations: 0,
-        terminate() { this.terminations += 1; this.canvas = { id: `replacement-${owners.length}` }; },
+        pause: () => Promise.resolve(),
+        terminate() { this.terminations += 1; this.canvas = { id: `replacement-${owners.length}`, style: {} }; },
       };
       owners.push(candidate);
       context.runtimePreparation = { candidate };
@@ -184,6 +185,7 @@ test("leaving the gallery retires a pending Python run without publishing a Pyth
       f.context.activeSourceContinuation = {};
     }
     const run = f.context.runScene();
+    await flush(); // Reach pending authoring after the retained replay pause.
     f.dispatch("pagehide", false);
     assert.equal((await run).stale, true);
     assert.deepEqual(f.errors, []);
