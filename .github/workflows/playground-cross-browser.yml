@@ -53,6 +53,10 @@ on:
       - "!web/**/*.test.mjs"
   workflow_dispatch:
     inputs:
+      firefox_navigation_diagnostic:
+        description: Capture retained Firefox resources without qualifying the PR
+        type: boolean
+        default: false
       webkit_crash_diagnostic:
         description: 'Diagnose the retained #2038 WebKit failure with its exact CI package; does not qualify the PR'
         type: boolean
@@ -67,7 +71,7 @@ concurrency:
 
 jobs:
   build:
-    if: ${{ !inputs.webkit_crash_diagnostic }}
+    if: ${{ !inputs.webkit_crash_diagnostic && !inputs.firefox_navigation_diagnostic }}
     name: Build browser package
     runs-on: ubuntu-latest
     env:
@@ -122,7 +126,7 @@ jobs:
           retention-days: 1
 
   browser:
-    if: ${{ !inputs.webkit_crash_diagnostic }}
+    if: ${{ !inputs.webkit_crash_diagnostic && !inputs.firefox_navigation_diagnostic }}
     name: ${{ matrix.browser }} / ${{ matrix.profile }}
     runs-on: ${{ matrix.os }}
     needs: build
@@ -240,7 +244,7 @@ jobs:
   # harness still launches fresh browser processes and executes cases
   # sequentially; independent shards run on separate hosted macOS runners.
   gallery:
-    if: ${{ !inputs.webkit_crash_diagnostic }}
+    if: ${{ !inputs.webkit_crash_diagnostic && !inputs.firefox_navigation_diagnostic }}
     name: Gallery ${{ matrix.browser }} / shard ${{ matrix.shard }}
     runs-on: ${{ matrix.os }}
     needs: build
@@ -380,5 +384,81 @@ jobs:
         with:
           name: retained-webkit-showcase-crash-diagnostic
           path: output/playwright/retained-webkit-crash
+          if-no-files-found: warn
+          retention-days: 7
+
+  firefox-navigation-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.firefox_navigation_diagnostic }}
+    name: Diagnose retained Firefox initial navigation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout diagnostic observer
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Checkout the exact retained source
+        uses: actions/checkout@v7
+        with:
+          ref: 903d58c3979b76cd2ed275b1d73ee74f26885f94
+          path: subject
+          persist-credentials: false
+      - name: Download the exact retained runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          repository: ${{ github.repository }}
+          run-id: 38355998241
+          github-token: ${{ github.token }}
+          path: subject/web
+      - name: Verify retained runtime bytes and identity
+        working-directory: subject
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          import {createHash} from 'node:crypto';
+          const identity = JSON.parse(await readFile('web/runtime-build-identity.json', 'utf8'));
+          if (identity.sourceRevision !== '903d58c3979b76cd2ed275b1d73ee74f26885f94' ||
+              identity.buildId !== 'bb0fcc3c261490281162a3d4c37d1ebea71aabbb547150341dc00a94ba858f1f') {
+            throw new Error('retained runtime identity changed');
+          }
+          for (const file of Object.values(identity.files)) {
+            const data = await readFile('web/' + file.path);
+            if (createHash('sha256').update(data).digest('hex') !== file.sha256) {
+              throw new Error('retained runtime bytes changed: ' + file.path);
+            }
+          }
+          console.log(identity.sourceRevision, identity.buildId);
+          NODE
+      - name: Install original browser dependencies
+        working-directory: subject
+        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - name: Install Firefox and system dependencies
+        working-directory: subject
+        run: npx playwright install --with-deps firefox
+      - name: Add resource observations with unchanged load deadline
+        run: |
+          python3 scripts/instrument-retained-firefox-navigation.py subject/scripts/playground-example-browser-smoke.mjs
+          node --check subject/scripts/playground-example-browser-smoke.mjs
+      - name: Execute original navigation and layout assertions
+        working-directory: subject
+        env:
+          DEBUG: pw:browser
+          NOON_PLAYGROUND_BROWSER: firefox
+          NOON_PLAYGROUND_PROFILE: desktop-dpr2
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: output/playwright/retained-firefox-navigation
+        run: |
+          set -euo pipefail
+          mkdir -p output/playwright/retained-firefox-navigation
+          node scripts/playground-example-browser-smoke.mjs 2>&1 | tee output/playwright/retained-firefox-navigation/browser-process.log
+      - name: Upload retained resource observations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retained-firefox-navigation-diagnostic
+          path: subject/output/playwright/retained-firefox-navigation
           if-no-files-found: warn
           retention-days: 7
