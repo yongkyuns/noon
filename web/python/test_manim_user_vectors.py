@@ -17,8 +17,10 @@ class UserVectors(unittest.TestCase):
     def test_public_exports_and_optional_package_discovery(self):
         optional = ["complex_to_R3", "complex_func_to_R3_func", "center_of_mass", "midpoint",
                     "normalize", "angle_of_vector", "angle_between_vectors", "shoelace",
-                    "shoelace_direction"]
-        for name in optional + ["cross2d", "R3_to_complex"]:
+                    "shoelace_direction", "quaternion_from_angle_axis", "angle_axis_from_quaternion",
+                    "quaternion_conjugate", "thick_diagonal", "rotation_about_z",
+                    "cartesian_to_spherical", "spherical_to_cartesian"]
+        for name in optional + ["cross2d", "R3_to_complex", "quaternion_mult"]:
             self.assertIs(getattr(noon, name), getattr(helpers, name))
             self.assertIn(name, noon.__all__)
             expected = ("numpy",) if name in optional else ()
@@ -32,6 +34,28 @@ class UserVectors(unittest.TestCase):
                        check=True, cwd=Path(__file__).parent)
         self.assertEqual(helpers.R3_to_complex([3]), 3 + 0j)
         with self.assertRaises(TypeError): helpers.R3_to_complex(["x", 2])
+        quaternion = [1, 2, 3, 4]
+        self.assertIs(helpers.quaternion_mult(quaternion), quaternion)
+        self.assertEqual(helpers.quaternion_mult(), [1, 0, 0, 0])
+        self.assertEqual(helpers.quaternion_mult([0, 1, 0, 0], [0, 0, 1, 0]), [0, 0, 0, 1])
+
+    @unittest.skipIf(np is None, "NumPy contracts run in the pinned utility lane")
+    def test_quaternion_angles_spherical_values_and_matrix_dtype(self):
+        values = np.array([1, 2, 3, 4], dtype=np.int64)
+        np.testing.assert_array_equal(helpers.quaternion_conjugate(values), [1, -2, -3, -4])
+        np.testing.assert_array_equal(values, [1, 2, 3, 4])
+        np.testing.assert_allclose(helpers.quaternion_from_angle_axis(np.pi, np.array([0, 0, 2])), [0, 0, 0, 1], atol=1e-15)
+        # The pinned zero-axis fallback currently raises the NumPy truth-value error.
+        with self.assertRaises(ValueError): helpers.angle_axis_from_quaternion([1, 0, 0, 0])
+        angle, axis = helpers.angle_axis_from_quaternion([0, 0, 0, 1])
+        self.assertEqual(angle, np.pi)
+        np.testing.assert_array_equal(axis, [0, 0, 1])
+        np.testing.assert_array_equal(helpers.cartesian_to_spherical([0, 0, 0]), [0, 0, 0])
+        np.testing.assert_allclose(helpers.spherical_to_cartesian(helpers.cartesian_to_spherical([1, 2, 3])), [1, 2, 3])
+        np.testing.assert_allclose(helpers.rotation_about_z(np.pi/2), [[0, -1, 0], [1, 0, 0], [0, 0, 1]], atol=1e-15)
+        diagonal = helpers.thick_diagonal(3, 1)
+        self.assertEqual(diagonal.dtype, np.uint8)
+        np.testing.assert_array_equal(diagonal, np.eye(3))
 
     @unittest.skipIf(np is None, "NumPy contracts run in the pinned utility lane")
     def test_normalize_preserves_original_zero_and_fallback_rules(self):
@@ -61,6 +85,13 @@ class UserVectors(unittest.TestCase):
         self.assertEqual(helpers.shoelace(points), -1)
         self.assertEqual(helpers.shoelace_direction(points), "CCW")
         self.assertEqual(helpers.shoelace_direction(points[::-1]), "CW")
+        columns = []
+        class SliceRows:
+            def __getitem__(self, key):
+                columns.append(key[1])
+                return points[key]
+        self.assertEqual(helpers.shoelace(SliceRows()), -1)
+        self.assertEqual(columns, [0, 1])
 
     @unittest.skipIf(np is None, "NumPy contracts run in the pinned utility lane")
     def test_complex_callback_is_lazy_called_once_and_propagates_failure(self):

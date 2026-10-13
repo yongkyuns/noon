@@ -20,7 +20,9 @@ from pinned_python_helpers import load_helpers
 
 NAMES = {"complex_to_R3", "R3_to_complex", "complex_func_to_R3_func", "center_of_mass",
          "midpoint", "normalize", "angle_of_vector", "angle_between_vectors",
-         "shoelace", "shoelace_direction", "cross2d"}
+         "shoelace", "shoelace_direction", "cross2d", "quaternion_mult",
+         "quaternion_from_angle_axis", "angle_axis_from_quaternion", "quaternion_conjugate",
+         "thick_diagonal", "rotation_about_z", "cartesian_to_spherical", "spherical_to_cartesian"}
 
 
 def observations(namespace):
@@ -56,6 +58,38 @@ def observations(namespace):
                 record(name, vector, other)
     for value in [0, 1j, -2 + 3j, float("nan"), "x", Decimal("0.1"), np.complex64(1 + 2j)]:
         record("complex_to_R3", value)
+    for vector in vectors + [[1, 2, 3, 4], np.array([1, 2, 3, 4], dtype=np.float32), (1, 0, 0, 0)]:
+        for name in ["cartesian_to_spherical", "spherical_to_cartesian", "quaternion_conjugate",
+                     "angle_axis_from_quaternion"]:
+            record(name, vector)
+        record("quaternion_mult", vector)
+        for other in [(1, 0, 0, 0), (0, 1, 2, 3), [1, 2], np.array([1, 2, 3, 4], dtype=np.float32)]:
+            record("quaternion_mult", vector, other)
+        for angle in [0, np.pi/3, np.float32(0.2), float("nan"), "x", Decimal("0.2")]:
+            record("quaternion_from_angle_axis", angle, vector)
+            record("quaternion_from_angle_axis", angle, vector, True)
+    record("quaternion_mult")
+    record("quaternion_mult", [1, 2, 3, 4], [4, 3, 2, 1], [1, 0, 0, 0])
+    for angle in [0, np.pi/3, np.float32(0.2), float("inf"), float("nan"), "x",
+                  Decimal("0.2"), np.array([0, 1])]:
+        record("rotation_about_z", angle)
+    for size in [-2, 0, 1, 3, True, 2.5, "x"]:
+        for thickness in [-1, 0, 1, 2, 10, "x", np.float32(1.5)]:
+            record("thick_diagonal", size, thickness)
+    for fail_on_column in [None, 0, 1]:
+        columns = []
+        class SliceRows:
+            def __getitem__(self, key):
+                column = key[1]
+                columns.append(column)
+                if column == fail_on_column:
+                    raise LookupError("user slice")
+                return np.array([[0, 0], [1, 0], [1, 1], [0, 1]])[:, column]
+        try:
+            outcome = ["value", normalize(namespace["shoelace"](SliceRows()))]
+        except Exception as error:
+            outcome = ["error", type(error).__name__]
+        result.append(["shoelace_slice_order", columns, outcome])
     for fails in [False, True]:
         events = []
         def callback(value):
@@ -77,7 +111,8 @@ def observations(namespace):
 
 def qualify(manim_source, *, installed_manim=False):
     source = manim_source / "manim/utils/space_ops.py"
-    expected = observations(load_helpers(source, NAMES, {"np": np, "Callable": Callable, "Sequence": Sequence}))
+    expected = observations(load_helpers(source, NAMES, {"np": np, "Callable": Callable,
+                                                       "Sequence": Sequence, "TAU": 2*np.pi}))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web/python"))
     import _manim_user_vectors
     import noon

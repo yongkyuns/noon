@@ -895,6 +895,14 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "quaternion_mult": "_manim_user_vectors",
+    "quaternion_from_angle_axis": "_manim_user_vectors",
+    "angle_axis_from_quaternion": "_manim_user_vectors",
+    "quaternion_conjugate": "_manim_user_vectors",
+    "thick_diagonal": "_manim_user_vectors",
+    "rotation_about_z": "_manim_user_vectors",
+    "cartesian_to_spherical": "_manim_user_vectors",
+    "spherical_to_cartesian": "_manim_user_vectors",
     "complex_to_R3": "_manim_user_vectors",
     "R3_to_complex": "_manim_user_vectors",
     "complex_func_to_R3_func": "_manim_user_vectors",
