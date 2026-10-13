@@ -223,7 +223,7 @@ jobs:
           name: following-graph-camera-qualification
           path: following-graph-camera-artifacts
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
       - name: Compare public Python semantics with pinned ManimCE
         timeout-minutes: 5
         run: |
@@ -236,7 +236,7 @@ jobs:
           name: manim-semantic-differential
           path: browser-smoke-artifacts/manim-differential
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 3
       - name: Verify semantic preview frames, cancellation, and fresh-run recovery
         run: timeout --signal=TERM 180s node scripts/semantic-preview-smoke.mjs
       - name: Verify actual preview PNG capture enters bounded artifact storage
@@ -248,7 +248,7 @@ jobs:
           name: semantic-preview-evidence
           path: browser-smoke-artifacts/semantic-preview
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
       - name: Render and compare retained Typst fixtures
         env:
           NOON_MANIM_TYPST_RASTER_BACKENDS: webgpu,webgl
@@ -269,7 +269,7 @@ jobs:
           name: retained-typst-raster-measurement
           path: manim-raster-artifacts/retained-typst
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
       - name: Render and compare canonical Manim scenes
         env:
           NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
@@ -286,7 +286,7 @@ jobs:
           name: manim-raster-command-output
           path: ${{ runner.temp }}/noon-raster-command.log
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 3
       - name: Capture semantic state at raster frame times
         env:
           NOON_MANIM_RASTER_ARTIFACTS: manim-raster-artifacts
@@ -307,7 +307,7 @@ jobs:
           name: manim-raster-differential
           path: manim-raster-artifacts
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
       - name: Report deferred qualification failures
         if: ${{ always() && (steps.following_graph_camera.outcome == 'failure' || steps.typst_ratchet.outcome == 'failure') }}
         run: |
