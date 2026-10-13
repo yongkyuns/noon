@@ -120,6 +120,7 @@ mod polygon_authoring;
 pub mod polygon_example;
 mod spatial_authoring;
 mod spatial_composition;
+pub mod triangle_example;
 mod world_affine;
 pub use graph_authoring::{
     DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphLayout,

@@ -68,10 +68,7 @@ impl ManimGeometryOptions {
     }
 
     pub fn triangle() -> Result<Self, AuthoringError> {
-        Ok(Self::new(
-            GeometryRef::path(crate::geometry_authoring::manim_triangle_path()),
-            manim_style(Color::BLUE),
-        ))
+        Self::regular_polygon(3, 1.0, None)
     }
 
     pub fn elbow(width: f64, angle: f64) -> Result<Self, AuthoringError> {

@@ -24,6 +24,23 @@ class PolygonAdapters(unittest.TestCase):
         self.assertEqual(calls[1], ("star", (5, 1.0, None, 2, polygon._base.TAU / 4)))
         self.assertEqual(calls[2], ("regular", (6, 2, 2.0, 0.3)))
 
+    def test_triangle_inherits_polygon_queries_and_delegates_regular_options(self):
+        from _manim_geometry import Triangle
+        calls = []
+        options = types.SimpleNamespace(
+            regularPolygram=lambda *args: calls.append(args) or object(),
+        )
+        with patch.object(polygon._shared, "_create_geometry_handle", object()), \
+             patch.object(polygon._shared, "_geometry_options", options), \
+             patch.object(polygon._shared, "_attach_geometry_options"), \
+             patch.object(polygon._shared, "_apply_shared_constructor_options"):
+            default = Triangle()
+            Triangle(radius=2, start_angle=0.3)
+        self.assertEqual(calls, [(3, 1, 1.0, None), (3, 1, 2.0, 0.3)])
+        self.assertIsInstance(default, polygon.RegularPolygon)
+        self.assertIs(Triangle.get_vertices, polygon.Polygram.get_vertices)
+        self.assertIs(Triangle.get_vertex_groups, polygon.Polygram.get_vertex_groups)
+
     def test_polygon_only_coerces_vertices_and_preserves_group_lengths(self):
         calls = []
         ffi = types.ModuleType("pyodide.ffi")
