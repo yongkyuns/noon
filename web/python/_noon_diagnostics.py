@@ -215,3 +215,41 @@ def capture_exception(error: BaseException, *, source: str, filename: str,
     return {"version": DIAGNOSTIC_VERSION, "phase": phase,
             "document": {"filename": filename, "revision": revision},
             "exception": exception, "truncated": capture.truncated}
+
+
+class source_diagnostic_scope:
+    """Observe an escaping source error without changing propagation or ownership.
+
+    The host supplies a per-invocation string sink, not a global last-error
+    mailbox. The sink receives JSON only; no exception or PyProxy escapes.
+    Successful execution performs no traceback capture. This scope can span
+    a host await, but does not rewrite authored code or decide engine recovery.
+    """
+
+    def __init__(self, *, source, filename, revision, phase, on_error):
+        self.source = source
+        self.filename = filename
+        self.revision = revision
+        self.phase = phase
+        self.on_error = on_error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception_type, error, tb):
+        try:
+            if error is not None:
+                try:
+                    import json
+                    self.on_error(json.dumps(capture_exception(
+                        error, source=self.source, filename=self.filename,
+                        revision=self.revision, phase=self.phase,
+                    ), ensure_ascii=True))
+                except BaseException:
+                    # Diagnostics must never replace the original failure,
+                    # including when exception formatting or the sink fails.
+                    pass
+        finally:
+            # A retained context manager must not keep source or host proxies.
+            self.source = self.on_error = None
+        return False

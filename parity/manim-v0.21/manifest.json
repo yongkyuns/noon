@@ -11,6 +11,20 @@
   },
   "fixtures": [
     {
+      "id": "polynomial-rates",
+      "scene": "PolynomialRates",
+      "source": "parity/manim-v0.21/core-examples/polynomial_rates.py",
+      "expected_duration": 1,
+      "sample_times": [
+        0,
+        0.26666666666666666,
+        0.5,
+        0.7666666666666666,
+        0.9666666666666667
+      ],
+      "notes": "Three existing shared method-target tracks use pinned polynomial rate functions; current source/raster qualification is required."
+    },
+    {
       "id": "math-table",
       "scene": "MathTableExample",
       "source": "parity/manim-v0.21/core-examples/table.py",

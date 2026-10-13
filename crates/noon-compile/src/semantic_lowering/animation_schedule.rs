@@ -2785,7 +2785,12 @@ where
 /// Rate used with swapped Create endpoints so `1 - mapped(t)` equals `original(1 - t)`.
 fn reversed_create_rate(rate: RateFunction) -> Option<RateFunction> {
     match rate {
-        RateFunction::Linear | RateFunction::Smooth | RateFunction::EaseInOutCubic => Some(rate),
+        RateFunction::Linear
+        | RateFunction::Smooth
+        | RateFunction::Smoothstep
+        | RateFunction::Smootherstep
+        | RateFunction::Smoothererstep
+        | RateFunction::EaseInOutCubic => Some(rate),
         RateFunction::RushInto => Some(RateFunction::RushFrom),
         RateFunction::RushFrom => Some(RateFunction::RushInto),
         RateFunction::StepStart => Some(RateFunction::StepEnd),

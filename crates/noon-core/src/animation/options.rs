@@ -300,6 +300,9 @@ impl RateFunction {
         match self {
             Self::Linear => "linear",
             Self::Smooth => "smooth",
+            Self::Smoothstep => "smoothstep",
+            Self::Smootherstep => "smootherstep",
+            Self::Smoothererstep => "smoothererstep",
             Self::RushInto => "rush_into",
             Self::RushFrom => "rush_from",
             Self::ThereAndBack => "there_and_back",
@@ -313,6 +316,9 @@ impl RateFunction {
         match value {
             "linear" => Some(Self::Linear),
             "smooth" => Some(Self::Smooth),
+            "smoothstep" => Some(Self::Smoothstep),
+            "smootherstep" => Some(Self::Smootherstep),
+            "smoothererstep" => Some(Self::Smoothererstep),
             "rush_into" => Some(Self::RushInto),
             "rush_from" => Some(Self::RushFrom),
             "there_and_back" => Some(Self::ThereAndBack),
@@ -445,6 +451,9 @@ mod tests {
         for rate_func in [
             RateFunction::Linear,
             RateFunction::Smooth,
+            RateFunction::Smoothstep,
+            RateFunction::Smootherstep,
+            RateFunction::Smoothererstep,
             RateFunction::RushInto,
             RateFunction::RushFrom,
             RateFunction::ThereAndBack,

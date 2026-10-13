@@ -1,5 +1,7 @@
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { createPlaygroundDiagnostics } from "./playground-diagnostics.js";
+import { authoringSourceDocument } from "./authoring-diagnostic-runtime.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
 import { PresentationRate } from "./frame-metrics.js";
 import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
@@ -22,6 +24,11 @@ const sceneButton = document.querySelector("#replace-scene");
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
 const sceneSourceEditor = document.querySelector("#python-scene-source");
+const diagnosticPanel = createPlaygroundDiagnostics({
+  editor: sceneSourceEditor,
+  details: document.querySelector("#python-diagnostics"),
+  traceback: document.querySelector("#python-traceback"),
+});
 const sourceEditor = document.querySelector("#python-source");
 const sceneTab = document.querySelector("#scene-tab");
 const patchTab = document.querySelector("#patch-tab");
@@ -449,31 +456,35 @@ function beginBusy() {
 function showError(error) {
   resetPresentationRate();
   console.error(error);
-  setRuntimeStatus(`Error: ${error}`, "error");
-  patchStatus.value = "Runtime failed";
+  const title = diagnosticPanel.show(error, "Runtime failed");
+  if (title === null) return;
+  setRuntimeStatus(title, "error");
+  patchStatus.value = title;
   patchStatus.dataset.state = "error";
 }
 
 function showSceneError(error) {
   resetPresentationRate();
   console.error(error);
-  patchStatus.value = `Python failed: ${error}`;
+  const title = diagnosticPanel.show(error, "Scene failed");
+  if (title === null) return;
+  patchStatus.value = title;
   patchStatus.dataset.state = "error";
-  document.querySelector("#python-traceback").textContent = String(error.stack ?? error);
-  const diagnostics = document.querySelector("#python-diagnostics");
-  diagnostics.hidden = false;
-  diagnostics.open = true;
 }
 
 function showRecoverableSceneError(error) {
   console.warn("Recoverable Python callback error", error);
-  patchStatus.value = `Python callback failed: ${error}`;
+  const title = diagnosticPanel.show(error, "A callback failed");
+  if (title === null) return;
+  patchStatus.value = title;
   patchStatus.dataset.state = "error";
 }
 
 function showPlaybackError(error) {
   console.error(error);
-  patchStatus.value = `Playback failed: ${error}`;
+  const title = diagnosticPanel.show(error, "Playback failed");
+  if (title === null) return;
+  patchStatus.value = title;
   patchStatus.dataset.state = "error";
 }
 
@@ -920,7 +931,7 @@ function stopForSourceEdit() {
   status.dataset.playbackControls = "unavailable";
   status.dataset.playbackPhase = "stopped";
   status.dataset.playbackPlaying = "false";
-  document.querySelector("#python-diagnostics").hidden = true;
+  diagnosticPanel.invalidate();
   setRuntimeStatus("Preview stopped · waiting for edited Python…", "ready");
   return task;
 }
@@ -971,7 +982,10 @@ async function runScene() {
     let earlyContinuation = null;
     let authoringFailed = false;
     try {
-      document.querySelector("#python-diagnostics").hidden = true;
+      diagnosticPanel.beginRun(authoringSourceDocument({ playground: {
+        selection_generation: runToken.selectionGeneration,
+        run_generation: runToken.runGeneration,
+      } }), source);
       setRuntimeStatus("Building Python scene…", "running");
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
@@ -1183,7 +1197,7 @@ async function runScene() {
         return recordStale(runToken, "error");
       }
       if (authoringFailed) {
-        setRuntimeStatus("Python error · edit the source to retry", "ready");
+        setRuntimeStatus("Scene error · see details below", "ready");
         showSceneError(error);
       } else if (player === null || playerNeedsRestart) {
         showError(error);
@@ -1561,6 +1575,7 @@ try {
     "pagehide",
     () => {
       sourceRestart.dispose();
+      diagnosticPanel.dispose();
       disposeFullscreen();
       stopMetricsPolling();
       playbackControls?.destroy();

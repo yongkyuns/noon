@@ -1335,3 +1335,12 @@ pub async fn create_direct_moving_zoomed_scene_around_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
         .await
 }
+
+/// Ordinary method targets with three shared polynomial rate functions.
+#[wasm_bindgen(js_name = createDirectPolynomialRatesRenderer)]
+pub async fn create_direct_polynomial_rates_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::polynomial_rates::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
