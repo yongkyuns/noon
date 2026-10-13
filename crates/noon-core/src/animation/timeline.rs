@@ -56,6 +56,9 @@ pub enum RateFunction {
     Linear,
     #[default]
     Smooth,
+    Smoothstep,
+    Smootherstep,
+    Smoothererstep,
     RushInto,
     RushFrom,
     ThereAndBack,
@@ -73,6 +76,11 @@ impl RateFunction {
         match self {
             Self::Linear => progress,
             Self::Smooth => manim_smooth(progress),
+            // Evaluate the cancellation-prone polynomials once in f64, then
+            // project to the planar track's existing f32 precision.
+            Self::Smoothstep | Self::Smootherstep | Self::Smoothererstep => {
+                self.evaluate_f64(f64::from(progress)) as f32
+            }
             Self::RushInto => 2.0 * manim_smooth(progress / 2.0),
             Self::RushFrom => 2.0 * manim_smooth(progress / 2.0 + 0.5) - 1.0,
             Self::ThereAndBack => {
@@ -113,6 +121,11 @@ impl RateFunction {
         match self {
             Self::Linear => p,
             Self::Smooth => manim_smooth_f64(p),
+            Self::Smoothstep => 3.0 * p.powi(2) - 2.0 * p.powi(3),
+            Self::Smootherstep => 6.0 * p.powi(5) - 15.0 * p.powi(4) + 10.0 * p.powi(3),
+            Self::Smoothererstep => {
+                35.0 * p.powi(4) - 84.0 * p.powi(5) + 70.0 * p.powi(6) - 20.0 * p.powi(7)
+            }
             Self::RushInto => 2.0 * manim_smooth_f64(p / 2.0),
             Self::RushFrom => 2.0 * manim_smooth_f64(p / 2.0 + 0.5) - 1.0,
             Self::ThereAndBack => manim_smooth_f64(if p < 0.5 { 2.0 * p } else { 2.0 * (1.0 - p) }),
@@ -974,6 +987,28 @@ mod tests {
         assert_eq!(RateFunction::StepEnd.evaluate(0.0), 0.0);
         assert_eq!(RateFunction::StepEnd.evaluate(1.0 - f32::EPSILON), 0.0);
         assert_eq!(RateFunction::StepEnd.evaluate(1.0), 1.0);
+    }
+
+    #[test]
+    fn polynomial_rates_match_pinned_values_at_both_track_precisions() {
+        for (rate, quarter) in [
+            (RateFunction::Smoothstep, 0.15625_f64),
+            (RateFunction::Smootherstep, 0.103515625),
+            (RateFunction::Smoothererstep, 0.070556640625),
+        ] {
+            for (progress, expected) in [
+                (-1.0, 0.0),
+                (0.0, 0.0),
+                (0.25, quarter),
+                (0.5, 0.5),
+                (0.75, 1.0 - quarter),
+                (1.0, 1.0),
+                (2.0, 1.0),
+            ] {
+                assert_eq!(rate.evaluate_f64(progress), expected);
+                assert_eq!(rate.evaluate(progress as f32), expected as f32);
+            }
+        }
     }
 
     #[test]

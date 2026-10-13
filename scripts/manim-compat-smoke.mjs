@@ -452,6 +452,8 @@ class SharedRateFunctions(Scene):
         self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=rush_into)
         self.play(circle.animate.shift(RIGHT), run_time=0.2, rate_func=rush_from)
         self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=there_and_back)
+        for rate in [smoothstep, smootherstep, smoothererstep]:
+            self.play(circle.animate.shift(RIGHT), run_time=0.2, rate_func=rate)
 `;
 
 const concurrentFamilySource = `
@@ -799,11 +801,12 @@ result = Scene()
   // Runtime samples qualify both easing interiors and the returning endpoint.
   const ratePage = await browser.newPage();
   ratePage.on("pageerror", error => errors.push(String(error)));
-  const times = [0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.65, 0.7, 0.75, 0.8];
+  const times = [0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.65, 0.7, 0.75, 0.8,
+    0.85, 0.9, 1.0, 1.05, 1.1, 1.2, 1.25, 1.3, 1.4];
   await ratePage.goto(`${baseUrl}/web/manim-raster-host.html`);
   const sharedRates = await ratePage.evaluate(async ({ source, times }) => {
     await window.noonHostRaster.ready();
-    await window.noonHostRaster.load(source, 1);
+    await window.noonHostRaster.load(source, 2);
     const samples = [];
     for (let index = 0; index < times.length; index += 1) {
       const metrics = await window.noonHostRaster.renderThrough(index, times);
@@ -812,7 +815,8 @@ result = Scene()
     return samples;
   }, { source: rateFunctionSource, times });
   const expectedX = [0.070103716545108, 0.5, 0.929896283454892, 1,
-    0.859792566910216, 0.859792566910216, 0.5, 0, 0.5, 1];
+    0.859792566910216, 0.859792566910216, 0.5, 0, 0.5, 1,
+    1.15625, 1.5, 2, 2.103515625, 2.5, 3, 3.070556640625, 3.5, 4];
   for (const [index, { frame, metrics }] of sharedRates.entries()) {
     assert.ok(Math.abs(frame.objects[0].center[0] - expectedX[index]) < 1e-5,
       `shared rate function at ${times[index]}s: ${frame.objects[0].center[0]} != ${expectedX[index]}`);
