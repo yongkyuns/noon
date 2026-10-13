@@ -246,6 +246,13 @@ fn paired_query_example_uses_the_normal_execution_session() {
 }
 
 #[test]
+fn cubic_constructor_reference_keeps_six_manim_point_stroke() {
+    let session = noon::example_scenes::cubic_bezier::session().unwrap();
+    assert_eq!(session.frame().objects.len(), 1);
+    assert!((session.frame().objects[0].style.stroke_width - 0.06).abs() < 1e-6);
+}
+
+#[test]
 fn effective_morph_queries_interpolate_controls_and_keep_snapshot_and_seek_coherent() {
     let mut scene = Scene::new();
     let mut object = scene.square(2.).unwrap();
