@@ -10,6 +10,7 @@ import math
 from functools import partialmethod
 from typing import Any, Callable
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 
 from _noon_errors import (
     NoonError,
@@ -1173,6 +1174,9 @@ def __dir__():
 
 
 __all__ = [
+    "annotations",
+    "PackageNotFoundError",
+    "version",
     "Glow",
     "Pixels",
     "EffectHandle",

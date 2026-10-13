@@ -30,6 +30,31 @@ class ManimNamespaceTests(unittest.TestCase):
             (),
         )
 
+    def test_standard_library_exports_preserve_identity_and_metadata_errors(self) -> None:
+        import __future__
+        import importlib.metadata as metadata
+        import sys
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        for name, expected in [("annotations", __future__.annotations),
+                               ("PackageNotFoundError", metadata.PackageNotFoundError),
+                               ("version", metadata.version)]:
+            self.assertIn(name, _base.__all__)
+            self.assertIs(getattr(_base, name), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            info = Path(directory) / "noon_namespace_fixture-1.2.3.dist-info"
+            info.mkdir()
+            (info / "METADATA").write_text(
+                "Metadata-Version: 2.1\nName: noon-namespace-fixture\nVersion: 1.2.3\n"
+            )
+            with patch.object(sys, "path", [directory, *sys.path]):
+                self.assertEqual(_base.version("noon-namespace-fixture"), "1.2.3")
+                with self.assertRaises(_base.PackageNotFoundError) as caught:
+                    _base.version("noon-namespace-absent")
+                self.assertEqual(caught.exception.name, "noon-namespace-absent")
+
     def test_install_exposes_pending_alias_without_importing_numpy(self) -> None:
         self.assertIn("np", _base.__all__)
         pending = _base.np

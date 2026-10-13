@@ -557,6 +557,11 @@ try {
 from noon import *
 import sys
 assert "numpy" not in sys.modules
+import __future__
+import importlib.metadata as metadata
+assert annotations is __future__.annotations
+assert PackageNotFoundError is metadata.PackageNotFoundError
+assert version is metadata.version
 for cls, group, base in [(Mobject, Group, Mobject), (Group, Group, Mobject),
                          (VMobject, VGroup, VMobject), (VGroup, VGroup, VMobject),
                          (Circle, VGroup, VMobject), (Square, VGroup, VMobject)]:
@@ -572,6 +577,17 @@ path = Path("movie.mp4")
 assert add_extension_if_not_present(path, ".mp4") is path
 assert add_extension_if_not_present(path, ".png") == Path("movie.mp4.png")
 with tempfile.TemporaryDirectory() as directory:
+    info = Path(directory) / "noon_namespace_fixture-1.2.3.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\\nName: noon-namespace-fixture\\nVersion: 1.2.3\\n")
+    with patch.object(sys, "path", [directory, *sys.path]):
+        assert version("noon-namespace-fixture") == "1.2.3"
+        try:
+            version("noon-namespace-absent")
+        except PackageNotFoundError as error:
+            assert error.name == "noon-namespace-absent"
+        else:
+            raise AssertionError("missing distribution must raise PackageNotFoundError")
     target = Path(directory) / "nested" / "target"
     assert guarantee_existence(target) == target.resolve(strict=True)
     (target / "old.txt").write_text("remove")
