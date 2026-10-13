@@ -1,7 +1,7 @@
 name: 2047 one-shot diagnostic integration
 
 # Temporary branch-restricted patch application and validation for #2047.
-# Neither this workflow nor its patch helper enters the product commit.
+# Neither this workflow nor its patch helpers enter the product commit.
 on:
   push:
     branches: [work/2047-diagnostics-apply-8dff442]
@@ -23,6 +23,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/noon-2047-input"
           cp .github/ci/2047-apply.py "$RUNNER_TEMP/2047-apply.py"
+          cp .github/ci/2047-fixtures.py "$RUNNER_TEMP/2047-fixtures.py"
+          cp .github/ci/2047-identity.py "$RUNNER_TEMP/2047-identity.py"
           for f in web/authoring-error.js web/authoring-error.test.mjs web/playground-diagnostics.js web/playground-diagnostics.css web/playground-diagnostics.test.mjs web/python/test_noon_worker_diagnostics.py; do
             mkdir -p "$RUNNER_TEMP/noon-2047-input/$(dirname "$f")"
             cp "$f" "$RUNNER_TEMP/noon-2047-input/$f"
@@ -31,7 +33,14 @@ jobs:
           git checkout --detach 8dff4426796a94a753defe4f9935deb0a356cb0f
           test "$(git rev-parse HEAD)" = 8dff4426796a94a753defe4f9935deb0a356cb0f
           NOON_DIAGNOSTIC_PAYLOAD_DIR="$RUNNER_TEMP/noon-2047-input" python3 "$RUNNER_TEMP/2047-apply.py"
+          python3 "$RUNNER_TEMP/2047-fixtures.py"
+          python3 "$RUNNER_TEMP/2047-identity.py"
           git diff --check
+      - name: Repository architecture gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh architecture HEAD 2>&1 | tee "$RUNNER_TEMP/2047-architecture.log"
       - name: Existing web preflight including new diagnostic tests
         shell: bash
         run: |
@@ -41,12 +50,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git add web/authoring-client.js web/authoring-client.test.mjs web/authoring-diagnostic.js web/authoring-error.js web/authoring-error.test.mjs web/index.html web/main.js web/playground-diagnostics.js web/playground-diagnostics.css web/playground-diagnostics.test.mjs web/python-compat-modules.js web/python-worker.source.js web/python/test_noon_worker_diagnostics.py scripts/playground-authoring-error-recovery-smoke.mjs
+          git add web/authoring-client.js web/authoring-client.test.mjs web/authoring-diagnostic.js web/authoring-error.js web/authoring-error.test.mjs web/index.html web/main.js web/playground-diagnostics.js web/playground-diagnostics.css web/playground-diagnostics.test.mjs web/python-compat-modules.js web/python-worker.source.js web/python/test_noon_worker_diagnostics.py web/python-worker-packages.test.mjs web/python-worker-source.test.mjs scripts/playground-authoring-error-recovery-smoke.mjs
           git diff --cached --check
-          test "$(git diff --cached --name-only | wc -l)" -eq 14
+          test "$(git diff --cached --name-only | wc -l)" -eq 16
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat(playground): wire source diagnostics through Python worker and editor' -m 'Advance #2047 D1 with invocation-local capture, request-correlated transport, source navigation, collapsed technical details, and recovery regression assertions. Existing web preflight passes. Real Pyodide/browser qualification and preview preservation remain outstanding.'
+          git commit -m 'feat(playground): wire source diagnostics through Python worker and editor' -m 'Advance #2047 D1 with invocation-local capture, unique source filenames, request-correlated transport, source navigation, collapsed technical details, and recovery regression assertions. Architecture gate and existing web preflight pass. Real Pyodide/browser qualification and preview preservation remain outstanding.'
           test "$(git rev-parse HEAD^)" = 8dff4426796a94a753defe4f9935deb0a356cb0f
           git push origin HEAD:refs/heads/work/2047-diagnostics-result-8dff442
           git rev-parse HEAD > "$RUNNER_TEMP/2047-result.txt"
@@ -62,6 +71,7 @@ jobs:
           path: |
             ${{ runner.temp }}/2047-result.txt
             ${{ runner.temp }}/2047-preflight.log
+            ${{ runner.temp }}/2047-architecture.log
             ${{ runner.temp }}/noon-2047-source.tgz
           retention-days: 1
           if-no-files-found: error
