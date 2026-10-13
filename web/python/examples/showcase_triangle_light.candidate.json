@@ -1,0 +1,22 @@
+{
+  "id": "showcase-triangle-light",
+  "title": "Light in a triangle",
+  "lesson": "Follow one light ray through 44 exact mirror reflections: equal angles at each wall create a colored geometric trail.",
+  "primary_feature": "specular-reflection-simulation",
+  "category": "Physics and simulation",
+  "path": "python/examples/showcase_triangle_light.py",
+  "features": ["ray-triangle intersections", "mirror reflections", "constant-speed motion", "persistent trail", "GPU glow", "Create"],
+  "duration": 25.0,
+  "thumbnail_time": 24.4,
+  "thumbnail": "thumbnails/showcase/showcase-triangle-light.png",
+  "thumbnail_alt": "A white triangular mirror filled with a cyan-to-pink reflected ray trail and a bright light point at its final wall contact",
+  "playback_capability": "deterministic-retained-replay",
+  "still_intervals": [[24.0, 25.0]],
+  "beats": [
+    {"time": 1.0, "label": "Introduce the triangular mirror"},
+    {"time": 4.2, "label": "Follow the first reflections"},
+    {"time": 11.0, "label": "Build the geometric trail"},
+    {"time": 19.0, "label": "Repeated equal-angle reflections"},
+    {"time": 24.4, "label": "One ray, 44 reflections, one law"}
+  ]
+}
