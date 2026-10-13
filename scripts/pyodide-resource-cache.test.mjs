@@ -67,6 +67,25 @@ test('failed fetches still fail their cases and do not poison later requests', a
   assert.equal(cache.stats().upstreamRequests, 2);
   assert.equal(cache.stats().upstreamFailures, 1);
   assert.equal(cache.stats().fulfillFailures, 0);
+  assert.deepEqual(cache.stats().upstreamFailureDetails, [{ url, error: 'network failure' }]);
+});
+
+test('upstream failure diagnostics are bounded snapshots and never retry a case', async () => {
+  const cache = createPyodideResourceCache(source);
+  const handler = await attach(cache);
+  let fetches = 0;
+  for (let index = 0; index < 7; index++) {
+    const failed = request(async () => { fetches++; throw new Error(`failure-${index}`); });
+    await handler(failed);
+    assert.equal(failed.result.aborted, 'failed');
+  }
+  const stats = cache.stats();
+  assert.equal(fetches, 7);
+  assert.equal(stats.upstreamFailures, 7);
+  assert.deepEqual(stats.upstreamFailureDetails.map(detail => detail.error),
+    ['failure-2', 'failure-3', 'failure-4', 'failure-5', 'failure-6']);
+  stats.upstreamFailureDetails[0].error = 'mutated';
+  assert.equal(cache.stats().upstreamFailureDetails[0].error, 'failure-2');
 });
 
 test('HTTP errors are delivered unchanged and not cached', async () => {

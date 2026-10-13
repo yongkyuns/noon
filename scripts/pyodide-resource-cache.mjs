@@ -15,6 +15,7 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
     hits: 0,
     upstreamRequests: 0,
     upstreamFailures: 0,
+    upstreamFailureDetails: [],
     fulfillFailures: 0,
     fulfillFailureDetails: [],
     retainedBytes: 0,
@@ -41,6 +42,11 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
       return value;
     } catch (error) {
       counts.upstreamFailures++;
+      counts.upstreamFailureDetails.push({
+        url: url.slice(0, 500),
+        error: String(error?.message ?? error).slice(0, 240),
+      });
+      if (counts.upstreamFailureDetails.length > 5) counts.upstreamFailureDetails.shift();
       entries.delete(url);
       throw error;
     } finally {
@@ -86,6 +92,7 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
       return {
         baseUrl,
         ...counts,
+        upstreamFailureDetails: counts.upstreamFailureDetails.map((detail) => ({ ...detail })),
         fulfillFailureDetails: counts.fulfillFailureDetails.map((detail) => ({ ...detail })),
       };
     },
