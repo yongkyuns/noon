@@ -97,19 +97,15 @@ def observations(namespace):
     return result
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("manim_source", type=Path)
-    parser.add_argument("--installed-manim", action="store_true")
-    args = parser.parse_args()
-    source = args.manim_source / "manim/utils/simple_functions.py"
+def qualify(manim_source, *, installed_manim=False):
+    source = manim_source / "manim/utils/simple_functions.py"
     expected = observations(load_helpers(source, NAMES, {"math": math, "np": np, "lru_cache": lru_cache}))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web/python"))
     import _manim_simple_functions
     import noon
     actual = observations(vars(_manim_simple_functions))
     errors = [] if actual == expected else ["user numerical observations differ"]
-    if args.installed_manim:
+    if installed_manim:
         from manim.utils import simple_functions
         if Path(simple_functions.__file__).read_bytes() != source.read_bytes():
             raise ValueError("installed simple-function source differs from pin")
@@ -117,10 +113,19 @@ def main():
     for name in NAMES:
         if getattr(noon, name) is not getattr(_manim_simple_functions, name) or name not in noon.__all__:
             errors.append(f"public export {name} differs")
-    print(json.dumps({"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-                      "symbols": len(NAMES), "observations": len(expected), "numpy_version": np.__version__,
-                      "installed_module_checked": args.installed_manim, "errors": errors}, indent=2))
-    return bool(errors)
+    return {"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "symbols": len(NAMES), "observations": len(expected), "numpy_version": np.__version__,
+            "installed_module_checked": installed_manim, "errors": errors}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("manim_source", type=Path)
+    parser.add_argument("--installed-manim", action="store_true")
+    args = parser.parse_args()
+    result = qualify(args.manim_source, installed_manim=args.installed_manim)
+    print(json.dumps(result, indent=2))
+    return bool(result["errors"])
 
 
 if __name__ == "__main__": raise SystemExit(main())
