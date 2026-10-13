@@ -113,7 +113,7 @@ intervals using runtime wake directives. It is not realtime pacing, preemptive
 Python execution, or a claim of responsive arbitrary CPU-bound user code.
 `parity/python-host` contains unchanged source scenarios; real CPython and
 Pyodide runs compare their observations at controlled logical samples. Issue
-#1874 tracks qualification and remaining capability breadth.
+#2015 tracks qualification and remaining capability breadth.
 
 ### Direct Rust execution invariant
 
