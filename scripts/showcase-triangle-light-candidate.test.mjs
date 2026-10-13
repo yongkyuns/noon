@@ -48,3 +48,17 @@ for (const fail of [false, true]) {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 }
+
+test("pre-merge review runs capture and replay against an exact-source WASM build", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/playground-triangle-light-review.yml", import.meta.url), "utf8");
+  assert.match(workflow, /Build this exact PR head for source-bound capture and replay/);
+  assert.match(workflow, /uses: \.\/\.github\/actions\/dev-wasm-build/);
+  assert.match(workflow, /built\.get\("sourceRevision"\) != expected/);
+  assert.doesNotMatch(workflow, /BASE_SHA|gh run download|runtime\.outputs\.reused/);
+  const verify = workflow.indexOf("Verify the compiled runtime and checkout share the exact PR revision");
+  const capture = workflow.indexOf("Capture and record the actual candidate through the existing Noon hosts");
+  const publish = workflow.indexOf("Package only after actual candidate playback and replay pass");
+  assert.ok(verify >= 0 && capture > verify && publish > capture, "review must verify provenance before capture and preview delivery");
+  const captureStep = workflow.slice(capture, workflow.indexOf("Retain actual frames", capture));
+  assert.match(captureStep, /if: \$\{\{ success\(\) \}\}/, "failed build identity must not launch the capture");
+});
