@@ -1,0 +1,64 @@
+name: Triangle light bottleneck isolation
+
+# Temporary diagnostic owned by #2056. This never deploys or qualifies a gallery
+# entry. Keep the source-bound preview and replay gates independent and unchanged.
+on:
+  pull_request:
+    paths:
+      - 'scripts/showcase-triangle-light-profile*'
+      - '.github/workflows/playground-triangle-light-profile.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: triangle-light-profile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  profile:
+    name: Release WebGL feature isolation, without video
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NOON_TRIANGLE_PROFILE_ENGINE_SHA: 6c6c0398c97fbbb0b09deb9a6e7485660ffdd5ed
+      NOON_TRIANGLE_PROFILE_RUNTIME: ${{ runner.temp }}/triangle-profile-runtime
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate diagnostic transformations and fail-closed measurement contracts
+        run: node --test scripts/showcase-triangle-light-profile.test.mjs
+      - name: Isolate the exact release engine used by the slow recording
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$NOON_TRIANGLE_PROFILE_RUNTIME/web"
+          gh run download 38418171156 --repo "$GITHUB_REPOSITORY" --name github-pages --dir "$RUNNER_TEMP/triangle-profile-archive"
+          python3 - <<'PY'
+          import os, pathlib, runpy, tarfile
+          destination = pathlib.Path(os.environ['NOON_TRIANGLE_PROFILE_RUNTIME']) / 'web'
+          archive = pathlib.Path(os.environ['RUNNER_TEMP']) / 'triangle-profile-archive/artifact.tar'
+          with tarfile.open(archive) as data:
+              data.extractall(destination, filter='data')
+          verify = runpy.run_path('scripts/showcase-triangle-light-preview.py')['verify_runtime']
+          identity = verify(destination)
+          if identity['sourceRevision'] != os.environ['NOON_TRIANGLE_PROFILE_ENGINE_SHA']:
+              raise SystemExit('Wrong diagnostic baseline engine: refusing a floating build')
+          print('Verified pinned release engine:', identity['sourceRevision'], identity['buildId'])
+          PY
+      - name: Install the existing pinned browser tools
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Measure the same flights with glow and scenery independently disabled
+        run: node scripts/showcase-triangle-light-profile.mjs
+      - name: Retain raw stage timings, exact variant sources, identities and failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: triangle-light-bottleneck-profile
+          path: browser-smoke-artifacts/triangle-profile
+          if-no-files-found: warn
+          retention-days: 7
