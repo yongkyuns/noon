@@ -1559,9 +1559,16 @@ try {
 
   window.addEventListener(
     "pagehide",
-    () => {
-      sourceRestart.dispose();
-      disposeFullscreen();
+    (event) => {
+      // Retiring a worker rejects its pending requests. Invalidate their run
+      // before teardown so navigation cannot publish a Python failure.
+      generations.invalidateRun();
+      activeSourceContinuation = null;
+      sourceRestart.cancel();
+      if (!event.persisted) {
+        sourceRestart.dispose();
+        disposeFullscreen();
+      }
       stopMetricsPolling();
       playbackControls?.destroy();
       playbackControls = null;
@@ -1569,12 +1576,23 @@ try {
       authoringClient = null;
       const preparation = runtimePreparation;
       runtimePreparation = null;
-      preparation?.candidate.terminate();
-      player?.terminate();
-      player = null;
+      if (preparation !== null) {
+        preparation.candidate.terminate();
+        adoptRuntimeCanvas(preparation.candidate);
+      }
+      discardEarlyContinuationRuntime(player);
     },
-    { once: true },
   );
+  window.addEventListener("pageshow", (event) => {
+    if (!event.persisted) return;
+    status.dataset.runtimeStartup = "deferred";
+    status.dataset.executionTopology = "deferred-until-run";
+    status.dataset.playbackPlaying = "false";
+    status.dataset.playbackControls = "unavailable";
+    setRuntimeStatus("Ready · runtime starts when you run an example", "ready");
+    patchStatus.value = "Preview stopped after navigation · Run to restart";
+    patchStatus.dataset.state = "ready";
+  });
 } catch (error) {
   showError(error);
 }
