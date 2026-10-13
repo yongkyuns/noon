@@ -430,21 +430,27 @@ jobs:
         env:
           NOON_PRODUCT_WORKSPACE: ${{ github.workspace }}
         run: |
-          # Fixed before measurement: three alternating pairs, starting B/C. Every run is retained;
+          # Fixed before measurement: B/C, C/B, B/C. Every run is retained;
           # a failed run fails the cohort rather than selecting another sample.
           # Reuse the same immutable packages for every declared workload.
           noon_workloads="$(node .github/ci/product-performance-anchor.mjs cohorts)"
           while IFS=$'\t' read -r noon_example noon_directory; do
             noon_evidence="browser-smoke-artifacts/product-gate/$noon_directory"
             for noon_pair in 1 2 3; do
-              NOON_PRODUCT_REFERENCE_ROOT="$NOON_PRODUCT_WORKSPACE/baseline" \
-              NOON_PRODUCT_REFERENCE_ARTIFACT_ROLE=baseline \
-              NOON_PRODUCT_CANDIDATE_ROOT="$NOON_PRODUCT_WORKSPACE/candidate" \
-              NOON_PRODUCT_EVIDENCE_ROOT="$noon_evidence" \
-              NOON_PRODUCT_PORT=4205 \
-              NOON_PRODUCT_EXAMPLE="$noon_example" \
-              NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
-                node scripts/playground-product-pair.mjs
+              noon_order="baseline candidate"
+              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate baseline"; fi
+              noon_position=0
+              for noon_side in $noon_order; do
+                noon_position=$((noon_position + 1))
+                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
+                NOON_PRODUCT_PORT=4205 \
+                NOON_PRODUCT_EXAMPLE="$noon_example" \
+                NOON_PRODUCT_LABEL="$noon_side" \
+                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
+                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
+                  node scripts/playground-product-e2e.mjs
+              done
             done
           done <<< "$noon_workloads"
 
@@ -539,14 +545,22 @@ jobs:
           while IFS=$'\t' read -r noon_example noon_directory; do
             noon_evidence="browser-smoke-artifacts/product-gate/cumulative/$noon_directory"
             for noon_pair in 1 2 3; do
-              NOON_PRODUCT_REFERENCE_ROOT="$NOON_PRODUCT_WORKSPACE/anchor" \
-              NOON_PRODUCT_REFERENCE_ARTIFACT_ROLE=anchor \
-              NOON_PRODUCT_CANDIDATE_ROOT="$NOON_PRODUCT_WORKSPACE/candidate" \
-              NOON_PRODUCT_EVIDENCE_ROOT="$noon_evidence" \
-              NOON_PRODUCT_PORT=4205 \
-              NOON_PRODUCT_EXAMPLE="$noon_example" \
-              NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
-                node scripts/playground-product-pair.mjs
+              noon_order="anchor candidate"
+              if [[ "$noon_pair" == 2 ]]; then noon_order="candidate anchor"; fi
+              noon_position=0
+              for noon_side in $noon_order; do
+                noon_position=$((noon_position + 1))
+                noon_label="$noon_side"
+                if [[ "$noon_side" == anchor ]]; then noon_label="baseline"; fi
+                NOON_PRODUCT_SITE_ROOT="$NOON_PRODUCT_WORKSPACE/$noon_side" \
+                NOON_PRODUCT_PORT=4205 \
+                NOON_PRODUCT_EXAMPLE="$noon_example" \
+                NOON_PRODUCT_LABEL="$noon_label" \
+                NOON_PRODUCT_PAIR_INDEX="$noon_pair" \
+                NOON_PRODUCT_PAIR_POSITION="$noon_position" \
+                NOON_PRODUCT_ARTIFACT_DIR="$noon_evidence/$noon_side/trial-$noon_pair" \
+                  node scripts/playground-product-e2e.mjs
+              done
             done
           done <<< "$noon_workloads"
 
@@ -666,18 +680,16 @@ jobs:
           for noon_scope in adjacent cumulative; do
             noon_root="browser-smoke-artifacts/product-gate"
             noon_baseline=baseline
-            noon_pairs=3
             if [[ "$noon_scope" == cumulative ]]; then
               noon_root="$noon_root/cumulative"
               noon_baseline=anchor
-              noon_pairs=3
-              printf '\nCumulative pinned-anchor comparisons (%s):\n' "$NOON_PRODUCT_ANCHOR_SHA"
+                printf '\nCumulative pinned-anchor comparisons (%s):\n' "$NOON_PRODUCT_ANCHOR_SHA"
             fi
             while IFS=$'\t' read -r noon_example noon_directory; do
               printf '\n%s / %s\n' "$noon_scope" "$noon_example"
               if ! node scripts/playground-product-compare.mjs \
                 "$noon_root/$noon_directory/$noon_baseline" \
-                "$noon_root/$noon_directory/candidate" --pairs "$noon_pairs"; then
+                "$noon_root/$noon_directory/candidate" --pairs 3; then
                 noon_failed=1
               fi
             done <<< "$noon_workloads"
