@@ -55,18 +55,34 @@ def wrapper_observations(namespace):
     return result
 
 
+def polynomial_observations(namespace):
+    from fractions import Fraction
+    from decimal import Decimal
+    result = []
+    for name in ["smoothstep", "smootherstep", "smoothererstep"]:
+        function = namespace[name]
+        for value in [-math.inf, -1, *[index / 256 for index in range(257)], 2, math.inf, math.nan,
+                      Fraction(1, 4), Decimal("0.25"), True]:
+            observed = function(value)
+            result.append([str(observed), type(observed).__name__])
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("manim_source", type=Path)
     parser.add_argument("--installed-manim", action="store_true")
     args = parser.parse_args()
     source = args.manim_source / "manim/utils/rate_functions.py"
-    reference = load_helpers(source, {"unit_interval", "zero", "not_quite_there", "squish_rate_func"}, {"wraps": wraps, "smooth": lambda t: t})
+    reference = load_helpers(source, {"unit_interval", "zero", "not_quite_there", "squish_rate_func", "smoothstep", "smootherstep", "smoothererstep"}, {"wraps": wraps, "smooth": lambda t: t})
     expected = observations(reference["unit_interval"], reference["zero"])
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web/python"))
     import _manim_rate_functions as noon
     actual = observations(noon._unit_interval, noon._zero_outside_interval)
     errors = [] if actual == expected else ["Python call guards differ from pinned source"]
+    expected_polynomials = polynomial_observations(reference)
+    if polynomial_observations(vars(noon)) != expected_polynomials:
+        errors.append("polynomial observations differ from pinned source")
     expected_wrappers = wrapper_observations(reference)
     if wrapper_observations(vars(noon)) != expected_wrappers:
         errors.append("callable wrapper observations differ from pinned source")
@@ -74,6 +90,8 @@ def main():
         from manim.utils import rate_functions
         if Path(rate_functions.__file__).read_bytes() != source.read_bytes():
             raise ValueError("installed rate source differs from pin")
+        if polynomial_observations(vars(rate_functions)) != expected_polynomials:
+            errors.append("installed polynomial observations differ")
         if wrapper_observations(vars(rate_functions)) != expected_wrappers:
             errors.append("installed callable wrapper observations differ")
         if observations(rate_functions.unit_interval, rate_functions.zero) != expected:
@@ -85,6 +103,7 @@ def main():
     print(json.dumps({"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                       "decorator_observations": len(expected), "public_boundary_observations": 25 if args.installed_manim else 0,
                       "callable_wrapper_observations": len(expected_wrappers),
+                      "polynomial_observations": len(expected_polynomials),
                       "installed_module_checked": args.installed_manim, "errors": errors}, indent=2))
     return bool(errors)
 

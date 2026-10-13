@@ -237,7 +237,7 @@ assert.match(
 );
 assert.match(
   bootBody,
-  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringClient\?\.terminate\(\)[\s\S]*preparation\?\.candidate\.terminate\(\)[\s\S]*player\?\.terminate\(\)/,
+  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringClient\?\.terminate\(\)[\s\S]*preparation\.candidate\.terminate\(\)[\s\S]*discardEarlyContinuationRuntime\(player\)/,
   "page teardown must release metrics, Python, unpublished preparation, and execution resources",
 );
 

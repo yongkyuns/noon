@@ -452,6 +452,8 @@ class SharedRateFunctions(Scene):
         self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=rush_into)
         self.play(circle.animate.shift(RIGHT), run_time=0.2, rate_func=rush_from)
         self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=there_and_back)
+        for rate in [smoothstep, smootherstep, smoothererstep]:
+            self.play(circle.animate.shift(RIGHT), run_time=0.2, rate_func=rate)
 `;
 
 const concurrentFamilySource = `
@@ -555,6 +557,36 @@ try {
 from noon import *
 import sys
 assert "numpy" not in sys.modules
+for cls, group, base in [(Mobject, Group, Mobject), (Group, Group, Mobject),
+                         (VMobject, VGroup, VMobject), (VGroup, VGroup, VMobject),
+                         (Circle, VGroup, VMobject), (Square, VGroup, VMobject)]:
+    value = object.__new__(cls)
+    assert value.get_group_class() is group
+    assert value.get_mobject_type_class() is base
+    assert cls.get_mobject_type_class() is base
+from pathlib import Path
+import tempfile
+import os
+from unittest.mock import patch
+path = Path("movie.mp4")
+assert add_extension_if_not_present(path, ".mp4") is path
+assert add_extension_if_not_present(path, ".png") == Path("movie.mp4.png")
+with tempfile.TemporaryDirectory() as directory:
+    target = Path(directory) / "nested" / "target"
+    assert guarantee_existence(target) == target.resolve(strict=True)
+    (target / "old.txt").write_text("remove")
+    assert guarantee_empty_existence(target) == target.resolve(strict=True)
+    assert list(target.iterdir()) == []
+    (target / "picture.png").write_text("keep")
+    assert seek_full_path_from_defaults("picture", target, [".svg", ".png"]) == target / "picture.png"
+    executable = target / "tool"
+    executable.write_text("user data")
+    assert ensure_executable(executable) == os.access(executable, os.X_OK)
+    os.utime(executable, times=(1000000000.0, 1100000000.0))
+    with patch("time.time", return_value=1234567890.0):
+        assert modify_atime(str(executable)) is None
+    assert executable.stat().st_atime == 1234567890.0
+    assert executable.stat().st_mtime == 1100000000.0
 assert choose(6, 2) == 15
 assert clip(5, 10, 0) == 10
 assert "numpy" not in sys.modules
@@ -835,11 +867,12 @@ result = Scene()
   // Runtime samples qualify both easing interiors and the returning endpoint.
   const ratePage = await browser.newPage();
   ratePage.on("pageerror", error => errors.push(String(error)));
-  const times = [0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.65, 0.7, 0.75, 0.8];
+  const times = [0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.65, 0.7, 0.75, 0.8,
+    0.85, 0.9, 1.0, 1.05, 1.1, 1.2, 1.25, 1.3, 1.4];
   await ratePage.goto(`${baseUrl}/web/manim-raster-host.html`);
   const sharedRates = await ratePage.evaluate(async ({ source, times }) => {
     await window.noonHostRaster.ready();
-    await window.noonHostRaster.load(source, 1);
+    await window.noonHostRaster.load(source, 2);
     const samples = [];
     for (let index = 0; index < times.length; index += 1) {
       const metrics = await window.noonHostRaster.renderThrough(index, times);
@@ -848,7 +881,8 @@ result = Scene()
     return samples;
   }, { source: rateFunctionSource, times });
   const expectedX = [0.070103716545108, 0.5, 0.929896283454892, 1,
-    0.859792566910216, 0.859792566910216, 0.5, 0, 0.5, 1];
+    0.859792566910216, 0.859792566910216, 0.5, 0, 0.5, 1,
+    1.15625, 1.5, 2, 2.103515625, 2.5, 3, 3.070556640625, 3.5, 4];
   for (const [index, { frame, metrics }] of sharedRates.entries()) {
     assert.ok(Math.abs(frame.objects[0].center[0] - expectedX[index]) < 1e-5,
       `shared rate function at ${times[index]}s: ${frame.objects[0].center[0]} != ${expectedX[index]}`);

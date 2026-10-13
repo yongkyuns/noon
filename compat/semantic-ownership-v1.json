@@ -63,6 +63,7 @@
     {"path": "web/python/noon.py", "token": "_ir.Mobject(", "maximum": 0, "migration_issue": "#61"}
   ],
   "operations": [
+    {"id": "python.user-file-paths", "host_callback": true, "surface": "add_extension_if_not_present, guarantee_existence, guarantee_empty_existence, seek_full_path_from_defaults, ensure_executable, modify_atime", "classification": "host-language-required", "owner": {"language": "python", "path": "web/python/_manim_file_paths.py", "symbol": "add_extension_if_not_present/guarantee_existence/guarantee_empty_existence/seek_full_path_from_defaults/ensure_executable/modify_atime"}, "adapters": [], "reason": "Host Path protocols and filesystem operations on explicit user paths, including user-defined path methods. No semantic objects, rendering resources, engine state, scheduling or output pipeline is represented."},
     {"id": "python.user-numerical-helpers", "host_callback": true, "surface": "binary_search, choose, clip, sigmoid on user data", "classification": "host-language-required", "owner": {"language": "python", "path": "web/python/_manim_simple_functions.py", "symbol": "binary_search/choose/clip/sigmoid"}, "adapters": [], "reason": "Explicit Python user-data comparisons, callback calls, numerical types and bounded host cache. No semantic geometry, animation scheduling, frame execution or engine state is represented."},
     {
       "id": "mobject.circle",
@@ -434,6 +435,14 @@
       "owner": {"language": "rust", "path": "crates/noon/src/family_arrangement.rs", "symbol": "FamilyArrangePlan/MobjectFamily::arrange_with_options"},
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_arrange"}],
       "reason": "One shared planner resolves direct-member selections, observes local leaf bounds, stages successive placements against preceding moves and centers unique semantic leaves once. Authored and live options calls publish one atomic transaction. Python passes one typed options object without sequencing member placements or supplying bounds."
+    },
+    {
+      "id": "mobject.class-queries",
+      "surface": "Mobject/VMobject/Group/VGroup get_group_class and get_mobject_type_class",
+      "classification": "python-adapter-only",
+      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject.get_group_class/get_mobject_type_class"},
+      "reason": "These queries return host-language class objects and preserve Python subclass dispatch; they neither inspect nor mutate engine geometry, family membership or scene state.",
+      "replacement": "Keep language class identity in the adapter; construction and membership continue through existing shared Rust handles."
     },
     {
       "id": "rate-function.lookup",

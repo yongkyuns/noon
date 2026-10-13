@@ -141,7 +141,7 @@ jobs:
           version: v0.16.0
 
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -185,6 +185,7 @@ jobs:
           sccache --show-stats
           node candidate/.github/ci/product-artifact.mjs stamp baseline .product-source
 
+      # Inter-job packages only need to survive long enough for the compare jobs.
       - name: Upload cumulative anchor production package
         id: anchor-artifact
         uses: actions/upload-artifact@v7
@@ -198,7 +199,7 @@ jobs:
             anchor/web/ci-artifact.json
             anchor/web/ci-Cargo.lock
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 2
 
       - name: Build candidate renderer-smoke fixture package
         env:
@@ -229,7 +230,7 @@ jobs:
             candidate/web/ci-artifact.json
             candidate/web/ci-Cargo.lock
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 2
 
       - name: Build candidate production package
         env:
@@ -260,7 +261,7 @@ jobs:
             candidate/web/ci-artifact.json
             candidate/web/ci-Cargo.lock
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 2
 
       - name: Upload baseline production package
         id: baseline-artifact
@@ -275,7 +276,7 @@ jobs:
             baseline/web/ci-artifact.json
             baseline/web/ci-Cargo.lock
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 2
 
   measure-adjacent:
     name: Adjacent product measurements
@@ -462,7 +463,7 @@ jobs:
           name: product-adjacent-evidence-${{ github.run_attempt }}
           path: candidate/browser-smoke-artifacts/product-gate
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
   measure-cumulative:
     name: Pinned-anchor product measurements
@@ -572,7 +573,7 @@ jobs:
           name: product-cumulative-evidence-${{ github.run_attempt }}
           path: candidate/browser-smoke-artifacts/product-gate/cumulative
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
   compare:
     name: Runtime, visual, latency, and FPS regression
@@ -714,4 +715,4 @@ jobs:
           name: playground-product-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
           path: candidate/browser-smoke-artifacts/product-gate
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7

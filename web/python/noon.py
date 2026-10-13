@@ -261,6 +261,14 @@ class Mobject:
     def __init__(self) -> None:
         raise TypeError("Mobject is a base type; construct a Circle, Rectangle, Line, or Path")
 
+    def get_group_class(self):
+        from _manim_compat import Group
+        return Group
+
+    @staticmethod
+    def get_mobject_type_class():
+        return Mobject
+
     _original__init__ = __init__
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -894,6 +902,12 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "add_extension_if_not_present": "_manim_file_paths",
+    "guarantee_existence": "_manim_file_paths",
+    "guarantee_empty_existence": "_manim_file_paths",
+    "seek_full_path_from_defaults": "_manim_file_paths",
+    "ensure_executable": "_manim_file_paths",
+    "modify_atime": "_manim_file_paths",
     "binary_search": "_manim_simple_functions",
     "choose": "_manim_simple_functions",
     "clip": "_manim_simple_functions",
@@ -962,6 +976,9 @@ _PUBLIC_EXPORTS = {
 
     "linear": "_manim_rate_functions",
     "smooth": "_manim_rate_functions",
+    "smoothstep": "_manim_rate_functions",
+    "smootherstep": "_manim_rate_functions",
+    "smoothererstep": "_manim_rate_functions",
     "rush_into": "_manim_rate_functions",
     "rush_from": "_manim_rate_functions",
     "there_and_back": "_manim_rate_functions",

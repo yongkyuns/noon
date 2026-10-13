@@ -3351,3 +3351,5 @@ pub mod pointer_selection;
 
 #[cfg(feature = "latex")]
 pub mod latex_text;
+
+pub mod polynomial_rates;

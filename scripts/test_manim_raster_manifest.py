@@ -17,6 +17,15 @@ ORACLE = ROOT / "scripts/manim-raster-semantic-reference.py"
 
 
 class RasterManifestTests(unittest.TestCase):
+    def test_polynomial_interiors_use_real_reference_frame_times(self):
+        manifest = json.loads((ROOT / "parity/manim-v0.21/manifest.json").read_text())
+        fixture = next(fixture for fixture in manifest["fixtures"] if fixture["id"] == "polynomial-rates")
+        fps = manifest["reference"]["frame_rate"]
+        self.assertIn(fixture["expected_duration"] / 2, fixture["sample_times"])
+        for time in fixture["sample_times"]:
+            self.assertAlmostEqual(time * fps, round(time * fps), places=9)
+            self.assertLess(time, fixture["expected_duration"])
+
     def test_vector_space_lts_has_direct_and_worker_pairs(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         fixtures = {

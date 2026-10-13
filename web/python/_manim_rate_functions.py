@@ -41,6 +41,21 @@ def linear(t: float) -> float:
     return t
 
 
+@_unit_interval
+def smoothstep(t: float) -> float:
+    return 3 * t**2 - 2 * t**3
+
+
+@_unit_interval
+def smootherstep(t: float) -> float:
+    return 6 * t**5 - 15 * t**4 + 10 * t**3
+
+
+@_unit_interval
+def smoothererstep(t: float) -> float:
+    return 35 * t**4 - 84 * t**5 + 70 * t**6 - 20 * t**7
+
+
 def _sigmoid(value: float) -> float:
     return 1.0 / (1.0 + math.exp(-value))
 
@@ -114,6 +129,9 @@ def _step_end(t: float) -> float:
 _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
     "linear": linear,
     "smooth": smooth,
+    "smoothstep": smoothstep,
+    "smootherstep": smootherstep,
+    "smoothererstep": smoothererstep,
     "rush_into": rush_into,
     "rush_from": rush_from,
     "there_and_back": there_and_back,
@@ -131,7 +149,8 @@ def easing_from_rate_func(rate_func: object) -> str:
             return semantic_id
     raise NotImplementedError(
         "Noon currently supports deterministic rate_func=linear, smooth, rush_into, "
-        "rush_from, and there_and_back; arbitrary Python per-frame rate functions "
+        "rush_from, there_and_back, smoothstep, smootherstep, and smoothererstep; "
+        "arbitrary Python per-frame rate functions "
         "are intentionally unsupported"
     )
 

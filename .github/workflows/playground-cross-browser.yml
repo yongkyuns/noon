@@ -92,7 +92,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -220,8 +220,9 @@ jobs:
           NOON_PAIRED_CASES: following_graph_camera-1.5,moving_zoomed_scene_around-9.5
           NOON_CAMERA_ARTIFACTS: browser-smoke-artifacts/playground-matrix/webkit-mobile-dpr2/special-camera
         run: node scripts/special-camera-qualification.mjs
+      # Preserve large per-case screenshots only when a browser test fails.
       - name: Upload playground diagnostics
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: playground-matrix-${{ matrix.browser }}-${{ matrix.profile }}
@@ -284,8 +285,9 @@ jobs:
           NOON_GALLERY_SHARD_COUNT: "3"
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-gallery/${{ matrix.browser }}/shard-${{ matrix.shard }}
         run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
+      # Keep exact shard evidence on failures, not on every passing run.
       - name: Upload exact shard inventory and diagnostics
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: playground-gallery-${{ matrix.browser }}-shard-${{ matrix.shard }}

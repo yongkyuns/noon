@@ -3,6 +3,7 @@
 import argparse
 import ast
 import json
+import runpy
 import sys
 from pathlib import Path
 
@@ -107,9 +108,14 @@ def main():
         actual = {key: value.value for key, value in enum.__members__.items()}
         if actual != members:
             errors.append(f"{name}: {actual!r} differs from pinned {members!r}")
+    class_queries = runpy.run_path(
+        str(Path(__file__).with_name("manim-class-queries.py")),
+        run_name="_class_query_qualification",
+    )["qualify"](args.manim_source)
+    errors.extend(class_queries["errors"])
     print(json.dumps({"colors": len(colors), "scalar_constants": len(constants), "axis_aliases": len(axes),
                       "enum_types": len(enums), "enum_members": sum(len(members) for _, members in enums.values()),
-                      "errors": errors}, indent=2))
+                      "class_queries": class_queries, "errors": errors}, indent=2))
     return bool(errors)
 
 

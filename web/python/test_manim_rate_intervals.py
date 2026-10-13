@@ -29,6 +29,22 @@ class RateIntervals(unittest.TestCase):
         expression = eval("lambda t: smooth(1 - t)", {"smooth": noon.smooth})
         self.assertTrue(rates.is_reverse_smooth_rate_func(expression))
 
+    def test_polynomial_rates_preserve_numeric_types_and_shared_ids(self):
+        from fractions import Fraction
+        for name, quarter in [("smoothstep", Fraction(5, 32)),
+                              ("smootherstep", Fraction(53, 512)),
+                              ("smoothererstep", Fraction(289, 4096))]:
+            function = getattr(noon, name)
+            result = function(Fraction(1, 4))
+            self.assertIsInstance(result, Fraction)
+            self.assertEqual(result, quarter)
+            self.assertEqual(function(0.5), 0.5)
+            self.assertEqual(function(-math.inf), 0)
+            self.assertEqual(function(math.inf), 1)
+            self.assertEqual(function(math.nan), 1)
+            self.assertEqual(rates.easing_from_rate_func(function), name)
+            self.assertIn(name, noon.__all__)
+
     def test_callable_wrappers_forward_arguments_and_do_not_eagerly_call_users(self):
         calls = []
         operand = object()

@@ -1,4 +1,5 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
+  { sourcePath: "python/_manim_file_paths.py", runtimePath: "/tmp/_manim_file_paths.py", label: "Noon Python user-path filesystem helpers" },
   { sourcePath: "python/_manim_simple_functions.py", runtimePath: "/tmp/_manim_simple_functions.py", label: "Noon Python user-data numerical helpers" },
   { sourcePath: "python/_manim_iterables.py", runtimePath: "/tmp/_manim_iterables.py", label: "Noon Python iterable helpers" },
   { sourcePath: "python/_manim_config_utils.py", runtimePath: "/tmp/_manim_config_utils.py", label: "Noon Python dictionary helpers" },
