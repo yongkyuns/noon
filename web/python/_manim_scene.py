@@ -29,6 +29,7 @@ import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
 from _manim_source_execution import current_source_invocation
 from _noon_errors import engine_await, engine_call, raise_engine_error
+from _noon_host import encode_callback as _json
 import _noon_ir as _ir
 import noon as _base
 
@@ -45,12 +46,6 @@ _PORTABLE_BARRIER_CALL = "_noon_portable_barrier_call"
 _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE = (
     "_noon_default_synchronous_continuation_candidate"
 )
-
-
-def _json(value: object) -> object:
-    # Encode tokens for the existing host-callback bridge.
-    from _noon_host import encode_callback
-    return encode_callback(value)
 
 
 def _context(scene: _base.Scene):
