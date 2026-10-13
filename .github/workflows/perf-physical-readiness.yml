@@ -48,4 +48,4 @@ jobs:
           name: physical-gpu-readiness-${{ github.run_id }}-${{ github.run_attempt }}
           path: perf-artifacts/physical-readiness
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 3

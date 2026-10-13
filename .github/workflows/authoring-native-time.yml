@@ -64,5 +64,5 @@ jobs:
         with:
           name: native-authored-time
           path: native-time-proof/
-          retention-days: 14
+          retention-days: 3
           if-no-files-found: error

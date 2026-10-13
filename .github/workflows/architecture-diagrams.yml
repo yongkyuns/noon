@@ -61,4 +61,4 @@ jobs:
             scripts/architecture_diagrams.py
             scripts/test_architecture_diagrams.py
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3

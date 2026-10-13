@@ -82,4 +82,4 @@ jobs:
           name: playground-lifecycle-recovery
           path: browser-smoke-artifacts/playground-lifecycle
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3

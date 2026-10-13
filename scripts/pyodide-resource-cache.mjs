@@ -23,7 +23,8 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
 
   async function read(route, url) {
     counts.upstreamRequests++;
-    let response;
+    let response, value, failure;
+    let failed = false;
     try {
       response = await route.fetch();
       const body = await response.body();
@@ -33,25 +34,33 @@ export function createPyodideResourceCache(workerSource, maxBytes = 64 * 1024 * 
       delete headers['content-encoding'];
       delete headers['content-length'];
       delete headers['set-cookie'];
-      const value = { status: response.status(), headers, body };
-      if (value.status === 200 && counts.retainedBytes + body.length <= maxBytes) {
-        counts.retainedBytes += body.length;
-      } else {
-        entries.delete(url);
-      }
-      return value;
+      value = { status: response.status(), headers, body };
     } catch (error) {
+      failed = true;
+      failure = error;
+    }
+    try {
+      await response?.dispose();
+    } catch (error) {
+      // Keep the primary read failure when cleanup also fails.
+      if (!failed) { failed = true; failure = error; }
+    }
+    if (failed) {
       counts.upstreamFailures++;
       counts.upstreamFailureDetails.push({
         url: url.slice(0, 500),
-        error: String(error?.message ?? error).slice(0, 240),
+        error: String(failure?.message ?? failure).slice(0, 240),
       });
       if (counts.upstreamFailureDetails.length > 5) counts.upstreamFailureDetails.shift();
       entries.delete(url);
-      throw error;
-    } finally {
-      await response?.dispose();
+      throw failure;
     }
+    if (value.status === 200 && counts.retainedBytes + value.body.length <= maxBytes) {
+      counts.retainedBytes += value.body.length;
+    } else {
+      entries.delete(url);
+    }
+    return value;
   }
 
   return {

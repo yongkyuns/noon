@@ -108,4 +108,4 @@ jobs:
           name: authoring-wasm-footprint-${{ github.event.pull_request.number }}
           path: browser-smoke-artifacts/authoring-wasm/footprint.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
