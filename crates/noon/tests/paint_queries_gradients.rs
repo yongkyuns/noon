@@ -169,6 +169,43 @@ fn aliased_family_gradient_is_one_local_publication_and_preserves_content_and_op
 }
 
 #[test]
+fn late_alias_gradient_uses_last_occurrence_order_authored_and_live_atomically() {
+    let mut scene = Scene::new();
+    let a = scene.square(0.2).unwrap();
+    let b = scene.circle(0.2).unwrap();
+    let unrelated = scene.square(0.1).unwrap();
+    let unchanged = unrelated.state().unwrap();
+    let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+    let family = scene.family(&[(&nested).into(), (&a).into()]).unwrap();
+    family.set_fill(None, Some(0.4)).unwrap();
+    let before = scene.revision();
+    family
+        .set_color_by_gradient(&[Color::RED, Color::BLUE])
+        .unwrap();
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(a.manim_color().unwrap(), Color::BLUE);
+    assert_eq!(b.manim_color().unwrap(), Color::RED);
+    scene
+        .add_many(&[(&family).into(), (&unrelated).into()])
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let result = live
+        .set_family_color_by_gradient(&family, &[Color::BLUE, Color::RED])
+        .unwrap();
+    assert_eq!(result.impacts().len(), 2);
+    assert_eq!(live.effective_manim_color(&a).unwrap(), Color::RED);
+    assert_eq!(live.effective_manim_color(&b).unwrap(), Color::BLUE);
+    assert_eq!(a.fill_opacity().unwrap(), 0.4);
+    assert_eq!(unrelated.state().unwrap(), unchanged);
+    let before = (a.state().unwrap(), b.state().unwrap());
+    assert!(live
+        .set_family_color_by_gradient(&family, &[Color::rgb(f32::NAN, 0.0, 0.0)])
+        .is_err());
+    assert_eq!((a.state().unwrap(), b.state().unwrap()), before);
+}
+
+#[test]
 fn paired_gradient_example_reaches_the_ordinary_retained_runtime() {
     let session = noon::example_scenes::paint_queries_gradients::session().unwrap();
     let colors: Vec<_> = session
@@ -178,10 +215,11 @@ fn paired_gradient_example_reaches_the_ordinary_retained_runtime() {
         .map(|object| object.style.fill.unwrap())
         .collect();
     assert_eq!(colors.len(), 5);
-    assert_eq!(colors[0].red, 1.0);
-    assert_eq!(colors[1].red, 0.5);
-    assert_eq!(colors[1].green, 0.5);
-    assert_eq!(colors[2].green, 1.0);
-    assert_eq!(colors[4].blue, 1.0);
+    assert_eq!(colors[0].blue, 1.0);
+    assert_eq!(colors[1].red, 1.0);
+    assert_eq!(colors[2].red, 0.5);
+    assert_eq!(colors[2].green, 0.5);
+    assert_eq!(colors[3].green, 1.0);
+    assert_eq!(colors[4].blue, 0.5);
     assert!(colors.iter().all(|color| (color.alpha - 0.7).abs() < 1e-6));
 }
