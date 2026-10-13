@@ -1,11 +1,12 @@
 name: Triangle light bottleneck isolation
 
-# Temporary diagnostic owned by #2056. This never deploys or qualifies a gallery
-# entry. Keep the source-bound preview and replay gates independent and unchanged.
+# Temporary #2056 diagnostic. Public gallery and exact-source replay gates are separate.
 on:
   pull_request:
     paths:
       - 'scripts/showcase-triangle-light-profile*'
+      - 'crates/noon-render-wgpu/src/polygon_coverage.wgsl'
+      - 'crates/noon-render-wgpu/tests/polygon_fill_coverage.rs'
       - '.github/workflows/playground-triangle-light-profile.yml'
 
 permissions:
@@ -18,19 +19,64 @@ concurrency:
 
 jobs:
   profile:
-    name: Release WebGL cadence isolation, without video
+    name: Release renderer fix and independent pixel oracle
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
       NOON_TRIANGLE_PROFILE_ENGINE_SHA: 6c6c0398c97fbbb0b09deb9a6e7485660ffdd5ed
+      CARGO_INCREMENTAL: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@v7
-      - name: Validate diagnostic transformations and fail-closed measurement contracts
+      - name: Validate diagnostic transformations
         run: |
           node --test scripts/showcase-triangle-light-profile.test.mjs
-          node --check scripts/showcase-triangle-light-profile-cadence.mjs
+          node --check scripts/showcase-triangle-light-profile-renderer.mjs
+      - name: Use repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+          rustup target add wasm32-unknown-unknown
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use pinned sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned wasm-opt
+        uses: ./.github/actions/install-wasm-opt
+      - name: Qualify actual GPU coverage against independent f64 clipping
+        env:
+          NOON_REQUIRE_GPU_TESTS: '1'
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/noon-gpu"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cargo fmt --all -- --check
+          cargo test -p noon-render-wgpu --test polygon_fill_coverage --test polygon_perimeter_coverage --test path_shader_uniformity
+      - name: Build the actual candidate release package
+        env:
+          NOON_WASM_PROFILE: release
+          NOON_WASM_SKIP_OPT: '0'
+          NOON_SKIP_WEB_PREFLIGHT: '1'
+        run: bash scripts/build-web-demo.sh
       - name: Isolate the exact release engine used by the slow recording
         shell: bash
         run: |
@@ -48,20 +94,22 @@ jobs:
           verify = runpy.run_path('scripts/showcase-triangle-light-preview.py')['verify_runtime']
           identity = verify(destination)
           if identity['sourceRevision'] != os.environ['NOON_TRIANGLE_PROFILE_ENGINE_SHA']:
-              raise SystemExit('Wrong diagnostic baseline engine: refusing a floating build')
-          print('Verified pinned release engine:', identity['sourceRevision'], identity['buildId'])
+              raise SystemExit('Wrong diagnostic baseline engine')
+          print('Verified baseline:', identity['sourceRevision'], identity['buildId'])
           PY
       - name: Install the existing pinned browser tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
-      - name: Isolate browser wakes from execution and GPU completion
-        run: node scripts/showcase-triangle-light-profile-cadence.mjs
-      - name: Retain raw stage timings, exact variant sources, identities and failures
+      - name: Compare unchanged scenes and real rendered pixels on both release engines
+        run: node scripts/showcase-triangle-light-profile-renderer.mjs
+      - name: Retain timings, images, identities, dependency lock and failures
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: triangle-light-bottleneck-profile
-          path: browser-smoke-artifacts/triangle-profile
+          path: |
+            browser-smoke-artifacts/triangle-profile
+            Cargo.lock
           if-no-files-found: warn
           retention-days: 7
