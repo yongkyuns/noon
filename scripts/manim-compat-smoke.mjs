@@ -579,6 +579,9 @@ with tempfile.TemporaryDirectory() as directory:
     assert seek_full_path_from_defaults("picture", target, [".svg", ".png"]) == target / "picture.png"
 assert choose(6, 2) == 15
 assert clip(5, 10, 0) == 10
+assert batch_by_property([1, 1, 2, 1], lambda value: value) == [([1, 1], 1), ([2], 2), ([1], 1)]
+assert list(uniq_chain([1, 2, 1], iter([2, 3]))) == [1, 2, 3]
+assert hash_obj({"a": [1, 2], "b": {3, 4}}) == hash_obj({"b": {4, 3}, "a": (1, 2)})
 assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
