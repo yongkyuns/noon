@@ -296,13 +296,31 @@ impl MobjectFamily {
         &self,
         edit: impl Fn(usize, usize, &mut SemanticStyle) -> Result<(), AuthoringError>,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.style_transaction_ordered(false, edit)
+    }
+
+    pub(crate) fn style_transaction_last_occurrence(
+        &self,
+        edit: impl Fn(usize, usize, &mut SemanticStyle) -> Result<(), AuthoringError>,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.style_transaction_ordered(true, edit)
+    }
+
+    fn style_transaction_ordered(
+        &self,
+        keep_last: bool,
+        edit: impl Fn(usize, usize, &mut SemanticStyle) -> Result<(), AuthoringError>,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
         self.validate()?;
         // Validate arguments even for an empty family, before staging any writes.
         edit(0, 1, &mut SemanticStyle::default())?;
         let store = self.integration_store().borrow();
-        let leaves = store
-            .ordered_leaf_nodes(self.node_id())
-            .map_err(AuthoringError::from)?;
+        let leaves = if keep_last {
+            store.ordered_last_occurrence_leaf_nodes(self.node_id())
+        } else {
+            store.ordered_leaf_nodes(self.node_id())
+        }
+        .map_err(AuthoringError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
         let count = leaves.len();
         for (index, leaf) in leaves.into_iter().enumerate() {

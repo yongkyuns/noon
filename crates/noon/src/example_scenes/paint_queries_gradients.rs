@@ -12,7 +12,8 @@ pub fn session() -> Result<ExecutionSession, String> {
         }
         let members: Vec<_> = boxes.iter().map(Into::into).collect();
         let nested = scene.family(&members)?;
-        let family = scene.family(&[(&boxes[0]).into(), (&nested).into()])?;
+        // The late alias moves the first box to the end of Manim's unique order.
+        let family = scene.family(&[(&nested).into(), (&boxes[0]).into()])?;
         family.set_fill(None, Some(0.7))?;
         family.set_stroke(None, Some(0.02), None)?;
         scene.add_many(&[(&family).into()])?;

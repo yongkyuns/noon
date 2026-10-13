@@ -769,7 +769,7 @@ def _paint_rgb(color):
 
 def _paint_queries_gradients(api):
     boxes = [api.Square(side_length=1) for _ in range(5)]
-    group = api.VGroup(boxes[0], api.VGroup(*boxes))
+    group = api.VGroup(api.VGroup(*boxes), boxes[0])
     group.set_fill(opacity=0.4).set_stroke(width=6)
     group.set_color_by_gradient("#FF0000", "#00FF00", "#0000FF")
     observations = [[_paint_rgb(obj.get_color()), _paint_rgb(obj.get_fill_color()),
