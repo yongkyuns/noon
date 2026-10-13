@@ -11,8 +11,10 @@ on:
       - 'web/number-label-smoke.js'
       - 'web/manim-compat-smoke.html'
       - 'scripts/plotting-qualification.mjs'
+      - 'scripts/polygon-qualification.mjs'
       - 'scripts/paired-authoring-qualification.mjs'
       - 'scripts/paint-fade-qualification.mjs'
+      - 'scripts/match-color-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
       - 'scripts/live-coordinate-checks.mjs'
       - 'scripts/animated-plotting-checks.mjs'
@@ -84,6 +86,10 @@ jobs:
           npx playwright install chromium
       - name: Qualify paired plotting and resumed Python authoring
         run: node scripts/plotting-qualification.mjs
+      - name: Qualify paired polygon constructors
+        env:
+          NOON_POLYGON_ARTIFACTS: plotting-artifacts/polygons
+        run: node scripts/polygon-qualification.mjs
       - name: Qualify Python constructor defaults against direct Rust construction
         env:
           NOON_CONSTRUCTOR_DEFAULTS_ARTIFACTS: plotting-artifacts/constructor-defaults
@@ -92,6 +98,10 @@ jobs:
         env:
           NOON_PAINT_FADE_ARTIFACTS: plotting-artifacts/paint-fade
         run: node scripts/paint-fade-qualification.mjs
+      - name: Qualify observed color matching against direct Rust construction
+        env:
+          NOON_MATCH_COLOR_ARTIFACTS: plotting-artifacts/match-color
+        run: node scripts/match-color-qualification.mjs
       - name: Qualify animated axes and graph reveals
         run: node scripts/time-series-plotting-qualification.mjs coordinates
       - name: Qualify animated NumberLine and transformed live queries

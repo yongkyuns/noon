@@ -4,6 +4,7 @@ import hashlib
 import itertools
 import json
 from pathlib import Path
+import runpy
 import sys
 import warnings
 
@@ -83,8 +84,14 @@ def main():
     if noon.stretch_array_to_length is not _manim_iterables.stretch_array_to_length:
         errors.append("public export identity differs")
     if "stretch_array_to_length" not in noon.__all__: errors.append("public export missing")
+    # Keep one pinned NumPy lane for user-data helpers while preserving each
+    # module's unchanged-source observations and independent provenance.
+    numerical_oracle = runpy.run_path(str(Path(__file__).with_name("manim-simple-functions.py")))
+    numerical = numerical_oracle["qualify"](args.manim_source, installed_manim=args.installed_manim)
+    errors.extend(numerical["errors"])
     print(json.dumps({"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                       "symbols": len(NAMES), "observations": len(expected), "numpy_version": np.__version__,
+                      "numerical_helpers": numerical,
                       "installed_module_checked": args.installed_manim, "errors": errors}, indent=2))
     return bool(errors)
 

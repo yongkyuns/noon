@@ -63,6 +63,7 @@
     {"path": "web/python/noon.py", "token": "_ir.Mobject(", "maximum": 0, "migration_issue": "#61"}
   ],
   "operations": [
+    {"id": "python.user-numerical-helpers", "host_callback": true, "surface": "binary_search, choose, clip, sigmoid on user data", "classification": "host-language-required", "owner": {"language": "python", "path": "web/python/_manim_simple_functions.py", "symbol": "binary_search/choose/clip/sigmoid"}, "adapters": [], "reason": "Explicit Python user-data comparisons, callback calls, numerical types and bounded host cache. No semantic geometry, animation scheduling, frame execution or engine state is represented."},
     {
       "id": "mobject.circle",
       "surface": "Circle",
@@ -449,6 +450,14 @@
       "owner": {"language": "python", "path": "web/python/_manim_rate_functions.py", "symbol": "easing_from_rate_func"},
       "reason": "Python must map a callable object to a stable shared semantic identifier; numerical evaluation belongs to Rust.",
       "replacement": "Emit the identifier to the shared resolver."
+    },
+    {
+      "id": "rate-function.callable-wrapper",
+      "surface": "not_quite_there/squish_rate_func explicit Python callable construction and evaluation",
+      "classification": "host-language-required",
+      "owner": {"language": "python", "path": "web/python/_manim_rate_functions.py", "symbol": "not_quite_there/squish_rate_func"},
+      "reason": "These helpers return Python closures and forward arbitrary user callback arguments and exceptions during explicit user evaluation. They do not select or execute engine playback rates; returned arbitrary callables remain rejected by the shared-rate adapter.",
+      "host_callback": true
     },
     {
       "id": "scene.updater-callback",

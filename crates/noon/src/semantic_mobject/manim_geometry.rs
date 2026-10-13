@@ -2,6 +2,62 @@
 use super::*;
 
 impl ManimGeometryOptions {
+    /// Closed vertex groups, preserving Manim's path ordering and BLUE default.
+    pub fn polygram(groups: &[Vec<(f64, f64)>]) -> Result<Self, AuthoringError> {
+        Ok(Self::new(
+            GeometryRef::path(crate::polygon_authoring::polygram_path(groups)?),
+            manim_style(Color::BLUE),
+        ))
+    }
+
+    pub fn polygon(vertices: &[(f64, f64)]) -> Result<Self, AuthoringError> {
+        Self::polygram(&[vertices.to_vec()])
+    }
+
+    pub fn regular_polygon(
+        n: u32,
+        radius: f64,
+        start_angle: Option<f64>,
+    ) -> Result<Self, AuthoringError> {
+        Self::regular_polygram(n, 1, radius, start_angle)
+    }
+
+    pub fn regular_polygram(
+        n: u32,
+        density: u32,
+        radius: f64,
+        start_angle: Option<f64>,
+    ) -> Result<Self, AuthoringError> {
+        Ok(Self::new(
+            GeometryRef::path(crate::polygon_authoring::regular_polygram_path(
+                n,
+                density,
+                radius,
+                start_angle,
+            )?),
+            manim_style(Color::BLUE),
+        ))
+    }
+
+    pub fn star(
+        n: u32,
+        outer_radius: f64,
+        inner_radius: Option<f64>,
+        density: u32,
+        start_angle: Option<f64>,
+    ) -> Result<Self, AuthoringError> {
+        Ok(Self::new(
+            GeometryRef::path(crate::polygon_authoring::star_path(
+                n,
+                outer_radius,
+                inner_radius,
+                density,
+                start_angle,
+            )?),
+            manim_style(Color::BLUE),
+        ))
+    }
+
     pub fn dot(x: f64, y: f64, radius: f64) -> Result<Self, AuthoringError> {
         let mut style = manim_style(Color::WHITE);
         style.fill_opacity = 1.0;
@@ -12,10 +68,7 @@ impl ManimGeometryOptions {
     }
 
     pub fn triangle() -> Result<Self, AuthoringError> {
-        Ok(Self::new(
-            GeometryRef::path(crate::geometry_authoring::manim_triangle_path()),
-            manim_style(Color::BLUE),
-        ))
+        Self::regular_polygon(3, 1.0, None)
     }
 
     pub fn elbow(width: f64, angle: f64) -> Result<Self, AuthoringError> {

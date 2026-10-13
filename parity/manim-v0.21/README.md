@@ -20,3 +20,9 @@ in `[0, 1]`; background strokes, mixed image families and non-recursive
 family-container paint remain unqualified. Image fade resets original pixel
 alpha in Manim and is explicitly rejected rather than inheriting vector alpha
 multiplication. Unrepresentable recursive occurrence counts fail before mutation.
+
+`triangle-options` covers omitted defaults, radius/start-angle overrides and
+inherited regular-polygon vertex queries. The Rust Triangle constructor delegates
+to the same closed regular-polygon path as the Python wrapper; the separate fixture
+preserves the polygon compound-fill/stroke regression unchanged. Wider inherited
+methods/options remain owned by #2012.

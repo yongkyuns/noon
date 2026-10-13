@@ -176,6 +176,22 @@ class Demo(Scene):
         assert abs(rush_into(0.5) - 2.0 * smooth(0.25)) < 1e-12
         assert abs(rush_from(0.5) - (2.0 * smooth(0.75) - 1.0)) < 1e-12
         assert abs(there_and_back(0.25) - smooth(0.5)) < 1e-12
+        calls = []
+        marker = object()
+        def user_rate(t, arg, *, token):
+            assert arg is marker and token is marker
+            calls.append(t)
+            return t
+        reduced = not_quite_there(user_rate, proportion=0.5)
+        compressed = squish_rate_func(user_rate, a=0.2, b=0.8)
+        assert calls == []
+        assert reduced(0.5, marker, token=marker) == 0.25
+        assert abs(compressed(0.5, marker, token=marker) - 0.5) < 1e-12
+        assert len(calls) == 2
+        def forbidden(*args, **kwargs):
+            raise AssertionError("equal endpoints must not call user code")
+        assert squish_rate_func(forbidden, a=0.3, b=0.3)(object()) == 0.3
+        assert not_quite_there()(0.5) == 0.35
 
         import _manim_compat as _compat_impl
         assert not hasattr(_compat_impl._ir, "Circle")
@@ -546,6 +562,9 @@ for cls, group, base in [(Mobject, Group, Mobject), (Group, Group, Mobject),
     assert value.get_group_class() is group
     assert value.get_mobject_type_class() is base
     assert cls.get_mobject_type_class() is base
+assert choose(6, 2) == 15
+assert clip(5, 10, 0) == 10
+assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
 result = Scene()
@@ -567,6 +586,18 @@ else:
     raise AssertionError("stretch must preserve the pinned Warning exception")
 result = Scene()
 `);
+      const numericalNamespace = await client.run(`
+from noon import binary_search as search, sigmoid as logistic, Scene
+import numpy as np
+calls = []
+def value(x):
+    calls.append(x)
+    return x
+assert search(value, 0, 0, 1) == 0
+assert calls == [0, 0.5, 1]
+assert logistic(np.array([0, 1], dtype=np.float32)).dtype == np.float32
+result = Scene()
+`);
       const numpyNamespace = await client.run(`
 from noon import *
 import sys
@@ -583,6 +614,7 @@ result = Scene()
         patchError,
         coldNamespace: Boolean(coldNamespace.semanticExecution),
         arrayNamespace: Boolean(arrayNamespace.semanticExecution),
+        numericalNamespace: Boolean(numericalNamespace.semanticExecution),
         numpyNamespace: Boolean(numpyNamespace.semanticExecution),
         sharedScene: Boolean(result.semanticExecution),
         terminated: client.terminated,
@@ -594,6 +626,7 @@ result = Scene()
   assert.match(sceneOnlyAuthoring.patchError, /Python authoring result must be a noon.Scene/);
   assert.equal(sceneOnlyAuthoring.coldNamespace, true, "cold star-import authoring must not load NumPy");
   assert.equal(sceneOnlyAuthoring.arrayNamespace, true, "aliased array helper loads NumPy before the real Python worker call");
+  assert.equal(sceneOnlyAuthoring.numericalNamespace, true, "user numerical helpers execute in the actual worker");
   assert.equal(sceneOnlyAuthoring.numpyNamespace, true, "implicit np must resolve to real NumPy before execution");
   assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
   assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");

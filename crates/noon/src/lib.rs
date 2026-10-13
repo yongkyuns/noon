@@ -54,10 +54,13 @@
 
 #![forbid(unsafe_code)]
 
+mod angle_authoring;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod animated_number_line_example;
 mod animation_authoring;
 mod arc_authoring;
+pub use angle_authoring::ManimAngleOptions;
+pub mod angle_example;
 mod arrow_authoring;
 mod arrow_endpoints;
 mod arrow_queries;
@@ -113,8 +116,11 @@ mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
 mod graph_authoring;
+mod polygon_authoring;
+pub mod polygon_example;
 mod spatial_authoring;
 mod spatial_composition;
+pub mod triangle_example;
 mod world_affine;
 pub use graph_authoring::{
     DiGraph, Graph, GraphAuthoringError, GraphEdgeMobject, GraphEndpoint, GraphLayout,

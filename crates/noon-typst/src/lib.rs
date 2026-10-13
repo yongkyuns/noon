@@ -757,6 +757,53 @@ fn fingerprint_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use noon_core::GeometryResource;
+    use noon_text::raster::{GlyphRaster, GlyphRasterCache, GlyphRasterError};
+
+    #[test]
+    fn typst_glyphs_rasterize_from_retained_font_bytes() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        let glyph = run.glyphs.first().unwrap();
+        let mut cache = GlyphRasterCache::new();
+
+        let raster = cache
+            .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 64.0)
+            .unwrap();
+        let GlyphRaster::Image(image) = raster.as_ref() else {
+            panic!("visible glyph should produce pixels");
+        };
+        assert!(image.placement.width > 0);
+        assert!(image.placement.height > 0);
+        assert!(!image.data.is_empty());
+        assert_eq!(cache.stats().entries, 1);
+        assert_eq!(cache.stats().font_faces, 1);
+    }
+
+    #[test]
+    fn stroked_typst_runs_require_outline_rendering() {
+        let artifact = compile_typst_resource(
+            "#text(stroke: (paint: red, thickness: 1pt, dash: \"dashed\"))[A]",
+            TypstMode::Markup,
+        )
+        .unwrap();
+        let run = artifact
+            .resource
+            .runs
+            .iter()
+            .find(|run| run.stroke.is_some())
+            .expect("Typst should retain the text stroke");
+        let glyph = run.glyphs.first().unwrap();
+        let mut cache = GlyphRasterCache::new();
+
+        assert_eq!(
+            cache
+                .get_or_rasterize(&artifact.fonts, run, glyph.glyph_id, 48.0)
+                .unwrap_err(),
+            GlyphRasterError::OutlineRequired
+        );
+        assert!(cache.is_empty());
+        assert_eq!(cache.stats().misses, 0);
+    }
 
     #[test]
     fn markup_compiles_to_one_shrink_wrapped_svg() {

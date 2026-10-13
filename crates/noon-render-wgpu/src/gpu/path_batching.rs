@@ -3,7 +3,7 @@
 use noon_core::{Rect, Vec2};
 
 use super::retained_text::RetainedRenderItem;
-use crate::{OrderedRenderBatch, PreparedFrame, RenderPrimitive};
+use crate::{OrderedRenderBatch, PathCoverage, PreparedFrame, RenderPrimitive};
 
 const WINDOW: usize = 32;
 
@@ -151,7 +151,9 @@ fn path_bounds(
     let RenderPrimitive::Path { batch: path } = batch.primitive else {
         return None;
     };
-    if batch.instance_range.len() != 1 || prepared.path_batches[path].polygon_coverage {
+    if batch.instance_range.len() != 1
+        || prepared.path_batches[path].coverage != PathCoverage::Tessellated
+    {
         return None;
     }
     let mesh = &prepared.path_mesh_cache[prepared.path_batch_cache_indices[path]];

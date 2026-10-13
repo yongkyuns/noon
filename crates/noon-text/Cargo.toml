@@ -10,5 +10,4 @@ noon-core = { path = "../noon-core" }
 swash = "=0.2.10"
 
 [dev-dependencies]
-noon-typst = { path = "../noon-typst" }
 typst-assets = { version = "=0.15.1", features = ["fonts"] }

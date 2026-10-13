@@ -1366,6 +1366,25 @@
       "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     },
     {
+      "id": "polygon-constructors",
+      "scene": "PolygonConstructors",
+      "source": "parity/manim-v0.21/core-examples/polygon_constructors.py",
+      "expected_duration": 0.2
+    },
+    {
+      "id": "triangle-options",
+      "scene": "TriangleOptions",
+      "source": "parity/manim-v0.21/core-examples/triangle_options.py",
+      "expected_duration": 0.2,
+      "notes": "Triangle inherits regular-polygon defaults, radius/start-angle options and vertex queries; unchanged raster thresholds apply."
+    },
+    {
+      "id": "angle-constructors",
+      "scene": "AngleConstructors",
+      "source": "parity/manim-v0.21/core-examples/angle_constructors.py",
+      "expected_duration": 0.2
+    },
+    {
       "id": "number-line-defaults",
       "scene": "NumberLineDefaults",
       "source": "parity/manim-v0.21/core-examples/number_line_defaults.py",

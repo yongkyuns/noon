@@ -24,6 +24,7 @@ use noon_core::{
 #[cfg(test)]
 use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena, TextVectorStyle};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RendererPublication};
+use noon_text::shaping::{outline_commands_to_path, unhinted_glyph_scaler};
 #[cfg(test)]
 use noon_typst::{compile_typst_resource, TypstMode};
 use swash::{
@@ -979,16 +980,9 @@ impl GlyphOutlineCache {
             .iter()
             .map(|setting| (setting.tag, setting.value))
             .collect();
-        let mut scaler = self
-            .scale_context
-            .builder(font)
-            .size(run.font_size)
-            .hint(false)
-            .variations(variations.iter())
-            .build();
-        let path = scaler
+        let path = unhinted_glyph_scaler(&mut self.scale_context, font, run.font_size, &variations)
             .scale_outline(glyph_id)
-            .map(|outline| zeno_to_noon(outline.path().commands()))
+            .map(|outline| outline_commands_to_path(outline.path().commands()))
             .unwrap_or_default();
         let path = Arc::new(path);
         self.admit_outline(key, path.clone());
@@ -3312,26 +3306,6 @@ fn noon_to_zeno(path: &VectorPath) -> Vec<ZenoCommand> {
         .collect()
 }
 
-fn zeno_to_noon(commands: impl Iterator<Item = ZenoCommand>) -> VectorPath {
-    let mut path = VectorPath::new();
-    for command in commands {
-        path = match command {
-            ZenoCommand::MoveTo(point) => path.move_to(Vec2::new(point.x, point.y)),
-            ZenoCommand::LineTo(point) => path.line_to(Vec2::new(point.x, point.y)),
-            ZenoCommand::QuadTo(control, point) => {
-                path.quadratic_to(Vec2::new(control.x, control.y), Vec2::new(point.x, point.y))
-            }
-            ZenoCommand::CurveTo(control1, control2, point) => path.cubic_to(
-                Vec2::new(control1.x, control1.y),
-                Vec2::new(control2.x, control2.y),
-                Vec2::new(point.x, point.y),
-            ),
-            ZenoCommand::Close => path.close(),
-        };
-    }
-    path
-}
-
 fn expand_stroke(path: &VectorPath, stroke: &TextGlyphStroke) -> VectorPath {
     let source = noon_to_zeno(path);
     let mut style = zeno::Stroke::new(stroke.width);
@@ -3350,7 +3324,7 @@ fn expand_stroke(path: &VectorPath, stroke: &TextGlyphStroke) -> VectorPath {
         .dash(stroke.dash_array.as_ref(), stroke.dash_phase);
     let mut output = Vec::<ZenoCommand>::new();
     zeno::apply(source.as_slice(), style, None, &mut output);
-    zeno_to_noon(output.into_iter())
+    outline_commands_to_path(output.into_iter())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

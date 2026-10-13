@@ -210,6 +210,8 @@ export class ExecutionWorkerClient {
     );
     const initiallyPaused = validateInitiallyPaused(options.initiallyPaused);
     const pacing = validateSemanticPacing(options.pacing);
+    const initialPointerView = options.initialPointerView === undefined ? undefined
+      : validatedBrowserPointerView(options.initialPointerView.revision, options.initialPointerView.width, options.initialPointerView.height);
     if (initiallyPaused && continuationGeneration !== null) {
       throw new Error("source-owned semantic continuations cannot start paused");
     }
@@ -233,6 +235,7 @@ export class ExecutionWorkerClient {
       continuationGeneration,
       initiallyPaused,
       pacing,
+      initialPointerView,
     );
   }
 
@@ -244,6 +247,7 @@ export class ExecutionWorkerClient {
     continuationGeneration,
     initiallyPaused,
     pacing,
+    initialPointerView,
   ) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
@@ -256,6 +260,9 @@ export class ExecutionWorkerClient {
       this.#assertLifecycleCurrent(generation);
       this.#loopDurationSeconds = loopDurationSeconds;
       this.#session = checkedNextSession(this.#session);
+      // Install the exact mapping before any renderer receipt can arrive.
+      // It authorizes nothing until the matching presentation is acknowledged.
+      this.#pointerView = initialPointerView ?? null;
       const control = new MessageChannel();
       const render = new MessageChannel();
       this.#engineWorker = control.port1;
@@ -277,14 +284,14 @@ export class ExecutionWorkerClient {
         contextId,
         control.port2,
         render.port1,
-        this.#semanticAttachmentOptions(
+        { ...this.#semanticAttachmentOptions(
           loopDurationSeconds,
           this.#session,
           callbackSessionId,
           continuationGeneration,
           initiallyPaused,
           pacing,
-        ),
+        ), initialPointerView },
       );
       this.#ready = Promise.all([engineReady, renderReady, attached]).then(
         ([engine, renderResult]) => ({
@@ -603,9 +610,8 @@ export class ExecutionWorkerClient {
   // observed receipt synchronously, before registration or input can yield.
   setBrowserPointerView(revision, width, height) {
     this.#requireStarted();
-    if (!Number.isSafeInteger(revision) || revision < 0 || !Number.isFinite(width) ||
-        !Number.isFinite(height) || width < 0 || height < 0 ||
-        (this.#pointerView !== null && revision < this.#pointerView.revision)) {
+    const view = validatedBrowserPointerView(revision, width, height);
+    if (this.#pointerView !== null && revision < this.#pointerView.revision) {
       throw new TypeError("invalid or retired browser pointer view");
     }
     if (this.#pointerView?.revision === revision) {
@@ -617,7 +623,6 @@ export class ExecutionWorkerClient {
       }
       return Promise.resolve({ type: "browser_pointer_view" });
     }
-    const view = Object.freeze({ revision, width, height });
     this.#pointerView = view;
     this.#pointerReceipt = null;
     const requested = this.#requestNativeInput("browser_pointer_view", { view });
@@ -1366,4 +1371,12 @@ function checkedNextSession(current) {
     throw new Error("execution worker session space exhausted");
   }
   return current + 1;
+}
+
+function validatedBrowserPointerView(revision, width, height) {
+  if (!Number.isSafeInteger(revision) || revision < 0 || !Number.isFinite(width) ||
+      !Number.isFinite(height) || width < 0 || height < 0) {
+    throw new TypeError("invalid or retired browser pointer view");
+  }
+  return Object.freeze({ revision, width, height });
 }

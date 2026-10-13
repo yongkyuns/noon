@@ -7,13 +7,18 @@ import { wheelLinePixels, wheelDeltaCssPixels } from "./browser-wheel-units.js";
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window,
+  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window, registeredView = null,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
   }
   let selected = null;
-  let view = null;
+  // This DOM snapshot was registered before the initial renderer publication.
+  // Seed only mapping-change detection; the engine still owns input admission.
+  let view = registeredView === null ? null : [
+    registeredView.left, registeredView.top, registeredView.width,
+    registeredView.height, registeredView.devicePixelRatio,
+  ];
   let unavailableViewReported = false;
   const active = () => !signal.aborted && isCurrent();
   const cancel = (kind = "cancel") => {
@@ -217,9 +222,9 @@ export function attachBrowserPointerInput(canvas, {
   }
   windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
   if (onView) {
-    // Register before the first paint; input collection never invents a receipt.
+    // Reuse startup registration when available; collection never invents a receipt.
     // Scroll/resize/element resize can invalidate mapping without pointer motion.
-    advanceView();
+    if (registeredView === null) advanceView();
     const refresh = guard(() => { if (active()) currentView(); });
     windowTarget.addEventListener("resize", refresh, { signal });
     windowTarget.addEventListener("scroll", refresh, { capture: true, signal });

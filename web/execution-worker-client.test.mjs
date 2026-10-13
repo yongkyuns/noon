@@ -200,6 +200,49 @@ test("reserves a fresh start and cancellation during host probing cannot transfe
   assert.equal(canvas.transfers, 0);
 });
 
+test("semantic startup forwards the initial platform view to the authoring owner", async () => {
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const authoring = new FakeSemanticAuthoringClient();
+  const view = { revision: 9, width: 640, height: 360 };
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("scene", authoring, {
+      transportMode: "transferable", initialPointerView: view,
+    });
+    await finishStartup(starting, authoring, offset);
+    assert.deepEqual(authoring.attachments.at(-1).options.initialPointerView, view);
+    assert.equal(client.pointerPresentation, null, "registration alone does not authorize input");
+    const attachment = authoring.attachments.at(-1);
+    const engine = attachment.controlPort.peer;
+    const receipt = { session: attachment.options.session, sequence: 0, presentation: 1, view_revision: view.revision };
+    engine.emitMessage(engineMessage("pointer_presented", { receipt }));
+    assert.deepEqual(client.pointerPresentation, receipt);
+    await client.setBrowserPointerView(view.revision, view.width, view.height);
+    assert.equal(engine.messages.filter(message => message.type === "browser_pointer_view").length, 0);
+    engine.emitMessage(engineMessage("pointer_presented", { receipt: { ...receipt, view_revision: view.revision + 1, presentation: 2 } }));
+    assert.deepEqual(client.pointerPresentation, receipt, "an unregistered view cannot replace the initial receipt");
+  } finally { client.terminate(); }
+});
+
+test("invalid initial pointer views fail before browser startup", async () => {
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const offset = FakeWorker.instances.length;
+  const authoring = new FakeSemanticAuthoringClient();
+  try {
+    for (const view of [
+      { revision: -1, width: 640, height: 360 },
+      { revision: 1, width: NaN, height: 360 },
+      { revision: 1, width: 640, height: -1 },
+    ]) {
+      await assert.rejects(client.startSemanticExecution("scene", authoring, {
+        initialPointerView: view,
+      }), /invalid or retired browser pointer view/);
+    }
+    assert.equal(FakeWorker.instances.length, offset);
+    assert.equal(authoring.attachments.length, 0);
+  } finally { client.terminate(); }
+});
+
 test("engine and render requests use independent issuance spaces", async () => {
   const errors = [];
   const { client, engine, render } = await startClient(errors);

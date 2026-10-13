@@ -97,3 +97,11 @@ def is_closed(value):
         return bool(engine_call(query.isClosed))
     finally:
         query.free()
+
+
+def vertex_groups(value):
+    query = _query(value)
+    try:
+        return [_points(points) for points in engine_call(query.vertexGroups)]
+    finally:
+        query.free()

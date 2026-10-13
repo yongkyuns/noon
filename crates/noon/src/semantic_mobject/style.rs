@@ -443,6 +443,12 @@ impl Mobject {
         edit_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
+
+    /// Match the donor's authored Manim RGB while preserving enabled paint opacity.
+    pub fn match_color(&mut self, donor: &Mobject) -> Result<(), AuthoringError> {
+        let color = donor.manim_color()?;
+        self.set_color(color.red.into(), color.green.into(), color.blue.into(), 1.0)
+    }
     pub fn disable_fill(&mut self) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
