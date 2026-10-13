@@ -35,6 +35,18 @@ pub fn session() -> Result<ExecutionSession, String> {
                 color.blue.into(),
                 color.alpha.into(),
             )?;
+            live.match_color(&boxes[0], &boxes[4])?;
+            assert_eq!(
+                live.effective_manim_color(&boxes[0])?,
+                live.effective_manim_color(&boxes[4])?
+            );
+            live.set_color(
+                &boxes[0],
+                color.red.into(),
+                color.green.into(),
+                color.blue.into(),
+                1.0,
+            )?;
             assert!((live.effective(&boxes[0])?.fill_opacity() - 0.7).abs() < 1e-6);
             assert!((live.effective_stroke_width(&boxes[0])? - 0.02).abs() < 1e-6);
             let segment = live.wait_segment(0.2)?;

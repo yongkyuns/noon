@@ -26,22 +26,56 @@ def observations(unit_interval, zero):
     return result
 
 
+def wrapper_observations(namespace):
+    def normalized(value):
+        if isinstance(value, float) and math.isnan(value): return "NaN"
+        return value
+    result = []
+    sentinel = object()
+    for name in ["not_quite_there", "squish_rate_func"]:
+        for parameters in ([{}, {"proportion": 0.25}] if name == "not_quite_there" else
+                           [{}, {"a": 0.2, "b": 0.8}, {"a": 0.8, "b": 0.2}, {"a": 0.5, "b": 0.5}]):
+            calls = []
+            def callback(t, positional, *, token):
+                calls.append([normalized(t), positional is sentinel, token is sentinel])
+                return t + 2
+            wrapped = namespace[name](callback, **parameters)
+            result.append([wrapped.__name__, len(calls)])
+            for t in [-math.inf, -1, 0, 0.2, 0.4, 0.5, 0.6, 0.8, 1, math.inf, math.nan]:
+                result.append(normalized(wrapped(t, sentinel, token=sentinel)))
+            result.append(calls)
+        failure = ValueError("callback failed")
+        def failing(t): raise failure
+        try: namespace[name](failing)(0.5)
+        except ValueError as error: result.append(error is failure)
+        else: result.append(False)
+    from fractions import Fraction
+    endpoint = Fraction(1, 3)
+    result.append(namespace["squish_rate_func"](failing, endpoint, Fraction(1, 3))(object()) is endpoint)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("manim_source", type=Path)
     parser.add_argument("--installed-manim", action="store_true")
     args = parser.parse_args()
     source = args.manim_source / "manim/utils/rate_functions.py"
-    reference = load_helpers(source, {"unit_interval", "zero"}, {"wraps": wraps})
+    reference = load_helpers(source, {"unit_interval", "zero", "not_quite_there", "squish_rate_func"}, {"wraps": wraps, "smooth": lambda t: t})
     expected = observations(reference["unit_interval"], reference["zero"])
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web/python"))
     import _manim_rate_functions as noon
     actual = observations(noon._unit_interval, noon._zero_outside_interval)
     errors = [] if actual == expected else ["Python call guards differ from pinned source"]
+    expected_wrappers = wrapper_observations(reference)
+    if wrapper_observations(vars(noon)) != expected_wrappers:
+        errors.append("callable wrapper observations differ from pinned source")
     if args.installed_manim:
         from manim.utils import rate_functions
         if Path(rate_functions.__file__).read_bytes() != source.read_bytes():
             raise ValueError("installed rate source differs from pin")
+        if wrapper_observations(vars(rate_functions)) != expected_wrappers:
+            errors.append("installed callable wrapper observations differ")
         if observations(rate_functions.unit_interval, rate_functions.zero) != expected:
             errors.append("installed decorator observations differ")
         for name in ["linear", "smooth", "rush_into", "rush_from", "there_and_back"]:
@@ -50,6 +84,7 @@ def main():
                     errors.append(f"{name}: boundary {t} differs")
     print(json.dumps({"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                       "decorator_observations": len(expected), "public_boundary_observations": 25 if args.installed_manim else 0,
+                      "callable_wrapper_observations": len(expected_wrappers),
                       "installed_module_checked": args.installed_manim, "errors": errors}, indent=2))
     return bool(errors)
 

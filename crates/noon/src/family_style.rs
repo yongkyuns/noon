@@ -214,6 +214,12 @@ impl MobjectFamily {
         self.edit_style(|style| edit_color(style, red, green, blue, alpha))
     }
 
+    /// Match a donor leaf's authored RGB through one unique-leaf transaction.
+    pub fn match_color(&self, donor: &Mobject) -> Result<(), AuthoringError> {
+        let color = donor.manim_color()?;
+        self.set_color(color.red.into(), color.green.into(), color.blue.into(), 1.0)
+    }
+
     /// Change supplied fill fields atomically. Omitted fields remain unchanged.
     pub fn set_fill(
         &self,

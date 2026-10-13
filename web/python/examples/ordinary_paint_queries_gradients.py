@@ -9,6 +9,10 @@ class PaintQueriesGradients(Scene):
         self.add(family)
         family.set_color_by_gradient("#FF0000", "#00FF00", "#0000FF")
         boxes[0].set_color(boxes[0].get_color())
+        original = boxes[0].get_color()
+        boxes[0].match_color(boxes[-1])
+        assert boxes[0].get_color() == boxes[-1].get_color()
+        boxes[0].set_color(original)
         assert abs(boxes[0].get_fill_opacity() - 0.7) < 1e-6
         assert abs(boxes[0].get_stroke_width() - 2) < 1e-6
         assert boxes[0].get_fill_color() == boxes[0].get_stroke_color()

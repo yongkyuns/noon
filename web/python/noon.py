@@ -390,6 +390,10 @@ class Mobject:
         from _manim_geometry import _mobject_get_color
         return _mobject_get_color(self)
 
+    def match_color(self, mobject: Mobject) -> Mobject:
+        """Match the donor's observed color through the existing shared setter."""
+        return self.set_color(mobject.get_color())
+
     def match_points(self, mobject: object) -> Mobject:
         from _manim_geometry import match_points
         return match_points(self, mobject)
@@ -954,6 +958,8 @@ _PUBLIC_EXPORTS = {
     "rush_into": "_manim_rate_functions",
     "rush_from": "_manim_rate_functions",
     "there_and_back": "_manim_rate_functions",
+    "not_quite_there": "_manim_rate_functions",
+    "squish_rate_func": "_manim_rate_functions",
     "Add": "_manim_composition",
     "AnimationGroup": "_manim_composition",
     "LaggedStart": "_manim_composition",
@@ -1067,7 +1073,9 @@ def __getattr__(name: str):
     module = _PUBLIC_EXPORTS.get(name)
     if module is not None:
         from importlib import import_module
-        return getattr(import_module(module), name)
+        value = getattr(import_module(module), name)
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
