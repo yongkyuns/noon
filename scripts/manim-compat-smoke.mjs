@@ -176,6 +176,22 @@ class Demo(Scene):
         assert abs(rush_into(0.5) - 2.0 * smooth(0.25)) < 1e-12
         assert abs(rush_from(0.5) - (2.0 * smooth(0.75) - 1.0)) < 1e-12
         assert abs(there_and_back(0.25) - smooth(0.5)) < 1e-12
+        calls = []
+        marker = object()
+        def user_rate(t, arg, *, token):
+            assert arg is marker and token is marker
+            calls.append(t)
+            return t
+        reduced = not_quite_there(user_rate, proportion=0.5)
+        compressed = squish_rate_func(user_rate, a=0.2, b=0.8)
+        assert calls == []
+        assert reduced(0.5, marker, token=marker) == 0.25
+        assert abs(compressed(0.5, marker, token=marker) - 0.5) < 1e-12
+        assert len(calls) == 2
+        def forbidden(*args, **kwargs):
+            raise AssertionError("equal endpoints must not call user code")
+        assert squish_rate_func(forbidden, a=0.3, b=0.3)(object()) == 0.3
+        assert not_quite_there()(0.5) == 0.35
 
         import _manim_compat as _compat_impl
         assert not hasattr(_compat_impl._ir, "Circle")

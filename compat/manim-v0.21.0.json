@@ -73,6 +73,8 @@
     "Succession": {"status": "supported", "category": "animation-composition", "evidence": "composition tests"},
     "ValueTracker": {"status": "supported", "category": "reactive", "evidence": "reactive authoring/runtime tests"},
     "linear": {"status": "supported", "category": "rate-function", "evidence": "shared rate-function tests"},
+    "not_quite_there": {"status": "partial", "category": "rate-function", "dependency": "#2016", "evidence": "scripts/manim-rate-intervals.py; web/python/test_manim_rate_intervals.py", "reason": "Explicit Python callable construction/evaluation preserves pinned argument forwarding, errors and interval behavior. Returned arbitrary callables do not yet lower to shared Rust playback descriptors."},
+    "squish_rate_func": {"status": "partial", "category": "rate-function", "dependency": "#2016", "evidence": "scripts/manim-rate-intervals.py; web/python/test_manim_rate_intervals.py", "reason": "Explicit Python callable construction/evaluation preserves pinned argument forwarding, errors and interval behavior. Returned arbitrary callables do not yet lower to shared Rust playback descriptors."},
     "smooth": {"status": "supported", "category": "rate-function", "evidence": "shared rate-function tests"},
     "rush_into": {"status": "supported", "category": "rate-function", "evidence": "shared rate-function tests"},
     "rush_from": {"status": "supported", "category": "rate-function", "evidence": "shared rate-function tests"},
