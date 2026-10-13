@@ -634,6 +634,9 @@ impl From<SemanticStoreError> for AuthoringFailure {
             E::NotFamilyMember { .. } => ("invalid_input", "store.not_family_member"),
             E::FamilyCycle { .. } => ("invalid_input", "store.family_cycle"),
             E::DuplicateSourceIdentity(_) => ("invalid_input", "store.duplicate_source_identity"),
+            E::FamilyMultiplicityOverflow(_) => {
+                ("invalid_input", "store.family_multiplicity_overflow")
+            }
         };
         Self::new(category, code, error)
     }
@@ -988,5 +991,31 @@ impl From<crate::SpatialCompositionError> for AuthoringFailure {
             ),
             MeshMustRemainWorld => Self::new("unsupported_operation", "spatial.mesh_domain", error),
         }
+    }
+}
+
+#[cfg(test)]
+mod current_diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn shared_family_overflow_preserves_current_diagnostics() {
+        let node = noon_core::SemanticStore::new().insert_family();
+        let error = SemanticStoreError::FamilyMultiplicityOverflow(node);
+        let message = error.to_string();
+        let failure = AuthoringFailure::from(error);
+        assert_eq!(failure.category, "invalid_input");
+        assert_eq!(failure.code, "store.family_multiplicity_overflow");
+        assert_eq!(failure.message, message);
+    }
+
+    #[test]
+    fn shared_angle_query_preserves_current_diagnostics() {
+        let error = AuthoringError::MissingAngleValue;
+        let message = error.to_string();
+        let failure = AuthoringFailure::from(error);
+        assert_eq!(failure.category, "invalid_input");
+        assert_eq!(failure.code, "angle.value_missing");
+        assert_eq!(failure.message, message);
     }
 }

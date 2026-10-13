@@ -26,7 +26,7 @@ def main() -> None:
     command = ["cargo", "build", "-p", "noon-python"]
     if args.profile == "release":
         command.append("--release")
-    environment = dict(os.environ, PYO3_PYTHON=sys.executable)
+    environment = dict(os.environ, PYO3_PYTHON=sys.executable, PYO3_BUILD_EXTENSION_MODULE="1")
     subprocess.run(command, cwd=ROOT, env=environment, check=True)
     target = Path(environment.get("CARGO_TARGET_DIR", ROOT / "target"))
     if not target.is_absolute():
