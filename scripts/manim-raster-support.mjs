@@ -558,25 +558,40 @@ export function compareEffective3DCamera(debugFrame, expectedCamera3d) {
     }
   }
   requireFiniteVector(expectedCamera3d.light_source, 3, "Manim camera light_source");
-  const expectedProfile = Object.fromEntries(
-    EFFECTIVE_CAMERA_3D_FIELDS.map(field => [field, expectedCamera3d[field]]),
-  );
-  const actualProfile = Object.fromEntries(
-    EFFECTIVE_CAMERA_3D_FIELDS.map(field => [field, actual[field]]),
-  );
-  const cameraError = compareEffectiveFrames(actualProfile, expectedProfile);
-
   const lightRows = debugFrame.objects.filter(row => row.present && row.spatial?.point_light === true);
-  let lightError = 0;
+  let actualLight;
   if (lightRows.length === 0) {
-    lightError = compareEffectiveFrames(expectedCamera3d.light_source, DEFAULT_MANIM_POINT_LIGHT);
+    actualLight = DEFAULT_MANIM_POINT_LIGHT;
   } else {
     if (lightRows.length !== 1) {
       throw new Error(`camera profile: expected at most one present point-light row; found ${lightRows.length}`);
     }
-    const translation = lightRows[0].spatial.translation;
-    requireFiniteVector(translation, 3, "Noon point-light translation");
-    lightError = compareEffectiveFrames(translation, expectedCamera3d.light_source);
+    actualLight = lightRows[0].spatial.translation;
+    requireFiniteVector(actualLight, 3, "Noon point-light translation");
   }
-  return { maximumAbsoluteError: Math.max(cameraError, lightError), lightObserved: lightRows.length === 1 };
+
+  let maximumAbsoluteError = 0;
+  const errors = [];
+  function compareNumber(actualValue, expectedValue, field) {
+    try {
+      maximumAbsoluteError = Math.max(maximumAbsoluteError,
+        compareEffectiveFrames({ [field]: actualValue }, { [field]: expectedValue }));
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+  for (const field of EFFECTIVE_CAMERA_3D_FIELDS) {
+    if (field === "frame_center") {
+      for (let axis = 0; axis < 3; axis += 1) {
+        compareNumber(actual.frame_center[axis], expectedCamera3d.frame_center[axis], `frame_center[${axis}]`);
+      }
+    } else {
+      compareNumber(actual[field], expectedCamera3d[field], field);
+    }
+  }
+  for (let axis = 0; axis < 3; axis += 1) {
+    compareNumber(actualLight[axis], expectedCamera3d.light_source[axis], `light_source[${axis}]`);
+  }
+  if (errors.length > 0) throw new Error(errors.join("; "));
+  return { maximumAbsoluteError, lightObserved: lightRows.length === 1 };
 }

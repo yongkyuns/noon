@@ -192,6 +192,33 @@ test("effective 3D camera compares every profile field and observes point light"
   }
 });
 
+test("effective 3D camera reports all numeric field mismatches in one diagnostic", () => {
+  const expected = {
+    phi: 1.1090003497949128, theta: 0.5252506208689597, gamma: 0.2,
+    focal_distance: 5, zoom: 1, frame_height: 8,
+    frame_center: [0.000003, -0.000004, 0], light_source: [-6, -8, 10],
+  };
+  const debug = { objects: [
+    { present: true, spatial: { camera_profile: {
+      phi: 1.108996938995747, theta: 0.5235987755982988, gamma: 0.2 + 5e-7,
+      focal_distance: 5, zoom: 1, frame_height: 8, frame_center: [0, 0, 0],
+      near: 0.1, far: 100,
+    } } },
+    { present: true, spatial: { point_light: true, translation: [-7, -9, 10 + 5e-7] } },
+  ] };
+
+  assert.throws(() => compareEffective3DCamera(debug, expected), error => {
+    assert.match(error.message, /(?:^|; )frame\.phi: effective value differs/);
+    assert.match(error.message, /(?:^|; )frame\.theta: effective value differs/);
+    assert.match(error.message, /(?:^|; )frame\.frame_center\[0\]: effective value differs/);
+    assert.match(error.message, /(?:^|; )frame\.frame_center\[1\]: effective value differs/);
+    assert.match(error.message, /(?:^|; )frame\.light_source\[0\]: effective value differs/);
+    assert.match(error.message, /(?:^|; )frame\.light_source\[1\]: effective value differs/);
+    assert.doesNotMatch(error.message, /gamma|frame_center\[2\]|light_source\[2\]/);
+    return true;
+  });
+});
+
 test("effective 3D camera permits an absent light row only at Manim's pinned default", () => {
   const expected = {
     phi: 0.6, theta: -1.2, gamma: 0, focal_distance: 5, zoom: 1,
