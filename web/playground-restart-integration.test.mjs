@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { createSourceRestart } from "./playground-source-restart.js";
 import { createRunRequestRouter } from "./playground-run-request-router.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
+import { authoringSourceDocument } from "./authoring-diagnostic-runtime.js";
 
 function deferred() {
   let resolve;
@@ -98,7 +99,8 @@ assert.ok(runStart >= 0 && runEnd > runStart && hideStart >= 0 && hideEnd > hide
 // in-flight authoring request, as it does when Safari caches a gallery document.
 function navigationFixture() {
   const errors = [], clients = [], owners = [], timers = new Map();
-  let timerId = 0, fullscreenDisposals = 0;
+  let timerId = 0, fullscreenDisposals = 0, diagnosticInvalidations = 0, diagnosticDisposals = 0;
+  const diagnosticBegins = [];
   const window = new EventTarget();
   const diagnostics = { hidden: false };
   const context = {
@@ -109,6 +111,12 @@ function navigationFixture() {
     sceneRunPromise: null, activeSourceContinuation: null, activeRunRequest: null,
     latestRunPhaseMetrics: null, canvas: { id: "original" }, playbackDurationSeconds: 1,
     document: { querySelector: () => diagnostics },
+    authoringSourceDocument,
+    diagnosticPanel: {
+      beginRun(document, source) { diagnosticBegins.push({ document, source }); },
+      invalidate() { diagnosticInvalidations += 1; },
+      dispose() { diagnosticDisposals += 1; },
+    },
     currentExample: () => ({ id: "one", title: "One" }),
     resetPresentationRate() {}, stopMetricsPolling() {},
     beginBusy: () => () => {}, setBusy() {},
@@ -155,6 +163,9 @@ function navigationFixture() {
   return {
     context, errors, clients, owners, timers,
     get fullscreenDisposals() { return fullscreenDisposals; },
+    get diagnosticInvalidations() { return diagnosticInvalidations; },
+    get diagnosticDisposals() { return diagnosticDisposals; },
+    get diagnosticBegins() { return diagnosticBegins; },
     dispatch(type, persisted) {
       const event = new Event(type); Object.defineProperty(event, "persisted", { value: persisted });
       window.dispatchEvent(event);
@@ -180,6 +191,8 @@ test("leaving the gallery retires a pending Python run without publishing a Pyth
     assert.equal(f.context.activeSourceContinuation, null);
     assert.equal(f.context.player, null);
     assert.equal(f.context.canvas, f.owners[0].canvas);
+    assert.equal(f.diagnosticInvalidations, 1, "navigation must invalidate obsolete source diagnostics");
+    assert.equal(f.diagnosticDisposals, 1, "permanent navigation disposes diagnostic listeners");
   }
 });
 
@@ -193,6 +206,9 @@ test("Safari cached return keeps explicit Run, edits and subsequent navigation t
     assert.equal(f.clients.length, cycle + 1, "restored controls must start a fresh authoring request");
     f.dispatch("pagehide", true);
     await run;
+    assert.equal(f.diagnosticInvalidations, cycle + 1);
+    assert.equal(f.diagnosticDisposals, 0,
+      "cached documents must retain diagnostic listeners for the next edit");
     assert.equal(f.clients[cycle].terminated, true);
     assert.equal(f.owners[cycle].terminations, 1);
     assert.equal(f.context.canvas, f.owners[cycle].canvas, "restart must use the replacement, untransferred canvas");
@@ -204,6 +220,11 @@ test("Safari cached return keeps explicit Run, edits and subsequent navigation t
   assert.equal(f.fullscreenDisposals, 0, "cached DOM controls remain installed");
   f.dispatch("pagehide", false);
   assert.equal(f.fullscreenDisposals, 1, "permanent departure disposes DOM controls");
+  assert.equal(f.diagnosticInvalidations, 4);
+  assert.equal(f.diagnosticDisposals, 1, "permanent departure disposes diagnostic listeners once");
+  assert.ok(f.diagnosticBegins.length >= 3, "each restored explicit source run reopens diagnostics");
+  assert.ok(f.diagnosticBegins.every(x => x.document.filename.startsWith("noon-s")),
+    "diagnostic runs retain actual host-owned source identities");
   await f.context.sourceRestart.runNow();
   assert.equal(f.clients.length, 3, "a permanently retired document must not start another worker");
 });
@@ -213,6 +234,8 @@ test("navigation cancels a queued edit restart before the cached document return
   f.context.sourceRestart.edited();
   assert.equal(f.timers.size, 1);
   f.dispatch("pagehide", true); f.dispatch("pageshow", true); f.tick(); await flush();
+  assert.equal(f.diagnosticInvalidations, 1);
+  assert.equal(f.diagnosticDisposals, 0);
   assert.equal(f.clients.length, 0, "restoration must not launch a cancelled edit timer");
   assert.equal(f.timers.size, 0);
   assert.deepEqual(f.errors, []);

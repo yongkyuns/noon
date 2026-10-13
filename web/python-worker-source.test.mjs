@@ -209,7 +209,7 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.deepEqual(calls, ["cancel_semantic_continuation", "run"]);
   assert.match(
     source,
-    /await\s+execute_source\(\s*__noon_source,\s*json.loads\(__noon_context_json\)\s*\)/,
+    /await\s+execute_compiled_source\(\s*__noon_code,\s*__noon_portable_constructs,\s*json.loads\(__noon_context_json\)\s*\)/,
   );
   assert.match(source, /continuation\.endpoint\.startContinuation\(continuation\.generation\)/);
   assert.match(source, /continuation\.runRequestId\s*!==\s*request\.continuationRunRequestId/);
@@ -455,7 +455,7 @@ test("a late sparse read cannot cross a failed callback phase into its successor
   assert.equal(continuation.callbackRequest.phaseTokenJson, nextToken);
   assert.equal(continuation.callbackRequest.read, null);
   assert.equal(readCalls, 2, "a stale read result must not replay or replace the successor read");
-  void api.completeContinuationCallback(context, nextToken, "successor batch");
+  void api.completeContinuationCallback(continuation.context, nextToken, "successor batch");
   assert.equal(await nextCallback, "successor batch");
 });
 
@@ -477,7 +477,7 @@ test("worker delegates every Scene construct lifecycle to the canonical adapter"
   );
   assert.match(
     authoring,
-    /await\s+execute_source\(\s*__noon_source,\s*json.loads\(__noon_context_json\)\s*\)/,
+    /await\s+execute_compiled_source\(\s*__noon_code,\s*__noon_portable_constructs,\s*json.loads\(__noon_context_json\)\s*\)/,
   );
   assert.doesNotMatch(authoring, /__noon_result\.(?:setup|construct|tear_down)\(/);
   assert.doesNotMatch(authoring, /exportDocument|to_document|to_scene_spec|materialize_legacy_geometry/);
@@ -577,9 +577,17 @@ test("a trapped host never publishes late success or request errors", () => {
   ]);
 });
 
-test("source compilation is shared and never replays module effects", () => {
-  assert.match(source, /from _noon_source import execute_source/);
-  assert.match(sharedSource, /compile_authoring_source\(source, filename, portable=portable\)/);
+test("source compilation is shared, diagnosed once and never replays module effects", async () => {
+  const diagnostics = await readFile(new URL("./authoring-diagnostic-runtime.js", import.meta.url), "utf8");
+  const authoring = source.slice(source.indexOf("async function runAuthoringSource"),
+    source.indexOf("async function runCanonicalCallbackPhase"));
+  assert.match(diagnostics, /compile_authoring_source\(\s*__noon_source,\s*filename=__noon_filename\s*\)/);
+  assert.equal(diagnostics.match(/compile_authoring_source\(/g)?.length, 1);
+  assert.equal(authoring.match(/withAuthoringDiagnostics\(/g)?.length, 1);
+  assert.doesNotMatch(authoring, /compile_authoring_source/);
+  assert.match(authoring, /from _noon_source import execute_compiled_source/);
+  assert.match(authoring, /await execute_compiled_source\(\s*__noon_code, __noon_portable_constructs/);
+  assert.match(sharedSource, /return await execute_compiled_source\(code, portable_constructs, context\)/);
   assert.match(sharedSource, /await execute_authoring_module\(code, namespace\)/);
   assert.match(sharedSource, /namespace\[MODULE_BARRIER_GLOBAL\] = await_module_source_barrier/);
   assert.match(sharedSource, /namespace\[BARRIER_GLOBAL\] = await_source_barrier/);

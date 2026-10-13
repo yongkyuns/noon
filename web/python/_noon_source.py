@@ -19,8 +19,13 @@ async def execute_source(source: str, context=None, *, portable: bool = True,
                          filename: str = "<noon>") -> Scene:
     if not isinstance(source, str) or not source.strip():
         raise TypeError("Python authoring source must be non-empty")
-    namespace = {"context": {} if context is None else context, "__name__": "__main__"}
     code, portable_constructs = compile_authoring_source(source, filename, portable=portable)
+    return await execute_compiled_source(code, portable_constructs, context)
+
+
+async def execute_compiled_source(code, portable_constructs, context=None) -> Scene:
+    """Execute a once-compiled source through the common host lifecycle."""
+    namespace = {"context": {} if context is None else context, "__name__": "__main__"}
     if portable_constructs:
         namespace[BARRIER_GLOBAL] = await_source_barrier
     if MODULE_BARRIER_GLOBAL in code.co_names:

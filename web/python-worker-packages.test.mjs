@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { diagnosedHostCode, withAuthoringDiagnostics } from "./authoring-diagnostic-runtime.js";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 const start = source.indexOf("async function prepareAuthoringDependencies(");
@@ -14,9 +15,10 @@ const { prepareAuthoringDependencies, runAuthoringSource } = vm.runInNewContext(
 ${source.slice(start, end)}
 return { prepareAuthoringDependencies, runAuthoringSource };
 })()`,
+  { diagnosedHostCode, withAuthoringDiagnostics },
 );
 
-function interpreter({ load, execute, requiredPackages = [], missingPackages } = {}) {
+function interpreter({ compile, load, execute, requiredPackages = [], missingPackages } = {}) {
   const events = [];
   const namespaces = [];
   const pyodide = {
@@ -36,8 +38,10 @@ function interpreter({ load, execute, requiredPackages = [], missingPackages } =
           const namespace = {
             values,
             destroyed: false,
+            destroyCount: 0,
             set: (key, value) => values.set(key, value),
             destroy() {
+              this.destroyCount += 1;
               this.destroyed = true;
               events.push(["destroy"]);
             },
@@ -50,6 +54,12 @@ function interpreter({ load, execute, requiredPackages = [], missingPackages } =
       },
     },
     runPython(script, { globals }) {
+      if (script.includes("from _manim_source_execution import compile_authoring_source")) {
+        const text = globals.values.get("__noon_source");
+        events.push(["compile", text, globals.values.get("__noon_filename")]);
+        assert.match(script, /filename=__noon_filename/);
+        return compile?.(text, globals);
+      }
       if (script.includes("_manim_namespace.required_packages_json(")) {
         events.push(["implicit-required", globals.values.get("__noon_dependency_source")]);
         return JSON.stringify(requiredPackages);
@@ -70,9 +80,9 @@ function interpreter({ load, execute, requiredPackages = [], missingPackages } =
       events.push(["execute", globals.values.get("__noon_source")]);
       // Both Python hosts use the common source lifecycle. This worker owns
       // only package readiness and its bridge namespace, not another compiler.
-      assert.match(bootstrap, /from _noon_source import execute_source/);
-      assert.match(bootstrap, /await execute_source\(\s*__noon_source, json\.loads\(__noon_context_json\)\s*\)/);
-      assert.equal(bootstrap.match(/await execute_source\(/g)?.length, 1);
+      assert.match(bootstrap, /from _noon_source import execute_compiled_source/);
+      assert.match(bootstrap, /await execute_compiled_source\(\s*__noon_code, __noon_portable_constructs, json\.loads\(__noon_context_json\)\s*\)/);
+      assert.equal(bootstrap.match(/await execute_compiled_source\(/g)?.length, 1);
       assert.doesNotMatch(bootstrap, /compile_authoring_source|execute_authoring_module|execute_construct/);
       return execute ? execute(bootstrap, globals) : "source-result";
     },
@@ -95,22 +105,27 @@ test("explicit source imports finish loading before dependency inspection or aut
   let release;
   const loading = new Promise(resolve => { release = resolve; });
   const state = interpreter({ load: () => loading });
-  const pending = runAuthoringSource(state.pyodide, numpyScene, { selected: "Demo" });
+  const pending = runAuthoringSource(state.pyodide, numpyScene, { selected: "Demo" }, 0);
   await Promise.resolve();
-  assert.deepEqual(state.events, [["packages", numpyScene]]);
-  assert.equal(state.namespaces.length, 0);
+  assert.deepEqual(state.events, [
+    ["dict"], ["constructor-destroy"], ["compile", numpyScene, "noon-request-0.py"],
+    ["packages", numpyScene],
+  ]);
+  assert.equal(state.namespaces.length, 1);
+  assert.equal(authoringNamespaces(state)[0].destroyed, false);
   release();
   assert.equal(await pending, "source-result");
 
   const kinds = state.events.map(event => event[0]);
   assert.deepEqual(kinds, [
+    "dict",
+    "constructor-destroy",
+    "compile",
     "packages",
     "dict",
     "constructor-destroy",
     "implicit-required",
     "destroy",
-    "dict",
-    "constructor-destroy",
     "execute",
     "destroy",
   ]);
@@ -123,9 +138,12 @@ test("explicit source imports finish loading before dependency inspection or aut
 test("package-load failure preserves its error and never executes user source", async () => {
   const failure = new Error("package download failed");
   const state = interpreter({ load: async () => { throw failure; } });
-  await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}), error => error === failure);
-  assert.deepEqual(state.events, [["packages", numpyScene]]);
-  assert.equal(state.namespaces.length, 0);
+  await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}, 0), error => error === failure);
+  assert.deepEqual(state.events.map(event => event[0]), [
+    "dict", "constructor-destroy", "compile", "packages", "destroy",
+  ]);
+  assert.equal(state.namespaces.length, 1);
+  assert.equal(authoringNamespaces(state)[0].destroyCount, 1);
 });
 
 test("a failed package load does not poison a later source run", async () => {
@@ -135,28 +153,34 @@ test("a failed package load does not poison a later source run", async () => {
       if (++attempts === 1) throw new Error("temporary package failure");
     },
   });
-  await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}), /temporary package failure/);
-  assert.equal(await runAuthoringSource(state.pyodide, numpyScene, {}), "source-result");
+  await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}, 0), /temporary package failure/);
+  assert.equal(await runAuthoringSource(state.pyodide, numpyScene, {}, 1), "source-result");
   assert.equal(attempts, 2);
   assert.equal(state.events.filter(([kind]) => kind === "execute").length, 1);
-  assert.equal(authoringNamespaces(state).length, 1);
-  assert.equal(authoringNamespaces(state)[0].destroyed, true);
+  assert.equal(authoringNamespaces(state).length, 2);
+  assert.deepEqual(authoringNamespaces(state).map(namespace => namespace.destroyCount), [1, 1]);
+  assert.deepEqual(authoringNamespaces(state).map(namespace => namespace.values.get("__noon_revision")),
+    ["request-0", "request-1"]);
 });
 
 test("synchronous loader errors also stop before dependency inspection and authoring", async () => {
   const state = interpreter();
   const failure = new Error("invalid import syntax");
   state.pyodide.loadPackagesFromImports = () => { throw failure; };
-  await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}), error => error === failure);
-  assert.deepEqual(state.events, []);
+  await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}, 0), error => error === failure);
+  assert.deepEqual(state.events.map(event => event[0]), [
+    "dict", "constructor-destroy", "compile", "destroy",
+  ]);
+  assert.equal(authoringNamespaces(state)[0].destroyCount, 1);
 });
 
 test("source execution failure still destroys its authoring namespace exactly once", async () => {
   const failure = new Error("authored exception");
   const state = interpreter({ execute: () => { throw failure; } });
-  await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}), error => error === failure);
+  await assert.rejects(runAuthoringSource(state.pyodide, numpyScene, {}, 0), error => error === failure);
   const [namespace] = authoringNamespaces(state);
-  assert.equal(namespace.destroyed, true);
+  assert.equal(namespace.destroyCount, 1);
+  assert.ok(state.namespaces.every(namespace => namespace.destroyCount === 1));
   // One temporary dependency namespace and one authoring namespace are each destroyed.
   assert.equal(state.events.filter(([kind]) => kind === "destroy").length, 2);
 });
@@ -168,7 +192,7 @@ test("each run delegates its original explicit imports without installing a fixe
     numpyScene,
     "from numpy import sin\nfrom noon import *\nresult = Scene()\n",
   ];
-  for (const text of sources) await runAuthoringSource(state.pyodide, text, {});
+  for (const [requestId, text] of sources.entries()) await runAuthoringSource(state.pyodide, text, {}, requestId);
   assert.deepEqual(
     state.events.filter(([kind]) => kind === "packages").map(([, text]) => text),
     sources,
@@ -186,7 +210,7 @@ test("implicit Manim aliases load and bind the real package before user executio
     missingPackages: ["numpy"],
   });
   assert.equal(
-    await runAuthoringSource(state.pyodide, implicitNumpyScene, {}),
+    await runAuthoringSource(state.pyodide, implicitNumpyScene, {}, 0),
     "source-result",
   );
   const kinds = state.events.map(event => event[0]);
@@ -219,4 +243,30 @@ test("package discovery remains source-startup work, never worker initialization
   assert.equal(source.slice(end).includes("loadPackagesFromImports"), false);
   assert.equal(source.match(/loadPackagesFromImports\(/g)?.length, 1);
   assert.equal(source.includes('loadPackage("numpy")'), false);
+});
+
+
+test("compile failure preserves the original error, frees its namespace and starts no downloads", async () => {
+  const failure = new SyntaxError("invalid Python source");
+  const state = interpreter({ compile: () => { throw failure; } });
+  await assert.rejects(runAuthoringSource(state.pyodide, "broken syntax", {}, 3),
+    error => error === failure);
+  assert.deepEqual(state.events.map(event => event[0]), [
+    "dict", "constructor-destroy", "compile", "destroy",
+  ]);
+  assert.equal(authoringNamespaces(state)[0].destroyCount, 1);
+});
+
+test("corrected source uses a fresh revision after compile failure on the same interpreter", async () => {
+  let attempts = 0;
+  const state = interpreter({ compile: () => {
+    if (++attempts === 1) throw new SyntaxError("invalid Python source");
+  } });
+  await assert.rejects(runAuthoringSource(state.pyodide, "broken syntax", {}, 3), SyntaxError);
+  assert.equal(await runAuthoringSource(state.pyodide, numpyScene, {}, 4), "source-result");
+  assert.deepEqual(state.events.filter(([kind]) => kind === "packages"), [["packages", numpyScene]]);
+  assert.equal(state.events.filter(([kind]) => kind === "execute").length, 1);
+  assert.deepEqual(authoringNamespaces(state).map(namespace => namespace.values.get("__noon_revision")),
+    ["request-3", "request-4"]);
+  assert.ok(state.namespaces.every(namespace => namespace.destroyCount === 1));
 });
