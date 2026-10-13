@@ -15,15 +15,25 @@ pub(super) struct PreparedPublication<'session, 'store> {
 }
 
 impl<'session, 'store> PreparedPublication<'session, 'store> {
-    pub(super) fn supports(prepared: &PreparedSemanticMutationTransaction<'_>) -> bool {
+    pub(super) fn supports(
+        session: &ExecutionSession,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+    ) -> bool {
+        let recording = session.runtime.replay_scope_active();
         prepared.mutations().iter().all(|mutation| {
-            matches!(
-                mutation,
-                SemanticMutation::SetProperty { .. }
-                    | SemanticMutation::SetObjectTransform { .. }
-                    | SemanticMutation::ReplaceStyle { .. }
-                    | SemanticMutation::UpdateEffect { .. }
-            )
+            let object = match mutation {
+                SemanticMutation::SetProperty { object, .. }
+                | SemanticMutation::SetObjectTransform { object, .. }
+                | SemanticMutation::ReplaceStyle { object, .. } => object,
+                SemanticMutation::UpdateEffect { .. } => return !recording,
+                _ => return false,
+            };
+            // Detached target values have no execution projection to retain.
+            // Attached or mixed recording edits still need general replay handling.
+            !recording
+                || object
+                    .existing()
+                    .is_some_and(|node| !session.reachability.is_reachable(node))
         })
     }
 

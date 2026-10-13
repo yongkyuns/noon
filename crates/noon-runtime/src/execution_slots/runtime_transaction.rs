@@ -652,6 +652,128 @@ mod tests {
     }
 
     #[test]
+    fn prepared_empty_publication_preserves_recording_and_matches_general_commit() {
+        let (mut prepared_instance, object) = semantic_instance();
+        let (mut general_instance, _) = semantic_instance();
+        for instance in [&mut prepared_instance, &mut general_instance] {
+            instance
+                .begin_replay_retention(crate::ReplayLimits {
+                    revisions: 0,
+                    payloads: 0,
+                })
+                .unwrap();
+            instance.take_frame_changes();
+        }
+        let before = prepared_instance.publication_context();
+        let next_scene = before.scene_revision().checked_next().unwrap();
+        let empty = ExecutionMutationTransaction::new();
+        let prepared = prepared_instance
+            .prepare_authored_value_publication(&empty, before, next_scene)
+            .unwrap()
+            .expect("a detached edit needs only a scene revision publication");
+        prepared_instance.commit_prepared_authored_value_publication(prepared);
+        general_instance
+            .apply_authored_execution_transaction(
+                &empty,
+                CompiledResources::default(),
+                before,
+                next_scene,
+            )
+            .unwrap();
+
+        assert_eq!(prepared_instance.frame(), general_instance.frame());
+        assert_eq!(
+            prepared_instance.publication_context(),
+            general_instance.publication_context()
+        );
+        assert_eq!(
+            prepared_instance.publication_context().execution_revision(),
+            before.execution_revision()
+        );
+        assert_eq!(
+            prepared_instance.replay_stats(),
+            crate::ReplayStats::default()
+        );
+        assert!(prepared_instance.replay_retention_valid());
+        assert!(prepared_instance.take_frame_changes().is_empty());
+        assert!(general_instance.take_frame_changes().is_empty());
+
+        let current = prepared_instance.publication_context();
+        let next_scene = current.scene_revision().checked_next().unwrap();
+        assert!(matches!(
+            prepared_instance.prepare_authored_value_publication(&empty, before, next_scene),
+            Err(AuthoredPublicationError::StalePublication { .. })
+        ));
+        assert!(matches!(
+            prepared_instance.prepare_authored_value_publication(
+                &empty,
+                current,
+                next_scene.checked_next().unwrap()
+            ),
+            Err(AuthoredPublicationError::InvalidSceneRevision { .. })
+        ));
+        let attached = ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+            object,
+            style: Style {
+                opacity: 0.25,
+                ..Style::default()
+            },
+        }]);
+        assert!(prepared_instance
+            .prepare_authored_value_publication(&attached, current, next_scene)
+            .unwrap()
+            .is_none());
+        assert_eq!(prepared_instance.publication_context(), current);
+        prepared_instance.seal_replay().unwrap();
+        assert!(matches!(
+            prepared_instance.prepare_authored_value_publication(&empty, current, next_scene),
+            Err(AuthoredPublicationError::Compile(
+                CompilePatchError::ReplaySealed
+            ))
+        ));
+        assert_eq!(prepared_instance.publication_context(), current);
+    }
+
+    #[test]
+    fn prepared_empty_publication_leaves_pending_spatial_work_untouched() {
+        let mut store = SemanticStore::new();
+        let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        state
+            .set_spatial_composition_domain(
+                noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
+            )
+            .unwrap();
+        let node = store.insert_semantic_object(state);
+        store.attach_to_scene(node).unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&store, &mut index).unwrap();
+        for recording in [false, true] {
+            let mut instance = SceneInstance::from_semantic_execution(lowered.clone());
+            if recording {
+                instance.begin_replay_retention(Default::default()).unwrap();
+            }
+            instance.mark_changed(0);
+            assert!(instance.pending_spatial_anchor_rows.contains(&0));
+            let frame = instance.frame().clone();
+            let rows = instance.pending_spatial_anchor_rows.clone();
+            let groups = instance.pending_spatial_anchor_groups.clone();
+            let before = instance.publication_context();
+            let prepared = instance
+                .prepare_authored_value_publication(
+                    &ExecutionMutationTransaction::new(),
+                    before,
+                    before.scene_revision().checked_next().unwrap(),
+                )
+                .unwrap()
+                .unwrap();
+            instance.commit_prepared_authored_value_publication(prepared);
+            assert_eq!(instance.frame(), &frame);
+            assert_eq!(instance.pending_spatial_anchor_rows, rows);
+            assert_eq!(instance.pending_spatial_anchor_groups, groups);
+        }
+    }
+
+    #[test]
     fn effective_transform_uses_the_stable_compiled_object_slot() {
         let (mut instance, object) = semantic_instance();
         let transform = Transform2D {

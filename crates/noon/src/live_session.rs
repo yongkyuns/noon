@@ -3364,6 +3364,133 @@ mod tests {
     }
 
     #[test]
+    fn detached_recording_values_preserve_the_frame_and_record_the_later_method_animation() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.begin_replay_retention(Default::default()).unwrap();
+        let mut live = scene.live(&mut session);
+        let target = live.target_editor(&circle).unwrap();
+        live.session.take_frame_changes();
+        let before = live.session.publication_context();
+        let original_frame = live.session.frame().clone();
+
+        live.set_translation(&target, 2.0, -1.0).unwrap();
+        live.rotate(&target, 0.5).unwrap();
+        live.set_color(&target, 1.0, 0.0, 0.0, 1.0).unwrap();
+        let after = live.session.publication_context();
+        assert_eq!(
+            after.scene_revision(),
+            before
+                .scene_revision()
+                .checked_next()
+                .unwrap()
+                .checked_next()
+                .unwrap()
+                .checked_next()
+                .unwrap()
+        );
+        assert_eq!(after.execution_revision(), before.execution_revision());
+        assert_eq!(
+            after.frame_epoch(),
+            before
+                .frame_epoch()
+                .checked_next()
+                .unwrap()
+                .checked_next()
+                .unwrap()
+                .checked_next()
+                .unwrap()
+        );
+        assert_eq!(live.session.frame(), &original_frame);
+        assert!(live.session.take_frame_changes().is_empty());
+        assert_eq!(
+            live.session.replay_stats(),
+            noon_runtime::ReplayStats::default()
+        );
+        assert_eq!(
+            live.authored(&target).unwrap().transform.translation,
+            SemanticVec3::new(2.0, -1.0, 0.0)
+        );
+
+        let segment = live
+            .declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[TransformToRequest::new(
+                    &circle,
+                    &target,
+                    AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Linear),
+                )
+                .method_target()],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        live.advance_segment_to(segment, 0.5).unwrap();
+        let middle = live.effective(&circle).unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        let end = live.effective(&circle).unwrap();
+        assert!(live.session.replay_stats().revisions_retained > 0);
+        live.session.seal_replay().unwrap();
+        live.session.seek(0.5).unwrap();
+        let replayed = live.effective(&circle).unwrap();
+        assert_eq!(replayed.transform, middle.transform);
+        assert_eq!(replayed.style, middle.style);
+        live.session.seek(0.0).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation,
+            noon_core::Vec2::ZERO
+        );
+        live.session.seek(1.0).unwrap();
+        let replayed = live.effective(&circle).unwrap();
+        assert_eq!(replayed.transform, end.transform);
+        assert_eq!(replayed.style, end.style);
+    }
+
+    #[test]
+    fn mixed_recording_values_keep_attached_edits_in_replay_history() {
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.begin_replay_retention(Default::default()).unwrap();
+        let mut live = scene.live(&mut session);
+        let target = live.target_editor(&circle).unwrap();
+        live.session.advance_to(1.0).unwrap();
+        let mut attached = live.authored(&circle).unwrap().transform;
+        attached.translation.x = 3.0;
+        let mut detached = live.authored(&target).unwrap().transform;
+        detached.translation.x = 8.0;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_object_transform(circle.node_id(), attached);
+        transaction.set_object_transform(target.node_id(), detached);
+        live.apply(transaction).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            3.0
+        );
+        assert_eq!(live.authored(&target).unwrap().transform.translation.x, 8.0);
+        assert!(live.session.replay_stats().revisions_retained > 0);
+        live.session.advance_to(2.0).unwrap();
+        live.session.seal_replay().unwrap();
+        live.session.seek(0.5).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            0.0
+        );
+        live.session.seek(1.5).unwrap();
+        assert_eq!(
+            live.effective(&circle).unwrap().transform.translation.x,
+            3.0
+        );
+    }
+
+    #[test]
     fn live_facade_rejects_foreign_handles_without_fallback() {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();

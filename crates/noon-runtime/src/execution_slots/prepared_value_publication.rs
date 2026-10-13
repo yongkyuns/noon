@@ -81,8 +81,9 @@ pub struct PreparedAuthoredValuePublication {
 impl SceneInstance {
     /// Prepare the narrow authored-value publication contract for local rows.
     ///
-    /// `Ok(None)` means the transaction contains more than supported local base
-    /// writes and must stay on the existing general publication path.
+    /// `Ok(None)` means the transaction requires the general publication path,
+    /// including execution writes while replay is recording. An empty execution
+    /// transaction can still publish a detached semantic edit without replay work.
     pub fn prepare_authored_value_publication(
         &self,
         transaction: &ExecutionMutationTransaction,
@@ -90,7 +91,7 @@ impl SceneInstance {
         scene_revision: SceneRevision,
     ) -> Result<Option<PreparedAuthoredValuePublication>, AuthoredPublicationError> {
         self.require_replay_writable()?;
-        if self.replay_scope_active() {
+        if self.replay_scope_active() && !transaction.mutations().is_empty() {
             return Ok(None);
         }
         if transaction.mutations().iter().any(|patch| {
@@ -234,6 +235,7 @@ impl SceneInstance {
         debug_assert_eq!(prepared.runtime, self.runtime_identity());
         debug_assert_eq!(prepared.expected, self.publication_context());
         self.last_patch_stats = crate::RuntimePatchStats::default();
+        let has_writes = !prepared.writes.is_empty();
 
         for write in prepared.writes {
             if !write.changes_execution() {
@@ -352,7 +354,11 @@ impl SceneInstance {
             }
         }
 
-        self.flush_spatial_anchor_changes();
+        // A semantic-only edit must leave pending execution work untouched,
+        // just like an empty transaction on the general publication path.
+        if has_writes {
+            self.flush_spatial_anchor_changes();
+        }
 
         self.publication = PublicationContext::new(
             prepared.scene_revision,
