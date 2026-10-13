@@ -639,6 +639,7 @@ jobs:
           path: candidate/web
 
       - name: Verify source, configuration and package contents
+        id: production-verified
         run: |
           node candidate/.github/ci/product-artifact.mjs verify baseline baseline
           node candidate/.github/ci/product-artifact.mjs verify candidate candidate

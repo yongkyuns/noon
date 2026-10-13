@@ -226,3 +226,19 @@ test("producer preflight-only checks cannot be mistaken for different executed b
     "consumer must explicitly attest the matching producer preflight selection");
   assert.match(consumer, /node scripts\/python-host-perf\.mjs/);
 });
+
+test("comparison step conditions refer to IDs defined in their own job", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const comparison = workflow.split("\n  compare:\n")[1];
+  assert.ok(comparison, "comparison job must exist");
+  const ids = new Set([...comparison.matchAll(/^        id: ([\w-]+)$/gm)].map(match => match[1]));
+  const references = [...comparison.matchAll(/steps\.([\w-]+)\.(?:outcome|conclusion|outputs)/g)];
+  assert.ok(references.length > 0, "fixed-work measurement must require verified production packages");
+  for (const [, id] of references) {
+    assert.ok(ids.has(id), `comparison condition references missing job-local step: ${id}`);
+  }
+  const verification = comparison.split("      - name: Verify source, configuration and package contents\n")[1]?.split("\n      - name:")[0];
+  assert.match(verification, /id: production-verified/);
+  assert.match(verification, /verify baseline baseline/);
+  assert.match(verification, /verify candidate candidate/);
+});
