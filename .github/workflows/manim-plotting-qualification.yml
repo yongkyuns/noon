@@ -14,6 +14,7 @@ on:
       - 'scripts/polygon-qualification.mjs'
       - 'scripts/paired-authoring-qualification.mjs'
       - 'scripts/paint-fade-qualification.mjs'
+      - 'scripts/match-color-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
       - 'scripts/live-coordinate-checks.mjs'
       - 'scripts/animated-plotting-checks.mjs'
@@ -97,6 +98,10 @@ jobs:
         env:
           NOON_PAINT_FADE_ARTIFACTS: plotting-artifacts/paint-fade
         run: node scripts/paint-fade-qualification.mjs
+      - name: Qualify observed color matching against direct Rust construction
+        env:
+          NOON_MATCH_COLOR_ARTIFACTS: plotting-artifacts/match-color
+        run: node scripts/match-color-qualification.mjs
       - name: Qualify animated axes and graph reveals
         run: node scripts/time-series-plotting-qualification.mjs coordinates
       - name: Qualify animated NumberLine and transformed live queries

@@ -36,6 +36,9 @@ on:
       - 'web/python/_manim_iterables.py'
       - 'web/python/test_manim_iterable_utilities.py'
       - 'scripts/manim-config-utilities.py'
+      - 'scripts/manim-match-color.py'
+      - 'web/python/noon.py'
+      - 'web/python/test_paint_queries_gradients.py'
       - 'web/python/_manim_config_utils.py'
       - 'web/python/test_manim_config_utilities.py'
       - 'web/python/_manim_namespace.py'
@@ -79,6 +82,7 @@ jobs:
           python3 noon/scripts/manim-rate-intervals.py manim-v0.21.0
           python3 noon/scripts/test_pinned_python_helpers.py
           python3 noon/scripts/manim-config-utilities.py manim-v0.21.0
+          python3 noon/scripts/manim-match-color.py manim-v0.21.0
       - name: Qualify NumPy user-data contracts against pinned source
         shell: bash
         run: |

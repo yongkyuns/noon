@@ -4,10 +4,36 @@ from unittest.mock import Mock, patch
 
 import _manim_compat as compat
 import _manim_semantic_handles as handles
+import noon
 from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PaintQueriesGradientsTests(unittest.TestCase):
+    def test_match_color_preserves_observation_before_dynamic_setter_and_returns_result(self):
+        calls = []
+        color = object()
+        class Donor:
+            def get_color(self):
+                calls.append("get")
+                return color
+        class Recipient(noon.Mobject):
+            def __init__(self): pass
+            def set_color(self, value):
+                calls.append(("set", value))
+                return self
+        recipient = Recipient()
+        self.assertIs(recipient.match_color(Donor()), recipient)
+        self.assertEqual(calls, ["get", ("set", color)])
+        self.assertIs(compat.Group.match_color, noon.Mobject.match_color)
+
+    def test_match_color_donor_failure_does_not_call_the_recipient_setter(self):
+        recipient = identity_only_wrapper(compat.Circle)
+        donor = SimpleNamespace(get_color=Mock(side_effect=RuntimeError("donor unavailable")))
+        with patch.object(compat.Circle, "set_color") as setter:
+            with self.assertRaisesRegex(RuntimeError, "donor unavailable"):
+                recipient.match_color(donor)
+        setter.assert_not_called()
+
     def test_channel_queries_use_typed_observations_and_exclude_opacity(self):
         obj = identity_only_wrapper(compat.Circle)
         color = SimpleNamespace(red=1.0, green=0.0, blue=0.0, alpha=0.2)

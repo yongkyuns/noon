@@ -2805,6 +2805,22 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_color(style, red, green, blue, alpha))
     }
 
+    /// Capture the donor's coherent effective RGB before the recipient mutation.
+    pub fn match_color(
+        &mut self,
+        mobject: &Mobject,
+        donor: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let color = self.effective_manim_color(donor)?;
+        self.set_color(
+            mobject,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            1.0,
+        )
+    }
+
     /// Set stroke color and opacity through one authoritative style publication.
     pub fn set_stroke(
         &mut self,
@@ -2963,6 +2979,22 @@ impl<'a> LiveSession<'a> {
         alpha: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_family_style(family, |style| edit_color(style, red, green, blue, alpha))
+    }
+
+    /// Match a donor's effective RGB in one coherent family publication.
+    pub fn match_family_color(
+        &mut self,
+        family: &MobjectFamily,
+        donor: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let color = self.effective_manim_color(donor)?;
+        self.set_family_color(
+            family,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            1.0,
+        )
     }
 
     pub fn set_family_fill(
