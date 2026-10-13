@@ -1906,6 +1906,31 @@ def _group_members(self: _compat.Group) -> list[object]:
             for key in engine_call(self._semantic_family_handle.memberKeys)]
 
 
+def _get_family(self: _base.Mobject) -> list[_base.Mobject]:
+    if not _is_shared_family(self):
+        return [self]
+    from _manim_updaters import canonical_callback_phase_active
+    if canonical_callback_phase_active():
+        raise NotImplementedError("get_family during staged callback membership is not supported")
+    # Rust selects the membership and order. This walk only resolves returned
+    # semantic identities to their existing host wrappers, preserving aliases.
+    keys = [str(key) for key in engine_call(self._semantic_family_handle.familyKeys)]
+    wrappers = {}
+    pending = [self]
+    while pending:
+        wrapper = pending.pop()
+        key = _family_wrapper_key(wrapper)
+        if key in wrappers:
+            continue
+        wrappers[key] = wrapper
+        if _is_shared_family(wrapper):
+            pending.extend(wrapper.submobjects)
+    try:
+        return [wrappers[key] for key in keys]
+    except KeyError as error:
+        raise RuntimeError("shared family identity has no Python wrapper") from error
+
+
 def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0) -> None:
     if _create_family_handle is None or _new_membership_batch is None:
         raise RuntimeError("Group construction requires the shared Rust authoring host")

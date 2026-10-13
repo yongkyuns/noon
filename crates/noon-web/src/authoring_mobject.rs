@@ -1363,6 +1363,20 @@ mod wasm {
         }
 
         /// Observe authoritative family order when a frontend requests members.
+        #[wasm_bindgen(js_name = familyKeys)]
+        pub fn family_keys(&self) -> Result<Vec<String>, JsValue> {
+            noon::MobjectTarget::from(&self.family)
+                .family_nodes()
+                .map(|nodes| {
+                    nodes
+                        .into_iter()
+                        .map(|id| format!("{}:{}", id.slot(), id.generation()))
+                        .collect()
+                })
+                .map_err(typed_js_error)
+        }
+
+        /// Observe authoritative direct membership when a frontend requests members.
         #[wasm_bindgen(js_name = memberKeys)]
         pub fn member_keys(&self) -> Result<Vec<String>, JsValue> {
             let store = self.family.integration_store().borrow();
