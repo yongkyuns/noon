@@ -428,7 +428,8 @@ def laboratory_artwork():
                 artwork_path([(276, 541), (265, 537)], "#394458", 3.5),
                 oval(325, 560, 5, 7, "#ddb184")]
     mouth = oval(324, 581, 4.5, 5.5, "#98644b")
-    objects.append(mouth)
+    # Its later FadeOut removes a scene root, not a room-group child. Keep the
+    # mouth separate; ordinary Transform targets (arms and hands) stay grouped.
     return objects, arms, mouth, clock_hands
 
 
@@ -504,7 +505,8 @@ class TriangleLightShowcase(Scene):
         glass, rim = mirror_artwork()
         photon = Dot((*points[0], 0), radius=0.029, color=WHITE, z_index=25)
         photon.set_glow(color=ink("#ff749c"), radius=Pixels(8), intensity=2.6)
-        self.play(FadeIn(Group(*room)), FadeIn(glass), FadeIn(Group(*rim)), FadeIn(photon), run_time=0.8)
+        self.play(FadeIn(Group(*room)), FadeIn(mouth), FadeIn(glass),
+                  FadeIn(Group(*rim)), FadeIn(photon), run_time=0.8)
 
         beam = None
         for section, begin, end, seconds in ((0, 0, BOUNCES, FLIGHT_SECONDS),
