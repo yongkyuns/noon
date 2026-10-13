@@ -539,6 +539,13 @@ try {
 from noon import *
 import sys
 assert "numpy" not in sys.modules
+for cls, group, base in [(Mobject, Group, Mobject), (Group, Group, Mobject),
+                         (VMobject, VGroup, VMobject), (VGroup, VGroup, VMobject),
+                         (Circle, VGroup, VMobject), (Square, VGroup, VMobject)]:
+    value = object.__new__(cls)
+    assert value.get_group_class() is group
+    assert value.get_mobject_type_class() is base
+    assert cls.get_mobject_type_class() is base
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
 result = Scene()

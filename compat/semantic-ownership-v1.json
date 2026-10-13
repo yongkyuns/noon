@@ -435,6 +435,14 @@
       "reason": "One shared planner resolves direct-member selections, observes local leaf bounds, stages successive placements against preceding moves and centers unique semantic leaves once. Authored and live options calls publish one atomic transaction. Python passes one typed options object without sequencing member placements or supplying bounds."
     },
     {
+      "id": "mobject.class-queries",
+      "surface": "Mobject/VMobject/Group/VGroup get_group_class and get_mobject_type_class",
+      "classification": "python-adapter-only",
+      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject.get_group_class/get_mobject_type_class"},
+      "reason": "These queries return host-language class objects and preserve Python subclass dispatch; they neither inspect nor mutate engine geometry, family membership or scene state.",
+      "replacement": "Keep language class identity in the adapter; construction and membership continue through existing shared Rust handles."
+    },
+    {
       "id": "rate-function.lookup",
       "surface": "Known Manim rate-function callable lookup",
       "classification": "python-adapter-only",

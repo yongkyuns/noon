@@ -94,6 +94,13 @@ def _as_color(name: str, value: object) -> _base.Color:
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    def get_group_class(self):
+        return VGroup
+
+    @staticmethod
+    def get_mobject_type_class():
+        return VMobject
+
     def __init__(self, *, color=None, **kwargs):
         from _manim_semantic_handles import _geometry_options, _apply_shared_constructor_options, _apply_constructor_color, _attach_geometry_options
         from _noon_errors import engine_call
@@ -609,6 +616,10 @@ class Group(Mobject):
 
 
 class VGroup(Group):
+    # The family wrapper reuses vector-class queries without duplicating them.
+    get_group_class = VMobject.get_group_class
+    get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
+
     def make_smooth(self):
         return self.change_anchor_mode("smooth")
 

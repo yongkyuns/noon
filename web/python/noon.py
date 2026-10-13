@@ -255,6 +255,14 @@ class Mobject:
     def __init__(self) -> None:
         raise TypeError("Mobject is a base type; construct a Circle, Rectangle, Line, or Path")
 
+    def get_group_class(self):
+        from _manim_compat import Group
+        return Group
+
+    @staticmethod
+    def get_mobject_type_class():
+        return Mobject
+
     _original__init__ = __init__
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
