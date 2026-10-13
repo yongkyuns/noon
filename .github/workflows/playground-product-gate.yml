@@ -661,9 +661,11 @@ jobs:
           artifact-ids: ${{ needs.measure-cumulative.outputs.evidence-artifact }}
           path: candidate/browser-smoke-artifacts/product-gate/cumulative
 
-      - name: Install pinned comparison image dependency
+      - name: Install pinned comparison and host measurement dependencies
         working-directory: candidate
-        run: npm install --no-save --ignore-scripts pngjs@7.0.0
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
 
       - name: Compare product behavior
         working-directory: candidate

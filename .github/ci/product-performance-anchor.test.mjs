@@ -242,3 +242,20 @@ test("comparison step conditions refer to IDs defined in their own job", async (
   assert.match(verification, /verify baseline baseline/);
   assert.match(verification, /verify candidate candidate/);
 });
+
+test("fixed-work comparison job installs its pinned browser prerequisites", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const comparison = workflow.split("\n  compare:\n")[1];
+  assert.ok(comparison, "comparison job must exist");
+  const installation = comparison.split("      - name: Install pinned comparison and host measurement dependencies\n")[1]?.split("\n      - name:")[0];
+  assert.match(installation, /working-directory: candidate/);
+  assert.match(installation, /npm install --no-save --ignore-scripts playwright@1\.62\.1 pngjs@7\.0\.0/);
+  assert.match(installation, /npx playwright install chromium/);
+  assert.ok(comparison.indexOf("Install pinned comparison and host measurement dependencies")
+    < comparison.indexOf("Measure fixed-work Python host overhead on matched packages"));
+  for (const job of ["measure-adjacent", "measure-cumulative"]) {
+    const source = workflow.split(`\n  ${job}:\n`)[1]?.split(/^  [\w-]+:\n/m)[0];
+    assert.match(source, /playwright@1\.62\.1 pngjs@7\.0\.0/);
+    assert.match(source, /npx playwright install chromium/);
+  }
+});
