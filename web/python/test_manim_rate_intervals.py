@@ -1,5 +1,9 @@
 import math
 import unittest
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 import noon
 import _manim_rate_functions as rates
@@ -56,11 +60,12 @@ class RateIntervals(unittest.TestCase):
             self.assertEqual(function(math.nan), 1)
             self.assertEqual(function(math.inf), 1)
             with self.assertRaises(TypeError): function("0.5")
+    @unittest.skipIf(np is None, "Numeric NumPy rate contracts run in the pinned utility lane")
+    def test_numpy_rate_values_types_and_decimal_errors(self):
         self.assertAlmostEqual(noon.slow_into(0.25), 0.6614378277661477)
         self.assertEqual(noon.double_smooth(0.25), 0.25)
         self.assertEqual(noon.double_smooth(0.5), 0.5)
         self.assertEqual(noon.double_smooth(0.75), 0.75)
-        import numpy as np
         from decimal import Decimal
         self.assertIs(type(noon.double_smooth(0.25)), np.float64)
         with self.assertRaises(TypeError): noon.double_smooth(Decimal("0.25"))
