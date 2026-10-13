@@ -608,6 +608,12 @@ assert stretched.dtype == array.dtype
 from noon import inverse_interpolate, match_interpolate
 assert inverse_interpolate(0, 8, 2) == 0.25
 assert match_interpolate(0, 100, 0, 8, 2) == 25
+from noon import normalize, center_of_mass, angle_of_vector, complex_func_to_R3_func, cross2d
+assert normalize([3, 4]).tolist() == [0.6, 0.8]
+assert center_of_mass([[0, 1], [2, 3]]).tolist() == [1, 2]
+assert angle_of_vector([0, 1]) == __import__("numpy").pi / 2
+assert complex_func_to_R3_func(lambda z: z*z)([1, 2, 9]).tolist() == [-3, 4, 0]
+assert cross2d(array[0], array[1]) == -2
 assert not __import__("numpy").shares_memory(stretched, array)
 try:
     stretch(array, 1)

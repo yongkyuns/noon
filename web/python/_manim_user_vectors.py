@@ -1,0 +1,71 @@
+"""Vector operations on explicit Python user data, independent of engine state."""
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+
+
+def complex_to_R3(complex_num: complex) -> np.ndarray:
+    import numpy as np
+    return np.array((complex_num.real, complex_num.imag, 0))
+
+
+def R3_to_complex(point: Sequence[float]) -> np.ndarray:
+    return complex(*point[:2])
+
+
+def complex_func_to_R3_func(
+    complex_func: Callable[[complex], complex],
+) -> Callable[[Point3DLike], Point3D]:
+    return lambda p: complex_to_R3(complex_func(R3_to_complex(p)))
+
+
+def center_of_mass(points: PointNDLike_Array) -> PointND:
+    import numpy as np
+    return np.average(points, 0, np.ones(len(points)))
+
+
+def midpoint(point1: Sequence[float], point2: Sequence[float]) -> float | np.ndarray:
+    return center_of_mass([point1, point2])
+
+
+def normalize(vect: np.ndarray | tuple[float], fall_back: np.ndarray | None = None) -> np.ndarray:
+    import numpy as np
+    norm = np.linalg.norm(vect)
+    if norm > 0:
+        return np.array(vect) / norm
+    return fall_back or np.zeros(len(vect))
+
+
+def angle_of_vector(vector: Sequence[float] | np.ndarray) -> float:
+    import numpy as np
+    if isinstance(vector, np.ndarray) and len(vector.shape) > 1:
+        if vector.shape[0] < 2:
+            raise ValueError("Vector must have the correct dimensions. (2, n)")
+        c_vec = np.empty(vector.shape[1], dtype=np.complex128)
+        c_vec.real = vector[0]
+        c_vec.imag = vector[1]
+        return np.angle(c_vec)
+    return np.angle(complex(*vector[:2]))
+
+
+def angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
+    import numpy as np
+    return 2 * np.arctan2(
+        np.linalg.norm(normalize(v1) - normalize(v2)),
+        np.linalg.norm(normalize(v1) + normalize(v2)),
+    )
+
+
+def shoelace(x_y: Point2D_Array) -> float:
+    import numpy as np
+    return np.trapezoid(x_y[:, 1], x_y[:, 0])
+
+
+def shoelace_direction(x_y: Point2D_Array) -> str:
+    return "CW" if shoelace(x_y) > 0 else "CCW"
+
+
+def cross2d(a: Vector2D | Vector2D_Array, b: Vector2D | Vector2D_Array) -> ManimFloat | npt.NDArray[ManimFloat]:
+    if len(a.shape) == 2:
+        return a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]
+    return a[0] * b[1] - b[0] * a[1]

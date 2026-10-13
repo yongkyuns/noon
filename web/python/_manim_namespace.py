@@ -23,6 +23,15 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "complex_to_R3": "numpy",
+    "complex_func_to_R3_func": "numpy",
+    "center_of_mass": "numpy",
+    "midpoint": "numpy",
+    "normalize": "numpy",
+    "angle_of_vector": "numpy",
+    "angle_between_vectors": "numpy",
+    "shoelace": "numpy",
+    "shoelace_direction": "numpy",
     "binary_search": "numpy",
     "sigmoid": "numpy",
     "inverse_interpolate": "numpy",

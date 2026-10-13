@@ -895,6 +895,17 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "complex_to_R3": "_manim_user_vectors",
+    "R3_to_complex": "_manim_user_vectors",
+    "complex_func_to_R3_func": "_manim_user_vectors",
+    "center_of_mass": "_manim_user_vectors",
+    "midpoint": "_manim_user_vectors",
+    "normalize": "_manim_user_vectors",
+    "angle_of_vector": "_manim_user_vectors",
+    "angle_between_vectors": "_manim_user_vectors",
+    "shoelace": "_manim_user_vectors",
+    "shoelace_direction": "_manim_user_vectors",
+    "cross2d": "_manim_user_vectors",
     "add_extension_if_not_present": "_manim_file_paths",
     "guarantee_existence": "_manim_file_paths",
     "guarantee_empty_existence": "_manim_file_paths",
