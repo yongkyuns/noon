@@ -887,6 +887,10 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "binary_search": "_manim_simple_functions",
+    "choose": "_manim_simple_functions",
+    "clip": "_manim_simple_functions",
+    "sigmoid": "_manim_simple_functions",
     "adjacent_n_tuples": "_manim_iterables",
     "adjacent_pairs": "_manim_iterables",
     "all_elements_are_instances": "_manim_iterables",
