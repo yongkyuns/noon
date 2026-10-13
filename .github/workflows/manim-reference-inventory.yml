@@ -23,6 +23,9 @@ on:
       - 'scripts/test_manim_reference_dispositions.py'
       - 'scripts/manim-namespace-values.py'
       - 'scripts/manim-iterable-utilities.py'
+      - 'scripts/manim-rate-intervals.py'
+      - 'web/python/_manim_rate_functions.py'
+      - 'web/python/test_manim_rate_intervals.py'
       - 'scripts/pinned_python_helpers.py'
       - 'scripts/test_pinned_python_helpers.py'
       - 'web/python/_manim_iterables.py'
@@ -68,6 +71,7 @@ jobs:
           test "$actual_sha" = "$MANIM_REFERENCE_SHA"
           python3 noon/scripts/manim-namespace-values.py manim-v0.21.0
           python3 noon/scripts/manim-iterable-utilities.py manim-v0.21.0
+          python3 noon/scripts/manim-rate-intervals.py manim-v0.21.0
           python3 noon/scripts/test_pinned_python_helpers.py
           python3 noon/scripts/manim-config-utilities.py manim-v0.21.0
       - name: Extract and validate reference inventory

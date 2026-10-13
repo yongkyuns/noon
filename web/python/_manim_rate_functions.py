@@ -11,22 +11,41 @@ import math
 import dis
 import inspect
 from typing import Callable
+from functools import wraps
 
 
 
 INFLECTION = 10.0
 
 
+def _unit_interval(function):
+    @wraps(function)
+    def wrapper(t, *args, **kwargs):
+        if 0 <= t <= 1:
+            return function(t, *args, **kwargs)
+        return 0 if t < 0 else 1
+    return wrapper
+
+
+def _zero_outside_interval(function):
+    @wraps(function)
+    def wrapper(t, *args, **kwargs):
+        return function(t, *args, **kwargs) if 0 <= t <= 1 else 0
+    return wrapper
+
+
+@_unit_interval
 def linear(t: float) -> float:
     """Manim's linear rate function."""
 
-    return float(t)
+    return t
 
 
 def _sigmoid(value: float) -> float:
     return 1.0 / (1.0 + math.exp(-value))
 
 
+@_unit_interval
 def smooth(t: float, inflection: float = INFLECTION) -> float:
     """Manim-compatible normalized logistic smooth rate function."""
 
@@ -39,14 +58,17 @@ def smooth(t: float, inflection: float = INFLECTION) -> float:
     return min(max(result, 0.0), 1.0)
 
 
+@_unit_interval
 def rush_into(t: float, inflection: float = INFLECTION) -> float:
     return 2.0 * smooth(float(t) / 2.0, inflection)
 
 
+@_unit_interval
 def rush_from(t: float, inflection: float = INFLECTION) -> float:
     return 2.0 * smooth(float(t) / 2.0 + 0.5, inflection) - 1.0
 
 
+@_zero_outside_interval
 def there_and_back(t: float, inflection: float = INFLECTION) -> float:
     value = float(t)
     mirrored = 2.0 * value if value < 0.5 else 2.0 * (1.0 - value)
