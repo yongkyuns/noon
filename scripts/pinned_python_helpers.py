@@ -2,9 +2,15 @@
 import ast
 
 
-def load_helpers(source, names, dependencies):
+def load_helpers(source, names, dependencies, *, class_name=None):
     tree = ast.parse(source.read_text(), filename=str(source))
-    nodes = [node for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+    body = tree.body
+    if class_name is not None:
+        selected = [node for node in body if isinstance(node, ast.ClassDef) and node.name == class_name]
+        if len(selected) != 1:
+            raise ValueError("pinned helper class is missing or ambiguous")
+        body = selected[0].body
+    nodes = [node for node in body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
              and node.name in names]
     if {node.name for node in nodes} != set(names):
         raise ValueError("pinned helper definitions are incomplete")
