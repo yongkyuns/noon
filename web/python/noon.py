@@ -895,6 +895,7 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "CubicBezier": "_manim_geometry",
     "add_extension_if_not_present": "_manim_file_paths",
     "guarantee_existence": "_manim_file_paths",
     "guarantee_empty_existence": "_manim_file_paths",
