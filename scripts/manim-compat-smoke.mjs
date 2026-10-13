@@ -543,6 +543,23 @@ assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
 result = Scene()
 `);
+      const arrayNamespace = await client.run(`
+from noon import stretch_array_to_length as stretch, Scene
+import sys
+assert "numpy" in sys.modules
+array = __import__("numpy").array([[1, 2], [3, 4]])
+stretched = stretch(array, 3)
+assert stretched.tolist() == [[1, 2], [1, 2], [3, 4]]
+assert stretched.dtype == array.dtype
+assert not __import__("numpy").shares_memory(stretched, array)
+try:
+    stretch(array, 1)
+except Warning:
+    pass
+else:
+    raise AssertionError("stretch must preserve the pinned Warning exception")
+result = Scene()
+`);
       const numpyNamespace = await client.run(`
 from noon import *
 import sys
@@ -558,6 +575,7 @@ result = Scene()
       return {
         patchError,
         coldNamespace: Boolean(coldNamespace.semanticExecution),
+        arrayNamespace: Boolean(arrayNamespace.semanticExecution),
         numpyNamespace: Boolean(numpyNamespace.semanticExecution),
         sharedScene: Boolean(result.semanticExecution),
         terminated: client.terminated,
@@ -568,6 +586,7 @@ result = Scene()
   });
   assert.match(sceneOnlyAuthoring.patchError, /Python authoring result must be a noon.Scene/);
   assert.equal(sceneOnlyAuthoring.coldNamespace, true, "cold star-import authoring must not load NumPy");
+  assert.equal(sceneOnlyAuthoring.arrayNamespace, true, "aliased array helper loads NumPy before the real Python worker call");
   assert.equal(sceneOnlyAuthoring.numpyNamespace, true, "implicit np must resolve to real NumPy before execution");
   assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
   assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");

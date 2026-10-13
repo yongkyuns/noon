@@ -1,6 +1,6 @@
 """ManimCE v0.21 Python iterable ergonomics for user data."""
 from collections.abc import Iterable
-from itertools import cycle
+from itertools import chain, cycle
 
 
 def adjacent_n_tuples(objects, n):
@@ -65,3 +65,73 @@ def remove_list_redundancies(lst):
 def remove_nones(sequence):
     """Preserve the pinned function's removal of all falsey values."""
     return [value for value in sequence if value]
+
+
+def batch_by_property(items, property_func):
+    result, batch, current = [], [], None
+    for item in items:
+        value = property_func(item)
+        if value != current:
+            if batch:
+                result.append((batch, current))
+            current, batch = value, [item]
+        else:
+            batch.append(item)
+    if batch:
+        result.append((batch, current))
+    return result
+
+
+def uniq_chain(*args):
+    seen = set()
+    for value in chain(*args):
+        if value not in seen:
+            seen.add(value)
+            yield value
+
+
+def hash_obj(obj):
+    if isinstance(obj, dict):
+        return hash(tuple(sorted((hash_obj(key), hash_obj(value)) for key, value in obj.items())))
+    if isinstance(obj, set):
+        return hash(tuple(sorted(hash_obj(value) for value in obj)))
+    if isinstance(obj, (tuple, list)):
+        return hash(tuple(hash_obj(value) for value in obj))
+    return hash(obj)
+
+
+def resize_array(nparray, length):
+    import numpy as np
+    if len(nparray) == length:
+        return nparray
+    return np.resize(nparray, (length, *nparray.shape[1:]))
+
+
+def resize_preserving_order(nparray, length):
+    import numpy as np
+    if len(nparray) == 0:
+        return np.zeros((length, *nparray.shape[1:]))
+    if len(nparray) == length:
+        return nparray
+    return nparray[np.arange(length) * len(nparray) // length]
+
+
+def resize_with_interpolation(nparray, length):
+    import numpy as np
+    if len(nparray) == length:
+        return nparray
+    return np.array([
+        (1 - alpha) * nparray[left] + alpha * nparray[right]
+        for index in np.linspace(0, len(nparray) - 1, length)
+        for left, right, alpha in [(int(index), int(np.ceil(index)), index % 1)]
+    ])
+
+
+def stretch_array_to_length(nparray, length):
+    import numpy as np
+    current = len(nparray)
+    if current > length:
+        raise Warning("Trying to stretch array to a length shorter than its own")
+    indices = np.arange(length) / float(length)
+    indices *= current
+    return nparray[indices.astype(int)]

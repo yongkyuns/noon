@@ -1366,6 +1366,12 @@
       "notes": "Qualified against pinned ManimCE Cairo with unchanged manifest tolerances on WebGPU and WebGL2."
     },
     {
+      "id": "polygon-constructors",
+      "scene": "PolygonConstructors",
+      "source": "parity/manim-v0.21/core-examples/polygon_constructors.py",
+      "expected_duration": 0.2
+    },
+    {
       "id": "number-line-defaults",
       "scene": "NumberLineDefaults",
       "source": "parity/manim-v0.21/core-examples/number_line_defaults.py",

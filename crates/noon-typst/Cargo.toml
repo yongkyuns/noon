@@ -20,3 +20,6 @@ tinyvec = { version = "=1.13.3", default-features = false }
 typst-layout = "=0.15.1"
 typst-library = "=0.15.1"
 typst-svg = "=0.15.1"
+
+[dev-dependencies]
+noon-text = { path = "../noon-text" }

@@ -173,6 +173,8 @@ pub enum AuthoringError {
     NonFiniteGeometry,
     /// Flattened XY point input has an incomplete coordinate pair.
     InvalidPointCoordinates(usize),
+    /// A polygon or star constructor has invalid topology options.
+    InvalidPolygonOptions(&'static str),
     /// The requested object state contains non-finite values.
     NonFiniteObjectState,
     /// An imported compact transform contains non-finite values.
@@ -329,6 +331,7 @@ impl std::fmt::Display for AuthoringError {
                 "point coordinates require XY pairs, received {count} values"
             ),
             Self::NonFiniteGeometry => f.write_str("geometry must be finite"),
+            Self::InvalidPolygonOptions(reason) => f.write_str(reason),
             Self::NonFiniteObjectState => {
                 f.write_str("geometry, transform, and style must be finite")
             }

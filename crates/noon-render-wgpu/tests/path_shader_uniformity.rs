@@ -10,7 +10,7 @@ fn shader_function(name: &str) -> &'static str {
 
 #[test]
 fn reveal_derivative_runs_before_reveal_control_flow() {
-    for entry in ["fs_path", "fs_path_compact"] {
+    for entry in ["fs_path", "fs_path_compact", "fs_path_stroke"] {
         let fragment = shader_function(entry);
         let derivative = fragment
             .find("let edge = max(fwidth(input.path_progress)")
