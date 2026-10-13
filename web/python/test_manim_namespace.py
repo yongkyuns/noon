@@ -45,6 +45,12 @@ class ManimNamespaceTests(unittest.TestCase):
             self.assertEqual(namespace.required_packages(source), ("numpy",))
         self.assertEqual(namespace.required_packages("message = 'stretch_array_to_length'"), ())
 
+    def test_slow_into_loads_numpy_only_when_used(self):
+        for source in ["slow_into(0.5)", "from manim import slow_into as slow\nslow(0.5)",
+                       "import noon\nnoon.slow_into(0.5)"]:
+            self.assertEqual(namespace.required_packages(source), ("numpy",))
+        self.assertEqual(namespace.required_packages("double_smooth(0.5)"), ("numpy",))
+
     def test_pure_colors_match_manim_v021(self) -> None:
         expected = {
             "PURE_RED": (1.0, 0.0, 0.0),

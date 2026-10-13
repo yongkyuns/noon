@@ -79,7 +79,6 @@ jobs:
           test "$actual_sha" = "$MANIM_REFERENCE_SHA"
           python3 noon/scripts/manim-namespace-values.py manim-v0.21.0
           python3 noon/scripts/manim-iterable-utilities.py manim-v0.21.0
-          python3 noon/scripts/manim-rate-intervals.py manim-v0.21.0
           python3 noon/scripts/test_pinned_python_helpers.py
           python3 noon/scripts/manim-config-utilities.py manim-v0.21.0
           python3 noon/scripts/manim-match-color.py manim-v0.21.0
@@ -89,6 +88,7 @@ jobs:
           python3 -m venv array-oracle
           array-oracle/bin/pip install numpy==2.5.4
           array-oracle/bin/python noon/scripts/manim-array-utilities.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-rate-intervals.py manim-v0.21.0
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_array_utilities.py -v
       - name: Extract and validate reference inventory
         shell: bash
