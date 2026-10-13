@@ -25,7 +25,6 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       NOON_TRIANGLE_PROFILE_ENGINE_SHA: 6c6c0398c97fbbb0b09deb9a6e7485660ffdd5ed
-      NOON_TRIANGLE_PROFILE_RUNTIME: ${{ runner.temp }}/triangle-profile-runtime
     steps:
       - uses: actions/checkout@v7
       - name: Validate diagnostic transformations and fail-closed measurement contracts
@@ -34,6 +33,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export NOON_TRIANGLE_PROFILE_RUNTIME="$RUNNER_TEMP/triangle-profile-runtime"
+          echo "NOON_TRIANGLE_PROFILE_RUNTIME=$NOON_TRIANGLE_PROFILE_RUNTIME" >> "$GITHUB_ENV"
           mkdir -p "$NOON_TRIANGLE_PROFILE_RUNTIME/web"
           gh run download 38418171156 --repo "$GITHUB_REPOSITORY" --name github-pages --dir "$RUNNER_TEMP/triangle-profile-archive"
           python3 - <<'PY'
