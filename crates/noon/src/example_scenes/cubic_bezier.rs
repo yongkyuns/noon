@@ -11,7 +11,8 @@ pub fn session() -> Result<ExecutionSession, String> {
         );
         let mut curve = scene.geometry(ManimGeometryOptions::path(path)?)?;
         curve.set_stroke_color(88. / 255., 196. / 255., 221. / 255., 1.)?;
-        curve.set_stroke_width(6.)?;
+        // Rust stores normalized width; the Python adapter converts Manim points.
+        curve.set_stroke_width(0.06)?;
         assert_eq!(curve.path_query()?.point_count(), 4);
         scene.add(&curve)?;
         let mut session = scene.execution_session()?;
