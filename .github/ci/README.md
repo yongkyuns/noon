@@ -319,13 +319,13 @@ the window. No GPU timestamp queries or source-owner work are added. Reports ret
 raw observations and the comparison recomputes these costs before image decoding.
 Each run hashes the locally derived generated artifact inventory against its
 producer manifest and reports uncompressed file bytes, excluding the dependency
-lockfile. This is package size, not compressed HTTP transfer size. All seven trials
+lockfile. This is package size, not compressed HTTP transfer size. All three trials
 must retain the same package inventory and sizes. These costs are descriptive;
 the strict host qualification separately evaluates paired render-call CPU cost.
 It is not a measurement of total GPU or system cost.
 
 The broad product latency/FPS thresholds apply to arithmetic means across all
-seven runs. The strict host qualification additionally requires the paired 95%
+three runs. The strict host qualification additionally requires the paired 95%
 FPS ratio interval to have a lower bound of at least 0.97. An interval wholly
 below 0.97 demonstrates a regression; overlap is inconclusive and still blocks
 sign-off. Render-call CPU cost is independent: a passing CPU result cannot clear
