@@ -13,7 +13,6 @@ on:
       - 'scripts/plotting-qualification.mjs'
       - 'scripts/polygon-qualification.mjs'
       - 'scripts/paired-authoring-qualification.mjs'
-      - 'scripts/polynomial-rate-qualification.mjs'
       - 'scripts/paint-fade-qualification.mjs'
       - 'scripts/match-color-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
@@ -95,10 +94,6 @@ jobs:
         env:
           NOON_CONSTRUCTOR_DEFAULTS_ARTIFACTS: plotting-artifacts/constructor-defaults
         run: node scripts/constructor-defaults-qualification.mjs
-      - name: Qualify shared polynomial rate tracks
-        env:
-          NOON_POLYNOMIAL_RATE_ARTIFACTS: plotting-artifacts/polynomial-rates
-        run: node scripts/polynomial-rate-qualification.mjs
       - name: Qualify leaf and recursive family paint fades
         env:
           NOON_PAINT_FADE_ARTIFACTS: plotting-artifacts/paint-fade

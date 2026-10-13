@@ -1,4 +1,5 @@
 import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
+import { polynomialRateCases } from "./polynomial-rate-qualification.mjs";
 
 await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_CONSTRUCTOR_DEFAULTS_ARTIFACTS ?? "constructor-defaults-artifacts",
@@ -11,5 +12,5 @@ await qualifyPairedAuthoring({
     duration: 1,
     sampleTime: 1,
     playback: "live",
-  }],
+  }, ...polynomialRateCases],
 });
