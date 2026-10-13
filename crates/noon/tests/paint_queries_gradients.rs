@@ -1,6 +1,58 @@
 use noon::{color_gradient, Color, Scene, SemanticPaint, StyleUpdate};
 
 #[test]
+fn matching_color_preserves_opacity_geometry_and_aliased_family_locality() {
+    let mut scene = Scene::new();
+    let mut donor = scene.circle(0.2).unwrap();
+    donor.set_fill(1.0, 0.0, 0.0, 0.0).unwrap();
+    donor.set_stroke_color(0.0, 0.0, 1.0, 1.0).unwrap();
+    let mut recipient = scene.square(0.5).unwrap();
+    recipient.set_fill(1.0, 0.0, 0.0, 0.25).unwrap();
+    recipient.set_stroke_opacity(0.6).unwrap();
+    let content = recipient.state().unwrap().content;
+    recipient.match_color(&donor).unwrap();
+    assert_eq!(recipient.manim_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
+    assert_eq!(recipient.fill_opacity().unwrap(), 0.25);
+    assert_eq!(recipient.stroke_opacity().unwrap(), 0.6);
+    assert_eq!(recipient.state().unwrap().content, content);
+    let other = scene.square(0.3).unwrap();
+    let untouched = other.state().unwrap();
+    let family = scene
+        .family(&[(&recipient).into(), (&recipient).into()])
+        .unwrap();
+    donor.set_stroke_color(0.0, 1.0, 0.0, 1.0).unwrap();
+    let before = scene.revision();
+    family.match_color(&donor).unwrap();
+    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(recipient.manim_color().unwrap(), Color::rgb(0.0, 1.0, 0.0));
+    assert_eq!(other.state().unwrap(), untouched);
+}
+
+#[test]
+fn live_matching_captures_current_donor_color_and_rejects_foreign_donor_atomically() {
+    let mut scene = Scene::new();
+    let donor = scene.circle(0.2).unwrap();
+    let recipient = scene.square(0.3).unwrap();
+    let family = scene
+        .family(&[(&recipient).into(), (&recipient).into()])
+        .unwrap();
+    scene
+        .add_many(&[(&donor).into(), (&family).into()])
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.circle(0.1).unwrap();
+    let mut live = scene.live(&mut session);
+    live.set_color(&donor, 0.0, 0.0, 1.0, 1.0).unwrap();
+    let result = live.match_family_color(&family, &donor).unwrap();
+    assert_eq!(result.impacts().len(), 1);
+    assert_eq!(live.effective_manim_color(&recipient).unwrap(), Color::rgb(0.0, 0.0, 1.0));
+    let before = recipient.state().unwrap();
+    assert!(live.match_color(&recipient, &foreign).is_err());
+    assert_eq!(recipient.state().unwrap(), before);
+}
+
+#[test]
 fn color_observation_prefers_visible_fill_and_does_not_reapply_opacity() {
     let mut scene = Scene::new();
     let mut object = scene.square(1.0).unwrap();

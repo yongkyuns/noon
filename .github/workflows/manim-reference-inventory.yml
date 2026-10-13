@@ -23,6 +23,9 @@ on:
       - 'scripts/test_manim_reference_dispositions.py'
       - 'scripts/manim-namespace-values.py'
       - 'scripts/manim-config-utilities.py'
+      - 'scripts/manim-match-color.py'
+      - 'web/python/noon.py'
+      - 'web/python/test_paint_queries_gradients.py'
       - 'web/python/_manim_config_utils.py'
       - 'web/python/test_manim_config_utilities.py'
       - 'web/python/_manim_namespace.py'
@@ -63,6 +66,7 @@ jobs:
           test "$actual_sha" = "$MANIM_REFERENCE_SHA"
           python3 noon/scripts/manim-namespace-values.py manim-v0.21.0
           python3 noon/scripts/manim-config-utilities.py manim-v0.21.0
+          python3 noon/scripts/manim-match-color.py manim-v0.21.0
       - name: Extract and validate reference inventory
         shell: bash
         run: |

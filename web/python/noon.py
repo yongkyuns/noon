@@ -390,6 +390,10 @@ class Mobject:
         from _manim_geometry import _mobject_get_color
         return _mobject_get_color(self)
 
+    def match_color(self, mobject: Mobject) -> Mobject:
+        """Match the donor's observed color through the existing shared setter."""
+        return self.set_color(mobject.get_color())
+
     def match_points(self, mobject: object) -> Mobject:
         from _manim_geometry import match_points
         return match_points(self, mobject)
