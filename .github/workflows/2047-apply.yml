@@ -1,0 +1,67 @@
+name: 2047 one-shot diagnostic integration
+
+# Temporary branch-restricted patch application and validation for #2047.
+# Neither this workflow nor its patch helper enters the product commit.
+on:
+  push:
+    branches: [work/2047-diagnostics-apply-8dff442]
+permissions:
+  contents: write
+concurrency:
+  group: diagnostic-integration-2047
+  cancel-in-progress: false
+jobs:
+  integrate:
+    if: github.repository == 'yongkyuns/noon' && github.ref == 'refs/heads/work/2047-diagnostics-apply-8dff442'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply checked source changes to the exact PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/noon-2047-input"
+          cp .github/ci/2047-apply.py "$RUNNER_TEMP/2047-apply.py"
+          for f in web/authoring-error.js web/authoring-error.test.mjs web/playground-diagnostics.js web/playground-diagnostics.css web/playground-diagnostics.test.mjs web/python/test_noon_worker_diagnostics.py; do
+            mkdir -p "$RUNNER_TEMP/noon-2047-input/$(dirname "$f")"
+            cp "$f" "$RUNNER_TEMP/noon-2047-input/$f"
+          done
+          git fetch --depth=1 origin 8dff4426796a94a753defe4f9935deb0a356cb0f
+          git checkout --detach 8dff4426796a94a753defe4f9935deb0a356cb0f
+          test "$(git rev-parse HEAD)" = 8dff4426796a94a753defe4f9935deb0a356cb0f
+          NOON_DIAGNOSTIC_PAYLOAD_DIR="$RUNNER_TEMP/noon-2047-input" python3 "$RUNNER_TEMP/2047-apply.py"
+          git diff --check
+      - name: Existing web preflight including new diagnostic tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee "$RUNNER_TEMP/2047-preflight.log"
+      - name: Publish validated commit to isolated result branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add web/authoring-client.js web/authoring-client.test.mjs web/authoring-diagnostic.js web/authoring-error.js web/authoring-error.test.mjs web/index.html web/main.js web/playground-diagnostics.js web/playground-diagnostics.css web/playground-diagnostics.test.mjs web/python-compat-modules.js web/python-worker.source.js web/python/test_noon_worker_diagnostics.py scripts/playground-authoring-error-recovery-smoke.mjs
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 14
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(playground): wire source diagnostics through Python worker and editor' -m 'Advance #2047 D1 with invocation-local capture, request-correlated transport, source navigation, collapsed technical details, and recovery regression assertions. Existing web preflight passes. Real Pyodide/browser qualification and preview preservation remain outstanding.'
+          test "$(git rev-parse HEAD^)" = 8dff4426796a94a753defe4f9935deb0a356cb0f
+          git push origin HEAD:refs/heads/work/2047-diagnostics-result-8dff442
+          git rev-parse HEAD > "$RUNNER_TEMP/2047-result.txt"
+      - name: Retain source and validation evidence without git credentials
+        if: always()
+        shell: bash
+        run: |
+          tar --exclude=.git --exclude=node_modules --exclude=target --exclude=web/pkg --exclude='web/python/compat-bundle*.json' --exclude=__pycache__ --exclude='*.pyc' -czf "$RUNNER_TEMP/noon-2047-source.tgz" .
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: diagnostic-integration-2047
+          path: |
+            ${{ runner.temp }}/2047-result.txt
+            ${{ runner.temp }}/2047-preflight.log
+            ${{ runner.temp }}/noon-2047-source.tgz
+          retention-days: 1
+          if-no-files-found: error
