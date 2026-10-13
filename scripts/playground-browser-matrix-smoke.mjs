@@ -4,7 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
-import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { collectWebKitCrashReports, playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence } from "./playground-browser-failure-evidence.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { serveRepository } from "./browser-test-server.mjs";
 
@@ -247,14 +248,19 @@ async function chooseDifferentExample(page) {
 }
 
 async function runShowcaseFromPublicUi(page, exampleId) {
+  trace.setPhase("showcase-navigation", { exampleId });
   await page.goto(`${baseUrl}/web/index.html?catalog=showcase&example=${exampleId}`, { waitUntil: "load" });
+  await native.observe("showcase-page-loaded");
+  trace.setPhase("showcase-before-run", { exampleId });
   await assertDeferredRuntime(page);
   await page.waitForFunction(
     (id) => document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId === id,
     exampleId,
     { timeout: 10_000 },
   );
+  trace.record("showcase-run-click-request", await captureAttemptedPage(page));
   await page.locator("#replace-scene").click();
+  trace.setPhase("showcase-running", { exampleId });
   await page.locator("#metric-fps").waitFor({ state: "visible" });
   await page.waitForFunction(() => Number(document.querySelector("#metric-fps")?.value) > 0,
     null, { timeout: 180_000 });
@@ -510,8 +516,17 @@ async function writeDiagnostics(fileName, diagnostics) {
   );
 }
 
+const trace = createBrowserFailureTrace();
+const native = createNativeWebKitEvidence({
+  enabled: browserName === "webkit" && process.platform === "darwin" && process.env.GITHUB_ACTIONS === "true",
+  executablePath: playwright.webkit.executablePath(),
+  artifacts: artifactDir,
+  collect: collectWebKitCrashReports,
+});
 let browser = null;
+let context = null;
 let page = null;
+let lastCompletedRuntime = null;
 const pageErrors = [];
 const consoleErrors = [];
 let capabilities = null;
@@ -520,11 +535,14 @@ let finalRuntime = null;
 
 try {
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
-  const context = await browser.newContext({
+  context = await browser.newContext({
     viewport: profile.viewport,
     deviceScaleFactor: profile.deviceScaleFactor,
   });
   page = await context.newPage();
+  trace.attach(browser, context, page);
+  trace.setPhase("initial-navigation");
+  await native.observe("initial-page-created");
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -579,6 +597,7 @@ try {
       `↷ ${browserName}/${profileName}: runtime unsupported by production render-host selection (${reasons})`,
     );
   } else {
+    trace.setPhase("baseline-run");
     const runButton = page.locator("#replace-scene");
     await runButton.click();
     finalRuntime = await waitForAppliedScene(page, "parity-square-and-circle");
@@ -593,16 +612,23 @@ try {
     );
     assert.equal(finalRuntime.canvases, 1, `${browserName}/${profileName}: expected one live canvas`);
 
+    lastCompletedRuntime = { phase: "baseline-run", exampleId: "parity-square-and-circle", runtime: finalRuntime };
+    trace.setPhase("public-edit-rerun");
     const selectedExampleId = await chooseDifferentExample(page);
     await editAndRerun(page, selectedExampleId);
     await exerciseResize(page);
+    finalRuntime = await runtimeSnapshot(page);
+    lastCompletedRuntime = { phase: "public-edit-rerun", exampleId: selectedExampleId, runtime: finalRuntime };
     console.log(`→ ${browserName}/${profileName}: public workflow passed; running full showcase`);
     const showcaseSourcePass = await runShowcaseFromPublicUi(page, denseShowcase.id);
+    trace.setPhase("showcase-completed", { exampleId: denseShowcase.id });
+    lastCompletedRuntime = { phase: "showcase-completed", exampleId: denseShowcase.id, runtime: showcaseSourcePass.runtime };
     assert.equal(showcaseSourcePass.runtime.patchState, "applied", "showcase source pass failed");
     assert.ok(Math.abs(Number(showcaseSourcePass.metrics?.metrics?.time) - denseShowcase.duration) < 1e-7,
       `showcase source pass stopped at ${showcaseSourcePass.metrics?.metrics?.time}s instead of ${denseShowcase.duration}s`);
     console.log(`→ ${browserName}/${profileName}: showcase source completed; checking replay`);
     const replayLoops = browserName === "webkit" ? 3 : 1;
+    trace.setPhase("showcase-replay", { exampleId: denseShowcase.id });
     const showcasePlayback = await completeShowcasePlayback(page, replayLoops);
     const showcaseMetrics = showcasePlayback.execution?.metrics ?? {};
     assert.ok(Math.abs(Number(showcasePlayback.duration) - denseShowcase.duration) < 1e-7,
@@ -648,6 +674,7 @@ ${consoleErrors.join("\n")}`,
         metrics: showcaseMetrics,
       },
       trapRecovery,
+      lifecycle: trace.snapshot(),
       pageErrors,
       consoleErrors,
     });
@@ -656,21 +683,26 @@ ${consoleErrors.join("\n")}`,
     );
   }
 } catch (error) {
+  trace.record("test-failure", { message: String(error).slice(0, 300) });
+  // Do not misattribute the previously successful scene to this failed run.
+  const attemptedPage = await captureAttemptedPage(page);
   if (page !== null) {
-    try {
-      finalRuntime = await runtimeSnapshot(page);
-      await page.screenshot({ path: path.join(artifactDir, "failure.png"), fullPage: true });
-    } catch {
-      // Keep the original failure if the page itself is no longer inspectable.
-    }
+    try { await page.screenshot({ path: path.join(artifactDir, "failure.png"), fullPage: true }); }
+    catch { /* A closed page has no valid screenshot. */ }
   }
+  const nativeCrashReports = await native.failure();
   await writeDiagnostics("diagnostics.json", {
     browser: browserName,
     browserVersion: browser?.version() ?? null,
     profile: profileName,
     runtimeSupported,
     capabilities,
-    runtime: finalRuntime,
+    runtime: null,
+    attemptedPage,
+    lastCompletedRuntime,
+    lifecycle: trace.snapshot(),
+    nativeProcessSnapshots: native.snapshots(),
+    nativeCrashReports,
     pageErrors,
     consoleErrors,
     error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
@@ -678,6 +710,7 @@ ${consoleErrors.join("\n")}`,
   });
   throw error;
 } finally {
+  trace.setPhase("cleanup");
   if (browser !== null) await browser.close();
   await server.close();
 }
