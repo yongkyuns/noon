@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   profile:
-    name: Release WebGL feature isolation, without video
+    name: Release WebGL cadence isolation, without video
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -28,7 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate diagnostic transformations and fail-closed measurement contracts
-        run: node --test scripts/showcase-triangle-light-profile.test.mjs
+        run: |
+          node --test scripts/showcase-triangle-light-profile.test.mjs
+          node --check scripts/showcase-triangle-light-profile-cadence.mjs
       - name: Isolate the exact release engine used by the slow recording
         shell: bash
         run: |
@@ -53,8 +55,8 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
-      - name: Measure the same flights with glow and scenery independently disabled
-        run: node scripts/showcase-triangle-light-profile.mjs
+      - name: Isolate browser wakes from execution and GPU completion
+        run: node scripts/showcase-triangle-light-profile-cadence.mjs
       - name: Retain raw stage timings, exact variant sources, identities and failures
         if: always()
         uses: actions/upload-artifact@v7
