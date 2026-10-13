@@ -44,7 +44,6 @@ const CHECKOUT_RUNNER_SOURCES = Object.freeze([
   "web/authoring-client.js",
   "web/authoring-execution-client.js",
   "web/manim-raster-host.js",
-  "web/provenanced-authoring-client.js",
   "web/runtime-build-verifier.js",
   "web/semantic-preview-session.js",
 ]);

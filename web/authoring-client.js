@@ -1,3 +1,5 @@
+import { validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
+
 export const AUTHORING_CHANNEL = "noon.authoring";
 export const AUTHORING_PROTOCOL_VERSION = 7;
 
@@ -230,10 +232,7 @@ export class PythonAuthoringClient {
     try {
       validateEnvelope(message);
       if (message.type === "ready") {
-        if (!this.#ready) {
-          this.#ready = true;
-          this.#resolveReady();
-        }
+        if (!this.#ready && !this.#terminated) void this.#acceptReady(message);
         return;
       }
 
@@ -376,6 +375,19 @@ export class PythonAuthoringClient {
       throw new Error(`Python authoring response has unissued request ID ${requestId}`);
     }
     return pending;
+  }
+
+  async #acceptReady(message) {
+    try {
+      // Structured cloning removes the worker's frozen metadata. Reuse the
+      // canonical verifier to validate and freeze the received observation.
+      const identity = await validateRuntimeBuildIdentity(message.buildIdentity);
+      if (this.#terminated || this.#ready) return;
+      this.#ready = true;
+      this.#resolveReady(identity);
+    } catch (error) {
+      this.#fail(error);
+    }
   }
 
   #fail(error) {
