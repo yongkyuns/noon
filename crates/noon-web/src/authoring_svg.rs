@@ -10,9 +10,8 @@ use js_sys::Array;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    authoring_error::js_error,
-    WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoringStore,
-    WasmManimGeometryOptions,
+    authoring_error::js_error, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle,
+    WasmAuthoringStore, WasmManimGeometryOptions,
 };
 
 const SVG_DEFAULT_TRANSPORT_TAG: &str = "noon.svg-default.v1";
