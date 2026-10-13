@@ -157,6 +157,7 @@ export class AuthoringExecutionClient {
     const terminateCandidate = createIdempotentTerminator(player);
     try {
       let initialPointerView;
+      let registeredView = null;
       if (typeof this.#canvas.getBoundingClientRect === "function" &&
           typeof globalThis.window?.addEventListener === "function") {
         // View registration can prepare native picking data. Keep that platform
@@ -164,6 +165,8 @@ export class AuthoringExecutionClient {
         this.#advancePointerView();
         const rect = this.#canvas.getBoundingClientRect();
         initialPointerView = { revision: this.#pointerViewRevision, width: rect.width, height: rect.height };
+        registeredView = { ...initialPointerView, left: rect.left, top: rect.top, devicePixelRatio: window.devicePixelRatio || 1 };
+        this.#pointerViewport = [this.#canvas.clientWidth, this.#canvas.clientHeight, registeredView.devicePixelRatio];
       }
       const ready = await player.startSemanticExecution(semantic.contextId, authoringClient, {
         ...options,
@@ -180,7 +183,7 @@ export class AuthoringExecutionClient {
       this.#rendererBackend = ready.render.backend;
       this.#transportMode = ready.transportMode;
       this.#resizeCurrentCanvas();
-      await this.#attachPointerInput();
+      await this.#attachPointerInput(registeredView);
       return ready;
     } catch (error) {
       if (this.#preparedPlayer === player) {
@@ -513,7 +516,7 @@ export class AuthoringExecutionClient {
     this.#pointerCollector = null;
   }
 
-  #attachPointerInput() {
+  #attachPointerInput(registeredView = null) {
     this.#retirePointerInput();
     // Headless contract tests intentionally use a minimal canvas double. Pointer
     // collection is a DOM capability, not a startup requirement.
@@ -568,6 +571,7 @@ export class AuthoringExecutionClient {
     };
     this.#pointerCollector = attachBrowserPointerInput(canvas, {
       signal,
+      registeredView: registeredView?.revision === this.#pointerViewRevision ? registeredView : null,
       isCurrent: () => this.#player === player && this.#lifecycleGeneration === generation &&
         this.#transition === null,
       send: submit,

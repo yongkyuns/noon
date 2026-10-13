@@ -883,6 +883,19 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "adjacent_n_tuples": "_manim_iterables",
+    "adjacent_pairs": "_manim_iterables",
+    "all_elements_are_instances": "_manim_iterables",
+    "concatenate_lists": "_manim_iterables",
+    "list_difference_update": "_manim_iterables",
+    "list_update": "_manim_iterables",
+    "listify": "_manim_iterables",
+    "tuplify": "_manim_iterables",
+    "make_even": "_manim_iterables",
+    "make_even_by_cycling": "_manim_iterables",
+    "remove_list_redundancies": "_manim_iterables",
+    "remove_nones": "_manim_iterables",
+    "stretch_array_to_length": "_manim_iterables",
     "DictAsObject": "_manim_config_utils",
     "merge_dicts_recursively": "_manim_config_utils",
     "update_dict_recursively": "_manim_config_utils",
