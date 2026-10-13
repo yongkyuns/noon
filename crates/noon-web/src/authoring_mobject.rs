@@ -1760,6 +1760,19 @@ mod wasm {
         pub fn semantic_generation(&self) -> u32 {
             self.handle.node_id().generation()
         }
+
+        #[wasm_bindgen(js_name = familyKeys)]
+        pub fn family_keys(&self) -> Result<Vec<String>, JsValue> {
+            noon::MobjectTarget::from(&self.handle)
+                .family_nodes()
+                .map(|nodes| {
+                    nodes
+                        .into_iter()
+                        .map(|id| format!("{}:{}", id.slot(), id.generation()))
+                        .collect()
+                })
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = cloneHandle)]
         pub fn clone_handle(&self) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             self.handle

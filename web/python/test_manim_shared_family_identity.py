@@ -16,6 +16,8 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
 
         a = identity_only_wrapper(compat.Square)
         b = identity_only_wrapper(compat.Circle)
+        a._semantic_handle = Mock()
+        a._semantic_handle.familyKeys.return_value = ["a"]
         nested = identity_only_wrapper(compat.VGroup)
         root = identity_only_wrapper(compat.Group)
         nested._semantic_family_handle = Mock()
