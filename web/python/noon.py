@@ -398,6 +398,11 @@ class Mobject:
         from _manim_geometry import _mobject_get_color
         return _mobject_get_color(self)
 
+    def get_family(self, recurse: bool = True) -> list[Mobject]:
+        """Return existing wrappers in shared family order, including this root."""
+        from _manim_semantic_handles import _get_family
+        return _get_family(self)
+
     def match_color(self, mobject: Mobject) -> Mobject:
         """Match the donor's observed color through the existing shared setter."""
         return self.set_color(mobject.get_color())

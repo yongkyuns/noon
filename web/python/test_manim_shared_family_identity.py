@@ -8,6 +8,48 @@ from pathlib import Path
 
 
 class ManimSharedFamilyIdentityTests(unittest.TestCase):
+    def test_family_query_uses_shared_order_and_existing_wrapper_identity(self):
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        a = identity_only_wrapper(compat.Square)
+        b = identity_only_wrapper(compat.Circle)
+        a._semantic_handle = Mock()
+        a._semantic_handle.familyKeys.return_value = ["a"]
+        nested = identity_only_wrapper(compat.VGroup)
+        root = identity_only_wrapper(compat.Group)
+        nested._semantic_family_handle = Mock()
+        root._semantic_family_handle = Mock()
+        root._semantic_family_handle.familyKeys.return_value = ["root", "nested", "b", "a"]
+        wrappers = {id(a): "a", id(b): "b", id(nested): "nested", id(root): "root"}
+        children = {id(root): [nested, a], id(nested): [a, b]}
+        with patch.object(handles, "_family_wrapper_key", side_effect=lambda value: wrappers[id(value)]), \
+             patch.object(handles, "_group_members", side_effect=lambda value: children[id(value)]):
+            self.assertEqual(root.get_family(), [root, nested, b, a])
+            self.assertEqual(root.get_family(recurse=False), [root, nested, b, a])
+            self.assertEqual(a.get_family(), [a])
+            root._semantic_family_handle.familyKeys.return_value = ["root", "unknown"]
+            with self.assertRaisesRegex(RuntimeError, "no Python wrapper"):
+                root.get_family()
+        self.assertEqual(root._semantic_family_handle.familyKeys.call_count, 3)
+
+    def test_staged_family_query_is_explicitly_rejected_before_host_read(self):
+        from unittest.mock import Mock
+        import _manim_compat as compat
+        import _manim_updaters as updaters
+        from _typed_geometry_test_support import identity_only_wrapper
+        root = identity_only_wrapper(compat.Group)
+        root._semantic_family_handle = Mock()
+        token = updaters._ACTIVE_CANONICAL_CONTEXT.set(Mock())
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "staged callback membership"):
+                root.get_family()
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+        root._semantic_family_handle.familyKeys.assert_not_called()
+
     def test_live_observations_and_coordinates_delegate_without_python_bounds_math(self):
         from types import SimpleNamespace
         from unittest.mock import Mock, patch
