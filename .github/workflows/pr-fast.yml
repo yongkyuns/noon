@@ -181,7 +181,7 @@ jobs:
           name: cold-start-footprint-${{ github.event.pull_request.number }}
           path: browser-smoke-artifacts/cold-start/footprint.json
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 3
 
       - name: Check deterministic playback
         id: deterministic-replay

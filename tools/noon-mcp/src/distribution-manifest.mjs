@@ -42,9 +42,9 @@ const CHECKOUT_RUNNER_SOURCES = Object.freeze([
   "scripts/build-web-demo.sh",
   "web/agent-preview-host.js",
   "web/authoring-client.js",
+  "web/authoring-diagnostic.js",
   "web/authoring-execution-client.js",
   "web/manim-raster-host.js",
-  "web/provenanced-authoring-client.js",
   "web/runtime-build-verifier.js",
   "web/semantic-preview-session.js",
 ]);

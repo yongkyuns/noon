@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { PythonAuthoringClient, AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION } from "./authoring-client.js";
 import { authoringDiagnosticPayload } from "./authoring-diagnostic-runtime.js";
+import { runtimeBuildIdentity } from "./test-support/runtime-build.mjs";
 
 const python = spawnSync("python3", ["-c", `
 import json
@@ -34,10 +35,11 @@ class FakeWorker {
 function make() {
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
-  worker.send({ type: "ready" });
+  worker.send({ type: "ready", buildIdentity: runtimeBuildIdentity() });
   return { worker, client };
 }
 async function nextRun(client, worker) {
+  await client.ready();
   const result = client.run("pass");
   // Attach a rejection handler before simulating delivery.
   const outcome = result.then(value => ({ value }), error => ({ error }));

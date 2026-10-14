@@ -97,6 +97,78 @@ def observations(namespace):
     return result
 
 
+
+INTERPOLATION_NAMES = {"interpolate", "integer_interpolate", "mid", "inverse_interpolate", "match_interpolate"}
+
+
+def interpolation_observations(namespace):
+    result = [["signature", name, str(inspect.signature(namespace[name]))]
+              for name in sorted(INTERPOLATION_NAMES)]
+    def record(name, *args):
+        before = normalize(args)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                value = namespace[name](*args)
+                outcome = ["value", type(value).__name__, normalize(value),
+                           [value is arg for arg in args]]
+                if isinstance(value, np.ndarray):
+                    outcome.append([np.shares_memory(value, arg) if isinstance(arg, np.ndarray)
+                                    else False for arg in args])
+            except Exception as error:
+                outcome = ["error", type(error).__name__]
+        result.append([name, outcome, [type(item.message).__name__ for item in caught],
+                       normalize(args) == before])
+    ranges = [(0, 10), (10, 0), (2, 2), (-2.5, 3.5),
+              (Fraction(1, 3), Fraction(5, 3)), (Decimal("0.2"), Decimal("0.8")),
+              (np.float32(1), np.float32(3)),
+              (np.array([0, 1, 2]), np.array([3, 2, 1])),
+              (np.array([[0], [1]], dtype=np.float32), np.array([2, 3, 4], dtype=np.float32)),
+              (np.empty((0, 2)), np.empty((0, 2))), ([1, 2], [3, 4])]
+    alphas = [-1, 0, 0.25, 1, 2, math.inf, math.nan, True, "0.5",
+              Fraction(1, 4), Decimal("0.25"), np.float32(0.25),
+              np.array([[0.25], [0.75]])]
+    for start, end in ranges:
+        record("mid", start, end)
+        for alpha in alphas:
+            record("interpolate", start, end, alpha)
+            record("integer_interpolate", start, end, alpha)
+            record("inverse_interpolate", start, end, alpha)
+            record("match_interpolate", -5, 5, start, end, alpha)
+    events = []
+    class Operand:
+        def __init__(self, name): self.name = name
+        def __rsub__(self, other): events.append(["rsub", self.name, other]); return Operand("complement")
+        def __mul__(self, other): events.append(["mul", self.name, other.name]); return Operand("product")
+        def __add__(self, other): events.append(["add", self.name, other.name]); return Operand("sum")
+    value = namespace["interpolate"](Operand("start"), Operand("end"), Operand("alpha"))
+    result.append(["operator_order", events, value.name])
+    return result
+
+
+def qualify_interpolation(manim_source, *, installed_manim=False):
+    from typing import overload
+    source = manim_source / "manim/utils/bezier.py"
+    expected = interpolation_observations(load_helpers(source, INTERPOLATION_NAMES,
+                                                      {"np": np, "overload": overload}))
+    import _manim_interpolation
+    import noon
+    actual = interpolation_observations(vars(_manim_interpolation))
+    errors = [] if actual == expected else ["user interpolation observations differ"]
+    if installed_manim:
+        from manim.utils import bezier
+        if Path(bezier.__file__).read_bytes() != source.read_bytes():
+            raise ValueError("installed interpolation source differs from pin")
+        if interpolation_observations(vars(bezier)) != expected:
+            errors.append("installed interpolation observations differ")
+    for name in INTERPOLATION_NAMES:
+        if getattr(noon, name) is not getattr(_manim_interpolation, name) or name not in noon.__all__:
+            errors.append(f"public interpolation export {name} differs")
+    return {"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "symbols": len(INTERPOLATION_NAMES), "observations": len(expected),
+            "installed_module_checked": installed_manim, "errors": errors}
+
+
 def qualify(manim_source, *, installed_manim=False):
     source = manim_source / "manim/utils/simple_functions.py"
     expected = observations(load_helpers(source, NAMES, {"math": math, "np": np, "lru_cache": lru_cache}))
@@ -113,8 +185,11 @@ def qualify(manim_source, *, installed_manim=False):
     for name in NAMES:
         if getattr(noon, name) is not getattr(_manim_simple_functions, name) or name not in noon.__all__:
             errors.append(f"public export {name} differs")
+    interpolation = qualify_interpolation(manim_source, installed_manim=installed_manim)
+    errors.extend(interpolation["errors"])
     return {"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "symbols": len(NAMES), "observations": len(expected), "numpy_version": np.__version__,
+            "interpolation_helpers": interpolation,
             "installed_module_checked": installed_manim, "errors": errors}
 
 

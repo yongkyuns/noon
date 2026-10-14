@@ -119,7 +119,7 @@ jobs:
           path: |
             ci-artifacts/foreground-matching
             foreground-matching-artifacts
-          retention-days: 14
+          retention-days: 3
           if-no-files-found: error
       - name: Require every qualification stage
         if: always()

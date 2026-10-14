@@ -307,7 +307,7 @@ jobs:
           name: manim-raster-differential
           path: manim-raster-artifacts
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
       - name: Report deferred qualification failures
         if: ${{ always() && (steps.following_graph_camera.outcome == 'failure' || steps.typst_ratchet.outcome == 'failure') }}
         run: |
