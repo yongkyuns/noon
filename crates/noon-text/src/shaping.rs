@@ -456,6 +456,15 @@ impl NativeTextCompiler {
                 face_index: font.face_index,
             },
         )?;
+        let shaping_size = match font.metrics_profile {
+            NativeFontMetricsProfile::CairoFreeType => options.font_size,
+            NativeFontMetricsProfile::CairoCoreText => {
+                // Glyph placement and paths must use the same resolved size.
+                (crate::outline::coretext_layout_size(options.font_size)
+                    .map_err(|_| NativeTextError::InvalidGlyphOutline)?
+                    * 3.6) as f32
+            }
+        };
         let mut shaper = self
             .shape_context
             .builder_with_id(
@@ -466,7 +475,7 @@ impl NativeTextCompiler {
                 ],
             )
             .script(Script::Latin)
-            .size(options.font_size)
+            .size(shaping_size)
             .variations(variations)
             .build();
         shaper.add_str(text);
@@ -976,6 +985,47 @@ mod tests {
         assert!(NativeTextCompiler::new()
             .compile_plain("Agj", &font, &NativeTextOptions::new(42.0))
             .is_ok());
+    }
+
+    #[test]
+    fn coretext_point_grid_preserves_native_bundled_font_placement() {
+        // Pango/CoreText observations for the bundled DejaVu Sans Mono Bold
+        // face at 67 points. The first embedded TrueType face is this font.
+        let font = static_truetype_font()
+            .with_metrics_profile(NativeFontMetricsProfile::CairoCoreText)
+            .unwrap();
+        let mut compiler = NativeTextCompiler::new();
+        let artifact = compiler
+            .compile_plain("Frame", &font, &NativeTextOptions::new(67.0))
+            .unwrap();
+        let glyphs = &artifact.resource.runs[0].glyphs;
+        assert_eq!(glyphs.len(), 5);
+        for (glyph, expected) in
+            glyphs
+                .iter()
+                .zip([0.0, 11.2041015625, 22.408203125, 33.6123046875, 44.81640625])
+        {
+            let relative_x = (f64::from(glyph.origin.x) - f64::from(glyphs[0].origin.x)) / 3.6;
+            assert!((relative_x - expected).abs() < 1e-5);
+        }
+        assert!((f64::from(artifact.resource.bounds.width()) / 72.0 - 2.6802734).abs() < 1e-6);
+        assert!((f64::from(artifact.resource.bounds.height()) / 72.0 - 0.69140625).abs() < 1e-6);
+        let markup = compiler
+            .compile_styled(
+                "Frame",
+                &font,
+                &NativeTextOptions::new(67.0),
+                &[NativeTextSpan {
+                    source_span: TextSourceSpan::new(0, 5),
+                    font: font.clone(),
+                    fill: None,
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            markup.resource.runs[0].glyphs,
+            artifact.resource.runs[0].glyphs
+        );
     }
 
     fn alternate_font() -> NativeFontFace {

@@ -140,9 +140,12 @@ impl GlyphOutlineContext {
     }
 }
 
-/// Pango uses 1024 units per Cairo layout pixel; retain that authored-size grid.
-fn coretext_layout_size(size: f32) -> Result<f64, GlyphOutlineError> {
-    let size = (f64::from(size) / 3.6 * 1024.0).round() / 1024.0;
+/// Manim supplies Pango point sizes. Pango quantizes those before resolving the
+/// 96-DPI Cairo size on its own 1024-unit grid; combining the two steps loses
+/// a layout unit at some authored sizes.
+pub(crate) fn coretext_layout_size(size: f32) -> Result<f64, GlyphOutlineError> {
+    let point_units = (f64::from(size) / 4.8 * 1024.0).round();
+    let size = (point_units * (4.0 / 3.0)).round() / 1024.0;
     if !size.is_finite() || size > f64::from(i32::MAX) / 256.0 {
         return Err(GlyphOutlineError);
     }
@@ -469,6 +472,8 @@ mod tests {
             )
             .is_err());
         assert_eq!(coretext_layout_size(48.0).unwrap(), 13653.0 / 1024.0);
+        // Independent Pango/Cairo observations at Manim's 67-point text size.
+        assert_eq!(coretext_layout_size(67.0).unwrap(), 19057.0 / 1024.0);
         assert!(!transformed_fixed_coordinates_fit(
             PathElement::MoveTo {
                 x: 0.0,
