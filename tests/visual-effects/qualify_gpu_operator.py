@@ -74,6 +74,7 @@ def cache_evidence_error(directory: Path) -> str | None:
             return "missing operator completion marker"
         if "samples=4" not in (directory / "profile.txt").read_text():
             return "missing four-sample profile"
+        readbacks = {}
         for name, size, equal in cache_evidence_cases():
             expected = (directory / f"{name}-expected.rgba").read_bytes()
             actual = (directory / f"{name}-actual.rgba").read_bytes()
@@ -86,6 +87,7 @@ def cache_evidence_error(directory: Path) -> str | None:
                                for i in range(0, size, 4))
             if mask != recomputed:
                 return f"{name}: incorrect differing-pixel mask"
+            readbacks[name] = (expected, actual)
         # Integer code expectation is separate from both WGSL and Rust readback.
         codes = bytearray()
         for y in range(8):
@@ -93,8 +95,57 @@ def cache_evidence_error(directory: Path) -> str | None:
                 for sample in range(4):
                     alpha = (x + sample * 37 + y * 13) % 256
                     codes.extend((alpha, x & alpha, sample * 17 % (alpha + 1), alpha))
-        if (directory / "seed-samples-actual.rgba").read_bytes() != codes:
+        if readbacks["seed-samples"][1] != codes:
             return "seed sample codes disagree with independent byte reference"
+        # Pairwise equality alone lets two identically wrong files pass. Bind
+        # every restoration round to the original independently computed bytes.
+        for round_index in range(8):
+            name = f"round-{round_index}-samples"
+            if readbacks[name][1] != codes:
+                return f"{name}: sample restoration differs from independent byte reference"
+        for backdrop in range(4):
+            for representation in ("samples", "resolved"):
+                original = readbacks[f"b{backdrop}-s0-{representation}"][1]
+                for step in (2, 3):
+                    name = f"b{backdrop}-s{step}-{representation}"
+                    if readbacks[name][1] != original:
+                        return f"{name}: repeated suffix changed with history"
+            ordinary = readbacks[f"b{backdrop}-s3-resolved"][1]
+            for defect in ("permuted", "averaged", "accumulated"):
+                name = f"b{backdrop}-{defect}"
+                if readbacks[name][0] != ordinary:
+                    return f"{name}: negative control uses a different ordinary reference"
+            prefix = readbacks[f"b{backdrop}-abandoned-samples"][1]
+            for step in range(4):
+                name = f"b{backdrop}-s{step}-samples"
+                samples = readbacks[name][1]
+                # Row 3 has exactly opaque red/blue sources. Endpoint codes
+                # need no assumption about intermediate UNORM rounding, and
+                # catch blank output or lost/permuted coverage independently.
+                if step != 1:
+                    for x in range(256):
+                        for sample in range(4):
+                            offset = (3 * 256 + x) * 16 + sample * 4
+                            if (x >> 4) & (1 << sample):
+                                color = bytes((0, 0, 255, 255))
+                            elif x & (1 << sample):
+                                color = bytes((255, 0, 0, 255))
+                            else:
+                                continue
+                            if samples[offset:offset + 4] != color:
+                                return f"{name}: opaque sample witness failed at x={x} sample={sample}"
+                # The suffix cannot affect samples outside its explicit mask;
+                # compare those bytes to the separately retained prefix. This
+                # also covers the complementary suffix and every alpha row.
+                for pixel in range(256 * 8):
+                    mask = (pixel % 256) >> 4
+                    if step == 1:
+                        mask ^= 15
+                    for sample in range(4):
+                        offset = pixel * 16 + sample * 4
+                        if not mask & (1 << sample):
+                            if samples[offset:offset + 4] != prefix[offset:offset + 4]:
+                                return f"{name}: uncovered sample changed at pixel={pixel} sample={sample}"
     except (OSError, UnicodeError) as error:
         return f"missing or unreadable probe evidence: {error}"
     return None

@@ -142,26 +142,64 @@ class CacheProbeAdmission(unittest.TestCase):
 
 class CacheReadbackAdmission(unittest.TestCase):
     """Synthetic files test the validator, never GPU execution."""
-    def fixture(self, root):
+    @staticmethod
+    def write_case(root, name, expected, actual):
+        (root / f"{name}-expected.rgba").write_bytes(expected)
+        (root / f"{name}-actual.rgba").write_bytes(actual)
+        mask = bytes(0 if expected[i:i + 4] == actual[i:i + 4] else 255
+                     for i in range(0, len(expected), 4))
+        (root / f"{name}-diff.mask").write_bytes(mask)
+
+    def fixture(self, root, *, blank_composition=False):
         (root / "PASS.txt").write_text("CACHE_MSAA_OPERATOR_PASS: synthetic parser fixture")
         (root / "profile.txt").write_text("synthetic parser fixture samples=4")
+        codes = bytearray()
+        prefix = bytearray(256 * 8 * 4 * 4)
+        for y in range(8):
+            for x in range(256):
+                for sample in range(4):
+                    alpha = (x + sample * 37 + y * 13) % 256
+                    codes.extend((alpha, x & alpha, sample * 17 % (alpha + 1), alpha))
+                    if not blank_composition and y == 3 and x & (1 << sample):
+                        offset = ((y * 256 + x) * 4 + sample) * 4
+                        prefix[offset:offset + 4] = bytes((255, 0, 0, 255))
+        ordinary, other = prefix.copy(), prefix.copy()
+        if not blank_composition:
+            # Only populate selected rows needed by the checker. This is not a
+            # software implementation of the GPU, its blending, or store rules.
+            for x in range(256):
+                for sample in range(4):
+                    offset = ((3 * 256 + x) * 4 + sample) * 4
+                    if (x >> 4) & (1 << sample):
+                        ordinary[offset:offset + 4] = bytes((0, 0, 255, 255))
+                    else:
+                        other[offset:offset + 4] = bytes((0, 127, 0, 127))
+        # Resolved parser records need only retain their cross-case identity.
+        # No GPU resolve/rounding oracle is supplied by these synthetic files.
+        resolved = bytes(256 * 8 * 4)
         for name, size, equal in cache_evidence_cases():
-            expected = bytearray(size)
-            if name == "seed-samples":
-                for y in range(8):
-                    for x in range(256):
-                        for sample in range(4):
-                            alpha = (x + sample * 37 + y * 13) % 256
-                            offset = ((y * 256 + x) * 4 + sample) * 4
-                            expected[offset:offset + 4] = bytes((
-                                alpha, x & alpha, sample * 17 % (alpha + 1), alpha))
-            actual = expected.copy()
-            mask = bytearray(size // 4)
+            if name == "seed-samples" or name.startswith("round-"):
+                expected = codes
+            elif name.endswith("abandoned-samples"):
+                expected = prefix
+            elif name.endswith("samples"):
+                expected = other if "-s1-" in name else ordinary
+            else:
+                expected = resolved
+            self.assertEqual(len(expected), size)
+            actual = bytearray(expected)
             if not equal:
-                actual[0], mask[0] = 1, 255
-            (root / f"{name}-expected.rgba").write_bytes(expected)
-            (root / f"{name}-actual.rgba").write_bytes(actual)
-            (root / f"{name}-diff.mask").write_bytes(mask)
+                actual[0] ^= 1
+            self.write_case(root, name, expected, actual)
+
+    @staticmethod
+    def change_pair(root, name, offset):
+        # Corrupt both sides identically, leaving their difference mask valid.
+        for side in ("expected", "actual"):
+            path = root / f"{name}-{side}.rgba"
+            content = bytearray(path.read_bytes())
+            content[offset] ^= 128
+            path.write_bytes(content)
 
     def test_inventory_is_complete_and_missing_or_truncated_readback_fails(self):
         self.assertEqual(len(cache_evidence_cases()), 57)
@@ -196,6 +234,105 @@ class CacheReadbackAdmission(unittest.TestCase):
                 path = root / f"seed-samples-{suffix}.rgba"
                 path.write_bytes(bytes(len(path.read_bytes())))
             self.assertIsNotNone(cache_evidence_error(root))
+
+    def test_every_restore_round_is_bound_to_original_seed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.fixture(root)
+            for round_index in range(8):
+                name = f"round-{round_index}-samples"
+                with self.subTest(round=round_index):
+                    self.change_pair(root, name, -1)
+                    self.assertEqual(cache_evidence_error(root),
+                                     f"{name}: sample restoration differs from independent byte reference")
+                    self.change_pair(root, name, -1)
+            self.assertIsNone(cache_evidence_error(root))
+
+    def test_repeated_suffix_rejects_matching_pair_history_drift(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.fixture(root)
+            for backdrop in range(4):
+                for step in (2, 3):
+                    for representation in ("samples", "resolved"):
+                        name = f"b{backdrop}-s{step}-{representation}"
+                        for channel in (0, 3):
+                            with self.subTest(case=name, channel=channel):
+                                self.change_pair(root, name, channel)
+                                self.assertEqual(cache_evidence_error(root),
+                                                 f"{name}: repeated suffix changed with history")
+                                self.change_pair(root, name, channel)
+            self.assertIsNone(cache_evidence_error(root))
+
+    def test_each_negative_control_uses_the_same_ordinary_reference(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.fixture(root)
+            for backdrop in range(4):
+                for defect in ("permuted", "averaged", "accumulated"):
+                    name = f"b{backdrop}-{defect}"
+                    with self.subTest(case=name):
+                        self.change_pair(root, name, -1)
+                        self.assertEqual(cache_evidence_error(root),
+                                         f"{name}: negative control uses a different ordinary reference")
+                        self.change_pair(root, name, -1)
+            self.assertIsNone(cache_evidence_error(root))
+
+    def test_blank_composition_pairs_cannot_borrow_a_valid_seed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.fixture(root, blank_composition=True)
+            self.assertIn("opaque sample witness failed", cache_evidence_error(root) or "")
+
+    def test_consistent_coincident_and_disjoint_sample_swaps_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for x in (0x11, 0x12):
+                with self.subTest(coverage=x):
+                    self.fixture(root)
+                    for step in (0, 2, 3):
+                        for side in ("expected", "actual"):
+                            path = root / f"b0-s{step}-samples-{side}.rgba"
+                            data = bytearray(path.read_bytes())
+                            offset = (3 * 256 + x) * 16
+                            a, b = data[offset:offset + 4], data[offset + 4:offset + 8]
+                            data[offset:offset + 8] = b + a
+                            path.write_bytes(data)
+                    self.assertIn("opaque sample witness failed", cache_evidence_error(root) or "")
+
+    def test_suffix_cannot_change_samples_outside_its_coverage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for step in (0, 1):
+                for channel in (0, 3):
+                    with self.subTest(step=step, channel=channel):
+                        self.fixture(root)
+                        # x=0 has empty ordinary suffix coverage; x=255 has
+                        # empty complementary suffix coverage at every sample.
+                        x = 0 if step == 0 else 255
+                        steps = (0, 2, 3) if step == 0 else (1,)
+                        for at in steps:
+                            self.change_pair(root, f"b0-s{at}-samples", x * 16 + channel)
+                        self.assertIn("uncovered sample changed", cache_evidence_error(root) or "")
+
+    def test_run_stage_rejects_success_logs_with_incoherent_readbacks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def synthetic_process(*args, **kwargs):
+                artifacts = Path(kwargs["env"]["NOON_CACHE_PROBE_ARTIFACTS"])
+                self.fixture(artifacts)
+                self.change_pair(artifacts, "round-7-samples", -1)
+                return SimpleNamespace(returncode=0, stdout=CacheProbeAdmission().log())
+
+            with patch("qualify_gpu_operator.subprocess.run", side_effect=synthetic_process):
+                result = run_stage(root, root, "incoherent", False,
+                                   test=CACHE_TEST, integration=CACHE_TARGET)
+            self.assertFalse(result["accepted"])
+            self.assertEqual(result["evidence_error"],
+                             "round-7-samples: sample restoration differs from independent byte reference")
+            self.assertIn("round-7-samples-actual.rgba", result["artifact_sha256"])
+            self.assertTrue((root / "incoherent.log").is_file())
 
 
 if __name__ == "__main__":
