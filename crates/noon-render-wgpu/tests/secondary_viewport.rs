@@ -1,7 +1,9 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
     Camera2DState, Color, FontResourceArena, GeometryRef, GeometryResourceArena, Inset2DViewState,
-    ObjectId, Style, TextResourceArena, Transform2D, Vec2, VectorPath,
+    ObjectContentRef, ObjectId, RasterImageContentRef, RasterImageResourceArena,
+    RasterImageSampling, SemanticImageContent, Style, TextResourceArena, Transform2D, Vec2,
+    VectorPath,
 };
 use noon_render_wgpu::{
     AnalyticOverlay, Camera2D, FrameComposition, FramePreparer, GpuRenderer, OverlayGpuState,
@@ -877,5 +879,162 @@ fn zero_contribution_camera_is_pixel_identical_and_visible_strokes_restore() {
         );
         assert!(frame.presences[0]);
         assert_eq!(frame.objects[0].id, ObjectId::new(0));
+    });
+}
+
+#[test]
+fn bitmap_pixels_are_independent_of_unrelated_vector_multisampling() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping bitmap coverage comparison: no GPU adapter is available");
+            return;
+        };
+        eprintln!("bitmap coverage adapter: {:?}", adapter.get_info());
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("bitmap coverage target"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bitmap coverage readback"),
+            size: u64::from(WIDTH * HEIGHT * 4),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        renderer.set_camera(
+            &queue,
+            Camera2D::new(Vec2::new(0.3, -0.2), Vec2::new(8.0, 4.0)).unwrap(),
+        );
+        let mut text = renderer.create_retained_text_state(&device, &queue);
+        let mut preparer = RetainedFramePreparer::new();
+        let texts = TextResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let mut images = RasterImageResourceArena::new();
+        let handle = images
+            .intern_rgba8(
+                3,
+                2,
+                vec![
+                    255, 0, 0, 255, 0, 200, 0, 128, 0, 0, 255, 255, 80, 30, 180, 255, 240, 120, 0,
+                    64, 255, 255, 255, 255,
+                ],
+            )
+            .unwrap();
+        for sampling in [
+            RasterImageSampling::Nearest,
+            RasterImageSampling::Linear,
+            RasterImageSampling::Bicubic,
+        ] {
+            for (scale, rotation) in [
+                (Vec2::new(0.73, 0.61), 0.0),
+                (Vec2::new(-0.73, 0.61), 0.0),
+                (Vec2::new(0.73, -0.61), 0.37),
+                (Vec2::new(0.73, 0.61), 1.1),
+                (Vec2::new(0.0, 0.61), 0.37),
+            ] {
+                let mut expected = None;
+                for with_path in [false, true, false] {
+                    let mut object = CompiledObject::new(
+                        ObjectId::new(0),
+                        GeometryRef::rectangle(3.0, 2.0),
+                        Transform2D {
+                            translation: Vec2::new(0.417, -0.113),
+                            scale,
+                            rotation,
+                        },
+                        Style {
+                            fill: Some(Color::WHITE),
+                            stroke: None,
+                            stroke_width: 0.0,
+                            opacity: 0.7,
+                            ..Style::default()
+                        },
+                    );
+                    object.content = ObjectContentRef::Image(RasterImageContentRef::from_resource(
+                        SemanticImageContent::with_sampling(handle, sampling),
+                        images.get(handle).unwrap(),
+                    ));
+                    let mut objects = vec![object];
+                    if with_path {
+                        // This submitted path selects MSAA but is outside the camera,
+                        // so it cannot change any bitmap pixel through painter order.
+                        objects.push(CompiledObject::new(
+                            ObjectId::new(1),
+                            GeometryRef::path(
+                                VectorPath::new()
+                                    .move_to(Vec2::new(100.0, 100.0))
+                                    .line_to(Vec2::new(101.0, 101.0)),
+                            ),
+                            Transform2D::IDENTITY,
+                            Style {
+                                fill: None,
+                                stroke: Some(Color::WHITE),
+                                stroke_width: 0.1,
+                                ..Style::default()
+                            },
+                        ));
+                    }
+                    let scene =
+                        SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
+                    let prepared = preparer
+                        .prepare_with_image_resources(
+                            &device,
+                            scene.frame(),
+                            &noon_runtime::FrameChanges::all(),
+                            &texts,
+                            &fonts,
+                            &geometries,
+                            &images,
+                            noon_render_wgpu::text::TextDeviceMetrics::uniform(16.0).unwrap(),
+                        )
+                        .unwrap();
+                    renderer.upload_retained(&device, &queue, &prepared, &mut text);
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    let draws = renderer
+                        .encode_retained(
+                            &mut encoder,
+                            &view,
+                            &prepared,
+                            &text,
+                            wgpu::Color::BLACK,
+                            None,
+                        )
+                        .unwrap();
+                    assert_eq!(draws.images, 1);
+                    assert_eq!(draws.geometry.draw_calls > 0, with_path);
+                    let pixels = submit_and_read(&device, &queue, encoder, &target, &readback);
+                    if let Some(expected) = &expected {
+                        assert!(pixels == *expected, "{sampling:?}, {scale:?}, {rotation}");
+                    } else {
+                        let lit = pixels
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .filter(|p| p[..3] != [0; 3])
+                            .count();
+                        assert_eq!(lit > 0, scale.x != 0.0);
+                        expected = Some(pixels);
+                    }
+                }
+            }
+        }
     });
 }
