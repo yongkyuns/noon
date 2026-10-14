@@ -249,3 +249,7 @@ Cargo features are additive: another dependency enabling `noon` defaults can
 re-enable providers. The [external consumer and qualification commands](fixtures/provider-consumer/README.md)
 inspect the resolved active graph independently of Noon's workspace and record
 native/WASM build and footprint evidence.
+
+## Triangle-light release diagnostic capture
+
+The paired release diagnostic uses the same current `scene-perf.js` measurement harness for both immutable engines. `captureBeforeTerminate=1` retains the renderer after all timing samples and the final metrics query have completed; the browser releases it after taking the screenshot. Ordinary profiling still terminates immediately. Each screenshot must contain foreground pixels before it can enter the pixel comparison, so matching blank backgrounds cannot qualify the scene. This diagnostic does not replace ordinary gallery, physical-device, or user visual approval gates.
