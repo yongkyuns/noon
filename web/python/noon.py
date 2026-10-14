@@ -1081,6 +1081,7 @@ _PUBLIC_EXPORTS = {
     "Sector": "_manim_shared_geometry",
     "Annulus": "_manim_shared_geometry",
     "Dot": "_manim_geometry",
+    "AnnotationDot": "_manim_geometry",
     "Ellipse": "_manim_geometry",
     "Triangle": "_manim_geometry",
     "Polygram": "_manim_polygon",
