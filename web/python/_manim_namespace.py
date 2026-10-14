@@ -24,8 +24,6 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 
 _OPTIONAL_HELPER_PACKAGES = {
     "rate_functions": "numpy",
-    "slow_into": "numpy",
-    "double_smooth": "numpy",
     "quaternion_from_angle_axis": "numpy",
     "angle_axis_from_quaternion": "numpy",
     "quaternion_conjugate": "numpy",
