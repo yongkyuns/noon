@@ -94,7 +94,7 @@ test("different optimization, target, feature, recipe or compiler identity still
 });
 
 
-test("the exact extra skipped-preflight check is authenticated, not a general recipe waiver", async () => {
+test("additive skipped syntax checks are authenticated without a production recipe waiver", async () => {
   const candidateSource = await readFile(new URL("./build-web-demo.sh", import.meta.url), "utf8");
   const check = "  node --check scripts/playground-product-pair.mjs\n";
   assert.equal(candidateSource.split(check).length, 2, "candidate's guard must remain unique");
@@ -110,6 +110,11 @@ test("the exact extra skipped-preflight check is authenticated, not a general re
   assert.throws(() => assertComparableArtifacts(make(), { webBuildScripts: sources }), /preflight skip/);
   const options = { webBuildScripts: sources, preflightSkipped: true };
   assert.deepEqual(assertComparableArtifacts(make(), options), ["scripts/build-web-demo.sh"]);
+  const added = candidateSource.replace(check, check + '  node --check scripts/additional-qualified-check.mjs\n');
+  const addedSources = [baselineSource, added];
+  assert.deepEqual(assertComparableArtifacts(make(addedSources), {
+    webBuildScripts: addedSources, preflightSkipped: true,
+  }), ["scripts/build-web-demo.sh"]);
   const wrongDigest = make(); wrongDigest[1].build.inputs["scripts/build-web-demo.sh"] = "f".repeat(64);
   assert.throws(() => assertComparableArtifacts(wrongDigest, options), /fingerprint/);
   // A change anywhere in the *executable* build path still fails, including
@@ -118,7 +123,11 @@ test("the exact extra skipped-preflight check is authenticated, not a general re
     candidateSource.replace('wasm-pack "${wasm_pack_args[@]}"', 'echo not-a-build "${wasm_pack_args[@]}"'),
     candidateSource.replace('wasm_pack_args+=(--no-opt)', 'wasm_pack_args+=(--opt)'),
     candidateSource.replace('node scripts/build-runtime-identity.mjs', 'node scripts/changed-identity.mjs'),
-    candidateSource.replace(check, check + '  node --check scripts/another-check.mjs\n'),
+    candidateSource.replace(check, check + '  node --check scripts/cubic-bezier-qualification.mjs; export RUSTFLAGS=changed\n'),
+    candidateSource.replace(check, check + '  node --check scripts/$(echo malicious).mjs\n'),
+    candidateSource.replace(check, check + '  node scripts/cubic-bezier-qualification.mjs\n'),
+    candidateSource + '  node --check scripts/another-check.mjs\n',
+    candidateSource.replace(check, check + check),
     candidateSource.replace(check, "") + check,
   ]) {
     const tamperedSources = [baselineSource, changed];

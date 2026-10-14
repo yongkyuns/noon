@@ -20,11 +20,9 @@ export function scoredPairSchedule(pairIndex) {
   ]);
 }
 
-// The exact published producer recipes differ by one *preflight-only* syntax
-// check. The product builds set NOON_SKIP_WEB_PREFLIGHT=1, so this command is
-// not executed when constructing either production artifact. Do not ignore the
-// script hash: authenticate both sources against their immutable artifact
-// identities and prove the entire script differs by only this one known line.
+// Authenticate complete producer scripts. Product builds attest that preflight
+// is skipped; only additive, literal Node syntax checks inside that branch may
+// differ. No executable build commands, flags, hashes or measurements are waived.
 const WEB_RECIPE = "scripts/build-web-demo.sh";
 const SKIPPED_PAIR_CHECK = "  node --check scripts/playground-product-pair.mjs\n";
 const PREFLIGHT_START = 'if [[ "$skip_web_preflight" != "1" ]]; then\n';
@@ -50,8 +48,18 @@ function verifySkippedPreflightRecipeDelta(identities, scripts, preflightSkipped
   const check = candidate.indexOf(SKIPPED_PAIR_CHECK);
   assert.ok(start >= 0 && end > start && check > start && check < end,
     "the differing command must be inside the skipped preflight branch");
-  assert.equal(candidate.replace(SKIPPED_PAIR_CHECK, ""), baseline,
-    "web build production recipes differ beyond the skipped preflight syntax check");
+  let normalized = candidate;
+  const syntaxChecks = candidate.match(/^  node --check scripts\/[a-z0-9-]+\.mjs\n/gm) ?? [];
+  for (const line of syntaxChecks) {
+    if (baseline.includes(line)) continue;
+    assert.equal(candidate.split(line).length, 2, "additional syntax checks must be unique");
+    const offset = candidate.indexOf(line);
+    assert.ok(offset > start && offset < end,
+      "additional syntax checks must be inside the attested skipped preflight branch");
+    normalized = normalized.replace(line, "");
+  }
+  assert.equal(normalized, baseline,
+    "web build production recipes differ beyond additive skipped syntax checks");
 }
 
 // A source fingerprint is provenance, not a compiler setting. Verify each
@@ -74,7 +82,7 @@ export function assertComparableArtifacts(identities, { webBuildScripts = null, 
   });
   if (builds[0].recipes[WEB_RECIPE] !== builds[1].recipes[WEB_RECIPE]) {
     verifySkippedPreflightRecipeDelta(identities, webBuildScripts, preflightSkipped);
-    // Normalize only this proved-unexecuted command. Every other recipe input
+    // Normalize only these proved-unexecuted syntax checks. Every other recipe input
     // is still compared by its full hash and a changed build script is listed
     // separately in changedBuildInputs for later provenance review.
     builds[0].recipes[WEB_RECIPE] = "verified-skipped-preflight-only";
