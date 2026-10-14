@@ -33,6 +33,8 @@ on:
       - 'web/python/test_manim_namespace.py'
       - 'scripts/manim-rate-intervals.py'
       - 'scripts/manim_easing_oracle.py'
+      - 'scripts/manim-back-easings.py'
+      - 'web/python/test_manim_back_easings.py'
       - 'scripts/manim-sine-easings.py'
       - 'scripts/manim-exponential-circular-easings.py'
       - 'web/python/test_manim_exponential_circular_easings.py'
@@ -98,6 +100,8 @@ jobs:
           array-oracle/bin/python noon/scripts/manim-array-utilities.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-rate-intervals.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-polynomial-easings.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-back-easings.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_back_easings.py -v
           array-oracle/bin/python noon/scripts/manim-sine-easings.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-exponential-circular-easings.py manim-v0.21.0
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_exponential_circular_easings.py -v

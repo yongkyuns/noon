@@ -2795,6 +2795,9 @@ fn reversed_create_rate(rate: RateFunction) -> Option<RateFunction> {
         | RateFunction::EaseInOutQuad
         | RateFunction::EaseInOutQuart
         | RateFunction::EaseInOutQuint => Some(rate),
+        RateFunction::EaseInBack => Some(RateFunction::EaseOutBack),
+        RateFunction::EaseOutBack => Some(RateFunction::EaseInBack),
+        RateFunction::EaseInOutBack => Some(RateFunction::EaseInOutBack),
         RateFunction::EaseInExpo => Some(RateFunction::EaseOutExpo),
         RateFunction::EaseOutExpo => Some(RateFunction::EaseInExpo),
         RateFunction::EaseInOutExpo => Some(RateFunction::EaseInOutExpo),
@@ -3482,8 +3485,11 @@ mod tests {
     }
 
     #[test]
-    fn reversed_monotone_create_preserves_original_rate_and_endpoint_identity() {
+    fn reversed_builtin_create_preserves_original_rate_and_endpoint_identity() {
         for rate in [
+            RateFunction::EaseInBack,
+            RateFunction::EaseOutBack,
+            RateFunction::EaseInOutBack,
             RateFunction::EaseInExpo,
             RateFunction::EaseOutExpo,
             RateFunction::EaseInOutExpo,
