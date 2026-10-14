@@ -10,10 +10,12 @@ from __future__ import annotations
 import math
 import dis
 import inspect
+import sys
 from typing import Callable
 from functools import wraps
 
-
+# Preserve the public module alias and callable identities without a second registry.
+rate_functions = sys.modules[__name__]
 
 INFLECTION = 10.0
 

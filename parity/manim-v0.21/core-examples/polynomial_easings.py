@@ -5,18 +5,18 @@ class PolynomialEasings(Scene):
     def construct(self):
         colors = [PURE_RED, PURE_GREEN, PURE_BLUE, PURE_CYAN, PURE_MAGENTA]
         rates = [
-            ease_in_quad,
-            ease_out_quad,
-            ease_in_out_quad,
-            ease_in_cubic,
-            ease_out_cubic,
-            ease_in_out_cubic,
-            ease_in_quart,
-            ease_out_quart,
-            ease_in_out_quart,
-            ease_in_quint,
-            ease_out_quint,
-            ease_in_out_quint,
+            rate_functions.ease_in_quad,
+            rate_functions.ease_out_quad,
+            rate_functions.ease_in_out_quad,
+            rate_functions.ease_in_cubic,
+            rate_functions.ease_out_cubic,
+            rate_functions.ease_in_out_cubic,
+            rate_functions.ease_in_quart,
+            rate_functions.ease_out_quart,
+            rate_functions.ease_in_out_quart,
+            rate_functions.ease_in_quint,
+            rate_functions.ease_out_quint,
+            rate_functions.ease_in_out_quint,
         ]
         shapes = []
         for index, rate in enumerate(rates):

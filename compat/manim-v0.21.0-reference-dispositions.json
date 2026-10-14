@@ -1506,8 +1506,8 @@
     },
     {
       "id": "reference-3b28780457f28f1f",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks rate_functions. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "The rate_functions module alias is exported for a bounded shared vocabulary. This exact pinned example still needs canonical execution, semantic/effective-state, timing, raster and replay qualification; module presence is not parity evidence.",
       "owners": [
         "#81",
         "#82",
@@ -1520,11 +1520,7 @@
         "directive_line": 521,
         "name": "ChangeDefaultAnimation",
         "source_sha256": "d38b694f8780bc0e62cfd4e2e0d5b5abeb4964879e3e5b71b619212f841c1d75"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "rate_functions"
-      ]
+      }
     },
     {
       "id": "reference-1dc0842535d19172",
@@ -9053,7 +9049,7 @@
     {
       "id": "reference-e7aedab9855fcc11",
       "status": "blocked",
-      "reason": "Current public Noon namespace lacks BOLD, config, rate_functions. This static admission blocker does not enumerate all behavior gaps.",
+      "reason": "Current public Noon namespace still lacks config. The rate_functions module is now exported for its bounded shared vocabulary; exact example behavior remains unqualified.",
       "owners": [
         "#77",
         "#83",
@@ -9073,14 +9069,13 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "config",
-        "rate_functions"
+        "config"
       ]
     },
     {
       "id": "reference-7cd2f9004af6451d",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks rate_functions. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "The rate_functions module alias is exported for a bounded shared vocabulary. This exact pinned example still needs canonical execution, semantic/effective-state, timing, raster and replay qualification; module presence is not parity evidence.",
       "owners": [
         "#80",
         "#81",
@@ -9098,11 +9093,7 @@
         "directive_line": 56,
         "name": "RateFunctions1Example",
         "source_sha256": "0c0721a3b04142a803b759ccd7f6d3b8ffdb1a9c3132c1ebde2cad73a1c6a215"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "rate_functions"
-      ]
+      }
     }
   ]
 }

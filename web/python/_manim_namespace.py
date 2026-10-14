@@ -23,6 +23,7 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "rate_functions": "numpy",
     "binary_search": "numpy",
     "sigmoid": "numpy",
     "slow_into": "numpy",
