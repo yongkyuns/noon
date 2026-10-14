@@ -1215,6 +1215,14 @@ pub async fn create_direct_path_construction_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+#[wasm_bindgen(js_name = createDirectCubicBezierSmokeRenderer)]
+pub async fn create_direct_cubic_bezier_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::cubic_bezier::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 #[wasm_bindgen(js_name = createDirectPathSelectionSmokeRenderer)]
 pub async fn create_direct_path_selection_smoke_renderer(
     canvas: OffscreenCanvas,
