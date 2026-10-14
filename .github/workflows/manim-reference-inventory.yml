@@ -26,6 +26,7 @@ on:
       - 'scripts/manim-array-utilities.py'
       - 'scripts/manim-user-*.py'
       - 'web/python/_manim_user_vectors.py'
+      - 'web/python/_manim_user_vector_bases.py'
       - 'web/python/test_manim_user_*.py'
       - 'web/python/_manim_iterables.py'
       - 'web/python/test_manim_array_utilities.py'
@@ -100,6 +101,8 @@ jobs:
           array-oracle/bin/python noon/scripts/manim-user-curve-operations.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-curve-subdivision.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-curve-membership.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-vector-bases.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_vector_bases.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_membership.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_subdivision.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_operations.py -v

@@ -23,6 +23,8 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "z_to_vector": "numpy",
+
     "normalize_along_axis": "numpy",
     "get_winding_number": "numpy",
     "bezier": "numpy",
