@@ -1385,3 +1385,12 @@ pub async fn create_direct_back_easings_renderer(
     let session = noon::example_scenes::polynomial_rates::back_session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[wasm_bindgen(js_name = createDirectElasticBounceEasingsRenderer)]
+pub async fn create_direct_elastic_bounce_easings_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::polynomial_rates::elastic_bounce_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

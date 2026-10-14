@@ -65,6 +65,12 @@ pub enum RateFunction {
     RushFrom,
     ThereAndBack,
     EaseInOutCubic,
+    EaseInElastic,
+    EaseOutElastic,
+    EaseInOutElastic,
+    EaseInBounce,
+    EaseOutBounce,
+    EaseInOutBounce,
     EaseInBack,
     EaseOutBack,
     EaseInOutBack,
@@ -109,6 +115,12 @@ impl RateFunction {
             | Self::Smoothererstep
             | Self::SlowInto
             | Self::DoubleSmooth
+            | Self::EaseInElastic
+            | Self::EaseOutElastic
+            | Self::EaseInOutElastic
+            | Self::EaseInBounce
+            | Self::EaseOutBounce
+            | Self::EaseInOutBounce
             | Self::EaseInBack
             | Self::EaseOutBack
             | Self::EaseInOutBack
@@ -183,6 +195,47 @@ impl RateFunction {
                     0.5 * manim_smooth_f64(2.0 * p)
                 } else {
                     0.5 * (1.0 + manim_smooth_f64(2.0 * p - 1.0))
+                }
+            }
+            Self::EaseInElastic => {
+                let c4 = 2.0 * std::f64::consts::PI / 3.0;
+                if p == 0.0 {
+                    0.0
+                } else if p == 1.0 {
+                    1.0
+                } else {
+                    -2.0_f64.powf(10.0 * p - 10.0) * ((p * 10.0 - 10.75) * c4).sin()
+                }
+            }
+            Self::EaseOutElastic => {
+                let c4 = 2.0 * std::f64::consts::PI / 3.0;
+                if p == 0.0 {
+                    0.0
+                } else if p == 1.0 {
+                    1.0
+                } else {
+                    2.0_f64.powf(-10.0 * p) * ((p * 10.0 - 0.75) * c4).sin() + 1.0
+                }
+            }
+            Self::EaseInOutElastic => {
+                let c5 = 2.0 * std::f64::consts::PI / 4.5;
+                if p == 0.0 {
+                    0.0
+                } else if p == 1.0 {
+                    1.0
+                } else if p < 0.5 {
+                    -(2.0_f64.powf(20.0 * p - 10.0) * ((20.0 * p - 11.125) * c5).sin()) / 2.0
+                } else {
+                    2.0_f64.powf(-20.0 * p + 10.0) * ((20.0 * p - 11.125) * c5).sin() / 2.0 + 1.0
+                }
+            }
+            Self::EaseInBounce => 1.0 - manim_bounce_out(1.0 - p),
+            Self::EaseOutBounce => manim_bounce_out(p),
+            Self::EaseInOutBounce => {
+                if p < 0.5 {
+                    (1.0 - manim_bounce_out(1.0 - 2.0 * p)) / 2.0
+                } else {
+                    (1.0 + manim_bounce_out(2.0 * p - 1.0)) / 2.0
                 }
             }
             Self::EaseInBack => {
@@ -284,6 +337,20 @@ fn polynomial_in_out(p: f64, degree: i32) -> f64 {
         2.0_f64.powi(degree - 1) * p.powi(degree)
     } else {
         1.0 - (-2.0 * p + 2.0).powi(degree) / 2.0
+    }
+}
+
+fn manim_bounce_out(t: f64) -> f64 {
+    let n1 = 7.5625;
+    let d1 = 2.75;
+    if t < 1.0 / d1 {
+        n1 * t * t
+    } else if t < 2.0 / d1 {
+        n1 * (t - 1.5 / d1) * (t - 1.5 / d1) + 0.75
+    } else if t < 2.5 / d1 {
+        n1 * (t - 2.25 / d1) * (t - 2.25 / d1) + 0.9375
+    } else {
+        n1 * (t - 2.625 / d1) * (t - 2.625 / d1) + 0.984375
     }
 }
 
@@ -1159,6 +1226,24 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, expected_count);
+    }
+
+    #[test]
+    fn elastic_bounce_easings_match_original_samples_in_both_precisions() {
+        assert_pinned_easing_samples(include_str!("elastic_bounce_easing_reference.csv"), 1542);
+        assert!(RateFunction::EaseInElastic.evaluate_f64(0.25) < 0.0);
+        assert!(RateFunction::EaseOutElastic.evaluate_f64(0.125) > 1.0);
+        for rate in [
+            RateFunction::EaseInElastic,
+            RateFunction::EaseOutElastic,
+            RateFunction::EaseInOutElastic,
+            RateFunction::EaseInBounce,
+            RateFunction::EaseOutBounce,
+            RateFunction::EaseInOutBounce,
+        ] {
+            assert_eq!(rate.evaluate_f64(0.0), 0.0);
+            assert_eq!(rate.evaluate_f64(1.0), 1.0);
+        }
     }
 
     #[test]
