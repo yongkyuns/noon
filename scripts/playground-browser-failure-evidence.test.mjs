@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence, parsePlaywrightWebKitProcesses } from "./playground-browser-failure-evidence.mjs";
 
 test("records browser death independently from page evaluation and with exact phase", () => {
@@ -45,6 +46,28 @@ test("captures attempted scene state rather than reporting last successful sourc
   const data = { patchState: "running", selectedExampleId: "showcase-dynamic-scene", runDisabled: true };
   const result = await captureAttemptedPage({ evaluate: async () => data });
   assert.deepEqual(result, { state: "captured", observed: data });
+});
+
+test("captures bounded playback commands without querying an unavailable engine", async () => {
+  const controls = {
+    dataset: { playing: "true", busy: "false", elapsedSeconds: "11.17" },
+    querySelector: () => ({ getAttribute: () => "Pause animation", disabled: false, textContent: "Pause" }),
+  };
+  const result = await captureAttemptedPage({
+    evaluate: async callback => runInNewContext(`(${callback.toString()})()`, {
+      location: { href: "http://localhost/current-scene" },
+      document: { querySelector: selector => selector === ".playback-controls" ? controls : null },
+      window: {
+        __matrixPlaybackTrace: { events: Array.from({ length: 40 }, (_, id) => ({ id, type: "pause" })) },
+        __noonExampleGallery: { executionMetrics: () => { throw new Error("engine unavailable"); } },
+      },
+    }),
+  });
+  assert.equal(result.state, "captured");
+  assert.equal(result.observed.playbackControls.data.playing, "true");
+  assert.equal(result.observed.playbackControls.toggle.ariaLabel, "Pause animation");
+  assert.deepEqual(Array.from(result.observed.playbackTrace, event => event.id),
+    Array.from({ length: 32 }, (_, index) => index + 8));
 });
 
 test("closed page stays unavailable even if an earlier scene was successful", async () => {

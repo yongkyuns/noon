@@ -11,6 +11,18 @@
   },
   "fixtures": [
     {
+      "id": "cubic-bezier",
+      "scene": "CubicBezierConstructor",
+      "source": "parity/manim-v0.21/core-examples/cubic_bezier.py",
+      "expected_duration": 0.2,
+      "sample_times": [
+        0,
+        0.1,
+        0.16666666666666666
+      ],
+      "notes": "New authored constructor probe over unchanged shared cubic geometry; original source executes with import-only substitution. Covers one curve, control-point count and an interior parameter query."
+    },
+    {
       "id": "annotation-dot",
       "scene": "AnnotationDotConstructor",
       "source": "parity/manim-v0.21/core-examples/annotation_dot.py",

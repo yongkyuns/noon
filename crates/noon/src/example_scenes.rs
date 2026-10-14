@@ -3328,6 +3328,7 @@ pub mod point_matching;
 
 pub mod path_editing;
 
+pub mod cubic_bezier;
 pub mod path_construction;
 
 pub mod path_selection;
