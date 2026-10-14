@@ -62,6 +62,12 @@ class ManimNamespaceTests(unittest.TestCase):
         self.assertEqual(namespace.required_packages('running_start(0.5)'), ())
         self.assertEqual(namespace.required_packages("message = 'wiggle(0.5)'"), ())
 
+    def test_default_proportion_wrapper_prepares_its_numpy_smooth_dependency(self):
+        for source in ('not_quite_there()(0.5)',
+                       'from manim import not_quite_there as helper\nhelper()(0.5)',
+                       'import noon\nnoon.not_quite_there()(0.5)'):
+            self.assertEqual(namespace.required_packages(source), ('numpy',))
+
     def test_interpolation_requires_numpy_only_for_division_helpers(self):
         for name in ["inverse_interpolate", "match_interpolate"]:
             self.assertEqual(namespace.required_packages(f"from manim import {name} as helper\nhelper(0, 1, 0.5)"), ("numpy",))
