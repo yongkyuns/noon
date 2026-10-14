@@ -201,6 +201,7 @@ mod tests {
             source: Arc::from(source),
             kind: TextSourceKind::Plain,
             runs: Arc::from([GlyphRun {
+                outline_profile: crate::GlyphOutlineProfile::Font,
                 font: FontFaceIdentity {
                     family: Arc::from("Test"),
                     face_key: Arc::from("test-face"),

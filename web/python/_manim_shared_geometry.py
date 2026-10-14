@@ -105,8 +105,9 @@ def _dot_init(
     candidate = engine_call(_shared._geometry_options.dot,
         point_value.x, point_value.y, radius_value
     )
-    _shared._apply_shared_constructor_options(candidate, options)
+    # Manim's explicit fill/stroke colors take precedence over the common color.
     _apply_candidate_color(candidate, color)
+    _shared._apply_shared_constructor_options(candidate, options)
     _shared._attach_geometry_options(self, candidate, "Dot")
     self.radius = radius_value
 

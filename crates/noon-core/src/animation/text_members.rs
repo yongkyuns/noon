@@ -181,6 +181,7 @@ mod tests {
 
     fn run(glyphs: Vec<PositionedGlyph>) -> GlyphRun {
         GlyphRun {
+            outline_profile: crate::GlyphOutlineProfile::Font,
             font: FontFaceIdentity {
                 family: Arc::from("Test"),
                 face_key: Arc::from("test-face"),
