@@ -831,7 +831,7 @@ try {
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_text_source_parts.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_arrangement.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
-    { filename: "ordinary_canonical_curve_layout.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_canonical_curve_layout.py", objectCount: 5, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_construction.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_selection.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_refinement.py", objectCount: 8, expectedDuration: 0.2, endpointTime: null },
