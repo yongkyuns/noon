@@ -9,6 +9,36 @@ import noon
 import _manim_rate_functions as rates
 
 
+class KnownRateIdentityTests(unittest.TestCase):
+    def test_canonical_aliases_keep_the_same_shared_ids(self):
+        for semantic_id, function in rates._KNOWN_RATE_FUNCTIONS.items():
+            alias = function
+            self.assertEqual(rates.easing_from_rate_func(alias), semantic_id)
+
+    def test_shadowed_builtin_name_cannot_select_different_rust_math(self):
+        def linear(t):
+            return 1 - t
+
+        self.assertEqual(linear(0.25), 0.75)
+        with self.assertRaises(NotImplementedError):
+            rates.easing_from_rate_func(linear)
+
+    def test_unknown_callable_admission_never_invokes_user_metadata_or_equality(self):
+        class Callable:
+            @property
+            def __name__(self):
+                raise AssertionError("read arbitrary callable metadata")
+
+            def __eq__(self, other):
+                raise AssertionError("invoked user equality")
+
+            def __call__(self, t):
+                raise AssertionError("sampled arbitrary callable")
+
+        with self.assertRaises(NotImplementedError):
+            rates.easing_from_rate_func(Callable())
+
+
 class RateIntervals(unittest.TestCase):
     def test_public_rate_module_preserves_callable_identity_and_shared_recognition(self):
         from types import ModuleType

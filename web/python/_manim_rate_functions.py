@@ -222,9 +222,8 @@ _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
 def easing_from_rate_func(rate_func: object) -> str:
     """Map a known Manim callable to the language-neutral core semantic ID."""
 
-    name = getattr(rate_func, "__name__", None)
     for semantic_id, function in _KNOWN_RATE_FUNCTIONS.items():
-        if rate_func is function or rate_func == function or name == semantic_id:
+        if rate_func is function:
             return semantic_id
     raise NotImplementedError(
         "Noon currently supports deterministic rate_func=linear, smooth, rush_into, "
