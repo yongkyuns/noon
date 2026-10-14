@@ -20,7 +20,9 @@ class ReverseSmoothRecognitionTests(unittest.TestCase):
 
     def test_canonical_reverse_is_recognized_without_evaluating_it(self):
         function = reverse_smooth()
-        with patch.object(rates.math, 'exp', side_effect=AssertionError('sampled easing')):
+        with patch.object(rates, '_smooth_value', side_effect=AssertionError('sampled easing')):
+            with self.assertRaisesRegex(AssertionError, 'sampled easing'):
+                rates.smooth(0.5)
             self.assertTrue(rates.is_reverse_smooth_rate_func(function))
         self.assertFalse(rates.is_reverse_smooth_rate_func(
             eval('lambda t: smooth(1 - t) + 0.0', {'smooth': rates.smooth})))
