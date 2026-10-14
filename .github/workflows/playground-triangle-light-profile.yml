@@ -8,19 +8,20 @@ on:
       - 'crates/noon-render-wgpu/src/polygon_coverage.wgsl'
       - 'crates/noon-render-wgpu/tests/polygon_fill_coverage.rs'
       - '.github/workflows/playground-triangle-light-profile.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: triangle-light-profile-${{ github.event.pull_request.number }}
+  group: triangle-light-profile-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   profile:
     name: Release renderer fix and independent pixel oracle
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
