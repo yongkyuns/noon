@@ -149,6 +149,34 @@ def rotation_about_z(angle: float) -> np.ndarray:
     return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 
 
+def rotation_matrix(
+    angle: float,
+    axis: Vector3DLike,
+    homogeneous: bool = False,
+) -> np.ndarray:
+    """Rotate explicit user vectors with the pinned SciPy conversion."""
+    import numpy as np
+    from scipy.spatial.transform import Rotation
+    matrix = Rotation.from_rotvec(angle * normalize(axis)).as_matrix()
+    if not homogeneous:
+        return matrix
+    result = np.eye(4)
+    result[:3, :3] = matrix
+    return result
+
+
+def z_to_vector(vector: np.ndarray) -> np.ndarray:
+    """Construct the pinned basis for an explicit user vector."""
+    import numpy as np
+    axis_z = normalize(vector)
+    axis_y = normalize(cross(axis_z, np.array([1., 0., 0.])))
+    axis_x = cross(axis_y, axis_z)
+    if np.linalg.norm(axis_y) == 0:
+        axis_x = normalize(cross(np.array([0., 1., 0.]), axis_z))
+        axis_y = -cross(axis_x, axis_z)
+    return np.array([axis_x, axis_y, axis_z]).T
+
+
 def cartesian_to_spherical(vec: Vector3DLike) -> np.ndarray:
     import numpy as np
     norm = np.linalg.norm(vec)
