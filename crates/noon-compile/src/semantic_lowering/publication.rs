@@ -479,6 +479,7 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { .. }
                 | SemanticMutation::ReplaceStyle { .. }
+                | SemanticMutation::SetFamilyColor { .. }
                 | SemanticMutation::SetZIndex { .. }
                 | SemanticMutation::SetForegroundMembers { .. }
                 | SemanticMutation::SetGraphDeclaration { .. }
@@ -1249,7 +1250,11 @@ fn lower_semantic_publication(
                     domains.entry(object).or_default().style = true;
                 }
             }
-            SemanticMutation::SetBarMetadata { .. } | SemanticMutation::UpdateEffect { .. } => {}
+            // Family color is authored metadata on a non-rendered root. It
+            // commits coherently but has no renderable object value projection.
+            SemanticMutation::SetFamilyColor { .. }
+            | SemanticMutation::SetBarMetadata { .. }
+            | SemanticMutation::UpdateEffect { .. } => {}
             SemanticMutation::AddMember { .. }
             | SemanticMutation::RemoveMember { .. }
             | SemanticMutation::ReorderMember { .. }

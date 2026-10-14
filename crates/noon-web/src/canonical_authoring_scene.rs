@@ -8655,6 +8655,23 @@ mod wasm {
                 .live_match_family_style(&source.semantic_family()?, &target.semantic_family()?)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSetFamilyOwnColor)]
+        pub fn live_set_family_own_color(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_own_color(&family, red, green, blue, alpha)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetFamilyColor)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_set_family_color(

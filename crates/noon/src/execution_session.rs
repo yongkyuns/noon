@@ -124,6 +124,7 @@ impl AnimationAdmissions {
 
 /// Mutable transaction state shared while recursively staging a composition.
 struct CompositionStaging<'a> {
+    family_colors: &'a mut std::collections::BTreeMap<SemanticNodeId, noon_core::Color>,
     declaration: &'a mut SemanticMutationTransaction,
     admitted: &'a mut AnimationAdmissions,
     removals: &'a mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
@@ -156,6 +157,7 @@ enum PreparedAnimationLifecycle {
     Composition {
         root: SemanticNodeId,
         admits: bool,
+        family_colors: Vec<(SemanticNodeId, noon_core::Color)>,
         removals: Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
         callback_intervals: Vec<(
             noon_core::SemanticLocalNodeToken,
@@ -1685,6 +1687,7 @@ impl ExecutionSession {
                 lifecycle_root: None,
                 lifecycle_removals: Vec::new(),
                 family_transform: None,
+                family_colors: Vec::new(),
                 object_entries: completions,
                 scalar_entries: Vec::new(),
             },
@@ -2011,6 +2014,7 @@ impl ExecutionSession {
                 lifecycle_root: None,
                 lifecycle_removals: Vec::new(),
                 family_transform: None,
+                family_colors: Vec::new(),
                 object_entries: Vec::new(),
                 scalar_entries: vec![ScalarSegmentCompletionEntry {
                     signal,
@@ -2102,11 +2106,13 @@ impl ExecutionSession {
         let mut admitted = AnimationAdmissions::default();
         let mut removals = Vec::new();
         let mut callback_intervals = Vec::new();
+        let mut family_colors = std::collections::BTreeMap::new();
         let animation = self.stage_composition_request(
             store,
             root,
             request,
             CompositionStaging {
+                family_colors: &mut family_colors,
                 declaration: &mut declaration,
                 admitted: &mut admitted,
                 removals: &mut removals,
@@ -2123,6 +2129,7 @@ impl ExecutionSession {
             Some(PreparedAnimationLifecycle::Composition {
                 root,
                 admits: !admitted.is_empty(),
+                family_colors: family_colors.into_iter().collect(),
                 removals,
                 callback_intervals,
             }),
@@ -2190,6 +2197,7 @@ impl ExecutionSession {
         reuse_compatible_admission: bool,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         let CompositionStaging {
+            family_colors,
             declaration,
             admitted,
             removals,
@@ -2458,6 +2466,16 @@ impl ExecutionSession {
                         // `path_arc` is Transform payload meaning, not composition
                         // timing. Each aligned leaf owns the same deterministic arc.
                         composition_options.path_arc = None;
+                        family_colors.extend(
+                            crate::state_replacement::paired_family_colors(
+                                store,
+                                *source,
+                                *target_state,
+                            )
+                            .map_err(|e| {
+                                ExecutionSessionAnimationError::InvalidComposition(e.to_string())
+                            })?,
+                        );
                         let expanded = SemanticCompositionRequest::Composition {
                             kind: SemanticAnimationCompositionKind::Parallel,
                             children: pairs
@@ -2480,6 +2498,7 @@ impl ExecutionSession {
                             root,
                             &expanded,
                             CompositionStaging {
+                                family_colors: &mut *family_colors,
                                 declaration,
                                 admitted,
                                 removals,
@@ -2610,6 +2629,7 @@ impl ExecutionSession {
                                     .introducer(introducer),
                             },
                             CompositionStaging {
+                                family_colors: &mut *family_colors,
                                 declaration,
                                 admitted,
                                 removals,
@@ -3108,6 +3128,7 @@ impl ExecutionSession {
                             root,
                             child,
                             CompositionStaging {
+                                family_colors: &mut *family_colors,
                                 declaration,
                                 admitted,
                                 removals,
@@ -4524,6 +4545,40 @@ impl ExecutionSession {
                 })
             });
 
+        // Non-rendered root paint follows Manim's become-style release: keep
+        // source own color throughout interpolation, publish target at the end.
+        let mut family_colors = schedule
+            .family_transforms()
+            .iter()
+            .filter(|transform| transform.mode == SemanticFamilyTransformMode::Structural)
+            .flat_map(|transform| {
+                let source = resolve_committed_node(transform.source, &result);
+                let target = resolve_committed_node(transform.target_state, &result);
+                // Equal topology shares the become pairing contract, including nested
+                // metadata and aliases. Unequal topology reconciles members separately.
+                match crate::state_replacement::paired_family_colors(store, source, target) {
+                    Ok(colors) => colors,
+                    Err(_) => {
+                        vec![(
+                            source,
+                            store
+                                .node(target)
+                                .and_then(noon_core::SemanticNode::family_color)
+                                .expect("prepared structural target retains own color"),
+                        )]
+                    }
+                }
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if let Some(PreparedAnimationLifecycle::Composition {
+            family_colors: staged,
+            ..
+        }) = lifecycle.as_ref()
+        {
+            family_colors.extend(staged.iter().copied());
+        }
+        let family_colors = family_colors.into_iter().collect();
+
         self.next_activation_track_id = next_track_id;
         self.derived_display_plan = derived_display_plan;
         self.derived_display_objects.clear();
@@ -4576,6 +4631,7 @@ impl ExecutionSession {
                             .collect(),
                     },
                     family_transform: family_transform_completion,
+                    family_colors,
                     object_entries: entries,
                     scalar_entries: scalar_completions.into_values().collect(),
                 },

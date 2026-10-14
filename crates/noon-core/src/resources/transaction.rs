@@ -396,6 +396,7 @@ mod tests {
         let mut replacement = text("font");
         replacement.runs = Arc::from([GlyphRun {
             font: face.clone(),
+            outline_profile: crate::GlyphOutlineProfile::Font,
             variations: Arc::from([]),
             font_size: 48.0,
             direction: TextDirection::LeftToRight,

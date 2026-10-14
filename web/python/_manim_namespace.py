@@ -23,6 +23,17 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "normalize_along_axis": "numpy",
+    "get_winding_number": "numpy",
+    "bezier": "numpy",
+    "partial_bezier_points": "numpy",
+    "split_bezier": "numpy",
+    "subdivide_bezier": "numpy",
+    "bezier_remap": "numpy",
+    "rotation_matrix_from_quaternion": "numpy",
+    "rotation_matrix_transpose_from_quaternion": "numpy",
+    "line_intersection": "numpy",
+    "find_intersection": "numpy",
     "quaternion_from_angle_axis": "numpy",
     "angle_axis_from_quaternion": "numpy",
     "quaternion_conjugate": "numpy",
@@ -41,6 +52,8 @@ _OPTIONAL_HELPER_PACKAGES = {
     "shoelace_direction": "numpy",
     "binary_search": "numpy",
     "sigmoid": "numpy",
+    "slow_into": "numpy",
+    "double_smooth": "numpy",
     "inverse_interpolate": "numpy",
     "match_interpolate": "numpy",
     "stretch_array_to_length": "numpy",
