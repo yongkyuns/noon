@@ -900,6 +900,7 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "CubicBezier": "_manim_geometry",
     "normalize_along_axis": "_manim_user_vectors",
     "get_winding_number": "_manim_user_vectors",
     "bezier": "_manim_user_vectors",

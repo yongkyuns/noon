@@ -11,6 +11,64 @@ fn near(actual: (f64, f64), expected: (f64, f64)) {
 }
 
 #[test]
+fn point_count_keeps_promoted_controls_and_unfinished_anchors() {
+    let mut scene = Scene::new();
+    let cubic = VectorPath::new().move_to(Vec2::ZERO).cubic_to(
+        Vec2::new(1., 2.),
+        Vec2::new(2., -2.),
+        Vec2::new(3., 0.),
+    );
+    for (path, expected) in [
+        (VectorPath::new(), 0),
+        (VectorPath::new().move_to(Vec2::ZERO), 1),
+        (
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .move_to(Vec2::new(2., 1.)),
+            1,
+        ),
+        (cubic.clone(), 4),
+        (cubic.clone().move_to(Vec2::new(4., 0.)), 5),
+        (
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1., 0.)),
+            4,
+        ),
+        (
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .quadratic_to(Vec2::new(1., 1.), Vec2::new(2., 0.)),
+            4,
+        ),
+        (
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .cubic_to(Vec2::ZERO, Vec2::ZERO, Vec2::ZERO),
+            4,
+        ),
+    ] {
+        let mut object = scene.path(path, Default::default()).unwrap();
+        let revision = scene.revision();
+        let query = object.path_query().unwrap();
+        assert_eq!(query.point_count(), expected);
+        assert_eq!(scene.revision(), revision);
+        object.set_scale(2., 0.5).unwrap();
+        assert_eq!(query.point_count(), expected);
+        assert_eq!(object.local_path_query().unwrap().point_count(), expected);
+    }
+    assert_eq!(
+        scene
+            .rectangle(2., 1.)
+            .unwrap()
+            .path_query()
+            .unwrap()
+            .point_count(),
+        16
+    );
+}
+
+#[test]
 fn nonuniform_world_measure_and_local_measure_are_distinct_immutable_observations() {
     let mut scene = Scene::new();
     let path = VectorPath::new()
@@ -185,6 +243,13 @@ fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
 fn paired_query_example_uses_the_normal_execution_session() {
     let session = noon::example_scenes::path_queries::session().unwrap();
     assert_eq!(session.frame().objects.len(), 10);
+}
+
+#[test]
+fn cubic_constructor_reference_keeps_six_manim_point_stroke() {
+    let session = noon::example_scenes::cubic_bezier::session().unwrap();
+    assert_eq!(session.frame().objects.len(), 1);
+    assert!((session.frame().objects[0].style.stroke_width - 0.06).abs() < 1e-6);
 }
 
 #[test]
