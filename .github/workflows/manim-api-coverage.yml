@@ -6,6 +6,16 @@ on:
       - master
     paths-ignore:
       - "crates/**/tests/**"
+  pull_request:
+    paths:
+      - '.github/workflows/manim-api-coverage.yml'
+      - 'compat/manim-v0.21.0.json'
+      - 'scripts/manim-api-coverage.py'
+      - 'scripts/manim-user-array-normalization.py'
+      - 'web/python/noon.py'
+      - 'web/python/_manim_namespace.py'
+      - 'web/python/test_manim_api_coverage_policy.py'
+      - 'web/python/test_manim_user_intersections.py'
   workflow_dispatch:
 
 permissions:
@@ -39,6 +49,11 @@ jobs:
 
       - name: Install pinned ManimCE reference
         run: python -m pip install --disable-pip-version-check "manim==0.21.0"
+
+      - name: Test public namespace policy and private helper boundaries
+        run: |
+          python -m unittest discover -s web/python -p test_manim_api_coverage_policy.py -v
+          python -m unittest discover -s web/python -p test_manim_user_intersections.py -v
 
       - name: Validate and report public API coverage
         run: |
