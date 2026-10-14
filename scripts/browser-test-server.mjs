@@ -8,7 +8,10 @@ import path from "node:path";
 export async function serveRepository(repoRoot, port, { crossOriginIsolated = false } = {}) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const contentTypes = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript",
-    ".wasm": "application/wasm", ".json": "application/json", ".py": "text/x-python" };
+    ".wasm": "application/wasm", ".json": "application/json", ".py": "text/x-python",
+    ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif",
+    ".ttf": "font/ttf", ".otf": "font/otf", ".woff": "font/woff", ".woff2": "font/woff2" };
   const server = createServer(async (request, response) => {
     try {
       const relative = decodeURIComponent(new URL(request.url, baseUrl).pathname).replace(/^\/+/, "");
