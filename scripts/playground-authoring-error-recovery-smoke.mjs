@@ -193,6 +193,30 @@ async function assertFrozenPreview(page, reference) {
   assert.equal(await page.locator("canvas").count(), 1, "the frozen image must not create a second live canvas");
 }
 
+// Source-owned construct/play has finished when its result is applied. Restart
+// the accepted timeline through public controls, then explicitly resume it.
+// Replay controls do not execute Python again or increment the fixture counter.
+async function startReplayForExplicitRerun(page) {
+  const restart = page.locator(".playback-restart");
+  const toggle = page.locator(".playback-toggle");
+  assert.equal(await restart.isEnabled(), true, "replay restart must be available");
+  await restart.click();
+  await page.waitForFunction(() => {
+    const controls = document.querySelector(".playback-controls");
+    const button = document.querySelector(".playback-toggle");
+    return controls?.dataset.busy === "false" && button?.disabled === false;
+  });
+  const label = await toggle.getAttribute("aria-label");
+  if (label === "Play animation") await toggle.click();
+  else assert.equal(label, "Pause animation");
+  await page.waitForFunction(() => {
+    const controls = document.querySelector(".playback-controls");
+    const button = document.querySelector(".playback-toggle");
+    return controls?.dataset.busy === "false" && controls.dataset.playing === "true" &&
+      button?.disabled === false && button.getAttribute("aria-label") === "Pause animation";
+  });
+}
+
 async function waitForInitialScene(page) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   await page.waitForSelector("#scene-editor-panel .python-code-editor[data-editor-ready='true'] .cm-content", {
@@ -426,12 +450,29 @@ try {
   diagnostics.snapshots.rerunBaseline = await runEditedSource(page, {
     expectedState: "applied", expectedObjectCount: 1,
   });
-  const replayToggle = page.locator(".playback-toggle");
-  assert.equal(await replayToggle.getAttribute("aria-label"), "Pause animation");
-  assert.equal(await replayToggle.isEnabled(), true);
   const acceptedGeneration = await page.locator("#patch-status").getAttribute("data-run-generation");
+  await startReplayForExplicitRerun(page);
+  diagnostics.snapshots.rerunPlaying = await snapshot(page);
+  assert.equal(await page.locator("#patch-status").getAttribute("data-run-generation"), acceptedGeneration,
+    "replaying the timeline must not rerun Python");
+  assert.equal(await page.locator("#python-scene-source").inputValue(), SOURCES.explicitRerun);
+  // Record the precondition at the actual Run event, before its handler pauses
+  // playback. A slow test that lets the replay finish must not pass vacuously.
+  await page.evaluate(() => {
+    document.querySelector("#replace-scene").addEventListener("click", () => {
+      const controls = document.querySelector(".playback-controls");
+      window.__noonPreviewRerunClick = {
+        playing: controls?.dataset.playing === "true",
+        busy: controls?.dataset.busy === "true",
+        runGeneration: document.querySelector("#patch-status")?.dataset.runGeneration,
+      };
+    }, { capture: true, once: true });
+  });
   phase = "explicit-rerun-error";
   await page.locator("#replace-scene").click();
+  diagnostics.rerunClick = await page.evaluate(() => window.__noonPreviewRerunClick);
+  assert.deepEqual(diagnostics.rerunClick, { playing: true, busy: false, runGeneration: acceptedGeneration },
+    "the rerun failure must start from active replay, not an already-finished timeline");
   diagnostics.snapshots.rerunError = await waitForRunResult(page, { expectedState: "error" });
   assert.equal(diagnostics.snapshots.rerunError.problemTitle, "Python raised ValueError");
   await assertStoppedPreview(page, diagnostics.snapshots.rerunError);
