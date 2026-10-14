@@ -36,13 +36,25 @@ impl Store {
         batch: &MembershipBatch,
         z_index: f64,
     ) -> PyResult<crate::family::FamilyHandle> {
+        self.family_with_color(batch, z_index, 1.0, 1.0, 1.0, 1.0)
+    }
+    fn family_with_color(
+        &self,
+        batch: &MembershipBatch,
+        z_index: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> PyResult<crate::family::FamilyHandle> {
         if batch.kind != "add" {
             return Err(engine_error("family creation requires an add batch"));
         }
-        noon::MobjectFamily::create_with_z_index(
+        noon::MobjectFamily::create_with_own_color(
             Rc::clone(&self.semantics),
             &batch.targets(),
             z_index,
+            noon::Color::rgba(r as f32, g as f32, b as f32, a as f32),
         )
         .map(|family| crate::family::FamilyHandle { family })
         .map_err(engine_error)
@@ -392,6 +404,18 @@ impl Context {
         batch: &MembershipBatch,
         z_index: f64,
     ) -> PyResult<crate::family::FamilyHandle> {
+        self.create_family_with_color(batch, z_index, 1.0, 1.0, 1.0, 1.0)
+    }
+    #[pyo3(name = "liveCreateFamilyWithColor")]
+    fn create_family_with_color(
+        &mut self,
+        batch: &MembershipBatch,
+        z_index: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> PyResult<crate::family::FamilyHandle> {
         self.available()?;
         if batch.kind != "add" {
             return Err(engine_error("family creation requires an add batch"));
@@ -400,12 +424,13 @@ impl Context {
             .execution
             .as_mut()
             .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::publish_family_creation(
+        noon::integration::publish_family_creation_with_color(
             self.scene.integration_store(),
             self.scene.root(),
             execution,
             &batch.targets(),
             z_index,
+            noon::Color::rgba(r as f32, g as f32, b as f32, a as f32),
         )
         .map(|family| crate::family::FamilyHandle { family })
         .map_err(engine_error)

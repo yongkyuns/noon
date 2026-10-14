@@ -54,7 +54,9 @@ def noonCreateAuthoringGeometryHandle(options):
     return _arena().geometry(options)
 
 
-def noonCreateAuthoringFamilyHandle(batch, z_index):
+def noonCreateAuthoringFamilyHandle(batch, z_index, *color):
+    if color:
+        return _arena().family_with_color(batch, z_index, *color)
     return _arena().family(batch, z_index)
 
 

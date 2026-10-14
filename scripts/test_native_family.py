@@ -58,8 +58,8 @@ class FamilyColors(Scene):
     def construct(self):
         a = Square(color=RED)
         b = Square(color=BLUE)
-        family = Group(a, b)
-        assert family.get_color().red == 1
+        family = Group(a, b, color=GREEN)
+        assert family.get_color().green > .7
         family.set_color(GREEN, family=False)
         assert a.get_color().red > .9 and b.get_color().blue > .8
         self.add(family)
@@ -67,8 +67,8 @@ class FamilyColors(Scene):
         family.set_color(WHITE)
         assert family.get_color().red == 1 and a.get_color().red == 1
         self.colors = [family.get_color().red, a.get_color().green, b.get_color().blue]
-        late = Group(a)
-        late.set_color(BLUE, family=False)
+        late = Group(a, color=BLUE)
+        assert a.get_color().red == 1
         copied = late.copy()
         copied.set_color(GREEN, family=False)
         assert late.get_color().blue > .8 and copied.get_color().green > .7
