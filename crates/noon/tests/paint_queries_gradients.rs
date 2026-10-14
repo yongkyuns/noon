@@ -50,7 +50,10 @@ fn live_matching_captures_current_donor_color_and_rejects_foreign_donor_atomical
     assert!(result.impacts().iter().any(|impact| matches!(impact,
         noon_core::SemanticMutationImpact::FamilyColor { node } if *node == family.node_id())));
     assert_eq!(family.own_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
-    assert_eq!(family.integration_store().borrow().scene_revision(), revision.checked_next().unwrap());
+    assert_eq!(
+        family.integration_store().borrow().scene_revision(),
+        revision.checked_next().unwrap()
+    );
     assert_eq!(
         live.effective_manim_color(&recipient).unwrap(),
         Color::rgb(0.0, 0.0, 1.0)
