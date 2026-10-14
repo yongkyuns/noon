@@ -398,6 +398,11 @@ class Mobject:
         from _manim_geometry import _mobject_get_color
         return _mobject_get_color(self)
 
+    def get_family(self, recurse: bool = True) -> list[Mobject]:
+        """Return existing wrappers in shared family order, including this root."""
+        from _manim_semantic_handles import _get_family
+        return _get_family(self)
+
     def match_color(self, mobject: Mobject) -> Mobject:
         """Match the donor's observed color through the existing shared setter."""
         return self.set_color(mobject.get_color())
@@ -901,6 +906,11 @@ _PUBLIC_EXPORTS = {
     "seek_full_path_from_defaults": "_manim_file_paths",
     "ensure_executable": "_manim_file_paths",
     "modify_atime": "_manim_file_paths",
+    "interpolate": "_manim_interpolation",
+    "integer_interpolate": "_manim_interpolation",
+    "mid": "_manim_interpolation",
+    "inverse_interpolate": "_manim_interpolation",
+    "match_interpolate": "_manim_interpolation",
     "binary_search": "_manim_simple_functions",
     "choose": "_manim_simple_functions",
     "clip": "_manim_simple_functions",

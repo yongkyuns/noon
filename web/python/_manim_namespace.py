@@ -27,6 +27,8 @@ _OPTIONAL_HELPER_PACKAGES = {
     "sigmoid": "numpy",
     "slow_into": "numpy",
     "double_smooth": "numpy",
+    "inverse_interpolate": "numpy",
+    "match_interpolate": "numpy",
     "stretch_array_to_length": "numpy",
     "resize_array": "numpy",
     "resize_preserving_order": "numpy",

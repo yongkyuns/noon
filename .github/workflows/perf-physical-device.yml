@@ -102,4 +102,4 @@ jobs:
           name: noon-perf-${{ inputs.device_id }}-${{ github.run_id }}
           path: perf-artifacts/physical-dispatch
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3

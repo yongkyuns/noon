@@ -173,4 +173,4 @@ jobs:
             noon/artifacts/manim-v0.21.0-reference-classification-lock.json
             noon/artifacts/manim-v0.21.0-reference-coverage.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3

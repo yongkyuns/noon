@@ -47,4 +47,4 @@ jobs:
           name: ci-attempt-measurements-${{ github.run_attempt }}
           path: ci-artifacts/run-timing
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 3

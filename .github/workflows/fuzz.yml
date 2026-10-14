@@ -41,3 +41,4 @@ jobs:
           name: fuzz-${{ matrix.target }}-artifacts
           path: fuzz/artifacts/${{ matrix.target }}
           if-no-files-found: ignore
+          retention-days: 3

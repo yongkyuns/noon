@@ -148,4 +148,4 @@ runs:
         name: wasm-build-evidence-${{ github.job }}-${{ github.run_attempt }}
         path: ci-artifacts/wasm-build
         if-no-files-found: ignore
-        retention-days: 7
+        retention-days: 3

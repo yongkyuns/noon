@@ -588,6 +588,9 @@ with tempfile.TemporaryDirectory() as directory:
     assert executable.stat().st_atime == 1234567890.0
     assert executable.stat().st_mtime == 1100000000.0
 assert choose(6, 2) == 15
+assert interpolate(0, 8, 0.25) == 2
+assert integer_interpolate(0, 8, 0.25) == (2, 0.0)
+assert mid(0, 8) == 4
 assert clip(5, 10, 0) == 10
 assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
@@ -602,6 +605,9 @@ array = __import__("numpy").array([[1, 2], [3, 4]])
 stretched = stretch(array, 3)
 assert stretched.tolist() == [[1, 2], [1, 2], [3, 4]]
 assert stretched.dtype == array.dtype
+from noon import inverse_interpolate, match_interpolate
+assert inverse_interpolate(0, 8, 2) == 0.25
+assert match_interpolate(0, 100, 0, 8, 2) == 25
 assert not __import__("numpy").shares_memory(stretched, array)
 try:
     stretch(array, 1)
