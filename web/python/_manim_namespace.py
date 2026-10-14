@@ -56,6 +56,7 @@ _OPTIONAL_HELPER_PACKAGES = {
     "there_and_back": "numpy",
     "slow_into": "numpy",
     "double_smooth": "numpy",
+    "not_quite_there": "numpy",
     "there_and_back_with_pause": "numpy",
     "wiggle": "numpy",
     "exponential_decay": "numpy",

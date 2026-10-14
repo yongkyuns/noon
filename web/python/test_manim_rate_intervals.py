@@ -161,7 +161,11 @@ class RateIntervals(unittest.TestCase):
             self.assertIs(raised.exception, failure)
         reversed_interval = noon.squish_rate_func(noon.linear, a=0.8, b=0.2)
         self.assertEqual([reversed_interval(t) for t in [0.0, 0.5, 1.0]], [0.0, 0.0, 1.0])
+
+    @unittest.skipIf(np is None, "Numeric NumPy rate contracts run in the pinned utility lane")
+    def test_default_proportion_wrapper_evaluates_pinned_numpy_smooth(self):
         self.assertEqual(noon.not_quite_there()(0.5), 0.35)
+        self.assertIs(type(noon.not_quite_there()(0.5)), np.float64)
 
 
 if __name__ == "__main__": unittest.main()
