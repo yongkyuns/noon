@@ -1352,3 +1352,11 @@ pub async fn create_direct_polynomial_rates_renderer(
     let session = noon::example_scenes::polynomial_rates::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[wasm_bindgen(js_name = createDirectPolynomialEasingsRenderer)]
+pub async fn create_direct_polynomial_easings_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::polynomial_rates::easing_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

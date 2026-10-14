@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -26,7 +26,8 @@ const liveMathAnimations = {
   'showcase-text-math': [['Write', 0, 1.2]],
 };
 await mkdir(artifacts, { recursive: true });
-let server, browser, runtimeCache;
+let server, httpServerState, browser, runtimeCache;
+let completed = false;
 const startedAt = performance.now();
 const results = [];
 const nativeFailureDiagnostics = browserName === 'webkit' && process.platform === 'darwin' &&
@@ -69,9 +70,14 @@ async function json(relative) {
 }
 try {
   if (!external) {
-    server = process.env.NOON_GALLERY_COI === '1'
-      ? await serveRepository(root, port, { crossOriginIsolated: true })
-      : spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', root], { stdio: 'ignore' });
+    httpServerState = { kind: 'owned-repository-server', port, ready: false, error: null };
+    try {
+      server = await serveRepository(root, port, { crossOriginIsolated: process.env.NOON_GALLERY_COI === '1' });
+      httpServerState.ready = true;
+    } catch (error) {
+      httpServerState.error = { code: error.code ?? null, message: String(error).slice(0, 300) };
+      throw error;
+    }
     let ready = false;
     for (let i = 0; i < 100; i++) {
       ready = await fetch(new URL('index.html', base)).then(r => r.ok).catch(() => false);
@@ -352,6 +358,7 @@ try {
     } catch (error) {
       result.outcome = 'fail'; result.failure = String(error);
       result.failureDiagnostics = {
+        httpServer: httpServerState ?? null,
         pendingRequestCount: pendingRequests.size,
         pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({
           url: request.url.slice(0, 500),
@@ -416,12 +423,15 @@ try {
   const failed = results.filter(result => result.outcome !== 'pass');
   assert.deepEqual(failed.map(result => [result.id, result.noJspi, result.failure]), [], 'gallery runtime failures');
   console.log(`All ${selectedEntries.length} ${selectedIds ? 'selected' : 'selectable'} examples and ${queue.length - selectedEntries.length} no-JSPI controls passed.`);
+  completed = true;
 } finally {
+  if (!completed && httpServerState) {
+    await writeFile(path.join(artifacts, 'http-server-diagnostics.json'), stringify(httpServerState));
+  }
   await writeFile(path.join(artifacts, 'results.json'), stringify(results));
   const runtimeResources = { elapsedMs: performance.now() - startedAt, ...runtimeCache?.stats() };
   await writeFile(path.join(artifacts, 'runtime-resources.json'), stringify(runtimeResources));
   console.log('Gallery runtime resources:', stringify(runtimeResources));
   await browser?.close();
   if (typeof server?.close === 'function') await server.close();
-  else server?.kill('SIGTERM');
 }

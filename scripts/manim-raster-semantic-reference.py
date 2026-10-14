@@ -358,14 +358,18 @@ def main() -> int:
         modules: dict[Path, Any] = {}
         fixtures = []
         for fixture in manifest["fixtures"]:
+            frame_rate = fixture.get("reference_frame_rate", reference["frame_rate"])
+            if isinstance(frame_rate, bool) or not isinstance(frame_rate, int) or frame_rate <= 0:
+                raise ValueError(f"{fixture['id']}: reference frame rate must be a positive integer")
             source_path = (repo_root / fixture.get("source", reference["source"])).resolve()
             module = modules.get(source_path)
             if module is None:
                 module = _load_source(source_path)
                 modules[source_path] = module
-            fixtures.append(
-                _render_fixture(module, fixture, float(reference["frame_rate"]), args.terminal_png_root)
-            )
+            with tempconfig({"frame_rate": frame_rate}):
+                fixtures.append(
+                    _render_fixture(module, fixture, float(frame_rate), args.terminal_png_root)
+                )
 
     payload = {
         "manim_version": manim.__version__,

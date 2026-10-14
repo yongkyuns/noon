@@ -62,3 +62,24 @@ test("bind collisions fail before admission and shutdown closes paused downloads
   await server.close();
   response.destroy();
 });
+
+test("gallery assets preserve MIME types and isolation remains explicit", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "noon-gallery-server-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const assets = { "style.css": ["text/css", "body { color: red }"],
+    "image.svg": ["image/svg+xml", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
+    "image.png": ["image/png", "fixture bytes"], "face.ttf": ["font/ttf", "font bytes"] };
+  for (const [file, [, bytes]] of Object.entries(assets)) await writeFile(path.join(root, file), bytes);
+  for (const isolated of [false, true]) {
+    const server = await serveRepository(root, 0, { crossOriginIsolated: isolated });
+    try {
+      for (const [file, [mime, bytes]] of Object.entries(assets)) {
+        const response = await fetch(`${server.baseUrl}/${file}`);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("content-type"), mime);
+        assert.equal(response.headers.get("cross-origin-embedder-policy"), isolated ? "require-corp" : null);
+        assert.equal(await response.text(), bytes);
+      }
+    } finally { await server.close(); }
+  }
+});
