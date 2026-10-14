@@ -900,6 +900,9 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "normalize_along_axis": "_manim_user_vectors",
+    "rotation_matrix_from_quaternion": "_manim_user_vectors",
+    "rotation_matrix_transpose_from_quaternion": "_manim_user_vectors",
     "line_intersection": "_manim_user_vectors",
     "find_intersection": "_manim_user_vectors",
     "quaternion_mult": "_manim_user_vectors",

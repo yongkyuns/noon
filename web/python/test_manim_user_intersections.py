@@ -10,10 +10,33 @@ import noon
 
 class UserIntersections(unittest.TestCase):
     def test_public_identities_and_optional_package_discovery(self):
-        for name in ('line_intersection', 'find_intersection'):
+        for name in ('line_intersection', 'find_intersection', 'normalize_along_axis',
+                     'rotation_matrix_from_quaternion', 'rotation_matrix_transpose_from_quaternion'):
             self.assertIs(getattr(noon, name), getattr(helpers, name))
             self.assertIn(name, noon.__all__)
             self.assertEqual(namespace.required_packages(f'from noon import {name} as intersect\nintersect([], [])'), ('numpy',))
+
+    @unittest.skipIf(np is None, 'NumPy contracts run in the pinned utility lane')
+    def test_normalization_preserves_identity_views_and_zero_rows(self):
+        owner = np.array([[3., 4., 0., 99.], [0., 0., 0., 77.]])
+        view = owner[:, :3]
+        self.assertIs(noon.normalize_along_axis(view, 1), view)
+        np.testing.assert_allclose(owner, [[0.6, 0.8, 0, 99], [0, 0, 0, 77]])
+        integer = np.array([[3, 4]])
+        with self.assertRaises(TypeError):
+            noon.normalize_along_axis(integer, 1)
+        np.testing.assert_array_equal(integer, [[3, 4]])
+
+    @unittest.skipIf(np is None, 'NumPy contracts run in the pinned utility lane')
+    def test_quaternion_matrix_orientation_and_input_preservation(self):
+        quaternion = np.array([np.sqrt(0.5), 0, 0, np.sqrt(0.5)])
+        before = quaternion.copy()
+        matrix = noon.rotation_matrix_from_quaternion(quaternion)
+        transpose = noon.rotation_matrix_transpose_from_quaternion(quaternion)
+        self.assertIsInstance(transpose, list)
+        np.testing.assert_allclose(matrix, [[0, -1, 0], [1, 0, 0], [0, 0, 1]], atol=1e-15)
+        np.testing.assert_array_equal(matrix.T, transpose)
+        np.testing.assert_array_equal(quaternion, before)
 
     @unittest.skipIf(np is None, 'NumPy contracts run in the pinned utility lane')
     def test_planar_intersection_and_original_rejections(self):
