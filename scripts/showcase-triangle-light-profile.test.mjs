@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { diagnosticSource, distribution, summarizeProfile } from "./showcase-triangle-light-profile.mjs";
+import { diagnosticForegroundPixels, diagnosticSource, distribution, summarizeProfile } from "./showcase-triangle-light-profile.mjs";
 const source = await readFile(new URL("../web/python/examples/showcase_triangle_light.py",import.meta.url),"utf8");
 const timed = text => text.split("\n").filter(line=>/self\.(play|wait)|run_time=|FLIGHT_SECONDS|BOUNCES =/.test(line));
+
+test("a bright border cannot qualify a blank scene, but an interior dot can", () => {
+  const image = { width: 8, height: 8, data: new Uint8Array(8 * 8 * 4) };
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    const offset = (y * 8 + x) * 4;
+    const edge = x < 2 || y < 2 || x >= 6 || y >= 6;
+    image.data.set(edge ? [255, 255, 255, 255] : [13, 18, 32, 255], offset);
+  }
+  assert.equal(diagnosticForegroundPixels(image), 0);
+  image.data.set([255, 255, 255, 255], (3 * 8 + 3) * 4);
+  assert.equal(diagnosticForegroundPixels(image), 1);
+  assert.throws(() => diagnosticForegroundPixels({ ...image, data: image.data.subarray(4) }));
+});
 
 test("baseline and repeat use the exact source, not an optimized replacement",()=>{
   assert.equal(diagnosticSource(source),source);

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { summarizeProfile } from './showcase-triangle-light-profile.mjs';
+import { diagnosticForegroundPixels, summarizeProfile } from './showcase-triangle-light-profile.mjs';
 const hash = b => createHash('sha256').update(b).digest('hex');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'browser-smoke-artifacts/triangle-profile/renderer');
@@ -66,13 +66,7 @@ try {
         result.summary=summarizeProfile(observed.report);
         const png=await page.locator('#scene').screenshot({path:path.join(out,name+'-'+engine+'.png')});
         const pixels=PNG.sync.read(png);
-        // The border/background alone cannot qualify a rendered scene. Every
-        // variant contains a visible white dot, independently of its fill.
-        let visiblePixels=0;
-        for(let y=2;y<pixels.height-2;y++)for(let x=2;x<pixels.width-2;x++){
-          const offset=(y*pixels.width+x)*4;
-          if(Math.max(...pixels.data.subarray(offset,offset+3))>100)visiblePixels++;
-        }
+        const visiblePixels=diagnosticForegroundPixels(pixels);
         result.visiblePixels=visiblePixels;
         assert.ok(visiblePixels>0,'renderer capture contains no foreground pixels');
         result.pngSha256=hash(png);images.set(name+'-'+engine,pixels);

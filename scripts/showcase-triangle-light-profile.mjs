@@ -10,6 +10,20 @@ import { fileURLToPath } from "node:url";
 
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 
+// Ignore the canvas border and dark host background. Every diagnostic source
+// has a visible white dot, even when the triangle fill is absent.
+export function diagnosticForegroundPixels({ width, height, data }) {
+  assert.equal(data.length, width * height * 4);
+  let count = 0;
+  for (let y = 2; y < height - 2; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      const offset = (y * width + x) * 4;
+      if (Math.max(data[offset], data[offset + 1], data[offset + 2]) > 100) count++;
+    }
+  }
+  return count;
+}
+
 export function diagnosticSource(source, { glow = true, laboratory = true } = {}) {
   assert.equal((source.match(/class TriangleLightShowcase\(Scene\):/g) ?? []).length, 1);
   let result = source;
