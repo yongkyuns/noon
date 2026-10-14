@@ -250,7 +250,7 @@ struct CameraUniform {
     center: [f32; 2],
     clip_scale: [f32; 2],
     viewport_size: [f32; 2],
-    padding: [f32; 2],
+    viewport_origin: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -302,11 +302,15 @@ impl Camera2D {
     }
 
     fn uniform(self, viewport_size: [u32; 2]) -> CameraUniform {
+        self.uniform_in_viewport(viewport_size, [0; 2])
+    }
+
+    fn uniform_in_viewport(self, viewport_size: [u32; 2], origin: [u32; 2]) -> CameraUniform {
         CameraUniform {
             center: [self.center.x, self.center.y],
             clip_scale: [2.0 / self.world_size.x, 2.0 / self.world_size.y],
             viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
-            padding: [0.0; 2],
+            viewport_origin: [origin[0] as f32, origin[1] as f32],
         }
     }
 }
@@ -1420,7 +1424,9 @@ impl GpuRenderer {
         let prepared = composition.prepared;
         let presentations = composition.presentations;
         let [x, y, width, height] = secondary.destination;
-        let camera_uniform = secondary.camera.uniform([width, height]);
+        let camera_uniform = secondary
+            .camera
+            .uniform_in_viewport([width, height], [x, y]);
         let secondary_camera_buffer = create_buffer_with_data(
             device,
             queue,
@@ -2592,7 +2598,12 @@ mod tests {
         assert_eq!(uniform.center, [3.0, -2.0]);
         assert_eq!(uniform.clip_scale, [0.125, 2.0 / 9.0]);
         assert_eq!(uniform.viewport_size, [1_920.0, 1_080.0]);
-        assert_eq!(uniform.padding, [0.0; 2]);
+        assert_eq!(uniform.viewport_origin, [0.0; 2]);
+        let offset = camera.uniform_in_viewport([63, 31], [17, 11]);
+        assert_eq!(offset.viewport_origin, [17.0, 11.0]);
+        assert_eq!(offset.viewport_size, [63.0, 31.0]);
+        assert_eq!(offset.center, uniform.center);
+        assert_eq!(offset.clip_scale, uniform.clip_scale);
     }
 
     #[test]

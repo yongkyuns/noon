@@ -2815,7 +2815,7 @@
     {
       "id": "reference-8f7372e0aba5ba2c",
       "status": "blocked",
-      "reason": "Current public Noon namespace lacks AnnotationDot, CurvedArrow, CurvedDoubleArrow, LabeledDot. This static admission blocker does not enumerate all behavior gaps.",
+      "reason": "Current public Noon namespace lacks CurvedArrow, CurvedDoubleArrow, LabeledDot. AnnotationDot is exported; that presence does not qualify the complete unchanged example. This static admission blocker does not enumerate all behavior gaps.",
       "owners": [
         "#77",
         "#83",
@@ -2833,7 +2833,6 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "AnnotationDot",
         "CurvedArrow",
         "CurvedDoubleArrow",
         "LabeledDot"
@@ -3075,8 +3074,8 @@
     },
     {
       "id": "reference-37ac848b0fced646",
-      "status": "blocked",
-      "reason": "Current public Noon namespace lacks CubicBezier. This static admission blocker does not enumerate all behavior gaps.",
+      "status": "unqualified",
+      "reason": "CubicBezier is exported with qualified planar constructor cases. This exact pinned BezierSplineExample still needs canonical execution, semantic/effective-state, timing, raster and replay qualification; constructor presence alone does not prove the example.",
       "owners": [
         "#77",
         "#89",
@@ -3089,11 +3088,7 @@
         "directive_line": 1107,
         "name": "BezierSplineExample",
         "source_sha256": "f0df90571f87f5eaea190f84b4b98e37887e02c755e1441e1a2459d7d0883989"
-      },
-      "blocker_kind": "namespace",
-      "namespace_blockers": [
-        "CubicBezier"
-      ]
+      }
     },
     {
       "id": "reference-411953731e5d8fe8",
