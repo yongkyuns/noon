@@ -900,6 +900,8 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "line_intersection": "_manim_user_vectors",
+    "find_intersection": "_manim_user_vectors",
     "quaternion_mult": "_manim_user_vectors",
     "quaternion_from_angle_axis": "_manim_user_vectors",
     "angle_axis_from_quaternion": "_manim_user_vectors",

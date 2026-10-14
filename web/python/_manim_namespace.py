@@ -23,6 +23,8 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "line_intersection": "numpy",
+    "find_intersection": "numpy",
     "quaternion_from_angle_axis": "numpy",
     "angle_axis_from_quaternion": "numpy",
     "quaternion_conjugate": "numpy",
