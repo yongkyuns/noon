@@ -1437,6 +1437,7 @@ def _canonical_affine_options(
             play_easing=easing,
             play_rate_func=rate_func,
             play_lag_ratio=lag_ratio,
+            **({"create": True} if allow_reverse_rate else {}),
         )
     except NotImplementedError:
         return None

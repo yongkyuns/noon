@@ -220,6 +220,7 @@ const expectedJavascriptSurface = [
   "appendCreate(",
   "appendRotate(",
   "export function resolveAnimationOptions(",
+  "export function resolveCreateAnimationOptions(",
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
@@ -456,6 +457,7 @@ const expectedTypeSurface = [
   "manimMoveToHandle(",
   "manimMoveToPoint(",
   "export function resolveAnimationOptions(",
+  "export function resolveCreateAnimationOptions(",
   "export function resolveTransformAnimationOptions(",
 ];
 

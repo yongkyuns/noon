@@ -230,6 +230,20 @@ pub fn resolve_transform_animation_options(
     resolve_animation_options_unchecked(defaults, animation, play).validate_transform()
 }
 
+/// Resolve Create reveal direction without admitting curved paths.
+pub fn resolve_create_animation_options(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    let options =
+        resolve_animation_options_unchecked(defaults, animation, play).validate_transform()?;
+    if options.path_arc.abs() > 1e-12 {
+        return Err(AnimationOptionsError::UnsupportedPathArc(options.path_arc));
+    }
+    Ok(options)
+}
+
 /// Resolve timing for targetless/structural instant leaves. The shared precedence rule is
 /// unchanged; only an exactly-zero duration is admitted so `Add()` can carry an exact boundary.
 pub fn resolve_add_animation_options(
@@ -483,6 +497,42 @@ mod tests {
                 AnimationOptions::new().reverse_rate_function(true),
                 AnimationOptions::new(),
             ),
+            Err(AnimationOptionsError::UnsupportedReverseRateFunction)
+        );
+    }
+
+    #[test]
+    fn create_options_admit_reversal_but_preserve_path_and_timing_guards() {
+        let authored = AnimationOptions::new()
+            .rate_func(RateFunction::Lingering)
+            .reverse_rate_function(true);
+        let resolved = resolve_create_animation_options(
+            AnimationDefaults::MANIM,
+            authored,
+            AnimationOptions::new().run_time(0.8),
+        )
+        .unwrap();
+        assert!(resolved.reverse_rate_function);
+        assert_eq!(resolved.rate_func, RateFunction::Lingering);
+        assert_eq!(resolved.run_time, 0.8);
+        assert!(matches!(
+            resolve_create_animation_options(
+                AnimationDefaults::MANIM,
+                authored.path_arc(0.5),
+                AnimationOptions::new(),
+            ),
+            Err(AnimationOptionsError::UnsupportedPathArc(value)) if value == 0.5
+        ));
+        assert!(matches!(
+            resolve_create_animation_options(
+                AnimationDefaults::MANIM,
+                authored,
+                AnimationOptions::new().run_time(0.0),
+            ),
+            Err(AnimationOptionsError::InvalidRunTime(value)) if value == 0.0
+        ));
+        assert_eq!(
+            resolve_animation_options(AnimationDefaults::MANIM, authored, AnimationOptions::new()),
             Err(AnimationOptionsError::UnsupportedReverseRateFunction)
         );
     }
