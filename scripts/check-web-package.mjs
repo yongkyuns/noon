@@ -340,7 +340,7 @@ const expectedTypeSurface = [
   "setValueTracker(",
   "authoredDuration(): number",
   "authoredWait(",
-  "appendCreate(object_id: string, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",
+  "appendCreate(object_id: string, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, reverse_rate_function: boolean): void",
   "appendUncreate(object_id: string, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, remover: boolean, reverse_rate_function: boolean): void",
   "liveContainsMobject(",
   "export class WasmAnimationCompositionBuilder",

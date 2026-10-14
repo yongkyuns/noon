@@ -1411,6 +1411,7 @@ def _canonical_affine_options(
     *,
     builder_args: dict[str, object] | None = None,
     allow_family_lag: bool = False,
+    allow_reverse_rate: bool = False,
 ) -> object | None:
     """Resolve the existing Python play ergonomics before typed Rust preflight."""
     duration = kwargs.get("duration")
@@ -1442,7 +1443,7 @@ def _canonical_affine_options(
     if (
         (resolved.lag_ratio != 0.0 and not allow_family_lag)
         or resolved.path_arc != 0.0
-        or resolved.reverse_rate_function
+        or (resolved.reverse_rate_function and not allow_reverse_rate)
     ):
         return None
     return resolved
@@ -1638,7 +1639,7 @@ def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> o
         return None
     if "remover" in args and args.pop("remover") is not False:
         return None
-    return _canonical_affine_options(animation, kwargs, builder_args=args)
+    return _canonical_affine_options(animation, kwargs, builder_args=args, allow_reverse_rate=True)
 
 
 def _canonical_uncreate_options(animation: object, kwargs: dict[str, object]) -> object | None:
@@ -2761,7 +2762,7 @@ def _build_canonical_composition_candidate(
                 raise NotImplementedError("unsupported canonical Create options")
             reservation = reserve(created) if created._scene is None else None
             entering_id = "" if reservation is None or reservation.reuse_existing_identity else str(reservation.object.id)
-            builder.appendCreate(entering_id, getattr(created, "_semantic_handle"), float(child.run_time), str(child.rate_func))
+            builder.appendCreate(entering_id, getattr(created, "_semantic_handle"), float(child.run_time), str(child.rate_func), bool(child.reverse_rate_function))
             return
         affine = _canonical_affine_animation(self, animation)
         if affine is not None:
