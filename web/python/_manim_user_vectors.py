@@ -346,3 +346,86 @@ def is_closed(points: Point3D_Array) -> bool:
 def straight_path() -> PathFuncType:
     from _manim_interpolation import interpolate
     return interpolate
+
+
+# Memoized coefficients operate only on explicit caller-owned numeric arrays.
+_USER_SUBDIVISION_MATRICES = [{} for _ in range(4)]
+
+
+def _get_subdivision_matrix(n_points: int, n_divisions: int) -> MatrixMN:
+    import numpy as np
+    if n_points not in (1, 2, 3, 4):
+        raise NotImplementedError('This function does not support subdividing Bézier curves with 0 or more than 4 control points.')
+    subdivision_matrix = _USER_SUBDIVISION_MATRICES[n_points - 1].get(n_divisions, None)
+    if subdivision_matrix is not None:
+        return subdivision_matrix
+    subdivision_matrix = np.empty((n_points * n_divisions, n_points))
+    if n_points == 4:
+        for i in range(n_divisions):
+            i2 = i * i
+            i3 = i2 * i
+            ip1 = i + 1
+            ip12 = ip1 * ip1
+            ip13 = ip12 * ip1
+            nmi = n_divisions - i
+            nmi2 = nmi * nmi
+            nmi3 = nmi2 * nmi
+            nmim1 = nmi - 1
+            nmim12 = nmim1 * nmim1
+            nmim13 = nmim12 * nmim1
+            subdivision_matrix[4 * i:4 * (i + 1)] = np.array([[nmi3, 3 * nmi2 * i, 3 * nmi * i2, i3], [nmi2 * nmim1, 2 * nmi * nmim1 * i + nmi2 * ip1, nmim1 * i2 + 2 * nmi * i * ip1, i2 * ip1], [nmi * nmim12, nmim12 * i + 2 * nmi * nmim1 * ip1, 2 * nmim1 * i * ip1 + nmi * ip12, i * ip12], [nmim13, 3 * nmim12 * ip1, 3 * nmim1 * ip12, ip13]])
+        subdivision_matrix /= n_divisions * n_divisions * n_divisions
+    elif n_points == 3:
+        for i in range(n_divisions):
+            ip1 = i + 1
+            nmi = n_divisions - i
+            nmim1 = nmi - 1
+            subdivision_matrix[3 * i:3 * (i + 1)] = np.array([[nmi * nmi, 2 * i * nmi, i * i], [nmi * nmim1, i * nmim1 + ip1 * nmi, i * ip1], [nmim1 * nmim1, 2 * ip1 * nmim1, ip1 * ip1]])
+        subdivision_matrix /= n_divisions * n_divisions
+    elif n_points == 2:
+        aux_range = np.arange(n_divisions + 1)
+        subdivision_matrix[::2, 1] = aux_range[:-1]
+        subdivision_matrix[1::2, 1] = aux_range[1:]
+        subdivision_matrix[:, 0] = subdivision_matrix[::-1, 1]
+        subdivision_matrix /= n_divisions
+    elif n_points == 1:
+        subdivision_matrix[:] = 1
+    _USER_SUBDIVISION_MATRICES[n_points - 1][n_divisions] = subdivision_matrix
+    return subdivision_matrix
+
+
+def subdivide_bezier(points: BezierPointsLike, n_divisions: int) -> Spline:
+    import numpy as np
+    points = np.asarray(points)
+    if n_divisions == 1:
+        return points
+    N, dim = points.shape
+    if N <= 4:
+        subdivision_matrix = _get_subdivision_matrix(N, n_divisions)
+        return subdivision_matrix @ points
+    beziers = np.empty((n_divisions, N, dim))
+    beziers[-1] = points
+    for curve_num in range(n_divisions - 1, 0, -1):
+        curr = beziers[curve_num]
+        prev = beziers[curve_num - 1]
+        prev[0] = curr[0]
+        a = (n_divisions - curve_num) / (n_divisions - curve_num + 1)
+        for i in range(1, N):
+            curr[:N - i] += a * (curr[1:N - i + 1] - curr[:N - i])
+            prev[i] = curr[0]
+    return beziers.reshape(n_divisions * N, dim)
+
+
+def bezier_remap(bezier_tuples: BezierPointsLike_Array, new_number_of_curves: int) -> BezierPoints_Array:
+    import numpy as np
+    bezier_tuples = np.asarray(bezier_tuples)
+    current_number_of_curves, nppc, dim = bezier_tuples.shape
+    repeat_indices = np.arange(new_number_of_curves, dtype='i') * current_number_of_curves // new_number_of_curves
+    split_factors = np.zeros(current_number_of_curves, dtype='i')
+    np.add.at(split_factors, repeat_indices, 1)
+    new_tuples = np.empty((new_number_of_curves, nppc, dim))
+    index = 0
+    for curve, sf in zip(bezier_tuples, split_factors, strict=True):
+        new_tuples[index:index + sf] = subdivide_bezier(curve, sf).reshape(sf, nppc, dim)
+        index += sf
+    return new_tuples

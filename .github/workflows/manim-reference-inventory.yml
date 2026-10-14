@@ -98,6 +98,8 @@ jobs:
           array-oracle/bin/python noon/scripts/manim-user-winding.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-bezier.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-curve-operations.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-curve-subdivision.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_subdivision.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_operations.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_bezier.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_winding.py -v

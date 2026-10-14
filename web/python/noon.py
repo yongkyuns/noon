@@ -905,6 +905,8 @@ _PUBLIC_EXPORTS = {
     "bezier": "_manim_user_vectors",
     "partial_bezier_points": "_manim_user_vectors",
     "split_bezier": "_manim_user_vectors",
+    "subdivide_bezier": "_manim_user_vectors",
+    "bezier_remap": "_manim_user_vectors",
     "is_closed": "_manim_user_vectors",
     "straight_path": "_manim_user_vectors",
     "rotation_matrix_from_quaternion": "_manim_user_vectors",
