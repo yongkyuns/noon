@@ -79,6 +79,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/shared-authoring-pyodide-contract.mjs
   node --check scripts/paired-authoring-qualification.mjs
   node --check scripts/polynomial-rate-qualification.mjs
+  node --check scripts/polynomial-easing-qualification.mjs
   node --check scripts/special-camera-qualification.mjs
   node --check scripts/plotting-qualification.mjs
   node --check scripts/playground-gallery-runtime-smoke.mjs

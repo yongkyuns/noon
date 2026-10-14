@@ -127,6 +127,55 @@ def squish_rate_func(func: Callable[..., float], a: float = 0.4, b: float = 0.6)
     return result
 
 
+@_unit_interval
+def ease_in_quad(t: float) -> float:
+    return t * t
+
+@_unit_interval
+def ease_out_quad(t: float) -> float:
+    return 1 - (1 - t) * (1 - t)
+
+@_unit_interval
+def ease_in_out_quad(t: float) -> float:
+    return 2 * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 2) / 2
+
+@_unit_interval
+def ease_in_cubic(t: float) -> float:
+    return t * t * t
+
+@_unit_interval
+def ease_out_cubic(t: float) -> float:
+    return 1 - pow(1 - t, 3)
+
+@_unit_interval
+def ease_in_out_cubic(t: float) -> float:
+    return 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
+
+@_unit_interval
+def ease_in_quart(t: float) -> float:
+    return t * t * t * t
+
+@_unit_interval
+def ease_out_quart(t: float) -> float:
+    return 1 - pow(1 - t, 4)
+
+@_unit_interval
+def ease_in_out_quart(t: float) -> float:
+    return 8 * t * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 4) / 2
+
+@_unit_interval
+def ease_in_quint(t: float) -> float:
+    return t * t * t * t * t
+
+@_unit_interval
+def ease_out_quint(t: float) -> float:
+    return 1 - pow(1 - t, 5)
+
+@_unit_interval
+def ease_in_out_quint(t: float) -> float:
+    return 16 * t * t * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 5) / 2
+
+
 def _step_start(t: float) -> float:
     """Internal retained step: source at t=0, target for every t>0."""
 
@@ -140,6 +189,19 @@ def _step_end(t: float) -> float:
 
 
 _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
+    "ease_in_quad": ease_in_quad,
+    "ease_out_quad": ease_out_quad,
+    "ease_in_out_quad": ease_in_out_quad,
+    "ease_in_cubic": ease_in_cubic,
+    "ease_out_cubic": ease_out_cubic,
+    "ease_in_out_cubic": ease_in_out_cubic,
+    "ease_in_quart": ease_in_quart,
+    "ease_out_quart": ease_out_quart,
+    "ease_in_out_quart": ease_in_out_quart,
+    "ease_in_quint": ease_in_quint,
+    "ease_out_quint": ease_out_quint,
+    "ease_in_out_quint": ease_in_out_quint,
+
     "linear": linear,
     "smooth": smooth,
     "smoothstep": smoothstep,
@@ -165,7 +227,7 @@ def easing_from_rate_func(rate_func: object) -> str:
     raise NotImplementedError(
         "Noon currently supports deterministic rate_func=linear, smooth, rush_into, "
         "rush_from, there_and_back, smoothstep, smootherstep, smoothererstep, slow_into, "
-        "and double_smooth; "
+        "double_smooth and polynomial ease_in/out/in_out functions; "
         "arbitrary Python per-frame rate functions "
         "are intentionally unsupported"
     )

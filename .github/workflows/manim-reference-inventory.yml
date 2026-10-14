@@ -89,6 +89,7 @@ jobs:
           array-oracle/bin/pip install numpy==2.5.4
           array-oracle/bin/python noon/scripts/manim-array-utilities.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-rate-intervals.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-polynomial-easings.py manim-v0.21.0
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_array_utilities.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_rate_intervals.py -v
       - name: Extract and validate reference inventory

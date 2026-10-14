@@ -895,6 +895,19 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "ease_in_quad": "_manim_rate_functions",
+    "ease_out_quad": "_manim_rate_functions",
+    "ease_in_out_quad": "_manim_rate_functions",
+    "ease_in_cubic": "_manim_rate_functions",
+    "ease_out_cubic": "_manim_rate_functions",
+    "ease_in_out_cubic": "_manim_rate_functions",
+    "ease_in_quart": "_manim_rate_functions",
+    "ease_out_quart": "_manim_rate_functions",
+    "ease_in_out_quart": "_manim_rate_functions",
+    "ease_in_quint": "_manim_rate_functions",
+    "ease_out_quint": "_manim_rate_functions",
+    "ease_in_out_quint": "_manim_rate_functions",
+
     "add_extension_if_not_present": "_manim_file_paths",
     "guarantee_existence": "_manim_file_paths",
     "guarantee_empty_existence": "_manim_file_paths",
