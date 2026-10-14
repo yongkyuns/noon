@@ -452,7 +452,7 @@ class SharedRateFunctions(Scene):
         self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=rush_into)
         self.play(circle.animate.shift(RIGHT), run_time=0.2, rate_func=rush_from)
         self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=there_and_back)
-        for rate in [smoothstep, smootherstep, smoothererstep]:
+        for rate in [smoothstep, smootherstep, smoothererstep, slow_into, double_smooth]:
             self.play(circle.animate.shift(RIGHT), run_time=0.2, rate_func=rate)
 `;
 

@@ -1001,6 +1001,8 @@ _PUBLIC_EXPORTS = {
     "smoothstep": "_manim_rate_functions",
     "smootherstep": "_manim_rate_functions",
     "smoothererstep": "_manim_rate_functions",
+    "slow_into": "_manim_rate_functions",
+    "double_smooth": "_manim_rate_functions",
     "rush_into": "_manim_rate_functions",
     "rush_from": "_manim_rate_functions",
     "there_and_back": "_manim_rate_functions",

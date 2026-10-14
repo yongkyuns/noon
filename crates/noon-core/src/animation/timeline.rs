@@ -59,6 +59,8 @@ pub enum RateFunction {
     Smoothstep,
     Smootherstep,
     Smoothererstep,
+    SlowInto,
+    DoubleSmooth,
     RushInto,
     RushFrom,
     ThereAndBack,
@@ -76,11 +78,13 @@ impl RateFunction {
         match self {
             Self::Linear => progress,
             Self::Smooth => manim_smooth(progress),
-            // Evaluate the cancellation-prone polynomials once in f64, then
-            // project to the planar track's existing f32 precision.
-            Self::Smoothstep | Self::Smootherstep | Self::Smoothererstep => {
-                self.evaluate_f64(f64::from(progress)) as f32
-            }
+            // Evaluate the polynomial and new monotone rates once in f64,
+            // then project to the planar track's existing f32 precision.
+            Self::Smoothstep
+            | Self::Smootherstep
+            | Self::Smoothererstep
+            | Self::SlowInto
+            | Self::DoubleSmooth => self.evaluate_f64(f64::from(progress)) as f32,
             Self::RushInto => 2.0 * manim_smooth(progress / 2.0),
             Self::RushFrom => 2.0 * manim_smooth(progress / 2.0 + 0.5) - 1.0,
             Self::ThereAndBack => {
@@ -125,6 +129,14 @@ impl RateFunction {
             Self::Smootherstep => 6.0 * p.powi(5) - 15.0 * p.powi(4) + 10.0 * p.powi(3),
             Self::Smoothererstep => {
                 35.0 * p.powi(4) - 84.0 * p.powi(5) + 70.0 * p.powi(6) - 20.0 * p.powi(7)
+            }
+            Self::SlowInto => (1.0 - (1.0 - p) * (1.0 - p)).sqrt(),
+            Self::DoubleSmooth => {
+                if p < 0.5 {
+                    0.5 * manim_smooth_f64(2.0 * p)
+                } else {
+                    0.5 * (1.0 + manim_smooth_f64(2.0 * p - 1.0))
+                }
             }
             Self::RushInto => 2.0 * manim_smooth_f64(p / 2.0),
             Self::RushFrom => 2.0 * manim_smooth_f64(p / 2.0 + 0.5) - 1.0,
@@ -1009,6 +1021,32 @@ mod tests {
                 assert_eq!(rate.evaluate(progress as f32), expected as f32);
             }
         }
+    }
+
+    #[test]
+    fn slow_and_double_smooth_rates_match_pinned_values_at_both_precisions() {
+        for (rate, quarter, three_quarters) in [
+            (
+                RateFunction::SlowInto,
+                0.6614378277661477_f64,
+                0.9682458365518543,
+            ),
+            (RateFunction::DoubleSmooth, 0.25, 0.75),
+        ] {
+            for (progress, expected) in [
+                (-1.0, 0.0),
+                (0.0, 0.0),
+                (0.25, quarter),
+                (0.75, three_quarters),
+                (1.0, 1.0),
+                (2.0, 1.0),
+            ] {
+                assert!((rate.evaluate_f64(progress) - expected).abs() < 1e-15);
+                assert_eq!(rate.evaluate(progress as f32), expected as f32);
+            }
+        }
+        assert_eq!(RateFunction::DoubleSmooth.evaluate_f64(0.5), 0.5);
+        assert!((RateFunction::SlowInto.evaluate_f64(0.5) - 0.8660254037844386).abs() < 1e-15);
     }
 
     #[test]
