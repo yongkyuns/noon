@@ -62,6 +62,7 @@ jobs:
           fallback: none
       - name: Install pinned wasm-opt
         uses: ./.github/actions/install-wasm-opt
+      # A runner needs both the Vulkan loader and an ICD for the mandatory GPU oracle.
       - name: Install the Linux Vulkan software adapter
         run: |
           sudo apt-get update
