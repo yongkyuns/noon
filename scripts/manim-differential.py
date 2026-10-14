@@ -73,6 +73,22 @@ def _point_observation(point: Any) -> list[float]:
     return [_round_float(point[0]), _round_float(point[1])]
 
 
+def _dot_paint_observations(api, class_name) -> Any:
+    options = [{}, {"radius": 0.2, "point": api.RIGHT + api.UP},
+               {"color": api.RED}, {"fill_color": api.GREEN, "stroke_color": api.RED},
+               {"fill_opacity": 0.3, "stroke_opacity": 0.6, "stroke_width": 7}]
+    result = []
+    for kwargs in options:
+        dot = getattr(api, class_name)(**kwargs)
+        result.append({**_object_observation(dot),
+                       "fill": _paint_rgb(dot.get_fill_color()),
+                       "stroke": _paint_rgb(dot.get_stroke_color()),
+                       "fill_opacity": float(dot.get_fill_opacity()),
+                       "stroke_opacity": float(dot.get_stroke_opacity()),
+                       "stroke_width": float(dot.get_stroke_width())})
+    return result
+
+
 def _members_observation(group: Any) -> dict[str, Any]:
     members = list(group.submobjects)
     center = group.get_center()
@@ -1209,6 +1225,10 @@ FIXTURES = [
             lambda: _group_coordinate_dimensions(noon, noon.VGroup),
             lambda: _group_coordinate_dimensions(manim, manim.VGroup)),
     Fixture("circle_dimensions", _noon_circle_dimensions, _manim_circle_dimensions),
+    Fixture("annotation_dot", lambda: _dot_paint_observations(noon, "AnnotationDot"),
+            lambda: _dot_paint_observations(manim, "AnnotationDot")),
+    Fixture("dot_constructor_paint", lambda: _dot_paint_observations(noon, "Dot"),
+            lambda: _dot_paint_observations(manim, "Dot")),
     Fixture("rectangle_dimensions", _noon_rectangle_dimensions, _manim_rectangle_dimensions),
     Fixture("screen_rectangle", lambda: _screen_rectangle_observations(noon),
             lambda: _screen_rectangle_observations(manim)),
