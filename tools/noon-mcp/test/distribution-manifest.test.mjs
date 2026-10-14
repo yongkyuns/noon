@@ -68,6 +68,9 @@ test("distribution manifest pins package, skill, capability and runner identitie
     "tools/noon-mcp/src/server.mjs",
     "scripts/agent-preview-sessions.mjs",
     "scripts/agent-preview-artifacts.mjs",
+    "web/authoring-client.js",
+    "web/authoring-diagnostic.js",
+    "web/runtime-build-verifier.js",
     "skills/noon-authoring/SKILL.md",
   ]) assertSha(first.runner.sourceSha256[required], required);
   assertSha(first.notices.sha256, "third-party notices");

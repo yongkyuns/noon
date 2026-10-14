@@ -92,7 +92,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -228,7 +228,7 @@ jobs:
           name: playground-matrix-${{ matrix.browser }}-${{ matrix.profile }}
           path: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
 
   # Run every gallery case on every browser. Within each WebKit shard the
   # harness still launches fresh browser processes and executes cases
@@ -293,4 +293,4 @@ jobs:
           name: playground-gallery-${{ matrix.browser }}-shard-${{ matrix.shard }}
           path: browser-smoke-artifacts/playground-gallery/${{ matrix.browser }}/shard-${{ matrix.shard }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3

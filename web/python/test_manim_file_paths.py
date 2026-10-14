@@ -1,11 +1,48 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import noon
+import _manim_file_paths as helpers
 
 
 class FilePathHelpers(unittest.TestCase):
+    def test_executable_search_uses_stem_and_short_circuits_missing_commands(self):
+        with patch.object(helpers.shutil, "which", return_value=None) as which, \
+             patch.object(helpers.os, "access") as access:
+            self.assertFalse(noon.ensure_executable(Path("tool.exe")))
+            which.assert_called_once_with("tool")
+            access.assert_not_called()
+        with patch.object(helpers.shutil, "which", return_value="/resolved/tool"), \
+             patch.object(helpers.os, "access", return_value=True) as access:
+            self.assertTrue(noon.ensure_executable(Path("tool.exe")))
+            access.assert_called_once_with("/resolved/tool", helpers.os.X_OK)
+
+    def test_explicit_executable_path_bypasses_search_without_launching(self):
+        path = Path("folder/tool.exe")
+        with patch.object(helpers.shutil, "which") as which, \
+             patch.object(helpers.os, "access", return_value=False) as access:
+            self.assertFalse(noon.ensure_executable(path))
+            which.assert_not_called()
+            access.assert_called_once_with(path, helpers.os.X_OK)
+
+    def test_access_timestamp_changes_preserve_modification_time_and_file_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "retained.txt"
+            path.write_text("keep")
+            helpers.os.utime(path, times=(1000000000.0, 1100000000.0))
+            with patch.object(helpers.time, "time", return_value=1234567890.0):
+                self.assertIsNone(noon.modify_atime(str(path)))
+            observed = path.stat()
+            self.assertEqual(observed.st_atime, 1234567890.0)
+            self.assertEqual(observed.st_mtime, 1100000000.0)
+            self.assertEqual(path.read_text(), "keep")
+            with patch.object(helpers.os, "utime") as utime:
+                with self.assertRaises(FileNotFoundError):
+                    noon.modify_atime(str(path.parent / "missing"))
+                utime.assert_not_called()
+
     def test_extensions_preserve_existing_suffix_and_matching_identity(self):
         path = Path("movie.mp4")
         self.assertIs(noon.add_extension_if_not_present(path, ".mp4"), path)

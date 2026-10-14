@@ -192,7 +192,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -307,7 +307,7 @@ jobs:
           name: manim-raster-differential
           path: manim-raster-artifacts
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
       - name: Report deferred qualification failures
         if: ${{ always() && (steps.following_graph_camera.outcome == 'failure' || steps.typst_ratchet.outcome == 'failure') }}
         run: |

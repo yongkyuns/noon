@@ -32,13 +32,26 @@ class RecoveryScene(Scene):
 class RuntimeFailure(Scene):
     def construct(self):
         self.add(Square())
-        self.add(MissingShape())
+        label = "😀한글"; self.add(MissingShape())
 `,
   oneObject: `from noon import *
 
 class FinalRecovery(Scene):
     def construct(self):
         self.add(Circle())
+`,
+  explicitRerun: `from noon import *
+import builtins
+
+class ExplicitRerun(Scene):
+    def construct(self):
+        attempt = getattr(builtins, "_noon_test_preview_rerun", 0) + 1
+        builtins._noon_test_preview_rerun = attempt
+        if attempt == 2:
+            raise ValueError("Intentional explicit rerun failure")
+        square = Square()
+        self.add(square)
+        self.play(square.animate.shift(RIGHT), run_time=3)
 `,
 };
 
@@ -90,8 +103,31 @@ async function snapshot(page) {
       playing: status?.dataset.playbackPlaying === "true",
       canvasHidden: getComputedStyle(document.querySelector("canvas")).visibility === "hidden",
       traceback: document.querySelector("#python-traceback")?.textContent ?? "",
+      problemVisible: document.querySelector("#authoring-problem")?.hidden === false,
+      problemTitle: document.querySelector("#authoring-problem strong")?.textContent ?? "",
+      detailsOpen: document.querySelector("#python-diagnostics")?.open ?? false,
     };
   });
+}
+
+async function assertSourceDiagnostic(page, observed, { type, line, selectedText = null }) {
+  assert.equal(observed.problemVisible, true, "the production error panel must be visible");
+  assert.equal(observed.problemTitle, `Python raised ${type}`);
+  assert.equal(observed.detailsOpen, false, "technical details must be collapsed by default");
+  assert.match(observed.traceback, /noon-s\d+-r\d+\.py/, "raw traceback must name the executed revision");
+  await page.getByRole("button", { name: `Go to line ${line}`, exact: true }).click();
+  const selection = await page.evaluate(() => {
+    const view = document.querySelector("#python-scene-source").editorView;
+    const { from, to } = view.state.selection.main;
+    return { line: view.state.doc.lineAt(from).number, text: view.state.sliceDoc(from, to) };
+  });
+  assert.equal(selection.line, line, "source link must target the user's actual line");
+  if (selectedText !== null) assert.equal(selection.text, selectedText);
+}
+
+function assertDiagnosticCleared(observed) {
+  assert.equal(observed.problemVisible, false, "edited/corrected source must clear the old panel");
+  assert.equal(observed.traceback, "", "old technical details must not survive into the next run");
 }
 
 async function assertStoppedPreview(page, observed) {
@@ -106,6 +142,79 @@ async function assertStoppedPreview(page, observed) {
   const before = await frames();
   await page.waitForTimeout(250);
   assert.equal(await frames(), before, "paused source must settle with no further presentations");
+}
+
+// A readback of the displayed placeholder, independent of the preview cache.
+// The negative control (a blank or missing image) cannot satisfy this reference.
+async function previewPixels(page, frozen = false) {
+  return page.evaluate(async (frozen) => {
+    const image = document.querySelector(frozen ? "#last-successful-preview img" : "#scene");
+    const width = frozen ? image.naturalWidth : image.width;
+    const height = frozen ? image.naturalHeight : image.height;
+    const scale = Math.min(1, 1536 / width, 1536 / height, Math.sqrt(1048576 / width / height));
+    const copy = document.createElement("canvas");
+    copy.width = Math.max(1, Math.floor(width * scale));
+    copy.height = Math.max(1, Math.floor(height * scale));
+    const context = copy.getContext("2d");
+    context.drawImage(image, 0, 0, copy.width, copy.height);
+    const bytes = context.getImageData(0, 0, copy.width, copy.height).data;
+    let different = 0;
+    for (let i = 4; i < bytes.length; i += 4) {
+      if (bytes[i] !== bytes[0] || bytes[i + 1] !== bytes[1] || bytes[i + 2] !== bytes[2] || bytes[i + 3] !== bytes[3]) different += 1;
+    }
+    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+      .map(byte => byte.toString(16).padStart(2, "0")).join("");
+    return { width: copy.width, height: copy.height, different, digest };
+  }, frozen);
+}
+
+async function pauseAndRecordPreview(page) {
+  const toggle = page.locator(".playback-toggle");
+  if (await toggle.getAttribute("aria-label") === "Pause animation") await toggle.click();
+  // Observe the compositor's placeholder update after the acknowledged pause.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const pixels = await previewPixels(page);
+  assert.ok(pixels.different > 50, "the successful scene must have visible nonuniform pixels");
+  return { pixels, runGeneration: await page.locator("#patch-status").getAttribute("data-run-generation") };
+}
+
+async function assertFrozenPreview(page, reference) {
+  await page.waitForFunction(() => {
+    const overlay = document.querySelector("#last-successful-preview");
+    const image = overlay?.querySelector("img");
+    return overlay?.hidden === false && image?.complete && image.naturalWidth > 0;
+  }, null, { timeout: 10_000 });
+  const overlay = page.locator("#last-successful-preview");
+  assert.match(await overlay.textContent(), /Previous successful preview.*Edited source failed/);
+  assert.equal(await overlay.getAttribute("data-run-generation"), reference.runGeneration);
+  assert.deepEqual(await previewPixels(page, true), reference.pixels, "invalid edits must preserve actual displayed pixels");
+  assert.equal(await page.locator(".playback-toggle").isDisabled(), true,
+    "the old execution must not resume behind its frozen preview");
+  assert.equal(await page.locator("canvas").count(), 1, "the frozen image must not create a second live canvas");
+}
+
+// Source-owned construct/play has finished when its result is applied. Restart
+// the accepted timeline through public controls, then explicitly resume it.
+// Replay controls do not execute Python again or increment the fixture counter.
+async function startReplayForExplicitRerun(page) {
+  const restart = page.locator(".playback-restart");
+  const toggle = page.locator(".playback-toggle");
+  assert.equal(await restart.isEnabled(), true, "replay restart must be available");
+  await restart.click();
+  await page.waitForFunction(() => {
+    const controls = document.querySelector(".playback-controls");
+    const button = document.querySelector(".playback-toggle");
+    return controls?.dataset.busy === "false" && button?.disabled === false;
+  });
+  const label = await toggle.getAttribute("aria-label");
+  if (label === "Play animation") await toggle.click();
+  else assert.equal(label, "Pause animation");
+  await page.waitForFunction(() => {
+    const controls = document.querySelector(".playback-controls");
+    const button = document.querySelector(".playback-toggle");
+    return controls?.dataset.busy === "false" && controls.dataset.playing === "true" &&
+      button?.disabled === false && button.getAttribute("aria-label") === "Pause animation";
+  });
 }
 
 async function waitForInitialScene(page) {
@@ -249,13 +358,14 @@ try {
   assert.notEqual(diagnostics.snapshots.baseline.patchSequence, "");
   await page.screenshot({ path: path.join(artifactDir, "baseline.png"), fullPage: true });
 
+  diagnostics.previewBaseline = await pauseAndRecordPreview(page);
   phase = "syntax-error";
   await setEditorSource(page, SOURCES.syntaxError);
   let edited = await snapshot(page);
   assert.match(edited.patchText, /restarting/);
   assert.equal(edited.objectCount, diagnostics.snapshots.baseline.objectCount);
   diagnostics.snapshots.syntaxError = await runEditedSource(page, { expectedState: "error" });
-  assert.match(diagnostics.snapshots.syntaxError.patchText, /Python failed:/);
+  assert.equal(diagnostics.snapshots.syntaxError.patchText, "Python raised SyntaxError");
   assert.notEqual(diagnostics.snapshots.syntaxError.runtimeState, "error");
   assert.equal(diagnostics.snapshots.syntaxError.rendererBackend, diagnostics.snapshots.baseline.rendererBackend);
   assert.equal(
@@ -269,28 +379,34 @@ try {
     "syntax failure must retain the last successful object-count diagnostic",
   );
   await assertStoppedPreview(page, diagnostics.snapshots.syntaxError);
+  await assertFrozenPreview(page, diagnostics.previewBaseline);
   assert.match(diagnostics.snapshots.syntaxError.traceback, /SyntaxError/);
+  await assertSourceDiagnostic(page, diagnostics.snapshots.syntaxError, { type: "SyntaxError", line: 3 });
   await page.screenshot({ path: path.join(artifactDir, "syntax-error.png"), fullPage: true });
 
   phase = "syntax-recovery";
   await setEditorSource(page, SOURCES.twoObjects);
   edited = await snapshot(page);
+  assertDiagnosticCleared(edited);
   assert.match(edited.patchText, /restarting/);
   diagnostics.snapshots.syntaxRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 2,
   });
+  assertDiagnosticCleared(diagnostics.snapshots.syntaxRecovered);
   assert.match(diagnostics.snapshots.syntaxRecovered.patchText, /2 objects/);
   assert.notEqual(diagnostics.snapshots.syntaxRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.syntaxRecovered.rendererBackend, "WebGL2");
 
+  assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
+  diagnostics.previewRecovered = await pauseAndRecordPreview(page);
   phase = "runtime-error";
   await setEditorSource(page, SOURCES.runtimeError);
   edited = await snapshot(page);
   assert.match(edited.patchText, /restarting/);
   assert.equal(edited.objectCount, "2");
   diagnostics.snapshots.runtimeError = await runEditedSource(page, { expectedState: "error" });
-  assert.match(diagnostics.snapshots.runtimeError.patchText, /Python failed:/);
+  assert.equal(diagnostics.snapshots.runtimeError.patchText, "Python raised NameError");
   assert.notEqual(diagnostics.snapshots.runtimeError.runtimeState, "error");
   assert.equal(diagnostics.snapshots.runtimeError.rendererBackend, "WebGL2");
   assert.equal(
@@ -304,27 +420,91 @@ try {
     "authoring failure must retain the last successful object-count diagnostic",
   );
   await assertStoppedPreview(page, diagnostics.snapshots.runtimeError);
+  await assertFrozenPreview(page, diagnostics.previewRecovered);
   assert.match(diagnostics.snapshots.runtimeError.traceback, /MissingShape/);
+  await assertSourceDiagnostic(page, diagnostics.snapshots.runtimeError, {
+    type: "NameError", line: 6, selectedText: "MissingShape",
+  });
   await page.screenshot({ path: path.join(artifactDir, "runtime-error.png"), fullPage: true });
 
   phase = "runtime-recovery";
   await setEditorSource(page, SOURCES.oneObject);
   edited = await snapshot(page);
+  assertDiagnosticCleared(edited);
   assert.match(edited.patchText, /restarting/);
   diagnostics.snapshots.runtimeRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 1,
   });
+  assertDiagnosticCleared(diagnostics.snapshots.runtimeRecovered);
   assert.match(diagnostics.snapshots.runtimeRecovered.patchText, /1 objects/);
   assert.notEqual(diagnostics.snapshots.runtimeRecovered.runtimeState, "error");
   assert.equal(diagnostics.snapshots.runtimeRecovered.rendererBackend, "WebGL2");
+  assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
   await page.screenshot({ path: path.join(artifactDir, "recovered.png"), fullPage: true });
+
+  // Rerunning the same valid source can fail on a later invocation. No edit
+  // event pauses the previous replay here: Run itself must stop it first.
+  phase = "explicit-rerun-baseline";
+  await setEditorSource(page, SOURCES.explicitRerun);
+  diagnostics.snapshots.rerunBaseline = await runEditedSource(page, {
+    expectedState: "applied", expectedObjectCount: 1,
+  });
+  const acceptedGeneration = await page.locator("#patch-status").getAttribute("data-run-generation");
+  await startReplayForExplicitRerun(page);
+  diagnostics.snapshots.rerunPlaying = await snapshot(page);
+  assert.equal(await page.locator("#patch-status").getAttribute("data-run-generation"), acceptedGeneration,
+    "replaying the timeline must not rerun Python");
+  // CodeMirror exposes the source through a main-world textarea getter.
+  // Playwright inputValue reads the isolated world's stale native fallback.
+  assert.equal(await page.evaluate(() => document.querySelector("#python-scene-source").value), SOURCES.explicitRerun);
+  // Record the precondition at the actual Run event, before its handler pauses
+  // playback. A slow test that lets the replay finish must not pass vacuously.
+  await page.evaluate(() => {
+    document.querySelector("#replace-scene").addEventListener("click", () => {
+      const controls = document.querySelector(".playback-controls");
+      window.__noonPreviewRerunClick = {
+        playing: controls?.dataset.playing === "true",
+        busy: controls?.dataset.busy === "true",
+        runGeneration: document.querySelector("#patch-status")?.dataset.runGeneration,
+      };
+    }, { capture: true, once: true });
+  });
+  phase = "explicit-rerun-error";
+  await page.locator("#replace-scene").click();
+  diagnostics.rerunClick = await page.evaluate(() => window.__noonPreviewRerunClick);
+  assert.deepEqual(diagnostics.rerunClick, { playing: true, busy: false, runGeneration: acceptedGeneration },
+    "the rerun failure must start from active replay, not an already-finished timeline");
+  diagnostics.snapshots.rerunError = await waitForRunResult(page, { expectedState: "error" });
+  assert.equal(diagnostics.snapshots.rerunError.problemTitle, "Python raised ValueError");
+  await assertStoppedPreview(page, diagnostics.snapshots.rerunError);
+  await page.waitForFunction(() => {
+    const overlay = document.querySelector("#last-successful-preview");
+    const image = overlay?.querySelector("img");
+    return overlay?.hidden === false && image?.complete && image.naturalWidth > 0;
+  });
+  const rerunPixels = await previewPixels(page, true);
+  assert.ok(rerunPixels.different > 50, "the failed rerun must retain visible scene pixels");
+  // Running-frame capture is not compared to a different live instant. Check
+  // its accepted source identity and stability; earlier paused cases compare
+  // against independent exact displayed-pixel references.
+  await assertFrozenPreview(page, { pixels: rerunPixels, runGeneration: acceptedGeneration });
+  phase = "explicit-rerun-recovery";
+  await page.locator("#replace-scene").click();
+  diagnostics.snapshots.rerunRecovered = await waitForRunResult(page, {
+    expectedState: "applied", expectedObjectCount: 1,
+  });
+  assertDiagnosticCleared(diagnostics.snapshots.rerunRecovered);
+  assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
 
   const syntaxConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "syntax-error");
   const runtimeConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "runtime-error");
+  const rerunConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "explicit-rerun-error");
   const unexpectedConsole = diagnostics.consoleErrors.filter(
-    (entry) => entry.phase !== "syntax-error" && entry.phase !== "runtime-error",
+    (entry) => entry.phase !== "syntax-error" && entry.phase !== "runtime-error" && entry.phase !== "explicit-rerun-error",
   );
+  assert.ok(rerunConsole.some((entry) => /Intentional explicit rerun failure/.test(entry.text)),
+    `the explicit rerun should expose its actual exception: ${JSON.stringify(rerunConsole)}`);
   assert.ok(
     syntaxConsole.some((entry) => /SyntaxError|invalid syntax|expected ':'/i.test(entry.text)),
     `syntax failure should be diagnostic in the console: ${JSON.stringify(syntaxConsole)}`,

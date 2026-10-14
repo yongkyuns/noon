@@ -89,6 +89,8 @@ jobs:
           python3 -m venv array-oracle
           array-oracle/bin/pip install numpy==2.5.4
           array-oracle/bin/python noon/scripts/manim-array-utilities.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-vectors.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_vectors.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_array_utilities.py -v
       - name: Extract and validate reference inventory
         shell: bash
@@ -172,4 +174,4 @@ jobs:
             noon/artifacts/manim-v0.21.0-reference-classification-lock.json
             noon/artifacts/manim-v0.21.0-reference-coverage.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3

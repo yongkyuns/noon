@@ -110,7 +110,7 @@ jobs:
           cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::selection_tests -- --nocapture
           cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -184,4 +184,4 @@ jobs:
             browser-smoke-artifacts/playground-playback-dynamic
             browser-smoke-artifacts/playground-playback-dynamic-webgpu
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3

@@ -73,6 +73,22 @@ def _point_observation(point: Any) -> list[float]:
     return [_round_float(point[0]), _round_float(point[1])]
 
 
+def _dot_paint_observations(api, class_name) -> Any:
+    options = [{}, {"radius": 0.2, "point": api.RIGHT + api.UP},
+               {"color": api.RED}, {"fill_color": api.GREEN, "stroke_color": api.RED},
+               {"fill_opacity": 0.3, "stroke_opacity": 0.6, "stroke_width": 7}]
+    result = []
+    for kwargs in options:
+        dot = getattr(api, class_name)(**kwargs)
+        result.append({**_object_observation(dot),
+                       "fill": _paint_rgb(dot.get_fill_color()),
+                       "stroke": _paint_rgb(dot.get_stroke_color()),
+                       "fill_opacity": float(dot.get_fill_opacity()),
+                       "stroke_opacity": float(dot.get_stroke_opacity()),
+                       "stroke_width": float(dot.get_stroke_width())})
+    return result
+
+
 def _members_observation(group: Any) -> dict[str, Any]:
     members = list(group.submobjects)
     center = group.get_center()
@@ -96,6 +112,23 @@ def _noon_rectangle_dimensions() -> Any:
 
 def _manim_rectangle_dimensions() -> Any:
     return _object_observation(manim.Rectangle(width=3.0, height=1.25))
+
+
+def _screen_rectangle_observations(api) -> Any:
+    observations = []
+    for kwargs in [{}, {"aspect_ratio": 4 / 3, "height": 3},
+                   {"aspect_ratio": 0.75, "height": 2.5}]:
+        rectangle = api.ScreenRectangle(**kwargs).shift(api.RIGHT * 0.75)
+        initial = _object_observation(rectangle)
+        initial["aspect_ratio"] = float(rectangle.aspect_ratio)
+        rectangle.aspect_ratio = 2.25
+        stretched = _object_observation(rectangle)
+        stretched["aspect_ratio"] = float(rectangle.aspect_ratio)
+        rectangle.height = 1.25
+        resized = _object_observation(rectangle)
+        resized["aspect_ratio"] = float(rectangle.aspect_ratio)
+        observations.append({"initial": initial, "stretched": stretched, "resized": resized})
+    return observations
 
 
 def _noon_shifted_circle() -> Any:
@@ -716,19 +749,29 @@ def _family_membership_order(provider: Any, group_name: str) -> Any:
     group_type = getattr(provider, group_name)
     nested = group_type(a, b)
     family = group_type(a, nested, a)
-    names = {id(a): "a", id(b): "b", id(c): "c", id(nested): "nested"}
+    names = {id(a): "a", id(b): "b", id(c): "c", id(nested): "nested", id(family): "root"}
     order = lambda: [names[id(member)] for member in family.submobjects]
+    query_order = lambda: [names[id(member)] for member in family.get_family()]
     observed = [order()]
+    families = [query_order()]
     family.add(c, nested, c)
     observed.append(order())
+    families.append(query_order())
     family.add(a)
     observed.append(order())
+    families.append(query_order())
     family.remove(nested, nested)
     observed.append(order())
+    families.append(query_order())
     family.add(nested)
     observed.append(order())
+    families.append(query_order())
     copied = family.copy()
-    return {"order": observed, "nested_identity": nested[0] is a and nested[1] is b,
+    return {"order": observed, "family": families,
+            "recurse_false": [names[id(member)] for member in family.get_family(False)],
+            "leaf_self": a.get_family() == [a],
+            "empty_self": (lambda empty: empty.get_family() == [empty])(group_type()),
+            "nested_identity": nested[0] is a and nested[1] is b,
             "copy_alias": copied[1] is copied[2][0],
             "copy_independent": copied[1] is not a}
 
@@ -769,7 +812,7 @@ def _paint_rgb(color):
 
 def _paint_queries_gradients(api):
     boxes = [api.Square(side_length=1) for _ in range(5)]
-    group = api.VGroup(boxes[0], api.VGroup(*boxes))
+    group = api.VGroup(api.VGroup(*boxes), boxes[0])
     group.set_fill(opacity=0.4).set_stroke(width=6)
     group.set_color_by_gradient("#FF0000", "#00FF00", "#0000FF")
     observations = [[_paint_rgb(obj.get_color()), _paint_rgb(obj.get_fill_color()),
@@ -1182,7 +1225,13 @@ FIXTURES = [
             lambda: _group_coordinate_dimensions(noon, noon.VGroup),
             lambda: _group_coordinate_dimensions(manim, manim.VGroup)),
     Fixture("circle_dimensions", _noon_circle_dimensions, _manim_circle_dimensions),
+    Fixture("annotation_dot", lambda: _dot_paint_observations(noon, "AnnotationDot"),
+            lambda: _dot_paint_observations(manim, "AnnotationDot")),
+    Fixture("dot_constructor_paint", lambda: _dot_paint_observations(noon, "Dot"),
+            lambda: _dot_paint_observations(manim, "Dot")),
     Fixture("rectangle_dimensions", _noon_rectangle_dimensions, _manim_rectangle_dimensions),
+    Fixture("screen_rectangle", lambda: _screen_rectangle_observations(noon),
+            lambda: _screen_rectangle_observations(manim)),
     Fixture("shifted_circle", _noon_shifted_circle, _manim_shifted_circle),
     Fixture("moved_rectangle", _noon_moved_rectangle, _manim_moved_rectangle),
     Fixture("scaled_square", _noon_scaled_square, _manim_scaled_square),

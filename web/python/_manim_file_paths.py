@@ -2,11 +2,29 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import shutil
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from manim.typing import StrPath
+
+
+def ensure_executable(path_to_exe: Path) -> bool:
+    """Check the host executable search path or an explicit user path."""
+    if path_to_exe.parent == Path("."):
+        executable = shutil.which(path_to_exe.stem)
+        if executable is None:
+            return False
+    else:
+        executable = path_to_exe
+    return os.access(executable, os.X_OK)
+
+
+def modify_atime(file_path: str) -> None:
+    """Set a user file's access time while retaining its modification time."""
+    os.utime(file_path, times=(time.time(), Path(file_path).stat().st_mtime))
 
 
 def add_extension_if_not_present(file_name: Path, extension: str) -> Path:

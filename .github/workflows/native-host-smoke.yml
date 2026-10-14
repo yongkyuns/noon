@@ -136,7 +136,7 @@ jobs:
         with:
           name: native-selection-pixels
           path: selection-proof/
-          retention-days: 14
+          retention-days: 3
 
   headless-capture:
     name: Rust scene capture without a display server
@@ -228,4 +228,4 @@ jobs:
         with:
           name: native-export-capture
           path: capture-proof/
-          retention-days: 14
+          retention-days: 3

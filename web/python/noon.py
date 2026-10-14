@@ -398,6 +398,11 @@ class Mobject:
         from _manim_geometry import _mobject_get_color
         return _mobject_get_color(self)
 
+    def get_family(self, recurse: bool = True) -> list[Mobject]:
+        """Return existing wrappers in shared family order, including this root."""
+        from _manim_semantic_handles import _get_family
+        return _get_family(self)
+
     def match_color(self, mobject: Mobject) -> Mobject:
         """Match the donor's observed color through the existing shared setter."""
         return self.set_color(mobject.get_color())
@@ -895,10 +900,36 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "quaternion_mult": "_manim_user_vectors",
+    "quaternion_from_angle_axis": "_manim_user_vectors",
+    "angle_axis_from_quaternion": "_manim_user_vectors",
+    "quaternion_conjugate": "_manim_user_vectors",
+    "thick_diagonal": "_manim_user_vectors",
+    "rotation_about_z": "_manim_user_vectors",
+    "cartesian_to_spherical": "_manim_user_vectors",
+    "spherical_to_cartesian": "_manim_user_vectors",
+    "complex_to_R3": "_manim_user_vectors",
+    "R3_to_complex": "_manim_user_vectors",
+    "complex_func_to_R3_func": "_manim_user_vectors",
+    "center_of_mass": "_manim_user_vectors",
+    "midpoint": "_manim_user_vectors",
+    "normalize": "_manim_user_vectors",
+    "angle_of_vector": "_manim_user_vectors",
+    "angle_between_vectors": "_manim_user_vectors",
+    "shoelace": "_manim_user_vectors",
+    "shoelace_direction": "_manim_user_vectors",
+    "cross2d": "_manim_user_vectors",
     "add_extension_if_not_present": "_manim_file_paths",
     "guarantee_existence": "_manim_file_paths",
     "guarantee_empty_existence": "_manim_file_paths",
     "seek_full_path_from_defaults": "_manim_file_paths",
+    "ensure_executable": "_manim_file_paths",
+    "modify_atime": "_manim_file_paths",
+    "interpolate": "_manim_interpolation",
+    "integer_interpolate": "_manim_interpolation",
+    "mid": "_manim_interpolation",
+    "inverse_interpolate": "_manim_interpolation",
+    "match_interpolate": "_manim_interpolation",
     "binary_search": "_manim_simple_functions",
     "choose": "_manim_simple_functions",
     "clip": "_manim_simple_functions",
@@ -1015,6 +1046,7 @@ _PUBLIC_EXPORTS = {
     "RESAMPLING_ALGORITHMS": "_manim_image",
     "Circle": "_manim_compat",
     "Rectangle": "_manim_compat",
+    "ScreenRectangle": "_manim_compat",
     "Square": "_manim_compat",
     "Line": "_manim_compat",
     "Path": "_manim_compat",
@@ -1049,6 +1081,7 @@ _PUBLIC_EXPORTS = {
     "Sector": "_manim_shared_geometry",
     "Annulus": "_manim_shared_geometry",
     "Dot": "_manim_geometry",
+    "AnnotationDot": "_manim_geometry",
     "Ellipse": "_manim_geometry",
     "Triangle": "_manim_geometry",
     "Polygram": "_manim_polygon",

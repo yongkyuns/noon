@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { runtimeBuildIdentity } from "./test-support/runtime-build.mjs";
 
 import {
   AUTHORING_CHANNEL,
@@ -41,6 +42,7 @@ function workerMessage(type, payload = {}) {
     channel: AUTHORING_CHANNEL,
     protocolVersion: AUTHORING_PROTOCOL_VERSION,
     type,
+    ...(type === "ready" ? { buildIdentity: runtimeBuildIdentity() } : {}),
     ...payload,
   };
 }
@@ -68,6 +70,59 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test("ready exposes a validated immutable build identity across the worker boundary", async () => {
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  const incoming = runtimeBuildIdentity();
+  worker.emit("message", workerMessage("ready", { buildIdentity: incoming }));
+  const observed = await client.ready();
+  assert.deepEqual(observed, incoming);
+  assert.equal(Object.isFrozen(observed), true);
+  assert.equal(Object.isFrozen(observed.files), true);
+  for (const descriptor of Object.values(observed.files)) assert.equal(Object.isFrozen(descriptor), true);
+  incoming.files.wasm.sha256 = "0".repeat(64);
+  incoming.buildId = "0".repeat(64);
+  assert.deepEqual(await client.ready(), runtimeBuildIdentity());
+  client.terminate();
+});
+
+test("invalid readiness provenance rejects readiness and queued Run and retires its worker", async () => {
+  const valid = runtimeBuildIdentity();
+  for (const buildIdentity of [
+    undefined, null,
+    { ...valid, sourceRevision: "short" },
+    { ...valid, buildId: "0".repeat(64) },
+    { ...valid, files: { ...valid.files, wasm: { ...valid.files.wasm, path: "./other.wasm" } } },
+    { ...valid, files: { worker: valid.files.worker, wasm: valid.files.wasm, glue: valid.files.glue } },
+    { ...valid, extra: true },
+  ]) {
+    const worker = new FakeWorker();
+    const client = new PythonAuthoringClient(worker);
+    const readyRejected = assert.rejects(client.ready(), /runtime build identity|provenance|digest/);
+    const runRejected = assert.rejects(client.run("result = scene"), /runtime build identity|provenance|digest/);
+    worker.emit("message", workerMessage("ready", { buildIdentity }));
+    await Promise.all([readyRejected, runRejected]);
+    assert.equal(worker.terminated, true);
+    assert.equal(client.terminated, true);
+    assert.deepEqual(worker.messages, [], "invalid readiness must not submit source");
+  }
+});
+
+test("termination wins while readiness identity validation is pending", async (t) => {
+  const digest = deferred();
+  t.mock.method(crypto.subtle, "digest", () => digest.promise);
+  const worker = new FakeWorker();
+  const client = new PythonAuthoringClient(worker);
+  const incoming = runtimeBuildIdentity();
+  const rejected = assert.rejects(client.ready(), /terminated/);
+  worker.emit("message", workerMessage("ready", { buildIdentity: incoming }));
+  client.terminate();
+  digest.resolve(Uint8Array.from(Buffer.from(incoming.buildId, "hex")).buffer);
+  await rejected;
+  await assert.rejects(client.run("result = scene"), /terminated/);
+  assert.deepEqual(worker.messages, []);
+});
 
 test("correlates a Python request with a validated shared Scene response", async () => {
   const worker = new FakeWorker();
@@ -159,6 +214,7 @@ test("routes an early semantic continuation registration without settling the ru
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
+  await client.ready();
   const registrations = [];
   let settled = false;
   const result = client.run("async scene", {}, {
@@ -233,6 +289,7 @@ test("waits for continuation startup before settling an already returned result"
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
+  await client.ready();
   const startup = deferred();
   let settled = false;
   const result = client.run("async scene", {}, {
@@ -274,6 +331,7 @@ test("continuation startup failure rejects a buffered result and cancels its run
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
+  await client.ready();
   const startup = deferred();
   const result = client.run("async scene", {}, {
     onSemanticContinuation: () => startup.promise,
@@ -316,6 +374,7 @@ test("cancels the matching suspended continuation when early startup rejects", a
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
+  await client.ready();
   const result = client.run("async scene", {}, {
     onSemanticContinuation: () => { throw new Error("renderer startup failed"); },
   });
@@ -354,6 +413,7 @@ test("semantic execution attachment transfers distinct control and render ports"
   const worker = new FakeWorker();
   const client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready"));
+  await client.ready();
   const control = new MessageChannel();
   const render = new MessageChannel();
   const result = client.attachSemanticExecution(

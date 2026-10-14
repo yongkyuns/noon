@@ -35,6 +35,21 @@ class Dot(_compat.Circle):
         _dot_init(self, point, radius, stroke_width, fill_opacity, color, **kwargs)
 
 
+class AnnotationDot(Dot):
+    """Manim annotation defaults over shared Dot geometry and paint."""
+
+    def __init__(
+        self,
+        radius: float = DEFAULT_DOT_RADIUS * 1.3,
+        stroke_width: float = 5,
+        stroke_color: _base.Color = _base.WHITE,
+        fill_color: _base.Color = _base.BLUE,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(radius=radius, stroke_width=stroke_width,
+                         stroke_color=stroke_color, fill_color=fill_color, **kwargs)
+
+
 class Ellipse(_compat.Circle):
     """Manim-compatible ellipse backed by the shared Rust constructor."""
 

@@ -112,7 +112,7 @@ jobs:
             ${{ runner.temp }}/provider-results/*.txt
             ${{ runner.temp }}/provider-results/Cargo.lock
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
   baseline:
     name: Base geometry costs / ${{ matrix.target }}
@@ -150,4 +150,4 @@ jobs:
             ${{ runner.temp }}/provider-baseline-results/*.txt
             ${{ runner.temp }}/provider-baseline-results/Cargo.lock
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3

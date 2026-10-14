@@ -566,6 +566,8 @@ for cls, group, base in [(Mobject, Group, Mobject), (Group, Group, Mobject),
     assert cls.get_mobject_type_class() is base
 from pathlib import Path
 import tempfile
+import os
+from unittest.mock import patch
 path = Path("movie.mp4")
 assert add_extension_if_not_present(path, ".mp4") is path
 assert add_extension_if_not_present(path, ".png") == Path("movie.mp4.png")
@@ -577,7 +579,18 @@ with tempfile.TemporaryDirectory() as directory:
     assert list(target.iterdir()) == []
     (target / "picture.png").write_text("keep")
     assert seek_full_path_from_defaults("picture", target, [".svg", ".png"]) == target / "picture.png"
+    executable = target / "tool"
+    executable.write_text("user data")
+    assert ensure_executable(executable) == os.access(executable, os.X_OK)
+    os.utime(executable, times=(1000000000.0, 1100000000.0))
+    with patch("time.time", return_value=1234567890.0):
+        assert modify_atime(str(executable)) is None
+    assert executable.stat().st_atime == 1234567890.0
+    assert executable.stat().st_mtime == 1100000000.0
 assert choose(6, 2) == 15
+assert interpolate(0, 8, 0.25) == 2
+assert integer_interpolate(0, 8, 0.25) == (2, 0.0)
+assert mid(0, 8) == 4
 assert clip(5, 10, 0) == 10
 assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
@@ -592,6 +605,21 @@ array = __import__("numpy").array([[1, 2], [3, 4]])
 stretched = stretch(array, 3)
 assert stretched.tolist() == [[1, 2], [1, 2], [3, 4]]
 assert stretched.dtype == array.dtype
+from noon import inverse_interpolate, match_interpolate
+assert inverse_interpolate(0, 8, 2) == 0.25
+assert match_interpolate(0, 100, 0, 8, 2) == 25
+from noon import normalize, center_of_mass, angle_of_vector, complex_func_to_R3_func, cross2d
+assert normalize([3, 4]).tolist() == [0.6, 0.8]
+assert center_of_mass([[0, 1], [2, 3]]).tolist() == [1, 2]
+assert angle_of_vector([0, 1]) == __import__("numpy").pi / 2
+assert complex_func_to_R3_func(lambda z: z*z)([1, 2, 9]).tolist() == [-3, 4, 0]
+assert cross2d(array[0], array[1]) == -2
+from noon import quaternion_mult, quaternion_conjugate, cartesian_to_spherical, thick_diagonal
+quaternion = [1, 2, 3, 4]
+assert quaternion_mult(quaternion) is quaternion
+assert quaternion_conjugate(quaternion).tolist() == [1, -2, -3, -4]
+assert cartesian_to_spherical([0, 0, 0]).tolist() == [0, 0, 0]
+assert thick_diagonal(3, 1).tolist() == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 assert not __import__("numpy").shares_memory(stretched, array)
 try:
     stretch(array, 1)

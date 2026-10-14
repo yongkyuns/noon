@@ -1,5 +1,8 @@
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { createPlaygroundPreview } from "./playground-preview.js";
+import { createPlaygroundDiagnostics } from "./playground-diagnostics.js";
+import { authoringSourceDocument } from "./authoring-diagnostic-runtime.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
 import { PresentationRate } from "./frame-metrics.js";
 import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
@@ -16,12 +19,18 @@ import {
 } from "./example-gallery.js";
 
 let canvas = document.querySelector("#scene");
+const previousPreview = createPlaygroundPreview(canvas.parentElement);
 const status = document.querySelector("#status");
 const statusText = document.querySelector("#status-text");
 const sceneButton = document.querySelector("#replace-scene");
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
 const sceneSourceEditor = document.querySelector("#python-scene-source");
+const diagnosticPanel = createPlaygroundDiagnostics({
+  editor: sceneSourceEditor,
+  details: document.querySelector("#python-diagnostics"),
+  traceback: document.querySelector("#python-traceback"),
+});
 const sourceEditor = document.querySelector("#python-source");
 const sceneTab = document.querySelector("#scene-tab");
 const patchTab = document.querySelector("#patch-tab");
@@ -449,31 +458,35 @@ function beginBusy() {
 function showError(error) {
   resetPresentationRate();
   console.error(error);
-  setRuntimeStatus(`Error: ${error}`, "error");
-  patchStatus.value = "Runtime failed";
+  const title = diagnosticPanel.show(error, "Runtime failed");
+  if (title === null) return;
+  setRuntimeStatus(title, "error");
+  patchStatus.value = title;
   patchStatus.dataset.state = "error";
 }
 
 function showSceneError(error) {
   resetPresentationRate();
   console.error(error);
-  patchStatus.value = `Python failed: ${error}`;
+  const title = diagnosticPanel.show(error, "Scene failed");
+  if (title === null) return;
+  patchStatus.value = title;
   patchStatus.dataset.state = "error";
-  document.querySelector("#python-traceback").textContent = String(error.stack ?? error);
-  const diagnostics = document.querySelector("#python-diagnostics");
-  diagnostics.hidden = false;
-  diagnostics.open = true;
 }
 
 function showRecoverableSceneError(error) {
   console.warn("Recoverable Python callback error", error);
-  patchStatus.value = `Python callback failed: ${error}`;
+  const title = diagnosticPanel.show(error, "A callback failed");
+  if (title === null) return;
+  patchStatus.value = title;
   patchStatus.dataset.state = "error";
 }
 
 function showPlaybackError(error) {
   console.error(error);
-  patchStatus.value = `Playback failed: ${error}`;
+  const title = diagnosticPanel.show(error, "Playback failed");
+  if (title === null) return;
+  patchStatus.value = title;
   patchStatus.dataset.state = "error";
 }
 
@@ -838,6 +851,8 @@ async function supersedeActiveSourceContinuation() {
   const continuation = activeSourceContinuation;
   if (continuation === null) return false;
 
+  previousPreview.hold(canvas);
+  playbackControls?.setControllable(false);
   generations.invalidateRun();
   patchStatus.value = "Restarting with edited Python…";
   patchStatus.dataset.state = "running";
@@ -871,6 +886,8 @@ async function supersedeActiveSourceContinuation() {
 let editStopPromise = null;
 function stopForSourceEdit() {
   if (editStopPromise !== null) return editStopPromise;
+  previousPreview.hold(canvas);
+  playbackControls?.setControllable(false);
   generations.invalidateRun();
   const priorRun = sceneRunPromise;
   const client = authoringClient;
@@ -920,7 +937,7 @@ function stopForSourceEdit() {
   status.dataset.playbackControls = "unavailable";
   status.dataset.playbackPhase = "stopped";
   status.dataset.playbackPlaying = "false";
-  document.querySelector("#python-diagnostics").hidden = true;
+  diagnosticPanel.invalidate();
   setRuntimeStatus("Preview stopped · waiting for edited Python…", "ready");
   return task;
 }
@@ -971,7 +988,30 @@ async function runScene() {
     let earlyContinuation = null;
     let authoringFailed = false;
     try {
-      document.querySelector("#python-diagnostics").hidden = true;
+      diagnosticPanel.beginRun(authoringSourceDocument({ playground: {
+        selection_generation: runToken.selectionGeneration,
+        run_generation: runToken.runGeneration,
+      } }), source);
+      previousPreview.hold(canvas, "Building edited source");
+      // Explicit Run need not pass through the edit-stop path. Do not leave a
+      // completed source's replay/callbacks running behind the frozen image.
+      if (player !== null && !playerNeedsRestart) {
+        const retainedPlayer = player;
+        canvas.style.visibility = "hidden";
+        playbackControls?.setControllable(false);
+        stopMetricsPolling();
+        try {
+          await retainedPlayer.pause();
+        } catch {
+          // Same retirement policy as edit-stop: an unpausable owner cannot
+          // remain live behind the preview. The replacement gets a fresh owner.
+          if (isCurrentRun(runToken)) discardEarlyContinuationRuntime(retainedPlayer);
+        }
+        if (!isCurrentRun(runToken)) return recordStale(runToken, "after-preview-pause");
+        status.dataset.playbackPlaying = "false";
+        status.dataset.playbackPhase = "stopped";
+        status.dataset.playbackControls = "unavailable";
+      }
       setRuntimeStatus("Building Python scene…", "running");
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
@@ -1025,6 +1065,7 @@ async function runScene() {
               throw new Error("Python semantic continuation was superseded during startup");
             }
             adoptRuntimeCanvas(attachedPlayer);
+            previousPreview.showLive();
             startMetricsPolling();
             updatePlaybackControls({
               supported: false,
@@ -1173,6 +1214,7 @@ async function runScene() {
       patchStatus.dataset.sequence = String(result.nextPatchSequence);
       patchStatus.dataset.runGeneration = String(runToken.runGeneration);
       patchStatus.dataset.operation = operation;
+      previousPreview.accept(canvas, { exampleId: example.id, runGeneration: runToken.runGeneration });
       return { stale: false, result };
     } catch (error) {
       if (activeSourceContinuation?.runToken === runToken) {
@@ -1182,8 +1224,10 @@ async function runScene() {
       if (!isCurrentRun(runToken)) {
         return recordStale(runToken, "error");
       }
+      previousPreview.hold(canvas, "Edited source failed");
+      playbackControls?.setControllable(false);
       if (authoringFailed) {
-        setRuntimeStatus("Python error · edit the source to retry", "ready");
+        setRuntimeStatus("Scene error · see details below", "ready");
         showSceneError(error);
       } else if (player === null || playerNeedsRestart) {
         showError(error);
@@ -1275,6 +1319,7 @@ async function selectExample(
     if (selectedExampleId && selectedExampleId !== id && sceneSourceEditor.value !== canonicalSource) {
       drafts.set(selectedExampleId, sceneSourceEditor.value);
     }
+    if (selectedExampleId !== id) previousPreview.clear();
     selectedExampleId = id;
     canonicalSource = source;
     sceneSourceEditor.value = drafts.get(id) ?? source;
@@ -1417,7 +1462,9 @@ async function updateWorkerMetrics() {
   } catch (error) {
     if (isCurrentMetricsObservation(observation)) showError(error);
   } finally {
-    if (playbackPending === observation) playbackPending = null;
+    if (playbackPending === observation) {
+      playbackPending = null;
+    }
   }
 }
 
@@ -1559,9 +1606,20 @@ try {
 
   window.addEventListener(
     "pagehide",
-    () => {
-      sourceRestart.dispose();
-      disposeFullscreen();
+    (event) => {
+      // Retiring a worker rejects its pending requests. Invalidate their run
+      // before teardown so navigation cannot publish a Python failure.
+      generations.invalidateRun();
+      activeSourceContinuation = null;
+      diagnosticPanel.invalidate();
+      previousPreview.clear();
+      sourceRestart.cancel();
+      if (!event.persisted) {
+        sourceRestart.dispose();
+        diagnosticPanel.dispose();
+        previousPreview.dispose();
+        disposeFullscreen();
+      }
       stopMetricsPolling();
       playbackControls?.destroy();
       playbackControls = null;
@@ -1569,12 +1627,23 @@ try {
       authoringClient = null;
       const preparation = runtimePreparation;
       runtimePreparation = null;
-      preparation?.candidate.terminate();
-      player?.terminate();
-      player = null;
+      if (preparation !== null) {
+        preparation.candidate.terminate();
+        adoptRuntimeCanvas(preparation.candidate);
+      }
+      discardEarlyContinuationRuntime(player);
     },
-    { once: true },
   );
+  window.addEventListener("pageshow", (event) => {
+    if (!event.persisted) return;
+    status.dataset.runtimeStartup = "deferred";
+    status.dataset.executionTopology = "deferred-until-run";
+    status.dataset.playbackPlaying = "false";
+    status.dataset.playbackControls = "unavailable";
+    setRuntimeStatus("Ready · runtime starts when you run an example", "ready");
+    patchStatus.value = "Preview stopped after navigation · Run to restart";
+    patchStatus.dataset.state = "ready";
+  });
 } catch (error) {
   showError(error);
 }
