@@ -65,6 +65,12 @@ pub enum RateFunction {
     RushFrom,
     ThereAndBack,
     EaseInOutCubic,
+    EaseInExpo,
+    EaseOutExpo,
+    EaseInOutExpo,
+    EaseInCirc,
+    EaseOutCirc,
+    EaseInOutCirc,
     EaseInSine,
     EaseOutSine,
     EaseInOutSine,
@@ -100,6 +106,12 @@ impl RateFunction {
             | Self::Smoothererstep
             | Self::SlowInto
             | Self::DoubleSmooth
+            | Self::EaseInExpo
+            | Self::EaseOutExpo
+            | Self::EaseInOutExpo
+            | Self::EaseInCirc
+            | Self::EaseOutCirc
+            | Self::EaseInOutCirc
             | Self::EaseInSine
             | Self::EaseOutSine
             | Self::EaseInOutSine
@@ -165,6 +177,40 @@ impl RateFunction {
                     0.5 * manim_smooth_f64(2.0 * p)
                 } else {
                     0.5 * (1.0 + manim_smooth_f64(2.0 * p - 1.0))
+                }
+            }
+            Self::EaseInExpo => {
+                if p == 0.0 {
+                    0.0
+                } else {
+                    2.0_f64.powf(10.0 * p - 10.0)
+                }
+            }
+            Self::EaseOutExpo => {
+                if p == 1.0 {
+                    1.0
+                } else {
+                    1.0 - 2.0_f64.powf(-10.0 * p)
+                }
+            }
+            Self::EaseInOutExpo => {
+                if p == 0.0 {
+                    0.0
+                } else if p == 1.0 {
+                    1.0
+                } else if p < 0.5 {
+                    2.0_f64.powf(20.0 * p - 10.0) / 2.0
+                } else {
+                    (2.0 - 2.0_f64.powf(-20.0 * p + 10.0)) / 2.0
+                }
+            }
+            Self::EaseInCirc => 1.0 - (1.0 - p.powi(2)).sqrt(),
+            Self::EaseOutCirc => (1.0 - (p - 1.0).powi(2)).sqrt(),
+            Self::EaseInOutCirc => {
+                if p < 0.5 {
+                    (1.0 - (1.0 - (2.0 * p).powi(2)).sqrt()) / 2.0
+                } else {
+                    ((1.0 - (-2.0 * p + 2.0).powi(2)).sqrt() + 1.0) / 2.0
                 }
             }
             Self::EaseInSine => 1.0 - (p * std::f64::consts::PI / 2.0).cos(),
@@ -1074,13 +1120,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sine_easings_match_unchanged_manim_finite_samples() {
+    fn assert_pinned_easing_samples(reference: &str, expected_count: usize) {
         let mut count = 0;
-        for row in include_str!("sine_easing_reference.csv")
-            .lines()
-            .filter(|s| !s.starts_with('#'))
-        {
+        for row in reference.lines().filter(|s| !s.starts_with('#')) {
             let values = row.split(',').collect::<Vec<_>>();
             let rate = RateFunction::from_semantic_id(values[0]).unwrap();
             let progress = values[1].parse::<f64>().unwrap();
@@ -1092,28 +1134,25 @@ mod tests {
             assert_eq!(rate.evaluate(progress as f32), expected as f32, "{row}");
             count += 1;
         }
-        assert_eq!(count, 99);
+        assert_eq!(count, expected_count);
+    }
+
+    #[test]
+    fn exponential_circular_easings_match_unchanged_manim_finite_samples() {
+        assert_pinned_easing_samples(
+            include_str!("exponential_circular_easing_reference.csv"),
+            198,
+        );
+    }
+
+    #[test]
+    fn sine_easings_match_unchanged_manim_finite_samples() {
+        assert_pinned_easing_samples(include_str!("sine_easing_reference.csv"), 99);
     }
 
     #[test]
     fn polynomial_easings_match_unchanged_manim_finite_samples() {
-        let mut count = 0;
-        for row in include_str!("polynomial_easing_reference.csv")
-            .lines()
-            .filter(|s| !s.starts_with('#'))
-        {
-            let values = row.split(',').collect::<Vec<_>>();
-            let rate = RateFunction::from_semantic_id(values[0]).unwrap();
-            let progress = values[1].parse::<f64>().unwrap();
-            let expected = values[2].parse::<f64>().unwrap();
-            assert!(
-                (rate.evaluate_f64(progress) - expected).abs() < 1e-14,
-                "{row}"
-            );
-            assert_eq!(rate.evaluate(progress as f32), expected as f32, "{row}");
-            count += 1;
-        }
-        assert_eq!(count, 420);
+        assert_pinned_easing_samples(include_str!("polynomial_easing_reference.csv"), 420);
     }
 
     #[test]

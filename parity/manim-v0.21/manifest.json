@@ -11,6 +11,23 @@
   },
   "fixtures": [
     {
+      "id": "exponential-circular-easings",
+      "scene": "ExponentialCircularEasings",
+      "source": "parity/manim-v0.21/core-examples/exponential_circular_easings.py",
+      "reference_frame_rate": 120,
+      "expected_duration": 1,
+      "sample_times": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.75,
+        0.9666666666666667
+      ],
+      "notes": "Six original exponential/circular rates through shared method targets. 120fps reference represents all unchanged requested times exactly; no tolerance relaxation."
+    },
+    {
       "id": "sine-easings",
       "scene": "SineEasings",
       "source": "parity/manim-v0.21/core-examples/sine_easings.py",

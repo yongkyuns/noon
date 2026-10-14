@@ -1368,3 +1368,12 @@ pub async fn create_direct_sine_easings_renderer(
     let session = noon::example_scenes::polynomial_rates::sine_session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[wasm_bindgen(js_name = createDirectExponentialCircularEasingsRenderer)]
+pub async fn create_direct_exponential_circular_easings_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::polynomial_rates::exponential_circular_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
