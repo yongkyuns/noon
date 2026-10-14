@@ -23,6 +23,9 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "normalize_along_axis": "numpy",
+    "rotation_matrix_from_quaternion": "numpy",
+    "rotation_matrix_transpose_from_quaternion": "numpy",
     "line_intersection": "numpy",
     "find_intersection": "numpy",
     "quaternion_from_angle_axis": "numpy",

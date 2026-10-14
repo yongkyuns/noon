@@ -91,6 +91,7 @@ jobs:
           array-oracle/bin/python noon/scripts/manim-rate-intervals.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-vectors.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-intersections.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-array-normalization.py manim-v0.21.0
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_intersections.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_vectors.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_array_utilities.py -v

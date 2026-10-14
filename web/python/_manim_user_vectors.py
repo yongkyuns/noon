@@ -113,6 +113,29 @@ def quaternion_conjugate(quaternion: Sequence[float]) -> np.ndarray:
     return result
 
 
+def rotation_matrix_transpose_from_quaternion(quat: np.ndarray) -> list[np.ndarray]:
+    quat_inv = quaternion_conjugate(quat)
+    return [
+        quaternion_mult(quat, [0, *basis], quat_inv)[1:]
+        for basis in [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    ]
+
+
+def rotation_matrix_from_quaternion(quat: np.ndarray) -> np.ndarray:
+    import numpy as np
+    return np.transpose(rotation_matrix_transpose_from_quaternion(quat))
+
+
+def normalize_along_axis(array: np.ndarray, axis: np.ndarray) -> np.ndarray:
+    """Preserve the original in-place NumPy operation on explicit user arrays."""
+    import numpy as np
+    norms = np.sqrt((array * array).sum(axis))
+    norms[norms == 0] = 1
+    buffed_norms = np.repeat(norms, array.shape[axis]).reshape(array.shape)
+    array /= buffed_norms
+    return array
+
+
 def thick_diagonal(dim: int, thickness: int = 2) -> MatrixMN:
     import numpy as np
     rows = np.arange(dim).repeat(dim).reshape((dim, dim))
