@@ -45,6 +45,9 @@ impl FamilyHandle {
     fn semantic_generation(&self) -> u32 {
         self.family.node_id().generation()
     }
+    fn scale(&self, x: f64, y: f64) -> PyResult<()> {
+        self.family.scale(x, y).map_err(engine_error)
+    }
     #[pyo3(name = "memberKeys")]
     fn member_keys(&self) -> PyResult<Vec<String>> {
         let store = self.family.integration_store().borrow();
@@ -97,13 +100,17 @@ impl FamilyHandle {
     }
 }
 
-/// Immutable authored observation; all aggregation and critical points stay in Rust.
+/// Immutable authored observation with shared atomic placement operations.
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct FamilyLayoutObservation {
     layout: noon::FamilyLayout,
 }
 #[pymethods]
 impl FamilyLayoutObservation {
+    #[pyo3(name = "shiftBy")]
+    fn shift_by(&self, x: f64, y: f64) -> PyResult<()> {
+        self.layout.shift(x, y).map_err(engine_error)
+    }
     #[getter(centerX)]
     fn center_x(&self) -> f64 {
         self.layout.center().0

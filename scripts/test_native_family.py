@@ -18,6 +18,42 @@ class NativeFamilyTests(unittest.TestCase):
                 batch.appendMobject('', member)
         return store.family(batch, 0)
 
+    def test_empty_family_shift_and_scale_do_not_move_a_late_child(self):
+        store = native.Store()
+        family = self.family(store)
+        family.layout().shiftBy(3, -2)
+        family.scale(2, 2)
+        empty = family.layout()
+        self.assertEqual((empty.centerX, empty.centerY, empty.width, empty.height),
+                         (0, 0, 0, 0))
+        child = store.geometry(native.GeometryOptions.square(2))
+        batch = native.MembershipBatch('add')
+        batch.appendMobject('', child)
+        family.editMembership(batch)
+        layout = family.layout()
+        self.assertEqual((layout.centerX, layout.centerY, layout.width, layout.height),
+                         (0, 0, 2, 2))
+
+    def test_family_scale_and_shift_visit_shared_leaves_once_and_reject_invalid_values(self):
+        store = native.Store()
+        child = store.geometry(native.GeometryOptions.square(2))
+        family = self.family(store, child, child)
+        original = family.layout()
+        family.scale(2, 3)
+        family.layout().shiftBy(1, 2)
+        layout = family.layout()
+        self.assertEqual((layout.centerX, layout.centerY, layout.width, layout.height),
+                         (1, 2, 4, 6))
+        self.assertEqual((original.centerX, original.centerY, original.width, original.height),
+                         (0, 0, 2, 2))
+        with self.assertRaises(RuntimeError):
+            family.scale(float('nan'), 1)
+        with self.assertRaises(RuntimeError):
+            family.layout().shiftBy(0, float('nan'))
+        unchanged = family.layout()
+        self.assertEqual((unchanged.centerX, unchanged.centerY, unchanged.width, unchanged.height),
+                         (1, 2, 4, 6))
+
     def test_root_metadata_and_copy_independence_use_real_shared_handles(self):
         store = native.Store()
         root = self.family(store)
