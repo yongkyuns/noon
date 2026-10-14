@@ -9,6 +9,7 @@ import playwright from 'playwright';
 import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
+import { captureChildProcessDiagnostics } from './playground-browser-failure-evidence.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
 
@@ -26,7 +27,7 @@ const liveMathAnimations = {
   'showcase-text-math': [['Write', 0, 1.2]],
 };
 await mkdir(artifacts, { recursive: true });
-let server, browser, runtimeCache;
+let server, serverDiagnostics, browser, runtimeCache;
 const startedAt = performance.now();
 const results = [];
 const nativeFailureDiagnostics = browserName === 'webkit' && process.platform === 'darwin' &&
@@ -71,7 +72,8 @@ try {
   if (!external) {
     server = process.env.NOON_GALLERY_COI === '1'
       ? await serveRepository(root, port, { crossOriginIsolated: true })
-      : spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', root], { stdio: 'ignore' });
+      : spawn('python3', ['-u', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', root], { stdio: ['ignore', 'pipe', 'pipe'] });
+    if (typeof server?.on === 'function') serverDiagnostics = captureChildProcessDiagnostics(server);
     let ready = false;
     for (let i = 0; i < 100; i++) {
       ready = await fetch(new URL('index.html', base)).then(r => r.ok).catch(() => false);
@@ -352,6 +354,7 @@ try {
     } catch (error) {
       result.outcome = 'fail'; result.failure = String(error);
       result.failureDiagnostics = {
+        httpServer: serverDiagnostics?.snapshot() ?? null,
         pendingRequestCount: pendingRequests.size,
         pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({
           url: request.url.slice(0, 500),
@@ -424,4 +427,5 @@ try {
   await browser?.close();
   if (typeof server?.close === 'function') await server.close();
   else server?.kill('SIGTERM');
+  serverDiagnostics?.dispose();
 }
