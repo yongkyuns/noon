@@ -222,7 +222,30 @@ def _step_end(t: float) -> float:
     return 0.0 if float(t) < 1.0 else 1.0
 
 
+@_unit_interval
+def ease_in_sine(t: float) -> float:
+    import numpy as np
+    val: float = 1 - np.cos((t * np.pi) / 2)
+    return val
+
+@_unit_interval
+def ease_out_sine(t: float) -> float:
+    import numpy as np
+    val: float = np.sin((t * np.pi) / 2)
+    return val
+
+@_unit_interval
+def ease_in_out_sine(t: float) -> float:
+    import numpy as np
+    val: float = -(np.cos(np.pi * t) - 1) / 2
+    return val
+
+
 _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
+    "ease_in_sine": ease_in_sine,
+    "ease_out_sine": ease_out_sine,
+    "ease_in_out_sine": ease_in_out_sine,
+
     "ease_in_quad": ease_in_quad,
     "ease_out_quad": ease_out_quad,
     "ease_in_out_quad": ease_in_out_quad,

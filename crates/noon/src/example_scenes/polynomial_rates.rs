@@ -39,6 +39,19 @@ pub fn easing_session() -> Result<ExecutionSession, String> {
     )
 }
 
+/// Three standard sine curves through the same retained method-target composition.
+pub fn sine_session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::EaseInSine,
+            RateFunction::EaseOutSine,
+            RateFunction::EaseInOutSine,
+        ],
+        0.65,
+        1.0,
+    )
+}
+
 fn build_session(
     rates: &[RateFunction],
     side: f64,
@@ -100,6 +113,42 @@ fn build_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sine_rates_keep_seek_and_forward_sampling_equal_at_original_positions() {
+        let mut forward = sine_session().unwrap();
+        let mut sought = sine_session().unwrap();
+        let ids = forward
+            .frame()
+            .objects
+            .iter()
+            .map(|o| o.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids.len(), 3);
+        for time in [0.0, 0.125, 0.25, 0.375, 0.5, 0.75, 1.0] {
+            forward.advance_to(time).unwrap();
+            sought.seek(time).unwrap();
+            for (index, (left, right)) in forward
+                .frame()
+                .objects
+                .iter()
+                .zip(&sought.frame().objects)
+                .enumerate()
+            {
+                assert_eq!(left.id, ids[index]);
+                assert_eq!(left.transform, right.transform);
+                assert_eq!(left.style, right.style);
+            }
+        }
+        sought.seek(0.25).unwrap();
+        for (object, original) in sought.frame().objects.iter().zip([
+            0.07612046748871326_f32,
+            0.3826834323650898_f32,
+            0.1464466094067262_f32,
+        ]) {
+            assert!((object.transform.translation.x - (-2.0 + 4.0 * original)).abs() < 1e-6);
+        }
+    }
 
     #[test]
     fn all_twelve_polynomial_easings_keep_identity_seek_and_forward_equal() {

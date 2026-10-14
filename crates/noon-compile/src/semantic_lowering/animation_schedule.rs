@@ -2795,6 +2795,9 @@ fn reversed_create_rate(rate: RateFunction) -> Option<RateFunction> {
         | RateFunction::EaseInOutQuad
         | RateFunction::EaseInOutQuart
         | RateFunction::EaseInOutQuint => Some(rate),
+        RateFunction::EaseInSine => Some(RateFunction::EaseOutSine),
+        RateFunction::EaseOutSine => Some(RateFunction::EaseInSine),
+        RateFunction::EaseInOutSine => Some(RateFunction::EaseInOutSine),
         RateFunction::EaseInQuad => Some(RateFunction::EaseOutQuad),
         RateFunction::EaseOutQuad => Some(RateFunction::EaseInQuad),
         RateFunction::EaseInCubic => Some(RateFunction::EaseOutCubic),
@@ -3473,8 +3476,11 @@ mod tests {
     }
 
     #[test]
-    fn reversed_polynomial_create_preserves_original_rate_and_endpoint_identity() {
+    fn reversed_monotone_create_preserves_original_rate_and_endpoint_identity() {
         for rate in [
+            RateFunction::EaseInSine,
+            RateFunction::EaseOutSine,
+            RateFunction::EaseInOutSine,
             RateFunction::EaseInQuad,
             RateFunction::EaseOutQuad,
             RateFunction::EaseInOutQuad,
