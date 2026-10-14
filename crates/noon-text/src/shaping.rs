@@ -29,6 +29,17 @@ const MANIM_PLAIN_LINE_ADVANCE_SCALE: f32 = 0.75;
 // so one Cairo layout pixel is 3.6 units in Noon's point-sized shaping space.
 const MANIM_PANGO_LAYOUT_PIXEL: f32 = 3.6;
 
+/// Explicit layout environment for native text; the portable default is stable
+/// across hosts. This changes preparation only, never the presentation clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NativeFontMetricsProfile {
+    #[default]
+    CairoFreeType,
+    /// Fractional Pango layout with Cairo/CoreText paths, for static monochrome
+    /// TrueType faces. CFF, variable and intrinsic color faces are unsupported.
+    CairoCoreText,
+}
+
 /// Exact immutable OpenType face input. `face_key` derives from the bytes and
 /// collection index, so a glyph identity never resolves to a different file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +48,7 @@ pub struct NativeFontFace {
     pub face_key: Arc<str>,
     pub face_index: u32,
     pub data: Arc<[u8]>,
+    metrics_profile: NativeFontMetricsProfile,
 }
 
 impl NativeFontFace {
@@ -59,7 +71,38 @@ impl NativeFontFace {
             face_key,
             face_index,
             data,
+            metrics_profile: NativeFontMetricsProfile::default(),
         })
+    }
+
+    pub fn metrics_profile(&self) -> NativeFontMetricsProfile {
+        self.metrics_profile
+    }
+
+    /// Select a deterministic metrics recipe without copying the font bytes.
+    pub fn with_metrics_profile(
+        mut self,
+        profile: NativeFontMetricsProfile,
+    ) -> Result<Self, NativeTextError> {
+        if profile == NativeFontMetricsProfile::CairoCoreText
+            && !crate::outline::supports_coretext_metrics(&self.data, self.face_index)
+        {
+            return Err(NativeTextError::UnsupportedFontMetricsProfile);
+        }
+        self.metrics_profile = profile;
+        Ok(self)
+    }
+
+    fn outline_profile(&self) -> Result<noon_core::GlyphOutlineProfile, NativeTextError> {
+        match self.metrics_profile {
+            NativeFontMetricsProfile::CairoFreeType => {
+                crate::outline::native_outline_profile(&self.data, self.face_index)
+                    .map_err(|_| NativeTextError::InvalidGlyphOutline)
+            }
+            NativeFontMetricsProfile::CairoCoreText => {
+                Ok(noon_core::GlyphOutlineProfile::CairoCoreText)
+            }
+        }
     }
 }
 
@@ -109,6 +152,7 @@ pub enum NativeTextError {
     },
     InvalidFontSize,
     InvalidGlyphOutline,
+    UnsupportedFontMetricsProfile,
     InvalidLineSpacing,
     SourceTooLarge,
     InvalidStyleSpan {
@@ -131,6 +175,10 @@ impl fmt::Display for NativeTextError {
             Self::InvalidFontFace { face_index } => write!(
                 formatter,
                 "invalid OpenType font face at index {face_index}"
+            ),
+            Self::UnsupportedFontMetricsProfile => write!(
+                formatter,
+                "Cairo/CoreText metrics require a static monochrome TrueType face"
             ),
             Self::InvalidGlyphOutline => {
                 write!(formatter, "invalid or unsupported OpenType glyph outline")
@@ -283,8 +331,7 @@ impl NativeTextCompiler {
                         glyphs: Vec::new(),
                         visual_bounds: None,
                     },
-                    crate::outline::native_outline_profile(&base_font.data, base_font.face_index)
-                        .map_err(|_| NativeTextError::InvalidGlyphOutline)?,
+                    base_font.outline_profile()?,
                 );
                 remember_font(&mut used_fonts, identity, base_font.data.clone());
                 // Empty lines advance the next baseline, but contribute no
@@ -409,6 +456,15 @@ impl NativeTextCompiler {
                 face_index: font.face_index,
             },
         )?;
+        let shaping_size = match font.metrics_profile {
+            NativeFontMetricsProfile::CairoFreeType => options.font_size,
+            NativeFontMetricsProfile::CairoCoreText => {
+                // Glyph placement and paths must use the same resolved size.
+                (crate::outline::coretext_layout_size(options.font_size)
+                    .map_err(|_| NativeTextError::InvalidGlyphOutline)?
+                    * 3.6) as f32
+            }
+        };
         let mut shaper = self
             .shape_context
             .builder_with_id(
@@ -419,10 +475,14 @@ impl NativeTextCompiler {
                 ],
             )
             .script(Script::Latin)
-            .size(options.font_size)
+            .size(shaping_size)
             .variations(variations)
             .build();
         shaper.add_str(text);
+        let layout_unit = match font.metrics_profile {
+            NativeFontMetricsProfile::CairoFreeType => MANIM_PANGO_LAYOUT_PIXEL,
+            NativeFontMetricsProfile::CairoCoreText => MANIM_PANGO_LAYOUT_PIXEL / 1024.0,
+        };
         let mut cursor_x = initial_x;
         let mut projected = Vec::<ProjectedRun>::new();
         let mut paint_span = 0_usize;
@@ -468,8 +528,7 @@ impl NativeTextCompiler {
             }
             *cluster_ordinal = cluster_ordinal.saturating_add(1);
             let raw_advance = cluster.advance();
-            let positioned_advance =
-                (raw_advance / MANIM_PANGO_LAYOUT_PIXEL).round() * MANIM_PANGO_LAYOUT_PIXEL;
+            let positioned_advance = (raw_advance / layout_unit).round() * layout_unit;
             if let Some(glyph) = run.glyphs[first_cluster_glyph..].last_mut() {
                 glyph.advance.x += positioned_advance - raw_advance;
             }
@@ -478,9 +537,7 @@ impl NativeTextCompiler {
         if let Some(error) = boundary_error {
             return Err(error);
         }
-        let outline_profile =
-            crate::outline::native_outline_profile(font.data.as_ref(), font.face_index)
-                .map_err(|_| NativeTextError::InvalidGlyphOutline)?;
+        let outline_profile = font.outline_profile()?;
         let mut scaler = self
             .outline_context
             .scaler(
@@ -775,6 +832,7 @@ fn layout_artifact(
     kind: TextSourceKind,
 ) -> TextLayoutArtifact {
     let mut identity = format!("{NATIVE_TEXT_BACKEND_VERSION}\0{NATIVE_TEXT_TEMPLATE_VERSION}\0{:?}\0{}\0{}\0{:08x}\0{:08x}\0", kind, base_font.face_key, base_font.face_index, options.font_size.to_bits(), options.line_spacing.to_bits());
+    append_metrics_identity(&mut identity, base_font);
     append_color_identity(&mut identity, options.fill);
     for setting in options.variations.iter() {
         identity.push('\0');
@@ -789,6 +847,7 @@ fn layout_artifact(
             "\0{}:{}:{}:{}",
             span.source_span.start, span.source_span.end, span.font.face_key, span.font.face_index
         ));
+        append_metrics_identity(&mut identity, &span.font);
         append_color_identity(&mut identity, span.fill);
     }
     identity.push('\0');
@@ -804,6 +863,12 @@ fn layout_artifact(
         )),
         artifact_fingerprint: Arc::from(format!("{:016x}", fingerprint_u64(identity.as_bytes()))),
         backend_payload_key: None,
+    }
+}
+
+fn append_metrics_identity(identity: &mut String, font: &NativeFontFace) {
+    if font.metrics_profile == NativeFontMetricsProfile::CairoCoreText {
+        identity.push_str("\0cairo-coretext");
     }
 }
 
@@ -855,6 +920,114 @@ mod tests {
             .expect("Typst test assets include at least one font");
         NativeFontFace::new("Bundled Test Font", Arc::<[u8]>::from(bytes), 0).unwrap()
     }
+    fn static_truetype_font() -> NativeFontFace {
+        let bytes = typst_assets::fonts()
+            .find(|data| data.starts_with(&[0, 1, 0, 0]))
+            .unwrap();
+        NativeFontFace::new("TrueType Test Face", Arc::<[u8]>::from(bytes), 0).unwrap()
+    }
+
+    #[test]
+    fn explicit_coretext_metrics_preserve_face_bytes_and_separate_layout() {
+        let font = static_truetype_font();
+        let selected = font
+            .clone()
+            .with_metrics_profile(NativeFontMetricsProfile::CairoCoreText)
+            .unwrap();
+        assert_eq!(
+            font.metrics_profile(),
+            NativeFontMetricsProfile::CairoFreeType
+        );
+        assert!(Arc::ptr_eq(&font.data, &selected.data));
+        assert_eq!(font.face_key, selected.face_key);
+        let options = NativeTextOptions::new(42.0);
+        let mut compiler = NativeTextCompiler::new();
+        let portable = compiler.compile_plain("Agj", &font, &options).unwrap();
+        let coretext = compiler.compile_plain("Agj", &selected, &options).unwrap();
+        assert_eq!(
+            portable.resource.runs[0].font,
+            coretext.resource.runs[0].font
+        );
+        assert_eq!(
+            coretext.resource.runs[0].outline_profile,
+            noon_core::GlyphOutlineProfile::CairoCoreText
+        );
+        assert_ne!(portable.resource.bounds, coretext.resource.bounds);
+        assert_ne!(
+            portable.resource.layout_artifact,
+            coretext.resource.layout_artifact
+        );
+        for glyph in coretext.resource.runs[0].glyphs.iter() {
+            let units = glyph.advance.x / (MANIM_PANGO_LAYOUT_PIXEL / 1024.0);
+            assert!((units - units.round()).abs() < 0.01);
+        }
+        let reset = selected
+            .with_metrics_profile(NativeFontMetricsProfile::CairoFreeType)
+            .unwrap();
+        assert_eq!(
+            compiler
+                .compile_plain("Agj", &reset, &options)
+                .unwrap()
+                .resource,
+            portable.resource
+        );
+    }
+
+    #[test]
+    fn coretext_metrics_reject_cff_before_compilation() {
+        let font = libertinus_serif_regular_font();
+        assert_eq!(
+            font.clone()
+                .with_metrics_profile(NativeFontMetricsProfile::CairoCoreText)
+                .unwrap_err(),
+            NativeTextError::UnsupportedFontMetricsProfile
+        );
+        assert!(NativeTextCompiler::new()
+            .compile_plain("Agj", &font, &NativeTextOptions::new(42.0))
+            .is_ok());
+    }
+
+    #[test]
+    fn coretext_point_grid_preserves_native_bundled_font_placement() {
+        // Pango/CoreText observations for the bundled DejaVu Sans Mono Bold
+        // face at 67 points. The first embedded TrueType face is this font.
+        let font = static_truetype_font()
+            .with_metrics_profile(NativeFontMetricsProfile::CairoCoreText)
+            .unwrap();
+        let mut compiler = NativeTextCompiler::new();
+        let artifact = compiler
+            .compile_plain("Frame", &font, &NativeTextOptions::new(67.0))
+            .unwrap();
+        let glyphs = &artifact.resource.runs[0].glyphs;
+        assert_eq!(glyphs.len(), 5);
+        for (glyph, expected) in
+            glyphs
+                .iter()
+                .zip([0.0, 11.2041015625, 22.408203125, 33.6123046875, 44.81640625])
+        {
+            let relative_x = (f64::from(glyph.origin.x) - f64::from(glyphs[0].origin.x)) / 3.6;
+            assert!((relative_x - expected).abs() < 1e-5);
+        }
+        assert!((f64::from(artifact.resource.bounds.width()) / 72.0 - 2.6802734).abs() < 1e-6);
+        assert!((f64::from(artifact.resource.bounds.height()) / 72.0 - 0.69140625).abs() < 1e-6);
+        let markup = compiler
+            .compile_styled(
+                "Frame",
+                &font,
+                &NativeTextOptions::new(67.0),
+                &[NativeTextSpan {
+                    source_span: TextSourceSpan::new(0, 5),
+                    font: font.clone(),
+                    fill: None,
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            markup.resource.runs[0].glyphs,
+            artifact.resource.runs[0].glyphs
+        );
+    }
+
     fn alternate_font() -> NativeFontFace {
         let bytes = typst_assets::fonts()
             .nth(1)

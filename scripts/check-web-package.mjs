@@ -231,6 +231,7 @@ const expectedTypeSurface = [
   "constructor(family: string, data: Uint8Array, face_index: number)",
   "static bundled(family: string): WasmNativeFontFace",
   "cloneFace(): WasmNativeFontFace",
+  "withMetricsProfile(profile: string): WasmNativeFontFace",
   "readonly family: string",
   "readonly faceIndex: number",
   "export class WasmTextColorBatch",
