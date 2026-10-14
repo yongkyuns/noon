@@ -680,6 +680,7 @@ mod draw_border_tests {
 
     fn test_run() -> GlyphRun {
         GlyphRun {
+            outline_profile: noon_core::GlyphOutlineProfile::Font,
             font: FontFaceIdentity {
                 family: Arc::from("Test"),
                 face_key: Arc::from("test-face"),

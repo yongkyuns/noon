@@ -24,6 +24,9 @@ on:
       - 'scripts/manim-namespace-values.py'
       - 'scripts/manim-iterable-utilities.py'
       - 'scripts/manim-array-utilities.py'
+      - 'scripts/manim-user-*.py'
+      - 'web/python/_manim_user_vectors.py'
+      - 'web/python/test_manim_user_*.py'
       - 'web/python/_manim_iterables.py'
       - 'web/python/test_manim_array_utilities.py'
       - 'web/python/_manim_namespace.py'
@@ -104,6 +107,17 @@ jobs:
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_exponential_circular_easings.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_sine_easings.py -v
           array-oracle/bin/python noon/scripts/manim-user-vectors.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-intersections.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-array-normalization.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-winding.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-bezier.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-curve-operations.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-user-curve-subdivision.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_subdivision.py -v
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_curve_operations.py -v
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_bezier.py -v
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_winding.py -v
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_intersections.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_user_vectors.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_array_utilities.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_rate_intervals.py -v

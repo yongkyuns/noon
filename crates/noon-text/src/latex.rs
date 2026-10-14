@@ -707,6 +707,7 @@ fn set_char(
         .ok_or(LatexDviError::Limit("glyph identity"))?;
     let run_index = u32::try_from(runs.len()).map_err(|_| LatexDviError::Limit("glyph runs"))?;
     runs.push(GlyphRun {
+        outline_profile: noon_core::GlyphOutlineProfile::Font,
         font: font.face.clone(),
         variations: Arc::from([]),
         font_size,
