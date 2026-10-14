@@ -243,3 +243,51 @@ test("navigation cancels a queued edit restart before the cached document return
   assert.equal(f.timers.size, 0);
   assert.deepEqual(f.errors, []);
 });
+
+// Run admission stays available while automatic preloading owns an authoring
+// request. The request router joins an unchanged request or queues an edit.
+function busyControlsFixture() {
+  const cards = [{ disabled: false }];
+  const context = {
+    sceneButton: { disabled: false }, resetButton: {}, sceneSourceEditor: { value: "source" },
+    canonicalSource: "source", gallerySearch: {}, categorySelect: {}, paritySelect: {},
+    previousGalleryPage: {}, nextGalleryPage: {}, galleryPage: 0,
+    galleryGrid: { querySelectorAll: () => cards },
+    playbackControls: { setBusy(value) { context.playbackBusy = value; } },
+    activeRunRequest: null, sceneRunPromise: null, activeSourceContinuation: null,
+    current: true, isCurrentRun: () => context.current,
+    updateGalleryPagerControls() {},
+  };
+  const start = main.indexOf("function setBusy(busy)");
+  const end = main.indexOf("function beginBusy()", start);
+  assert.ok(start >= 0 && end > start);
+  vm.runInNewContext(main.slice(start, end), context);
+  return { context, cards };
+}
+
+test("Run accepts a join or queued edit during preloading before a continuation exists", () => {
+  const { context, cards } = busyControlsFixture();
+  context.activeRunRequest = { token: {} };
+  // beginBusy runs after the active request is published, before its promise.
+  context.setBusy(true);
+  assert.equal(context.sceneButton.disabled, false);
+  context.sceneRunPromise = Promise.resolve();
+  context.setBusy(true);
+  assert.equal(context.sceneButton.disabled, false);
+  assert.equal(context.gallerySearch.disabled, true);
+  assert.equal(cards[0].disabled, true);
+  assert.equal(context.playbackBusy, true);
+});
+
+test("Run remains blocked for selection changes and stale authoring requests", () => {
+  const { context } = busyControlsFixture();
+  context.setBusy(true);
+  assert.equal(context.sceneButton.disabled, true);
+  context.activeRunRequest = { token: {} };
+  context.sceneRunPromise = Promise.resolve();
+  context.current = false;
+  context.setBusy(true);
+  assert.equal(context.sceneButton.disabled, true);
+  context.setBusy(false);
+  assert.equal(context.sceneButton.disabled, false);
+});
