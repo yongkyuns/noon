@@ -32,7 +32,7 @@ def easing_observations(namespace, names):
     return result
 
 
-def qualify_easings(source_root, names, *, installed_manim=False, module_only=False, helper_names=()):
+def qualify_easings(source_root, names, *, installed_manim=False, module_only=True, helper_names=()):
     """Use one source/installation/public-identity protocol for every easing batch."""
     source = source_root / "manim/utils/rate_functions.py"
     original = load_helpers(source, set(names) | {"unit_interval"} | set(helper_names),
@@ -44,10 +44,16 @@ def qualify_easings(source_root, names, *, installed_manim=False, module_only=Fa
     public = noon.rate_functions if module_only else noon
     errors = [] if easing_observations(vars(rates), names) == expected else ["easing observations differ"]
     for name in names:
+        if module_only and (name in noon.__all__ or hasattr(noon, name)):
+            errors.append(f"module-only easing {name} leaked into the public namespace")
         function = getattr(public, name)
         if function is not getattr(rates, name) or rates.easing_from_rate_func(function) != name:
             errors.append(f"public easing identity {name} differs")
     if installed_manim:
+        import manim
+        for name in names:
+            if module_only and hasattr(manim, name):
+                errors.append(f"pinned module-only easing {name} unexpectedly became public")
         from manim.utils import rate_functions
         if Path(rate_functions.__file__).read_bytes() != source.read_bytes():
             raise ValueError("installed complete rate module differs from pin")
