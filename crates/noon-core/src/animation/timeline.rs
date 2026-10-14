@@ -61,6 +61,9 @@ pub enum RateFunction {
     Smoothererstep,
     SlowInto,
     DoubleSmooth,
+    Lingering,
+    /// Complemented reversed Lingering used by shared reverse Create lowering.
+    MirroredLingering,
     RushInto,
     RushFrom,
     ThereAndBack,
@@ -115,6 +118,8 @@ impl RateFunction {
             | Self::Smoothererstep
             | Self::SlowInto
             | Self::DoubleSmooth
+            | Self::Lingering
+            | Self::MirroredLingering
             | Self::EaseInElastic
             | Self::EaseOutElastic
             | Self::EaseInOutElastic
@@ -190,6 +195,8 @@ impl RateFunction {
                 35.0 * p.powi(4) - 84.0 * p.powi(5) + 70.0 * p.powi(6) - 20.0 * p.powi(7)
             }
             Self::SlowInto => (1.0 - (1.0 - p) * (1.0 - p)).sqrt(),
+            Self::Lingering => (p / 0.8).min(1.0),
+            Self::MirroredLingering => 1.0 - Self::Lingering.evaluate_f64(1.0 - p),
             Self::DoubleSmooth => {
                 if p < 0.5 {
                     0.5 * manim_smooth_f64(2.0 * p)
@@ -1159,6 +1166,31 @@ mod tests {
             (actual - expected).abs() < 1e-6,
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[test]
+    fn lingering_matches_original_values_and_shared_reverse_create_complement() {
+        for line in include_str!("lingering_reference.csv")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .skip(1)
+        {
+            let mut fields = line.split(',');
+            let progress = fields.next().unwrap().parse::<f64>().unwrap();
+            let expected = fields.next().unwrap().parse::<f64>().unwrap();
+            assert!((RateFunction::Lingering.evaluate_f64(progress) - expected).abs() < 1e-14);
+            assert!(
+                (RateFunction::Lingering.evaluate(progress as f32) - expected as f32).abs() < 1e-6
+            );
+            assert!(
+                (1.0 - RateFunction::MirroredLingering.evaluate_f64(1.0 - progress) - expected)
+                    .abs()
+                    < 1e-14
+            );
+        }
+        assert_eq!(RateFunction::Lingering.evaluate_f64(0.8), 1.0);
+        assert_eq!(RateFunction::Lingering.evaluate_f64(0.9), 1.0);
+        assert_eq!(RateFunction::MirroredLingering.evaluate_f64(0.1), 0.0);
     }
 
     #[test]

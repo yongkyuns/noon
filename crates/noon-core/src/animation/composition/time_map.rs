@@ -201,6 +201,8 @@ fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
         | RateFunction::Smoothererstep
         | RateFunction::SlowInto
         | RateFunction::DoubleSmooth
+        | RateFunction::Lingering
+        | RateFunction::MirroredLingering
         | RateFunction::RushInto
         | RateFunction::RushFrom
         | RateFunction::EaseInOutCubic
@@ -227,7 +229,9 @@ fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
             if value <= 0.0 {
                 return Some(0.0);
             }
-            if value >= 1.0 {
+            // Lingering reaches its endpoint at 0.8 and then holds. Preserve
+            // the earliest boundary through the existing shared f32 search.
+            if value >= 1.0 && rate_func != RateFunction::Lingering {
                 return Some(1.0);
             }
             let mut lower = 0.0_f64;
@@ -517,6 +521,27 @@ mod tests {
         ]);
         assert!(!map.evaluate(0.25).begun);
         assert_eq!(map.evaluate(0.75).alpha, 0.5);
+    }
+
+    #[test]
+    fn lingering_resolves_earliest_activation_before_its_endpoint_plateau() {
+        for (rate, threshold, expected) in [
+            (RateFunction::Lingering, 0.5, 0.4),
+            (RateFunction::Lingering, 1.0, 0.8),
+            (RateFunction::MirroredLingering, 0.5, 0.6),
+        ] {
+            let map = CompositionTimeMap::from_steps(vec![
+                CompositionTimeMapStep::new(0.0, 1.0, rate),
+                CompositionTimeMapStep::new(threshold, 1.0 - threshold, RateFunction::Linear),
+            ]);
+            let boundary = map.monotone_event_alpha().unwrap();
+            assert!(
+                (boundary - expected).abs() < 5e-8,
+                "{rate:?}: {boundary} versus {expected}"
+            );
+            assert!(!map.evaluate((boundary - 1e-6) as f32).begun);
+            assert!(map.evaluate((boundary + 1e-6) as f32).begun);
+        }
     }
 
     #[test]

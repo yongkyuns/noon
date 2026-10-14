@@ -103,6 +103,8 @@ jobs:
           array-oracle/bin/python noon/scripts/manim-rate-intervals.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-polynomial-easings.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-elastic-bounce-easings.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-lingering.py manim-v0.21.0
+          PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_lingering.py -v
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_elastic_bounce_easings.py -v
           array-oracle/bin/python noon/scripts/manim-back-easings.py manim-v0.21.0
           PYTHONPATH=noon/web/python array-oracle/bin/python -m unittest discover -s noon/web/python -p test_manim_back_easings.py -v

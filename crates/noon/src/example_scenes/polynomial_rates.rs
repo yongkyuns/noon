@@ -97,10 +97,29 @@ pub fn elastic_bounce_session() -> Result<ExecutionSession, String> {
     )
 }
 
+/// Lingering's early hold and reverse Create use the same shared composition.
+pub fn lingering_session() -> Result<ExecutionSession, String> {
+    build_session_with_reverse_create(
+        &[RateFunction::Lingering, RateFunction::Lingering],
+        0.65,
+        1.0,
+        true,
+    )
+}
+
 fn build_session(
     rates: &[RateFunction],
     side: f64,
     row_step: f64,
+) -> Result<ExecutionSession, String> {
+    build_session_with_reverse_create(rates, side, row_step, false)
+}
+
+fn build_session_with_reverse_create(
+    rates: &[RateFunction],
+    side: f64,
+    row_step: f64,
+    reverse_create_last: bool,
 ) -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
@@ -120,9 +139,16 @@ fn build_session(
             shape.set_color(rgb.0, rgb.1, rgb.2, 1.0)?;
             shape.set_fill_opacity(1.0)?;
             shape.set_stroke_width(0.0)?;
-            scene.add(&shape)?;
-            let mut target = shape.target_editor()?;
-            target.shift(4.0, 0.0)?;
+            if !(reverse_create_last && index + 1 == rates.len()) {
+                scene.add(&shape)?;
+            }
+            let target = if reverse_create_last && index + 1 == rates.len() {
+                None
+            } else {
+                let mut target = shape.target_editor()?;
+                target.shift(4.0, 0.0)?;
+                Some(target)
+            };
             shapes.push(shape);
             targets.push(target);
         }
@@ -131,14 +157,16 @@ fn build_session(
             .zip(&targets)
             .zip(rates.iter().copied())
             .map(|((shape, target), rate)| {
-                AnimationCompositionRequest::TransformTo(
-                    TransformToRequest::new(
-                        shape,
-                        target,
-                        AnimationOptions::new().run_time(1.0).rate_func(rate),
-                    )
-                    .method_target(),
-                )
+                let options = AnimationOptions::new().run_time(1.0).rate_func(rate);
+                match target {
+                    Some(target) => AnimationCompositionRequest::TransformTo(
+                        TransformToRequest::new(shape, target, options).method_target(),
+                    ),
+                    None => AnimationCompositionRequest::Create {
+                        target: shape,
+                        options: options.reverse_rate_function(true),
+                    },
+                }
             })
             .collect();
         let request = AnimationCompositionRequest::Composition {
@@ -190,6 +218,15 @@ mod tests {
         }
         assert_eq!(forward.effective_time(), 1.0);
         sought
+    }
+
+    #[test]
+    fn lingering_hold_and_reverse_create_preserve_seek_and_forward_identity() {
+        let mut sought = assert_seek_matches_forward(lingering_session, 2);
+        for (time, x) in [(0.4, 0.0), (0.8, 2.0), (0.9, 2.0)] {
+            sought.seek(time).unwrap();
+            assert!((sought.frame().objects[0].transform.translation.x - x).abs() < 1e-6);
+        }
     }
 
     #[test]
