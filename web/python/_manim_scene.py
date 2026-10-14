@@ -182,7 +182,13 @@ def _set_translation_drag_targets(
     return scene
 
 
-def _semantic_wrapper_key(value: object) -> str:
+def _semantic_wrapper_key(value: object, wrapper_keys: dict[int, str] | None = None) -> str:
+    # Identity projection is repeated during one inert membership batch. Share
+    # those host getter results only for that call; later operations read the
+    # handle again. Rust still validates every handle and publishes the batch.
+    wrapper_id = id(value)
+    if wrapper_keys is not None and wrapper_id in wrapper_keys:
+        return wrapper_keys[wrapper_id]
     if not isinstance(value, (_base.Mobject, _compat.Group)):
         raise TypeError("Scene membership accepts Mobjects and Groups")
     handle = getattr(value, "_semantic_family_handle", None)
@@ -192,7 +198,10 @@ def _semantic_wrapper_key(value: object) -> str:
         raise NotImplementedError(
             "standard Scene membership requires an ordinary typed Mobject or Group"
         )
-    return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+    key = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+    if wrapper_keys is not None:
+        wrapper_keys[wrapper_id] = key
+    return key
 
 
 def _membership_registry(scene: _base.Scene) -> dict[str, object]:
@@ -203,14 +212,20 @@ def _membership_registry(scene: _base.Scene) -> dict[str, object]:
 
 
 def _register_membership_wrappers(
-    scene: _base.Scene, value: object, *, registry: dict[str, object] | None = None
+    scene: _base.Scene,
+    value: object,
+    *,
+    registry: dict[str, object] | None = None,
+    wrapper_keys: dict[int, str] | None = None,
 ) -> None:
     if registry is None:
         registry = _membership_registry(scene)
-    registry[_semantic_wrapper_key(value)] = value
+    registry[_semantic_wrapper_key(value, wrapper_keys)] = value
     if _semantic_handles._is_shared_family(value):
         for member in value.submobjects:
-            _register_membership_wrappers(scene, member, registry=registry)
+            _register_membership_wrappers(
+                scene, member, registry=registry, wrapper_keys=wrapper_keys
+            )
 
 
 def _membership_wrapper_leaves(candidate: object):
@@ -230,6 +245,7 @@ def _membership_leaf_bindings(
     next_object_id: int,
     key_binding: tuple[str, str] | None,
     binding_reservations: dict[str, _TypedBindingReservation],
+    wrapper_keys: dict[int, str] | None = None,
 ) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
     # This walk reserves Python wrapper IDs only. The family handle below remains
     # the sole membership/order input; Rust resolves authoritative family leaves.
@@ -243,7 +259,7 @@ def _membership_leaf_bindings(
             raise NotImplementedError(
                 "standard Scene membership does not support retained-only Mobjects"
             )
-        semantic_key = _semantic_wrapper_key(member)
+        semantic_key = _semantic_wrapper_key(member, wrapper_keys)
         if member._scene is not None and member._scene is not scene:
             raise ValueError("Mobject already belongs to another Scene")
         if semantic_key in binding_reservations:
@@ -289,6 +305,7 @@ def _append_membership_value(
     binding_reservations: dict[str, _TypedBindingReservation],
     reserve_bindings: bool,
     key_binding: tuple[str, str] | None = None,
+    wrapper_keys: dict[int, str] | None = None,
 ) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
     reservations = []
     if reserve_bindings:
@@ -299,6 +316,7 @@ def _append_membership_value(
             next_object_id=next_object_id,
             key_binding=key_binding,
             binding_reservations=binding_reservations,
+            wrapper_keys=wrapper_keys,
         )
     if _semantic_handles._is_shared_family(value):
         family = getattr(value, "_semantic_family_handle", None)
@@ -313,7 +331,8 @@ def _append_membership_value(
         if reserve_bindings:
             # A preceding Group may already have reserved this unbound leaf.
             # Reuse that identity without committing any Python wrapper early.
-            object_id = str(binding_reservations[_semantic_wrapper_key(value)].object.id)
+            semantic_key = _semantic_wrapper_key(value, wrapper_keys)
+            object_id = str(binding_reservations[semantic_key].object.id)
         engine_call(batch.appendMobject, object_id, handle, operation="Scene.membership")
     else:
         raise TypeError("Scene membership accepts Mobjects and Groups")
@@ -446,7 +465,10 @@ def _canonical_edit_membership(
         or not isinstance(values[0], _base.Mobject)
     ):
         raise ValueError("an explicit key requires one ordinary Mobject add")
-    key_binding = None if key is None else (_semantic_wrapper_key(values[0]), key)
+    wrapper_keys: dict[int, str] = {}
+    key_binding = (
+        None if key is None else (_semantic_wrapper_key(values[0], wrapper_keys), key)
+    )
     context = _context(scene)
     batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
     if spatial_domain is not None:
@@ -456,7 +478,7 @@ def _canonical_edit_membership(
     binding_reservations: dict[str, _TypedBindingReservation] = {}
     request_keys = set()
     for value in values:
-        request_key = _semantic_wrapper_key(value)
+        request_key = _semantic_wrapper_key(value, wrapper_keys)
         if request_key in request_keys:
             raise ValueError("membership request contains a duplicate Mobject or Group")
         request_keys.add(request_key)
@@ -468,6 +490,7 @@ def _canonical_edit_membership(
             binding_reservations=binding_reservations,
             reserve_bindings=kind in {"add", "add_foreground", "replace"},
             key_binding=key_binding,
+            wrapper_keys=wrapper_keys,
         )
         reservations.extend(appended)
     # Existing-key checks cannot see other speculative reservations. Detect
@@ -478,7 +501,7 @@ def _canonical_edit_membership(
     for member, reservation, handle in reservations:
         _commit_typed_binding(member, scene, reservation, handle)
     for value in values:
-        _register_membership_wrappers(scene, value)
+        _register_membership_wrappers(scene, value, wrapper_keys=wrapper_keys)
     _sync_membership_wrapper_attachments(scene, kind, values)
 
 
