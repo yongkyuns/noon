@@ -703,6 +703,7 @@ mod tests {
                 source: Arc::from("x"),
                 kind: TextSourceKind::Plain,
                 runs: Arc::from([GlyphRun {
+                    outline_profile: crate::GlyphOutlineProfile::Font,
                     font,
                     variations: Arc::from([]),
                     font_size: 1.0,

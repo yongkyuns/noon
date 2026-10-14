@@ -8,11 +8,12 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use noon_core::{
-    FontResource, FontResourceHandle, FontResourceLookup, FontVariationSetting, GlyphRun,
+    FontResource, FontResourceHandle, FontResourceLookup, FontVariationSetting,
+    GlyphOutlineProfile, GlyphRun,
 };
 use swash::{
-    scale::{image::Content, Render, ScaleContext, Source, StrikeWith},
-    zeno::{Format, Vector},
+    scale::{image::Content, Render, Source, StrikeWith},
+    zeno::{Format, Mask, Origin, Scratch, Transform, Vector},
     CacheKey, FontRef, GlyphId,
 };
 
@@ -57,9 +58,33 @@ pub struct GlyphRasterKey {
     pub pixel_size_bits: u32,
     pub variation_fingerprint: u64,
     pub phase: GlyphRasterPhase,
+    pub outline_profile: GlyphOutlineProfile,
+    /// Authored size affects Cairo geometry; natural font images remain size-independent.
+    pub outline_size_bits: u32,
 }
 
 impl GlyphRasterKey {
+    /// One identity constructor shared by CPU images and GPU atlas residency.
+    pub fn from_run(
+        font: FontResourceHandle,
+        run: &GlyphRun,
+        glyph_id: GlyphId,
+        pixel_size: f32,
+        phase: GlyphRasterPhase,
+    ) -> Self {
+        Self {
+            font,
+            glyph_id,
+            pixel_size_bits: pixel_size.to_bits(),
+            variation_fingerprint: variation_fingerprint(run.variations.as_ref()),
+            phase,
+            outline_profile: run.outline_profile,
+            outline_size_bits: match run.outline_profile {
+                GlyphOutlineProfile::Font => 0,
+                GlyphOutlineProfile::Cairo => run.font_size.to_bits(),
+            },
+        }
+    }
     pub fn pixel_size(self) -> f32 {
         f32::from_bits(self.pixel_size_bits)
     }
@@ -149,6 +174,7 @@ pub enum GlyphRasterError {
     InvalidFontData(FontResourceHandle),
     GlyphIdOutOfRange(u32),
     InvalidPixelSize,
+    InvalidGlyphOutline,
     InvalidVariation,
     OutlineRequired,
     UnexpectedSubpixelMask,
@@ -174,6 +200,9 @@ impl fmt::Display for GlyphRasterError {
             }
             Self::InvalidPixelSize => {
                 write!(formatter, "glyph pixel size must be finite and positive")
+            }
+            Self::InvalidGlyphOutline => {
+                write!(formatter, "invalid or unsupported OpenType glyph outline")
             }
             Self::InvalidVariation => write!(formatter, "glyph variation values must be finite"),
             Self::OutlineRequired => write!(
@@ -210,7 +239,8 @@ struct CachedGlyphRaster {
 /// exact glyph ids, retained font bytes, and retained variation settings into masks
 /// or color images. This keeps Typst/native/LaTeX layout semantics out of renderers.
 pub struct GlyphRasterCache {
-    scale_context: ScaleContext,
+    outline_context: crate::outline::GlyphOutlineContext,
+    mask_scratch: Scratch,
     faces: HashMap<FontResourceHandle, SwashFace>,
     entries: HashMap<GlyphRasterKey, CachedGlyphRaster>,
     limits: GlyphRasterCacheLimits,
@@ -239,7 +269,8 @@ impl GlyphRasterCache {
 
     pub fn with_limits(limits: GlyphRasterCacheLimits) -> Self {
         Self {
-            scale_context: ScaleContext::new(),
+            outline_context: crate::outline::GlyphOutlineContext::default(),
+            mask_scratch: Scratch::new(),
             faces: HashMap::new(),
             entries: HashMap::new(),
             limits,
@@ -354,13 +385,7 @@ impl GlyphRasterCache {
         let font_handle = fonts
             .handle_for_face(&run.font)
             .ok_or(GlyphRasterError::MissingFontResource)?;
-        let key = GlyphRasterKey {
-            font: font_handle,
-            glyph_id,
-            pixel_size_bits: pixel_size.to_bits(),
-            variation_fingerprint: variation_fingerprint(run.variations.as_ref()),
-            phase,
-        };
+        let key = GlyphRasterKey::from_run(font_handle, run, glyph_id, pixel_size, phase);
         let access = self.next_access();
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.last_used = access;
@@ -459,13 +484,57 @@ impl GlyphRasterCache {
             .iter()
             .map(|setting| (setting.tag, setting.value))
             .collect();
+        if run.outline_profile == GlyphOutlineProfile::Cairo {
+            let path = self
+                .outline_context
+                .scaler(
+                    font,
+                    resource.key.face_index,
+                    run.font_size,
+                    &variations,
+                    run.outline_profile,
+                )
+                .and_then(|mut scaler| scaler.outline(glyph_id))
+                .map_err(|_| GlyphRasterError::InvalidGlyphOutline)?;
+            if path
+                .conservative_bounds()
+                .is_none_or(|bounds| bounds.min.x >= bounds.max.x || bounds.min.y >= bounds.max.y)
+            {
+                return Ok(GlyphRaster::Empty);
+            }
+            let commands: Vec<_> = crate::outline::path_commands(&path).collect();
+            let scale = pixel_size / run.font_size;
+            if !scale.is_finite() {
+                return Err(GlyphRasterError::InvalidPixelSize);
+            }
+            let (phase_x, phase_y) = phase.offset();
+            let offset = Vector::new(phase_x, phase_y);
+            let mut data = Vec::new();
+            let placement = Mask::with_scratch(commands.as_slice(), &mut self.mask_scratch)
+                .format(Format::Alpha)
+                .origin(Origin::BottomLeft)
+                .transform(Some(Transform::scale(scale, scale)))
+                .offset(offset)
+                .render_offset(offset)
+                .inspect(|format, w, h| data.resize(format.buffer_size(w, h), 0))
+                .render_into(&mut data, None);
+            if placement.width == 0 || placement.height == 0 {
+                return Ok(GlyphRaster::Empty);
+            }
+            return Ok(GlyphRaster::Image(GlyphRasterImage {
+                format: GlyphRasterFormat::Alpha8,
+                placement: GlyphRasterPlacement {
+                    left: placement.left,
+                    top: placement.top,
+                    width: placement.width,
+                    height: placement.height,
+                },
+                data: data.into(),
+            }));
+        }
         let mut scaler = self
-            .scale_context
-            .builder(font)
-            .size(pixel_size)
-            .hint(false)
-            .variations(variations.iter())
-            .build();
+            .outline_context
+            .font_scaler(font, pixel_size, &variations);
         let sources = [
             Source::ColorOutline(0),
             Source::ColorBitmap(StrikeWith::BestFit),
@@ -563,6 +632,126 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(cache.stats().misses, 1);
         assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
+    fn cairo_recipe_keys_authored_size_but_natural_images_reuse_device_size() {
+        let artifact = native_artifact("o");
+        let mut run = artifact.resource.runs[0].clone();
+        let glyph_id = run.glyphs[0].glyph_id;
+        let handle = artifact.fonts.handle_for_face(&run.font).unwrap();
+        let mut cache = GlyphRasterCache::new();
+        run.font_size = 17.3;
+        let small = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph_id, 48.0)
+            .unwrap();
+        let key =
+            GlyphRasterKey::from_run(handle, &run, glyph_id as u16, 48.0, GlyphRasterPhase::ZERO);
+        run.font_size = 48.0;
+        let large = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph_id, 48.0)
+            .unwrap();
+        assert_ne!(
+            key,
+            GlyphRasterKey::from_run(handle, &run, glyph_id as u16, 48.0, GlyphRasterPhase::ZERO)
+        );
+        assert_ne!(small, large);
+        assert_eq!(cache.stats().misses, 2);
+        run.outline_profile = GlyphOutlineProfile::Font;
+        let natural = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph_id, 48.0)
+            .unwrap();
+        run.font_size = 17.3;
+        let reused = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph_id, 48.0)
+            .unwrap();
+        assert!(Arc::ptr_eq(&natural, &reused));
+        assert_eq!(cache.stats().misses, 3);
+        assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
+    fn cairo_zero_area_at_tiny_authored_sizes_is_an_empty_cached_image() {
+        let artifact = native_artifact("o");
+        let mut run = artifact.resource.runs[0].clone();
+        run.font_size = 1e-40;
+        let mut cache = GlyphRasterCache::new();
+        let glyph_id = run.glyphs[0].glyph_id;
+        let first = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph_id, 48.0)
+            .unwrap();
+        assert_eq!(first.as_ref(), &GlyphRaster::Empty);
+        let second = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph_id, 48.0)
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(cache.stats().misses, 1);
+        assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
+    fn cairo_masks_cover_the_same_authored_paths_at_device_scales_and_phases() {
+        let artifact = native_artifact("Agj");
+        let run = &artifact.resource.runs[0];
+        assert_eq!(run.outline_profile, GlyphOutlineProfile::Cairo);
+        let font = artifact
+            .fonts
+            .get(artifact.fonts.handle_for_face(&run.font).unwrap())
+            .unwrap();
+        let face = FontRef::from_index(&font.data, font.key.face_index as usize).unwrap();
+        let mut outlines = crate::outline::GlyphOutlineContext::default();
+        let mut scaler = outlines
+            .scaler(
+                face,
+                font.key.face_index,
+                run.font_size,
+                &[],
+                run.outline_profile,
+            )
+            .unwrap();
+        let mut cache = GlyphRasterCache::new();
+        for glyph in run.glyphs.iter() {
+            let path = scaler.outline(glyph.glyph_id as u16).unwrap();
+            for size in [10.0, 48.0, 96.0] {
+                for phase in [GlyphRasterPhase::ZERO, GlyphRasterPhase::new(3, 5).unwrap()] {
+                    let scale = size / run.font_size;
+                    let transform = Transform::scale(scale, scale);
+                    let commands: Vec<_> = crate::outline::path_commands(&path)
+                        .map(|command| command.transform(&transform))
+                        .collect();
+                    let offset = Vector::from(phase.offset());
+                    let mut data = Vec::new();
+                    let placement = Mask::new(commands.as_slice())
+                        .origin(Origin::BottomLeft)
+                        .offset(offset)
+                        .render_offset(offset)
+                        .inspect(|format, w, h| data.resize(format.buffer_size(w, h), 0))
+                        .render_into(&mut data, None);
+                    let actual = cache
+                        .get_or_rasterize_at_phase(
+                            &artifact.fonts,
+                            run,
+                            glyph.glyph_id,
+                            size,
+                            phase,
+                        )
+                        .unwrap();
+                    let GlyphRaster::Image(actual) = actual.as_ref() else {
+                        panic!("visible glyph");
+                    };
+                    assert_eq!(actual.data.as_ref(), data);
+                    assert_eq!(
+                        actual.placement,
+                        GlyphRasterPlacement {
+                            left: placement.left,
+                            top: placement.top,
+                            width: placement.width,
+                            height: placement.height
+                        }
+                    );
+                }
+            }
+        }
     }
 
     #[test]
