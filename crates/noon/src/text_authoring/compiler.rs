@@ -265,6 +265,10 @@ fn native_key(text: &Text) -> Result<TextCompileKey, TextAuthoringError> {
         // NativeFontFace computes this immutable content identity once. The
         // Arc payload stored beside the descriptor remains the collision guard.
         push_text(&mut bytes, face.face_key.as_ref());
+        bytes.push(match face.metrics_profile() {
+            super::NativeFontMetricsProfile::CairoFreeType => 0,
+            super::NativeFontMetricsProfile::CairoCoreText => 1,
+        });
     } else {
         bytes.push(0);
     }
@@ -376,6 +380,32 @@ mod tests {
             bundled_native_font_face("not an embedded Noon font"),
             Err(TextAuthoringError::FontUnavailable(_))
         ));
+    }
+
+    #[test]
+    fn explicit_font_metrics_have_distinct_compiler_identity() {
+        clear_text_compiler_cache();
+        let portable_face = bundled_native_font_face(DEFAULT_NATIVE_TEXT_FONT_FAMILY).unwrap();
+        let coretext_face = portable_face
+            .clone()
+            .with_metrics_profile(super::super::NativeFontMetricsProfile::CairoCoreText)
+            .unwrap();
+        let portable = Text::new("Agj")
+            .with_font_face(portable_face)
+            .compile_artifact()
+            .unwrap();
+        let coretext = Text::new("Agj")
+            .with_font_face(coretext_face.clone())
+            .compile_artifact()
+            .unwrap();
+        let repeated = Text::new("Agj")
+            .with_font_face(coretext_face)
+            .compile_artifact()
+            .unwrap();
+        assert!(!Arc::ptr_eq(&portable.resource, &coretext.resource));
+        assert!(Arc::ptr_eq(&coretext.resource, &repeated.resource));
+        assert_eq!(text_compiler_diagnostics().successful_compiles, 2);
+        assert_eq!(text_compiler_diagnostics().cache_hits, 1);
     }
 
     #[test]

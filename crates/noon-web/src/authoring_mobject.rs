@@ -228,6 +228,33 @@ mod wasm {
             })
         }
 
+        /// Return a new font input with an explicit deterministic metrics recipe.
+        #[wasm_bindgen(js_name = withMetricsProfile)]
+        pub fn with_metrics_profile(&self, profile: &str) -> Result<Self, JsValue> {
+            let profile = match profile {
+                "cairo-freetype" => noon::NativeFontMetricsProfile::CairoFreeType,
+                "cairo-coretext" => noon::NativeFontMetricsProfile::CairoCoreText,
+                _ => {
+                    return Err(js_error(AuthoringFailure::new(
+                        "invalid_input",
+                        "text.invalid_metrics_profile",
+                        "unknown native font metrics profile",
+                    )))
+                }
+            };
+            self.face
+                .clone()
+                .with_metrics_profile(profile)
+                .map(|face| Self { face })
+                .map_err(|error| {
+                    js_error(AuthoringFailure::new(
+                        "invalid_input",
+                        "text.unsupported_metrics_profile",
+                        error,
+                    ))
+                })
+        }
+
         /// Resolve the shared engine's embedded regular face without a byte transfer.
         pub fn bundled(family: &str) -> Result<Self, JsValue> {
             noon::bundled_native_font_face(family)

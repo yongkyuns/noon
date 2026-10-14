@@ -81,7 +81,9 @@ impl GlyphRasterKey {
             outline_profile: run.outline_profile,
             outline_size_bits: match run.outline_profile {
                 GlyphOutlineProfile::Font => 0,
-                GlyphOutlineProfile::Cairo => run.font_size.to_bits(),
+                GlyphOutlineProfile::Cairo | GlyphOutlineProfile::CairoCoreText => {
+                    run.font_size.to_bits()
+                }
             },
         }
     }
@@ -484,7 +486,7 @@ impl GlyphRasterCache {
             .iter()
             .map(|setting| (setting.tag, setting.value))
             .collect();
-        if run.outline_profile == GlyphOutlineProfile::Cairo {
+        if run.outline_profile != GlyphOutlineProfile::Font {
             let path = self
                 .outline_context
                 .scaler(
@@ -690,10 +692,63 @@ mod tests {
     }
 
     #[test]
+    fn font_metrics_profiles_do_not_alias_cached_masks() {
+        let bytes = typst_assets::fonts()
+            .find(|data| data.starts_with(&[0, 1, 0, 0]))
+            .unwrap();
+        let face = NativeFontFace::new("TT", Arc::<[u8]>::from(bytes), 0).unwrap();
+        let artifact = NativeTextCompiler::new()
+            .compile_plain("A", &face, &NativeTextOptions::new(42.0))
+            .unwrap();
+        let mut run = artifact.resource.runs[0].clone();
+        let glyph = run.glyphs[0].glyph_id;
+        let mut cache = GlyphRasterCache::new();
+        let portable = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph, 48.0)
+            .unwrap();
+        run.outline_profile = GlyphOutlineProfile::CairoCoreText;
+        let fractional = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph, 48.0)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&portable, &fractional));
+        let repeated = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph, 48.0)
+            .unwrap();
+        assert!(Arc::ptr_eq(&fractional, &repeated));
+        run.font_size = 17.3;
+        let resized = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph, 48.0)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&fractional, &resized));
+        assert_eq!(cache.stats().misses, 3);
+        assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
     fn cairo_masks_cover_the_same_authored_paths_at_device_scales_and_phases() {
-        let artifact = native_artifact("Agj");
-        let run = &artifact.resource.runs[0];
-        assert_eq!(run.outline_profile, GlyphOutlineProfile::Cairo);
+        let bytes = typst_assets::fonts()
+            .find(|data| data.starts_with(&[0, 1, 0, 0]))
+            .unwrap();
+        let face = NativeFontFace::new("TT", Arc::<[u8]>::from(bytes), 0).unwrap();
+        let artifact = NativeTextCompiler::new()
+            .compile_plain("Agj", &face, &NativeTextOptions::new(42.0))
+            .unwrap();
+        let portable = native_artifact("Agj");
+        for (artifact, profile) in [
+            (&portable, GlyphOutlineProfile::Cairo),
+            (&artifact, GlyphOutlineProfile::Cairo),
+            (&artifact, GlyphOutlineProfile::CairoCoreText),
+        ] {
+            masks_match_authored_paths(artifact, profile);
+        }
+    }
+
+    fn masks_match_authored_paths(
+        artifact: &NativeTextResourceArtifact,
+        profile: GlyphOutlineProfile,
+    ) {
+        let mut run = artifact.resource.runs[0].clone();
+        run.outline_profile = profile;
         let font = artifact
             .fonts
             .get(artifact.fonts.handle_for_face(&run.font).unwrap())
@@ -730,7 +785,7 @@ mod tests {
                     let actual = cache
                         .get_or_rasterize_at_phase(
                             &artifact.fonts,
-                            run,
+                            &run,
                             glyph.glyph_id,
                             size,
                             phase,
