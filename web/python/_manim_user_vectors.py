@@ -165,18 +165,6 @@ def rotation_matrix(
     return result
 
 
-def z_to_vector(vector: np.ndarray) -> np.ndarray:
-    """Construct the pinned basis for an explicit user vector."""
-    import numpy as np
-    axis_z = normalize(vector)
-    axis_y = normalize(cross(axis_z, np.array([1., 0., 0.])))
-    axis_x = cross(axis_y, axis_z)
-    if np.linalg.norm(axis_y) == 0:
-        axis_x = normalize(cross(np.array([0., 1., 0.]), axis_z))
-        axis_y = -cross(axis_x, axis_z)
-    return np.array([axis_x, axis_y, axis_z]).T
-
-
 def cartesian_to_spherical(vec: Vector3DLike) -> np.ndarray:
     import numpy as np
     norm = np.linalg.norm(vec)

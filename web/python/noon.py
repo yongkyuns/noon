@@ -928,7 +928,6 @@ _PUBLIC_EXPORTS = {
     "thick_diagonal": "_manim_user_vectors",
     "rotation_about_z": "_manim_user_vectors",
     "rotation_matrix": "_manim_user_vectors",
-    "z_to_vector": "_manim_user_vectors",
     "cartesian_to_spherical": "_manim_user_vectors",
     "spherical_to_cartesian": "_manim_user_vectors",
     "complex_to_R3": "_manim_user_vectors",

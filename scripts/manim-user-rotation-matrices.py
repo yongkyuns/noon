@@ -14,7 +14,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from pinned_python_helpers import load_helpers
 
-NAMES = ('rotation_matrix', 'z_to_vector')
+NAMES = ('rotation_matrix',)
 normalize_value = runpy.run_path(str(Path(__file__).with_name('manim-simple-functions.py')),
                                run_name='_rotation_data_normalization')['normalize']
 
@@ -45,7 +45,6 @@ def observations(namespace):
                np.arange(6, dtype=float)[::2], np.array([[1, 0, 0], [0, 1, 0]]),
                [Fraction(1, 3), Fraction(2, 3), 1], [Decimal('0.1'), Decimal('0.2'), 1]]
     for vector in vectors:
-        record('z_to_vector', vector)
         for angle in (0, 0.2, np.pi, -np.pi / 3, np.float32(0.2), Fraction(1, 3),
                       Decimal('0.2'), True, float('inf'), float('nan'), 'bad'):
             for homogeneous in (False, True, 0, 1, 'yes', None):
@@ -55,7 +54,7 @@ def observations(namespace):
 
 def qualify(source_root, *, installed_manim=False):
     source = source_root / 'manim/utils/space_ops.py'
-    original = load_helpers(source, {*NAMES, 'normalize', 'cross'},
+    original = load_helpers(source, {*NAMES, 'normalize'},
                             {'np': np, 'Rotation': Rotation,
                              'RIGHT': np.array([1., 0., 0.]), 'UP': np.array([0., 1., 0.])})
     expected = observations(original)
