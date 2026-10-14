@@ -62,6 +62,10 @@ jobs:
           fallback: none
       - name: Install pinned wasm-opt
         uses: ./.github/actions/install-wasm-opt
+      - name: Install the Linux Vulkan software adapter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libvulkan1 mesa-vulkan-drivers
       - name: Qualify actual GPU coverage against independent f64 clipping
         env:
           NOON_REQUIRE_GPU_TESTS: '1'
