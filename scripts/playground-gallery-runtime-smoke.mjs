@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import playwright from 'playwright';
 import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports } from './playground-browser-support.mjs';
+import { createBrowserFailureTrace } from './playground-browser-failure-evidence.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
@@ -171,6 +172,8 @@ try {
       profilePublications: Object.hasOwn(liveMathAnimations, entry.id) });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
+    const trace = createBrowserFailureTrace();
+    const detachTrace = trace.attach(caseBrowser, context, page);
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [], presentations: [] };
     const observedPublications = new Set();
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
@@ -198,12 +201,14 @@ try {
     try {
       await Promise.race([
         (async () => {
+          trace.setPhase('gallery-navigation', { exampleId: entry.id, noJspi });
           await page.goto(new URL(`index.html?example=${encodeURIComponent(entry.id)}`, base).href,
             { waitUntil: 'domcontentloaded', timeout: 30000 });
           // Remember the content process while alive; post-crash sampling cannot
           // find it. This Node-side observation does not query scene/runtime state.
           try { nativeProcesses = await webKitProcesses(); } catch { /* Evidence unavailable. */ }
           await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
+          trace.setPhase('gallery-authored-execution', { exampleId: entry.id, noJspi });
           let completed = false;
           // Longer authored examples can run materially slower than real time in Firefox CI.
           // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
@@ -352,6 +357,7 @@ try {
     } catch (error) {
       result.outcome = 'fail'; result.failure = String(error);
       result.failureDiagnostics = {
+        browserTrace: trace.snapshot(),
         pendingRequestCount: pendingRequests.size,
         pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({
           url: request.url.slice(0, 500),
@@ -373,6 +379,8 @@ try {
     } finally {
       clearTimeout(caseTimer);
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});
+      result.browserTrace = trace.snapshot();
+      detachTrace();
       result.elapsedMs = performance.now() - caseStartedAt;
       results.push(result);
       await writeFile(path.join(artifacts, `${name}.json`), stringify(result));
