@@ -413,6 +413,52 @@ def _path_queries_probe(api):
     return result
 
 
+def _cubic_bezier_probe(api):
+    cases = [
+        [(-2, 0, 0), (-1, 2, 0), (1, -2, 0), (2, 0, 0)],
+        [(0, 0, 0)] * 4,
+        [(-3, 1, 0), (2, 3, 0), (-1, -2, 0), (4, 0.5, 0)],
+    ]
+    result = []
+    for index, points in enumerate(cases):
+        options = {} if index < 2 else {"color": api.GREEN, "stroke_width": 6, "fill_opacity": 0.4}
+        curve = api.CubicBezier(*points, **options)
+        if index == 2:
+            curve.scale(0.75).rotate(0.3).shift(api.RIGHT * 0.375 + api.DOWN * 0.5)
+        result.append({
+            "layout": _object_observation(curve),
+            "points": curve.get_num_points(),
+            "start": _point_observation(curve.get_start()),
+            "end": _point_observation(curve.get_end()),
+            "anchors_and_handles": [[_point_observation(point) for point in rows]
+                                    for rows in curve.get_anchors_and_handles()],
+            "samples": [_point_observation(curve.point_from_proportion(alpha))
+                        for alpha in (0, 0.125, 0.25, 0.5, 0.75, 0.875, 1)],
+            "paint": [_paint_rgb(curve.get_fill_color()), _paint_rgb(curve.get_stroke_color()),
+                      curve.get_fill_opacity(), curve.get_stroke_opacity(), curve.get_stroke_width()],
+        })
+    return result
+
+
+def _path_point_counts(api):
+    path = api.VMobject()
+    counts = [path.get_num_points()]
+    path.start_new_path((0, 0, 0))
+    counts.append(path.get_num_points())
+    path.start_new_path((1, 1, 0))
+    counts.append(path.get_num_points())
+    path.add_line_to(api.RIGHT * 2)
+    counts.append(path.get_num_points())
+    path.start_new_path((3, 1, 0))
+    counts.append(path.get_num_points())
+    path.add_cubic_bezier_curve_to(api.RIGHT * 3 + api.UP * 2,
+                                   api.RIGHT * 4 + api.DOWN, api.RIGHT * 5)
+    counts.append(path.get_num_points())
+    path.rotate(0.3).shift(api.RIGHT)
+    counts.append(path.get_num_points())
+    return counts
+
+
 def _z_index_probe(api):
     a, b = api.Square(z_index=2.5), api.Circle(z_index=2.5)
     nested = api.VGroup(a, b, z_index=2.5)
@@ -1201,6 +1247,8 @@ FIXTURES = [
     Fixture("z_index", lambda: _z_index_probe(noon), lambda: _z_index_probe(manim)),
     Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
     Fixture("path_queries", lambda: _path_queries_probe(noon), lambda: _path_queries_probe(manim)),
+    Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),
+    Fixture("path_point_counts", lambda: _path_point_counts(noon), lambda: _path_point_counts(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
