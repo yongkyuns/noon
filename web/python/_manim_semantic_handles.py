@@ -1943,12 +1943,12 @@ def _get_family(self: _base.Mobject) -> list[_base.Mobject]:
         raise RuntimeError("shared family identity has no Python wrapper") from error
 
 
-def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0, color=None) -> None:
+def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0, color=_base.WHITE) -> None:
     if _create_family_handle is None or _new_membership_batch is None:
         raise RuntimeError("Group construction requires the shared Rust authoring host")
     z_index = _ir._finite_number("z_index", z_index)
-    parsed = None if color is None else _compat._as_color("color", color)
-    arguments = () if parsed is None else (parsed.red, parsed.green, parsed.blue, parsed.alpha)
+    parsed = _base.BLACK if color is None else _compat._as_color("color", color)
+    arguments = () if parsed == _base.WHITE else (parsed.red, parsed.green, parsed.blue, parsed.alpha)
     _validate_group_members(self, mobjects)
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)

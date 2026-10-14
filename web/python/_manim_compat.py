@@ -430,7 +430,7 @@ class Group(Mobject):
         from _manim_semantic_handles import _match_style
         return _match_style(self, vmobject, family)
 
-    def __init__(self, *mobjects: object, z_index: float = 0, color=None) -> None:
+    def __init__(self, *mobjects: object, z_index: float = 0, color=_base.WHITE) -> None:
         from _manim_semantic_handles import _group_init
         _group_init(self, *mobjects, z_index=z_index, color=color)
 

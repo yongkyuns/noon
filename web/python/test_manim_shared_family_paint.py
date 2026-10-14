@@ -26,6 +26,15 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 context.liveCreateFamily.assert_not_called()
                 self.assertEqual(context.liveCreateFamilyWithColor.call_args.args[1:], (0.0, *expected))
 
+    def test_omitted_constructor_color_is_white_but_explicit_none_is_black(self):
+        with patch.object(handles, "_create_family_handle") as create, \
+             patch.object(handles, "_new_membership_batch", return_value=Mock()), \
+             patch.object(handles, "_live_constructor_context", return_value=None):
+            compat.Group()
+            self.assertEqual(create.call_args.args[1:], (0.0,))
+            compat.Group(color=None)
+            self.assertEqual(create.call_args.args[1:], (0.0, 0.0, 0.0, 0.0, 1.0))
+
     def test_invalid_constructor_color_rejects_before_family_allocation(self):
         with patch.object(handles, "_create_family_handle") as create, \
              patch.object(handles, "_new_membership_batch") as batch:
