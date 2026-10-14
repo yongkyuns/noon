@@ -2,6 +2,48 @@ use super::*;
 use crate::Scene;
 
 #[test]
+fn empty_path_layout_ignores_pose_until_world_points_exist() {
+    let mut scene = Scene::new();
+    let mut object = scene
+        .path(VectorPath::new(), SemanticStyle::default())
+        .unwrap();
+    object.shift(3.0, -2.0).unwrap();
+    object.scale(2.0, 2.0).unwrap();
+    let revision = scene.integration_store().borrow().scene_revision();
+    assert_eq!(object.center().unwrap(), (0.0, 0.0));
+    assert_eq!(object.width().unwrap(), 0.0);
+    assert_eq!(object.height().unwrap(), 0.0);
+    assert_eq!(object.critical_point(1.0, -1.0).unwrap(), (0.0, 0.0));
+    assert_eq!(scene.integration_store().borrow().scene_revision(), revision);
+
+    object
+        .set_points_as_corners(&[Vec2::new(1.0, 2.0), Vec2::new(3.0, 2.0)])
+        .unwrap();
+    assert_eq!(object.center().unwrap(), (2.0, 2.0));
+    assert_eq!(object.width().unwrap(), 2.0);
+}
+
+#[test]
+fn empty_path_layout_authored_and_live_queries_agree_after_seek() {
+    let mut scene = Scene::new();
+    let mut object = scene
+        .path(VectorPath::new(), SemanticStyle::default())
+        .unwrap();
+    object.shift(4.0, 5.0).unwrap();
+    scene.add(&object).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    for time in [0.0, 0.25, 0.0] {
+        session.seek(time).unwrap();
+        let live = scene.live(&mut session);
+        let observed = live.effective_layout(&object).unwrap();
+        assert_eq!(observed.center, (0.0, 0.0));
+        assert_eq!(observed.width, 0.0);
+        assert_eq!(observed.height, 0.0);
+        assert_eq!(observed.center, object.center().unwrap());
+    }
+}
+
+#[test]
 fn cross_lines_preserve_two_leaf_geometry_and_target_bounds() {
     let bounds = Bounds2D64 {
         min_x: -1.0,
