@@ -142,9 +142,9 @@ mod tests {
         }
         sought.seek(0.25).unwrap();
         for (object, original) in sought.frame().objects.iter().zip([
-            0.07612046748871326_f32,
-            0.3826834323650898_f32,
-            0.1464466094067262_f32,
+            0.07612046748871326_f64 as f32,
+            0.3826834323650898_f64 as f32,
+            0.1464466094067262_f64 as f32,
         ]) {
             assert!((object.transform.translation.x - (-2.0 + 4.0 * original)).abs() < 1e-6);
         }
