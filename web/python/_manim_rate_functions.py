@@ -12,6 +12,7 @@ import dis
 import inspect
 import sys
 from typing import Callable
+from types import FunctionType
 from functools import wraps
 
 # Preserve the public module alias and callable identities without a second registry.
@@ -241,7 +242,7 @@ def is_reverse_smooth_rate_func(rate_func: object) -> bool:
     deliberately narrow so arbitrary Python easing callables stay unsupported.
     """
 
-    if not inspect.isfunction(rate_func):
+    if type(rate_func) is not FunctionType:
         return False
 
     code = rate_func.__code__
