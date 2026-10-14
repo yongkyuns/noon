@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -9,7 +9,6 @@ import playwright from 'playwright';
 import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
-import { captureChildProcessDiagnostics } from './playground-browser-failure-evidence.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
 
@@ -27,7 +26,7 @@ const liveMathAnimations = {
   'showcase-text-math': [['Write', 0, 1.2]],
 };
 await mkdir(artifacts, { recursive: true });
-let server, serverDiagnostics, browser, runtimeCache;
+let server, httpServerState, browser, runtimeCache;
 let completed = false;
 const startedAt = performance.now();
 const results = [];
@@ -71,21 +70,16 @@ async function json(relative) {
 }
 try {
   if (!external) {
-    server = process.env.NOON_GALLERY_COI === '1'
-      ? await serveRepository(root, port, { crossOriginIsolated: true })
-      : spawn('python3', ['-u', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', root], { stdio: ['ignore', 'pipe', 'pipe'] });
-    if (typeof server?.on === 'function') serverDiagnostics = captureChildProcessDiagnostics(server);
+    httpServerState = { kind: 'owned-repository-server', port, ready: false, error: null };
+    try {
+      server = await serveRepository(root, port, { crossOriginIsolated: process.env.NOON_GALLERY_COI === '1' });
+      httpServerState.ready = true;
+    } catch (error) {
+      httpServerState.error = { code: error.code ?? null, message: String(error).slice(0, 300) };
+      throw error;
+    }
     let ready = false;
     for (let i = 0; i < 100; i++) {
-      const observed = serverDiagnostics?.snapshot();
-      if (observed && (observed.error !== null || observed.exitCode !== null)) {
-        throw new Error(`gallery HTTP server failed: ${stringify(observed)}`);
-      }
-      // A pre-existing server cannot qualify as this test's checkout.
-      if (observed && !observed.stdoutTail.includes('Serving HTTP on')) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        continue;
-      }
       ready = await fetch(new URL('index.html', base)).then(r => r.ok).catch(() => false);
       if (ready) break;
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -364,7 +358,7 @@ try {
     } catch (error) {
       result.outcome = 'fail'; result.failure = String(error);
       result.failureDiagnostics = {
-        httpServer: serverDiagnostics?.snapshot() ?? null,
+        httpServer: httpServerState ?? null,
         pendingRequestCount: pendingRequests.size,
         pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({
           url: request.url.slice(0, 500),
@@ -431,8 +425,8 @@ try {
   console.log(`All ${selectedEntries.length} ${selectedIds ? 'selected' : 'selectable'} examples and ${queue.length - selectedEntries.length} no-JSPI controls passed.`);
   completed = true;
 } finally {
-  if (!completed && serverDiagnostics) {
-    await writeFile(path.join(artifacts, 'http-server-diagnostics.json'), stringify(serverDiagnostics.snapshot()));
+  if (!completed && httpServerState) {
+    await writeFile(path.join(artifacts, 'http-server-diagnostics.json'), stringify(httpServerState));
   }
   await writeFile(path.join(artifacts, 'results.json'), stringify(results));
   const runtimeResources = { elapsedMs: performance.now() - startedAt, ...runtimeCache?.stats() };
@@ -440,6 +434,4 @@ try {
   console.log('Gallery runtime resources:', stringify(runtimeResources));
   await browser?.close();
   if (typeof server?.close === 'function') await server.close();
-  else server?.kill('SIGTERM');
-  serverDiagnostics?.dispose();
 }
