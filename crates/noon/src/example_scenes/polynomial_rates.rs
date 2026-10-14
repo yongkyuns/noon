@@ -168,12 +168,12 @@ mod tests {
         let mut sought = assert_seek_matches_forward(exponential_circular_session, 6);
         sought.seek(0.25).unwrap();
         for (object, original) in sought.frame().objects.iter().zip([
-            0.005524271728019903_f32,
-            0.8232233047033631_f32,
+            0.005524271728019903_f64 as f32,
+            0.8232233047033631_f64 as f32,
             0.015625_f32,
-            0.031754163448145745_f32,
-            0.6614378277661477_f32,
-            0.0669872981077807_f32,
+            0.031754163448145745_f64 as f32,
+            0.6614378277661477_f64 as f32,
+            0.0669872981077807_f64 as f32,
         ]) {
             assert!((object.transform.translation.x - (-2.0 + 4.0 * original)).abs() < 1e-6);
         }
@@ -184,9 +184,9 @@ mod tests {
         let mut sought = assert_seek_matches_forward(sine_session, 3);
         sought.seek(0.25).unwrap();
         for (object, original) in sought.frame().objects.iter().zip([
-            0.07612046748871326_f32,
-            0.3826834323650898_f32,
-            0.1464466094067262_f32,
+            0.07612046748871326_f64 as f32,
+            0.3826834323650898_f64 as f32,
+            0.1464466094067262_f64 as f32,
         ]) {
             assert!((object.transform.translation.x - (-2.0 + 4.0 * original)).abs() < 1e-6);
         }
