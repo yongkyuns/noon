@@ -2819,7 +2819,7 @@
     {
       "id": "reference-8f7372e0aba5ba2c",
       "status": "blocked",
-      "reason": "Current public Noon namespace lacks AnnotationDot, CurvedArrow, CurvedDoubleArrow, LabeledDot. This static admission blocker does not enumerate all behavior gaps.",
+      "reason": "Current public Noon namespace lacks CurvedArrow, CurvedDoubleArrow, LabeledDot. AnnotationDot is exported; that presence does not qualify the complete unchanged example. This static admission blocker does not enumerate all behavior gaps.",
       "owners": [
         "#77",
         "#83",
@@ -2837,7 +2837,6 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "AnnotationDot",
         "CurvedArrow",
         "CurvedDoubleArrow",
         "LabeledDot"
