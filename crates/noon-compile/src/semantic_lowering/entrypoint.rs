@@ -847,6 +847,7 @@ mod tests {
                     kind: TextSourceKind::Plain,
                     runs: Arc::from([GlyphRun {
                         font: selected_face.clone(),
+                        outline_profile: noon_core::GlyphOutlineProfile::Font,
                         variations: Arc::from([]),
                         font_size: 24.0,
                         direction: TextDirection::LeftToRight,
@@ -882,6 +883,7 @@ mod tests {
                     kind: TextSourceKind::Plain,
                     runs: Arc::from([GlyphRun {
                         font: unrelated_face,
+                        outline_profile: noon_core::GlyphOutlineProfile::Font,
                         variations: Arc::from([]),
                         font_size: 24.0,
                         direction: TextDirection::LeftToRight,
