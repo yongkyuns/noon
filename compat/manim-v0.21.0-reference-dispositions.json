@@ -2455,7 +2455,7 @@
     {
       "id": "reference-88d8a4df06eb83b0",
       "status": "blocked",
-      "reason": "Current public Noon namespace lacks ApplyPointwiseFunction, R3_to_complex, complex_to_R3. This static admission blocker does not enumerate all behavior gaps.",
+      "reason": "Current public Noon namespace lacks ApplyPointwiseFunction. R3_to_complex and complex_to_R3 are exported with explicit user-array qualification; that does not establish WarpSquare behavior parity. This static admission blocker does not enumerate all behavior gaps.",
       "owners": [
         "#82",
         "#89",
@@ -2470,9 +2470,7 @@
       },
       "blocker_kind": "namespace",
       "namespace_blockers": [
-        "ApplyPointwiseFunction",
-        "R3_to_complex",
-        "complex_to_R3"
+        "ApplyPointwiseFunction"
       ]
     },
     {
