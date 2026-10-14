@@ -17,6 +17,8 @@ const buildTool = /^(?:cargo|rustc|rust-lld|wasm-opt|g?make|ninja|cmake|clang(?:
 
 // Consume executable names, never command arguments. Missing or malformed ps
 // output is unknown; an empty list only rules out these known build tools.
+// JVM executables also host Gradle/Maven builds. Their presence is unknown
+// activity, rather than a clean host verdict or an assertion that every JVM builds.
 export function parseBuildProcesses(output) {
   if (typeof output !== "string" || !output.trim()) return null;
   const builds = [];
@@ -26,6 +28,7 @@ export function parseBuildProcesses(output) {
     const pid = Number(match[1]);
     if (!Number.isSafeInteger(pid) || pid <= 0) return null;
     const executable = path.posix.basename(match[2]);
+    if (/^javaw?$/.test(executable)) return null;
     if (buildTool.test(executable)) builds.push({ pid, executable });
   }
   return builds;

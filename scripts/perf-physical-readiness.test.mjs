@@ -27,6 +27,12 @@ test("build activity distinguishes executable names and rejects missing/malforme
     assert.equal(assessReadiness({ ...ok, buildProcesses: processes }).status, "blocked");
   }
   assert.deepEqual(parseBuildProcesses("1 swift-driver-helper\n2 my-xcodebuild\n3 /opt/Swift.app/app"), []);
+  for (const executable of ["java", "javaw"]) {
+    const processes = parseBuildProcesses(`1 /opt/another project/jdk/bin/${executable}\n2 node`);
+    assert.equal(processes, null);
+    assert.ok(assessReadiness({ ...ok, buildProcesses: processes }).blockers.includes("host build activity unknown"));
+  }
+  assert.deepEqual(parseBuildProcesses("1 java-helper\n2 my-java\n3 /opt/Java.app/app"), []);
   for (const value of [null, "", "PID COMMAND", "0 rustc", "9007199254740992 rustc", "1 node\nbroken"]) {
     assert.equal(parseBuildProcesses(value), null);
   }
@@ -109,7 +115,7 @@ test("readiness retains large process tables and rejects output beyond its bound
   }
 });
 
-for (const compiler of ["rustc", "swift-driver", "swift-frontend", "xcodebuild"]) test(`device capture refuses ${compiler} and preserves reports if it starts during a suite`, async t => {
+for (const compiler of ["rustc", "swift-driver", "swift-frontend", "xcodebuild", "java"]) test(`device capture refuses ${compiler} and preserves reports if it starts during a suite`, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "noon-device-builds-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await mkdir(path.join(dir, "scripts")); await mkdir(path.join(dir, "bin"));
@@ -130,18 +136,20 @@ for (const compiler of ["rustc", "swift-driver", "swift-frontend", "xcodebuild"]
       NOON_PERF_DEVICE_ID: "test-device", NOON_PERF_GPU_MODE: gpuMode,
       NOON_PERF_BACKENDS: "webgpu", NOON_PERF_SUITES: "corpus", NOON_PERF_RUN_DIR: out },
   });
+  const expectedProcesses = compiler === "java" ? null : [{ pid: 123, executable: compiler }];
+  const blockedMessage = compiler === "java" ? /host build activity unknown/ : /compiler\/build\/archive tooling is active/;
   await writeFile(marker, "active");
   const before = path.join(dir, "before");
   let result = capture(before);
-  assert.notEqual(result.status, 0); assert.match(result.stderr, /compiler\/build\/archive tooling is active/);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, blockedMessage);
   assert.deepEqual(await readdir(before), ["perf-corpus-webgpu-builds-before.json"]);
   const read = (out, phase) => readFile(path.join(out, `perf-corpus-webgpu-builds-${phase}.json`), "utf8").then(JSON.parse);
-  assert.deepEqual((await read(before, "before")).processes, [{ pid: 123, executable: compiler }]);
+  assert.deepEqual((await read(before, "before")).processes, expectedProcesses);
   await rm(marker);
   const after = path.join(dir, "after"); result = capture(after);
-  assert.notEqual(result.status, 0); assert.match(result.stderr, /compiler\/build\/archive tooling is active/);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, blockedMessage);
   assert.deepEqual((await read(after, "before")).processes, []);
-  assert.deepEqual((await read(after, "after")).processes, [{ pid: 123, executable: compiler }]);
+  assert.deepEqual((await read(after, "after")).processes, expectedProcesses);
   assert.equal(await readFile(path.join(after, "corpus-webgpu.json"), "utf8"), "raw evidence");
   const original = await readFile(path.join(after, "perf-corpus-webgpu-builds-before.json"), "utf8");
   result = capture(after);
