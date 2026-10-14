@@ -10,6 +10,28 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class SharedFamilyPaintTests(unittest.TestCase):
+    def test_root_only_color_uses_one_shared_root_operation(self):
+        group = identity_only_wrapper(compat.Group, submobjects=[])
+        group._semantic_family_handle = Mock()
+        with patch.object(handles, "_group_target_context", return_value=None):
+            self.assertIs(group.set_color(compat._base.BLUE, family=False), group)
+        group._semantic_family_handle.setOwnColor.assert_called_once_with(
+            compat._base.BLUE.red, compat._base.BLUE.green, compat._base.BLUE.blue, compat._base.BLUE.alpha)
+        group._semantic_family_handle.setColor.assert_not_called()
+
+    def test_root_only_callback_color_fails_before_leaf_mutation(self):
+        group = identity_only_wrapper(compat.Group, submobjects=[])
+        group._semantic_family_handle = Mock()
+        phase = Mock()
+        token = updaters._ACTIVE_CANONICAL_CONTEXT.set(phase)
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "metadata writes"):
+                group.set_color(compat._base.BLUE, family=False)
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+        phase.paint_family.assert_not_called()
+
+
     def test_leaf_fade_forwards_default_and_live_calls_without_python_alpha_math(self):
         for live in (False, True):
             leaf = identity_only_wrapper(compat.Square)

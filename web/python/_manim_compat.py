@@ -529,11 +529,11 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_rotate
         return _group_rotate(self, angle, axis, about_point=about_point, about_edge=about_edge, **kwargs)
 
-    def set_color(self, color: object) -> Group:
+    def set_color(self, color: object, family: bool = True) -> Group:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
             return _base.Mobject.set_color(self, color)
         from _manim_semantic_handles import _group_set_color
-        return _group_set_color(self, color)
+        return _group_set_color(self, color, family=family)
 
     def set_fill(self, color: object = None, opacity: float | None = None) -> Group:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:

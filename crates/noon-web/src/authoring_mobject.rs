@@ -1082,6 +1082,25 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = manimColor)]
+        pub fn manim_color(&self) -> Result<WasmManimColor, JsValue> {
+            self.semantic_family()?
+                .own_color()
+                .map(WasmManimColor::from_color)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = setOwnColor)]
+        pub fn set_own_color(
+            &self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_own_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = worldFamilyCenter)]
         pub fn world_family_center(&self) -> Result<Vec<f64>, JsValue> {
             let center = self.family.world_center().map_err(js_error)?;

@@ -2978,7 +2978,23 @@ impl<'a> LiveSession<'a> {
         blue: f64,
         alpha: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_family_style(family, |style| edit_color(style, red, green, blue, alpha))
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.color_transaction(red, green, blue, alpha, true)?)
+    }
+
+    /// Publish root-only authored color while preserving every descendant.
+    pub fn set_family_own_color(
+        &mut self,
+        family: &MobjectFamily,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.color_transaction(red, green, blue, alpha, false)?)
     }
 
     /// Match a donor's effective RGB in one coherent family publication.
