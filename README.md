@@ -253,3 +253,5 @@ native/WASM build and footprint evidence.
 ## Triangle-light release diagnostic capture
 
 The paired release diagnostic uses the same current `scene-perf.js` measurement harness for both immutable engines. `captureBeforeTerminate=1` retains the renderer after all timing samples and the final metrics query have completed; the browser releases it after taking the screenshot. Ordinary profiling still terminates immediately. Each screenshot must contain foreground pixels before it can enter the pixel comparison, so matching blank backgrounds cannot qualify the scene. This diagnostic does not replace ordinary gallery, physical-device, or user visual approval gates.
+
+The existing Triangle light pre-merge review workflow also supports manual dispatch when normal PR checks have not started. It retains the same exact source/runtime verification, actual candidate playback and replay, photon-motion gate, external dependency archive, video capture, and unapproved runnable bundle. This review does not repeat the release timing experiment.

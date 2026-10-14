@@ -9,19 +9,20 @@ on:
       - 'web/python/test_showcase_triangle_light*'
       - 'scripts/showcase-triangle-light-*'
       - '.github/workflows/playground-triangle-light-review.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: triangle-light-review-${{ github.event.pull_request.number }}
+  group: triangle-light-review-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   preview:
     name: Runnable preview and actual WebGL review
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
