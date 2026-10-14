@@ -26,10 +26,17 @@ class Builder:
     def appendFamilyTransformTo(self, *args):
         self.children.append(("structural", args))
 
+    def appendFamilyMethodTargetTo(self, *args):
+        self.children.append(("method-target", args))
+
 
 class Matching:
     def __init__(self, **kwargs):
         self.anim_args = kwargs
+
+
+class AlignedGroup(Matching):
+    pass
 
 
 class MatchingTex(Matching):
@@ -55,7 +62,7 @@ class MatchingTimingScopeTests(unittest.TestCase):
         module = ast.Module(body=helpers + [route], type_ignores=[])
         cls.module = ast.fix_missing_locations(module)
 
-    def route(self, constructor=None, play=None, matching=True, matching_class=Matching):
+    def route(self, constructor=None, play=None, matching=True, matching_class=Matching, method_target=False):
         self.resolutions = []
         def resolve(leaf, kwargs, **unused):
             self.resolutions.append(dict(kwargs))
@@ -64,17 +71,24 @@ class MatchingTimingScopeTests(unittest.TestCase):
             return NS(run_time=opts.get("run_time", opts.get("duration", 1.0)),
                       rate_func=opts.get("rate_func", opts.get("easing", "smooth")),
                       lag_ratio=opts.get("lag_ratio", 0.0), path_arc=opts.get("path_arc", 0.0))
-        namespace = {"_animate": NS(TransformMatchingShapes=Matching, TransformMatchingTex=MatchingTex),
+        namespace = {"_animate": NS(TransformMatchingShapes=Matching, TransformMatchingTex=MatchingTex, _AlignedGroupAnimationBuilder=AlignedGroup),
                      "_canonical_transform_options": resolve, "math": math,
                      "_rate_functions": NS(easing_from_rate_func=lambda value: value)}
         exec(compile(self.module, "_manim_scene.py:matching-transport", "exec"), namespace)
         context = NS(beginOrdinaryCompositionBuilder=lambda kind, duration, lag, play_duration:
                      Builder(duration, lag))
-        leaf = matching_class(**(constructor or {})) if matching else NS(anim_args=constructor or {})
+        leaf = matching_class(**(constructor or {})) if matching else (AlignedGroup(**(constructor or {})) if method_target else NS(anim_args=constructor or {}))
         source, target = (NS(_semantic_family_handle=object()) for _ in range(2))
         parent, completed = Builder(), []
         namespace["route"](context, parent, (source, target, leaf), play or {}, completed)
         return parent, completed
+
+    def test_ordinary_and_method_family_targets_choose_distinct_completion_contracts(self):
+        for method_target, expected in ((False, "structural"), (True, "method-target")):
+            with self.subTest(method_target=method_target):
+                parent, completed = self.route(matching=False, method_target=method_target)
+                self.assertEqual(parent.children[0][0], expected)
+                self.assertEqual(completed, [])
 
     def test_constructor_child_and_play_group_keep_distinct_rates_and_durations(self):
         cases = [({}, {}, "smooth", "linear", 1.0, None),

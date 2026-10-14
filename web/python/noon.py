@@ -900,8 +900,9 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "rate_functions": "_manim_rate_functions",
+
     "CubicBezier": "_manim_geometry",
-    "normalize_along_axis": "_manim_user_vectors",
     "get_winding_number": "_manim_user_vectors",
     "bezier": "_manim_user_vectors",
     "partial_bezier_points": "_manim_user_vectors",
@@ -910,8 +911,6 @@ _PUBLIC_EXPORTS = {
     "bezier_remap": "_manim_user_vectors",
     "is_closed": "_manim_user_vectors",
     "straight_path": "_manim_user_vectors",
-    "rotation_matrix_from_quaternion": "_manim_user_vectors",
-    "rotation_matrix_transpose_from_quaternion": "_manim_user_vectors",
     "line_intersection": "_manim_user_vectors",
     "find_intersection": "_manim_user_vectors",
     "quaternion_mult": "_manim_user_vectors",

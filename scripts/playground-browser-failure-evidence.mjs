@@ -5,6 +5,30 @@ import { promisify } from "node:util";
 
 const short = (value, limit = 300) => typeof value === "string" ? value.slice(0, limit) : null;
 
+/** Bounded evidence from the test-owned file server; never restart or retry it. */
+export function captureChildProcessDiagnostics(child, { maxOutputChars = 16_000 } = {}) {
+  if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars < 1 || maxOutputChars > 64_000) {
+    throw new RangeError("invalid child-process output capacity");
+  }
+  let stdoutTail = "", stderrTail = "", error = null;
+  const subscriptions = [];
+  const on = (target, event, listener) => {
+    if (target == null) return;
+    target.on(event, listener);
+    subscriptions.push([target, event, listener]);
+  };
+  on(child.stdout, "data", chunk => { stdoutTail = (stdoutTail + chunk.toString()).slice(-maxOutputChars); });
+  on(child.stderr, "data", chunk => { stderrTail = (stderrTail + chunk.toString()).slice(-maxOutputChars); });
+  on(child, "error", cause => { error = short(String(cause)); });
+  return Object.freeze({ snapshot: () => ({
+    pid: child.pid ?? null, exitCode: child.exitCode ?? null,
+    signalCode: child.signalCode ?? null, error, stdoutTail, stderrTail,
+  }), dispose: () => {
+    for (const [target, event, listener] of subscriptions) target.off(event, listener);
+    subscriptions.length = 0;
+  } });
+}
+
 /** Host-side observations, independent of a crashed page's JS execution context. */
 export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 32 } = {}) {
   if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 128) {

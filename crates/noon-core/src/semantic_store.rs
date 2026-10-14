@@ -350,7 +350,7 @@ pub enum SemanticNodeKind {
     /// frontend identity seam and are owned for migration by #61/#959.
     AuthoringObject,
     /// A semantic family/collection with no implied transform ownership.
-    Family(SemanticPresentation),
+    Family(SemanticFamilyState),
     /// Authored native-reactive signal using the same scene-global generational
     /// identity allocator as objects and families.
     Signal(SemanticSignalState),
@@ -436,7 +436,7 @@ impl SemanticNode {
     /// Authored painter metadata on an object or a non-rendered family root.
     pub fn presentation(&self) -> Option<SemanticPresentation> {
         match &self.kind {
-            SemanticNodeKind::Family(presentation) => Some(*presentation),
+            SemanticNodeKind::Family(state) => Some(state.presentation),
             _ => self
                 .object_state
                 .as_ref()
@@ -446,13 +446,26 @@ impl SemanticNode {
 
     pub(crate) fn set_z_index(&mut self, value: f64) {
         match &mut self.kind {
-            SemanticNodeKind::Family(presentation) => presentation.z_index = value,
+            SemanticNodeKind::Family(state) => state.presentation.z_index = value,
             _ => self
                 .object_state
                 .as_mut()
                 .expect("validated authoring node")
                 .set_z_index(value),
         }
+    }
+
+    pub fn family_color(&self) -> Option<crate::Color> {
+        match self.kind() {
+            SemanticNodeKind::Family(state) => Some(state.own_color),
+            _ => None,
+        }
+    }
+    pub(crate) fn set_family_color(&mut self, color: crate::Color) {
+        let SemanticNodeKind::Family(state) = &mut self.kind else {
+            unreachable!("preflighted family color");
+        };
+        state.own_color = color;
     }
 
     pub fn source_identity(&self) -> Option<&SourceIdentity> {
@@ -950,7 +963,7 @@ impl SemanticStore {
     }
 
     pub fn insert_family(&mut self) -> SemanticNodeId {
-        self.insert_kind(SemanticNodeKind::Family(SemanticPresentation::default()))
+        self.insert_kind(SemanticNodeKind::Family(SemanticFamilyState::default()))
     }
 
     pub(crate) fn insert_semantic_signal_state(

@@ -2137,6 +2137,7 @@ impl TransportGlyphRun {
 enum TransportGlyphOutlineProfile {
     Font,
     Cairo,
+    CairoCoreText,
 }
 
 impl From<GlyphOutlineProfile> for TransportGlyphOutlineProfile {
@@ -2144,6 +2145,7 @@ impl From<GlyphOutlineProfile> for TransportGlyphOutlineProfile {
         match value {
             GlyphOutlineProfile::Font => Self::Font,
             GlyphOutlineProfile::Cairo => Self::Cairo,
+            GlyphOutlineProfile::CairoCoreText => Self::CairoCoreText,
         }
     }
 }
@@ -2153,6 +2155,7 @@ impl TransportGlyphOutlineProfile {
         match self {
             Self::Font => GlyphOutlineProfile::Font,
             Self::Cairo => GlyphOutlineProfile::Cairo,
+            Self::CairoCoreText => GlyphOutlineProfile::CairoCoreText,
         }
     }
 }
@@ -2845,17 +2848,24 @@ mod tests {
             .unwrap()
             .runs[0]
             .clone();
-        cairo_run.outline_profile = GlyphOutlineProfile::Cairo;
-        let mut encoded = serde_json::to_value(TransportGlyphRun::from_core(&cairo_run)).unwrap();
-        assert_eq!(
-            serde_json::from_value::<TransportGlyphRun>(encoded.clone())
-                .unwrap()
-                .into_core(),
-            cairo_run,
-            "retained text transport must preserve the Cairo outline profile"
-        );
-        encoded["outline_profile"] = serde_json::json!("unknown");
-        assert!(serde_json::from_value::<TransportGlyphRun>(encoded).is_err());
+        for profile in [
+            GlyphOutlineProfile::Font,
+            GlyphOutlineProfile::Cairo,
+            GlyphOutlineProfile::CairoCoreText,
+        ] {
+            cairo_run.outline_profile = profile;
+            let mut encoded =
+                serde_json::to_value(TransportGlyphRun::from_core(&cairo_run)).unwrap();
+            assert_eq!(
+                serde_json::from_value::<TransportGlyphRun>(encoded.clone())
+                    .unwrap()
+                    .into_core(),
+                cairo_run,
+                "retained text transport must preserve the outline profile"
+            );
+            encoded["outline_profile"] = serde_json::json!("unknown");
+            assert!(serde_json::from_value::<TransportGlyphRun>(encoded).is_err());
+        }
         let bundle = RetainedResourceBundle::capture(
             original_handles.iter().copied(),
             source.text_resources(),

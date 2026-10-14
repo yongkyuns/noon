@@ -155,8 +155,11 @@ def _mobject_get_color(self: _base.Mobject) -> _base.Color:
 
 
 def _group_get_color(self: _compat.Group) -> _base.Color:
-    leaves = _compat._leaf_mobjects(self)
-    return _base.WHITE if not leaves else _mobject_get_color(leaves[0])
+    handle = getattr(self, "_semantic_family_handle", None)
+    if handle is None:
+        raise RuntimeError("Group observation requires the shared Rust authoring host")
+    observed = engine_call(handle.manimColor)
+    return _base.Color(float(observed.red), float(observed.green), float(observed.blue), float(observed.alpha))
 
 
 def _public_bound_method_name(source: object, method: object) -> str:
