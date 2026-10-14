@@ -2584,6 +2584,12 @@ impl CanonicalAuthoringScene {
                     options,
                     noon_core::AnimationOptions::new(),
                 )
+            } else if matches!(child, OrdinaryCompositionChild::Create { .. }) {
+                noon_core::resolve_create_animation_options(
+                    noon_core::AnimationDefaults::MANIM,
+                    options,
+                    noon_core::AnimationOptions::new(),
+                )
             } else if matches!(child, OrdinaryCompositionChild::Add { .. }) {
                 noon_core::resolve_add_animation_options(
                     noon_core::AnimationDefaults::MANIM,
@@ -13454,6 +13460,33 @@ mod tests {
         assert!(!context.live_contains_mobject(&square).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&square.node_id()));
         assert_eq!(context.identities.get(&square.node_id()), Some(&id));
+    }
+
+    #[test]
+    fn ordinary_reverse_create_lingering_preserves_typed_admission() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Lingering)
+            .reverse_rate_function(true);
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &create_requests(&[(ObjectId::new(0), circle.clone(), options)]),
+                AnimationOptions::new(),
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(end, 1.0);
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(0)),
+            Some(&circle.node_id())
+        );
+        let player = context.active_live_player().unwrap();
+        player.live_advance_segment_to(end).unwrap();
+        player.live_complete_segment().unwrap();
+        assert!(context.live_contains_mobject(&circle).unwrap());
     }
 
     #[test]

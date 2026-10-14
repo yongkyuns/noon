@@ -30,12 +30,18 @@ class LingeringRate(unittest.TestCase):
         animation = SimpleNamespace(anim_args={'reverse_rate_function': True})
         # Execute the actual coercion helpers without unrelated browser imports.
         loader = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'scripts/pinned_python_helpers.py'))['load_helpers']
+        calls = []
+        def resolve(**kwargs):
+            calls.append(kwargs)
+            return resolved
         helpers = loader(Path(__file__).with_name('_manim_scene.py'),
                          {'_canonical_create_options', '_canonical_affine_options'},
-                         {'_options': SimpleNamespace(resolve=lambda **kwargs: resolved,
+                         {'_options': SimpleNamespace(resolve=resolve,
                           builder_args=lambda value: value.anim_args)})
         self.assertIs(helpers['_canonical_create_options'](animation, {}), resolved)
+        self.assertTrue(calls[-1]['create'])
         self.assertIsNone(helpers['_canonical_affine_options'](animation, {}))
+        self.assertNotIn('create', calls[-1])
         animation.anim_args['introducer'] = False
         self.assertIsNone(helpers['_canonical_create_options'](animation, {}))
 
