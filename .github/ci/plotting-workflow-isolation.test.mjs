@@ -25,6 +25,9 @@ test("all original plotting cases retain their commands and modes", () => {
 
 test("every case consumes the authenticated full-validation package", () => {
   const build = section("build"), qualify = section("qualify");
+  assert.ok(build.indexOf("Prepare validation evidence") < build.indexOf("Build exact-source browser package"));
+  assert.match(build, /Retain package-build outcome\n\s+if: always\(\)/);
+  assert.match(build, /cp web\/ci-artifact\.json ci-artifacts\/plotting-integration\/package-build\.json/);
   assert.match(build, /bash scripts\/check\.sh full/);
   assert.ok(build.indexOf("wasm-build.mjs stamp") > build.indexOf("bash scripts/check.sh full"));
   assert.match(build, /wasm-build\.mjs verify/);

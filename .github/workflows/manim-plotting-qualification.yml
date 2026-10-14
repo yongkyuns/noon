@@ -39,11 +39,26 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Prepare validation evidence before package preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts/plotting-integration
+          git rev-parse HEAD > ci-artifacts/plotting-integration/source-sha.txt
+          git status --porcelain --untracked-files=all > ci-artifacts/plotting-integration/worktree-before-build.txt
       - name: Build exact-source browser package
         uses: ./.github/actions/dev-wasm-build
         with:
           preflight: 'true'
           cache-ref: ${{ github.event.pull_request.base.sha }}
+      - name: Retain package-build outcome
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f web/ci-artifact.json ]]; then
+            cp web/ci-artifact.json ci-artifacts/plotting-integration/package-build.json
+          fi
       - name: Verify animated plotting factories in the built package
         shell: bash
         run: |
