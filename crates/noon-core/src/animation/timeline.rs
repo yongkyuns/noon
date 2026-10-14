@@ -65,6 +65,9 @@ pub enum RateFunction {
     RushFrom,
     ThereAndBack,
     EaseInOutCubic,
+    EaseInSine,
+    EaseOutSine,
+    EaseInOutSine,
     EaseInQuad,
     EaseOutQuad,
     EaseInOutQuad,
@@ -97,6 +100,9 @@ impl RateFunction {
             | Self::Smoothererstep
             | Self::SlowInto
             | Self::DoubleSmooth
+            | Self::EaseInSine
+            | Self::EaseOutSine
+            | Self::EaseInOutSine
             | Self::EaseInQuad
             | Self::EaseOutQuad
             | Self::EaseInOutQuad
@@ -161,6 +167,9 @@ impl RateFunction {
                     0.5 * (1.0 + manim_smooth_f64(2.0 * p - 1.0))
                 }
             }
+            Self::EaseInSine => 1.0 - (p * std::f64::consts::PI / 2.0).cos(),
+            Self::EaseOutSine => (p * std::f64::consts::PI / 2.0).sin(),
+            Self::EaseInOutSine => -((std::f64::consts::PI * p).cos() - 1.0) / 2.0,
             Self::EaseInQuad => p * p,
             Self::EaseOutQuad => 1.0 - (1.0 - p) * (1.0 - p),
             Self::EaseInOutQuad => polynomial_in_out(p, 2),
@@ -1063,6 +1072,27 @@ mod tests {
                 assert_eq!(rate.evaluate(progress as f32), expected as f32);
             }
         }
+    }
+
+    #[test]
+    fn sine_easings_match_unchanged_manim_finite_samples() {
+        let mut count = 0;
+        for row in include_str!("sine_easing_reference.csv")
+            .lines()
+            .filter(|s| !s.starts_with('#'))
+        {
+            let values = row.split(',').collect::<Vec<_>>();
+            let rate = RateFunction::from_semantic_id(values[0]).unwrap();
+            let progress = values[1].parse::<f64>().unwrap();
+            let expected = values[2].parse::<f64>().unwrap();
+            assert!(
+                (rate.evaluate_f64(progress) - expected).abs() < 1e-14,
+                "{row}"
+            );
+            assert_eq!(rate.evaluate(progress as f32), expected as f32, "{row}");
+            count += 1;
+        }
+        assert_eq!(count, 99);
     }
 
     #[test]

@@ -11,6 +11,23 @@
   },
   "fixtures": [
     {
+      "id": "sine-easings",
+      "scene": "SineEasings",
+      "source": "parity/manim-v0.21/core-examples/sine_easings.py",
+      "reference_frame_rate": 120,
+      "expected_duration": 1,
+      "sample_times": [
+        0,
+        0.125,
+        0.25,
+        0.375,
+        0.5,
+        0.75,
+        0.9666666666666667
+      ],
+      "notes": "Three standard sine rates through shared method targets. 120fps original reference represents every unchanged requested time exactly; no tolerance relaxation."
+    },
+    {
       "id": "polynomial-easings",
       "reference_frame_rate": 120,
       "scene": "PolynomialEasings",
