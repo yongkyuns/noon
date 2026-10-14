@@ -12,6 +12,18 @@ const sha256 = value => createHash("sha256").update(value).digest("hex");
 
 // Ignore the canvas border and dark host background. Every diagnostic source
 // has a visible white dot, even when the triangle fill is absent.
+// Preserve each immutable engine's verified ready-message adapter. The old
+// engine kept provenance in a wrapper; current engines own it in the base client.
+export function rendererProfileHarness(source, engineHarness) {
+  const current = 'import { PythonAuthoringClient } from "./authoring-client.js";';
+  const legacy = 'import { ProvenancedPythonAuthoringClient } from "./provenanced-authoring-client.js";';
+  assert.ok(source.startsWith(current));
+  if (engineHarness.startsWith(current)) return source;
+  assert.ok(engineHarness.startsWith(legacy), "unknown engine provenance adapter");
+  return source.replace(current,
+    'import { ProvenancedPythonAuthoringClient as PythonAuthoringClient } from "./provenanced-authoring-client.js";');
+}
+
 export function diagnosticForegroundPixels({ width, height, data }) {
   assert.equal(data.length, width * height * 4);
   let count = 0;

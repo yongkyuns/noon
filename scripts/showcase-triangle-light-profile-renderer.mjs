@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { diagnosticForegroundPixels, summarizeProfile } from './showcase-triangle-light-profile.mjs';
+import { diagnosticForegroundPixels, rendererProfileHarness, summarizeProfile } from './showcase-triangle-light-profile.mjs';
 const hash = b => createHash('sha256').update(b).digest('hex');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'browser-smoke-artifacts/triangle-profile/renderer');
@@ -17,8 +17,8 @@ const {serveRepository} = await import('./browser-test-server.mjs');
 const {browserArgs} = await import('./manim-raster-support.mjs');
 const {createPyodideResourceCache} = await import('./pyodide-resource-cache.mjs');
 const code = await readFile(path.join(root,'web/python/examples/showcase_triangle_light.py'),'utf8');
-// Both release engines run the same current measurement/capture harness. Its
-// relative imports still load each engine's own immutable runtime modules.
+// Both release engines run the same measurement and capture code. Only the
+// verified ready adapter follows each engine's immutable runtime modules.
 const profileHarness = await readFile(path.join(root,'web/scene-perf.js'),'utf8');
 function simple(scale) {
   const shape = scale === null ? '' : `        triangle = VMobject(stroke_width=0, fill_color=BLUE, fill_opacity=1)\n        triangle.set_points_as_corners([(-${scale}, -${scale}, 0), (${scale}, -${scale}, 0), (0, ${scale}, 0), (-${scale}, -${scale}, 0)])\n        self.add(triangle)\n`;
@@ -28,6 +28,7 @@ const variants = new Map([['dot',simple(null)],['small-fill',simple(.15)],['larg
 const bases = {baseline:path.resolve(process.env.NOON_TRIANGLE_PROFILE_RUNTIME), candidate:root};
 const identities = {};
 const servers = {};
+const profileHarnesses = {};
 const args=browserArgs('webgl');
 const browser=await chromium.launch({headless:true,args});
 const report={purpose:'Paired release renderer attribution, not physical-GPU or ordinary-playback FPS',
@@ -36,6 +37,8 @@ const report={purpose:'Paired release renderer attribution, not physical-GPU or 
 try {
   for(const [name,dir] of Object.entries(bases)) {
     identities[name]=JSON.parse(await readFile(path.join(dir,'web/runtime-build-identity.json'),'utf8'));
+    profileHarnesses[name]=rendererProfileHarness(profileHarness,
+      await readFile(path.join(dir,'web/scene-perf.js'),'utf8'));
     servers[name]=await serveRepository(dir,0);
   }
   assert.equal(identities.baseline.sourceRevision,process.env.NOON_TRIANGLE_PROFILE_ENGINE_SHA);
@@ -43,7 +46,7 @@ try {
   const images=new Map();
   for(const [name,source] of variants) {
     for(const engine of ['baseline','candidate']) {
-      const result={name,engine,sourceSha256:hash(source),outcome:'fail',pageErrors:[]};
+      const result={name,engine,profileHarnessSha256:hash(profileHarnesses[engine]),sourceSha256:hash(source),outcome:'fail',pageErrors:[]};
       report.cases.push(result);
       const context=await browser.newContext({viewport:{width:1200,height:900},deviceScaleFactor:1});
       const cache=createPyodideResourceCache(await readFile(path.join(bases[engine],'web/python-worker.js'),'utf8'));
@@ -51,7 +54,7 @@ try {
       const page=await context.newPage();
       page.on('pageerror',e=>result.pageErrors.push(String(e)));
       try {
-        await page.route('**/web/scene-perf.js',r=>r.fulfill({contentType:'text/javascript',body:profileHarness}));
+        await page.route('**/web/scene-perf.js',r=>r.fulfill({contentType:'text/javascript',body:profileHarnesses[engine]}));
         await page.route('**/python/demo_scene.py',r=>r.fulfill({contentType:'text/plain',body:source}));
         const params=new URLSearchParams({source:'./python/demo_scene.py',warmup:'24',frames:'90',targetHz:'30',
           includeSamples:'1',includeRendererSamples:'1',includeStageTimings:'1',includeRendererGpuIdentity:'1',

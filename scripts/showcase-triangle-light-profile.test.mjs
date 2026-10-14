@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { diagnosticForegroundPixels, diagnosticSource, distribution, summarizeProfile } from "./showcase-triangle-light-profile.mjs";
+import { diagnosticForegroundPixels, rendererProfileHarness, diagnosticSource, distribution, summarizeProfile } from "./showcase-triangle-light-profile.mjs";
 const source = await readFile(new URL("../web/python/examples/showcase_triangle_light.py",import.meta.url),"utf8");
 const timed = text => text.split("\n").filter(line=>/self\.(play|wait)|run_time=|FLIGHT_SECONDS|BOUNCES =/.test(line));
 
@@ -44,4 +44,14 @@ test("unavailable stage data is not reported as zero",()=>{
   assert.deepEqual(distribution([3,1,2]),{samples:3,median:2,p95:3,max:3,mean:2});
   for(const values of [[],[undefined],[NaN],[-1]]) assert.throws(()=>distribution(values));
   assert.throws(()=>summarizeProfile({schemaVersion:2}));
+});
+
+test("renderer measurement preserves each engine's verified ready adapter", () => {
+  const current = 'import { PythonAuthoringClient } from "./authoring-client.js";';
+  const legacy = 'import { ProvenancedPythonAuthoringClient } from "./provenanced-authoring-client.js";';
+  const timing = '\nconst frames = 90; const client = new PythonAuthoringClient();';
+  assert.equal(rendererProfileHarness(current + timing, current), current + timing);
+  assert.equal(rendererProfileHarness(current + timing, legacy),
+    'import { ProvenancedPythonAuthoringClient as PythonAuthoringClient } from "./provenanced-authoring-client.js";' + timing);
+  assert.throws(() => rendererProfileHarness(current + timing, 'unknown'));
 });
