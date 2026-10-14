@@ -191,3 +191,14 @@ def find_intersection(p0s: Point3DLike_Array, v0s: Vector3DLike_Array, p1s: Poin
         denom = max(np.dot(v0, normal), threshold)
         result += [p0 + np.dot(p1 - p0, normal) / denom * v0]
     return result
+
+
+def get_winding_number(points: Sequence[np.ndarray]) -> float:
+    from _manim_iterables import adjacent_pairs
+    total_angle: float = 0
+    for p1, p2 in adjacent_pairs(points):
+        d_angle = angle_of_vector(p2) - angle_of_vector(p1)
+        d_angle = ((d_angle + math.pi) % math.tau) - math.pi
+        total_angle += d_angle
+    val: float = total_angle / math.tau
+    return val
