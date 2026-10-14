@@ -93,6 +93,7 @@ jobs:
           array-oracle/bin/pip install numpy==2.5.4
           array-oracle/bin/python noon/scripts/manim-array-utilities.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-rate-intervals.py manim-v0.21.0
+          array-oracle/bin/python noon/scripts/manim-polynomial-easings.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-vectors.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-intersections.py manim-v0.21.0
           array-oracle/bin/python noon/scripts/manim-user-array-normalization.py manim-v0.21.0

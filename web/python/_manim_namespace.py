@@ -26,7 +26,7 @@ _OPTIONAL_HELPER_PACKAGES = {
     "get_unit_normal": "numpy",
     "z_to_vector": "numpy",
 
-    "normalize_along_axis": "numpy",
+    "rate_functions": "numpy",
     "get_winding_number": "numpy",
     "bezier": "numpy",
     "partial_bezier_points": "numpy",
@@ -35,8 +35,6 @@ _OPTIONAL_HELPER_PACKAGES = {
     "bezier_remap": "numpy",
     "point_lies_on_bezier": "numpy",
     "proportions_along_bezier_curve_for_point": "numpy",
-    "rotation_matrix_from_quaternion": "numpy",
-    "rotation_matrix_transpose_from_quaternion": "numpy",
     "line_intersection": "numpy",
     "find_intersection": "numpy",
     "quaternion_from_angle_axis": "numpy",
