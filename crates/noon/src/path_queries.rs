@@ -47,6 +47,12 @@ impl PathQuery {
             .map_or(0, PathProportionPlan::curve_count)
     }
 
+    /// Manim's cubic control-point count, including an unfinished final anchor.
+    /// Lines and quadratics use the same four-point promotion as curve queries.
+    pub fn point_count(&self) -> usize {
+        4 * self.curve_count() + usize::from(self.unfinished_anchor.is_some())
+    }
+
     /// Cubic controls in this snapshot's coordinate space. Lines and quadratics
     /// are promoted exactly; the returned points are derived observations.
     pub fn curve_points(&self, index: usize) -> Result<[(f64, f64); 4], AuthoringError> {
