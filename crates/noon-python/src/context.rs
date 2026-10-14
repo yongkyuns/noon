@@ -506,6 +506,25 @@ impl Context {
         let layout = self.layout(target)?;
         Ok(layout.center)
     }
+    #[pyo3(name = "queryFamilyLayout")]
+    fn family_layout(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<LayoutObservation> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.effective_family_layout(&target.family))
+                .map(LayoutObservation::from_effective)
+        } else {
+            let layout = target.family.layout().map_err(engine_error)?;
+            Ok(LayoutObservation {
+                center: layout.center(),
+                width: layout.width(),
+                height: layout.height(),
+            })
+        }
+    }
     #[pyo3(name = "queryMobjectLayout")]
     fn layout(&mut self, target: &MobjectHandle) -> PyResult<LayoutObservation> {
         self.require_active()?;

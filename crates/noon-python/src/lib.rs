@@ -53,6 +53,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<context::MembershipBatch>()?;
     m.add_class::<family::FamilyHandle>()?;
     m.add_class::<family::FamilyCopy>()?;
+    m.add_class::<family::FamilyLayoutObservation>()?;
     m.add_class::<family::ColorObservation>()?;
     m.add_class::<mobject::MobjectHandle>()?;
     m.add_class::<mobject::LayoutAnchor>()?;

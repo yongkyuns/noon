@@ -106,6 +106,13 @@ claimed by that profile. Unsupported bindings must fail explicitly rather than
 emulate browser objects or approximate semantic behavior. The existing browser
 renderer and native Rust window host remain separate platform integrations.
 
+The additional bounded 2D family profile exposes shared membership, root/member
+color, copy, and authored/effective bounds observations. Native leaf and family
+edge/corner queries delegate to the existing Rust layout operations, including
+after segment completion. Families reject foreign stores and retired live
+sessions through the same native context guards. General family placement,
+arrangement, spatial construction, and text remain outside this profile.
+
 Finite sample timestamps are host inputs; Rust still owns segment clamping,
 callback barriers, completion, and wake policy. The native sampled driver runs
 in Rust between genuine Python callback/completion boundaries and skips quiet

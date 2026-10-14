@@ -47,9 +47,13 @@ class NativeFamilyTests(unittest.TestCase):
         context = left.context()
         with self.assertRaises(RuntimeError):
             context.liveSetFamilyOwnColor(foreign, 1, 0, 0, 1)
+        with self.assertRaises(RuntimeError):
+            context.queryFamilyLayout(foreign)
         context.retire()
         with self.assertRaises(RuntimeError):
             context.liveSetFamilyOwnColor(root, 1, 0, 0, 1)
+        with self.assertRaises(RuntimeError):
+            context.queryFamilyLayout(root)
         self.assertEqual(root.manimColor().red, 1)
 
     def test_family_transform_and_method_completion_match_original_in_both_source_modes(self):
@@ -146,6 +150,36 @@ class FamilyColors(Scene):
                 finally:
                     close_scene(scene)
 
+
+class NativeLayoutTests(unittest.TestCase):
+    def test_common_layout_projection_handles_both_signed_axes_and_center(self):
+        source = '''from noon import *
+class NativeCriticalPoints(Scene):
+    def construct(self):
+        square = Square().shift(RIGHT + 2 * UP)
+        self.add(square)
+        group = Group(square)
+        self.add(group)
+        self.observations = []
+        for item in (square, group):
+            self.observations.append([
+                item.get_x(LEFT), item.get_x(ORIGIN), item.get_x(RIGHT),
+                item.get_y(DOWN), item.get_y(ORIGIN), item.get_y(UP),
+                list(item.get_corner(LEFT + DOWN)),
+                list(item.get_corner(RIGHT + UP)),
+            ])
+        self.play(square.animate.shift(RIGHT), run_time=1, rate_func=linear)
+        self.effective_edges = (group.get_x(LEFT), group.get_x(RIGHT))
+'''
+        expected = [0.0, 1.0, 2.0, 1.0, 2.0, 3.0, [0.0, 1.0], [2.0, 3.0]]
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                scene = asyncio.run(run_source(source, portable=portable, sample_hz=4))
+                try:
+                    self.assertEqual(scene.observations, [expected, expected])
+                    self.assertEqual(scene.effective_edges, (1.0, 3.0))
+                finally:
+                    close_scene(scene)
 
 class NativeCreateOptionsTests(unittest.TestCase):
     def test_create_projection_admits_reversal_without_relaxing_generic_options(self):

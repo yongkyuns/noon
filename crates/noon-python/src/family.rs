@@ -31,6 +31,12 @@ pub struct FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    fn layout(&self) -> PyResult<FamilyLayoutObservation> {
+        self.family
+            .layout()
+            .map(|layout| FamilyLayoutObservation { layout })
+            .map_err(engine_error)
+    }
     #[getter(semanticSlot)]
     fn semantic_slot(&self) -> u32 {
         self.family.node_id().slot()
@@ -88,6 +94,39 @@ impl FamilyHandle {
             .copy_with_references(&references.targets())
             .map(|copied| FamilyCopy { copied })
             .map_err(engine_error)
+    }
+}
+
+/// Immutable authored observation; all aggregation and critical points stay in Rust.
+#[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
+pub struct FamilyLayoutObservation {
+    layout: noon::FamilyLayout,
+}
+#[pymethods]
+impl FamilyLayoutObservation {
+    #[getter(centerX)]
+    fn center_x(&self) -> f64 {
+        self.layout.center().0
+    }
+    #[getter(centerY)]
+    fn center_y(&self) -> f64 {
+        self.layout.center().1
+    }
+    #[getter]
+    fn width(&self) -> f64 {
+        self.layout.width()
+    }
+    #[getter]
+    fn height(&self) -> f64 {
+        self.layout.height()
+    }
+    #[pyo3(name = "criticalX")]
+    fn critical_x(&self, x: f64, y: f64) -> f64 {
+        self.layout.critical_point(x, y).0
+    }
+    #[pyo3(name = "criticalY")]
+    fn critical_y(&self, x: f64, y: f64) -> f64 {
+        self.layout.critical_point(x, y).1
     }
 }
 
