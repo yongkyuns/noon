@@ -175,9 +175,11 @@ impl Probe {
         );
         self.queue.submit([encoder.finish()]);
         let (tx, rx) = std::sync::mpsc::channel();
-        buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                tx.send(result).unwrap();
+            });
         self.device
             .poll(wgpu::PollType::Wait {
                 submission_index: None,
@@ -306,12 +308,7 @@ fn rendered_content_cache_msaa_operator() {
         for x in 0..WIDTH {
             for s in 0..4 {
                 let a = (x + s * 37 + y * 13) & 255;
-                codes.extend([
-                    a as u8,
-                    (x & a) as u8,
-                    ((s * 17) % (a + 1)) as u8,
-                    a as u8,
-                ]);
+                codes.extend([a as u8, (x & a) as u8, ((s * 17) % (a + 1)) as u8, a as u8]);
             }
         }
     }
