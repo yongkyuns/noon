@@ -52,15 +52,30 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
 export async function captureAttemptedPage(page) {
   if (page === null) return { state: "unavailable", reason: "page not created" };
   try {
-    const observed = await page.evaluate(() => ({
-      url: location.href,
-      runDisabled: document.querySelector("#replace-scene")?.disabled ?? null,
-      selectedExampleId: document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
-      patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
-      patchText: (document.querySelector("#patch-status")?.value ?? "").slice(0, 300),
-      runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
-      runtimeState: document.querySelector("#status")?.dataset.state ?? null,
-    }));
+    const observed = await page.evaluate(() => {
+      const controls = document.querySelector(".playback-controls");
+      const toggle = controls?.querySelector(".playback-toggle");
+      return {
+        url: location.href,
+        runDisabled: document.querySelector("#replace-scene")?.disabled ?? null,
+        selectedExampleId: document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
+        patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
+        patchText: (document.querySelector("#patch-status")?.value ?? "").slice(0, 300),
+        runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
+        runtimeState: document.querySelector("#status")?.dataset.state ?? null,
+        playbackControls: controls == null ? null : {
+          data: { ...controls.dataset },
+          toggle: toggle == null ? null : {
+            ariaLabel: toggle.getAttribute("aria-label"),
+            disabled: toggle.disabled,
+            text: toggle.textContent,
+          },
+        },
+        // This is the test's bounded click/command trace, independent of engine
+        // RPCs. A failed playback query must not erase the attempted interaction.
+        playbackTrace: window.__matrixPlaybackTrace?.events?.slice(-32) ?? [],
+      };
+    });
     return { state: "captured", observed };
   } catch (error) {
     let pageClosed = null;
