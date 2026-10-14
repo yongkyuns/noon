@@ -210,6 +210,11 @@ pub(crate) enum SemanticCompositionRequest {
         target_state: SemanticNodeId,
         options: AnimationOptions,
     },
+    FamilyMethodTargetTo {
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    },
     MatchingFamilyTransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
@@ -336,6 +341,7 @@ impl SemanticCompositionRequest {
             | Self::WorldTransform { target: source, .. }
             | Self::CameraProfile { target: source, .. }
             | Self::FamilyTransformTo { source, .. }
+            | Self::FamilyMethodTargetTo { source, .. }
             | Self::MatchingFamilyTransformTo { source, .. }
             | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
             Self::CallbackInterval { target, .. } => Some(*target),
@@ -2396,6 +2402,11 @@ impl ExecutionSession {
                 source,
                 target_state,
                 options,
+            }
+            | SemanticCompositionRequest::FamilyMethodTargetTo {
+                source,
+                target_state,
+                options,
             } => {
                 let is_flat_family = |family: SemanticNodeId| {
                     store
@@ -2417,6 +2428,38 @@ impl ExecutionSession {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
                         "curved family Transform requires matching flat family topology".into(),
                     ));
+                }
+
+                // Manim ordinary Transform excludes non-rendered group roots.
+                // Method targets finish with become-style metadata handoff instead.
+                if matches!(
+                    request,
+                    SemanticCompositionRequest::FamilyMethodTargetTo { .. }
+                ) {
+                    let colors = match crate::state_replacement::paired_family_colors(
+                        store,
+                        *source,
+                        *target_state,
+                    ) {
+                        Ok(colors) => colors,
+                        Err(error) if is_flat_family(*source) && is_flat_family(*target_state) => {
+                            let color = store
+                                .node(*target_state)
+                                .and_then(noon_core::SemanticNode::family_color)
+                                .ok_or_else(|| {
+                                    ExecutionSessionAnimationError::InvalidComposition(
+                                        error.to_string(),
+                                    )
+                                })?;
+                            vec![(*source, color)]
+                        }
+                        Err(error) => {
+                            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                                error.to_string(),
+                            ))
+                        }
+                    };
+                    family_colors.extend(colors);
                 }
 
                 // Straight flat family transforms must share one correspondence/lifecycle
@@ -2466,16 +2509,7 @@ impl ExecutionSession {
                         // `path_arc` is Transform payload meaning, not composition
                         // timing. Each aligned leaf owns the same deterministic arc.
                         composition_options.path_arc = None;
-                        family_colors.extend(
-                            crate::state_replacement::paired_family_colors(
-                                store,
-                                *source,
-                                *target_state,
-                            )
-                            .map_err(|e| {
-                                ExecutionSessionAnimationError::InvalidComposition(e.to_string())
-                            })?,
-                        );
+
                         let expanded = SemanticCompositionRequest::Composition {
                             kind: SemanticAnimationCompositionKind::Parallel,
                             children: pairs
@@ -4545,31 +4579,9 @@ impl ExecutionSession {
                 })
             });
 
-        // Non-rendered root paint follows Manim's become-style release: keep
-        // source own color throughout interpolation, publish target at the end.
-        let mut family_colors = schedule
-            .family_transforms()
-            .iter()
-            .filter(|transform| transform.mode == SemanticFamilyTransformMode::Structural)
-            .flat_map(|transform| {
-                let source = resolve_committed_node(transform.source, &result);
-                let target = resolve_committed_node(transform.target_state, &result);
-                // Equal topology shares the become pairing contract, including nested
-                // metadata and aliases. Unequal topology reconciles members separately.
-                match crate::state_replacement::paired_family_colors(store, source, target) {
-                    Ok(colors) => colors,
-                    Err(_) => {
-                        vec![(
-                            source,
-                            store
-                                .node(target)
-                                .and_then(noon_core::SemanticNode::family_color)
-                                .expect("prepared structural target retains own color"),
-                        )]
-                    }
-                }
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
+        // Only explicitly declared family method targets release root metadata.
+        // Ordinary structural and matching Transform preserve source own color.
+        let mut family_colors = std::collections::BTreeMap::new();
         if let Some(PreparedAnimationLifecycle::Composition {
             family_colors: staged,
             ..
