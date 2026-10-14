@@ -141,3 +141,30 @@ def spherical_to_cartesian(spherical: Sequence[float]) -> np.ndarray:
     import numpy as np
     r, theta, phi = spherical
     return np.array([r*np.cos(theta)*np.sin(phi), r*np.sin(theta)*np.sin(phi), r*np.cos(phi)])
+
+
+def cross(v1: Vector3DLike, v2: Vector3DLike) -> Vector3D:
+    import numpy as np
+    return np.array([v1[1] * v2[2] - v1[2] * v2[1], v1[2] * v2[0] - v1[0] * v2[2], v1[0] * v2[1] - v1[1] * v2[0]])
+
+
+def line_intersection(line1: Sequence[np.ndarray], line2: Sequence[np.ndarray]) -> np.ndarray:
+    import numpy as np
+    if any(np.array([line1, line2])[:, :, 2].reshape(-1)):
+        raise ValueError('Coords must be in the xy-plane.')
+    padded = (np.pad(np.array(i)[:, :2], ((0, 0), (0, 1)), constant_values=1) for i in (line1, line2))
+    line1, line2 = (cross(*i) for i in padded)
+    x, y, z = cross(line1, line2)
+    if z == 0:
+        raise ValueError('The lines are parallel, there is no unique intersection point.')
+    return np.array([x / z, y / z, 0])
+
+
+def find_intersection(p0s: Point3DLike_Array, v0s: Vector3DLike_Array, p1s: Point3DLike_Array, v1s: Vector3DLike_Array, threshold: float=1e-05) -> list[Point3D]:
+    import numpy as np
+    result = []
+    for p0, v0, p1, v1 in zip(p0s, v0s, p1s, v1s, strict=True):
+        normal = cross(v1, cross(v0, v1))
+        denom = max(np.dot(v0, normal), threshold)
+        result += [p0 + np.dot(p1 - p0, normal) / denom * v0]
+    return result
