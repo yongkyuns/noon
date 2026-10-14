@@ -64,9 +64,12 @@ def qualify(source_root, *, installed_manim=False):
     import noon
     errors = [] if observations(vars(helpers)) == expected else ["array operation observations differ"]
     for name in NAMES:
-        if getattr(noon, name) is not getattr(helpers, name):
-            errors.append(f"public identity {name} differs")
+        if name in noon.__all__ or hasattr(noon, name):
+            errors.append(f"module-only helper {name} leaked into the public namespace")
     if installed_manim:
+        import manim
+        if any(hasattr(manim, name) for name in NAMES):
+            raise ValueError("pinned module-only helpers unexpectedly became public")
         from manim.utils import space_ops
         if Path(space_ops.__file__).read_bytes() != source.read_bytes():
             raise ValueError("installed complete space-ops module differs from pin")

@@ -15,7 +15,7 @@ def observations(namespace):
 
 
 def qualify(source_root, *, installed_manim=False):
-    return qualify_easings(source_root, NAMES, installed_manim=installed_manim, module_only=False)
+    return qualify_easings(source_root, NAMES, installed_manim=installed_manim, module_only=True)
 
 
 if __name__ == "__main__":
