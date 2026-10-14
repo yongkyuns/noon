@@ -116,7 +116,7 @@ class OperatorContract(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 convolve(field, 1)
         for radius in [-1, 17, float("inf")]:
-            with self.assertRaises(ValueError):
+            with self.subTest(radius=radius), self.assertRaises(ValueError):
                 convolve([[1]], radius)
         with self.assertRaises(ValueError):
             radius_pixels(1, "css-pixels", 600, 6)
