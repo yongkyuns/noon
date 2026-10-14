@@ -52,6 +52,67 @@ class NativeFamilyTests(unittest.TestCase):
             context.liveSetFamilyOwnColor(root, 1, 0, 0, 1)
         self.assertEqual(root.manimColor().red, 1)
 
+    def test_family_transform_and_method_completion_match_original_in_both_source_modes(self):
+        # Endpoint values come from the complete pinned Manim Scene probe.
+        source = '''from noon import *
+import json
+
+
+def rgb_hex(color):
+    if hasattr(color, 'to_hex'):
+        return color.to_hex().upper()
+    return '#' + ''.join(f'{round(component * 255):02X}'
+                          for component in (color.red, color.green, color.blue))
+
+
+class FamilyTransformOwnColors(Scene):
+    def construct(self):
+        observations = []
+        for kind in (Group, VGroup):
+            for method in (False, True):
+                source = kind(Square(color=RED))
+                target = kind(Square(color=BLUE), color=GREEN)
+                self.add(source)
+                before = [rgb_hex(source.get_color()), rgb_hex(source[0].get_color())]
+                self.play(source.animate.set_color(GREEN) if method else Transform(source, target),
+                          run_time=1, rate_func=linear)
+                after = [rgb_hex(source.get_color()), rgb_hex(source[0].get_color())]
+                observations.append({'kind': kind.__name__, 'method': method,
+                                     'before': before, 'after': after})
+                self.remove(source)
+        self.observations = observations
+'''
+        expected = [
+            {'kind': name, 'method': method,
+             'before': ['#FFFFFF', '#FC6255'],
+             'after': ['#83C167', '#83C167'] if method else ['#FFFFFF', '#58C4DD']}
+            for name in ('Group', 'VGroup') for method in (False, True)
+        ]
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                scene = asyncio.run(run_source(source, portable=portable, sample_hz=4))
+                try:
+                    self.assertEqual(scene.observations, expected)
+                finally:
+                    close_scene(scene)
+
+    def test_family_transform_rejects_foreign_and_retired_context_before_writes(self):
+        for method in (False, True):
+            with self.subTest(method=method):
+                left, right = native.Store(), native.Store()
+                source, foreign = self.family(left), self.family(right)
+                context = left.context()
+                candidate = context.beginOrdinaryCompositionBuilder('parallel', None, 0, None)
+                append = candidate.appendFamilyMethodTargetTo if method else candidate.appendFamilyTransformTo
+                append(source, foreign, 1, 'linear', 0, 0)
+                with self.assertRaisesRegex(RuntimeError, 'foreign|different.*store|another.*store'):
+                    context.beginOrdinaryComposition(candidate)
+                self.assertEqual(source.memberKeys(), [])
+                self.assertEqual(source.manimColor().red, 1)
+                context.retire()
+                with self.assertRaisesRegex(RuntimeError, 'retired'):
+                    context.beginOrdinaryComposition(candidate)
+
     def test_real_scene_family_admission_and_color_publication_in_both_source_modes(self):
         source = '''from noon import *
 class FamilyColors(Scene):

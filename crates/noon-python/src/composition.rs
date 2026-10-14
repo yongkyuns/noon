@@ -1,5 +1,5 @@
 //! Inert language-binding arguments. Timing/validation/lifecycle are resolved by Noon.
-use crate::{engine_error, mobject::MobjectHandle};
+use crate::{engine_error, family::FamilyHandle, mobject::MobjectHandle};
 use noon::{
     AnimationCompositionRequest as Request, AnimationOptions, FadeEndpoint, FadeTranslation,
     Mobject, SemanticAnimationCompositionKind as Kind, SemanticFadeDirection, TransformToRequest,
@@ -26,6 +26,12 @@ pub(crate) enum Child {
         source: Mobject,
         target: Mobject,
         point: bool,
+        method: bool,
+        options: AnimationOptions,
+    },
+    FamilyTransform {
+        source: noon::MobjectFamily,
+        target: noon::MobjectFamily,
         method: bool,
         options: AnimationOptions,
     },
@@ -63,6 +69,26 @@ impl Child {
                 } else {
                     request
                 })
+            }
+            Self::FamilyTransform {
+                source,
+                target,
+                method,
+                options,
+            } => {
+                if *method {
+                    Request::FamilyMethodTargetTo {
+                        source,
+                        target_state: target,
+                        options: *options,
+                    }
+                } else {
+                    Request::FamilyTransformTo {
+                        source,
+                        target_state: target,
+                        options: *options,
+                    }
+                }
             }
             Self::Create(target, options) => Request::Create {
                 target,
@@ -197,6 +223,47 @@ impl Composition {
         reverse: bool,
     ) -> PyResult<()> {
         self.transform(source, target, point, true, duration, easing, arc, reverse)
+    }
+    #[pyo3(name = "appendFamilyTransformTo")]
+    fn family_transform(
+        &mut self,
+        source: &FamilyHandle,
+        target: &FamilyHandle,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        arc: Option<f64>,
+    ) -> PyResult<()> {
+        self.children.push(Child::FamilyTransform {
+            source: source.family.clone(),
+            target: target.family.clone(),
+            method: false,
+            options: AnimationOptions {
+                run_time: duration,
+                rate_func: easing.map(rate).transpose()?,
+                lag_ratio: lag,
+                path_arc: arc,
+                ..AnimationOptions::new()
+            },
+        });
+        Ok(())
+    }
+    #[pyo3(name = "appendFamilyMethodTargetTo")]
+    fn family_method_target(
+        &mut self,
+        source: &FamilyHandle,
+        target: &FamilyHandle,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        arc: Option<f64>,
+    ) -> PyResult<()> {
+        self.family_transform(source, target, duration, easing, lag, arc)?;
+        let Some(Child::FamilyTransform { method, .. }) = self.children.last_mut() else {
+            unreachable!("family target append always stages one family child");
+        };
+        *method = true;
+        Ok(())
     }
     #[pyo3(name = "appendTransformTo")]
     fn affine(
