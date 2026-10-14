@@ -384,6 +384,9 @@ async function renderManimReferences() {
 
   const results = new Map();
   for (const fixture of manifest.fixtures) {
+    const frameRate = fixture.reference_frame_rate ?? reference.frame_rate;
+    assert.ok(Number.isSafeInteger(frameRate) && frameRate > 0,
+      `${fixture.id}: reference frame rate must be a positive integer`);
     const mediaDir = path.join(artifactRoot, "manim-media", fixture.id);
     const frameDir = path.join(artifactRoot, "reference", fixture.id);
     await mkdir(mediaDir, { recursive: true });
@@ -401,7 +404,7 @@ async function renderManimReferences() {
       "-r",
       `${reference.pixel_width},${reference.pixel_height}`,
       "--fps",
-      String(reference.frame_rate),
+      String(frameRate),
       fixtureSourcePathFor(fixture),
       fixture.scene,
     ]);
@@ -409,6 +412,7 @@ async function renderManimReferences() {
     const frameFiles = await findPngFrames(mediaDir, fixture.scene);
     const semanticFixture = semanticByFixture.get(fixture.id);
     assert.ok(semanticFixture, `${fixture.id}: missing semantic reference fixture`);
+    assert.equal(semanticFixture.frame_rate, frameRate, `${fixture.id}: semantic/PNG reference frame rate`);
     const logicalDuration = Number(fixture.expected_duration);
     assert.ok(Number.isFinite(logicalDuration) && logicalDuration >= 0, `${fixture.id}: logical duration`);
     const emptyZeroDuration = semanticFixture.frame_count === 0 && frameFiles.length === 1
@@ -422,9 +426,9 @@ async function renderManimReferences() {
     const firstFrame = PNG.sync.read(await readFile(dimensionSource));
     const frames = {
       frameCount: frameFiles.length,
-      frameRate: reference.frame_rate,
+      frameRate,
       duration: logicalDuration,
-      materializedFrameSpan: frameFiles.length / reference.frame_rate,
+      materializedFrameSpan: frameFiles.length / frameRate,
       width: firstFrame.width,
       height: firstFrame.height,
       format: "png-sequence",

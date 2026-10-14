@@ -12,6 +12,7 @@
   "fixtures": [
     {
       "id": "polynomial-easings",
+      "reference_frame_rate": 120,
       "scene": "PolynomialEasings",
       "source": "parity/manim-v0.21/core-examples/polynomial_easings.py",
       "expected_duration": 1,
@@ -24,7 +25,7 @@
         0.75,
         0.9666666666666667
       ],
-      "notes": "Twelve shared deterministic polynomial easing tracks; original constructor/options and unmodified frame sampling are qualified separately. No arbitrary Python playback claim."
+      "notes": "Twelve shared deterministic polynomial easing tracks. Original Cairo reference materialization uses 120 fps to represent every unchanged requested checkpoint exactly, including 0.125 and 0.375 seconds. No arbitrary Python playback claim."
     },
     {
       "id": "polynomial-rates",
