@@ -18,7 +18,9 @@ class RateIntervals(unittest.TestCase):
             for direction in ("in", "out", "in_out"):
                 name = f"ease_{direction}_{power}"
                 function = getattr(noon.rate_functions, name)
-                self.assertIs(function, getattr(noon, name))
+                self.assertIs(function, getattr(rates, name))
+                self.assertNotIn(name, noon.__all__)
+                self.assertFalse(hasattr(noon, name))
                 self.assertEqual(rates.easing_from_rate_func(function), name)
 
     def test_public_evaluation_uses_pinned_boundary_rules(self):
