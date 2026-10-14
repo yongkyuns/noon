@@ -787,6 +787,48 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         Ok(self.pending_geometry_path(object)?.conservative_bounds())
     }
 
+    /// Observe staged own color on an existing or pending non-rendered family.
+    pub fn family_color(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<crate::Color, SemanticTransactionReadError> {
+        let node = node.into();
+        match node {
+            SemanticTransactionNodeRef::Existing(id)
+                if self.preflight.removed_existing.contains(&id) =>
+            {
+                return Err(SemanticTransactionReadError::RemovedExistingNode(id));
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_read_token(token)?;
+                if self.preflight.removed_pending.contains(&token) {
+                    return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+                }
+            }
+            _ => {}
+        }
+        if let Some(color) = self.preflight.staged_family_colors.get(&node) {
+            return Ok(*color);
+        }
+        match node {
+            SemanticTransactionNodeRef::Existing(id) => self
+                .store
+                .node(id)
+                .ok_or(SemanticTransactionReadError::UnknownExistingNode(id))?
+                .family_color()
+                .ok_or(SemanticTransactionReadError::NotFamily(node)),
+            SemanticTransactionNodeRef::Pending(token)
+                if matches!(
+                    self.pending_creation(token),
+                    Some(SemanticNodeCreation::Family { .. })
+                ) =>
+            {
+                Ok(crate::Color::WHITE)
+            }
+            _ => Err(SemanticTransactionReadError::NotFamily(node)),
+        }
+    }
+
     /// Read proposed object or family painter priority without committing it.
     pub fn z_index(
         &self,
@@ -815,7 +857,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 if let Some(crate::SemanticNodeKind::Family(presentation)) =
                     self.store.node(id).map(|node| node.kind())
                 {
-                    return Ok(presentation.z_index);
+                    return Ok(presentation.presentation.z_index);
                 }
             }
             SemanticTransactionNodeRef::Pending(token)
@@ -1457,6 +1499,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     }
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::TextPresentationBaseline { object });
+                }
+                SemanticMutation::SetFamilyColor { node, color } => {
+                    let node = resolve_node_ref(node, &committed_nodes);
+                    store
+                        .node_mut(node)
+                        .expect("preflighted family")
+                        .set_family_color(color);
+                    written_slots.insert(node);
+                    impacts.push(SemanticMutationImpact::FamilyColor { node });
                 }
                 SemanticMutation::SetZIndex { node, value } => {
                     let node = resolve_node_ref(node, &committed_nodes);

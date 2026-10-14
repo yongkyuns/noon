@@ -1495,6 +1495,8 @@ def _group_paint(self, operation, arguments):
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     phase = _ACTIVE_CANONICAL_CONTEXT.get()
     if phase is not None:
+        if operation == "OwnColor":
+            raise NotImplementedError("callback root-only Group color requires shared family metadata writes")
         phase.paint_family(handle, operation, arguments)
         return self
     context = _group_target_context(self)
@@ -1515,10 +1517,10 @@ def _family_color_arguments(color):
     return (True, parsed.red, parsed.green, parsed.blue, parsed.alpha)
 
 
-def _group_set_color(self, color):
+def _group_set_color(self, color, family=True):
     parsed = _compat._as_color("color", color)
     arguments = (parsed.red, parsed.green, parsed.blue, parsed.alpha)
-    return _group_paint(self, "Color", arguments)
+    return _group_paint(self, "Color" if family else "OwnColor", arguments)
 
 
 def _group_set_fill(self, color=None, opacity=None):

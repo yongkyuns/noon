@@ -147,6 +147,10 @@ pub enum SemanticMutation {
         node: SemanticTransactionNodeRef,
         value: f64,
     },
+    SetFamilyColor {
+        node: SemanticTransactionNodeRef,
+        color: crate::Color,
+    },
     ReplaceStyle {
         object: SemanticTransactionNodeRef,
         style: SemanticStyle,
@@ -228,7 +232,8 @@ pub enum SemanticMutation {
 impl SemanticMutation {
     fn node_references(&self) -> Vec<SemanticTransactionNodeRef> {
         match self {
-            Self::SetZIndex { node: object, .. }
+            Self::SetFamilyColor { node: object, .. }
+            | Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
             | Self::SetCameraProfile { object, .. }
@@ -311,7 +316,8 @@ impl SemanticMutation {
             Self::SetSignal { signal, .. } => Some(*signal),
             Self::AddScalarSignalTrack { signal, .. } => Some(*signal),
             Self::SetScalarSignalAt { signal, .. } => Some(*signal),
-            Self::SetZIndex { node: object, .. }
+            Self::SetFamilyColor { node: object, .. }
+            | Self::SetZIndex { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
             | Self::SetClickIndicate { object, .. }
@@ -380,6 +386,7 @@ impl SemanticMutation {
             Self::ReplaceTextPresentationBaseline { object, .. } => {
                 Some(SemanticMutationKey::TextPresentationBaseline(*object))
             }
+            Self::SetFamilyColor { node, .. } => Some(SemanticMutationKey::FamilyColor(*node)),
             Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
@@ -435,6 +442,7 @@ pub(super) enum SemanticMutationKey {
     DecimalNumber(SemanticTransactionNodeRef),
     TextPresentationBaseline(SemanticTransactionNodeRef),
     ObjectStyle(SemanticTransactionNodeRef),
+    FamilyColor(SemanticTransactionNodeRef),
     ZIndex(SemanticTransactionNodeRef),
     Subscription {
         object: SemanticTransactionNodeRef,
@@ -471,6 +479,9 @@ pub enum SemanticMutationImpact {
         owner: SemanticNodeId,
         effect: SemanticNodeId,
         parameter: crate::GlowParameter,
+    },
+    FamilyColor {
+        node: SemanticNodeId,
     },
     ZIndex {
         node: SemanticNodeId,
@@ -587,6 +598,7 @@ pub(super) struct SemanticTransactionPreflight {
     animation_effect_snapshots:
         HashMap<SemanticLocalNodeToken, Box<crate::SemanticTransformEffectSnapshot>>,
     pending_effect_order: HashMap<SemanticTransactionNodeRef, Vec<SemanticLocalNodeToken>>,
+    staged_family_colors: HashMap<SemanticTransactionNodeRef, crate::Color>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
     staged_spatial_anchors: HashMap<SemanticTransactionNodeRef, SemanticTransactionNodeRef>,
@@ -986,6 +998,19 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::ReplaceStyle {
             object: object.into(),
             style,
+        });
+        self
+    }
+
+    /// Set a non-rendered family's own authored color in the shared transaction.
+    pub fn set_family_color(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        color: crate::Color,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyColor {
+            node: node.into(),
+            color,
         });
         self
     }
@@ -2061,6 +2086,7 @@ impl SemanticMutationTransaction {
         let mut available_pending_owners = HashSet::new();
         let mut staged_pending_paths: HashMap<SemanticLocalNodeToken, SemanticPendingPathObject> =
             HashMap::new();
+        let mut staged_family_colors = HashMap::new();
         let mut staged_family_z = HashMap::new();
         let mut staged_object_order = Vec::new();
         let mut spatial_anchor_checks = HashMap::new();
@@ -2697,6 +2723,19 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(did_change);
                 }
+                SemanticMutation::SetFamilyColor { node, color } => {
+                    catalog.ensure_family(*node, index)?;
+                    if ![color.red, color.green, color.blue, color.alpha]
+                        .into_iter()
+                        .all(f32::is_finite)
+                    {
+                        return Err(invalid_style_error(index, *node));
+                    }
+                    let previous = catalog.family_color(*node).expect("validated family");
+                    let previous = staged_family_colors.entry(*node).or_insert(previous);
+                    changed.push(*previous != *color);
+                    *previous = *color;
+                }
                 SemanticMutation::SetZIndex { node, value } => {
                     catalog.ensure_authoring_node(*node, index)?;
                     if !value.is_finite() {
@@ -3254,12 +3293,14 @@ impl SemanticMutationTransaction {
                 });
             }
         }
+        staged_family_colors.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         staged_pending_paths.retain(|token, _| !removed_pending.contains(token));
         let preflight = SemanticTransactionPreflight {
             animation_effect_snapshots: HashMap::new(),
             pending_effect_order: HashMap::new(),
             staged_effects,
+            staged_family_colors,
             staged_family_z,
             changed,
             staged_objects,
@@ -3909,6 +3950,10 @@ pub enum SemanticMutationTransactionError {
         index: usize,
         node: SemanticTransactionNodeRef,
     },
+    DuplicateFamilyColor {
+        index: usize,
+        node: SemanticNodeId,
+    },
     DuplicateZIndex {
         index: usize,
         node: SemanticNodeId,
@@ -4486,6 +4531,7 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "mutation {index} has non-finite z-index for {node:?}"
             ),
+            Self::DuplicateFamilyColor { index, node } => write!(formatter, "mutation {index} duplicates family own color for {node:?}"),
             Self::DuplicateZIndex { index, node } => write!(
                 formatter,
                 "mutation {index} duplicates z-index for {node:?}"
@@ -4910,6 +4956,9 @@ mod signal_scope_tests;
 
 #[cfg(test)]
 mod z_index_tests;
+
+#[cfg(test)]
+mod family_color_tests;
 
 #[cfg(test)]
 mod foreground_tests;

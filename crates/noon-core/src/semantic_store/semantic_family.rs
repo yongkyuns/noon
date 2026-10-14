@@ -45,6 +45,8 @@ impl std::fmt::Display for SemanticFamilyPairingError {
 
 impl std::error::Error for SemanticFamilyPairingError {}
 
+type FamilyNodePairs = Vec<(SemanticNodeId, SemanticNodeId)>;
+
 impl SemanticStore {
     /// Pair ordinary leaves from two structurally equivalent semantic families.
     ///
@@ -57,6 +59,29 @@ impl SemanticStore {
         source: SemanticNodeId,
         target: SemanticNodeId,
     ) -> Result<Vec<(SemanticNodeId, SemanticNodeId)>, SemanticFamilyPairingError> {
+        let (leaves, _) = self.paired_family_nodes(source, target)?;
+        if leaves.is_empty() {
+            return Err(SemanticFamilyPairingError::Empty);
+        }
+        Ok(leaves)
+    }
+
+    /// Pair family metadata through the same validated topology and alias contract.
+    /// Empty roots still have metadata, and every shared family appears only once.
+    pub fn ordered_family_root_pairs(
+        &self,
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+    ) -> Result<Vec<(SemanticNodeId, SemanticNodeId)>, SemanticFamilyPairingError> {
+        self.paired_family_nodes(source, target)
+            .map(|(_, families)| families)
+    }
+
+    fn paired_family_nodes(
+        &self,
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+    ) -> Result<(FamilyNodePairs, FamilyNodePairs), SemanticFamilyPairingError> {
         let require_family = |node_id| {
             let node = self
                 .node(node_id)
@@ -76,6 +101,7 @@ impl SemanticStore {
             source_aliases: &mut HashMap<SemanticNodeId, SemanticNodeId>,
             target_aliases: &mut HashMap<SemanticNodeId, SemanticNodeId>,
             leaves: &mut Vec<(SemanticNodeId, SemanticNodeId)>,
+            families: &mut Vec<(SemanticNodeId, SemanticNodeId)>,
         ) -> Result<(), SemanticFamilyPairingError> {
             let source_node = store
                 .node(source)
@@ -99,6 +125,7 @@ impl SemanticStore {
             }
             match (source_node.kind(), target_node.kind()) {
                 (SemanticNodeKind::Family(_), SemanticNodeKind::Family(_)) => {
+                    families.push((source, target));
                     if source_node.member_count() != target_node.member_count() {
                         return Err(SemanticFamilyPairingError::TopologyMismatch {
                             source,
@@ -115,6 +142,7 @@ impl SemanticStore {
                             source_aliases,
                             target_aliases,
                             leaves,
+                            families,
                         )?;
                     }
                     Ok(())
@@ -153,6 +181,7 @@ impl SemanticStore {
         }
 
         let mut leaves = Vec::new();
+        let mut families = Vec::new();
         pair(
             self,
             source,
@@ -160,11 +189,9 @@ impl SemanticStore {
             &mut HashMap::new(),
             &mut HashMap::new(),
             &mut leaves,
+            &mut families,
         )?;
-        if leaves.is_empty() {
-            return Err(SemanticFamilyPairingError::Empty);
-        }
-        Ok(leaves)
+        Ok((leaves, families))
     }
 
     /// Return render/animation leaves below `root` in authoritative semantic order.
