@@ -32,10 +32,10 @@ def easing_observations(namespace, names):
     return result
 
 
-def qualify_easings(source_root, names, *, installed_manim=False, module_only=False):
+def qualify_easings(source_root, names, *, installed_manim=False, module_only=False, helper_names=()):
     """Use one source/installation/public-identity protocol for every easing batch."""
     source = source_root / "manim/utils/rate_functions.py"
-    original = load_helpers(source, set(names) | {"unit_interval"},
+    original = load_helpers(source, set(names) | {"unit_interval"} | set(helper_names),
                             {"wraps": wraps, "np": np, "sqrt": math.sqrt})
     expected = easing_observations(original, names)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web/python"))

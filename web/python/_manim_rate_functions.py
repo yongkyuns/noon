@@ -130,6 +130,13 @@ def squish_rate_func(func: Callable[..., float], a: float = 0.4, b: float = 0.6)
 
 
 @_unit_interval
+def lingering(t: float) -> float:
+    def identity(t: float) -> float:
+        return t
+    return squish_rate_func(identity, 0, 0.8)(t)
+
+
+@_unit_interval
 def ease_in_quad(t: float) -> float:
     return t * t
 
@@ -336,6 +343,7 @@ def ease_in_out_bounce(t: float) -> float:
         return (1 + ease_out_bounce(2 * t - 1)) / 2
 
 _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
+    "lingering": lingering,
     "ease_in_elastic": ease_in_elastic,
     "ease_out_elastic": ease_out_elastic,
     "ease_in_out_elastic": ease_in_out_elastic,

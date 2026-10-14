@@ -592,6 +592,9 @@ assert interpolate(0, 8, 0.25) == 2
 assert integer_interpolate(0, 8, 0.25) == (2, 0.0)
 assert mid(0, 8) == 4
 assert clip(5, 10, 0) == 10
+assert lingering(0.4) == 0.5
+assert lingering(0.9) == 1.0
+assert lingering is __import__("_manim_rate_functions").lingering
 assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
