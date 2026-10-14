@@ -55,7 +55,8 @@ test("both cohorts upload exact same-run evidence IDs for the final comparator",
   assert.match(gate, /product-artifact\.mjs verify baseline baseline/);
   assert.match(gate, /product-artifact\.mjs verify baseline anchor/);
   assert.match(gate, /name: Runtime, visual, latency, and FPS regression/);
-  assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
+  assert.match(gate, /^    if: \$\{\{ !cancelled\(\) \}\}$/m,
+    "failed cohorts must report failure while superseded workflows remain cancellable");
   assert.match(gate, /Compare product behavior/);
   assert.match(gate, /for noon_scope in adjacent cumulative/);
   assert.match(gate, /--pairs 3/);
