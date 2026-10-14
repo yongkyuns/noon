@@ -24,5 +24,8 @@ class PolynomialEasings(Scene):
                            fill_opacity=1, stroke_width=0).shift(2 * LEFT + (2 - index * 0.38) * UP)
             self.add(shape)
             shapes.append(shape)
-        self.play(*[shape.animate(rate_func=rate).shift(4 * RIGHT)
-                    for shape, rate in zip(shapes, rates)], run_time=1, rate_func=linear)
+        self.play(AnimationGroup(
+            *(shape.animate(run_time=1, rate_func=rate).shift(4 * RIGHT)
+              for shape, rate in zip(shapes, rates)),
+            rate_func=linear,
+        ))
