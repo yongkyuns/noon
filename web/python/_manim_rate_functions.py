@@ -7,7 +7,6 @@ IDs passed to Rust. Python callables remain available for explicit user evaluati
 
 from __future__ import annotations
 
-import math
 import dis
 import inspect
 import sys
@@ -58,15 +57,12 @@ def smoothererstep(t: float) -> float:
     return 35 * t**4 - 84 * t**5 + 70 * t**6 - 20 * t**7
 
 
-def _sigmoid(value: float) -> float:
-    return 1.0 / (1.0 + math.exp(-value))
-
-
 @_unit_interval
 def smooth(t: float, inflection: float = INFLECTION) -> float:
     """Manim-compatible normalized logistic smooth rate function."""
 
-    return min(max(_smooth_value(float(t), float(inflection), _sigmoid), 0.0), 1.0)
+    from _manim_simple_functions import sigmoid
+    return min(max(_smooth_value(t, inflection, sigmoid), 0), 1)
 
 
 def _smooth_value(t, inflection, sigmoid):
@@ -90,38 +86,28 @@ def double_smooth(t: float) -> float:
 
 @_unit_interval
 def rush_into(t: float, inflection: float = INFLECTION) -> float:
-    return 2.0 * smooth(float(t) / 2.0, inflection)
+    return 2 * smooth(t / 2.0, inflection)
 
 
 @_unit_interval
 def rush_from(t: float, inflection: float = INFLECTION) -> float:
-    return 2.0 * smooth(float(t) / 2.0 + 0.5, inflection) - 1.0
+    return 2 * smooth(t / 2.0 + 0.5, inflection) - 1
 
 
 @_zero_outside_interval
 def there_and_back(t: float, inflection: float = INFLECTION) -> float:
-    value = float(t)
-    mirrored = 2.0 * value if value < 0.5 else 2.0 * (1.0 - value)
+    mirrored = 2 * t if t < 0.5 else 2 * (1 - t)
     return smooth(mirrored, inflection)
-
-
-
-
-@_unit_interval
-def _smooth_user_value(t: float, inflection: float = INFLECTION) -> float:
-    """Keep explicit user evaluation in the original NumPy scalar domain."""
-    from _manim_simple_functions import sigmoid
-    return min(max(_smooth_value(t, inflection, sigmoid), 0), 1)
 
 
 @_zero_outside_interval
 def there_and_back_with_pause(t: float, pause_ratio: float = 1.0 / 3) -> float:
     a = 2.0 / (1.0 - pause_ratio)
     if t < 0.5 - pause_ratio / 2:
-        return _smooth_user_value(a * t)
+        return smooth(a * t)
     elif t < 0.5 + pause_ratio / 2:
         return 1
-    return _smooth_user_value(a - a * t)
+    return smooth(a - a * t)
 
 
 @_unit_interval
@@ -143,7 +129,7 @@ def running_start(t: float, pull_factor: float = -0.5) -> float:
 def wiggle(t: float, wiggles: float = 2) -> float:
     import numpy as np
     new_t = 2 * t if t < 0.5 else 2 * (1 - t)
-    return _smooth_user_value(new_t) * np.sin(wiggles * np.pi * t)
+    return smooth(new_t) * np.sin(wiggles * np.pi * t)
 
 
 @_unit_interval

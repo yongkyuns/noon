@@ -15,7 +15,8 @@ import warnings
 import numpy as np
 from pinned_python_helpers import load_helpers
 
-NAMES = ('there_and_back_with_pause', 'running_start', 'wiggle', 'exponential_decay')
+REJECTED_NAMES = ('there_and_back_with_pause', 'running_start', 'wiggle', 'exponential_decay')
+NAMES = ('smooth', 'rush_into', 'rush_from', 'there_and_back', *REJECTED_NAMES)
 normalize = runpy.run_path(str(Path(__file__).with_name('manim-simple-functions.py')),
                           run_name='_rate_data_normalization')['normalize']
 
@@ -67,12 +68,15 @@ def qualify(source_root, *, installed_manim=False):
         function = getattr(noon, name)
         if name not in noon.__all__ or function is not getattr(noon.rate_functions, name):
             errors.append(f'public callable identity differs: {name}')
-        try:
-            rates.easing_from_rate_func(function)
-        except NotImplementedError:
-            pass
-        else:
-            errors.append(f'unimplemented playback admitted: {name}')
+        if name in REJECTED_NAMES:
+            try:
+                rates.easing_from_rate_func(function)
+            except NotImplementedError:
+                pass
+            else:
+                errors.append(f'unimplemented playback admitted: {name}')
+        elif rates.easing_from_rate_func(function) != name:
+            errors.append(f'existing Rust playback identity differs: {name}')
     if installed_manim:
         import manim
         from manim.utils import rate_functions

@@ -52,7 +52,8 @@ class ManimNamespaceTests(unittest.TestCase):
         self.assertEqual(namespace.required_packages("double_smooth(0.5)"), ("numpy",))
 
     def test_nonstandard_rate_data_loads_numpy_before_direct_or_aliased_calls(self):
-        for name in ('there_and_back_with_pause', 'wiggle', 'exponential_decay'):
+        for name in ('smooth', 'rush_into', 'rush_from', 'there_and_back',
+                     'there_and_back_with_pause', 'wiggle', 'exponential_decay'):
             for source in (f'{name}(0.5)',
                            f'from manim import {name} as helper\nhelper(0.5)',
                            f'import noon\nnoon.{name}(0.5)'):
