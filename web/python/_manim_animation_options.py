@@ -8,6 +8,11 @@ from typing import Any
 from _noon_host import noonResolveAnimationOptions as _resolve_shared_animation_options
 
 try:
+    from _noon_host import noonResolveCreateAnimationOptions as _resolve_create_animation_options
+except ImportError:
+    _resolve_create_animation_options = None
+
+try:
     from _noon_host import noonResolveTransformAnimationOptions as _resolve_transform_animation_options
 except ImportError:  # Test doubles predating the Transform-only bridge.
     _resolve_transform_animation_options = None
@@ -74,6 +79,7 @@ def resolve(
     play_easing: str | None,
     play_rate_func: object | None,
     play_lag_ratio: float | None,
+    create: bool = False,
 ) -> ResolvedAnimationOptions:
     play_rate_id = ""
     if play_easing is not None:
@@ -81,8 +87,15 @@ def resolve(
     elif play_rate_func is not None:
         play_rate_id = _rate_functions.easing_from_rate_func(play_rate_func)
 
+    resolver = (
+        _resolve_create_animation_options
+        if create and bool(builder_args.get("reverse_rate_function", False))
+        else _resolve_shared_animation_options
+    )
+    if resolver is None:
+        raise NotImplementedError("Create animation option bridge is unavailable")
     result = engine_call(
-        _resolve_shared_animation_options,
+        resolver,
         float(default_lag_ratio),
         _optional_number(builder_args, "run_time"),
         _optional_rate_func(builder_args),

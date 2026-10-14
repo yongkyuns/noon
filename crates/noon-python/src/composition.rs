@@ -322,10 +322,11 @@ impl Composition {
         target: &MobjectHandle,
         duration: f64,
         easing: &str,
+        reverse: bool,
     ) -> PyResult<()> {
         self.children.push(Child::Create(
             target.handle.clone(),
-            options(duration, easing)?,
+            options(duration, easing)?.reverse_rate_function(reverse),
         ));
         Ok(())
     }

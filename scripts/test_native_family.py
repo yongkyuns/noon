@@ -147,5 +147,40 @@ class FamilyColors(Scene):
                     close_scene(scene)
 
 
+class NativeCreateOptionsTests(unittest.TestCase):
+    def test_create_projection_admits_reversal_without_relaxing_generic_options(self):
+        args = (0, 1, 'lingering', float('nan'), float('nan'), 1,
+                float('nan'), '', float('nan'))
+        resolved = native.resolve_create_options(*args)
+        self.assertTrue(resolved.reverseRateFunction)
+        self.assertEqual(resolved.rateFunc, 'lingering')
+        self.assertEqual(resolved.runTime, 1)
+        with self.assertRaises(RuntimeError) as rejected:
+            native.resolve_animation_options(*args)
+        self.assertEqual(rejected.exception.code, 'animation.unsupported_reverse_rate_function')
+
+    def test_lingering_reverse_create_runs_in_both_native_source_modes(self):
+        source = '''from noon import *
+class NativeLingering(Scene):
+    def construct(self):
+        moving = Square().shift(2 * LEFT)
+        reversing = Square().shift(2 * LEFT + UP)
+        self.add(moving)
+        self.play(AnimationGroup(
+            moving.animate(run_time=1, rate_func=lingering).shift(4 * RIGHT),
+            Create(reversing, run_time=1, rate_func=lingering, reverse_rate_function=True),
+            rate_func=linear,
+        ))
+        self.observed = (moving.get_x(), reversing in self.mobjects)
+'''
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                scene = asyncio.run(run_source(source, portable=portable, sample_hz=4))
+                try:
+                    self.assertEqual(scene.observed, (2.0, True))
+                finally:
+                    close_scene(scene)
+
+
 if __name__ == '__main__':
     unittest.main()

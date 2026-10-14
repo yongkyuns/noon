@@ -1,6 +1,7 @@
 //! Common optional-language argument projection before shared option resolution.
 use noon_core::{
     resolve_animation_options as resolve_core_animation_options,
+    resolve_create_animation_options as resolve_core_create_animation_options,
     resolve_transform_animation_options as resolve_core_transform_animation_options,
     AnimationDefaults, AnimationOptions, RateFunction, ResolvedAnimationOptions,
 };
@@ -47,6 +48,63 @@ pub fn resolve_frontend_animation_options(
     play_rate_func: &str,
     play_lag_ratio: f64,
 ) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
+    resolve_frontend_options(
+        resolve_core_animation_options,
+        default_lag_ratio,
+        animation_run_time,
+        animation_rate_func,
+        animation_lag_ratio,
+        animation_path_arc,
+        animation_reverse_rate_function,
+        play_run_time,
+        play_rate_func,
+        play_lag_ratio,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_frontend_create_animation_options(
+    default_lag_ratio: f64,
+    animation_run_time: f64,
+    animation_rate_func: &str,
+    animation_lag_ratio: f64,
+    animation_path_arc: f64,
+    animation_reverse_rate_function: i32,
+    play_run_time: f64,
+    play_rate_func: &str,
+    play_lag_ratio: f64,
+) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
+    resolve_frontend_options(
+        resolve_core_create_animation_options,
+        default_lag_ratio,
+        animation_run_time,
+        animation_rate_func,
+        animation_lag_ratio,
+        animation_path_arc,
+        animation_reverse_rate_function,
+        play_run_time,
+        play_rate_func,
+        play_lag_ratio,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_frontend_options(
+    resolver: fn(
+        AnimationDefaults,
+        AnimationOptions,
+        AnimationOptions,
+    ) -> Result<ResolvedAnimationOptions, noon_core::AnimationOptionsError>,
+    default_lag_ratio: f64,
+    animation_run_time: f64,
+    animation_rate_func: &str,
+    animation_lag_ratio: f64,
+    animation_path_arc: f64,
+    animation_reverse_rate_function: i32,
+    play_run_time: f64,
+    play_rate_func: &str,
+    play_lag_ratio: f64,
+) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
     let animation_rate_func = parse_optional_rate_func(animation_rate_func)?;
     let play_rate_func = parse_optional_rate_func(play_rate_func)?;
 
@@ -65,7 +123,7 @@ pub fn resolve_frontend_animation_options(
         ..AnimationOptions::new()
     };
 
-    resolve_core_animation_options(
+    resolver(
         AnimationDefaults::MANIM.lag_ratio(default_lag_ratio),
         animation,
         play,

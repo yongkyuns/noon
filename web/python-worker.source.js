@@ -24,6 +24,7 @@ import initNoonWeb, {
   WasmTableOptions,
   noonLinearTransformationPathArc,
   resolveAnimationOptions,
+  resolveCreateAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
@@ -402,6 +403,7 @@ async function initializePyodide() {
     ? authoringStore.createFamilyWithColor(batch, zIndex, ...color)
     : authoringStore.createFamily(batch, zIndex);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
+  self.noonResolveCreateAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveCreateAnimationOptions, ...args);
   self.noonResolveTransformAnimationOptions = (...args) =>
     resolveAnimationOptionsPlain(resolveTransformAnimationOptions, ...args);
   const bindingsReadyAt = performance.now();

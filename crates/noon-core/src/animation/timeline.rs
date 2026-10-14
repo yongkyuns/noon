@@ -61,10 +61,43 @@ pub enum RateFunction {
     Smoothererstep,
     SlowInto,
     DoubleSmooth,
+    Lingering,
+    /// Complemented reversed Lingering used by shared reverse Create lowering.
+    MirroredLingering,
     RushInto,
     RushFrom,
     ThereAndBack,
     EaseInOutCubic,
+    EaseInElastic,
+    EaseOutElastic,
+    EaseInOutElastic,
+    EaseInBounce,
+    EaseOutBounce,
+    EaseInOutBounce,
+    EaseInBack,
+    EaseOutBack,
+    EaseInOutBack,
+    EaseInExpo,
+    EaseOutExpo,
+    EaseInOutExpo,
+    EaseInCirc,
+    EaseOutCirc,
+    EaseInOutCirc,
+    EaseInSine,
+    EaseOutSine,
+    EaseInOutSine,
+    EaseInQuad,
+    EaseOutQuad,
+    EaseInOutQuad,
+    EaseInCubic,
+    EaseOutCubic,
+    EaseInQuart,
+    EaseOutQuart,
+    EaseInOutQuart,
+    EaseInQuint,
+    EaseOutQuint,
+    EaseInOutQuint,
+
     /// Hold the source value at normalized progress 0, then switch to the target.
     StepStart,
     /// Hold the source value until normalized progress reaches 1, then switch.
@@ -84,7 +117,38 @@ impl RateFunction {
             | Self::Smootherstep
             | Self::Smoothererstep
             | Self::SlowInto
-            | Self::DoubleSmooth => self.evaluate_f64(f64::from(progress)) as f32,
+            | Self::DoubleSmooth
+            | Self::Lingering
+            | Self::MirroredLingering
+            | Self::EaseInElastic
+            | Self::EaseOutElastic
+            | Self::EaseInOutElastic
+            | Self::EaseInBounce
+            | Self::EaseOutBounce
+            | Self::EaseInOutBounce
+            | Self::EaseInBack
+            | Self::EaseOutBack
+            | Self::EaseInOutBack
+            | Self::EaseInExpo
+            | Self::EaseOutExpo
+            | Self::EaseInOutExpo
+            | Self::EaseInCirc
+            | Self::EaseOutCirc
+            | Self::EaseInOutCirc
+            | Self::EaseInSine
+            | Self::EaseOutSine
+            | Self::EaseInOutSine
+            | Self::EaseInQuad
+            | Self::EaseOutQuad
+            | Self::EaseInOutQuad
+            | Self::EaseInCubic
+            | Self::EaseOutCubic
+            | Self::EaseInQuart
+            | Self::EaseOutQuart
+            | Self::EaseInOutQuart
+            | Self::EaseInQuint
+            | Self::EaseOutQuint
+            | Self::EaseInOutQuint => self.evaluate_f64(f64::from(progress)) as f32,
             Self::RushInto => 2.0 * manim_smooth(progress / 2.0),
             Self::RushFrom => 2.0 * manim_smooth(progress / 2.0 + 0.5) - 1.0,
             Self::ThereAndBack => {
@@ -131,6 +195,8 @@ impl RateFunction {
                 35.0 * p.powi(4) - 84.0 * p.powi(5) + 70.0 * p.powi(6) - 20.0 * p.powi(7)
             }
             Self::SlowInto => (1.0 - (1.0 - p) * (1.0 - p)).sqrt(),
+            Self::Lingering => (p / 0.8).min(1.0),
+            Self::MirroredLingering => 1.0 - Self::Lingering.evaluate_f64(1.0 - p),
             Self::DoubleSmooth => {
                 if p < 0.5 {
                     0.5 * manim_smooth_f64(2.0 * p)
@@ -138,6 +204,113 @@ impl RateFunction {
                     0.5 * (1.0 + manim_smooth_f64(2.0 * p - 1.0))
                 }
             }
+            Self::EaseInElastic => {
+                let c4 = 2.0 * std::f64::consts::PI / 3.0;
+                if p == 0.0 {
+                    0.0
+                } else if p == 1.0 {
+                    1.0
+                } else {
+                    -2.0_f64.powf(10.0 * p - 10.0) * ((p * 10.0 - 10.75) * c4).sin()
+                }
+            }
+            Self::EaseOutElastic => {
+                let c4 = 2.0 * std::f64::consts::PI / 3.0;
+                if p == 0.0 {
+                    0.0
+                } else if p == 1.0 {
+                    1.0
+                } else {
+                    2.0_f64.powf(-10.0 * p) * ((p * 10.0 - 0.75) * c4).sin() + 1.0
+                }
+            }
+            Self::EaseInOutElastic => {
+                let c5 = 2.0 * std::f64::consts::PI / 4.5;
+                if p == 0.0 {
+                    0.0
+                } else if p == 1.0 {
+                    1.0
+                } else if p < 0.5 {
+                    -(2.0_f64.powf(20.0 * p - 10.0) * ((20.0 * p - 11.125) * c5).sin()) / 2.0
+                } else {
+                    2.0_f64.powf(-20.0 * p + 10.0) * ((20.0 * p - 11.125) * c5).sin() / 2.0 + 1.0
+                }
+            }
+            Self::EaseInBounce => 1.0 - manim_bounce_out(1.0 - p),
+            Self::EaseOutBounce => manim_bounce_out(p),
+            Self::EaseInOutBounce => {
+                if p < 0.5 {
+                    (1.0 - manim_bounce_out(1.0 - 2.0 * p)) / 2.0
+                } else {
+                    (1.0 + manim_bounce_out(2.0 * p - 1.0)) / 2.0
+                }
+            }
+            Self::EaseInBack => {
+                let c1 = 1.70158;
+                let c3 = c1 + 1.0;
+                c3 * p * p * p - c1 * p * p
+            }
+            Self::EaseOutBack => {
+                let c1 = 1.70158;
+                let c3 = c1 + 1.0;
+                1.0 + c3 * (p - 1.0).powi(3) + c1 * (p - 1.0).powi(2)
+            }
+            Self::EaseInOutBack => {
+                let c2 = 1.70158 * 1.525;
+                if p < 0.5 {
+                    (2.0 * p).powi(2) * ((c2 + 1.0) * 2.0 * p - c2) / 2.0
+                } else {
+                    ((2.0 * p - 2.0).powi(2) * ((c2 + 1.0) * (p * 2.0 - 2.0) + c2) + 2.0) / 2.0
+                }
+            }
+            Self::EaseInExpo => {
+                if p == 0.0 {
+                    0.0
+                } else {
+                    2.0_f64.powf(10.0 * p - 10.0)
+                }
+            }
+            Self::EaseOutExpo => {
+                if p == 1.0 {
+                    1.0
+                } else {
+                    1.0 - 2.0_f64.powf(-10.0 * p)
+                }
+            }
+            Self::EaseInOutExpo => {
+                if p == 0.0 {
+                    0.0
+                } else if p == 1.0 {
+                    1.0
+                } else if p < 0.5 {
+                    2.0_f64.powf(20.0 * p - 10.0) / 2.0
+                } else {
+                    (2.0 - 2.0_f64.powf(-20.0 * p + 10.0)) / 2.0
+                }
+            }
+            Self::EaseInCirc => 1.0 - (1.0 - p.powi(2)).sqrt(),
+            Self::EaseOutCirc => (1.0 - (p - 1.0).powi(2)).sqrt(),
+            Self::EaseInOutCirc => {
+                if p < 0.5 {
+                    (1.0 - (1.0 - (2.0 * p).powi(2)).sqrt()) / 2.0
+                } else {
+                    ((1.0 - (-2.0 * p + 2.0).powi(2)).sqrt() + 1.0) / 2.0
+                }
+            }
+            Self::EaseInSine => 1.0 - (p * std::f64::consts::PI / 2.0).cos(),
+            Self::EaseOutSine => (p * std::f64::consts::PI / 2.0).sin(),
+            Self::EaseInOutSine => -((std::f64::consts::PI * p).cos() - 1.0) / 2.0,
+            Self::EaseInQuad => p * p,
+            Self::EaseOutQuad => 1.0 - (1.0 - p) * (1.0 - p),
+            Self::EaseInOutQuad => polynomial_in_out(p, 2),
+            Self::EaseInCubic => p * p * p,
+            Self::EaseOutCubic => 1.0 - (1.0 - p).powi(3),
+            Self::EaseInQuart => p * p * p * p,
+            Self::EaseOutQuart => 1.0 - (1.0 - p).powi(4),
+            Self::EaseInOutQuart => polynomial_in_out(p, 4),
+            Self::EaseInQuint => p * p * p * p * p,
+            Self::EaseOutQuint => 1.0 - (1.0 - p).powi(5),
+            Self::EaseInOutQuint => polynomial_in_out(p, 5),
             Self::RushInto => 2.0 * manim_smooth_f64(p / 2.0),
             Self::RushFrom => 2.0 * manim_smooth_f64(p / 2.0 + 0.5) - 1.0,
             Self::ThereAndBack => manim_smooth_f64(if p < 0.5 { 2.0 * p } else { 2.0 * (1.0 - p) }),
@@ -163,6 +336,28 @@ impl RateFunction {
                 }
             }
         }
+    }
+}
+
+fn polynomial_in_out(p: f64, degree: i32) -> f64 {
+    if p < 0.5 {
+        2.0_f64.powi(degree - 1) * p.powi(degree)
+    } else {
+        1.0 - (-2.0 * p + 2.0).powi(degree) / 2.0
+    }
+}
+
+fn manim_bounce_out(t: f64) -> f64 {
+    let n1 = 7.5625;
+    let d1 = 2.75;
+    if t < 1.0 / d1 {
+        n1 * t * t
+    } else if t < 2.0 / d1 {
+        n1 * (t - 1.5 / d1) * (t - 1.5 / d1) + 0.75
+    } else if t < 2.5 / d1 {
+        n1 * (t - 2.25 / d1) * (t - 2.25 / d1) + 0.9375
+    } else {
+        n1 * (t - 2.625 / d1) * (t - 2.625 / d1) + 0.984375
     }
 }
 
@@ -974,6 +1169,31 @@ mod tests {
     }
 
     #[test]
+    fn lingering_matches_original_values_and_shared_reverse_create_complement() {
+        for line in include_str!("lingering_reference.csv")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .skip(1)
+        {
+            let mut fields = line.split(',');
+            let progress = fields.next().unwrap().parse::<f64>().unwrap();
+            let expected = fields.next().unwrap().parse::<f64>().unwrap();
+            assert!((RateFunction::Lingering.evaluate_f64(progress) - expected).abs() < 1e-14);
+            assert!(
+                (RateFunction::Lingering.evaluate(progress as f32) - expected as f32).abs() < 1e-6
+            );
+            assert!(
+                (1.0 - RateFunction::MirroredLingering.evaluate_f64(1.0 - progress) - expected)
+                    .abs()
+                    < 1e-14
+            );
+        }
+        assert_eq!(RateFunction::Lingering.evaluate_f64(0.8), 1.0);
+        assert_eq!(RateFunction::Lingering.evaluate_f64(0.9), 1.0);
+        assert_eq!(RateFunction::MirroredLingering.evaluate_f64(0.1), 0.0);
+    }
+
+    #[test]
     fn manim_rate_functions_have_exact_endpoints_and_reference_values() {
         assert_eq!(RateFunction::Linear.evaluate(0.0), 0.0);
         assert_eq!(RateFunction::Linear.evaluate(1.0), 1.0);
@@ -1021,6 +1241,74 @@ mod tests {
                 assert_eq!(rate.evaluate(progress as f32), expected as f32);
             }
         }
+    }
+
+    fn assert_pinned_easing_samples(reference: &str, expected_count: usize) {
+        let mut count = 0;
+        for row in reference.lines().filter(|s| !s.starts_with('#')) {
+            let values = row.split(',').collect::<Vec<_>>();
+            let rate = RateFunction::from_semantic_id(values[0]).unwrap();
+            let progress = values[1].parse::<f64>().unwrap();
+            let expected = values[2].parse::<f64>().unwrap();
+            assert!(
+                (rate.evaluate_f64(progress) - expected).abs() < 1e-14,
+                "{row}"
+            );
+            assert_eq!(rate.evaluate(progress as f32), expected as f32, "{row}");
+            count += 1;
+        }
+        assert_eq!(count, expected_count);
+    }
+
+    #[test]
+    fn elastic_bounce_easings_match_original_samples_in_both_precisions() {
+        assert_pinned_easing_samples(include_str!("elastic_bounce_easing_reference.csv"), 1542);
+        assert!(RateFunction::EaseInElastic.evaluate_f64(0.25) < 0.0);
+        assert!(RateFunction::EaseOutElastic.evaluate_f64(0.125) > 1.0);
+        for rate in [
+            RateFunction::EaseInElastic,
+            RateFunction::EaseOutElastic,
+            RateFunction::EaseInOutElastic,
+            RateFunction::EaseInBounce,
+            RateFunction::EaseOutBounce,
+            RateFunction::EaseInOutBounce,
+        ] {
+            assert_eq!(rate.evaluate_f64(0.0), 0.0);
+            assert_eq!(rate.evaluate_f64(1.0), 1.0);
+        }
+    }
+
+    #[test]
+    fn back_easings_match_original_overshoot_in_both_precisions() {
+        assert_pinned_easing_samples(include_str!("back_easing_reference.csv"), 99);
+        assert!(RateFunction::EaseInBack.evaluate_f64(0.25) < 0.0);
+        assert!(RateFunction::EaseOutBack.evaluate_f64(0.75) > 1.0);
+        for rate in [
+            RateFunction::EaseInBack,
+            RateFunction::EaseOutBack,
+            RateFunction::EaseInOutBack,
+        ] {
+            assert!(rate.evaluate_f64(0.0).abs() < 1e-14);
+            assert!((rate.evaluate_f64(1.0) - 1.0).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn exponential_circular_easings_match_unchanged_manim_finite_samples() {
+        assert_pinned_easing_samples(
+            include_str!("exponential_circular_easing_reference.csv"),
+            198,
+        );
+    }
+
+    #[test]
+    fn sine_easings_match_unchanged_manim_finite_samples() {
+        assert_pinned_easing_samples(include_str!("sine_easing_reference.csv"), 99);
+    }
+
+    #[test]
+    fn polynomial_easings_match_unchanged_manim_finite_samples() {
+        assert_pinned_easing_samples(include_str!("polynomial_easing_reference.csv"), 420);
     }
 
     #[test]

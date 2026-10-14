@@ -47,6 +47,7 @@ def _arena():
 noonAuthoringGeometryOptions = _native.GeometryOptions
 noonAuthoringVectorPath = _native.AuthoringVectorPath
 noonResolveAnimationOptions = _native.resolve_animation_options
+noonResolveCreateAnimationOptions = _native.resolve_create_options
 noonResolveTransformAnimationOptions = _native.resolve_transform_options
 
 

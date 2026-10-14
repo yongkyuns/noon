@@ -2791,9 +2791,40 @@ fn reversed_create_rate(rate: RateFunction) -> Option<RateFunction> {
         | RateFunction::Smootherstep
         | RateFunction::Smoothererstep
         | RateFunction::DoubleSmooth
-        | RateFunction::EaseInOutCubic => Some(rate),
+        | RateFunction::EaseInOutCubic
+        | RateFunction::EaseInOutQuad
+        | RateFunction::EaseInOutQuart
+        | RateFunction::EaseInOutQuint => Some(rate),
+        RateFunction::EaseInElastic => Some(RateFunction::EaseOutElastic),
+        RateFunction::EaseOutElastic => Some(RateFunction::EaseInElastic),
+        RateFunction::EaseInOutElastic => Some(RateFunction::EaseInOutElastic),
+        RateFunction::EaseInBounce => Some(RateFunction::EaseOutBounce),
+        RateFunction::EaseOutBounce => Some(RateFunction::EaseInBounce),
+        RateFunction::EaseInOutBounce => Some(RateFunction::EaseInOutBounce),
+        RateFunction::EaseInBack => Some(RateFunction::EaseOutBack),
+        RateFunction::EaseOutBack => Some(RateFunction::EaseInBack),
+        RateFunction::EaseInOutBack => Some(RateFunction::EaseInOutBack),
+        RateFunction::EaseInExpo => Some(RateFunction::EaseOutExpo),
+        RateFunction::EaseOutExpo => Some(RateFunction::EaseInExpo),
+        RateFunction::EaseInOutExpo => Some(RateFunction::EaseInOutExpo),
+        RateFunction::EaseInCirc => Some(RateFunction::EaseOutCirc),
+        RateFunction::EaseOutCirc => Some(RateFunction::EaseInCirc),
+        RateFunction::EaseInOutCirc => Some(RateFunction::EaseInOutCirc),
+        RateFunction::EaseInSine => Some(RateFunction::EaseOutSine),
+        RateFunction::EaseOutSine => Some(RateFunction::EaseInSine),
+        RateFunction::EaseInOutSine => Some(RateFunction::EaseInOutSine),
+        RateFunction::EaseInQuad => Some(RateFunction::EaseOutQuad),
+        RateFunction::EaseOutQuad => Some(RateFunction::EaseInQuad),
+        RateFunction::EaseInCubic => Some(RateFunction::EaseOutCubic),
+        RateFunction::EaseOutCubic => Some(RateFunction::EaseInCubic),
+        RateFunction::EaseInQuart => Some(RateFunction::EaseOutQuart),
+        RateFunction::EaseOutQuart => Some(RateFunction::EaseInQuart),
+        RateFunction::EaseInQuint => Some(RateFunction::EaseOutQuint),
+        RateFunction::EaseOutQuint => Some(RateFunction::EaseInQuint),
         RateFunction::RushInto => Some(RateFunction::RushFrom),
         RateFunction::RushFrom => Some(RateFunction::RushInto),
+        RateFunction::Lingering => Some(RateFunction::MirroredLingering),
+        RateFunction::MirroredLingering => Some(RateFunction::Lingering),
         RateFunction::StepStart => Some(RateFunction::StepEnd),
         RateFunction::StepEnd => Some(RateFunction::StepStart),
         RateFunction::ThereAndBack | RateFunction::SlowInto => None,
@@ -3459,6 +3490,70 @@ mod tests {
             RateFunction::RushInto
         );
         assert!(!forward_schedule.leaves()[0].options.reverse_rate_function);
+    }
+
+    #[test]
+    fn reversed_builtin_create_preserves_original_rate_and_endpoint_identity() {
+        for rate in [
+            RateFunction::Lingering,
+            RateFunction::MirroredLingering,
+            RateFunction::EaseInElastic,
+            RateFunction::EaseOutElastic,
+            RateFunction::EaseInOutElastic,
+            RateFunction::EaseInBounce,
+            RateFunction::EaseOutBounce,
+            RateFunction::EaseInOutBounce,
+            RateFunction::EaseInBack,
+            RateFunction::EaseOutBack,
+            RateFunction::EaseInOutBack,
+            RateFunction::EaseInExpo,
+            RateFunction::EaseOutExpo,
+            RateFunction::EaseInOutExpo,
+            RateFunction::EaseInCirc,
+            RateFunction::EaseOutCirc,
+            RateFunction::EaseInOutCirc,
+            RateFunction::EaseInSine,
+            RateFunction::EaseOutSine,
+            RateFunction::EaseInOutSine,
+            RateFunction::EaseInQuad,
+            RateFunction::EaseOutQuad,
+            RateFunction::EaseInOutQuad,
+            RateFunction::EaseInCubic,
+            RateFunction::EaseOutCubic,
+            RateFunction::EaseInOutCubic,
+            RateFunction::EaseInQuart,
+            RateFunction::EaseOutQuart,
+            RateFunction::EaseInOutQuart,
+            RateFunction::EaseInQuint,
+            RateFunction::EaseOutQuint,
+            RateFunction::EaseInOutQuint,
+        ] {
+            let mut store = SemanticStore::new();
+            let target = visible_target(&mut store, 1.0);
+            let animation = store
+                .insert_semantic_create_animation(
+                    target,
+                    AnimationOptions::new()
+                        .rate_func(rate)
+                        .reverse_rate_function(true),
+                )
+                .unwrap();
+            let schedule = lower_semantic_animation_schedule(
+                &store,
+                &prepare_index(&store),
+                animation,
+                0.0,
+                AnimationOptions::new(),
+            )
+            .unwrap();
+            let mapped = schedule.leaves()[0].timing.easing;
+            for progress in [0.0, 0.125, 0.25, 0.5, 0.75, 0.875, 1.0] {
+                assert!(
+                    (1.0 - mapped.evaluate_f64(progress) - rate.evaluate_f64(1.0 - progress)).abs()
+                        < 1e-14
+                );
+            }
+        }
     }
 
     #[test]

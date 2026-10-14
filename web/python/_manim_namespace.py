@@ -23,6 +23,7 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "rate_functions": "numpy",
     "get_winding_number": "numpy",
     "bezier": "numpy",
     "partial_bezier_points": "numpy",

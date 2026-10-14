@@ -294,5 +294,6 @@ pub fn publish_family_align_to(
 // Optional language adapters share argument/error projections, not another engine.
 pub use crate::binding_error::AuthoringFailure;
 pub use crate::binding_options::{
-    resolve_frontend_animation_options, resolve_frontend_transform_animation_options,
+    resolve_frontend_animation_options, resolve_frontend_create_animation_options,
+    resolve_frontend_transform_animation_options,
 };

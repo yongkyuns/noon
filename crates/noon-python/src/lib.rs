@@ -59,6 +59,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mobject::LayoutObservation>()?;
     m.add_class::<composition::Composition>()?;
     m.add_function(wrap_pyfunction!(options::resolve_animation_options, m)?)?;
+    m.add_function(wrap_pyfunction!(options::resolve_create_options, m)?)?;
     m.add_function(wrap_pyfunction!(options::resolve_transform_options, m)?)?;
     Ok(())
 }
