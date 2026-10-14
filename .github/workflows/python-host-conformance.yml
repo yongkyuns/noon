@@ -49,7 +49,7 @@ jobs:
         with:
           name: python-host-source-${{ github.sha }}
           path: artifacts/python-host-source/
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: error
       - uses: actions/setup-python@v6
         with:
@@ -80,7 +80,7 @@ jobs:
         with:
           name: python-host-native-${{ github.sha }}
           path: artifacts/python-host/
-          retention-days: 14
+          retention-days: 3
           if-no-files-found: error
 
   browser:
@@ -120,5 +120,5 @@ jobs:
         with:
           name: python-host-browser-${{ github.sha }}
           path: artifacts/python-host/
-          retention-days: 14
+          retention-days: 3
           if-no-files-found: error
