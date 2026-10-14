@@ -20,6 +20,7 @@ import {
 } from "./manim-raster-support.mjs";
 import { evaluateRasterTolerance, formatRasterPolicyFailure, resolveRasterTolerance } from "./manim-raster-policy.mjs";
 import { compareForegroundCoverage } from "./browser-visual-parity-lib.mjs";
+import { createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -501,7 +502,7 @@ async function prepareHostCapturePage(page) {
   await page.evaluate(() => window.noonHostRaster.ready());
 }
 
-async function captureHostFixture(page, fixture, referenceResult, fixtureDir, expectedBackend) {
+async function captureHostFixture(page, fixture, referenceResult, fixtureDir, expectedBackend, trace) {
   if (fixture.direct_factory) {
     const loaded = await page.evaluate(async ({ factory, requiresLatex }) => {
       const canvas = document.querySelector("#scene");
@@ -665,6 +666,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
         sourceObservationMode: replay.capture.observationMode,
         replayMode: replay.replayMode, pixelEqual: true } : null };
   }
+  trace.setPhase("raster-source-load", { fixture: fixture.id });
   const loaded = await page.evaluate(
     ({ source, loopDuration }) => window.noonHostRaster.load(source, loopDuration),
     { source: rasterFixtureSource(fixture.noon_source ? fixtureSources.get(fixture.noon_source) : fixtureSourceFor(fixture), fixture.scene, fixture), loopDuration: Math.max(1, fixture.expected_duration + 1) },
@@ -678,6 +680,7 @@ async function captureHostFixture(page, fixture, referenceResult, fixtureDir, ex
   const frameTimes = referenceResult.captureTimes;
   const captures = [];
   for (const sample of referenceResult.samples) {
+    trace.setPhase("raster-sample", { time: sample.requestedTime });
     const captureFrameIndex = frameTimes.findIndex(time =>
       Math.abs(time - sample.requestedTime) <= 1e-9);
     assert.notEqual(captureFrameIndex, -1,
@@ -724,14 +727,24 @@ async function captureNoonBackend(backend, references) {
     for (const fixture of manifest.fixtures) {
       let page = null;
       let deadline;
+      let detachTrace;
+      const trace = createBrowserFailureTrace();
+      const fixtureDir = path.join(artifactRoot, backend, fixture.id);
       try {
-        const fixtureDir = path.join(artifactRoot, backend, fixture.id);
         await mkdir(fixtureDir, { recursive: true });
         page = await context.newPage();
+        detachTrace = trace.attach(browser, context, page);
+        page.on("requestfailed", request => trace.record("request-failed", {
+          url: request.url().slice(0, 500),
+          reason: request.failure()?.errorText?.slice(0, 300) ?? null,
+        }));
+        page.on("pageerror", error => trace.record("page-error", { reason: String(error).slice(0, 500) }));
         const result = await Promise.race([
           (async () => {
+            trace.setPhase("raster-navigation", { fixture: fixture.id });
             await prepareHostCapturePage(page);
-            return captureHostFixture(page, fixture, references.get(fixture.id), fixtureDir, expectedBackend);
+            trace.setPhase("raster-capture", { fixture: fixture.id });
+            return captureHostFixture(page, fixture, references.get(fixture.id), fixtureDir, expectedBackend, trace);
           })(),
           new Promise((_, reject) => {
             deadline = setTimeout(() => reject(new Error("shared fixture exceeded 60 seconds")), 60_000);
@@ -741,10 +754,14 @@ async function captureNoonBackend(backend, references) {
         console.log(`[PASS] ${fixture.id}/${backend}: shared execution completed`);
       } catch (error) {
         const detail = error instanceof Error ? error.stack ?? error.message : String(error);
-        output.set(fixture.id, { error: detail });
+        const diagnostics = { fixture: fixture.id, backend, error: detail, browserTrace: trace.snapshot() };
+        output.set(fixture.id, { error: detail, diagnostics });
+        await writeFile(path.join(fixtureDir, "failure-diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`)
+          .catch(error => { diagnostics.artifactWriteError = String(error).slice(0, 300); });
         console.error(`[FAIL] ${fixture.id}/${backend}: ${detail}`);
       } finally {
         clearTimeout(deadline);
+        detachTrace?.();
         await page?.close();
       }
     }
