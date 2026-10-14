@@ -915,6 +915,7 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "typing": "_manim_typing",
     "rate_functions": "_manim_rate_functions",
     "unit": "_manim_unit",
 

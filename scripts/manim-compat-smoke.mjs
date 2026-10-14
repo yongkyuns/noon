@@ -620,6 +620,11 @@ result = Scene()
 from noon import stretch_array_to_length as stretch, Scene
 import sys
 assert "numpy" in sys.modules
+from noon import typing as mt
+assert mt.ManimFloat is __import__("numpy").float64
+assert mt.CubicBezierPoints == mt.Point3D_Array
+assert mt.ManimTextLabel == "Text | MathTex | Typst"
+assert mt.StrPath == str | __import__("os").PathLike[str]
 array = __import__("numpy").array([[1, 2], [3, 4]])
 stretched = stretch(array, 3)
 assert stretched.tolist() == [[1, 2], [1, 2], [3, 4]]
