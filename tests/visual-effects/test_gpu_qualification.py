@@ -335,5 +335,98 @@ class CacheReadbackAdmission(unittest.TestCase):
             self.assertTrue((root / "incoherent.log").is_file())
 
 
+class GeometryProbeAdmission(unittest.TestCase):
+    """Synthetic records exercise admission only, never claim GPU execution."""
+    def fixture(self, root):
+        from qualify_gpu_operator import geometry_evidence_cases
+        (root / "PASS.txt").write_text("CACHE_GEOMETRY_PROBE_PASS: synthetic checker fixture")
+        (root / "profile.txt").write_text("synthetic samples=4 transfer=Direct")
+        for name, size, equal in geometry_evidence_cases():
+            # Minimal nonuniform/sample-distinct bytes, not a software renderer.
+            expected = bytearray(size)
+            expected[4] = 64
+            if "-s1-" in name:
+                expected[8] = 16
+            if "-rebuilt-" in name or "-stale-prefix" in name:
+                expected[8] = 32
+            actual = expected.copy()
+            if not equal:
+                actual[-1] = 1
+            CacheReadbackAdmission.write_case(root, name, expected, actual)
+
+    def test_geometry_inventory_requires_every_exact_and_negative_comparison(self):
+        from qualify_gpu_operator import geometry_evidence_cases, geometry_evidence_error
+        cases = list(geometry_evidence_cases())
+        self.assertEqual(len(cases), 84)
+        self.assertEqual(sum(equal for _, _, equal in cases), 72)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.fixture(root)
+            self.assertIsNone(geometry_evidence_error(root))
+            path = root / "p3-rebuilt-samples-actual.rgba"
+            path.write_bytes(b"truncated")
+            self.assertIn("incomplete geometry", geometry_evidence_error(root))
+            path.unlink()
+            self.assertIn("missing or unreadable", geometry_evidence_error(root))
+
+    def test_geometry_control_and_mask_corruption_are_rejected(self):
+        from qualify_gpu_operator import geometry_evidence_error
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.fixture(root)
+            mask = root / "p0-reordered-diff.mask"
+            original = mask.read_bytes()
+            mask.write_bytes(bytes(len(original)))
+            self.assertIn("incorrect geometry difference mask", geometry_evidence_error(root))
+            mask.write_bytes(original)
+            expected = (root / "p0-reordered-expected.rgba").read_bytes()
+            (root / "p0-reordered-actual.rgba").write_bytes(expected)
+            self.assertIn("negative control failed", geometry_evidence_error(root))
+
+    def test_identically_wrong_geometry_pairs_cannot_change_reference_or_history(self):
+        from qualify_gpu_operator import geometry_evidence_error
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, message in (("p0-s2-samples", "history drift"),
+                                  ("p0-s0-fresh", "different ordinary geometry reference"),
+                                  ("p0-reordered", "different negative-control reference"),
+                                  ("p0-stale-prefix", "missing changed-prefix reference")):
+                with self.subTest(case=name):
+                    self.fixture(root)
+                    CacheReadbackAdmission.change_pair(root, name, 0)
+                    self.assertIn(message, geometry_evidence_error(root))
+
+    def test_blank_geometry_and_sample_uniform_output_do_not_pass(self):
+        from qualify_gpu_operator import geometry_evidence_error
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, message in (("p0-s0-ordinary", "blank ordinary geometry"),
+                                  ("p0-s0-samples", "no multisample coverage witness")):
+                with self.subTest(case=name):
+                    self.fixture(root)
+                    size = len((root / f"{name}-actual.rgba").read_bytes())
+                    CacheReadbackAdmission.write_case(root, name, bytes(size), bytes(size))
+                    self.assertIn(message, geometry_evidence_error(root))
+
+    def test_geometry_stage_cannot_borrow_operator_success_or_logs_without_evidence(self):
+        from qualify_gpu_operator import GEOMETRY_TEST
+        log = (f"test {GEOMETRY_TEST} ... ok\nCACHE_GEOMETRY_PROBE_PASS\n"
+               "test result: ok. 1 passed; 0 failed; 0 ignored;\n")
+        self.assertTrue(qualified(0, log, test=GEOMETRY_TEST))
+        self.assertFalse(qualified(0, CacheProbeAdmission().log(), test=GEOMETRY_TEST))
+        self.assertFalse(qualified(0, log.replace("CACHE_GEOMETRY_PROBE_PASS", ""), test=GEOMETRY_TEST))
+        self.assertFalse(qualified(101, log, test=GEOMETRY_TEST))
+        self.assertFalse(qualified(0, log.replace("1 passed", "0 passed"), test=GEOMETRY_TEST))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch("qualify_gpu_operator.subprocess.run",
+                       return_value=SimpleNamespace(returncode=0, stdout=log)) as run:
+                result = run_stage(root, root, "geometry", False, test=GEOMETRY_TEST)
+            self.assertIn("--lib", run.call_args.args[0])
+            self.assertNotIn("--test", run.call_args.args[0])
+            self.assertFalse(result["accepted"], "successful process logs are insufficient")
+            self.assertTrue(result["artifact_directory"].startswith("cache-geometry-"))
+
+
 if __name__ == "__main__":
     unittest.main()

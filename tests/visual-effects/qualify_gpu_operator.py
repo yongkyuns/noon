@@ -27,6 +27,7 @@ LIVE_TEST = "gpu::glow_filter::tests::animated_scene::live_glow_value_publicatio
 HOST_TEST = "gpu::glow_filter::tests::retained_host::automatic_retained_host_glow_pixels"
 CACHE_TARGET = "rendered_content_cache_msaa"
 CACHE_TEST = "rendered_content_cache_msaa_operator"
+GEOMETRY_TEST = "gpu::presentation::prefix_restore_tests::ordered_prefix_sample_restore"
 PASS = re.compile(r"test result: ok\. 1 passed; 0 failed; 0 ignored;")
 FAIL = re.compile(r"test result: FAILED\. 0 passed; 1 failed; 0 ignored;")
 ORIGINAL = "let bits = u32(round(clamp(value, 0.0, 1.0) * 16777215.0));"
@@ -45,6 +46,8 @@ def qualified(code: int, log: str, *, negative: bool = False, test: str = TEST) 
     accepted = code == 0 and PASS.search(log) is not None and test in log
     if test == CACHE_TEST:
         accepted = accepted and re.search(r"(?m)^CACHE_MSAA_OPERATOR_PASS\r?$", log) is not None
+    if test == GEOMETRY_TEST:
+        accepted = accepted and re.search(r"(?m)^CACHE_GEOMETRY_PROBE_PASS\r?$", log) is not None
     return accepted
 
 
@@ -151,6 +154,76 @@ def cache_evidence_error(directory: Path) -> str | None:
     return None
 
 
+def geometry_evidence_cases():
+    """Fixed readback inventory for the real-geometry prefix experiment."""
+    for profile in range(4):
+        width, height = (96, 64) if profile < 2 else (127, 81)
+        pixels = width * height * 4
+        for step in range(4):
+            for representation in ("ordinary", "fresh", "resolved", "samples"):
+                yield (f"p{profile}-s{step}-{representation}",
+                       pixels * (4 if representation == "samples" else 1), True)
+        for representation in ("resolved", "samples"):
+            yield (f"p{profile}-rebuilt-{representation}",
+                   pixels * (4 if representation == "samples" else 1), True)
+        for defect in ("accumulated", "reordered", "stale-prefix"):
+            yield f"p{profile}-{defect}", pixels, False
+
+
+def geometry_evidence_error(directory: Path) -> str | None:
+    """Check evidence integrity/history, not an independent geometry rasterizer."""
+    try:
+        if not (directory / "PASS.txt").read_text().startswith("CACHE_GEOMETRY_PROBE_PASS:"):
+            return "missing geometry completion marker"
+        if "samples=4 transfer=Direct" not in (directory / "profile.txt").read_text():
+            return "missing geometry sample/transfer profile"
+        readbacks = {}
+        for name, size, equal in geometry_evidence_cases():
+            expected = (directory / f"{name}-expected.rgba").read_bytes()
+            actual = (directory / f"{name}-actual.rgba").read_bytes()
+            mask = (directory / f"{name}-diff.mask").read_bytes()
+            if len(expected) != size or len(actual) != size or len(mask) != size // 4:
+                return f"{name}: incomplete geometry readback or mask"
+            if (expected == actual) != equal:
+                return f"{name}: geometry comparison or negative control failed"
+            calculated = bytes(0 if expected[i:i + 4] == actual[i:i + 4] else 255
+                               for i in range(0, size, 4))
+            if mask != calculated:
+                return f"{name}: incorrect geometry difference mask"
+            readbacks[name] = expected, actual
+        for profile in range(4):
+            for step in range(4):
+                ordinary = readbacks[f"p{profile}-s{step}-ordinary"][0]
+                if not any(ordinary[i:i + 4] != ordinary[:4]
+                           for i in range(4, len(ordinary), 4)):
+                    return f"p{profile}-s{step}: blank ordinary geometry"
+                for representation in ("fresh", "resolved"):
+                    name = f"p{profile}-s{step}-{representation}"
+                    if readbacks[name][0] != ordinary:
+                        return f"{name}: different ordinary geometry reference"
+                samples = readbacks[f"p{profile}-s{step}-samples"][0]
+                if not any(samples[i:i + 4] != samples[i + s:i + s + 4]
+                           for i in range(0, len(samples), 16) for s in (4, 8, 12)):
+                    return f"p{profile}-s{step}: no multisample coverage witness"
+            for representation in ("resolved", "samples"):
+                original = readbacks[f"p{profile}-s0-{representation}"][1]
+                for step in (2, 3):
+                    name = f"p{profile}-s{step}-{representation}"
+                    if readbacks[name][1] != original:
+                        return f"{name}: geometry history drift"
+            ordinary = readbacks[f"p{profile}-s3-ordinary"][0]
+            for defect in ("accumulated", "reordered"):
+                name = f"p{profile}-{defect}"
+                if readbacks[name][0] != ordinary:
+                    return f"{name}: different negative-control reference"
+            rebuilt = readbacks[f"p{profile}-rebuilt-resolved"][0]
+            if readbacks[f"p{profile}-stale-prefix"][0] != rebuilt or rebuilt == ordinary:
+                return f"p{profile}: missing changed-prefix reference"
+    except (OSError, UnicodeError) as error:
+        return f"missing or unreadable geometry evidence: {error}"
+    return None
+
+
 def run_stage(root: Path, output: Path, name: str, negative: bool, *, test: str = TEST,
               integration: str | None = None) -> dict:
     target = ["--lib"] if integration is None else ["--test", integration]
@@ -160,10 +233,11 @@ def run_stage(root: Path, output: Path, name: str, negative: bool, *, test: str 
     ]
     env = os.environ.copy()
     artifacts = None
-    if test == CACHE_TEST:
+    if test in (CACHE_TEST, GEOMETRY_TEST):
         # A fresh attempt directory prevents stale success or readbacks from a
         # previous attempt being reported as evidence for this invocation.
-        artifacts = output / f"cache-msaa-{time.time_ns()}"
+        prefix = "cache-geometry" if test == GEOMETRY_TEST else "cache-msaa"
+        artifacts = output / f"{prefix}-{time.time_ns()}"
         artifacts.mkdir()
         env["NOON_CACHE_PROBE_ARTIFACTS"] = str(artifacts)
         env["NOON_CACHE_PROBE_BACKEND"] = env.get(
@@ -200,7 +274,8 @@ def run_stage(root: Path, output: Path, name: str, negative: bool, *, test: str 
             str(path.relative_to(artifacts)): sha256(path.read_bytes())
             for path in sorted(artifacts.rglob("*")) if path.is_file()
         }
-        record["evidence_error"] = cache_evidence_error(artifacts)
+        validator = geometry_evidence_error if test == GEOMETRY_TEST else cache_evidence_error
+        record["evidence_error"] = validator(artifacts)
         record["accepted"] = record["accepted"] and record["evidence_error"] is None
     (output / f"{name}.json").write_text(json.dumps(record, indent=2) + "\n")
     return record
@@ -227,6 +302,7 @@ def main() -> None:
         "mutant_shader_sha256": sha256(mutant),
         "stages": records,
         "cache_probe": {"scope": "#2094 synthetic 4x sample-storage operator only", "accepted": False},
+        "geometry_probe": {"scope": "#2094 production geometry draw experiment only", "accepted": False},
         "passed": False,
     }
     try:
@@ -278,9 +354,30 @@ def main() -> None:
         if lock.is_file():
             (output / "cache-probe-Cargo.lock").write_bytes(lock.read_bytes())
         report["cache_probe"] = cache
-        report["passed"] = cache["accepted"] and cache["source_unchanged"]
-        if not report["passed"]:
+        if not (cache["accepted"] and cache["source_unchanged"]):
             raise RuntimeError("#2094 sample-storage operator probe failed; not a passing skip")
+        geometry_sources = (
+            "crates/noon-render-wgpu/src/gpu/presentation/prefix_restore_tests.rs",
+            "crates/noon-render-wgpu/src/gpu/presentation.rs",
+            "tests/visual-effects/qualify_gpu_operator.py",
+        )
+        geometry_hashes = dict(source_hashes)
+        for source in geometry_sources:
+            content = (root / source).read_bytes()
+            (output / Path(source).name).write_bytes(content)
+            geometry_hashes[source] = sha256(content)
+        geometry = run_stage(root, output, "cache-production-geometry", False, test=GEOMETRY_TEST)
+        geometry["scope"] = "#2094 production geometry draw experiment only; no automatic caching"
+        geometry["source_sha256"] = geometry_hashes
+        geometry["source_unchanged"] = all(sha256((root / path).read_bytes()) == digest
+                                           for path, digest in geometry_hashes.items())
+        geometry["cargo_lock_sha256"] = sha256(lock.read_bytes()) if lock.is_file() else None
+        if lock.is_file():
+            (output / "cache-geometry-Cargo.lock").write_bytes(lock.read_bytes())
+        report["geometry_probe"] = geometry
+        report["passed"] = geometry["accepted"] and geometry["source_unchanged"]
+        if not report["passed"]:
+            raise RuntimeError("#2094 production geometry prefix probe failed; not a passing skip")
     finally:
         report["source_restored"] = shader.read_bytes() == original
         (output / "qualification.json").write_text(json.dumps(report, indent=2) + "\n")

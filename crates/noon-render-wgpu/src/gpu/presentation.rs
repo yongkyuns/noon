@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod prefix_restore_tests;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputTransfer {
     #[default]
