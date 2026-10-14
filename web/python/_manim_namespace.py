@@ -37,6 +37,8 @@ _OPTIONAL_HELPER_PACKAGES = {
     "quaternion_conjugate": "numpy",
     "thick_diagonal": "numpy",
     "rotation_about_z": "numpy",
+    "rotation_matrix": "scipy",
+    "z_to_vector": "numpy",
     "cartesian_to_spherical": "numpy",
     "spherical_to_cartesian": "numpy",
     "complex_to_R3": "numpy",
