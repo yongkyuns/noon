@@ -107,6 +107,51 @@ def there_and_back(t: float, inflection: float = INFLECTION) -> float:
 
 
 
+@_unit_interval
+def _smooth_user_value(t: float, inflection: float = INFLECTION) -> float:
+    """Keep explicit user evaluation in the original NumPy scalar domain."""
+    from _manim_simple_functions import sigmoid
+    return min(max(_smooth_value(t, inflection, sigmoid), 0), 1)
+
+
+@_zero_outside_interval
+def there_and_back_with_pause(t: float, pause_ratio: float = 1.0 / 3) -> float:
+    a = 2.0 / (1.0 - pause_ratio)
+    if t < 0.5 - pause_ratio / 2:
+        return _smooth_user_value(a * t)
+    elif t < 0.5 + pause_ratio / 2:
+        return 1
+    return _smooth_user_value(a - a * t)
+
+
+@_unit_interval
+def running_start(t: float, pull_factor: float = -0.5) -> float:
+    t2 = t * t
+    t3 = t2 * t
+    t4 = t3 * t
+    t5 = t4 * t
+    t6 = t5 * t
+    mt = 1 - t
+    mt2 = mt * mt
+    mt3 = mt2 * mt
+    mt4 = mt3 * mt
+    return (15 * t2 * mt4 * pull_factor + 20 * t3 * mt3 * pull_factor
+            + 15 * t4 * mt2 + 6 * t5 * mt + t6)
+
+
+@_zero_outside_interval
+def wiggle(t: float, wiggles: float = 2) -> float:
+    import numpy as np
+    new_t = 2 * t if t < 0.5 else 2 * (1 - t)
+    return _smooth_user_value(new_t) * np.sin(wiggles * np.pi * t)
+
+
+@_unit_interval
+def exponential_decay(t: float, half_life: float = 0.1) -> float:
+    import numpy as np
+    return 1 - np.exp(-t / half_life)
+
+
 def not_quite_there(func: Callable[..., float] = smooth, proportion: float = 0.7):
     """Wrap explicit user evaluation with Manim's output proportion."""
     def result(t, *args, **kwargs):

@@ -51,6 +51,16 @@ class ManimNamespaceTests(unittest.TestCase):
             self.assertEqual(namespace.required_packages(source), ("numpy",))
         self.assertEqual(namespace.required_packages("double_smooth(0.5)"), ("numpy",))
 
+    def test_nonstandard_rate_data_loads_numpy_before_direct_or_aliased_calls(self):
+        for name in ('there_and_back_with_pause', 'wiggle', 'exponential_decay'):
+            for source in (f'{name}(0.5)',
+                           f'from manim import {name} as helper\nhelper(0.5)',
+                           f'import noon\nnoon.{name}(0.5)'):
+                with self.subTest(source=source):
+                    self.assertEqual(namespace.required_packages(source), ('numpy',))
+        self.assertEqual(namespace.required_packages('running_start(0.5)'), ())
+        self.assertEqual(namespace.required_packages("message = 'wiggle(0.5)'"), ())
+
     def test_interpolation_requires_numpy_only_for_division_helpers(self):
         for name in ["inverse_interpolate", "match_interpolate"]:
             self.assertEqual(namespace.required_packages(f"from manim import {name} as helper\nhelper(0, 1, 0.5)"), ("numpy",))
