@@ -429,3 +429,45 @@ def bezier_remap(bezier_tuples: BezierPointsLike_Array, new_number_of_curves: in
         new_tuples[index:index + sf] = subdivide_bezier(curve, sf).reshape(sf, nppc, dim)
         index += sf
     return new_tuples
+
+
+def proportions_along_bezier_curve_for_point(point: Point3DLike, control_points: BezierPointsLike, round_to: float=1e-06) -> MatrixMN:
+    import numpy as np
+    from functools import reduce
+    from _manim_simple_functions import choose
+    if not all((np.shape(point) == np.shape(c_p) for c_p in control_points)):
+        raise ValueError(f'Point {point} and Control Points {control_points} have different shapes.')
+    control_points = np.array(control_points)
+    n = len(control_points) - 1
+    roots = []
+    for dim, coord in enumerate(point):
+        control_coords = control_points[:, dim]
+        terms = []
+        for term_power in range(n, -1, -1):
+            outercoeff = choose(n, term_power)
+            term = []
+            sign = 1
+            for subterm_num in range(term_power, -1, -1):
+                innercoeff = choose(term_power, subterm_num) * sign
+                subterm = innercoeff * control_coords[subterm_num]
+                if term_power == 0:
+                    subterm -= coord
+                term.append(subterm)
+                sign *= -1
+            terms.append(outercoeff * sum(np.array(term)))
+        if all((term == 0 for term in terms)):
+            continue
+        bezier_polynom = np.polynomial.Polynomial(terms[::-1])
+        polynom_roots = bezier_polynom.roots()
+        if len(polynom_roots) > 0:
+            polynom_roots = np.around(polynom_roots, int(np.log10(1 / round_to)))
+        roots.append(polynom_roots)
+    roots = [[root for root in rootlist if root.imag == 0] for rootlist in roots]
+    roots = reduce(np.intersect1d, roots)
+    result = np.asarray([r.real for r in roots if 0 <= r.real <= 1])
+    return result
+
+
+def point_lies_on_bezier(point: Point3DLike, control_points: BezierPointsLike, round_to: float=1e-06) -> bool:
+    roots = proportions_along_bezier_curve_for_point(point, control_points, round_to)
+    return len(roots) > 0
