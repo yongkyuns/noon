@@ -19,6 +19,18 @@ DEFAULT_DOT_RADIUS = 0.08
 PURE_YELLOW = _base.color_from_hex("#FFFF00")
 
 
+class CubicBezier(_compat.Path):
+    """One planar cubic curve over the shared Rust path constructor."""
+
+    def __init__(self, start_anchor: Point3DLike, start_handle: Point3DLike,
+                 end_handle: Point3DLike, end_anchor: Point3DLike, **kwargs: Any) -> None:
+        points = [_base._as_vec2(value) for value in
+                  (start_anchor, start_handle, end_handle, end_anchor)]
+        coordinates = [(point.x, point.y) for point in points]
+        path = _base.VectorPath().move_to(coordinates[0]).cubic_to(*coordinates[1:])
+        super().__init__(path, **kwargs)
+
+
 class Dot(_compat.Circle):
     """Manim-compatible small filled circle."""
 
@@ -33,6 +45,21 @@ class Dot(_compat.Circle):
     ) -> None:
         from _manim_shared_geometry import _dot_init
         _dot_init(self, point, radius, stroke_width, fill_opacity, color, **kwargs)
+
+
+class AnnotationDot(Dot):
+    """Manim annotation defaults over shared Dot geometry and paint."""
+
+    def __init__(
+        self,
+        radius: float = DEFAULT_DOT_RADIUS * 1.3,
+        stroke_width: float = 5,
+        stroke_color: _base.Color = _base.WHITE,
+        fill_color: _base.Color = _base.BLUE,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(radius=radius, stroke_width=stroke_width,
+                         stroke_color=stroke_color, fill_color=fill_color, **kwargs)
 
 
 class Ellipse(_compat.Circle):

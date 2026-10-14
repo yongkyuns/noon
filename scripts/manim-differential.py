@@ -73,6 +73,22 @@ def _point_observation(point: Any) -> list[float]:
     return [_round_float(point[0]), _round_float(point[1])]
 
 
+def _dot_paint_observations(api, class_name) -> Any:
+    options = [{}, {"radius": 0.2, "point": api.RIGHT + api.UP},
+               {"color": api.RED}, {"fill_color": api.GREEN, "stroke_color": api.RED},
+               {"fill_opacity": 0.3, "stroke_opacity": 0.6, "stroke_width": 7}]
+    result = []
+    for kwargs in options:
+        dot = getattr(api, class_name)(**kwargs)
+        result.append({**_object_observation(dot),
+                       "fill": _paint_rgb(dot.get_fill_color()),
+                       "stroke": _paint_rgb(dot.get_stroke_color()),
+                       "fill_opacity": float(dot.get_fill_opacity()),
+                       "stroke_opacity": float(dot.get_stroke_opacity()),
+                       "stroke_width": float(dot.get_stroke_width())})
+    return result
+
+
 def _members_observation(group: Any) -> dict[str, Any]:
     members = list(group.submobjects)
     center = group.get_center()
@@ -96,6 +112,23 @@ def _noon_rectangle_dimensions() -> Any:
 
 def _manim_rectangle_dimensions() -> Any:
     return _object_observation(manim.Rectangle(width=3.0, height=1.25))
+
+
+def _screen_rectangle_observations(api) -> Any:
+    observations = []
+    for kwargs in [{}, {"aspect_ratio": 4 / 3, "height": 3},
+                   {"aspect_ratio": 0.75, "height": 2.5}]:
+        rectangle = api.ScreenRectangle(**kwargs).shift(api.RIGHT * 0.75)
+        initial = _object_observation(rectangle)
+        initial["aspect_ratio"] = float(rectangle.aspect_ratio)
+        rectangle.aspect_ratio = 2.25
+        stretched = _object_observation(rectangle)
+        stretched["aspect_ratio"] = float(rectangle.aspect_ratio)
+        rectangle.height = 1.25
+        resized = _object_observation(rectangle)
+        resized["aspect_ratio"] = float(rectangle.aspect_ratio)
+        observations.append({"initial": initial, "stretched": stretched, "resized": resized})
+    return observations
 
 
 def _noon_shifted_circle() -> Any:
@@ -378,6 +411,52 @@ def _path_queries_probe(api):
             "length_25": float(shape.get_arc_length(25)),
         })
     return result
+
+
+def _cubic_bezier_probe(api):
+    cases = [
+        [(-2, 0, 0), (-1, 2, 0), (1, -2, 0), (2, 0, 0)],
+        [(0, 0, 0)] * 4,
+        [(-3, 1, 0), (2, 3, 0), (-1, -2, 0), (4, 0.5, 0)],
+    ]
+    result = []
+    for index, points in enumerate(cases):
+        options = {} if index < 2 else {"color": api.GREEN, "stroke_width": 6, "fill_opacity": 0.4}
+        curve = api.CubicBezier(*points, **options)
+        if index == 2:
+            curve.scale(0.75).rotate(0.3).shift(api.RIGHT * 0.375 + api.DOWN * 0.5)
+        result.append({
+            "layout": _object_observation(curve),
+            "points": curve.get_num_points(),
+            "start": _point_observation(curve.get_start()),
+            "end": _point_observation(curve.get_end()),
+            "anchors_and_handles": [[_point_observation(point) for point in rows]
+                                    for rows in curve.get_anchors_and_handles()],
+            "samples": [_point_observation(curve.point_from_proportion(alpha))
+                        for alpha in (0, 0.125, 0.25, 0.5, 0.75, 0.875, 1)],
+            "paint": [_paint_rgb(curve.get_fill_color()), _paint_rgb(curve.get_stroke_color()),
+                      curve.get_fill_opacity(), curve.get_stroke_opacity(), curve.get_stroke_width()],
+        })
+    return result
+
+
+def _path_point_counts(api):
+    path = api.VMobject()
+    counts = [path.get_num_points()]
+    path.start_new_path((0, 0, 0))
+    counts.append(path.get_num_points())
+    path.start_new_path((1, 1, 0))
+    counts.append(path.get_num_points())
+    path.add_line_to(api.RIGHT * 2)
+    counts.append(path.get_num_points())
+    path.start_new_path((3, 1, 0))
+    counts.append(path.get_num_points())
+    path.add_cubic_bezier_curve_to(api.RIGHT * 3 + api.UP * 2,
+                                   api.RIGHT * 4 + api.DOWN, api.RIGHT * 5)
+    counts.append(path.get_num_points())
+    path.rotate(0.3).shift(api.RIGHT)
+    counts.append(path.get_num_points())
+    return counts
 
 
 def _z_index_probe(api):
@@ -1168,6 +1247,8 @@ FIXTURES = [
     Fixture("z_index", lambda: _z_index_probe(noon), lambda: _z_index_probe(manim)),
     Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
     Fixture("path_queries", lambda: _path_queries_probe(noon), lambda: _path_queries_probe(manim)),
+    Fixture("cubic_bezier", lambda: _cubic_bezier_probe(noon), lambda: _cubic_bezier_probe(manim), 1e-5),
+    Fixture("path_point_counts", lambda: _path_point_counts(noon), lambda: _path_point_counts(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
@@ -1192,7 +1273,13 @@ FIXTURES = [
             lambda: _group_coordinate_dimensions(noon, noon.VGroup),
             lambda: _group_coordinate_dimensions(manim, manim.VGroup)),
     Fixture("circle_dimensions", _noon_circle_dimensions, _manim_circle_dimensions),
+    Fixture("annotation_dot", lambda: _dot_paint_observations(noon, "AnnotationDot"),
+            lambda: _dot_paint_observations(manim, "AnnotationDot")),
+    Fixture("dot_constructor_paint", lambda: _dot_paint_observations(noon, "Dot"),
+            lambda: _dot_paint_observations(manim, "Dot")),
     Fixture("rectangle_dimensions", _noon_rectangle_dimensions, _manim_rectangle_dimensions),
+    Fixture("screen_rectangle", lambda: _screen_rectangle_observations(noon),
+            lambda: _screen_rectangle_observations(manim)),
     Fixture("shifted_circle", _noon_shifted_circle, _manim_shifted_circle),
     Fixture("moved_rectangle", _noon_moved_rectangle, _manim_moved_rectangle),
     Fixture("scaled_square", _noon_scaled_square, _manim_scaled_square),
