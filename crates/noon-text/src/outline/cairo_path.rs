@@ -111,6 +111,30 @@ fn native(p: Point) -> Vec2 {
     )
 }
 pub fn native_path(commands: &[PathElement]) -> VectorPath {
+    path_on_grid(commands, None)
+}
+
+pub fn coretext_path(commands: &[PathElement], scale: f64) -> VectorPath {
+    path_on_grid(commands, Some(scale))
+}
+
+fn path_on_grid(commands: &[PathElement], coretext_scale: Option<f64>) -> VectorPath {
+    // Cairo's double-to-24.8 conversion rounds ties to even. Its magic-number
+    // conversion also preserves the exact near-tie behavior of native Cairo.
+    const FIXED_MAGIC: f64 = (1_u64 << (52 - 8)) as f64 * 1.5;
+    let coretext_point = |x: f64, y: f64| -> Point {
+        [
+            ((x + FIXED_MAGIC).to_bits() as u32) as i32,
+            ((y + FIXED_MAGIC).to_bits() as u32) as i32,
+        ]
+    };
+    let point = |x: f32, y: f32| -> Point {
+        if let Some(scale) = coretext_scale {
+            coretext_point(f64::from(x) * scale, -f64::from(y) * scale)
+        } else {
+            point(x, y)
+        }
+    };
     let mut b = Builder::default();
     for command in commands {
         match *command {
@@ -125,6 +149,23 @@ pub fn native_path(commands: &[PathElement]) -> VectorPath {
                 y,
             } => b.curve_to(point(cx0, cy0), point(cx1, cy1), point(x, y)),
             PathElement::QuadTo { cx0, cy0, x, y } => {
+                if let Some(scale) = coretext_scale {
+                    // Quartz converts a floating quadratic after reading Cairo's
+                    // already-quantized current point; quantizing its control first
+                    // would instead produce the FreeType recipe below.
+                    let current = b.current.expect("quadratic must have a current point");
+                    let (cx, cy) = (f64::from(cx0) * scale, -f64::from(cy0) * scale);
+                    let (ex, ey) = (f64::from(x) * scale, -f64::from(y) * scale);
+                    b.curve_to(
+                        coretext_point(
+                            (f64::from(current[0]) / 256.0 + 2.0 * cx) / 3.0,
+                            (f64::from(current[1]) / 256.0 + 2.0 * cy) / 3.0,
+                        ),
+                        coretext_point((2.0 * cx + ex) / 3.0, (2.0 * cy + ey) / 3.0),
+                        coretext_point(ex, ey),
+                    );
+                    continue;
+                }
                 let current = b.current.expect("quadratic must have a current point");
                 let control = point(cx0, cy0);
                 let end = point(x, y);
@@ -139,7 +180,15 @@ pub fn native_path(commands: &[PathElement]) -> VectorPath {
                 });
                 b.curve_to(first, second, end);
             }
-            PathElement::Close => b.close(),
+            PathElement::Close => {
+                // CoreGraphics omits contours containing only a move and close.
+                if coretext_scale.is_some() && b.pending_move {
+                    b.current = None;
+                    b.pending_move = false;
+                } else {
+                    b.close();
+                }
+            }
         }
     }
     let mut path = VectorPath::new();
