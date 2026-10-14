@@ -253,3 +253,96 @@ def bezier(points: Point3D_Array | Sequence[Point3D_Array]) -> Callable[[float |
             return val
         return B[:, 0]
     return nth_grade_bezier
+
+
+def partial_bezier_points(points: BezierPointsLike, a: float, b: float) -> BezierPoints:
+    import numpy as np
+    if a == 1:
+        arr = np.array(points)
+        arr[:] = arr[-1]
+        return arr
+    if b == 0:
+        arr = np.array(points)
+        arr[:] = arr[0]
+        return arr
+    points = np.asarray(points)
+    degree = points.shape[0] - 1
+    if degree == 3:
+        ma, mb = (1 - a, 1 - b)
+        a2, b2, ma2, mb2 = (a * a, b * b, ma * ma, mb * mb)
+        a3, b3, ma3, mb3 = (a2 * a, b2 * b, ma2 * ma, mb2 * mb)
+        portion_matrix = np.array([[ma3, 3 * ma2 * a, 3 * ma * a2, a3], [ma2 * mb, 2 * ma * a * mb + ma2 * b, a2 * mb + 2 * ma * a * b, a2 * b], [ma * mb2, a * mb2 + 2 * ma * mb * b, 2 * a * mb * b + ma * b2, a * b2], [mb3, 3 * mb2 * b, 3 * mb * b2, b3]])
+        return portion_matrix @ points
+    if degree == 2:
+        ma, mb = (1 - a, 1 - b)
+        portion_matrix = np.array([[ma * ma, 2 * a * ma, a * a], [ma * mb, a * mb + ma * b, a * b], [mb * mb, 2 * b * mb, b * b]])
+        return portion_matrix @ points
+    if degree == 1:
+        direction = points[1] - points[0]
+        return np.array([points[0] + a * direction, points[0] + b * direction])
+    if degree == 0:
+        return points
+    arr = np.array(points, dtype=float)
+    N = arr.shape[0]
+    if a != 0:
+        for i in range(1, N):
+            arr[:N - i] += a * (arr[1:N - i + 1] - arr[:N - i])
+    if b != 1:
+        mu = (1 - b) / (1 - a)
+        for i in range(1, N):
+            arr[i:] += mu * (arr[i - 1:-1] - arr[i:])
+    return arr
+
+
+def split_bezier(points: BezierPointsLike, t: float) -> Spline:
+    import numpy as np
+    points = np.asarray(points)
+    N, dim = points.shape
+    degree = N - 1
+    if degree == 3:
+        mt = 1 - t
+        mt2 = mt * mt
+        mt3 = mt2 * mt
+        t2 = t * t
+        t3 = t2 * t
+        two_mt_t = 2 * mt * t
+        three_mt2_t = 3 * mt2 * t
+        three_mt_t2 = 3 * mt * t2
+        split_matrix = np.array([[1, 0, 0, 0], [mt, t, 0, 0], [mt2, two_mt_t, t2, 0], [mt3, three_mt2_t, three_mt_t2, t3], [mt3, three_mt2_t, three_mt_t2, t3], [0, mt2, two_mt_t, t2], [0, 0, mt, t], [0, 0, 0, 1]])
+        return split_matrix @ points
+    if degree == 2:
+        mt = 1 - t
+        mt2 = mt * mt
+        t2 = t * t
+        two_tmt = 2 * t * mt
+        split_matrix = np.array([[1, 0, 0], [mt, t, 0], [mt2, two_tmt, t2], [mt2, two_tmt, t2], [0, mt, t], [0, 0, 1]])
+        return split_matrix @ points
+    if degree == 1:
+        middle = points[0] + t * (points[1] - points[0])
+        return np.array([points[0], middle, middle, points[1]])
+    if degree == 0:
+        return np.array([points[0], points[0]])
+    arr = np.empty((2, N, dim))
+    arr[1] = points
+    arr[0, 0] = points[0]
+    for i in range(1, N):
+        arr[1, :N - i] += t * (arr[1, 1:N - i + 1] - arr[1, :N - i])
+        arr[0, i] = arr[1, 0]
+    return arr.reshape(2 * N, dim)
+
+
+def is_closed(points: Point3D_Array) -> bool:
+    start, end = (points[0], points[-1])
+    rtol = 1e-05
+    atol = 1e-08
+    tolerance = atol + rtol * start
+    if abs(end[0] - start[0]) > tolerance[0]:
+        return False
+    if abs(end[1] - start[1]) > tolerance[1]:
+        return False
+    return bool(abs(end[2] - start[2]) <= tolerance[2])
+
+
+def straight_path() -> PathFuncType:
+    from _manim_interpolation import interpolate
+    return interpolate
