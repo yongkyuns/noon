@@ -202,3 +202,54 @@ def get_winding_number(points: Sequence[np.ndarray]) -> float:
         total_angle += d_angle
     val: float = total_angle / math.tau
     return val
+
+
+def bezier(points: Point3D_Array | Sequence[Point3D_Array]) -> Callable[[float | ColVector], Point3D_Array]:
+    import numpy as np
+    P = np.asarray(points)
+    degree = P.shape[0] - 1
+    if degree == 0:
+
+        def zero_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+            return np.ones_like(t) * P[0]
+        return zero_bezier
+    if degree == 1:
+
+        def linear_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+            return P[0] + t * (P[1] - P[0])
+        return linear_bezier
+    if degree == 2:
+
+        def quadratic_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+            t2 = t * t
+            mt = 1 - t
+            mt2 = mt * mt
+            return mt2 * P[0] + 2 * t * mt * P[1] + t2 * P[2]
+        return quadratic_bezier
+    if degree == 3:
+
+        def cubic_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+            t2 = t * t
+            t3 = t2 * t
+            mt = 1 - t
+            mt2 = mt * mt
+            mt3 = mt2 * mt
+            return mt3 * P[0] + 3 * t * mt2 * P[1] + 3 * t2 * mt * P[2] + t3 * P[3]
+        return cubic_bezier
+
+    def nth_grade_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+        is_scalar = not isinstance(t, np.ndarray)
+        if is_scalar:
+            B = np.empty((1, *P.shape))
+        else:
+            assert isinstance(t, np.ndarray)
+            t = t.reshape(-1, *[1 for dim in P.shape])
+            B = np.empty((t.shape[0], *P.shape))
+        B[:] = P
+        for i in range(degree):
+            B[:, :degree - i] += t * (B[:, 1:degree - i + 1] - B[:, :degree - i])
+        if is_scalar:
+            val: Point3D = B[0, 0]
+            return val
+        return B[:, 0]
+    return nth_grade_bezier
