@@ -72,6 +72,14 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
                 self.assertTrue(policy["overrides"][name]["evidence"])
                 self.assertTrue(policy["overrides"][name]["reason"])
 
+    def test_module_only_space_helpers_do_not_enter_the_public_policy(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        exports = coverage.noon_public_exports()
+        for name in ('normalize_along_axis', 'rotation_matrix_from_quaternion', 'rotation_matrix_transpose_from_quaternion'):
+            with self.subTest(name=name):
+                self.assertNotIn(name, exports)
+                self.assertNotIn(name, policy["overrides"])
+
     def test_static_export_audit_captures_dynamic_public_mapping(self) -> None:
         self.assertIn("Write", coverage.noon_public_exports())
         self.assertIn("Unwrite", coverage.noon_public_exports())
