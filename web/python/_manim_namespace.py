@@ -23,6 +23,7 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "get_unit_normal": "numpy",
     "z_to_vector": "numpy",
 
     "normalize_along_axis": "numpy",

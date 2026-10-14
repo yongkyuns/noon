@@ -900,6 +900,7 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "get_unit_normal": "_manim_user_vector_bases",
     "z_to_vector": "_manim_user_vector_bases",
 
     "CubicBezier": "_manim_geometry",
