@@ -10,6 +10,7 @@
     "source": "parity/manim-v0.21/quickstart.py"
   },
   "fixtures": [
+    {"id": "back-easings", "scene": "BackEasings", "source": "parity/manim-v0.21/core-examples/back_easings.py", "reference_frame_rate": 120, "expected_duration": 1, "sample_times": [0, 0.125, 0.25, 0.375, 0.5, 0.75, 0.9666666666666667], "notes": "Three unchanged original back easings preserve negative and above-one overshoot. Existing requested sampling and tolerances are unchanged."},
     {
       "id": "exponential-circular-easings",
       "scene": "ExponentialCircularEasings",

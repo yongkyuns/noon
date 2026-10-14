@@ -65,6 +65,9 @@ pub enum RateFunction {
     RushFrom,
     ThereAndBack,
     EaseInOutCubic,
+    EaseInBack,
+    EaseOutBack,
+    EaseInOutBack,
     EaseInExpo,
     EaseOutExpo,
     EaseInOutExpo,
@@ -106,6 +109,9 @@ impl RateFunction {
             | Self::Smoothererstep
             | Self::SlowInto
             | Self::DoubleSmooth
+            | Self::EaseInBack
+            | Self::EaseOutBack
+            | Self::EaseInOutBack
             | Self::EaseInExpo
             | Self::EaseOutExpo
             | Self::EaseInOutExpo
@@ -177,6 +183,24 @@ impl RateFunction {
                     0.5 * manim_smooth_f64(2.0 * p)
                 } else {
                     0.5 * (1.0 + manim_smooth_f64(2.0 * p - 1.0))
+                }
+            }
+            Self::EaseInBack => {
+                let c1 = 1.70158;
+                let c3 = c1 + 1.0;
+                c3 * p * p * p - c1 * p * p
+            }
+            Self::EaseOutBack => {
+                let c1 = 1.70158;
+                let c3 = c1 + 1.0;
+                1.0 + c3 * (p - 1.0).powi(3) + c1 * (p - 1.0).powi(2)
+            }
+            Self::EaseInOutBack => {
+                let c2 = 1.70158 * 1.525;
+                if p < 0.5 {
+                    (2.0 * p).powi(2) * ((c2 + 1.0) * 2.0 * p - c2) / 2.0
+                } else {
+                    ((2.0 * p - 2.0).powi(2) * ((c2 + 1.0) * (p * 2.0 - 2.0) + c2) + 2.0) / 2.0
                 }
             }
             Self::EaseInExpo => {
@@ -1135,6 +1159,21 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, expected_count);
+    }
+
+    #[test]
+    fn back_easings_match_original_overshoot_in_both_precisions() {
+        assert_pinned_easing_samples(include_str!("back_easing_reference.csv"), 99);
+        assert!(RateFunction::EaseInBack.evaluate_f64(0.25) < 0.0);
+        assert!(RateFunction::EaseOutBack.evaluate_f64(0.75) > 1.0);
+        for rate in [
+            RateFunction::EaseInBack,
+            RateFunction::EaseOutBack,
+            RateFunction::EaseInOutBack,
+        ] {
+            assert!(rate.evaluate_f64(0.0).abs() < 1e-14);
+            assert!((rate.evaluate_f64(1.0) - 1.0).abs() < 1e-14);
+        }
     }
 
     #[test]

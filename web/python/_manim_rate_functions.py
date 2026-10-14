@@ -248,7 +248,33 @@ def ease_in_out_circ(t: float) -> float:
     )
 
 
+
+@_unit_interval
+def ease_in_back(t: float) -> float:
+    c1 = 1.70158
+    c3 = c1 + 1
+    return c3 * t * t * t - c1 * t * t
+
+@_unit_interval
+def ease_out_back(t: float) -> float:
+    c1 = 1.70158
+    c3 = c1 + 1
+    return 1 + c3 * pow(t - 1, 3) + c1 * pow(t - 1, 2)
+
+@_unit_interval
+def ease_in_out_back(t: float) -> float:
+    c1 = 1.70158
+    c2 = c1 * 1.525
+    return (
+        (pow(2 * t, 2) * ((c2 + 1) * 2 * t - c2)) / 2
+        if t < 0.5
+        else (pow(2 * t - 2, 2) * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2
+    )
+
 _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
+    "ease_in_back": ease_in_back,
+    "ease_out_back": ease_out_back,
+    "ease_in_out_back": ease_in_out_back,
     "ease_in_expo": ease_in_expo,
     "ease_out_expo": ease_out_expo,
     "ease_in_out_expo": ease_in_out_expo,

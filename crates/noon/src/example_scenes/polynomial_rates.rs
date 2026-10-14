@@ -68,6 +68,19 @@ pub fn exponential_circular_session() -> Result<ExecutionSession, String> {
     )
 }
 
+/// Original overshooting back rates through retained method targets.
+pub fn back_session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::EaseInBack,
+            RateFunction::EaseOutBack,
+            RateFunction::EaseInOutBack,
+        ],
+        0.65,
+        1.0,
+    )
+}
+
 fn build_session(
     rates: &[RateFunction],
     side: f64,
@@ -161,6 +174,15 @@ mod tests {
         }
         assert_eq!(forward.effective_time(), 1.0);
         sought
+    }
+
+    #[test]
+    fn back_rates_preserve_overshoot_and_seek_forward_identity() {
+        let mut sought = assert_seek_matches_forward(back_session, 3);
+        sought.seek(0.25).unwrap();
+        assert!(sought.frame().objects[0].transform.translation.x < -2.0);
+        sought.seek(0.75).unwrap();
+        assert!(sought.frame().objects[1].transform.translation.x > 2.0);
     }
 
     #[test]
