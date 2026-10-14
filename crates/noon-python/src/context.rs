@@ -31,6 +31,22 @@ impl Store {
     fn context(&self) -> Context {
         Context::new(Scene::with_integration_store(Rc::clone(&self.semantics)))
     }
+    fn family(
+        &self,
+        batch: &MembershipBatch,
+        z_index: f64,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        if batch.kind != "add" {
+            return Err(engine_error("family creation requires an add batch"));
+        }
+        noon::MobjectFamily::create_with_z_index(
+            Rc::clone(&self.semantics),
+            &batch.targets(),
+            z_index,
+        )
+        .map(|family| crate::family::FamilyHandle { family })
+        .map_err(engine_error)
+    }
     fn geometry(&self, options: &GeometryOptions) -> PyResult<MobjectHandle> {
         Mobject::from_manim_geometry(Rc::clone(&self.semantics), options.options.clone())
             .map(MobjectHandle::from_semantic_mobject)
@@ -39,9 +55,24 @@ impl Store {
 }
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct MembershipBatch {
-    kind: String,
-    members: Vec<Mobject>,
+    pub(crate) kind: String,
+    members: Vec<NativeFamilyMember>,
     bindings: Vec<Mobject>,
+}
+enum NativeFamilyMember {
+    Object(Mobject),
+    Family(noon::MobjectFamily),
+}
+impl MembershipBatch {
+    pub(crate) fn targets(&self) -> Vec<MobjectTarget<'_>> {
+        self.members
+            .iter()
+            .map(|member| match member {
+                NativeFamilyMember::Object(object) => MobjectTarget::Object(object),
+                NativeFamilyMember::Family(family) => MobjectTarget::Family(family),
+            })
+            .collect()
+    }
 }
 #[pymethods]
 impl MembershipBatch {
@@ -59,9 +90,17 @@ impl MembershipBatch {
         self.bindings.push(handle.handle.clone());
         Ok(())
     }
+    #[pyo3(name = "appendFamily")]
+    fn append_family(&mut self, handle: &crate::family::FamilyHandle) -> PyResult<()> {
+        handle.family.validate().map_err(engine_error)?;
+        self.members
+            .push(NativeFamilyMember::Family(handle.family.clone()));
+        Ok(())
+    }
     #[pyo3(name = "appendMobject")]
     fn append(&mut self, _id: &str, handle: &MobjectHandle) {
-        self.members.push(handle.handle.clone());
+        self.members
+            .push(NativeFamilyMember::Object(handle.handle.clone()));
     }
 }
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
@@ -116,6 +155,15 @@ impl Context {
             return Err(engine_error(noon::AuthoringError::ForeignStore));
         }
         target.handle.validate().map_err(engine_error)
+    }
+    fn same_family_store(&self, target: &crate::family::FamilyHandle) -> PyResult<()> {
+        if !Rc::ptr_eq(
+            self.scene.integration_store(),
+            target.family.integration_store(),
+        ) {
+            return Err(engine_error(noon::AuthoringError::ForeignStore));
+        }
+        target.family.validate().map_err(engine_error)
     }
     fn available(&self) -> PyResult<()> {
         self.require_active()?;
@@ -211,7 +259,7 @@ impl Context {
             }
             handle.validate().map_err(engine_error)?;
         }
-        let targets: Vec<_> = batch.members.iter().map(MobjectTarget::Object).collect();
+        let targets = batch.targets();
         let request = match batch.kind.as_str() {
             "add" => SceneMembershipRequest::Add(&targets),
             "remove" => SceneMembershipRequest::Remove(&targets),
@@ -320,6 +368,113 @@ impl Context {
         query
             .map(crate::path_query::PathQuery::new)
             .map_err(engine_error)
+    }
+    #[pyo3(name = "queryMobjectColor")]
+    fn mobject_color(
+        &mut self,
+        target: &MobjectHandle,
+    ) -> PyResult<crate::family::ColorObservation> {
+        self.require_active()?;
+        self.same_store(target)?;
+        if !self.bound_ids.contains(&target.handle.node_id()) {
+            return Err(engine_error("mobject is not bound to this canonical Scene"));
+        }
+        let color = if self.execution.is_some() {
+            self.with_live(|live| live.effective_manim_color(&target.handle))?
+        } else {
+            target.handle.manim_color().map_err(engine_error)?
+        };
+        Ok(color.into())
+    }
+    #[pyo3(name = "liveCreateFamily")]
+    fn create_family(
+        &mut self,
+        batch: &MembershipBatch,
+        z_index: f64,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        if batch.kind != "add" {
+            return Err(engine_error("family creation requires an add batch"));
+        }
+        let execution = self
+            .execution
+            .as_mut()
+            .ok_or_else(|| engine_error("no execution session"))?;
+        noon::integration::publish_family_creation(
+            self.scene.integration_store(),
+            self.scene.root(),
+            execution,
+            &batch.targets(),
+            z_index,
+        )
+        .map(|family| crate::family::FamilyHandle { family })
+        .map_err(engine_error)
+    }
+    #[pyo3(name = "liveCopyFamily")]
+    fn copy_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.available()?;
+        self.same_family_store(target)?;
+        if references.kind != "add" {
+            return Err(engine_error("family copy references require an add batch"));
+        }
+        self.with_live(|live| {
+            live.copy_family_with_references(&target.family, &references.targets())
+        })
+        .map(|copied| crate::family::FamilyCopy { copied })
+    }
+    #[pyo3(name = "liveEditFamilyMembership")]
+    fn edit_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<Vec<bool>> {
+        self.available()?;
+        self.same_family_store(target)?;
+        match batch.kind.as_str() {
+            "add" => {
+                self.with_live(|live| live.add_family_members(&target.family, &batch.targets()))
+            }
+            "remove" => {
+                self.with_live(|live| live.remove_family_members(&target.family, &batch.targets()))
+            }
+            _ => Err(engine_error("unsupported family membership operation")),
+        }
+    }
+    #[pyo3(name = "liveSetFamilyColor")]
+    fn family_color(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| {
+            live.set_family_color(&target.family, r, g, b, a)
+                .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveSetFamilyOwnColor")]
+    fn family_own_color(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| {
+            live.set_family_own_color(&target.family, r, g, b, a)
+                .map(|_| ())
+        })
     }
     #[pyo3(name = "queryMobjectCenter")]
     fn center(&mut self, target: &MobjectHandle) -> PyResult<(f64, f64)> {

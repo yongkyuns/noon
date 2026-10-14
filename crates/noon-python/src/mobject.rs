@@ -14,6 +14,13 @@ impl MobjectHandle {
 }
 #[pymethods]
 impl MobjectHandle {
+    #[pyo3(name = "manimColor")]
+    fn manim_color(&self) -> PyResult<crate::family::ColorObservation> {
+        self.handle
+            .manim_color()
+            .map(crate::family::ColorObservation::from)
+            .map_err(engine_error)
+    }
     #[pyo3(name = "startNewPath")]
     fn start_new_path(&mut self, x: f64, y: f64) -> PyResult<()> {
         let point = noon::integration::authoring_path_point(x, y).map_err(engine_error)?;

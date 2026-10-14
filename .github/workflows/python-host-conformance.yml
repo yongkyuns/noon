@@ -64,6 +64,8 @@ jobs:
         run: python3 scripts/build-native-python.py --profile release
       - name: Native immutable path query contracts
         run: PYTHONPATH=build/python python3 scripts/test_native_path_queries.py -v
+      - name: Qualify native canonical family authoring and ownership guards
+        run: PYTHONPATH=build/python python3 scripts/test_native_family.py -v
       - name: Same-source native conformance and retirement
         run: python3 scripts/python_host_conformance.py
       - name: Native binding performance and interpreter locality

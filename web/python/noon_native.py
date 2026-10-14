@@ -2,8 +2,8 @@
 
 The scene source is shared with Pyodide. This host is renderer-free and uses
 explicit logical samples, not a native realtime window. Optional text/resources,
-spatial/family construction and callback structural/content producers are outside
-this binding's initial profile; they are not silently replaced or emulated.
+spatial construction, full family animation/style and callback structural/content
+producers remain outside this binding's qualified profile; they are not silently replaced or emulated.
 """
 from __future__ import annotations
 

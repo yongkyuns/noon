@@ -13,3 +13,6 @@ __pycache__/
 /ci-artifacts
 /web/ci-artifact.json
 /web/ci-Cargo.lock
+
+# Generated local native family binding qualification package.
+/build/native-family/

@@ -8,6 +8,7 @@ mod callback;
 mod callback_values;
 mod composition;
 mod context;
+mod family;
 mod geometry;
 mod mobject;
 mod options;
@@ -50,6 +51,9 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<context::Store>()?;
     m.add_class::<context::Context>()?;
     m.add_class::<context::MembershipBatch>()?;
+    m.add_class::<family::FamilyHandle>()?;
+    m.add_class::<family::FamilyCopy>()?;
+    m.add_class::<family::ColorObservation>()?;
     m.add_class::<mobject::MobjectHandle>()?;
     m.add_class::<mobject::LayoutAnchor>()?;
     m.add_class::<mobject::LayoutObservation>()?;

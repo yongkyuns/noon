@@ -54,6 +54,10 @@ def noonCreateAuthoringGeometryHandle(options):
     return _arena().geometry(options)
 
 
+def noonCreateAuthoringFamilyHandle(batch, z_index):
+    return _arena().family(batch, z_index)
+
+
 def noonCreateCanonicalAuthoringSceneContext():
     context = _arena().context()
     context.configure(_settings.get())
