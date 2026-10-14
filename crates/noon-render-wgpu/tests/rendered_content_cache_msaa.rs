@@ -205,8 +205,10 @@ fn compare(dir: &Path, name: &str, expected: &[u8], actual: &[u8], equal: bool) 
     fs::write(dir.join(format!("{name}-expected.rgba")), expected).unwrap();
     fs::write(dir.join(format!("{name}-actual.rgba")), actual).unwrap();
     let mask: Vec<u8> = expected
-        .chunks_exact(4)
-        .zip(actual.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(actual.as_chunks::<4>().0)
         .map(|(a, b)| if a == b { 0 } else { 255 })
         .collect();
     fs::write(dir.join(format!("{name}-diff.mask")), &mask).unwrap();
