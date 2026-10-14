@@ -64,13 +64,26 @@ def _sigmoid(value: float) -> float:
 def smooth(t: float, inflection: float = INFLECTION) -> float:
     """Manim-compatible normalized logistic smooth rate function."""
 
-    value = float(t)
-    sharpness = float(inflection)
-    error = _sigmoid(-sharpness / 2.0)
-    result = (
-        _sigmoid(sharpness * (value - 0.5)) - error
-    ) / (1.0 - 2.0 * error)
-    return min(max(result, 0.0), 1.0)
+    return min(max(_smooth_value(float(t), float(inflection), _sigmoid), 0.0), 1.0)
+
+
+def _smooth_value(t, inflection, sigmoid):
+    error = sigmoid(-inflection / 2)
+    return (sigmoid(inflection * (t - 0.5)) - error) / (1 - 2 * error)
+
+
+@_unit_interval
+def slow_into(t: float) -> float:
+    import numpy as np
+    return np.sqrt(1 - (1 - t) * (1 - t))
+
+
+@_unit_interval
+def double_smooth(t: float) -> float:
+    from _manim_simple_functions import sigmoid
+    if t < 0.5:
+        return 0.5 * min(max(_smooth_value(2 * t, INFLECTION, sigmoid), 0), 1)
+    return 0.5 * (1 + min(max(_smooth_value(2 * t - 1, INFLECTION, sigmoid), 0), 1))
 
 
 @_unit_interval
@@ -132,6 +145,8 @@ _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
     "smoothstep": smoothstep,
     "smootherstep": smootherstep,
     "smoothererstep": smoothererstep,
+    "slow_into": slow_into,
+    "double_smooth": double_smooth,
     "rush_into": rush_into,
     "rush_from": rush_from,
     "there_and_back": there_and_back,
@@ -149,7 +164,8 @@ def easing_from_rate_func(rate_func: object) -> str:
             return semantic_id
     raise NotImplementedError(
         "Noon currently supports deterministic rate_func=linear, smooth, rush_into, "
-        "rush_from, there_and_back, smoothstep, smootherstep, and smoothererstep; "
+        "rush_from, there_and_back, smoothstep, smootherstep, smoothererstep, slow_into, "
+        "and double_smooth; "
         "arbitrary Python per-frame rate functions "
         "are intentionally unsupported"
     )

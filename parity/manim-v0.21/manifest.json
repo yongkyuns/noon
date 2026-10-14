@@ -11,6 +11,18 @@
   },
   "fixtures": [
     {
+      "id": "annotation-dot",
+      "scene": "AnnotationDotConstructor",
+      "source": "parity/manim-v0.21/core-examples/annotation_dot.py",
+      "expected_duration": 0.2,
+      "sample_times": [
+        0,
+        0.1,
+        0.16666666666666666
+      ],
+      "notes": "Shared Dot geometry, separate default fill/stroke paint and explicit color precedence; static authored constructor profile. No samples or tolerances relaxed."
+    },
+    {
       "id": "polynomial-rates",
       "scene": "PolynomialRates",
       "source": "parity/manim-v0.21/core-examples/polynomial_rates.py",
@@ -22,7 +34,7 @@
         0.7666666666666666,
         0.9666666666666667
       ],
-      "notes": "Three existing shared method-target tracks use pinned polynomial rate functions; current source/raster qualification is required."
+      "notes": "Five shared method-target tracks exercise three polynomial rates plus slow_into and double_smooth at unchanged sample times; current source/raster qualification is required."
     },
     {
       "id": "math-table",
