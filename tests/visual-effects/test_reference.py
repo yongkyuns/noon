@@ -116,7 +116,7 @@ class OperatorContract(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 convolve(field, 1)
         for radius in [-1, 17, float("inf")]:
-            with self.subTest(radius=radius), self.assertRaises(ValueError):
+            with self.assertRaises(ValueError):
                 convolve([[1]], radius)
         with self.assertRaises(ValueError):
             radius_pixels(1, "css-pixels", 600, 6)
@@ -249,6 +249,15 @@ class FixtureIntegrity(unittest.TestCase):
         self.assertTrue(all(target["qualified"] is False for target in protocol["targets"]))
         self.assertEqual({case["id"] for case in protocol["corpus"]},
                          {f"G{i}" for i in range(7)})
+
+
+def load_tests(loader, tests, pattern):
+    # Script/module invocation includes #2094's independent witnesses.
+    # Directory discovery finds that test module itself; do not run it twice.
+    if pattern is None:
+        import test_rendered_content_cache_reference
+        tests.addTests(loader.loadTestsFromModule(test_rendered_content_cache_reference))
+    return tests
 
 
 if __name__ == "__main__":
