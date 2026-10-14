@@ -1490,6 +1490,10 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmPathQuery {
+        #[wasm_bindgen(getter, js_name = pointCount)]
+        pub fn point_count(&self) -> u32 {
+            self.value.point_count() as u32
+        }
         #[wasm_bindgen(getter, js_name = curveCount)]
         pub fn curve_count(&self) -> u32 {
             self.value.curve_count() as u32

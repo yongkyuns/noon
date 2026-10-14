@@ -419,6 +419,7 @@ enum OrdinaryCompositionChild {
     FamilyTransformTo {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,
+        method_target: bool,
         options: noon_core::AnimationOptions,
     },
     MatchingFamilyTransformTo {
@@ -1630,12 +1631,23 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::FamilyTransformTo {
                     source,
                     target_state,
+                    method_target,
                     options,
-                } => noon::AnimationCompositionRequest::FamilyTransformTo {
-                    source,
-                    target_state,
-                    options: *options,
-                },
+                } => {
+                    if *method_target {
+                        noon::AnimationCompositionRequest::FamilyMethodTargetTo {
+                            source,
+                            target_state,
+                            options: *options,
+                        }
+                    } else {
+                        noon::AnimationCompositionRequest::FamilyTransformTo {
+                            source,
+                            target_state,
+                            options: *options,
+                        }
+                    }
+                }
                 OrdinaryCompositionChild::MatchingFamilyTransformTo {
                     source,
                     target_state,
@@ -2364,6 +2376,7 @@ impl CanonicalAuthoringScene {
                     source,
                     target_state,
                     options,
+                    ..
                 }
                 | OrdinaryCompositionChild::MatchingFamilyTransformTo {
                     source,
@@ -4647,8 +4660,36 @@ mod wasm {
                 .push(OrdinaryCompositionChild::FamilyTransformTo {
                     source: source.semantic_family()?,
                     target_state: target_state.semantic_family()?,
+                    method_target: false,
                     options,
                 });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyMethodTargetTo)]
+        pub fn append_family_method_target_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
+        ) -> Result<(), JsValue> {
+            self.append_family_transform_to(
+                source,
+                target_state,
+                child_run_time,
+                rate_function,
+                lag_ratio,
+                path_arc,
+            )?;
+            let Some(OrdinaryCompositionChild::FamilyTransformTo { method_target, .. }) =
+                self.children.last_mut()
+            else {
+                unreachable!("family target append always stages one family child");
+            };
+            *method_target = true;
             Ok(())
         }
 
@@ -10335,6 +10376,7 @@ mod tests {
         context.live_shift_family(&target_pair, 0.0, 1.0).unwrap();
 
         let family_play = [OrdinaryCompositionChild::FamilyTransformTo {
+            method_target: false,
             source: pair,
             target_state: target_pair,
             options: AnimationOptions::new()
@@ -11535,6 +11577,73 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_and_method_family_targets_keep_original_root_completion_distinct() {
+        for method_target in [false, true] {
+            let mut context = CanonicalAuthoringScene::default();
+            let leaf = context.scene.square(0.5).unwrap();
+            let source = context.scene.family(&[(&leaf).into()]).unwrap();
+            let mut target_leaf = leaf.target_editor().unwrap();
+            target_leaf.shift(1.0, 0.0).unwrap();
+            let target = context.scene.family(&[(&target_leaf).into()]).unwrap();
+            let green = noon_core::Color::GREEN;
+            target
+                .set_own_color(
+                    green.red.into(),
+                    green.green.into(),
+                    green.blue.into(),
+                    green.alpha.into(),
+                )
+                .unwrap();
+            context
+                .edit_membership(SceneMembershipBatch {
+                    kind: SceneMembershipBatchKind::Add,
+                    spatial_domain: None,
+                    members: vec![OwnedSceneMembershipMember::Family(source.clone())],
+                    bindings: vec![(ObjectId::new(0), leaf.clone())],
+                })
+                .unwrap();
+            let children = [OrdinaryCompositionChild::FamilyTransformTo {
+                source: source.clone(),
+                target_state: target,
+                method_target,
+                options: AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            }];
+            let end = context
+                .begin_ordinary_mixed_composition(
+                    noon_core::SemanticAnimationCompositionKind::Parallel,
+                    &children,
+                    AnimationOptions::new(),
+                    AnimationOptions::new(),
+                )
+                .unwrap();
+            let mut player = context.take_execution_player(end, 1).unwrap();
+            player.live_advance_segment_to(0.5).unwrap();
+            assert_eq!(source.own_color().unwrap(), noon_core::Color::WHITE);
+            player.live_advance_segment_to(end).unwrap();
+            player.live_complete_segment().unwrap();
+            assert_eq!(
+                source.own_color().unwrap(),
+                if method_target {
+                    noon_core::Color::GREEN
+                } else {
+                    noon_core::Color::WHITE
+                }
+            );
+            assert_eq!(
+                player
+                    .live_effective(&leaf)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
+                1.0
+            );
+        }
+    }
+
+    #[test]
     fn canonical_family_composition_rejects_crosswrites_and_captures_between_segments() {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.square(0.5).unwrap();
@@ -11564,12 +11673,14 @@ mod tests {
             .run_time(1.0)
             .rate_func(RateFunction::ThereAndBack);
         let invalid = [OrdinaryCompositionChild::FamilyTransformTo {
+            method_target: false,
             source: source.clone(),
             target_state: invalid_target,
             options: transform_options,
         }];
         let revision = context.scene.integration_store().borrow().scene_revision();
         let reversed = [OrdinaryCompositionChild::FamilyTransformTo {
+            method_target: false,
             source: source.clone(),
             target_state: target.clone(),
             options: transform_options.reverse_rate_function(true),
@@ -11598,6 +11709,7 @@ mod tests {
 
         let children = [
             OrdinaryCompositionChild::FamilyTransformTo {
+                method_target: false,
                 source: source.clone(),
                 target_state: target,
                 options: transform_options,

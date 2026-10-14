@@ -234,6 +234,12 @@ pub enum AnimationCompositionRequest<'a> {
         target_state: &'a MobjectFamily,
         options: AnimationOptions,
     },
+    /// Complete a family method target, including its non-rendered own color.
+    FamilyMethodTargetTo {
+        source: &'a MobjectFamily,
+        target_state: &'a MobjectFamily,
+        options: AnimationOptions,
+    },
     /// Match ordered family members by activation-time normalized point geometry.
     MatchingFamilyTransformTo {
         source: &'a MobjectFamily,
@@ -2156,13 +2162,29 @@ impl<'a> LiveSession<'a> {
                 source,
                 target_state,
                 options,
+            }
+            | AnimationCompositionRequest::FamilyMethodTargetTo {
+                source,
+                target_state,
+                options,
             } => {
                 self.require_family(source)?;
                 self.require_family(target_state)?;
-                Request::FamilyTransformTo {
-                    source: source.node_id(),
-                    target_state: target_state.node_id(),
-                    options: *options,
+                if matches!(
+                    request,
+                    AnimationCompositionRequest::FamilyMethodTargetTo { .. }
+                ) {
+                    Request::FamilyMethodTargetTo {
+                        source: source.node_id(),
+                        target_state: target_state.node_id(),
+                        options: *options,
+                    }
+                } else {
+                    Request::FamilyTransformTo {
+                        source: source.node_id(),
+                        target_state: target_state.node_id(),
+                        options: *options,
+                    }
                 }
             }
             AnimationCompositionRequest::MatchingFamilyTransformTo {
