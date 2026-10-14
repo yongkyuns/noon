@@ -84,6 +84,18 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         self.assertIn("Write", coverage.noon_public_exports())
         self.assertIn("Unwrite", coverage.noon_public_exports())
 
+    def test_standard_easings_stay_module_only_in_exports_and_policy(self) -> None:
+        policy = json.loads((ROOT / "compat" / "manim-v0.21.0.json").read_text())
+        exports = coverage.noon_public_exports()
+        self.assertIn("rate_functions", exports)
+        self.assertEqual(policy["overrides"]["rate_functions"]["status"], "partial")
+        for family in ("quad", "cubic", "quart", "quint", "sine", "expo", "circ", "back", "elastic", "bounce"):
+            for direction in ("in", "out", "in_out"):
+                name = f"ease_{direction}_{family}"
+                with self.subTest(name=name):
+                    self.assertNotIn(name, exports)
+                    self.assertNotIn(name, policy["overrides"])
+
     def test_static_export_audit_captures_installed_namespace(self) -> None:
         exports = coverage.noon_public_exports()
         for name in (

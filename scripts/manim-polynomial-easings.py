@@ -45,14 +45,21 @@ def qualify(source_root, *, installed_manim=False):
     import noon as public
     errors = [] if observations(vars(noon)) == expected else ["polynomial easing observations differ"]
     for name in NAMES:
-        if getattr(public, name) is not getattr(noon, name) or noon.easing_from_rate_func(getattr(public, name)) != name:
+        function = getattr(public.rate_functions, name)
+        if function is not getattr(noon, name) or noon.easing_from_rate_func(function) != name:
             errors.append(f"public easing identity {name} differs")
+        if name in public.__all__ or hasattr(public, name):
+            errors.append(f"module-only easing {name} leaked into the public namespace")
     if installed_manim:
+        import manim
         from manim.utils import rate_functions
         if Path(rate_functions.__file__).read_bytes() != source.read_bytes():
             raise ValueError("installed complete rate module differs from pin")
         if observations(vars(rate_functions)) != expected:
             errors.append("installed polynomial easing observations differ")
+        for name in NAMES:
+            if hasattr(manim, name):
+                errors.append(f"pinned module-only easing {name} unexpectedly became public")
     return {"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "functions": len(NAMES), "observations": len(expected),
             "installed_module_checked": installed_manim, "errors": errors}
