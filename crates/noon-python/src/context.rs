@@ -136,6 +136,25 @@ impl Context {
             .ok_or_else(|| engine_error("no execution session"))?;
         operation(&mut self.scene.live(session)).map_err(engine_error)
     }
+    fn publish_path_edit(
+        &mut self,
+        target: &MobjectHandle,
+        edit: noon::integration::BorrowedPathEdit<'_>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let execution = self
+            .execution
+            .as_mut()
+            .ok_or_else(|| engine_error("no execution session"))?;
+        noon::integration::publish_borrowed_path_edit(
+            self.scene.integration_store(),
+            self.scene.root(),
+            execution,
+            edit,
+        )
+        .map_err(engine_error)
+    }
     fn publish(&mut self, transaction: SemanticMutationTransaction) -> PyResult<()> {
         self.require_active()?;
         if self.execution.is_some() {
@@ -333,6 +352,28 @@ impl Context {
         self.available()?;
         self.with_live(|live| live.create_manim_geometry(options.options.clone()))
             .map(MobjectHandle::from_semantic_mobject)
+    }
+    #[pyo3(name = "liveStartNewPath")]
+    fn start_new_path(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
+        let point = noon::integration::authoring_path_point(x, y).map_err(engine_error)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Start {
+                object: &target.handle,
+                point,
+            },
+        )
+    }
+    #[pyo3(name = "liveAddLineTo")]
+    fn add_line_to(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
+        let point = noon::integration::authoring_path_point(x, y).map_err(engine_error)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Line {
+                object: &target.handle,
+                point,
+            },
+        )
     }
     #[pyo3(name = "liveShift")]
     fn shift(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {

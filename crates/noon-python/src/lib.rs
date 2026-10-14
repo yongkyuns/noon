@@ -12,6 +12,7 @@ mod geometry;
 mod mobject;
 mod options;
 mod path_query;
+mod vector_path;
 
 fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
     fn attach(py: Python<'_>, error: AuthoringFailure) -> PyErr {
@@ -44,6 +45,7 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 #[pymodule]
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<geometry::GeometryOptions>()?;
+    m.add_class::<vector_path::AuthoringVectorPath>()?;
     m.add_class::<path_query::PathQuery>()?;
     m.add_class::<context::Store>()?;
     m.add_class::<context::Context>()?;

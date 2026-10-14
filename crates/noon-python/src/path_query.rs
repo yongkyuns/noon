@@ -24,6 +24,10 @@ impl PathQuery {
     fn free(&mut self) {
         self.value.take();
     }
+    #[getter(pointCount)]
+    fn point_count(&self) -> PyResult<usize> {
+        Ok(self.value()?.point_count())
+    }
     #[getter(curveCount)]
     fn curve_count(&self) -> PyResult<usize> {
         Ok(self.value()?.curve_count())

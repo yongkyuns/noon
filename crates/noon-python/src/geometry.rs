@@ -143,6 +143,19 @@ impl GeometryOptions {
     }
 
     #[staticmethod]
+    pub fn path(mut path: PyRefMut<'_, crate::vector_path::AuthoringVectorPath>) -> PyResult<Self> {
+        noon::ManimGeometryOptions::path(path.take()?)
+            .map(Self::from_options)
+            .map_err(engine_error)
+    }
+    #[staticmethod]
+    #[pyo3(name = "emptyPath")]
+    pub fn empty_path() -> PyResult<Self> {
+        noon::ManimGeometryOptions::path(noon_core::VectorPath::new())
+            .map(Self::from_options)
+            .map_err(engine_error)
+    }
+    #[staticmethod]
     pub fn circle(radius: f64) -> Result<Self, PyErr> {
         noon::ManimGeometryOptions::circle(radius)
             .map(Self::from_options)

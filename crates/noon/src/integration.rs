@@ -27,6 +27,8 @@ mod frame_grid;
 mod path_edits;
 mod pixel_readback;
 mod svg_failure;
+mod vector_path;
+pub use vector_path::{authoring_path_point, AuthoringVectorPath};
 
 pub use export_frames::{
     ExportEndReason, ExportFrame, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyError,

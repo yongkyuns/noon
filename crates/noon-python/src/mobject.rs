@@ -14,6 +14,16 @@ impl MobjectHandle {
 }
 #[pymethods]
 impl MobjectHandle {
+    #[pyo3(name = "startNewPath")]
+    fn start_new_path(&mut self, x: f64, y: f64) -> PyResult<()> {
+        let point = noon::integration::authoring_path_point(x, y).map_err(engine_error)?;
+        self.handle.start_new_path(point).map_err(engine_error)
+    }
+    #[pyo3(name = "addLineTo")]
+    fn add_line_to(&mut self, x: f64, y: f64) -> PyResult<()> {
+        let point = noon::integration::authoring_path_point(x, y).map_err(engine_error)?;
+        self.handle.add_line_to(point).map_err(engine_error)
+    }
     #[pyo3(name = "pathQuery")]
     fn path_query(&self) -> PyResult<crate::path_query::PathQuery> {
         self.handle
