@@ -455,7 +455,9 @@ try {
   diagnostics.snapshots.rerunPlaying = await snapshot(page);
   assert.equal(await page.locator("#patch-status").getAttribute("data-run-generation"), acceptedGeneration,
     "replaying the timeline must not rerun Python");
-  assert.equal(await page.locator("#python-scene-source").inputValue(), SOURCES.explicitRerun);
+  // CodeMirror exposes the source through a main-world textarea getter.
+  // Playwright inputValue reads the isolated world's stale native fallback.
+  assert.equal(await page.evaluate(() => document.querySelector("#python-scene-source").value), SOURCES.explicitRerun);
   // Record the precondition at the actual Run event, before its handler pauses
   // playback. A slow test that lets the replay finish must not pass vacuously.
   await page.evaluate(() => {
