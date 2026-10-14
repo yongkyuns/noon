@@ -301,6 +301,14 @@ pub struct LayoutObservation {
 }
 #[pymethods]
 impl LayoutObservation {
+    #[pyo3(name = "criticalX")]
+    fn critical_x(&self, x: f64, y: f64) -> f64 {
+        noon::integration::layout_critical_point(self.center, (self.width, self.height), (x, y)).0
+    }
+    #[pyo3(name = "criticalY")]
+    fn critical_y(&self, x: f64, y: f64) -> f64 {
+        noon::integration::layout_critical_point(self.center, (self.width, self.height), (x, y)).1
+    }
     #[getter(centerX)]
     fn center_x(&self) -> f64 {
         self.center.0

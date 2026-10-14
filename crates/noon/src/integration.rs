@@ -297,3 +297,25 @@ pub use crate::binding_options::{
     resolve_frontend_animation_options, resolve_frontend_create_animation_options,
     resolve_frontend_transform_animation_options,
 };
+
+/// Project a coherent layout snapshot to its center, edge or corner.
+/// Language bindings share this projection rather than recomputing bounds.
+pub fn layout_critical_point(
+    center: (f64, f64),
+    size: (f64, f64),
+    direction: (f64, f64),
+) -> (f64, f64) {
+    let axis = |center: f64, size: f64, direction: f64| {
+        if direction < 0.0 {
+            center - size * 0.5
+        } else if direction > 0.0 {
+            center + size * 0.5
+        } else {
+            center
+        }
+    };
+    (
+        axis(center.0, size.0, direction.0),
+        axis(center.1, size.1, direction.1),
+    )
+}

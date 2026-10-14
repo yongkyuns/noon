@@ -4066,25 +4066,23 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = criticalX)]
-        pub fn critical_x(&self, direction_x: f64, _direction_y: f64) -> f64 {
-            if direction_x < 0.0 {
-                self.center_x - self.width * 0.5
-            } else if direction_x > 0.0 {
-                self.center_x + self.width * 0.5
-            } else {
-                self.center_x
-            }
+        pub fn critical_x(&self, direction_x: f64, direction_y: f64) -> f64 {
+            noon::integration::layout_critical_point(
+                (self.center_x, self.center_y),
+                (self.width, self.height),
+                (direction_x, direction_y),
+            )
+            .0
         }
 
         #[wasm_bindgen(js_name = criticalY)]
-        pub fn critical_y(&self, _direction_x: f64, direction_y: f64) -> f64 {
-            if direction_y < 0.0 {
-                self.center_y - self.height * 0.5
-            } else if direction_y > 0.0 {
-                self.center_y + self.height * 0.5
-            } else {
-                self.center_y
-            }
+        pub fn critical_y(&self, direction_x: f64, direction_y: f64) -> f64 {
+            noon::integration::layout_critical_point(
+                (self.center_x, self.center_y),
+                (self.width, self.height),
+                (direction_x, direction_y),
+            )
+            .1
         }
     }
 

@@ -157,7 +157,7 @@ class NativeCreateOptionsTests(unittest.TestCase):
         self.assertEqual(resolved.runTime, 1)
         with self.assertRaises(RuntimeError) as rejected:
             native.resolve_animation_options(*args)
-        self.assertEqual(rejected.exception.code, 'animation.unsupported_reverse_rate_function')
+        self.assertEqual(rejected.exception.code, 'animation.unsupported_reverse')
 
     def test_lingering_reverse_create_runs_in_both_native_source_modes(self):
         source = '''from noon import *
