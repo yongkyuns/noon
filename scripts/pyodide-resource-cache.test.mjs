@@ -73,6 +73,67 @@ test('failed fetches still fail their cases and do not poison later requests', a
     { url, error: 'network failure' },
   ]);
   assert.equal(cache.stats().fulfillFailures, 0);
+  assert.deepEqual(cache.stats().upstreamFailureDetails, [{ url, error: 'network failure' }]);
+});
+
+test('upstream failure diagnostics are bounded snapshots and never retry a case', async () => {
+  const cache = createPyodideResourceCache(source);
+  const handler = await attach(cache);
+  let fetches = 0;
+  for (let index = 0; index < 7; index++) {
+    const failed = request(async () => { fetches++; throw new Error(`failure-${index}`); });
+    await handler(failed);
+    assert.equal(failed.result.aborted, 'failed');
+  }
+  const stats = cache.stats();
+  assert.equal(fetches, 7);
+  assert.equal(stats.upstreamFailures, 7);
+  assert.deepEqual(stats.upstreamFailureDetails.map(detail => detail.error),
+    ['failure-2', 'failure-3', 'failure-4', 'failure-5', 'failure-6']);
+  stats.upstreamFailureDetails[0].error = 'mutated';
+  assert.equal(cache.stats().upstreamFailureDetails[0].error, 'failure-2');
+});
+
+test('response cleanup failure does not retain bytes or poison later cases', async () => {
+  const cache = createPyodideResourceCache(source);
+  const handler = await attach(cache);
+  let fetches = 0;
+  const failed = request(async () => {
+    fetches++;
+    const value = response(Buffer.from('bad'));
+    value.dispose = async () => { throw new Error('response cleanup failed'); };
+    return value;
+  });
+  await handler(failed);
+  assert.equal(failed.result.aborted, 'failed');
+  assert.equal(failed.result.response, undefined);
+  assert.equal(cache.stats().retainedBytes, 0);
+  assert.equal(cache.stats().upstreamFailures, 1);
+  assert.deepEqual(cache.stats().upstreamFailureDetails, [{ url, error: 'response cleanup failed' }]);
+  const later = request(async () => { fetches++; return response(Buffer.from('ok')); });
+  await handler(later);
+  assert.equal(fetches, 2, 'only a later independent case may fetch again');
+  assert.equal(later.result.response.body.toString(), 'ok');
+  assert.equal(cache.stats().hits, 0);
+  assert.equal(cache.stats().retainedBytes, 2);
+});
+
+test('body failure remains reported when response cleanup also fails', async () => {
+  const cache = createPyodideResourceCache(source);
+  const handler = await attach(cache);
+  let disposals = 0;
+  const failed = request(async () => {
+    const value = response(Buffer.from('unused'));
+    value.body = async () => { throw new Error('body read failed'); };
+    value.dispose = async () => { disposals++; throw new Error('secondary cleanup failure'); };
+    return value;
+  });
+  await handler(failed);
+  assert.equal(failed.result.aborted, 'failed');
+  assert.equal(disposals, 1);
+  assert.equal(cache.stats().retainedBytes, 0);
+  assert.equal(cache.stats().upstreamFailures, 1);
+  assert.deepEqual(cache.stats().upstreamFailureDetails, [{ url, error: 'body read failed' }]);
 });
 
 test('HTTP errors are delivered unchanged and not cached', async () => {

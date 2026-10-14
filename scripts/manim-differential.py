@@ -716,19 +716,29 @@ def _family_membership_order(provider: Any, group_name: str) -> Any:
     group_type = getattr(provider, group_name)
     nested = group_type(a, b)
     family = group_type(a, nested, a)
-    names = {id(a): "a", id(b): "b", id(c): "c", id(nested): "nested"}
+    names = {id(a): "a", id(b): "b", id(c): "c", id(nested): "nested", id(family): "root"}
     order = lambda: [names[id(member)] for member in family.submobjects]
+    query_order = lambda: [names[id(member)] for member in family.get_family()]
     observed = [order()]
+    families = [query_order()]
     family.add(c, nested, c)
     observed.append(order())
+    families.append(query_order())
     family.add(a)
     observed.append(order())
+    families.append(query_order())
     family.remove(nested, nested)
     observed.append(order())
+    families.append(query_order())
     family.add(nested)
     observed.append(order())
+    families.append(query_order())
     copied = family.copy()
-    return {"order": observed, "nested_identity": nested[0] is a and nested[1] is b,
+    return {"order": observed, "family": families,
+            "recurse_false": [names[id(member)] for member in family.get_family(False)],
+            "leaf_self": a.get_family() == [a],
+            "empty_self": (lambda empty: empty.get_family() == [empty])(group_type()),
+            "nested_identity": nested[0] is a and nested[1] is b,
             "copy_alias": copied[1] is copied[2][0],
             "copy_independent": copied[1] is not a}
 

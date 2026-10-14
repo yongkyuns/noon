@@ -3,6 +3,14 @@
 Development qualification and CI evidence tooling, not another architecture or
 roadmap. The engine contract remains `docs/architecture.md`.
 
+## Artifact retention
+
+CI artifacts expire within three days. Browser and product packages keep their
+shorter one- or two-day limits, and Pages deployment artifacts expire after one
+day. Every upload declares `retention-days` explicitly, including shared actions
+and failure diagnostics. The CI contract suite checks this policy with
+`node --test .github/ci/artifact-retention.test.mjs`.
+
 ## Qualification cadence
 
 The exhaustive pinned Manim raster oracle runs nightly at 06:17 UTC and on
@@ -353,8 +361,9 @@ thresholds and subsequent diagnostic-only profiles/history controls are unchange
 Any diagnostic rerun must repeat the entire declared cohort with those exact
 packages, without rebuilding Rust or selecting a passing observation. A passing
 rerun does not erase the earlier failure. Re-running all jobs builds new packages. Keep
-both package artifacts for the 14-day evidence window; after they expire, rerun
-the full workflow. Measurement artifacts include the attempt number, so a retry
+both package artifacts for the two-day package retention window; measurement and
+comparison reports expire after three days. After packages expire, rerun the full
+workflow. Measurement artifacts include the attempt number, so a retry
 does not overwrite the original failure. All existing smokes, comparison
 thresholds, and the required comparison check name remain in place. A failed
 producer also fails that required check.
