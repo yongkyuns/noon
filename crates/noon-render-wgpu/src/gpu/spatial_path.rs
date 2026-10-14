@@ -8,7 +8,7 @@ mod cairo;
 
 use super::create_buffer_with_data;
 use super::retained_text::{
-    append_transformed_path, resolved_text_vector_style, transform_path, variation_fingerprint,
+    append_transformed_path, outline_fingerprint, resolved_text_vector_style, transform_path,
     GlyphOutlineCache,
 };
 use bytemuck::{Pod, Zeroable};
@@ -1226,7 +1226,7 @@ fn collect_text_paths<'a>(
                     0,
                     font_handle,
                     run.font_size.to_bits(),
-                    variation_fingerprint(run),
+                    outline_fingerprint(run),
                 );
                 let needs_fill =
                     base_style.fill.is_some() && !path_is_resident(&fill_source, base_style);
@@ -1240,7 +1240,7 @@ fn collect_text_paths<'a>(
                     1,
                     font_handle,
                     run.font_size.to_bits(),
-                    variation_fingerprint(run),
+                    outline_fingerprint(run),
                 );
                 let needs_stroke =
                     stroke_style.is_some_and(|style| !path_is_resident(&stroke_source, style));
