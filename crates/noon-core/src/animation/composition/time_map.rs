@@ -204,6 +204,12 @@ fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
         | RateFunction::RushInto
         | RateFunction::RushFrom
         | RateFunction::EaseInOutCubic
+        | RateFunction::EaseInExpo
+        | RateFunction::EaseOutExpo
+        | RateFunction::EaseInOutExpo
+        | RateFunction::EaseInCirc
+        | RateFunction::EaseOutCirc
+        | RateFunction::EaseInOutCirc
         | RateFunction::EaseInSine
         | RateFunction::EaseOutSine
         | RateFunction::EaseInOutSine
@@ -534,6 +540,12 @@ mod tests {
     #[test]
     fn monotone_easings_preserve_earliest_nested_event_boundaries() {
         for rate in [
+            RateFunction::EaseInExpo,
+            RateFunction::EaseOutExpo,
+            RateFunction::EaseInOutExpo,
+            RateFunction::EaseInCirc,
+            RateFunction::EaseOutCirc,
+            RateFunction::EaseInOutCirc,
             RateFunction::EaseInSine,
             RateFunction::EaseOutSine,
             RateFunction::EaseInOutSine,

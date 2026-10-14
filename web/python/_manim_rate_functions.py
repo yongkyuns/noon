@@ -209,7 +209,53 @@ def ease_in_out_sine(t: float) -> float:
     return val
 
 
+@_unit_interval
+def ease_in_expo(t: float) -> float:
+    return 0 if t == 0 else pow(2, 10 * t - 10)
+
+@_unit_interval
+def ease_out_expo(t: float) -> float:
+    return 1 if t == 1 else 1 - pow(2, -10 * t)
+
+@_unit_interval
+def ease_in_out_expo(t: float) -> float:
+    if t == 0:
+        return 0
+    elif t == 1:
+        return 1
+    elif t < 0.5:
+        return pow(2, 20 * t - 10) / 2
+    else:
+        return (2 - pow(2, -20 * t + 10)) / 2
+
+@_unit_interval
+def ease_in_circ(t: float) -> float:
+    from math import sqrt
+    return 1 - sqrt(1 - pow(t, 2))
+
+@_unit_interval
+def ease_out_circ(t: float) -> float:
+    from math import sqrt
+    return sqrt(1 - pow(t - 1, 2))
+
+@_unit_interval
+def ease_in_out_circ(t: float) -> float:
+    from math import sqrt
+    return (
+        (1 - sqrt(1 - pow(2 * t, 2))) / 2
+        if t < 0.5
+        else (sqrt(1 - pow(-2 * t + 2, 2)) + 1) / 2
+    )
+
+
 _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
+    "ease_in_expo": ease_in_expo,
+    "ease_out_expo": ease_out_expo,
+    "ease_in_out_expo": ease_in_out_expo,
+    "ease_in_circ": ease_in_circ,
+    "ease_out_circ": ease_out_circ,
+    "ease_in_out_circ": ease_in_out_circ,
+
     "ease_in_sine": ease_in_sine,
     "ease_out_sine": ease_out_sine,
     "ease_in_out_sine": ease_in_out_sine,

@@ -52,6 +52,22 @@ pub fn sine_session() -> Result<ExecutionSession, String> {
     )
 }
 
+/// Exponential and circular rates share the same retained target composition.
+pub fn exponential_circular_session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::EaseInExpo,
+            RateFunction::EaseOutExpo,
+            RateFunction::EaseInOutExpo,
+            RateFunction::EaseInCirc,
+            RateFunction::EaseOutCirc,
+            RateFunction::EaseInOutCirc,
+        ],
+        0.45,
+        0.6,
+    )
+}
+
 fn build_session(
     rates: &[RateFunction],
     side: f64,
@@ -114,17 +130,19 @@ fn build_session(
 mod tests {
     use super::*;
 
-    #[test]
-    fn sine_rates_keep_seek_and_forward_sampling_equal_at_original_positions() {
-        let mut forward = sine_session().unwrap();
-        let mut sought = sine_session().unwrap();
+    fn assert_seek_matches_forward(
+        build: fn() -> Result<ExecutionSession, String>,
+        expected_count: usize,
+    ) -> ExecutionSession {
+        let mut forward = build().unwrap();
+        let mut sought = build().unwrap();
         let ids = forward
             .frame()
             .objects
             .iter()
             .map(|o| o.id)
             .collect::<Vec<_>>();
-        assert_eq!(ids.len(), 3);
+        assert_eq!(ids.len(), expected_count);
         for time in [0.0, 0.125, 0.25, 0.375, 0.5, 0.75, 1.0] {
             forward.advance_to(time).unwrap();
             sought.seek(time).unwrap();
@@ -136,10 +154,34 @@ mod tests {
                 .enumerate()
             {
                 assert_eq!(left.id, ids[index]);
+                assert_eq!(left.id, right.id);
                 assert_eq!(left.transform, right.transform);
                 assert_eq!(left.style, right.style);
             }
         }
+        assert_eq!(forward.effective_time(), 1.0);
+        sought
+    }
+
+    #[test]
+    fn exponential_circular_rates_keep_original_positions_and_seek_identity() {
+        let mut sought = assert_seek_matches_forward(exponential_circular_session, 6);
+        sought.seek(0.25).unwrap();
+        for (object, original) in sought.frame().objects.iter().zip([
+            0.005524271728019903_f32,
+            0.8232233047033631_f32,
+            0.015625_f32,
+            0.031754163448145745_f32,
+            0.6614378277661477_f32,
+            0.0669872981077807_f32,
+        ]) {
+            assert!((object.transform.translation.x - (-2.0 + 4.0 * original)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn sine_rates_keep_seek_and_forward_sampling_equal_at_original_positions() {
+        let mut sought = assert_seek_matches_forward(sine_session, 3);
         sought.seek(0.25).unwrap();
         for (object, original) in sought.frame().objects.iter().zip([
             0.07612046748871326_f32,
@@ -152,59 +194,12 @@ mod tests {
 
     #[test]
     fn all_twelve_polynomial_easings_keep_identity_seek_and_forward_equal() {
-        let mut forward = easing_session().unwrap();
-        let mut sought = easing_session().unwrap();
-        let ids = forward
-            .frame()
-            .objects
-            .iter()
-            .map(|o| o.id)
-            .collect::<Vec<_>>();
-        assert_eq!(ids.len(), 12);
-        for time in [0.0, 0.125, 0.25, 0.375, 0.5, 0.75, 1.0] {
-            forward.advance_to(time).unwrap();
-            sought.seek(time).unwrap();
-            for (index, (left, right)) in forward
-                .frame()
-                .objects
-                .iter()
-                .zip(&sought.frame().objects)
-                .enumerate()
-            {
-                assert_eq!(left.id, ids[index]);
-                assert_eq!(left.transform, right.transform);
-                assert_eq!(left.style, right.style);
-            }
-        }
-        assert_eq!(forward.effective_time(), 1.0);
+        assert_seek_matches_forward(easing_session, 12);
     }
 
     #[test]
     fn all_five_rates_preserve_identity_and_seek_matches_forward_sampling() {
-        let mut forward = session().unwrap();
-        let mut sought = session().unwrap();
-        let ids: Vec<_> = forward
-            .frame()
-            .objects
-            .iter()
-            .map(|object| object.id)
-            .collect();
-        assert_eq!(ids.len(), 5);
-        for time in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            forward.advance_to(time).unwrap();
-            sought.seek(time).unwrap();
-            for (index, (left, right)) in forward
-                .frame()
-                .objects
-                .iter()
-                .zip(&sought.frame().objects)
-                .enumerate()
-            {
-                assert_eq!(left.id, ids[index]);
-                assert_eq!(left.transform, right.transform);
-                assert_eq!(left.style, right.style);
-            }
-        }
+        let mut sought = assert_seek_matches_forward(session, 5);
         sought.seek(0.25).unwrap();
         let objects = &sought.frame().objects;
         assert!((objects[3].transform.translation.x - 0.6457513).abs() < 1e-6);
