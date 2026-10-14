@@ -181,7 +181,7 @@ class ManimTransformPathArcOptionsTests(unittest.TestCase):
 
             class MetadataCallable:
                 def __getattribute__(self, name):
-                    if name in {"__code__", "__globals__", "__defaults__", "__kwdefaults__", "__closure__"}:
+                    if name in {"__class__", "__code__", "__globals__", "__defaults__", "__kwdefaults__", "__closure__"}:
                         raise AssertionError("read unsupported callable metadata")
                     return object.__getattribute__(self, name)
 
