@@ -14,7 +14,7 @@ use noon::{
 };
 use noon::{Transform2D, Vec2};
 use pyo3::prelude::*;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct Store {
@@ -41,6 +41,7 @@ impl Store {
 pub struct MembershipBatch {
     kind: String,
     members: Vec<Mobject>,
+    bindings: Vec<Mobject>,
 }
 #[pymethods]
 impl MembershipBatch {
@@ -49,11 +50,14 @@ impl MembershipBatch {
         Self {
             kind: kind.into(),
             members: Vec::new(),
+            bindings: Vec::new(),
         }
     }
     #[pyo3(name = "reserveMobjectBinding")]
-    fn reserve(&self, _id: &str, handle: &MobjectHandle) -> PyResult<()> {
-        handle.handle.validate().map_err(engine_error)
+    fn reserve(&mut self, _id: &str, handle: &MobjectHandle) -> PyResult<()> {
+        handle.handle.validate().map_err(engine_error)?;
+        self.bindings.push(handle.handle.clone());
+        Ok(())
     }
     #[pyo3(name = "appendMobject")]
     fn append(&mut self, _id: &str, handle: &MobjectHandle) {
@@ -63,6 +67,8 @@ impl MembershipBatch {
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct Context {
     pub(crate) scene: Scene,
+    // Host binding provenance only; membership and object state stay in Rust Scene.
+    bound_ids: HashSet<noon_core::SemanticNodeId>,
     pub(crate) execution: Option<ExecutionSession>,
     pub(crate) segment: Option<ExecutionSegment>,
     pub(crate) terminal: bool,
@@ -78,6 +84,7 @@ impl Context {
     fn new(scene: Scene) -> Self {
         Self {
             scene,
+            bound_ids: HashSet::new(),
             execution: None,
             segment: None,
             terminal: false,
@@ -173,11 +180,18 @@ impl Context {
         MembershipBatch {
             kind: kind.into(),
             members: Vec::new(),
+            bindings: Vec::new(),
         }
     }
     #[pyo3(name = "editMembership")]
     fn edit_membership(&mut self, batch: &MembershipBatch) -> PyResult<()> {
         self.available()?;
+        for handle in &batch.bindings {
+            if !Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
+                return Err(engine_error(noon::AuthoringError::ForeignStore));
+            }
+            handle.validate().map_err(engine_error)?;
+        }
         let targets: Vec<_> = batch.members.iter().map(MobjectTarget::Object).collect();
         let request = match batch.kind.as_str() {
             "add" => SceneMembershipRequest::Add(&targets),
@@ -192,14 +206,18 @@ impl Context {
             },
             _ => return Err(engine_error("unsupported membership request")),
         };
-        if self.execution.is_some() {
+        let result = if self.execution.is_some() {
             self.with_live(|live| live.edit_membership(request).map(|_| ()))
         } else {
             self.scene
                 .edit_membership(request)
                 .map(|_| ())
                 .map_err(engine_error)
-        }
+        };
+        result?;
+        self.bound_ids
+            .extend(batch.bindings.iter().map(|handle| handle.node_id()));
+        Ok(())
     }
     #[pyo3(name = "containsMobject")]
     fn contains(&mut self, target: &MobjectHandle) -> PyResult<bool> {
@@ -253,18 +271,25 @@ impl Context {
     #[pyo3(name = "bindMobject")]
     fn bind(&mut self, _id: &str, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
-        self.scene.add(&target.handle).map_err(engine_error)
+        self.scene.add(&target.handle).map_err(engine_error)?;
+        self.bound_ids.insert(target.handle.node_id());
+        Ok(())
     }
     #[pyo3(name = "liveAdd")]
     fn live_add(&mut self, _id: &str, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.add(&target.handle).map(|_| ()))
+        self.with_live(|live| live.add(&target.handle).map(|_| ()))?;
+        self.bound_ids.insert(target.handle.node_id());
+        Ok(())
     }
     /// Match the browser value-only projection of the same shared observation.
     #[pyo3(name = "queryMobjectPath")]
     fn path_query(&self, target: &MobjectHandle) -> PyResult<crate::path_query::PathQuery> {
         self.require_active()?;
         self.same_store(target)?;
+        if !self.bound_ids.contains(&target.handle.node_id()) {
+            return Err(engine_error("mobject is not bound to this canonical Scene"));
+        }
         let query = match self.execution.as_ref() {
             Some(execution) => noon::integration::effective_path_query(
                 self.scene.integration_store(),

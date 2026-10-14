@@ -67,6 +67,32 @@ class QueryScene(Scene):
                 scene.marker.get_start()
         self.assertEqual(observations[0], observations[1])
 
+    def test_binding_provenance_rejects_unbound_and_other_same_store_contexts(self):
+        store = Store()
+        owner, other = store.context(), store.context()
+        handle = store.geometry(GeometryOptions.square(1))
+        with self.assertRaisesRegex(RuntimeError, "not bound"):
+            owner.queryMobjectPath(handle)
+        owner.bindMobject("0", handle)
+        query = owner.queryMobjectPath(handle)
+        self.assertEqual(query.curveCount, 4)
+        query.free()
+        with self.assertRaisesRegex(RuntimeError, "not bound"):
+            other.queryMobjectPath(handle)
+
+    def test_foreign_binding_reservation_cannot_partially_publish(self):
+        store, foreign = Store(), Store()
+        context = store.context()
+        own = store.geometry(GeometryOptions.square(1))
+        batch = context.beginMembershipBatch("add")
+        batch.appendMobject("0", own)
+        batch.reserveMobjectBinding("1", foreign.geometry(GeometryOptions.square(1)))
+        with self.assertRaises(NoonForeignHandleError):
+            engine_call(context.editMembership, batch)
+        self.assertFalse(context.containsMobject(own))
+        with self.assertRaisesRegex(RuntimeError, "not bound"):
+            context.queryMobjectPath(own)
+
     def test_foreign_store_and_nonfinite_parameter_rejected(self):
         first, second = Store(), Store()
         handle = first.geometry(GeometryOptions.line(0, 0, 3, 4))
