@@ -98,6 +98,23 @@ def _manim_rectangle_dimensions() -> Any:
     return _object_observation(manim.Rectangle(width=3.0, height=1.25))
 
 
+def _screen_rectangle_observations(api) -> Any:
+    observations = []
+    for kwargs in [{}, {"aspect_ratio": 4 / 3, "height": 3},
+                   {"aspect_ratio": 0.75, "height": 2.5}]:
+        rectangle = api.ScreenRectangle(**kwargs).shift(api.RIGHT * 0.75)
+        initial = _object_observation(rectangle)
+        initial["aspect_ratio"] = float(rectangle.aspect_ratio)
+        rectangle.aspect_ratio = 2.25
+        stretched = _object_observation(rectangle)
+        stretched["aspect_ratio"] = float(rectangle.aspect_ratio)
+        rectangle.height = 1.25
+        resized = _object_observation(rectangle)
+        resized["aspect_ratio"] = float(rectangle.aspect_ratio)
+        observations.append({"initial": initial, "stretched": stretched, "resized": resized})
+    return observations
+
+
 def _noon_shifted_circle() -> Any:
     obj = noon.Circle(radius=0.5).shift(noon.RIGHT * 2.25 + noon.UP * 1.5)
     return _object_observation(obj)
@@ -1193,6 +1210,8 @@ FIXTURES = [
             lambda: _group_coordinate_dimensions(manim, manim.VGroup)),
     Fixture("circle_dimensions", _noon_circle_dimensions, _manim_circle_dimensions),
     Fixture("rectangle_dimensions", _noon_rectangle_dimensions, _manim_rectangle_dimensions),
+    Fixture("screen_rectangle", lambda: _screen_rectangle_observations(noon),
+            lambda: _screen_rectangle_observations(manim)),
     Fixture("shifted_circle", _noon_shifted_circle, _manim_shifted_circle),
     Fixture("moved_rectangle", _noon_moved_rectangle, _manim_moved_rectangle),
     Fixture("scaled_square", _noon_scaled_square, _manim_scaled_square),

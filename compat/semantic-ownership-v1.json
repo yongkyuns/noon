@@ -86,10 +86,10 @@
     },
     {
       "id": "mobject.rectangle",
-      "surface": "Rectangle",
+      "surface": "Rectangle and ScreenRectangle constructors",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::manim_rectangle"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_rectangle_init"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_rectangle_init"}, {"language": "python", "path": "web/python/_manim_compat.py", "symbol": "ScreenRectangle.__init__"}],
       "reason": "Rust constructs rectangle geometry and exact Manim VMobject defaults; Python retains only call-shape and explicit-argument coercion."
     },
     {

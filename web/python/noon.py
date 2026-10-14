@@ -1046,6 +1046,7 @@ _PUBLIC_EXPORTS = {
     "RESAMPLING_ALGORITHMS": "_manim_image",
     "Circle": "_manim_compat",
     "Rectangle": "_manim_compat",
+    "ScreenRectangle": "_manim_compat",
     "Square": "_manim_compat",
     "Line": "_manim_compat",
     "Path": "_manim_compat",
