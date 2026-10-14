@@ -28,6 +28,7 @@ const liveMathAnimations = {
 };
 await mkdir(artifacts, { recursive: true });
 let server, serverDiagnostics, browser, runtimeCache;
+let completed = false;
 const startedAt = performance.now();
 const results = [];
 const nativeFailureDiagnostics = browserName === 'webkit' && process.platform === 'darwin' &&
@@ -76,6 +77,15 @@ try {
     if (typeof server?.on === 'function') serverDiagnostics = captureChildProcessDiagnostics(server);
     let ready = false;
     for (let i = 0; i < 100; i++) {
+      const observed = serverDiagnostics?.snapshot();
+      if (observed && (observed.error !== null || observed.exitCode !== null)) {
+        throw new Error(`gallery HTTP server failed: ${stringify(observed)}`);
+      }
+      // A pre-existing server cannot qualify as this test's checkout.
+      if (observed && !observed.stdoutTail.includes('Serving HTTP on')) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        continue;
+      }
       ready = await fetch(new URL('index.html', base)).then(r => r.ok).catch(() => false);
       if (ready) break;
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -419,7 +429,11 @@ try {
   const failed = results.filter(result => result.outcome !== 'pass');
   assert.deepEqual(failed.map(result => [result.id, result.noJspi, result.failure]), [], 'gallery runtime failures');
   console.log(`All ${selectedEntries.length} ${selectedIds ? 'selected' : 'selectable'} examples and ${queue.length - selectedEntries.length} no-JSPI controls passed.`);
+  completed = true;
 } finally {
+  if (!completed && serverDiagnostics) {
+    await writeFile(path.join(artifacts, 'http-server-diagnostics.json'), stringify(serverDiagnostics.snapshot()));
+  }
   await writeFile(path.join(artifacts, 'results.json'), stringify(results));
   const runtimeResources = { elapsedMs: performance.now() - startedAt, ...runtimeCache?.stats() };
   await writeFile(path.join(artifacts, 'runtime-resources.json'), stringify(runtimeResources));
