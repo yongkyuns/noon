@@ -22,15 +22,26 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
     record("phase", facts);
   };
   const attach = (browser, context, page) => {
-    browser.on("disconnected", () => record("browser-disconnected"));
-    context.on("close", () => record("context-close"));
-    page.on("crash", () => record("page-crash"));
-    page.on("close", () => record("page-close"));
-    page.on("framenavigated", frame => {
+    const subscriptions = [];
+    const on = (target, event, listener) => {
+      target.on(event, listener);
+      subscriptions.push([target, event, listener]);
+    };
+    on(browser, "disconnected", () => record("browser-disconnected"));
+    on(context, "close", () => record("context-close"));
+    on(page, "crash", () => record("page-crash"));
+    on(page, "close", () => record("page-close"));
+    on(page, "framenavigated", frame => {
       try {
         if (frame === page.mainFrame()) record("main-frame-navigation", { url: short(frame.url()) });
       } catch { record("main-frame-navigation-unavailable"); }
     });
+    // Gallery cases reuse Chromium/Firefox browsers; detach only this trace's
+    // listeners so completed cases neither retain pages nor accumulate events.
+    return () => {
+      for (const [target, event, listener] of subscriptions) target.off(event, listener);
+      subscriptions.length = 0;
+    };
   };
   return Object.freeze({ setPhase, record, attach, snapshot: () => ({
     phase, events: events.map(event => ({ ...event })),

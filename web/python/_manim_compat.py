@@ -308,6 +308,23 @@ class Rectangle(VMobject):
         _rectangle_init(self, width, height, color=color, **kwargs)
 
 
+class ScreenRectangle(Rectangle):
+    """Manim screen call shape over shared rectangle geometry and bounds."""
+
+    def __init__(
+        self, aspect_ratio: float = 16.0 / 9.0, height: float = 4, **kwargs: Any
+    ) -> None:
+        super().__init__(width=aspect_ratio * height, height=height, **kwargs)
+
+    @property
+    def aspect_ratio(self) -> float:
+        return self.width / self.height
+
+    @aspect_ratio.setter
+    def aspect_ratio(self, value: float) -> None:
+        self.stretch_to_fit_width(value * self.height)
+
+
 class Square(Rectangle):
     def __init__(
         self,

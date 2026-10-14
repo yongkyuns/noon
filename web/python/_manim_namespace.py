@@ -56,6 +56,8 @@ _OPTIONAL_HELPER_PACKAGES = {
     "shoelace_direction": "numpy",
     "binary_search": "numpy",
     "sigmoid": "numpy",
+    "slow_into": "numpy",
+    "double_smooth": "numpy",
     "inverse_interpolate": "numpy",
     "match_interpolate": "numpy",
     "stretch_array_to_length": "numpy",

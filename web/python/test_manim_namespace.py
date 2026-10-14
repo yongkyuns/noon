@@ -45,6 +45,12 @@ class ManimNamespaceTests(unittest.TestCase):
             self.assertEqual(namespace.required_packages(source), ("numpy",))
         self.assertEqual(namespace.required_packages("message = 'stretch_array_to_length'"), ())
 
+    def test_slow_into_loads_numpy_only_when_used(self):
+        for source in ["slow_into(0.5)", "from manim import slow_into as slow\nslow(0.5)",
+                       "import noon\nnoon.slow_into(0.5)"]:
+            self.assertEqual(namespace.required_packages(source), ("numpy",))
+        self.assertEqual(namespace.required_packages("double_smooth(0.5)"), ("numpy",))
+
     def test_interpolation_requires_numpy_only_for_division_helpers(self):
         for name in ["inverse_interpolate", "match_interpolate"]:
             self.assertEqual(namespace.required_packages(f"from manim import {name} as helper\nhelper(0, 1, 0.5)"), ("numpy",))

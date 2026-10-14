@@ -4,6 +4,7 @@ from functools import wraps
 import hashlib
 import json
 import math
+import inspect
 from pathlib import Path
 import sys
 
@@ -68,18 +69,58 @@ def polynomial_observations(namespace):
     return result
 
 
+def monotone_observations(namespace):
+    from fractions import Fraction
+    from decimal import Decimal
+    import numpy as np
+    result = []
+    for name in ["slow_into", "double_smooth"]:
+        function = namespace[name]
+        result.append([name, str(inspect.signature(function))])
+        for value in [-math.inf, -1, *[index / 256 for index in range(257)], 2,
+                      math.inf, math.nan, Fraction(1, 4), Decimal("0.25"), True,
+                      np.float32(0.25), np.float64(0.25), "0.5"]:
+            try:
+                observed = function(value)
+                result.append([float(observed), type(observed).__name__])
+            except (TypeError, ValueError) as error:
+                result.append([type(error).__name__])
+    return result
+
+
+def monotone_equal(actual, expected):
+    if len(actual) != len(expected):
+        return False
+    for left, right in zip(actual, expected):
+        if left == right:
+            continue
+        if len(left) != 2 or len(right) != 2 or left[1] != right[1]:
+            return False
+        if not isinstance(left[0], float) or not isinstance(right[0], float):
+            return False
+        if not math.isclose(left[0], right[0], rel_tol=1e-14, abs_tol=1e-14):
+            return False
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("manim_source", type=Path)
     parser.add_argument("--installed-manim", action="store_true")
     args = parser.parse_args()
     source = args.manim_source / "manim/utils/rate_functions.py"
-    reference = load_helpers(source, {"unit_interval", "zero", "not_quite_there", "squish_rate_func", "smoothstep", "smootherstep", "smoothererstep"}, {"wraps": wraps, "smooth": lambda t: t})
+    import numpy as np
+    sigmoid = load_helpers(args.manim_source / "manim/utils/simple_functions.py",
+                           {"sigmoid"}, {"np": np})["sigmoid"]
+    reference = load_helpers(source, {"slow_into", "double_smooth", "smooth", "unit_interval", "zero", "not_quite_there", "squish_rate_func", "smoothstep", "smootherstep", "smoothererstep"}, {"wraps": wraps, "np": np, "sigmoid": sigmoid})
     expected = observations(reference["unit_interval"], reference["zero"])
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web/python"))
     import _manim_rate_functions as noon
     actual = observations(noon._unit_interval, noon._zero_outside_interval)
     errors = [] if actual == expected else ["Python call guards differ from pinned source"]
+    expected_monotone = monotone_observations(reference)
+    if not monotone_equal(monotone_observations(vars(noon)), expected_monotone):
+        errors.append("monotone rate observations differ from pinned source")
     expected_polynomials = polynomial_observations(reference)
     if polynomial_observations(vars(noon)) != expected_polynomials:
         errors.append("polynomial observations differ from pinned source")
@@ -90,6 +131,8 @@ def main():
         from manim.utils import rate_functions
         if Path(rate_functions.__file__).read_bytes() != source.read_bytes():
             raise ValueError("installed rate source differs from pin")
+        if not monotone_equal(monotone_observations(vars(rate_functions)), expected_monotone):
+            errors.append("installed monotone rate observations differ")
         if polynomial_observations(vars(rate_functions)) != expected_polynomials:
             errors.append("installed polynomial observations differ")
         if wrapper_observations(vars(rate_functions)) != expected_wrappers:
@@ -104,6 +147,7 @@ def main():
                       "decorator_observations": len(expected), "public_boundary_observations": 25 if args.installed_manim else 0,
                       "callable_wrapper_observations": len(expected_wrappers),
                       "polynomial_observations": len(expected_polynomials),
+                      "monotone_observations": len(expected_monotone),
                       "installed_module_checked": args.installed_manim, "errors": errors}, indent=2))
     return bool(errors)
 

@@ -52,6 +52,7 @@ fn plain_text(store: &mut SemanticStore, source: &str) -> noon_core::SemanticNod
                 kind: TextSourceKind::Plain,
                 runs: Arc::from([GlyphRun {
                     font: face,
+                    outline_profile: noon_core::GlyphOutlineProfile::Font,
                     variations: Arc::from([]),
                     font_size: 24.0,
                     direction: TextDirection::LeftToRight,
