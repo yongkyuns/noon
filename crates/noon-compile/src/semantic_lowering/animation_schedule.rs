@@ -2795,6 +2795,12 @@ fn reversed_create_rate(rate: RateFunction) -> Option<RateFunction> {
         | RateFunction::EaseInOutQuad
         | RateFunction::EaseInOutQuart
         | RateFunction::EaseInOutQuint => Some(rate),
+        RateFunction::EaseInElastic => Some(RateFunction::EaseOutElastic),
+        RateFunction::EaseOutElastic => Some(RateFunction::EaseInElastic),
+        RateFunction::EaseInOutElastic => Some(RateFunction::EaseInOutElastic),
+        RateFunction::EaseInBounce => Some(RateFunction::EaseOutBounce),
+        RateFunction::EaseOutBounce => Some(RateFunction::EaseInBounce),
+        RateFunction::EaseInOutBounce => Some(RateFunction::EaseInOutBounce),
         RateFunction::EaseInBack => Some(RateFunction::EaseOutBack),
         RateFunction::EaseOutBack => Some(RateFunction::EaseInBack),
         RateFunction::EaseInOutBack => Some(RateFunction::EaseInOutBack),
@@ -3487,6 +3493,12 @@ mod tests {
     #[test]
     fn reversed_builtin_create_preserves_original_rate_and_endpoint_identity() {
         for rate in [
+            RateFunction::EaseInElastic,
+            RateFunction::EaseOutElastic,
+            RateFunction::EaseInOutElastic,
+            RateFunction::EaseInBounce,
+            RateFunction::EaseOutBounce,
+            RateFunction::EaseInOutBounce,
             RateFunction::EaseInBack,
             RateFunction::EaseOutBack,
             RateFunction::EaseInOutBack,

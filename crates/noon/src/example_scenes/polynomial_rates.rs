@@ -81,6 +81,22 @@ pub fn back_session() -> Result<ExecutionSession, String> {
     )
 }
 
+/// Original elastic overshoot and piecewise bounce rates use retained Rust targets.
+pub fn elastic_bounce_session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::EaseInElastic,
+            RateFunction::EaseOutElastic,
+            RateFunction::EaseInOutElastic,
+            RateFunction::EaseInBounce,
+            RateFunction::EaseOutBounce,
+            RateFunction::EaseInOutBounce,
+        ],
+        0.45,
+        0.6,
+    )
+}
+
 fn build_session(
     rates: &[RateFunction],
     side: f64,
@@ -174,6 +190,22 @@ mod tests {
         }
         assert_eq!(forward.effective_time(), 1.0);
         sought
+    }
+
+    #[test]
+    fn elastic_bounce_rates_preserve_original_positions_and_seek_identity() {
+        let mut sought = assert_seek_matches_forward(elastic_bounce_session, 6);
+        sought.seek(0.25).unwrap();
+        for (object, original) in sought.frame().objects.iter().zip([
+            -0.005524271728019903_f64 as f32,
+            0.9116116523516816_f64 as f32,
+            0.011969444423734044_f64 as f32,
+            0.02734375_f64 as f32,
+            0.47265625_f64 as f32,
+            0.1171875_f64 as f32,
+        ]) {
+            assert!((object.transform.translation.x - (-2.0 + 4.0 * original)).abs() < 1e-6);
+        }
     }
 
     #[test]

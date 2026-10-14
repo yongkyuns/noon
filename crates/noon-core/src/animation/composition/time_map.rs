@@ -245,6 +245,12 @@ fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
             Some(upper)
         }
         RateFunction::ThereAndBack
+        | RateFunction::EaseInElastic
+        | RateFunction::EaseOutElastic
+        | RateFunction::EaseInOutElastic
+        | RateFunction::EaseInBounce
+        | RateFunction::EaseOutBounce
+        | RateFunction::EaseInOutBounce
         | RateFunction::EaseInBack
         | RateFunction::EaseOutBack
         | RateFunction::EaseInOutBack
@@ -599,6 +605,12 @@ mod tests {
     fn reversing_and_discontinuous_rates_have_no_single_event_boundary() {
         for rate_func in [
             RateFunction::ThereAndBack,
+            RateFunction::EaseInElastic,
+            RateFunction::EaseOutElastic,
+            RateFunction::EaseInOutElastic,
+            RateFunction::EaseInBounce,
+            RateFunction::EaseOutBounce,
+            RateFunction::EaseInOutBounce,
             RateFunction::EaseInBack,
             RateFunction::EaseOutBack,
             RateFunction::EaseInOutBack,

@@ -271,7 +271,77 @@ def ease_in_out_back(t: float) -> float:
         else (pow(2 * t - 2, 2) * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2
     )
 
+@_unit_interval
+def ease_in_elastic(t: float) -> float:
+    import numpy as np
+    c4 = (2 * np.pi) / 3
+    if t == 0:
+        return 0
+    elif t == 1:
+        return 1
+    else:
+        val: float = -pow(2, 10 * t - 10) * np.sin((t * 10 - 10.75) * c4)
+        return val
+
+@_unit_interval
+def ease_out_elastic(t: float) -> float:
+    import numpy as np
+    c4 = (2 * np.pi) / 3
+    if t == 0:
+        return 0
+    elif t == 1:
+        return 1
+    else:
+        val: float = pow(2, -10 * t) * np.sin((t * 10 - 0.75) * c4) + 1
+        return val
+
+@_unit_interval
+def ease_in_out_elastic(t: float) -> float:
+    import numpy as np
+    c5 = (2 * np.pi) / 4.5
+    if t == 0:
+        return 0
+    elif t == 1:
+        return 1
+    elif t < 0.5:
+        val: float = -(pow(2, 20 * t - 10) * np.sin((20 * t - 11.125) * c5)) / 2
+        return val
+    else:
+        val = (pow(2, -20 * t + 10) * np.sin((20 * t - 11.125) * c5)) / 2 + 1
+        return val
+
+@_unit_interval
+def ease_in_bounce(t: float) -> float:
+    return 1 - ease_out_bounce(1 - t)
+
+@_unit_interval
+def ease_out_bounce(t: float) -> float:
+    n1 = 7.5625
+    d1 = 2.75
+
+    if t < 1 / d1:
+        return n1 * t * t
+    elif t < 2 / d1:
+        return n1 * (t - 1.5 / d1) * (t - 1.5 / d1) + 0.75
+    elif t < 2.5 / d1:
+        return n1 * (t - 2.25 / d1) * (t - 2.25 / d1) + 0.9375
+    else:
+        return n1 * (t - 2.625 / d1) * (t - 2.625 / d1) + 0.984375
+
+@_unit_interval
+def ease_in_out_bounce(t: float) -> float:
+    if t < 0.5:
+        return (1 - ease_out_bounce(1 - 2 * t)) / 2
+    else:
+        return (1 + ease_out_bounce(2 * t - 1)) / 2
+
 _KNOWN_RATE_FUNCTIONS: dict[str, Callable[..., float]] = {
+    "ease_in_elastic": ease_in_elastic,
+    "ease_out_elastic": ease_out_elastic,
+    "ease_in_out_elastic": ease_in_out_elastic,
+    "ease_in_bounce": ease_in_bounce,
+    "ease_out_bounce": ease_out_bounce,
+    "ease_in_out_bounce": ease_in_out_bounce,
     "ease_in_back": ease_in_back,
     "ease_out_back": ease_out_back,
     "ease_in_out_back": ease_in_out_back,
