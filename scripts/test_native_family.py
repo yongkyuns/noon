@@ -54,6 +54,53 @@ class NativeFamilyTests(unittest.TestCase):
         self.assertEqual((unchanged.centerX, unchanged.centerY, unchanged.width, unchanged.height),
                          (1, 2, 4, 6))
 
+    def test_live_family_shift_scale_reject_foreign_and_retired_contexts(self):
+        left, right = native.Store(), native.Store()
+        local, foreign = self.family(left), self.family(right)
+        context = left.context()
+        for operation in ('liveShiftFamily', 'liveScaleFamily'):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(RuntimeError, 'foreign|different.*store|another.*store'):
+                    getattr(context, operation)(foreign, 1, 1)
+        context.retire()
+        for operation in ('liveShiftFamily', 'liveScaleFamily'):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(RuntimeError, 'retired'):
+                    getattr(context, operation)(local, 1, 1)
+        self.assertEqual(local.memberKeys(), [])
+
+    def test_group_shift_and_scale_after_a_barrier_publish_effective_layout(self):
+        source = '''from noon import *
+class LiveFamilyLayout(Scene):
+    def construct(self):
+        self.observations=[]
+        for cls in (Group,VGroup):
+            group=cls(Square(),Square().shift(2*RIGHT))
+            self.add(group)
+            self.wait(.125)
+            for stage in ('initial','shift','scale'):
+                if stage=='shift':group.shift(RIGHT)
+                elif stage=='scale':group.scale(2)
+                self.observations.append([cls.__name__,stage,list(group.get_center()),group.width,group.height])
+            self.wait(.125)
+            self.remove(group)
+'''
+        # Values below come from the complete pinned Group/VGroup probe.
+        expected = [[name, stage, center, width, height]
+                    for name in ('Group', 'VGroup')
+                    for stage, center, width, height in (
+                        ('initial', [1, 0], 4, 2),
+                        ('shift', [2, 0], 4, 2),
+                        ('scale', [2, 0], 8, 4))]
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                scene = asyncio.run(run_source(source, portable=portable, sample_hz=8))
+                try:
+                    self.assertEqual(scene.observations, expected)
+                    self.assertEqual(scene.time, .5)
+                finally:
+                    close_scene(scene)
+
     def test_root_metadata_and_copy_independence_use_real_shared_handles(self):
         store = native.Store()
         root = self.family(store)

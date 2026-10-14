@@ -469,6 +469,28 @@ impl Context {
             _ => Err(engine_error("unsupported family membership operation")),
         }
     }
+    #[pyo3(name = "liveShiftFamily")]
+    fn shift_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        x: f64,
+        y: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.shift_family(&target.family, x, y).map(|_| ()))
+    }
+    #[pyo3(name = "liveScaleFamily")]
+    fn scale_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        x: f64,
+        y: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.scale_family(&target.family, x, y).map(|_| ()))
+    }
     #[pyo3(name = "liveSetFamilyColor")]
     fn family_color(
         &mut self,
