@@ -398,7 +398,9 @@ async function initializePyodide() {
   };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
-  self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
+  self.noonCreateAuthoringFamilyHandle = (batch, zIndex, ...color) => color.length
+    ? authoringStore.createFamilyWithColor(batch, zIndex, ...color)
+    : authoringStore.createFamily(batch, zIndex);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
   self.noonResolveTransformAnimationOptions = (...args) =>
     resolveAnimationOptionsPlain(resolveTransformAnimationOptions, ...args);

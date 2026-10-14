@@ -109,8 +109,27 @@ pub fn publish_family_creation(
     members: &[crate::MobjectTarget<'_>],
     z_index: f64,
 ) -> Result<crate::MobjectFamily, crate::AuthoringError> {
+    publish_family_creation_with_color(
+        store,
+        root,
+        execution,
+        members,
+        z_index,
+        crate::Color::WHITE,
+    )
+}
+
+/// Publish family metadata and membership through one existing live transaction.
+pub fn publish_family_creation_with_color(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    members: &[crate::MobjectTarget<'_>],
+    z_index: f64,
+    color: crate::Color,
+) -> Result<crate::MobjectFamily, crate::AuthoringError> {
     let (transaction, family) =
-        crate::family_authoring::family_creation_transaction(store, members, z_index)?;
+        crate::family_authoring::family_creation_color_transaction(store, members, z_index, color)?;
     let result = crate::Scene::publish_running_transaction(store, root, execution, transaction)?;
     let node = result
         .resolve(family)

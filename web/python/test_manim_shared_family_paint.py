@@ -10,6 +10,31 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class SharedFamilyPaintTests(unittest.TestCase):
+    def test_constructor_color_is_passed_in_the_single_family_creation(self):
+        handle = Mock()
+        for context in (None, Mock()):
+            with patch.object(handles, "_create_family_handle", return_value=handle) as create, \
+                 patch.object(handles, "_new_membership_batch", return_value=Mock()), \
+                 patch.object(handles, "_live_constructor_context", return_value=context):
+                group = compat.Group(color=compat._base.GREEN)
+            expected = (compat._base.GREEN.red, compat._base.GREEN.green,
+                        compat._base.GREEN.blue, compat._base.GREEN.alpha)
+            if context is None:
+                self.assertEqual(create.call_args.args[1:], (0.0, *expected))
+                handle.setOwnColor.assert_not_called()
+            else:
+                context.liveCreateFamily.assert_not_called()
+                self.assertEqual(context.liveCreateFamilyWithColor.call_args.args[1:], (0.0, *expected))
+
+    def test_invalid_constructor_color_rejects_before_family_allocation(self):
+        with patch.object(handles, "_create_family_handle") as create, \
+             patch.object(handles, "_new_membership_batch") as batch:
+            with self.assertRaises((TypeError, ValueError)):
+                compat.Group(color=object())
+        create.assert_not_called()
+        batch.assert_not_called()
+
+
     def test_root_only_color_uses_one_shared_root_operation(self):
         group = identity_only_wrapper(compat.Group, submobjects=[])
         group._semantic_family_handle = Mock()
