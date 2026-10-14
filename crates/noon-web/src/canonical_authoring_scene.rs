@@ -5373,6 +5373,7 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            reverse_rate_function: bool,
         ) -> Result<(), JsValue> {
             let entering_id = if object_id.is_empty() {
                 None
@@ -5382,7 +5383,8 @@ mod wasm {
             self.children.push(OrdinaryCompositionChild::Create {
                 entering_id,
                 target: target.semantic_mobject().clone(),
-                options: Self::options(child_run_time, rate_function)?,
+                options: Self::options(child_run_time, rate_function)?
+                    .reverse_rate_function(reverse_rate_function),
             });
             Ok(())
         }
