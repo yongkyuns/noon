@@ -372,6 +372,18 @@ impl MobjectFamily {
             .map_err(Into::into)
     }
 
+    /// The non-rendered root's authored color, independent of member paint.
+    pub fn own_color(&self) -> Result<crate::Color, AuthoringError> {
+        self.validate()?;
+        Ok(self
+            .store
+            .borrow()
+            .node(self.node)
+            .expect("validated family")
+            .family_color()
+            .expect("family state"))
+    }
+
     /// Authored aggregate world-space bounds center for this family's leaves.
     pub fn world_center(&self) -> Result<noon_core::SemanticVec3, AuthoringError> {
         crate::world_affine::target_world_center(&self.store, MobjectTarget::Family(self))

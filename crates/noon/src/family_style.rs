@@ -211,7 +211,60 @@ impl MobjectFamily {
         blue: f64,
         alpha: f64,
     ) -> Result<(), AuthoringError> {
-        self.edit_style(|style| edit_color(style, red, green, blue, alpha))
+        self.color_transaction(red, green, blue, alpha, true)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    /// Change this root without recoloring any descendant.
+    pub fn set_own_color(
+        &self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.color_transaction(red, green, blue, alpha, false)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn color_transaction(
+        &self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        recursive: bool,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.validate()?;
+        // The established shared paint edit validates all channels before any staging.
+        edit_color(&mut SemanticStyle::default(), red, green, blue, alpha)?;
+        let color = Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        let mut transaction = if recursive {
+            self.style_transaction(|style| edit_color(style, red, green, blue, alpha))?
+        } else {
+            SemanticMutationTransaction::new()
+        };
+        let store = self.integration_store().borrow();
+        let nodes = if recursive {
+            store.ordered_last_occurrence_authoring_nodes(self.node_id())?
+        } else {
+            vec![self.node_id()]
+        };
+        for node in nodes {
+            if let Some(previous) = store
+                .node(node)
+                .and_then(noon_core::SemanticNode::family_color)
+            {
+                if previous != color {
+                    transaction.set_family_color(node, color);
+                }
+            }
+        }
+        Ok(transaction)
     }
 
     /// Match a donor leaf's authored RGB through one unique-leaf transaction.
