@@ -23,6 +23,22 @@ _OPTIONAL_NAMESPACE_PACKAGES = {
 }
 
 _OPTIONAL_HELPER_PACKAGES = {
+    "quaternion_from_angle_axis": "numpy",
+    "angle_axis_from_quaternion": "numpy",
+    "quaternion_conjugate": "numpy",
+    "thick_diagonal": "numpy",
+    "rotation_about_z": "numpy",
+    "cartesian_to_spherical": "numpy",
+    "spherical_to_cartesian": "numpy",
+    "complex_to_R3": "numpy",
+    "complex_func_to_R3_func": "numpy",
+    "center_of_mass": "numpy",
+    "midpoint": "numpy",
+    "normalize": "numpy",
+    "angle_of_vector": "numpy",
+    "angle_between_vectors": "numpy",
+    "shoelace": "numpy",
+    "shoelace_direction": "numpy",
     "binary_search": "numpy",
     "sigmoid": "numpy",
     "inverse_interpolate": "numpy",
