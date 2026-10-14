@@ -25,6 +25,18 @@ Unknown inputs, mixed changes, missing history and classification failures retai
 full qualification. PR and manual runs remain full when selected. Recovery and
 playback workflows keep isolated web unit-test edits in preflight as well.
 
+## Required GPU numerical checks
+
+Linux jobs that set `NOON_REQUIRE_GPU_TESTS=1` must install both `libvulkan1`
+and `mesa-vulkan-drivers` before invoking the native renderer tests. The loader
+and Mesa software adapter are required even when a later Playwright step installs
+browser system packages. Missing adapters must remain a failure of the required
+numerical gate; a skipped test does not qualify the production shader.
+
+Software-adapter pixel/coverage checks establish numerical rendering behavior.
+They do not qualify physical-device frame pacing or imply a renderer speedup.
+Retain the original failure and measure the candidate on its exact source.
+
 ## Local architecture and iteration gate
 
 The #1272 R3/R4 guardrails are owned by #961. The ordinary local command remains
