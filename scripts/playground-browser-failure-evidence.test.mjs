@@ -1,8 +1,61 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence, parsePlaywrightWebKitProcesses } from "./playground-browser-failure-evidence.mjs";
+import { captureAttemptedPage, captureChildProcessDiagnostics, createBrowserFailureTrace, createNativeWebKitEvidence, parsePlaywrightWebKitProcesses } from "./playground-browser-failure-evidence.mjs";
+
+test("file-server diagnostics retain bounded output and exact process failure", () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = 42;
+  const trace = captureChildProcessDiagnostics(child, { maxOutputChars: 12 });
+  child.stdout.emit("data", Buffer.from("old serving log"));
+  child.stderr.emit("data", Buffer.from("old GET logs\n"));
+  child.stderr.emit("data", Buffer.from("Broken pipe!"));
+  child.emit("error", new Error("bind failed"));
+  child.exitCode = 1;
+  const first = trace.snapshot();
+  assert.equal(first.pid, 42);
+  assert.equal(first.exitCode, 1);
+  assert.equal(first.stderrTail, "Broken pipe!");
+  assert.equal(first.stdoutTail.length, 12);
+  assert.equal(first.error, "Error: bind failed");
+  child.stdout.emit("data", Buffer.from("next"));
+  assert.equal(first.stdoutTail.length, 12);
+  assert.notEqual(trace.snapshot().stdoutTail, first.stdoutTail);
+});
+
+test("file-server diagnostics observe a real exiting child without restarting it", async () => {
+  const child = spawn(process.execPath, ["-e",
+    "process.stdout.write('Serving test'); process.stderr.write('WASM GET aborted'); process.exitCode = 7"],
+  { stdio: ["ignore", "pipe", "pipe"] });
+  const trace = captureChildProcessDiagnostics(child);
+  try {
+    await new Promise(resolve => child.once("close", resolve));
+    const observed = trace.snapshot();
+    assert.equal(observed.exitCode, 7);
+    assert.equal(observed.stdoutTail, "Serving test");
+    assert.equal(observed.stderrTail, "WASM GET aborted");
+    assert.equal(observed.error, null);
+  } finally {
+    trace.dispose();
+  }
+});
+
+test("file-server diagnostic cleanup preserves unrelated listeners and tolerates absent streams", () => {
+  const child = new EventEmitter(); child.stdout = new EventEmitter();
+  const unrelated = () => {};
+  child.stdout.on("data", unrelated);
+  const trace = captureChildProcessDiagnostics(child);
+  assert.equal(child.stdout.listenerCount("data"), 2);
+  trace.dispose(); trace.dispose();
+  assert.deepEqual(child.stdout.listeners("data"), [unrelated]);
+  assert.deepEqual(trace.snapshot(), { pid: null, exitCode: null, signalCode: null,
+    error: null, stdoutTail: "", stderrTail: "" });
+  for (const maxOutputChars of [0, -1, 1.5, 64_001]) {
+    assert.throws(() => captureChildProcessDiagnostics(child, { maxOutputChars }), RangeError);
+  }
+});
 
 test("records browser death independently from page evaluation and with exact phase", () => {
   let time = 2000;

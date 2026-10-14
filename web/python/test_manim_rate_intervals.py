@@ -10,6 +10,19 @@ import _manim_rate_functions as rates
 
 
 class RateIntervals(unittest.TestCase):
+    def test_public_rate_module_preserves_callable_identity_and_shared_recognition(self):
+        from types import ModuleType
+        self.assertIsInstance(noon.rate_functions, ModuleType)
+        self.assertIs(noon.rate_functions, rates)
+        for power in ("quad", "cubic", "quart", "quint"):
+            for direction in ("in", "out", "in_out"):
+                name = f"ease_{direction}_{power}"
+                function = getattr(noon.rate_functions, name)
+                self.assertIs(function, getattr(rates, name))
+                self.assertNotIn(name, noon.__all__)
+                self.assertFalse(hasattr(noon, name))
+                self.assertEqual(rates.easing_from_rate_func(function), name)
+
     def test_public_evaluation_uses_pinned_boundary_rules(self):
         for function in [noon.linear, noon.smooth, noon.rush_into, noon.rush_from]:
             for value in [-math.inf, -0.01]: self.assertEqual(function(value), 0)
