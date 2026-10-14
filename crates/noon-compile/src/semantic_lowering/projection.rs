@@ -117,6 +117,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::DecimalNumber { .. }
                 | SemanticMutationImpact::TextPresentationBaseline { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
+                | SemanticMutationImpact::FamilyColor { .. }
                 | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }

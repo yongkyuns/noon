@@ -64,11 +64,17 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     let pairs = match pairing {
         Ok(pairs) => pairs,
         Err(noon_core::SemanticFamilyPairingError::Empty) => {
-            return crate::path_editing::PreparedPathEdits::prepare(
-                &source.integration_store().borrow(),
-                Vec::new(),
-            )
-            .map_err(E::from);
+            let store = source.integration_store().borrow();
+            let mut transaction = SemanticMutationTransaction::new();
+            stage_paired_family_colors(
+                &store,
+                &mut transaction,
+                source.node_id(),
+                target.node_id(),
+            )?;
+            return crate::path_editing::PreparedPathEdits::prepare(&store, Vec::new())
+                .map(|prepared| prepared.with_transaction(transaction))
+                .map_err(E::from);
         }
         Err(
             noon_core::SemanticFamilyPairingError::TopologyMismatch { .. }
@@ -93,6 +99,7 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     let store = source.integration_store().borrow();
     let targets = prepare_become_states(&store, &sources, targets, options)?;
     let mut transaction = SemanticMutationTransaction::new();
+    stage_paired_family_colors(&store, &mut transaction, source.node_id(), target.node_id())?;
     let mut replacements = Vec::new();
     let mut staged = HashMap::<SemanticNodeId, SemanticObjectState>::new();
     for ((source, target_id), (mut target, path)) in pairs.into_iter().zip(targets) {
@@ -119,10 +126,51 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     )
 }
 
+/// Shared metadata pairing for become and equal-topology animation completion.
+pub(crate) fn paired_family_colors(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<Vec<(SemanticNodeId, crate::Color)>, AuthoringError> {
+    store
+        .ordered_family_root_pairs(source, target)
+        .map_err(AuthoringError::from)?
+        .into_iter()
+        .map(|(source, target)| {
+            Ok((
+                source,
+                store
+                    .node(target)
+                    .and_then(noon_core::SemanticNode::family_color)
+                    .ok_or_else(|| {
+                        AuthoringError::from(noon_core::SemanticFamilyPairingError::UnknownNode(
+                            target,
+                        ))
+                    })?,
+            ))
+        })
+        .collect()
+}
+
+fn stage_paired_family_colors(
+    store: &SemanticStore,
+    transaction: &mut SemanticMutationTransaction,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<(), AuthoringError> {
+    for (source, color) in paired_family_colors(store, source, target)? {
+        transaction.set_family_color(source, color);
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 enum PersistentTargetNode {
     Object,
-    Family { members: Vec<SemanticNodeId> },
+    Family {
+        members: Vec<SemanticNodeId>,
+        own_color: crate::Color,
+    },
 }
 
 /// Select receiver metadata for synthesized expansion nodes using the same repeat
@@ -178,8 +226,9 @@ impl<'a> PersistentFamilyReconcile<'a> {
         })?;
         match node.kind() {
             SemanticNodeKind::AuthoringObject => Ok(PersistentTargetNode::Object),
-            SemanticNodeKind::Family(_) => Ok(PersistentTargetNode::Family {
+            SemanticNodeKind::Family(state) => Ok(PersistentTargetNode::Family {
                 members: node.members_iter().collect(),
+                own_color: state.own_color,
             }),
             _ => Err(AuthoringError::from(
                 noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(target),
@@ -260,7 +309,7 @@ impl<'a> PersistentFamilyReconcile<'a> {
                 self.target_to_receiver.insert(target, receiver);
                 Ok(receiver)
             }
-            PersistentTargetNode::Family { members } => {
+            PersistentTargetNode::Family { members, own_color } => {
                 let (receiver, reused, prototype_members) = if let Some(source) = reusable {
                     self.source_to_target.insert(source, target);
                     (
@@ -275,7 +324,7 @@ impl<'a> PersistentFamilyReconcile<'a> {
                         .and_then(|node| match node.kind() {
                             SemanticNodeKind::Family(presentation) => Some((
                                 node.members_iter().collect::<Vec<_>>(),
-                                presentation.z_index,
+                                presentation.presentation.z_index,
                             )),
                             _ => None,
                         })
@@ -289,6 +338,7 @@ impl<'a> PersistentFamilyReconcile<'a> {
                         prototype_members,
                     )
                 };
+                self.transaction.set_family_color(receiver, own_color);
                 // Publish the mapping before descending so aliases in the target
                 // DAG converge on exactly one receiver-owned identity.
                 self.target_to_receiver.insert(target, receiver);

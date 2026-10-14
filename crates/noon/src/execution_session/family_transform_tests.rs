@@ -1432,3 +1432,159 @@ fn matching_partial_foreground_source_rejects_before_publication() {
     assert_eq!(store.node(root).unwrap().foreground_members(), [b]);
     assert!(session.take_frame_changes().is_empty());
 }
+
+#[test]
+fn own_family_color_stays_authored_until_transform_completion() {
+    let mut store = SemanticStore::new();
+    let source_leaf = object(&mut store, 0.0);
+    let target_leaf = object(&mut store, 1.0);
+    let source = family(&mut store, &[source_leaf]);
+    let target = family(&mut store, &[target_leaf]);
+    let mut color = noon_core::SemanticMutationTransaction::new();
+    color.set_family_color(target, noon_core::Color::BLUE);
+    color.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyMethodTargetTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+    for time in [0.0, 0.25, 0.5, 0.75] {
+        session.advance_segment_to(segment, time).unwrap();
+        assert_eq!(
+            store.node(source).unwrap().family_color(),
+            Some(noon_core::Color::WHITE)
+        );
+    }
+    session.advance_segment_to(segment, 1.0).unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store.node(source).unwrap().family_color(),
+        Some(noon_core::Color::BLUE)
+    );
+}
+
+#[test]
+fn nested_family_metadata_releases_once_at_animation_completion() {
+    let mut store = SemanticStore::new();
+    let source_leaf = object(&mut store, 0.0);
+    let target_leaf = object(&mut store, 1.0);
+    let source_child = family(&mut store, &[source_leaf]);
+    let target_child = family(&mut store, &[target_leaf]);
+    let source = family(&mut store, &[source_child, source_child]);
+    let target = family(&mut store, &[target_child, target_child]);
+    let mut color = noon_core::SemanticMutationTransaction::new();
+    color
+        .set_family_color(target, noon_core::Color::BLUE)
+        .set_family_color(target_child, noon_core::Color::RED);
+    color.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyMethodTargetTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        store.node(source_child).unwrap().family_color(),
+        Some(noon_core::Color::WHITE)
+    );
+    session.advance_segment_to(segment, 1.0).unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store.node(source).unwrap().family_color(),
+        Some(noon_core::Color::BLUE)
+    );
+    assert_eq!(
+        store.node(source_child).unwrap().family_color(),
+        Some(noon_core::Color::RED)
+    );
+}
+
+#[test]
+fn ordinary_family_transform_preserves_root_color_like_pinned_manim() {
+    let mut store = SemanticStore::new();
+    let source_leaf = object(&mut store, 0.0);
+    let target_leaf = object(&mut store, 1.0);
+    let source = family(&mut store, &[source_leaf]);
+    let target = family(&mut store, &[target_leaf]);
+    let mut color = noon_core::SemanticMutationTransaction::new();
+    color.set_family_color(target, noon_core::Color::BLUE);
+    color.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+    for time in [0.0, 0.25, 0.5, 0.75] {
+        session.advance_segment_to(segment, time).unwrap();
+        assert_eq!(
+            store.node(source).unwrap().family_color(),
+            Some(noon_core::Color::WHITE)
+        );
+    }
+    session.advance_segment_to(segment, 1.0).unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store.node(source).unwrap().family_color(),
+        Some(noon_core::Color::WHITE)
+    );
+}
+
+#[test]
+fn ordinary_nested_family_transform_preserves_all_source_root_colors() {
+    let mut store = SemanticStore::new();
+    let source_leaf = object(&mut store, 0.0);
+    let target_leaf = object(&mut store, 1.0);
+    let source_child = family(&mut store, &[source_leaf]);
+    let target_child = family(&mut store, &[target_leaf]);
+    let source = family(&mut store, &[source_child, source_child]);
+    let target = family(&mut store, &[target_child, target_child]);
+    let mut color = noon_core::SemanticMutationTransaction::new();
+    color
+        .set_family_color(target, noon_core::Color::BLUE)
+        .set_family_color(target_child, noon_core::Color::RED);
+    color.apply(&mut store).unwrap();
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        store.node(source_child).unwrap().family_color(),
+        Some(noon_core::Color::WHITE)
+    );
+    session.advance_segment_to(segment, 1.0).unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store.node(source).unwrap().family_color(),
+        Some(noon_core::Color::WHITE)
+    );
+    assert_eq!(
+        store.node(source_child).unwrap().family_color(),
+        Some(noon_core::Color::WHITE)
+    );
+}

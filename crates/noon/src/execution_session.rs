@@ -124,6 +124,7 @@ impl AnimationAdmissions {
 
 /// Mutable transaction state shared while recursively staging a composition.
 struct CompositionStaging<'a> {
+    family_colors: &'a mut std::collections::BTreeMap<SemanticNodeId, noon_core::Color>,
     declaration: &'a mut SemanticMutationTransaction,
     admitted: &'a mut AnimationAdmissions,
     removals: &'a mut Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
@@ -156,6 +157,7 @@ enum PreparedAnimationLifecycle {
     Composition {
         root: SemanticNodeId,
         admits: bool,
+        family_colors: Vec<(SemanticNodeId, noon_core::Color)>,
         removals: Vec<(SemanticNodeId, SemanticTransactionNodeRef)>,
         callback_intervals: Vec<(
             noon_core::SemanticLocalNodeToken,
@@ -204,6 +206,11 @@ pub(crate) enum SemanticCompositionRequest {
         options: AnimationOptions,
     },
     FamilyTransformTo {
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    },
+    FamilyMethodTargetTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
         options: AnimationOptions,
@@ -334,6 +341,7 @@ impl SemanticCompositionRequest {
             | Self::WorldTransform { target: source, .. }
             | Self::CameraProfile { target: source, .. }
             | Self::FamilyTransformTo { source, .. }
+            | Self::FamilyMethodTargetTo { source, .. }
             | Self::MatchingFamilyTransformTo { source, .. }
             | Self::MatchingSourceFamilyTransformTo { source, .. } => Some(*source),
             Self::CallbackInterval { target, .. } => Some(*target),
@@ -1685,6 +1693,7 @@ impl ExecutionSession {
                 lifecycle_root: None,
                 lifecycle_removals: Vec::new(),
                 family_transform: None,
+                family_colors: Vec::new(),
                 object_entries: completions,
                 scalar_entries: Vec::new(),
             },
@@ -2011,6 +2020,7 @@ impl ExecutionSession {
                 lifecycle_root: None,
                 lifecycle_removals: Vec::new(),
                 family_transform: None,
+                family_colors: Vec::new(),
                 object_entries: Vec::new(),
                 scalar_entries: vec![ScalarSegmentCompletionEntry {
                     signal,
@@ -2102,11 +2112,13 @@ impl ExecutionSession {
         let mut admitted = AnimationAdmissions::default();
         let mut removals = Vec::new();
         let mut callback_intervals = Vec::new();
+        let mut family_colors = std::collections::BTreeMap::new();
         let animation = self.stage_composition_request(
             store,
             root,
             request,
             CompositionStaging {
+                family_colors: &mut family_colors,
                 declaration: &mut declaration,
                 admitted: &mut admitted,
                 removals: &mut removals,
@@ -2123,6 +2135,7 @@ impl ExecutionSession {
             Some(PreparedAnimationLifecycle::Composition {
                 root,
                 admits: !admitted.is_empty(),
+                family_colors: family_colors.into_iter().collect(),
                 removals,
                 callback_intervals,
             }),
@@ -2190,6 +2203,7 @@ impl ExecutionSession {
         reuse_compatible_admission: bool,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         let CompositionStaging {
+            family_colors,
             declaration,
             admitted,
             removals,
@@ -2388,6 +2402,11 @@ impl ExecutionSession {
                 source,
                 target_state,
                 options,
+            }
+            | SemanticCompositionRequest::FamilyMethodTargetTo {
+                source,
+                target_state,
+                options,
             } => {
                 let is_flat_family = |family: SemanticNodeId| {
                     store
@@ -2409,6 +2428,38 @@ impl ExecutionSession {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
                         "curved family Transform requires matching flat family topology".into(),
                     ));
+                }
+
+                // Manim ordinary Transform excludes non-rendered group roots.
+                // Method targets finish with become-style metadata handoff instead.
+                if matches!(
+                    request,
+                    SemanticCompositionRequest::FamilyMethodTargetTo { .. }
+                ) {
+                    let colors = match crate::state_replacement::paired_family_colors(
+                        store,
+                        *source,
+                        *target_state,
+                    ) {
+                        Ok(colors) => colors,
+                        Err(error) if is_flat_family(*source) && is_flat_family(*target_state) => {
+                            let color = store
+                                .node(*target_state)
+                                .and_then(noon_core::SemanticNode::family_color)
+                                .ok_or_else(|| {
+                                    ExecutionSessionAnimationError::InvalidComposition(
+                                        error.to_string(),
+                                    )
+                                })?;
+                            vec![(*source, color)]
+                        }
+                        Err(error) => {
+                            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                                error.to_string(),
+                            ))
+                        }
+                    };
+                    family_colors.extend(colors);
                 }
 
                 // Straight flat family transforms must share one correspondence/lifecycle
@@ -2458,6 +2509,7 @@ impl ExecutionSession {
                         // `path_arc` is Transform payload meaning, not composition
                         // timing. Each aligned leaf owns the same deterministic arc.
                         composition_options.path_arc = None;
+
                         let expanded = SemanticCompositionRequest::Composition {
                             kind: SemanticAnimationCompositionKind::Parallel,
                             children: pairs
@@ -2480,6 +2532,7 @@ impl ExecutionSession {
                             root,
                             &expanded,
                             CompositionStaging {
+                                family_colors: &mut *family_colors,
                                 declaration,
                                 admitted,
                                 removals,
@@ -2610,6 +2663,7 @@ impl ExecutionSession {
                                     .introducer(introducer),
                             },
                             CompositionStaging {
+                                family_colors: &mut *family_colors,
                                 declaration,
                                 admitted,
                                 removals,
@@ -3108,6 +3162,7 @@ impl ExecutionSession {
                             root,
                             child,
                             CompositionStaging {
+                                family_colors: &mut *family_colors,
                                 declaration,
                                 admitted,
                                 removals,
@@ -4524,6 +4579,18 @@ impl ExecutionSession {
                 })
             });
 
+        // Only explicitly declared family method targets release root metadata.
+        // Ordinary structural and matching Transform preserve source own color.
+        let mut family_colors = std::collections::BTreeMap::new();
+        if let Some(PreparedAnimationLifecycle::Composition {
+            family_colors: staged,
+            ..
+        }) = lifecycle.as_ref()
+        {
+            family_colors.extend(staged.iter().copied());
+        }
+        let family_colors = family_colors.into_iter().collect();
+
         self.next_activation_track_id = next_track_id;
         self.derived_display_plan = derived_display_plan;
         self.derived_display_objects.clear();
@@ -4576,6 +4643,7 @@ impl ExecutionSession {
                             .collect(),
                     },
                     family_transform: family_transform_completion,
+                    family_colors,
                     object_entries: entries,
                     scalar_entries: scalar_completions.into_values().collect(),
                 },

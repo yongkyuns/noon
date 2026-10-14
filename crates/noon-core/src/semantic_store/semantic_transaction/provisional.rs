@@ -299,12 +299,29 @@ impl<'a> TransactionNodeCatalog<'a> {
         match node {
             SemanticTransactionNodeRef::Existing(node) => {
                 match self.store.node(node).expect("validated node").kind() {
-                    SemanticNodeKind::Family(presentation) => Some(presentation.z_index),
+                    SemanticNodeKind::Family(presentation) => {
+                        Some(presentation.presentation.z_index)
+                    }
                     _ => None,
                 }
             }
             SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
                 PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(0.0),
+                _ => None,
+            },
+        }
+    }
+
+    pub(super) fn family_color(&self, node: SemanticTransactionNodeRef) -> Option<crate::Color> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => self
+                .store
+                .node(node)
+                .and_then(crate::SemanticNode::family_color),
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => {
+                    Some(crate::Color::WHITE)
+                }
                 _ => None,
             },
         }
@@ -670,6 +687,7 @@ pub(super) fn duplicate_mutation_error(
         | SemanticMutationKey::DecimalNumber(object)
         | SemanticMutationKey::TextPresentationBaseline(object)
         | SemanticMutationKey::ObjectStyle(object)
+        | SemanticMutationKey::FamilyColor(object)
         | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
         | SemanticMutationKey::NodeRemoval(object) => match object {
@@ -730,6 +748,9 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::TextPresentationBaseline(SemanticTransactionNodeRef::Existing(
             object,
         )) => SemanticMutationTransactionError::DuplicateContent { index, object },
+        SemanticMutationKey::FamilyColor(SemanticTransactionNodeRef::Existing(node)) => {
+            SemanticMutationTransactionError::DuplicateFamilyColor { index, node }
+        }
         SemanticMutationKey::ZIndex(SemanticTransactionNodeRef::Existing(node)) => {
             SemanticMutationTransactionError::DuplicateZIndex { index, node }
         }
