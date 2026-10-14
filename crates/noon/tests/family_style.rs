@@ -371,3 +371,50 @@ fn copied_and_become_family_metadata_preserve_aliases_and_independence() {
         .unwrap();
     assert_eq!(empty.own_color().unwrap(), Color::rgba(0.0, 0.0, 1.0, 1.0));
 }
+
+#[test]
+fn initial_family_color_and_membership_publish_atomically_without_leaf_recolor() {
+    let mut scene = Scene::new();
+    let leaf = scene.square(0.5).unwrap();
+    let before = leaf.state().unwrap();
+    let revision = scene.revision();
+    let family = MobjectFamily::create_with_own_color(
+        scene.integration_store().clone(),
+        &[(&leaf).into()],
+        3.0,
+        Color::GREEN,
+    )
+    .unwrap();
+    assert_eq!(family.own_color().unwrap(), Color::GREEN);
+    assert_eq!(leaf.state().unwrap(), before);
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let revision = scene.revision();
+    assert!(MobjectFamily::create_with_own_color(
+        scene.integration_store().clone(),
+        &[(&leaf).into()],
+        3.0,
+        Color::rgba(f32::NAN, 0.0, 0.0, 1.0)
+    )
+    .is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(leaf.state().unwrap(), before);
+    scene.add(&leaf).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let revision = scene.revision();
+    let live_family = noon::integration::publish_family_creation_with_color(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        &[(&leaf).into()],
+        4.0,
+        Color::BLUE,
+    )
+    .unwrap();
+    assert_eq!(live_family.own_color().unwrap(), Color::BLUE);
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(
+        session.publication_context().scene_revision(),
+        scene.revision()
+    );
+    assert_eq!(leaf.state().unwrap(), before);
+}

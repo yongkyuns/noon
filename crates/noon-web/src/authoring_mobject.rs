@@ -517,6 +517,26 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = createFamilyWithColor)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn create_family_with_color(
+            &self,
+            batch: crate::WasmSceneMembershipBatch,
+            z_index: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+            let color = super::family_color(true, red, green, blue, alpha)
+                .map_err(js_error)?
+                .expect("required family color");
+            batch
+                .create_family_with_color(Rc::clone(&self.semantics), z_index, color)
+                .map(WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = createFamily)]
         pub fn create_family(
             &self,
