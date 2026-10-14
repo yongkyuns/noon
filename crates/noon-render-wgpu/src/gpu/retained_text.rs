@@ -4596,7 +4596,7 @@ mod tests {
     }
 
     #[test]
-    fn subpixel_glyph_topology_stays_local_and_reuses_storage() {
+    fn cairo_subpixel_glyphs_stay_local_without_empty_space_phase_churn() {
         use noon_text::shaping::{NativeFontFace, NativeTextCompiler, NativeTextOptions};
 
         // Obtain the repository-bundled face through the existing Typst provider,
@@ -4616,8 +4616,36 @@ mod tests {
         let artifact = NativeTextCompiler::new()
             .compile_plain("TRACK 01", &font, &NativeTextOptions::new(10.0))
             .unwrap();
+        assert!(artifact
+            .resource
+            .runs
+            .iter()
+            .all(|run| run.outline_profile == noon_core::GlyphOutlineProfile::Cairo));
+        check_subpixel_glyph_locality(artifact.resource, artifact.fonts, false);
+    }
+
+    #[test]
+    fn natural_subpixel_glyph_topology_stays_local_and_reuses_storage() {
+        let artifact = compile_typst_resource(
+            "#set text(font: \"DejaVu Sans Mono\", size: 10pt)\nTRACK 01",
+            TypstMode::Markup,
+        )
+        .unwrap();
+        assert!(artifact
+            .resource
+            .runs
+            .iter()
+            .all(|run| run.outline_profile == noon_core::GlyphOutlineProfile::Font));
+        check_subpixel_glyph_locality(artifact.resource, artifact.fonts, true);
+    }
+
+    fn check_subpixel_glyph_locality(
+        resource: noon_core::TextResource,
+        fonts: FontResourceArena,
+        phase_churn: bool,
+    ) {
         let mut texts = TextResourceArena::new();
-        let text = texts.insert(artifact.resource).unwrap();
+        let text = texts.insert(resource).unwrap();
         let (mut frame, _, _, geometries) = geometry_and_fast_text_frame();
         frame.objects[1].content = ObjectContentRef::Text(text);
         frame.objects[1].transform = Transform2D {
@@ -4664,7 +4692,7 @@ mod tests {
                     &frame,
                     &changes,
                     &texts,
-                    &artifact.fonts,
+                    &fonts,
                     &geometries,
                     metrics,
                     Some(&[1, 2]),
@@ -4679,7 +4707,7 @@ mod tests {
                     &frame,
                     &FrameChanges::all(),
                     &texts,
-                    &artifact.fonts,
+                    &fonts,
                     &geometries,
                     metrics,
                     Some(&[1, 2]),
@@ -4790,10 +4818,17 @@ mod tests {
                 assert_eq!(actual.geometry_stats().path_vertices_repacked, 0);
             }
         }
-        assert!(
-            topology_changes > 0,
-            "fixture must cross empty/nonempty glyph phases"
-        );
+        if phase_churn {
+            assert!(
+                topology_changes > 0,
+                "natural fixture must cross empty/image glyph phases"
+            );
+        } else {
+            assert_eq!(
+                topology_changes, 0,
+                "empty Cairo whitespace stays empty at every phase"
+            );
+        }
         assert_eq!(retained.text.incremental_stats().phase_fallbacks, 0);
         assert_eq!(retained.incremental_stats().mixed_order_rebuilds, 1);
         assert_eq!(retained.incremental_stats().text_snapshot_copies, 1);
