@@ -692,6 +692,39 @@ mod tests {
     }
 
     #[test]
+    fn font_metrics_profiles_do_not_alias_cached_masks() {
+        let bytes = typst_assets::fonts()
+            .find(|data| data.starts_with(&[0, 1, 0, 0]))
+            .unwrap();
+        let face = NativeFontFace::new("TT", Arc::<[u8]>::from(bytes), 0).unwrap();
+        let artifact = NativeTextCompiler::new()
+            .compile_plain("A", &face, &NativeTextOptions::new(42.0))
+            .unwrap();
+        let mut run = artifact.resource.runs[0].clone();
+        let glyph = run.glyphs[0].glyph_id;
+        let mut cache = GlyphRasterCache::new();
+        let portable = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph, 48.0)
+            .unwrap();
+        run.outline_profile = GlyphOutlineProfile::CairoCoreText;
+        let fractional = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph, 48.0)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&portable, &fractional));
+        let repeated = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph, 48.0)
+            .unwrap();
+        assert!(Arc::ptr_eq(&fractional, &repeated));
+        run.font_size = 17.3;
+        let resized = cache
+            .get_or_rasterize(&artifact.fonts, &run, glyph, 48.0)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&fractional, &resized));
+        assert_eq!(cache.stats().misses, 3);
+        assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
     fn cairo_masks_cover_the_same_authored_paths_at_device_scales_and_phases() {
         let bytes = typst_assets::fonts()
             .find(|data| data.starts_with(&[0, 1, 0, 0]))
