@@ -46,7 +46,7 @@
         0.7666666666666666,
         0.9666666666666667
       ],
-      "notes": "Three existing shared method-target tracks use pinned polynomial rate functions; current source/raster qualification is required."
+      "notes": "Five shared method-target tracks exercise three polynomial rates plus slow_into and double_smooth at unchanged sample times; current source/raster qualification is required."
     },
     {
       "id": "math-table",

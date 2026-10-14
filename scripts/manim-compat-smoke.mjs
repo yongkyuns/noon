@@ -452,7 +452,7 @@ class SharedRateFunctions(Scene):
         self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=rush_into)
         self.play(circle.animate.shift(RIGHT), run_time=0.2, rate_func=rush_from)
         self.play(circle.animate.shift(LEFT), run_time=0.2, rate_func=there_and_back)
-        for rate in [smoothstep, smootherstep, smoothererstep]:
+        for rate in [smoothstep, smootherstep, smoothererstep, slow_into, double_smooth]:
             self.play(circle.animate.shift(RIGHT), run_time=0.2, rate_func=rate)
 `;
 
@@ -620,6 +620,12 @@ assert quaternion_mult(quaternion) is quaternion
 assert quaternion_conjugate(quaternion).tolist() == [1, -2, -3, -4]
 assert cartesian_to_spherical([0, 0, 0]).tolist() == [0, 0, 0]
 assert thick_diagonal(3, 1).tolist() == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+from noon import line_intersection, find_intersection
+np = __import__("numpy")
+assert line_intersection([[0, 0, 0], [2, 2, 0]], [[0, 2, 0], [2, 0, 0]]).tolist() == [1, 1, 0]
+assert find_intersection(np.array([[0, 0, 0]]), np.array([[1, 0, 0]]),
+                         np.array([[1, 2, 3]]), np.array([[0, 1, 0]]))[0].tolist() == [1, 0, 0]
+
 assert not __import__("numpy").shares_memory(stretched, array)
 try:
     stretch(array, 1)

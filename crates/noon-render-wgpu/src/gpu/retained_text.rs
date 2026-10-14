@@ -24,12 +24,11 @@ use noon_core::{
 #[cfg(test)]
 use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena, TextVectorStyle};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RendererPublication};
-use noon_text::shaping::{outline_commands_to_path, unhinted_glyph_scaler};
+use noon_text::outline::{outline_commands_to_path, GlyphOutlineContext};
 #[cfg(test)]
 use noon_typst::{compile_typst_resource, TypstMode};
 use swash::{
-    scale::ScaleContext,
-    zeno::{self, Cap as ZenoCap, Command as ZenoCommand, Join as ZenoJoin, PathData},
+    zeno::{self, Cap as ZenoCap, Command as ZenoCommand, Join as ZenoJoin},
     CacheKey, FontRef, GlyphId,
 };
 
@@ -651,7 +650,7 @@ pub(super) struct OutlineKey {
     pub(super) font: FontResourceHandle,
     glyph_id: GlyphId,
     pub(super) size_bits: u32,
-    pub(super) variation_fingerprint: u64,
+    pub(super) outline_fingerprint: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -716,7 +715,7 @@ enum OutlineResidencyKey {
 }
 
 pub(super) struct GlyphOutlineCache {
-    scale_context: ScaleContext,
+    outline_context: GlyphOutlineContext,
     faces: HashMap<FontResourceHandle, SwashFace>,
     face_entry_counts: HashMap<FontResourceHandle, usize>,
     outlines: HashMap<OutlineKey, CachedOutline>,
@@ -749,7 +748,7 @@ impl Default for GlyphOutlineCache {
 impl GlyphOutlineCache {
     pub(super) fn with_limits(limits: GlyphOutlineCacheLimits) -> Self {
         Self {
-            scale_context: ScaleContext::new(),
+            outline_context: GlyphOutlineContext::default(),
             faces: HashMap::new(),
             face_entry_counts: HashMap::new(),
             outlines: HashMap::new(),
@@ -947,7 +946,7 @@ impl GlyphOutlineCache {
             font: font_handle,
             glyph_id,
             size_bits: run.font_size.to_bits(),
-            variation_fingerprint: variation_fingerprint(run),
+            outline_fingerprint: outline_fingerprint(run),
         };
         if let Some(path) = self.cached_outline(key) {
             return Ok((key, path));
@@ -980,10 +979,17 @@ impl GlyphOutlineCache {
             .iter()
             .map(|setting| (setting.tag, setting.value))
             .collect();
-        let path = unhinted_glyph_scaler(&mut self.scale_context, font, run.font_size, &variations)
-            .scale_outline(glyph_id)
-            .map(|outline| outline_commands_to_path(outline.path().commands()))
-            .unwrap_or_default();
+        let path = self
+            .outline_context
+            .scaler(
+                font,
+                resource.key.face_index,
+                run.font_size,
+                &variations,
+                run.outline_profile,
+            )
+            .and_then(|mut scaler| scaler.outline(glyph_id))
+            .map_err(|_| RetainedPrepareError::InvalidFontData(font_handle))?;
         let path = Arc::new(path);
         self.admit_outline(key, path.clone());
         Ok((key, path))
@@ -3254,8 +3260,10 @@ pub(super) fn append_transformed_path(
     target
 }
 
-pub(super) fn variation_fingerprint(run: &GlyphRun) -> u64 {
+pub(super) fn outline_fingerprint(run: &GlyphRun) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
+    hash ^= run.outline_profile as u64;
+    hash = hash.wrapping_mul(0x100000001b3);
     for setting in run.variations.iter() {
         for byte in setting.tag {
             hash ^= u64::from(byte);
@@ -3282,32 +3290,8 @@ fn stroke_fingerprint(stroke: &TextGlyphStroke) -> u64 {
     hasher.finish()
 }
 
-fn noon_to_zeno(path: &VectorPath) -> Vec<ZenoCommand> {
-    path.commands()
-        .iter()
-        .map(|command| match *command {
-            PathCommand::MoveTo { to } => ZenoCommand::MoveTo(zeno::Point::new(to.x, to.y)),
-            PathCommand::LineTo { to } => ZenoCommand::LineTo(zeno::Point::new(to.x, to.y)),
-            PathCommand::QuadraticTo { control, to } => ZenoCommand::QuadTo(
-                zeno::Point::new(control.x, control.y),
-                zeno::Point::new(to.x, to.y),
-            ),
-            PathCommand::CubicTo {
-                control1,
-                control2,
-                to,
-            } => ZenoCommand::CurveTo(
-                zeno::Point::new(control1.x, control1.y),
-                zeno::Point::new(control2.x, control2.y),
-                zeno::Point::new(to.x, to.y),
-            ),
-            PathCommand::Close => ZenoCommand::Close,
-        })
-        .collect()
-}
-
 fn expand_stroke(path: &VectorPath, stroke: &TextGlyphStroke) -> VectorPath {
-    let source = noon_to_zeno(path);
+    let source: Vec<_> = noon_text::outline::path_commands(path).collect();
     let mut style = zeno::Stroke::new(stroke.width);
     style
         .join(match stroke.join {
@@ -4612,7 +4596,7 @@ mod tests {
     }
 
     #[test]
-    fn subpixel_glyph_topology_stays_local_and_reuses_storage() {
+    fn cairo_subpixel_glyphs_stay_local_without_empty_space_phase_churn() {
         use noon_text::shaping::{NativeFontFace, NativeTextCompiler, NativeTextOptions};
 
         // Obtain the repository-bundled face through the existing Typst provider,
@@ -4632,8 +4616,36 @@ mod tests {
         let artifact = NativeTextCompiler::new()
             .compile_plain("TRACK 01", &font, &NativeTextOptions::new(10.0))
             .unwrap();
+        assert!(artifact
+            .resource
+            .runs
+            .iter()
+            .all(|run| run.outline_profile == noon_core::GlyphOutlineProfile::Cairo));
+        check_subpixel_glyph_locality(artifact.resource, artifact.fonts, false);
+    }
+
+    #[test]
+    fn natural_subpixel_glyph_topology_stays_local_and_reuses_storage() {
+        let artifact = compile_typst_resource(
+            "#set text(font: \"DejaVu Sans Mono\", size: 10pt)\nTRACK 01",
+            TypstMode::Markup,
+        )
+        .unwrap();
+        assert!(artifact
+            .resource
+            .runs
+            .iter()
+            .all(|run| run.outline_profile == noon_core::GlyphOutlineProfile::Font));
+        check_subpixel_glyph_locality(artifact.resource, artifact.fonts, true);
+    }
+
+    fn check_subpixel_glyph_locality(
+        resource: noon_core::TextResource,
+        fonts: FontResourceArena,
+        phase_churn: bool,
+    ) {
         let mut texts = TextResourceArena::new();
-        let text = texts.insert(artifact.resource).unwrap();
+        let text = texts.insert(resource).unwrap();
         let (mut frame, _, _, geometries) = geometry_and_fast_text_frame();
         frame.objects[1].content = ObjectContentRef::Text(text);
         frame.objects[1].transform = Transform2D {
@@ -4680,7 +4692,7 @@ mod tests {
                     &frame,
                     &changes,
                     &texts,
-                    &artifact.fonts,
+                    &fonts,
                     &geometries,
                     metrics,
                     Some(&[1, 2]),
@@ -4695,7 +4707,7 @@ mod tests {
                     &frame,
                     &FrameChanges::all(),
                     &texts,
-                    &artifact.fonts,
+                    &fonts,
                     &geometries,
                     metrics,
                     Some(&[1, 2]),
@@ -4806,10 +4818,17 @@ mod tests {
                 assert_eq!(actual.geometry_stats().path_vertices_repacked, 0);
             }
         }
-        assert!(
-            topology_changes > 0,
-            "fixture must cross empty/nonempty glyph phases"
-        );
+        if phase_churn {
+            assert!(
+                topology_changes > 0,
+                "natural fixture must cross empty/image glyph phases"
+            );
+        } else {
+            assert_eq!(
+                topology_changes, 0,
+                "empty Cairo whitespace stays empty at every phase"
+            );
+        }
         assert_eq!(retained.text.incremental_stats().phase_fallbacks, 0);
         assert_eq!(retained.incremental_stats().mixed_order_rebuilds, 1);
         assert_eq!(retained.incremental_stats().text_snapshot_copies, 1);
@@ -4862,7 +4881,7 @@ mod tests {
             },
             glyph_id,
             size_bits: 24.0_f32.to_bits(),
-            variation_fingerprint: 0,
+            outline_fingerprint: 0,
         }
     }
 
@@ -4910,7 +4929,7 @@ mod tests {
             font,
             glyph_id: GlyphId::try_from(glyph).unwrap(),
             size_bits: 24.0_f32.to_bits(),
-            variation_fingerprint: 0,
+            outline_fingerprint: 0,
         };
 
         let shared_font = font(1);
