@@ -14,7 +14,10 @@ fn empty_path_layout_ignores_pose_until_world_points_exist() {
     assert_eq!(object.width().unwrap(), 0.0);
     assert_eq!(object.height().unwrap(), 0.0);
     assert_eq!(object.critical_point(1.0, -1.0).unwrap(), (0.0, 0.0));
-    assert_eq!(scene.integration_store().borrow().scene_revision(), revision);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
 
     object
         .set_points_as_corners(&[Vec2::new(1.0, 2.0), Vec2::new(3.0, 2.0)])
@@ -41,6 +44,21 @@ fn empty_path_layout_authored_and_live_queries_agree_after_seek() {
         assert_eq!(observed.height, 0.0);
         assert_eq!(observed.center, object.center().unwrap());
     }
+}
+
+#[test]
+fn empty_path_layout_does_not_erase_a_zero_extent_anchor() {
+    let mut scene = Scene::new();
+    let mut object = scene
+        .path(
+            VectorPath::new().move_to(Vec2::ZERO),
+            SemanticStyle::default(),
+        )
+        .unwrap();
+    object.shift(1.25, -2.5).unwrap();
+    assert_eq!(object.center().unwrap(), (1.25, -2.5));
+    assert_eq!(object.width().unwrap(), 0.0);
+    assert_eq!(object.height().unwrap(), 0.0);
 }
 
 #[test]
