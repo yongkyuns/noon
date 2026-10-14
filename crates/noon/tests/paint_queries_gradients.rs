@@ -44,8 +44,13 @@ fn live_matching_captures_current_donor_color_and_rejects_foreign_donor_atomical
     let foreign = foreign_scene.circle(0.1).unwrap();
     let mut live = scene.live(&mut session);
     live.set_color(&donor, 0.0, 0.0, 1.0, 1.0).unwrap();
+    let revision = family.integration_store().borrow().scene_revision();
     let result = live.match_family_color(&family, &donor).unwrap();
-    assert_eq!(result.impacts().len(), 1);
+    assert_eq!(result.impacts().len(), 2);
+    assert!(result.impacts().iter().any(|impact| matches!(impact,
+        noon_core::SemanticMutationImpact::FamilyColor { node } if *node == family.node_id())));
+    assert_eq!(family.own_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
+    assert_eq!(family.integration_store().borrow().scene_revision(), revision.checked_next().unwrap());
     assert_eq!(
         live.effective_manim_color(&recipient).unwrap(),
         Color::rgb(0.0, 0.0, 1.0)
