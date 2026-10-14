@@ -28,6 +28,18 @@
       "notes": "Twelve shared deterministic polynomial easing tracks. Original Cairo reference materialization uses 120 fps to represent every unchanged requested checkpoint exactly, including 0.125 and 0.375 seconds. No arbitrary Python playback claim."
     },
     {
+      "id": "annotation-dot",
+      "scene": "AnnotationDotConstructor",
+      "source": "parity/manim-v0.21/core-examples/annotation_dot.py",
+      "expected_duration": 0.2,
+      "sample_times": [
+        0,
+        0.1,
+        0.16666666666666666
+      ],
+      "notes": "Shared Dot geometry, separate default fill/stroke paint and explicit color precedence; static authored constructor profile. No samples or tolerances relaxed."
+    },
+    {
       "id": "polynomial-rates",
       "scene": "PolynomialRates",
       "source": "parity/manim-v0.21/core-examples/polynomial_rates.py",

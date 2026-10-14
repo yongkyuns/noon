@@ -322,10 +322,23 @@ pub struct TextGlyphStroke {
     pub miter_limit: f32,
 }
 
+/// Geometry recipe retained by the shaping/layout backend. It determines both
+/// lazy vector outlines and steady glyph masks, independently of device scale.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GlyphOutlineProfile {
+    /// Natural unhinted OpenType geometry (including Typst and color fonts).
+    #[default]
+    Font,
+    /// ManimPango/Cairo's authored-size 26.6 scaling and 24.8 path grid
+    /// for static monochrome TrueType/CFF faces.
+    Cairo,
+}
+
 /// One shaped run. `fill == None` means inherit the owning mobject's color;
 /// `Some` preserves an intrinsic backend color (for example styled Typst content).
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphRun {
+    pub outline_profile: GlyphOutlineProfile,
     pub font: FontFaceIdentity,
     /// Exact variable-font design coordinates used by the shaping backend.
     pub variations: Arc<[FontVariationSetting]>,
@@ -1314,6 +1327,7 @@ mod tests {
             source: Arc::from(source),
             kind: TextSourceKind::Plain,
             runs: Arc::from([GlyphRun {
+                outline_profile: GlyphOutlineProfile::Font,
                 font: FontFaceIdentity {
                     family: Arc::from("Test Sans"),
                     face_key: Arc::from("test-sans-v1"),
