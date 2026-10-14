@@ -217,11 +217,9 @@ impl CoreTextGlyphScaler<'_> {
                 &mut pen,
             )
             .map_err(|_| GlyphOutlineError)?;
-        if pen
-            .0
-            .iter()
-            .any(|command| !fixed_coordinates_fit(*command, 256.0 * self.scale))
-        {
+        if pen.0.iter().any(|command| {
+            !transformed_fixed_coordinates_fit(*command, [256.0 * self.scale, -256.0 * self.scale])
+        }) {
             return Err(GlyphOutlineError);
         }
         Ok(cairo_path::coretext_path(&pen.0, self.scale))
@@ -390,11 +388,14 @@ pub fn path_commands(path: &VectorPath) -> impl Iterator<Item = swash::zeno::Com
 // Reject before fixed conversion rather than saturating coordinates into another
 // shape. The 24.8 Cairo path representation has a finite coordinate domain.
 fn fixed_coordinates_fit(command: PathElement, units: f64) -> bool {
+    transformed_fixed_coordinates_fit(command, [units; 2])
+}
+
+fn transformed_fixed_coordinates_fit(command: PathElement, units: [f64; 2]) -> bool {
     let xy = |x: f32, y: f32| {
-        [x, y].iter().all(|v| {
-            v.is_finite()
-                && (f64::from(*v) * units).round() >= f64::from(i32::MIN)
-                && (f64::from(*v) * units).round() <= f64::from(i32::MAX)
+        [x, y].into_iter().zip(units).all(|(value, scale)| {
+            let fixed = (f64::from(value) * scale).round();
+            value.is_finite() && fixed >= f64::from(i32::MIN) && fixed <= f64::from(i32::MAX)
         })
     };
     match command {
@@ -468,6 +469,20 @@ mod tests {
             )
             .is_err());
         assert_eq!(coretext_layout_size(48.0).unwrap(), 13653.0 / 1024.0);
+        assert!(!transformed_fixed_coordinates_fit(
+            PathElement::MoveTo {
+                x: 0.0,
+                y: -8_388_608.0
+            },
+            [256.0, -256.0]
+        ));
+        assert!(transformed_fixed_coordinates_fit(
+            PathElement::MoveTo {
+                x: -8_388_608.0,
+                y: 0.0
+            },
+            [256.0, -256.0]
+        ));
     }
 
     #[test]
