@@ -14,6 +14,13 @@ impl MobjectHandle {
 }
 #[pymethods]
 impl MobjectHandle {
+    #[pyo3(name = "pathQuery")]
+    fn path_query(&self) -> PyResult<crate::path_query::PathQuery> {
+        self.handle
+            .path_query()
+            .map(crate::path_query::PathQuery::new)
+            .map_err(engine_error)
+    }
     #[getter(semanticSlot)]
     pub fn semantic_slot(&self) -> u32 {
         self.handle.node_id().slot()

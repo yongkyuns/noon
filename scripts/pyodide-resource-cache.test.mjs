@@ -58,7 +58,7 @@ test('failed fetches still fail their cases and do not poison later requests', a
   const cache = createPyodideResourceCache(source);
   const handler = await attach(cache);
   const failed = request(async (options) => {
-    assert.deepEqual(options, { maxRetries: 2 }, 'only transport-level GET retries are allowed');
+    assert.equal(options, undefined, 'a failed upstream request is not automatically retried');
     throw new Error('network failure');
   });
   await handler(failed);

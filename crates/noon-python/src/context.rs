@@ -261,6 +261,22 @@ impl Context {
         self.with_live(|live| live.add(&target.handle).map(|_| ()))
     }
     /// Match the browser value-only projection of the same shared observation.
+    #[pyo3(name = "queryMobjectPath")]
+    fn path_query(&self, target: &MobjectHandle) -> PyResult<crate::path_query::PathQuery> {
+        self.require_active()?;
+        self.same_store(target)?;
+        let query = match self.execution.as_ref() {
+            Some(execution) => noon::integration::effective_path_query(
+                self.scene.integration_store(),
+                execution,
+                &target.handle,
+            ),
+            None => target.handle.path_query(),
+        };
+        query
+            .map(crate::path_query::PathQuery::new)
+            .map_err(engine_error)
+    }
     #[pyo3(name = "queryMobjectCenter")]
     fn center(&mut self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
         let layout = self.layout(target)?;
