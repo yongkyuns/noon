@@ -56,12 +56,21 @@ pub struct ManimGeometryOptions {
     style: SemanticStyle,
     z_index: f64,
     role: noon_core::SemanticObjectRole,
+    resolved_start_angle: Option<f64>,
 }
 
 impl ManimGeometryOptions {
     /// Attach shared semantic query metadata before this inert request is published.
     pub fn set_semantic_role(&mut self, role: noon_core::SemanticObjectRole) {
         self.role = role;
+    }
+
+    /// Return the resolved Manim start angle for regular polygon constructors.
+    ///
+    /// This is constructor metadata only; the retained Rust path remains the
+    /// authoritative geometry representation.
+    pub fn resolved_start_angle(&self) -> Option<f64> {
+        self.resolved_start_angle
     }
 
     pub fn circle(radius: f64) -> Result<Self, AuthoringError> {
@@ -210,6 +219,7 @@ impl ManimGeometryOptions {
             style,
             z_index: 0.0,
             role: noon_core::SemanticObjectRole::Ordinary,
+            resolved_start_angle: None,
         }
     }
 
@@ -390,6 +400,7 @@ impl ManimGeometryOptions {
             style,
             z_index,
             role,
+            resolved_start_angle: _,
         } = self;
         match geometry {
             GeometryRef::Circle { .. }
@@ -438,6 +449,7 @@ impl ManimGeometryOptions {
             style,
             z_index,
             role,
+            resolved_start_angle: _,
         } = self;
         let GeometryRef::VectorPath(path) = geometry else {
             return Err(AuthoringError::Unsupported(
@@ -684,6 +696,7 @@ impl Mobject {
                 style,
                 z_index: 0.0,
                 role: noon_core::SemanticObjectRole::Ordinary,
+                resolved_start_angle: None,
             },
         )
     }

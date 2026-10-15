@@ -28,15 +28,16 @@ impl ManimGeometryOptions {
         radius: f64,
         start_angle: Option<f64>,
     ) -> Result<Self, AuthoringError> {
-        Ok(Self::new(
-            GeometryRef::path(crate::polygon_authoring::regular_polygram_path(
+        let (path, resolved_start_angle) =
+            crate::polygon_authoring::regular_polygram_path_and_start_angle(
                 n,
                 density,
                 radius,
                 start_angle,
-            )?),
-            manim_style(Color::BLUE),
-        ))
+            )?;
+        let mut options = Self::new(GeometryRef::path(path), manim_style(Color::BLUE));
+        options.resolved_start_angle = Some(resolved_start_angle);
+        Ok(options)
     }
 
     pub fn star(
@@ -46,16 +47,16 @@ impl ManimGeometryOptions {
         density: u32,
         start_angle: Option<f64>,
     ) -> Result<Self, AuthoringError> {
-        Ok(Self::new(
-            GeometryRef::path(crate::polygon_authoring::star_path(
-                n,
-                outer_radius,
-                inner_radius,
-                density,
-                start_angle,
-            )?),
-            manim_style(Color::BLUE),
-        ))
+        let (path, resolved_start_angle) = crate::polygon_authoring::star_path_and_start_angle(
+            n,
+            outer_radius,
+            inner_radius,
+            density,
+            start_angle,
+        )?;
+        let mut options = Self::new(GeometryRef::path(path), manim_style(Color::BLUE));
+        options.resolved_start_angle = Some(resolved_start_angle);
+        Ok(options)
     }
 
     pub fn dot(x: f64, y: f64, radius: f64) -> Result<Self, AuthoringError> {
