@@ -3811,6 +3811,22 @@ impl GpuRenderer {
         )
     }
 
+    /// Sample count of the shared scene pass for this prepared publication.
+    /// Offscreen hosts use this to keep direct attachments and resolve targets
+    /// in separate texture roles without changing draw preparation or sampling.
+    pub fn retained_scene_sample_count(
+        &self,
+        prepared: &PreparedRetainedGpuFrame<'_>,
+        derived: Option<&crate::PreparedDerivedDisplay>,
+    ) -> u32 {
+        let derived = derived.filter(|display| !display.slots.is_empty());
+        if derived.is_some() || (prepared.geometry_only && self.inset_views.is_empty()) {
+            self.scene_render_sample_count(&prepared.geometry, derived)
+        } else {
+            retained_sample_count(prepared.render_items, self.spatial.has_active_paths())
+        }
+    }
+
     fn encode_retained_inner(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -3840,8 +3856,7 @@ impl GpuRenderer {
         let scene_view = self.presentation.scene_view(view);
         // Spatial paths precede this painter stream, so they are absent from
         // render_items but still require the shared multisampled target.
-        let sample_count =
-            retained_sample_count(prepared.render_items, self.spatial.has_active_paths());
+        let sample_count = self.retained_scene_sample_count(prepared, None);
         let inset_stats =
             self.encode_inset_captures(encoder, prepared, text_state, sample_count)?;
         let spatial_stats = self.encode_spatial(

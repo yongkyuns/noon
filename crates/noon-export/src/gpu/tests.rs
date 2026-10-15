@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+#[ignore = "requires Metal or software Vulkan; run by native host qualification"]
+fn native_capture_first_path_after_single_sample_is_visible_in_its_first_publication() {
+    use noon::{Color, MobjectTarget, Scene, SvgImportOptions};
+    let scene = Scene::new();
+    let mut session = scene.execution_session().unwrap();
+    let mut options = CaptureOptions::new(320, 180);
+    if cfg!(target_os = "macos") {
+        options.backends = wgpu::Backends::METAL;
+        options.force_fallback_adapter = false;
+    } else {
+        options.backends = wgpu::Backends::VULKAN;
+        options.force_fallback_adapter = true;
+    }
+    let mut capture = crate::SessionCapture::new(&session, options).unwrap();
+    capture.render(&mut session).unwrap();
+    {
+        let mut live = scene.live(&mut session);
+        let wait = live.wait_segment(0.1).unwrap();
+        live.advance_segment_to(wait, wait.end_time()).unwrap();
+        live.complete_segment(wait).unwrap();
+    }
+    capture.render(&mut session).unwrap();
+    {
+        let mut live = scene.live(&mut session);
+        let svg = live
+            .create_svg(
+                r#"<svg width="20" height="10"><rect width="20" height="10" fill="red"/></svg>"#,
+                SvgImportOptions::default(),
+                None,
+            )
+            .unwrap();
+        live.add_many(&[MobjectTarget::Family(&svg)]).unwrap();
+        live.shift_family(&svg, 1.0, 0.0).unwrap();
+        live.set_family_fill(&svg, Some(Color::from_hex(0x00FF00)), None)
+            .unwrap();
+        let wait = live.wait_segment(0.1).unwrap();
+        live.advance_segment_to(wait, wait.start_time()).unwrap();
+    }
+    let first = capture.capture(&mut session).unwrap();
+    assert_eq!(first.receipt.published_time, 0.1);
+    assert_eq!(&first.rgba[(90 * 320 + 160) * 4..][..4], &[0, 255, 0, 255]);
+    let publication = first.receipt.publication;
+    let pixels = first.rgba.to_vec();
+    let repeated = capture.capture(&mut session).unwrap();
+    assert_eq!(repeated.receipt.publication, publication);
+    assert_eq!(repeated.rgba, pixels);
+}
+
+#[test]
 fn first_gpu_fault_is_terminal_and_is_not_replaced_by_later_faults() {
     let fault = GpuFault::default();
     assert!(fault.check().is_ok());
