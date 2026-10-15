@@ -13,6 +13,7 @@ mod geometry;
 mod mobject;
 mod options;
 mod path_query;
+mod render_options;
 mod vector_path;
 
 fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
@@ -62,5 +63,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(options::resolve_animation_options, m)?)?;
     m.add_function(wrap_pyfunction!(options::resolve_create_options, m)?)?;
     m.add_function(wrap_pyfunction!(options::resolve_transform_options, m)?)?;
+    m.add_class::<render_options::RenderOptionsResolution>()?;
+    m.add_function(wrap_pyfunction!(render_options::resolve_render_options, m)?)?;
     Ok(())
 }
