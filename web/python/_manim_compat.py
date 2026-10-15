@@ -101,15 +101,9 @@ class VMobject(Mobject):
     def get_mobject_type_class():
         return VMobject
 
-    def __init__(self, *, color=None, **kwargs):
-        from _manim_semantic_handles import _geometry_options, _apply_shared_constructor_options, _apply_constructor_color, _attach_geometry_options
-        from _noon_errors import engine_call
-        if _geometry_options is None:
-            raise RuntimeError("Mobject construction requires the shared Rust authoring host")
-        options = engine_call(_geometry_options.emptyPath)
-        _apply_shared_constructor_options(options, kwargs)
-        _apply_constructor_color(options, color)
-        _attach_geometry_options(self, options, "VMobject")
+    def __init__(self, *, color=_base.WHITE, **kwargs):
+        from _manim_semantic_handles import _empty_path_init
+        _empty_path_init(self, color=color, kind="VMobject", **kwargs)
 
     def set_points_as_corners(self, points):
         from _manim_path_editing import set_points_as_corners
@@ -430,9 +424,9 @@ class Group(Mobject):
         from _manim_semantic_handles import _match_style
         return _match_style(self, vmobject, family)
 
-    def __init__(self, *mobjects: object, z_index: float = 0) -> None:
+    def __init__(self, *mobjects: object, z_index: float = 0, color=_base.WHITE) -> None:
         from _manim_semantic_handles import _group_init
-        _group_init(self, *mobjects, z_index=z_index)
+        _group_init(self, *mobjects, z_index=z_index, color=color)
 
     @property
     def submobjects(self) -> list[object]:
