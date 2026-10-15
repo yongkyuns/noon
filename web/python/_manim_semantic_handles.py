@@ -405,8 +405,8 @@ def _empty_path_init(
     if _geometry_options is None:
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     options = engine_call(_geometry_options.emptyPath)
-    _apply_shared_constructor_options(options, kwargs)
     _apply_constructor_color(options, parsed)
+    _apply_shared_constructor_options(options, kwargs)
     _attach_geometry_options(self, options, kind)
 
 
