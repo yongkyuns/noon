@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <iostream>
+#include <iomanip>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -20,6 +21,7 @@
 constexpr int TILE_DIM = 32;
 constexpr int BLOCK_ROWS = 8;
 constexpr int N = TILE_DIM * TILE_DIM;
+#include "original_kernels.cuh"
 struct Access { int row, col; unsigned word; int global_index; float value; };
 
 // PAD is the only algorithmic difference; access logging is instrumentation.
@@ -70,6 +72,8 @@ struct Result {
   std::array<int, 4> counts{};
   std::vector<Access> selected;
   std::vector<float> output;
+  std::vector<Access> all_loads, all_reads;
+  std::vector<float> original_output;
 };
 
 template<int PAD> Result run(int column) {
@@ -107,26 +111,60 @@ template<int PAD> Result run(int column) {
     }
   }
   for (int lane = 0; lane < TILE_DIM; ++lane) result.selected.push_back(hr[column * TILE_DIM + lane]);
+  result.all_loads = hl;
+  result.all_reads = hr;
+  // Independently run the UNINSTRUMENTED original kernel, not merely a logger
+  // disabled in the instrumented implementation. Compare every output word.
+  check(cudaMemset(output.ptr, 0xff, N * sizeof(float)), "reset original output");
+  if constexpr (PAD == 0)
+    transpose_shared<<<dim3(1, 1), dim3(TILE_DIM, BLOCK_ROWS)>>>(input.ptr, output.ptr, TILE_DIM, TILE_DIM);
+  else
+    transpose_padded<<<dim3(1, 1), dim3(TILE_DIM, BLOCK_ROWS)>>>(input.ptr, output.ptr, TILE_DIM, TILE_DIM);
+  check(cudaGetLastError(), "launch original kernel");
+  check(cudaDeviceSynchronize(), "execute original kernel");
+  result.original_output.resize(N);
+  check(cudaMemcpy(result.original_output.data(), output.ptr, N * sizeof(float), cudaMemcpyDeviceToHost), "read original output");
+  if (result.original_output != result.output)
+    throw std::runtime_error("Original and instrumented CUDA outputs differ");
   return result;
 }
 
-void print_run(const Result &r) {
-  std::cout << "{\"stride\":" << r.stride << ",\"base_word\":" << r.base_word << ",\"loads\":[";
-  for (int i = 0; i < 4; ++i) std::cout << (i ? "," : "") << r.counts[i];
-  std::cout << "],\"verified_output_words\":1024,\"reads\":[";
-  for (std::size_t i = 0; i < r.selected.size(); ++i) {
-    const auto &a = r.selected[i];
+void print_accesses(const std::vector<Access> &records) {
+  std::cout << '[';
+  for (std::size_t i = 0; i < records.size(); ++i) {
+    const auto &a = records[i];
     std::cout << (i ? "," : "") << '[' << a.row << ',' << a.col << ',' << a.word << ','
               << a.global_index << ',' << static_cast<int>(a.value) << ']';
   }
-  std::cout << "]}";
+  std::cout << ']';
+}
+void print_values(const std::vector<float> &values) {
+  std::cout << '[';
+  for (std::size_t i = 0; i < values.size(); ++i)
+    std::cout << (i ? "," : "") << static_cast<int>(values[i]);
+  std::cout << ']';
+}
+void print_run(const Result &r, bool full) {
+  std::cout << "{\"stride\":" << r.stride << ",\"base_word\":" << r.base_word << ",\"loads\":[";
+  for (int i = 0; i < 4; ++i) std::cout << (i ? "," : "") << r.counts[i];
+  std::cout << "],\"verified_output_words\":1024,\"reads\":";
+  print_accesses(r.selected);
+  if (full) {
+    std::cout << ",\"load_accesses\":"; print_accesses(r.all_loads);
+    std::cout << ",\"read_accesses\":"; print_accesses(r.all_reads);
+    std::cout << ",\"output\":"; print_values(r.output);
+    std::cout << ",\"original_output\":"; print_values(r.original_output);
+  }
+  std::cout << '}';
 }
 
 int main(int argc, char **argv) {
   try {
-    if (argc > 2) throw std::runtime_error("Usage: record_cuda [column:0..31]");
+    if (argc > 3) throw std::runtime_error("Usage: record_cuda [column:0..31] [--json]");
+    const bool full = argc == 3 && std::string(argv[2]) == "--json";
+    if (argc == 3 && !full) throw std::runtime_error("Unknown output option");
     int column = 3;
-    if (argc == 2) {
+    if (argc >= 2) {
       std::size_t end = 0;
       column = std::stoi(argv[1], &end);
       if (end != std::string(argv[1]).size()) throw std::runtime_error("Invalid column");
@@ -142,10 +180,23 @@ int main(int argc, char **argv) {
     std::cerr << device.name << ": validated both 1024-word outputs and all recorded accesses.\n"
               << "Addresses/values only; no timing or bank-service-order measurement.\n";
     // Print only after BOTH runs validate; stdout is directly pasteable Python.
-    std::cout << "GPU_TRACE = {\"column\":" << column << ",\"runs\":[\n";
-    print_run(unpadded);
+    if (full) {
+      int runtime_version = 0, driver_version = 0;
+      check(cudaRuntimeGetVersion(&runtime_version), "runtime version");
+      check(cudaDriverGetVersion(&driver_version), "driver version");
+      std::cout << "{\"device\":" << std::quoted(std::string(device.name))
+                << ",\"compute_capability\":[" << device.major << ',' << device.minor << ']'
+                << ",\"runtime_version\":" << runtime_version
+                << ",\"driver_version\":" << driver_version
+                << ",\"nvcc_version\":[" << __CUDACC_VER_MAJOR__ << ',' << __CUDACC_VER_MINOR__ << ',' << __CUDACC_VER_BUILD__ << ']'
+                << ",\"column\":" << column;
+    } else {
+      std::cout << "GPU_TRACE = {\"column\":" << column;
+    }
+    std::cout << ",\"runs\":[\n";
+    print_run(unpadded, full);
     std::cout << ",\n";
-    print_run(padded);
+    print_run(padded, full);
     std::cout << "\n]}\n";
     return 0;
   } catch (const std::exception &e) {
