@@ -19,6 +19,18 @@ DEFAULT_DOT_RADIUS = 0.08
 PURE_YELLOW = _base.color_from_hex("#FFFF00")
 
 
+class CubicBezier(_compat.Path):
+    """One planar cubic curve over the shared Rust path constructor."""
+
+    def __init__(self, start_anchor: Point3DLike, start_handle: Point3DLike,
+                 end_handle: Point3DLike, end_anchor: Point3DLike, **kwargs: Any) -> None:
+        points = [_base._as_vec2(value) for value in
+                  (start_anchor, start_handle, end_handle, end_anchor)]
+        coordinates = [(point.x, point.y) for point in points]
+        path = _base.VectorPath().move_to(coordinates[0]).cubic_to(*coordinates[1:])
+        super().__init__(path, **kwargs)
+
+
 class Dot(_compat.Circle):
     """Manim-compatible small filled circle."""
 
@@ -143,8 +155,11 @@ def _mobject_get_color(self: _base.Mobject) -> _base.Color:
 
 
 def _group_get_color(self: _compat.Group) -> _base.Color:
-    leaves = _compat._leaf_mobjects(self)
-    return _base.WHITE if not leaves else _mobject_get_color(leaves[0])
+    handle = getattr(self, "_semantic_family_handle", None)
+    if handle is None:
+        raise RuntimeError("Group observation requires the shared Rust authoring host")
+    observed = engine_call(handle.manimColor)
+    return _base.Color(float(observed.red), float(observed.green), float(observed.blue), float(observed.alpha))
 
 
 def _public_bound_method_name(source: object, method: object) -> str:

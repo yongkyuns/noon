@@ -228,6 +228,33 @@ mod wasm {
             })
         }
 
+        /// Return a new font input with an explicit deterministic metrics recipe.
+        #[wasm_bindgen(js_name = withMetricsProfile)]
+        pub fn with_metrics_profile(&self, profile: &str) -> Result<Self, JsValue> {
+            let profile = match profile {
+                "cairo-freetype" => noon::NativeFontMetricsProfile::CairoFreeType,
+                "cairo-coretext" => noon::NativeFontMetricsProfile::CairoCoreText,
+                _ => {
+                    return Err(js_error(AuthoringFailure::new(
+                        "invalid_input",
+                        "text.invalid_metrics_profile",
+                        "unknown native font metrics profile",
+                    )))
+                }
+            };
+            self.face
+                .clone()
+                .with_metrics_profile(profile)
+                .map(|face| Self { face })
+                .map_err(|error| {
+                    js_error(AuthoringFailure::new(
+                        "invalid_input",
+                        "text.unsupported_metrics_profile",
+                        error,
+                    ))
+                })
+        }
+
         /// Resolve the shared engine's embedded regular face without a byte transfer.
         pub fn bundled(family: &str) -> Result<Self, JsValue> {
             noon::bundled_native_font_face(family)
@@ -1082,6 +1109,25 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = manimColor)]
+        pub fn manim_color(&self) -> Result<WasmManimColor, JsValue> {
+            self.semantic_family()?
+                .own_color()
+                .map(WasmManimColor::from_color)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = setOwnColor)]
+        pub fn set_own_color(
+            &self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_own_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = worldFamilyCenter)]
         pub fn world_family_center(&self) -> Result<Vec<f64>, JsValue> {
             let center = self.family.world_center().map_err(js_error)?;
@@ -1451,6 +1497,10 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmPathQuery {
+        #[wasm_bindgen(getter, js_name = pointCount)]
+        pub fn point_count(&self) -> u32 {
+            self.value.point_count() as u32
+        }
         #[wasm_bindgen(getter, js_name = curveCount)]
         pub fn curve_count(&self) -> u32 {
             self.value.curve_count() as u32

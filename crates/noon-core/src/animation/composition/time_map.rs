@@ -199,9 +199,22 @@ fn inverse_monotone_rate(rate_func: RateFunction, value: f64) -> Option<f64> {
         | RateFunction::Smoothstep
         | RateFunction::Smootherstep
         | RateFunction::Smoothererstep
+        | RateFunction::SlowInto
+        | RateFunction::DoubleSmooth
         | RateFunction::RushInto
         | RateFunction::RushFrom
-        | RateFunction::EaseInOutCubic => {
+        | RateFunction::EaseInOutCubic
+        | RateFunction::EaseInQuad
+        | RateFunction::EaseOutQuad
+        | RateFunction::EaseInOutQuad
+        | RateFunction::EaseInCubic
+        | RateFunction::EaseOutCubic
+        | RateFunction::EaseInQuart
+        | RateFunction::EaseOutQuart
+        | RateFunction::EaseInOutQuart
+        | RateFunction::EaseInQuint
+        | RateFunction::EaseOutQuint
+        | RateFunction::EaseInOutQuint => {
             if value <= 0.0 {
                 return Some(0.0);
             }
@@ -510,6 +523,50 @@ mod tests {
             ]);
             let boundary = map.monotone_event_alpha().unwrap();
             assert!((boundary - 0.5).abs() < 1e-6);
+            assert!(!map.evaluate((boundary - 1e-6) as f32).begun);
+            assert!(map.evaluate(boundary as f32).begun);
+        }
+    }
+
+    #[test]
+    fn polynomial_easings_preserve_earliest_nested_event_boundaries() {
+        for rate in [
+            RateFunction::EaseInQuad,
+            RateFunction::EaseOutQuad,
+            RateFunction::EaseInOutQuad,
+            RateFunction::EaseInCubic,
+            RateFunction::EaseOutCubic,
+            RateFunction::EaseInOutCubic,
+            RateFunction::EaseInQuart,
+            RateFunction::EaseOutQuart,
+            RateFunction::EaseInOutQuart,
+            RateFunction::EaseInQuint,
+            RateFunction::EaseOutQuint,
+            RateFunction::EaseInOutQuint,
+        ] {
+            let map = CompositionTimeMap::from_steps(vec![
+                CompositionTimeMapStep::new(0.0, 1.0, rate),
+                CompositionTimeMapStep::new(0.5, 0.5, RateFunction::Linear),
+            ]);
+            let boundary = map.monotone_event_alpha().unwrap();
+            assert!(boundary > 0.0 && boundary < 1.0);
+            assert!(!map.evaluate((boundary - 1e-6) as f32).begun);
+            assert!(map.evaluate(boundary as f32).begun);
+        }
+    }
+
+    #[test]
+    fn slow_and_double_smooth_resolve_the_earliest_nested_activation() {
+        for (rate, expected) in [
+            (RateFunction::SlowInto, 1.0 - (0.75_f64).sqrt()),
+            (RateFunction::DoubleSmooth, 0.5),
+        ] {
+            let map = CompositionTimeMap::from_steps(vec![
+                CompositionTimeMapStep::new(0.0, 1.0, rate),
+                CompositionTimeMapStep::new(0.5, 0.5, RateFunction::Linear),
+            ]);
+            let boundary = map.monotone_event_alpha().unwrap();
+            assert!((boundary - expected).abs() < 1e-6);
             assert!(!map.evaluate((boundary - 1e-6) as f32).begun);
             assert!(map.evaluate(boundary as f32).begun);
         }

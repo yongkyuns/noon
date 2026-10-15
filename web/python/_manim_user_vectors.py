@@ -113,6 +113,29 @@ def quaternion_conjugate(quaternion: Sequence[float]) -> np.ndarray:
     return result
 
 
+def rotation_matrix_transpose_from_quaternion(quat: np.ndarray) -> list[np.ndarray]:
+    quat_inv = quaternion_conjugate(quat)
+    return [
+        quaternion_mult(quat, [0, *basis], quat_inv)[1:]
+        for basis in [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    ]
+
+
+def rotation_matrix_from_quaternion(quat: np.ndarray) -> np.ndarray:
+    import numpy as np
+    return np.transpose(rotation_matrix_transpose_from_quaternion(quat))
+
+
+def normalize_along_axis(array: np.ndarray, axis: np.ndarray) -> np.ndarray:
+    """Preserve the original in-place NumPy operation on explicit user arrays."""
+    import numpy as np
+    norms = np.sqrt((array * array).sum(axis))
+    norms[norms == 0] = 1
+    buffed_norms = np.repeat(norms, array.shape[axis]).reshape(array.shape)
+    array /= buffed_norms
+    return array
+
+
 def thick_diagonal(dim: int, thickness: int = 2) -> MatrixMN:
     import numpy as np
     rows = np.arange(dim).repeat(dim).reshape((dim, dim))
@@ -124,6 +147,22 @@ def rotation_about_z(angle: float) -> np.ndarray:
     import numpy as np
     c, s = np.cos(angle), np.sin(angle)
     return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+
+def rotation_matrix(
+    angle: float,
+    axis: Vector3DLike,
+    homogeneous: bool = False,
+) -> np.ndarray:
+    """Rotate explicit user vectors with the pinned SciPy conversion."""
+    import numpy as np
+    from scipy.spatial.transform import Rotation
+    matrix = Rotation.from_rotvec(angle * normalize(axis)).as_matrix()
+    if not homogeneous:
+        return matrix
+    result = np.eye(4)
+    result[:3, :3] = matrix
+    return result
 
 
 def cartesian_to_spherical(vec: Vector3DLike) -> np.ndarray:
@@ -141,3 +180,310 @@ def spherical_to_cartesian(spherical: Sequence[float]) -> np.ndarray:
     import numpy as np
     r, theta, phi = spherical
     return np.array([r*np.cos(theta)*np.sin(phi), r*np.sin(theta)*np.sin(phi), r*np.cos(phi)])
+
+
+def cross(v1: Vector3DLike, v2: Vector3DLike) -> Vector3D:
+    import numpy as np
+    return np.array([v1[1] * v2[2] - v1[2] * v2[1], v1[2] * v2[0] - v1[0] * v2[2], v1[0] * v2[1] - v1[1] * v2[0]])
+
+
+def line_intersection(line1: Sequence[np.ndarray], line2: Sequence[np.ndarray]) -> np.ndarray:
+    import numpy as np
+    if any(np.array([line1, line2])[:, :, 2].reshape(-1)):
+        raise ValueError('Coords must be in the xy-plane.')
+    padded = (np.pad(np.array(i)[:, :2], ((0, 0), (0, 1)), constant_values=1) for i in (line1, line2))
+    line1, line2 = (cross(*i) for i in padded)
+    x, y, z = cross(line1, line2)
+    if z == 0:
+        raise ValueError('The lines are parallel, there is no unique intersection point.')
+    return np.array([x / z, y / z, 0])
+
+
+def find_intersection(p0s: Point3DLike_Array, v0s: Vector3DLike_Array, p1s: Point3DLike_Array, v1s: Vector3DLike_Array, threshold: float=1e-05) -> list[Point3D]:
+    import numpy as np
+    result = []
+    for p0, v0, p1, v1 in zip(p0s, v0s, p1s, v1s, strict=True):
+        normal = cross(v1, cross(v0, v1))
+        denom = max(np.dot(v0, normal), threshold)
+        result += [p0 + np.dot(p1 - p0, normal) / denom * v0]
+    return result
+
+
+def get_winding_number(points: Sequence[np.ndarray]) -> float:
+    from _manim_iterables import adjacent_pairs
+    total_angle: float = 0
+    for p1, p2 in adjacent_pairs(points):
+        d_angle = angle_of_vector(p2) - angle_of_vector(p1)
+        d_angle = ((d_angle + math.pi) % math.tau) - math.pi
+        total_angle += d_angle
+    val: float = total_angle / math.tau
+    return val
+
+
+def bezier(points: Point3D_Array | Sequence[Point3D_Array]) -> Callable[[float | ColVector], Point3D_Array]:
+    import numpy as np
+    P = np.asarray(points)
+    degree = P.shape[0] - 1
+    if degree == 0:
+
+        def zero_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+            return np.ones_like(t) * P[0]
+        return zero_bezier
+    if degree == 1:
+
+        def linear_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+            return P[0] + t * (P[1] - P[0])
+        return linear_bezier
+    if degree == 2:
+
+        def quadratic_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+            t2 = t * t
+            mt = 1 - t
+            mt2 = mt * mt
+            return mt2 * P[0] + 2 * t * mt * P[1] + t2 * P[2]
+        return quadratic_bezier
+    if degree == 3:
+
+        def cubic_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+            t2 = t * t
+            t3 = t2 * t
+            mt = 1 - t
+            mt2 = mt * mt
+            mt3 = mt2 * mt
+            return mt3 * P[0] + 3 * t * mt2 * P[1] + 3 * t2 * mt * P[2] + t3 * P[3]
+        return cubic_bezier
+
+    def nth_grade_bezier(t: float | ColVector) -> Point3D | Point3D_Array:
+        is_scalar = not isinstance(t, np.ndarray)
+        if is_scalar:
+            B = np.empty((1, *P.shape))
+        else:
+            assert isinstance(t, np.ndarray)
+            t = t.reshape(-1, *[1 for dim in P.shape])
+            B = np.empty((t.shape[0], *P.shape))
+        B[:] = P
+        for i in range(degree):
+            B[:, :degree - i] += t * (B[:, 1:degree - i + 1] - B[:, :degree - i])
+        if is_scalar:
+            val: Point3D = B[0, 0]
+            return val
+        return B[:, 0]
+    return nth_grade_bezier
+
+
+def partial_bezier_points(points: BezierPointsLike, a: float, b: float) -> BezierPoints:
+    import numpy as np
+    if a == 1:
+        arr = np.array(points)
+        arr[:] = arr[-1]
+        return arr
+    if b == 0:
+        arr = np.array(points)
+        arr[:] = arr[0]
+        return arr
+    points = np.asarray(points)
+    degree = points.shape[0] - 1
+    if degree == 3:
+        ma, mb = (1 - a, 1 - b)
+        a2, b2, ma2, mb2 = (a * a, b * b, ma * ma, mb * mb)
+        a3, b3, ma3, mb3 = (a2 * a, b2 * b, ma2 * ma, mb2 * mb)
+        portion_matrix = np.array([[ma3, 3 * ma2 * a, 3 * ma * a2, a3], [ma2 * mb, 2 * ma * a * mb + ma2 * b, a2 * mb + 2 * ma * a * b, a2 * b], [ma * mb2, a * mb2 + 2 * ma * mb * b, 2 * a * mb * b + ma * b2, a * b2], [mb3, 3 * mb2 * b, 3 * mb * b2, b3]])
+        return portion_matrix @ points
+    if degree == 2:
+        ma, mb = (1 - a, 1 - b)
+        portion_matrix = np.array([[ma * ma, 2 * a * ma, a * a], [ma * mb, a * mb + ma * b, a * b], [mb * mb, 2 * b * mb, b * b]])
+        return portion_matrix @ points
+    if degree == 1:
+        direction = points[1] - points[0]
+        return np.array([points[0] + a * direction, points[0] + b * direction])
+    if degree == 0:
+        return points
+    arr = np.array(points, dtype=float)
+    N = arr.shape[0]
+    if a != 0:
+        for i in range(1, N):
+            arr[:N - i] += a * (arr[1:N - i + 1] - arr[:N - i])
+    if b != 1:
+        mu = (1 - b) / (1 - a)
+        for i in range(1, N):
+            arr[i:] += mu * (arr[i - 1:-1] - arr[i:])
+    return arr
+
+
+def split_bezier(points: BezierPointsLike, t: float) -> Spline:
+    import numpy as np
+    points = np.asarray(points)
+    N, dim = points.shape
+    degree = N - 1
+    if degree == 3:
+        mt = 1 - t
+        mt2 = mt * mt
+        mt3 = mt2 * mt
+        t2 = t * t
+        t3 = t2 * t
+        two_mt_t = 2 * mt * t
+        three_mt2_t = 3 * mt2 * t
+        three_mt_t2 = 3 * mt * t2
+        split_matrix = np.array([[1, 0, 0, 0], [mt, t, 0, 0], [mt2, two_mt_t, t2, 0], [mt3, three_mt2_t, three_mt_t2, t3], [mt3, three_mt2_t, three_mt_t2, t3], [0, mt2, two_mt_t, t2], [0, 0, mt, t], [0, 0, 0, 1]])
+        return split_matrix @ points
+    if degree == 2:
+        mt = 1 - t
+        mt2 = mt * mt
+        t2 = t * t
+        two_tmt = 2 * t * mt
+        split_matrix = np.array([[1, 0, 0], [mt, t, 0], [mt2, two_tmt, t2], [mt2, two_tmt, t2], [0, mt, t], [0, 0, 1]])
+        return split_matrix @ points
+    if degree == 1:
+        middle = points[0] + t * (points[1] - points[0])
+        return np.array([points[0], middle, middle, points[1]])
+    if degree == 0:
+        return np.array([points[0], points[0]])
+    arr = np.empty((2, N, dim))
+    arr[1] = points
+    arr[0, 0] = points[0]
+    for i in range(1, N):
+        arr[1, :N - i] += t * (arr[1, 1:N - i + 1] - arr[1, :N - i])
+        arr[0, i] = arr[1, 0]
+    return arr.reshape(2 * N, dim)
+
+
+def is_closed(points: Point3D_Array) -> bool:
+    start, end = (points[0], points[-1])
+    rtol = 1e-05
+    atol = 1e-08
+    tolerance = atol + rtol * start
+    if abs(end[0] - start[0]) > tolerance[0]:
+        return False
+    if abs(end[1] - start[1]) > tolerance[1]:
+        return False
+    return bool(abs(end[2] - start[2]) <= tolerance[2])
+
+
+def straight_path() -> PathFuncType:
+    from _manim_interpolation import interpolate
+    return interpolate
+
+
+# Memoized coefficients operate only on explicit caller-owned numeric arrays.
+_USER_SUBDIVISION_MATRICES = [{} for _ in range(4)]
+
+
+def _get_subdivision_matrix(n_points: int, n_divisions: int) -> MatrixMN:
+    import numpy as np
+    if n_points not in (1, 2, 3, 4):
+        raise NotImplementedError('This function does not support subdividing Bézier curves with 0 or more than 4 control points.')
+    subdivision_matrix = _USER_SUBDIVISION_MATRICES[n_points - 1].get(n_divisions, None)
+    if subdivision_matrix is not None:
+        return subdivision_matrix
+    subdivision_matrix = np.empty((n_points * n_divisions, n_points))
+    if n_points == 4:
+        for i in range(n_divisions):
+            i2 = i * i
+            i3 = i2 * i
+            ip1 = i + 1
+            ip12 = ip1 * ip1
+            ip13 = ip12 * ip1
+            nmi = n_divisions - i
+            nmi2 = nmi * nmi
+            nmi3 = nmi2 * nmi
+            nmim1 = nmi - 1
+            nmim12 = nmim1 * nmim1
+            nmim13 = nmim12 * nmim1
+            subdivision_matrix[4 * i:4 * (i + 1)] = np.array([[nmi3, 3 * nmi2 * i, 3 * nmi * i2, i3], [nmi2 * nmim1, 2 * nmi * nmim1 * i + nmi2 * ip1, nmim1 * i2 + 2 * nmi * i * ip1, i2 * ip1], [nmi * nmim12, nmim12 * i + 2 * nmi * nmim1 * ip1, 2 * nmim1 * i * ip1 + nmi * ip12, i * ip12], [nmim13, 3 * nmim12 * ip1, 3 * nmim1 * ip12, ip13]])
+        subdivision_matrix /= n_divisions * n_divisions * n_divisions
+    elif n_points == 3:
+        for i in range(n_divisions):
+            ip1 = i + 1
+            nmi = n_divisions - i
+            nmim1 = nmi - 1
+            subdivision_matrix[3 * i:3 * (i + 1)] = np.array([[nmi * nmi, 2 * i * nmi, i * i], [nmi * nmim1, i * nmim1 + ip1 * nmi, i * ip1], [nmim1 * nmim1, 2 * ip1 * nmim1, ip1 * ip1]])
+        subdivision_matrix /= n_divisions * n_divisions
+    elif n_points == 2:
+        aux_range = np.arange(n_divisions + 1)
+        subdivision_matrix[::2, 1] = aux_range[:-1]
+        subdivision_matrix[1::2, 1] = aux_range[1:]
+        subdivision_matrix[:, 0] = subdivision_matrix[::-1, 1]
+        subdivision_matrix /= n_divisions
+    elif n_points == 1:
+        subdivision_matrix[:] = 1
+    _USER_SUBDIVISION_MATRICES[n_points - 1][n_divisions] = subdivision_matrix
+    return subdivision_matrix
+
+
+def subdivide_bezier(points: BezierPointsLike, n_divisions: int) -> Spline:
+    import numpy as np
+    points = np.asarray(points)
+    if n_divisions == 1:
+        return points
+    N, dim = points.shape
+    if N <= 4:
+        subdivision_matrix = _get_subdivision_matrix(N, n_divisions)
+        return subdivision_matrix @ points
+    beziers = np.empty((n_divisions, N, dim))
+    beziers[-1] = points
+    for curve_num in range(n_divisions - 1, 0, -1):
+        curr = beziers[curve_num]
+        prev = beziers[curve_num - 1]
+        prev[0] = curr[0]
+        a = (n_divisions - curve_num) / (n_divisions - curve_num + 1)
+        for i in range(1, N):
+            curr[:N - i] += a * (curr[1:N - i + 1] - curr[:N - i])
+            prev[i] = curr[0]
+    return beziers.reshape(n_divisions * N, dim)
+
+
+def bezier_remap(bezier_tuples: BezierPointsLike_Array, new_number_of_curves: int) -> BezierPoints_Array:
+    import numpy as np
+    bezier_tuples = np.asarray(bezier_tuples)
+    current_number_of_curves, nppc, dim = bezier_tuples.shape
+    repeat_indices = np.arange(new_number_of_curves, dtype='i') * current_number_of_curves // new_number_of_curves
+    split_factors = np.zeros(current_number_of_curves, dtype='i')
+    np.add.at(split_factors, repeat_indices, 1)
+    new_tuples = np.empty((new_number_of_curves, nppc, dim))
+    index = 0
+    for curve, sf in zip(bezier_tuples, split_factors, strict=True):
+        new_tuples[index:index + sf] = subdivide_bezier(curve, sf).reshape(sf, nppc, dim)
+        index += sf
+    return new_tuples
+
+
+def proportions_along_bezier_curve_for_point(point: Point3DLike, control_points: BezierPointsLike, round_to: float=1e-06) -> MatrixMN:
+    import numpy as np
+    from functools import reduce
+    from _manim_simple_functions import choose
+    if not all((np.shape(point) == np.shape(c_p) for c_p in control_points)):
+        raise ValueError(f'Point {point} and Control Points {control_points} have different shapes.')
+    control_points = np.array(control_points)
+    n = len(control_points) - 1
+    roots = []
+    for dim, coord in enumerate(point):
+        control_coords = control_points[:, dim]
+        terms = []
+        for term_power in range(n, -1, -1):
+            outercoeff = choose(n, term_power)
+            term = []
+            sign = 1
+            for subterm_num in range(term_power, -1, -1):
+                innercoeff = choose(term_power, subterm_num) * sign
+                subterm = innercoeff * control_coords[subterm_num]
+                if term_power == 0:
+                    subterm -= coord
+                term.append(subterm)
+                sign *= -1
+            terms.append(outercoeff * sum(np.array(term)))
+        if all((term == 0 for term in terms)):
+            continue
+        bezier_polynom = np.polynomial.Polynomial(terms[::-1])
+        polynom_roots = bezier_polynom.roots()
+        if len(polynom_roots) > 0:
+            polynom_roots = np.around(polynom_roots, int(np.log10(1 / round_to)))
+        roots.append(polynom_roots)
+    roots = [[root for root in rootlist if root.imag == 0] for rootlist in roots]
+    roots = reduce(np.intersect1d, roots)
+    result = np.asarray([r.real for r in roots if 0 <= r.real <= 1])
+    return result
+
+
+def point_lies_on_bezier(point: Point3DLike, control_points: BezierPointsLike, round_to: float=1e-06) -> bool:
+    roots = proportions_along_bezier_curve_for_point(point, control_points, round_to)
+    return len(roots) > 0

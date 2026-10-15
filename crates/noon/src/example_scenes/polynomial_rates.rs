@@ -1,20 +1,64 @@
-//! Shared polynomial rate tracks, paired with ordinary_polynomial_rates.py.
+//! Shared deterministic rate tracks, paired with ordinary_polynomial_rates.py.
 use crate::{
     AnimationCompositionRequest, AnimationOptions, ExecutionSession, RateFunction, Scene,
     SemanticAnimationCompositionKind, TransformToRequest,
 };
 
 pub fn session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::Smoothstep,
+            RateFunction::Smootherstep,
+            RateFunction::Smoothererstep,
+            RateFunction::SlowInto,
+            RateFunction::DoubleSmooth,
+        ],
+        0.65,
+        1.0,
+    )
+}
+
+pub fn easing_session() -> Result<ExecutionSession, String> {
+    build_session(
+        &[
+            RateFunction::EaseInQuad,
+            RateFunction::EaseOutQuad,
+            RateFunction::EaseInOutQuad,
+            RateFunction::EaseInCubic,
+            RateFunction::EaseOutCubic,
+            RateFunction::EaseInOutCubic,
+            RateFunction::EaseInQuart,
+            RateFunction::EaseOutQuart,
+            RateFunction::EaseInOutQuart,
+            RateFunction::EaseInQuint,
+            RateFunction::EaseOutQuint,
+            RateFunction::EaseInOutQuint,
+        ],
+        0.28,
+        0.38,
+    )
+}
+
+fn build_session(
+    rates: &[RateFunction],
+    side: f64,
+    row_step: f64,
+) -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
         let mut shapes = Vec::new();
         let mut targets = Vec::new();
-        for (index, rgb) in [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)]
-            .into_iter()
-            .enumerate()
-        {
-            let mut shape = scene.square(0.65)?;
-            shape.shift(-2.0, 1.0 - index as f64)?;
+        let colors = [
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (0.0, 1.0, 1.0),
+            (1.0, 0.0, 1.0),
+        ];
+        for (index, _) in rates.iter().enumerate() {
+            let rgb = colors[index % colors.len()];
+            let mut shape = scene.square(side)?;
+            shape.shift(-2.0, 2.0 - index as f64 * row_step)?;
             shape.set_color(rgb.0, rgb.1, rgb.2, 1.0)?;
             shape.set_fill_opacity(1.0)?;
             shape.set_stroke_width(0.0)?;
@@ -24,15 +68,10 @@ pub fn session() -> Result<ExecutionSession, String> {
             shapes.push(shape);
             targets.push(target);
         }
-        let rates = [
-            RateFunction::Smoothstep,
-            RateFunction::Smootherstep,
-            RateFunction::Smoothererstep,
-        ];
         let children = shapes
             .iter()
             .zip(&targets)
-            .zip(rates)
+            .zip(rates.iter().copied())
             .map(|((shape, target), rate)| {
                 AnimationCompositionRequest::TransformTo(
                     TransformToRequest::new(
@@ -56,4 +95,70 @@ pub fn session() -> Result<ExecutionSession, String> {
         Ok(session)
     };
     build().map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_twelve_polynomial_easings_keep_identity_seek_and_forward_equal() {
+        let mut forward = easing_session().unwrap();
+        let mut sought = easing_session().unwrap();
+        let ids = forward
+            .frame()
+            .objects
+            .iter()
+            .map(|o| o.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids.len(), 12);
+        for time in [0.0, 0.125, 0.25, 0.375, 0.5, 0.75, 1.0] {
+            forward.advance_to(time).unwrap();
+            sought.seek(time).unwrap();
+            for (index, (left, right)) in forward
+                .frame()
+                .objects
+                .iter()
+                .zip(&sought.frame().objects)
+                .enumerate()
+            {
+                assert_eq!(left.id, ids[index]);
+                assert_eq!(left.transform, right.transform);
+                assert_eq!(left.style, right.style);
+            }
+        }
+        assert_eq!(forward.effective_time(), 1.0);
+    }
+
+    #[test]
+    fn all_five_rates_preserve_identity_and_seek_matches_forward_sampling() {
+        let mut forward = session().unwrap();
+        let mut sought = session().unwrap();
+        let ids: Vec<_> = forward
+            .frame()
+            .objects
+            .iter()
+            .map(|object| object.id)
+            .collect();
+        assert_eq!(ids.len(), 5);
+        for time in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            forward.advance_to(time).unwrap();
+            sought.seek(time).unwrap();
+            for (index, (left, right)) in forward
+                .frame()
+                .objects
+                .iter()
+                .zip(&sought.frame().objects)
+                .enumerate()
+            {
+                assert_eq!(left.id, ids[index]);
+                assert_eq!(left.transform, right.transform);
+                assert_eq!(left.style, right.style);
+            }
+        }
+        sought.seek(0.25).unwrap();
+        let objects = &sought.frame().objects;
+        assert!((objects[3].transform.translation.x - 0.6457513).abs() < 1e-6);
+        assert_eq!(objects[4].transform.translation.x, -1.0);
+    }
 }

@@ -658,6 +658,7 @@ mod tests {
             source: Arc::from("AB"),
             kind: TextSourceKind::Plain,
             runs: Arc::from([GlyphRun {
+                outline_profile: noon_core::GlyphOutlineProfile::Font,
                 font: FontFaceIdentity {
                     family: Arc::from("Test"),
                     face_key: Arc::from("test-face"),

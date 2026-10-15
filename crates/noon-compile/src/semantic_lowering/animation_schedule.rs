@@ -2790,12 +2790,24 @@ fn reversed_create_rate(rate: RateFunction) -> Option<RateFunction> {
         | RateFunction::Smoothstep
         | RateFunction::Smootherstep
         | RateFunction::Smoothererstep
-        | RateFunction::EaseInOutCubic => Some(rate),
+        | RateFunction::DoubleSmooth
+        | RateFunction::EaseInOutCubic
+        | RateFunction::EaseInOutQuad
+        | RateFunction::EaseInOutQuart
+        | RateFunction::EaseInOutQuint => Some(rate),
+        RateFunction::EaseInQuad => Some(RateFunction::EaseOutQuad),
+        RateFunction::EaseOutQuad => Some(RateFunction::EaseInQuad),
+        RateFunction::EaseInCubic => Some(RateFunction::EaseOutCubic),
+        RateFunction::EaseOutCubic => Some(RateFunction::EaseInCubic),
+        RateFunction::EaseInQuart => Some(RateFunction::EaseOutQuart),
+        RateFunction::EaseOutQuart => Some(RateFunction::EaseInQuart),
+        RateFunction::EaseInQuint => Some(RateFunction::EaseOutQuint),
+        RateFunction::EaseOutQuint => Some(RateFunction::EaseInQuint),
         RateFunction::RushInto => Some(RateFunction::RushFrom),
         RateFunction::RushFrom => Some(RateFunction::RushInto),
         RateFunction::StepStart => Some(RateFunction::StepEnd),
         RateFunction::StepEnd => Some(RateFunction::StepStart),
-        RateFunction::ThereAndBack => None,
+        RateFunction::ThereAndBack | RateFunction::SlowInto => None,
     }
 }
 
@@ -3461,32 +3473,112 @@ mod tests {
     }
 
     #[test]
-    fn reversed_create_rejects_unmappable_rate_before_lowering() {
+    fn reversed_polynomial_create_preserves_original_rate_and_endpoint_identity() {
+        for rate in [
+            RateFunction::EaseInQuad,
+            RateFunction::EaseOutQuad,
+            RateFunction::EaseInOutQuad,
+            RateFunction::EaseInCubic,
+            RateFunction::EaseOutCubic,
+            RateFunction::EaseInOutCubic,
+            RateFunction::EaseInQuart,
+            RateFunction::EaseOutQuart,
+            RateFunction::EaseInOutQuart,
+            RateFunction::EaseInQuint,
+            RateFunction::EaseOutQuint,
+            RateFunction::EaseInOutQuint,
+        ] {
+            let mut store = SemanticStore::new();
+            let target = visible_target(&mut store, 1.0);
+            let animation = store
+                .insert_semantic_create_animation(
+                    target,
+                    AnimationOptions::new()
+                        .rate_func(rate)
+                        .reverse_rate_function(true),
+                )
+                .unwrap();
+            let schedule = lower_semantic_animation_schedule(
+                &store,
+                &prepare_index(&store),
+                animation,
+                0.0,
+                AnimationOptions::new(),
+            )
+            .unwrap();
+            let mapped = schedule.leaves()[0].timing.easing;
+            for progress in [0.0, 0.125, 0.25, 0.5, 0.75, 0.875, 1.0] {
+                assert!(
+                    (1.0 - mapped.evaluate_f64(progress) - rate.evaluate_f64(1.0 - progress)).abs()
+                        < 1e-14
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reversed_double_smooth_create_preserves_the_symmetric_shared_rate() {
         let mut store = SemanticStore::new();
         let target = visible_target(&mut store, 1.0);
         let animation = store
             .insert_semantic_create_animation(
                 target,
                 AnimationOptions::new()
-                    .rate_func(RateFunction::ThereAndBack)
+                    .rate_func(RateFunction::DoubleSmooth)
                     .reverse_rate_function(true),
             )
             .unwrap();
         let index = prepare_index(&store);
-
+        let schedule = lower_semantic_animation_schedule(
+            &store,
+            &index,
+            animation,
+            0.0,
+            AnimationOptions::new(),
+        )
+        .unwrap();
         assert_eq!(
-            lower_semantic_animation_schedule(
-                &store,
-                &index,
-                animation,
-                0.0,
-                AnimationOptions::new(),
-            ),
-            Err(SemanticAnimationScheduleError::Options {
-                animation,
-                error: AnimationOptionsError::UnsupportedReverseRateFunction,
-            })
+            schedule.leaves()[0].timing.easing,
+            RateFunction::DoubleSmooth
         );
+        for progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let rate = schedule.leaves()[0].timing.easing;
+            assert!(
+                (1.0 - rate.evaluate_f64(progress) - rate.evaluate_f64(1.0 - progress)).abs()
+                    < 1e-14
+            );
+        }
+    }
+
+    #[test]
+    fn reversed_create_rejects_unmappable_rate_before_lowering() {
+        for rate in [RateFunction::ThereAndBack, RateFunction::SlowInto] {
+            let mut store = SemanticStore::new();
+            let target = visible_target(&mut store, 1.0);
+            let animation = store
+                .insert_semantic_create_animation(
+                    target,
+                    AnimationOptions::new()
+                        .rate_func(rate)
+                        .reverse_rate_function(true),
+                )
+                .unwrap();
+            let index = prepare_index(&store);
+
+            assert_eq!(
+                lower_semantic_animation_schedule(
+                    &store,
+                    &index,
+                    animation,
+                    0.0,
+                    AnimationOptions::new(),
+                ),
+                Err(SemanticAnimationScheduleError::Options {
+                    animation,
+                    error: AnimationOptionsError::UnsupportedReverseRateFunction,
+                })
+            );
+        }
     }
 
     #[test]

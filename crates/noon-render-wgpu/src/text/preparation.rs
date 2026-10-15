@@ -17,8 +17,8 @@ use bytemuck::{Pod, Zeroable};
 #[cfg(test)]
 use noon_core::TextResourceArena;
 use noon_core::{
-    Color, FontResourceLookup, FontVariationSetting, GlyphRun, ObjectId, TextRenderItem,
-    TextResourceHandle, TextResourceLookup, Transform2D, Vec2,
+    Color, FontResourceLookup, GlyphRun, ObjectId, TextRenderItem, TextResourceHandle,
+    TextResourceLookup, Transform2D, Vec2,
 };
 use noon_runtime::{FrameChanges, FrameState};
 use noon_text::raster::{
@@ -1217,31 +1217,9 @@ fn raster_key(
         ))?;
     let glyph_id = u16::try_from(glyph_id)
         .map_err(|_| TextPrepareError::Raster(GlyphRasterError::GlyphIdOutOfRange(glyph_id)))?;
-    Ok(GlyphRasterKey {
-        font,
-        glyph_id,
-        pixel_size_bits: pixel_size.to_bits(),
-        variation_fingerprint: variation_fingerprint(run.variations.as_ref()),
-        phase,
-    })
-}
-
-// Must stay byte-for-byte equivalent to `noon-text` cache identity. It is
-// intentionally tiny and duplicated here because the raster cache returns the image
-// while the atlas independently requires the same stable key.
-fn variation_fingerprint(settings: &[FontVariationSetting]) -> u64 {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for setting in settings {
-        for byte in setting.tag {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        for byte in setting.value.to_bits().to_be_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-    }
-    hash
+    Ok(GlyphRasterKey::from_run(
+        font, run, glyph_id, pixel_size, phase,
+    ))
 }
 
 #[cfg(test)]

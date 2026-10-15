@@ -520,6 +520,7 @@ impl FrameNormalizer {
         let run_index = self.runs.len() as u32;
         self.runs.push(GlyphRun {
             font: face,
+            outline_profile: noon_core::GlyphOutlineProfile::Font,
             variations,
             font_size,
             direction: TextDirection::LeftToRight,

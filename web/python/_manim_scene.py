@@ -2661,7 +2661,11 @@ def _build_canonical_composition_candidate(
                 )
             append_family_transform = (
                 (destination.appendMatchingSourceFamilyTransformTo if source_matching else destination.appendMatchingFamilyTransformTo)
-                if matching else destination.appendFamilyTransformTo
+                if matching else (
+                    destination.appendFamilyMethodTargetTo
+                    if isinstance(leaf, _animate._AlignedGroupAnimationBuilder)
+                    else destination.appendFamilyTransformTo
+                )
             )
             append_family_transform(
                 source._semantic_family_handle,

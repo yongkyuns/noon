@@ -1161,6 +1161,18 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_own_color(
+        &mut self,
+        family: &noon::MobjectFamily,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_own_color(family, red, green, blue, alpha))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_color(
         &mut self,
         family: &noon::MobjectFamily,

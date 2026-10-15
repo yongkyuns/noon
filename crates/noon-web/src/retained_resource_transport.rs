@@ -11,10 +11,10 @@ use std::{
 use noon_core::{
     Color, FontFaceIdentity, FontResourceArena, FontResourceLookup, FontVariationSetting,
     GeometryRef, GeometryResource, GeometryResourceArena, GeometryResourceHandle,
-    GeometryResourceLookup, GlyphRun, MeshResource, PositionedGlyph, Rect, StrokeCap, StrokeJoin,
-    Style, TextAffineTransform, TextClusterIdentity, TextDirection, TextGlyphStroke,
-    TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem,
-    TextResource, TextResourceArena, TextResourceHandle, TextResourceLookup,
+    GeometryResourceLookup, GlyphOutlineProfile, GlyphRun, MeshResource, PositionedGlyph, Rect,
+    StrokeCap, StrokeJoin, Style, TextAffineTransform, TextClusterIdentity, TextDirection,
+    TextGlyphStroke, TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart,
+    TextRenderItem, TextResource, TextResourceArena, TextResourceHandle, TextResourceLookup,
     TextResourceReplacementStaging, TextSourceKind, TextSourceSpan, TextVectorItem,
     TextVectorStyle, Transform2D, Vec2, VectorPath,
 };
@@ -30,7 +30,7 @@ pub(crate) mod incremental_render;
 /// vector-decoration geometry, typed spatial meshes, and exact OpenType buffers
 /// across the Python-worker boundary when a retained scene is installed.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 12;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 13;
 const MAX_SHARED_RENDER_GEOMETRIES: usize = 16;
 const MAX_TRANSPORT_MESH_VERTICES: usize = 500_000;
 const MAX_TRANSPORT_MESH_INDICES: usize = 3_000_000;
@@ -2073,6 +2073,7 @@ impl From<TransportTextSourceKind> for TextSourceKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct TransportGlyphRun {
     font: TransportFontFaceIdentity,
+    outline_profile: TransportGlyphOutlineProfile,
     variations: Vec<TransportFontVariationSetting>,
     font_size: f32,
     direction: TransportTextDirection,
@@ -2086,6 +2087,7 @@ impl TransportGlyphRun {
     fn from_core(run: &GlyphRun) -> Self {
         Self {
             font: TransportFontFaceIdentity::from_core(&run.font),
+            outline_profile: run.outline_profile.into(),
             variations: run
                 .variations
                 .iter()
@@ -2108,6 +2110,7 @@ impl TransportGlyphRun {
     fn into_core(self) -> GlyphRun {
         GlyphRun {
             font: self.font.into_core(),
+            outline_profile: self.outline_profile.into_core(),
             variations: self
                 .variations
                 .into_iter()
@@ -2125,6 +2128,34 @@ impl TransportGlyphRun {
                 .map(TransportPositionedGlyph::into_core)
                 .collect::<Vec<_>>()
                 .into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TransportGlyphOutlineProfile {
+    Font,
+    Cairo,
+    CairoCoreText,
+}
+
+impl From<GlyphOutlineProfile> for TransportGlyphOutlineProfile {
+    fn from(value: GlyphOutlineProfile) -> Self {
+        match value {
+            GlyphOutlineProfile::Font => Self::Font,
+            GlyphOutlineProfile::Cairo => Self::Cairo,
+            GlyphOutlineProfile::CairoCoreText => Self::CairoCoreText,
+        }
+    }
+}
+
+impl TransportGlyphOutlineProfile {
+    fn into_core(self) -> GlyphOutlineProfile {
+        match self {
+            Self::Font => GlyphOutlineProfile::Font,
+            Self::Cairo => GlyphOutlineProfile::Cairo,
+            Self::CairoCoreText => GlyphOutlineProfile::CairoCoreText,
         }
     }
 }
@@ -2811,6 +2842,30 @@ mod tests {
         ];
         let original_handles = text_handles(&objects);
         let source = scene.integration_store().borrow();
+        let mut cairo_run = source
+            .text_resources()
+            .get(original_handles[0])
+            .unwrap()
+            .runs[0]
+            .clone();
+        for profile in [
+            GlyphOutlineProfile::Font,
+            GlyphOutlineProfile::Cairo,
+            GlyphOutlineProfile::CairoCoreText,
+        ] {
+            cairo_run.outline_profile = profile;
+            let mut encoded =
+                serde_json::to_value(TransportGlyphRun::from_core(&cairo_run)).unwrap();
+            assert_eq!(
+                serde_json::from_value::<TransportGlyphRun>(encoded.clone())
+                    .unwrap()
+                    .into_core(),
+                cairo_run,
+                "retained text transport must preserve the outline profile"
+            );
+            encoded["outline_profile"] = serde_json::json!("unknown");
+            assert!(serde_json::from_value::<TransportGlyphRun>(encoded).is_err());
+        }
         let bundle = RetainedResourceBundle::capture(
             original_handles.iter().copied(),
             source.text_resources(),

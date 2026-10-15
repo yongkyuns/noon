@@ -44,7 +44,7 @@ const examples = [
   { name: "Text range colors", factory: "createDirectTextRangeColorsSmokeRenderer", objectCount: 1, duration: 0.2 },
   { name: "Path editing", factory: "createDirectPathEditingSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Paint queries and gradients", factory: "createDirectPaintQueriesGradientsSmokeRenderer", objectCount: 5, duration: 0.2 },
-  { name: "Polynomial rate functions", factory: "createDirectPolynomialRatesRenderer", objectCount: 3, duration: 1 },
+  { name: "Polynomial rate functions", factory: "createDirectPolynomialRatesRenderer", objectCount: 5, duration: 1 },
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
   { name: "Dimension fitting", factory: "createDirectDimensionFittingSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family membership order", factory: "createDirectFamilyMembershipOrderSmokeRenderer", objectCount: 2, duration: 0.2 },

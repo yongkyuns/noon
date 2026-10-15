@@ -5,6 +5,30 @@ import { promisify } from "node:util";
 
 const short = (value, limit = 300) => typeof value === "string" ? value.slice(0, limit) : null;
 
+/** Bounded evidence from the test-owned file server; never restart or retry it. */
+export function captureChildProcessDiagnostics(child, { maxOutputChars = 16_000 } = {}) {
+  if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars < 1 || maxOutputChars > 64_000) {
+    throw new RangeError("invalid child-process output capacity");
+  }
+  let stdoutTail = "", stderrTail = "", error = null;
+  const subscriptions = [];
+  const on = (target, event, listener) => {
+    if (target == null) return;
+    target.on(event, listener);
+    subscriptions.push([target, event, listener]);
+  };
+  on(child.stdout, "data", chunk => { stdoutTail = (stdoutTail + chunk.toString()).slice(-maxOutputChars); });
+  on(child.stderr, "data", chunk => { stderrTail = (stderrTail + chunk.toString()).slice(-maxOutputChars); });
+  on(child, "error", cause => { error = short(String(cause)); });
+  return Object.freeze({ snapshot: () => ({
+    pid: child.pid ?? null, exitCode: child.exitCode ?? null,
+    signalCode: child.signalCode ?? null, error, stdoutTail, stderrTail,
+  }), dispose: () => {
+    for (const [target, event, listener] of subscriptions) target.off(event, listener);
+    subscriptions.length = 0;
+  } });
+}
+
 /** Host-side observations, independent of a crashed page's JS execution context. */
 export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 32 } = {}) {
   if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 128) {
@@ -22,15 +46,26 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
     record("phase", facts);
   };
   const attach = (browser, context, page) => {
-    browser.on("disconnected", () => record("browser-disconnected"));
-    context.on("close", () => record("context-close"));
-    page.on("crash", () => record("page-crash"));
-    page.on("close", () => record("page-close"));
-    page.on("framenavigated", frame => {
+    const subscriptions = [];
+    const on = (target, event, listener) => {
+      target.on(event, listener);
+      subscriptions.push([target, event, listener]);
+    };
+    on(browser, "disconnected", () => record("browser-disconnected"));
+    on(context, "close", () => record("context-close"));
+    on(page, "crash", () => record("page-crash"));
+    on(page, "close", () => record("page-close"));
+    on(page, "framenavigated", frame => {
       try {
         if (frame === page.mainFrame()) record("main-frame-navigation", { url: short(frame.url()) });
       } catch { record("main-frame-navigation-unavailable"); }
     });
+    // Gallery cases reuse Chromium/Firefox browsers; detach only this trace's
+    // listeners so completed cases neither retain pages nor accumulate events.
+    return () => {
+      for (const [target, event, listener] of subscriptions) target.off(event, listener);
+      subscriptions.length = 0;
+    };
   };
   return Object.freeze({ setPhase, record, attach, snapshot: () => ({
     phase, events: events.map(event => ({ ...event })),
@@ -41,15 +76,30 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
 export async function captureAttemptedPage(page) {
   if (page === null) return { state: "unavailable", reason: "page not created" };
   try {
-    const observed = await page.evaluate(() => ({
-      url: location.href,
-      runDisabled: document.querySelector("#replace-scene")?.disabled ?? null,
-      selectedExampleId: document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
-      patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
-      patchText: (document.querySelector("#patch-status")?.value ?? "").slice(0, 300),
-      runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
-      runtimeState: document.querySelector("#status")?.dataset.state ?? null,
-    }));
+    const observed = await page.evaluate(() => {
+      const controls = document.querySelector(".playback-controls");
+      const toggle = controls?.querySelector(".playback-toggle");
+      return {
+        url: location.href,
+        runDisabled: document.querySelector("#replace-scene")?.disabled ?? null,
+        selectedExampleId: document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
+        patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
+        patchText: (document.querySelector("#patch-status")?.value ?? "").slice(0, 300),
+        runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
+        runtimeState: document.querySelector("#status")?.dataset.state ?? null,
+        playbackControls: controls == null ? null : {
+          data: { ...controls.dataset },
+          toggle: toggle == null ? null : {
+            ariaLabel: toggle.getAttribute("aria-label"),
+            disabled: toggle.disabled,
+            text: toggle.textContent,
+          },
+        },
+        // This is the test's bounded click/command trace, independent of engine
+        // RPCs. A failed playback query must not erase the attempted interaction.
+        playbackTrace: window.__matrixPlaybackTrace?.events?.slice(-32) ?? [],
+      };
+    });
     return { state: "captured", observed };
   } catch (error) {
     let pageClosed = null;
