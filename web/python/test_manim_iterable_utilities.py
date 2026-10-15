@@ -3,6 +3,49 @@ import noon
 
 
 class IterableUtilities(unittest.TestCase):
+    def test_batches_preserve_adjacent_order_identity_and_callback_failure(self):
+        first, second = object(), object()
+        calls = []
+        def classify(value):
+            calls.append(value)
+            return None if value is first else 2
+        batches = noon.batch_by_property([first, first, second, first], classify)
+        self.assertEqual(batches, [([first, first], None), ([second], 2), ([first], None)])
+        self.assertEqual(calls, [first, first, second, first])
+        def fail(value): raise ValueError("user callback")
+        with self.assertRaisesRegex(ValueError, "user callback"):
+            noon.batch_by_property([first], fail)
+
+    def test_unique_chain_is_lazy_and_preserves_first_equal_value(self):
+        events = []
+        def source():
+            for value in [1, 1, 2]:
+                events.append(value)
+                yield value
+        result = noon.uniq_chain(source(), [2, 3])
+        self.assertEqual(events, [])
+        self.assertEqual(next(result), 1)
+        self.assertEqual(events, [1])
+        self.assertEqual(list(result), [2, 3])
+        self.assertEqual(events, [1, 1, 2])
+        first, second = [frozenset({1}), frozenset({1})]
+        self.assertIs(next(noon.uniq_chain([first], [second])), first)
+        with self.assertRaises(TypeError): list(noon.uniq_chain([[1]]))
+
+    def test_nested_hashing_preserves_container_order_rules_and_user_failures(self):
+        value = {"a": [1, {2, 3}], "b": (4, 5)}
+        reordered = {"b": [4, 5], "a": (1, {3, 2})}
+        self.assertEqual(noon.hash_obj(value), noon.hash_obj(reordered))
+        self.assertEqual(noon.hash_obj([1, 2]), hash((hash(1), hash(2))))
+        self.assertNotEqual(noon.hash_obj([1, 2]), noon.hash_obj([2, 1]))
+        class BrokenHash:
+            def __hash__(self): raise ValueError("user hash")
+        with self.assertRaisesRegex(ValueError, "user hash"):
+            noon.hash_obj([BrokenHash()])
+        with self.assertRaises(TypeError): noon.hash_obj(bytearray(b"x"))
+        cyclic = []; cyclic.append(cyclic)
+        with self.assertRaises(RecursionError): noon.hash_obj(cyclic)
+
     def test_cyclic_adjacency_and_lazy_zip_type(self):
         pairs = noon.adjacent_pairs([1, 2, 3])
         self.assertIsInstance(pairs, zip)
