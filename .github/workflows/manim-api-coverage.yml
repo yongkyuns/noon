@@ -17,6 +17,8 @@ on:
       - 'scripts/manim-polynomial-easings.py'
       - 'scripts/manim-nonstandard-rate-data.py'
       - 'scripts/manim-user-rotation-matrices.py'
+      - 'scripts/manim-user-vector-rotations.py'
+      - 'web/python/test_manim_user_vector_rotations.py'
       - 'web/python/_manim_user_vectors.py'
       - 'web/python/test_manim_user_rotation_matrices.py'
       - 'scripts/manim-simple-functions.py'
@@ -81,6 +83,7 @@ jobs:
           python -m unittest discover -s web/python -p test_manim_rate_intervals.py -v
           python -m unittest discover -s web/python -p test_manim_nonstandard_rate_data.py -v
           python -m unittest discover -s web/python -p test_manim_user_rotation_matrices.py -v
+          python -m unittest discover -s web/python -p test_manim_user_vector_rotations.py -v
 
       - name: Qualify module-only polynomial easing callables
         run: python scripts/manim-polynomial-easings.py .pinned-manim-reference --installed-manim
@@ -92,6 +95,8 @@ jobs:
 
       - name: Qualify module-only scalar units against complete Manim
         run: python scripts/manim-unit-scalars.py .pinned-manim-reference
+      - name: Qualify explicit user vector rotation values
+        run: python scripts/manim-user-vector-rotations.py .pinned-manim-reference --installed-manim
 
       - name: Validate and report public API coverage
         run: |
