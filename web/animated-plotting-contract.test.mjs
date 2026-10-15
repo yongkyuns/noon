@@ -17,9 +17,16 @@ test("both public animations run via a real continuation consumer in the paired 
   const workflow = await read("../.github/workflows/manim-plotting-qualification.yml");
   assert.match(harness, /onSemanticContinuation\(registration\)/);
   assert.match(harness, /sampleToAuthoredTime\(time\)/);
+  const matrixCases = [...workflow.matchAll(
+    /- case: ([\w-]+)\n\s+script: scripts\/time-series-plotting-qualification\.mjs\n\s+mode: '([^']*)'/g,
+  )].map((match) => ({ name: match[1], mode: match[2] }));
   for (const mode of Object.keys(animatedPlottingCases)) {
-    assert.ok(workflow.includes(`time-series-plotting-qualification.mjs ${mode}`));
+    assert.equal(matrixCases.filter((entry) => entry.mode === mode).length, 1,
+      `paired plotting mode ${mode} must have exactly one matrix consumer`);
   }
+  assert.match(workflow, /NOON_CASE_SCRIPT: \$\{\{ matrix\.script \}\}/);
+  assert.match(workflow, /NOON_CASE_MODE: \$\{\{ matrix\.mode \}\}/);
+  assert.match(workflow, /node "\$NOON_CASE_SCRIPT" "\$NOON_CASE_MODE"/);
 });
 
 test("quiet waits only retain their last visual timestamp inside declared wait intervals", () => {
