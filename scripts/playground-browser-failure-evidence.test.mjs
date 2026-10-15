@@ -189,3 +189,23 @@ test("non-WebKit platforms do not sample native processes", async () => {
   assert.equal(await evidence.failure(), null);
   assert.deepEqual(evidence.snapshots(), []);
 });
+
+test("case cleanup detaches only owned lifecycle listeners and remains idempotent", () => {
+  const browser = new EventEmitter(), context = new EventEmitter(), page = new EventEmitter();
+  const independent = () => {};
+  browser.on("disconnected", independent);
+  const trace = createBrowserFailureTrace();
+  const detach = trace.attach(browser, context, page);
+  trace.setPhase("gallery-authored-execution");
+  page.emit("close");
+  const failure = trace.snapshot();
+  assert.equal(failure.events.at(-1).kind, "page-close");
+  detach(); detach();
+  assert.deepEqual(browser.listeners("disconnected"), [independent]);
+  assert.equal(context.listenerCount("close"), 0);
+  assert.equal(page.listenerCount("close"), 0);
+  assert.equal(page.listenerCount("crash"), 0);
+  assert.equal(page.listenerCount("framenavigated"), 0);
+  browser.emit("disconnected");
+  assert.deepEqual(trace.snapshot(), failure);
+});

@@ -26,7 +26,7 @@ use noon_core::{TextSourceFill, TextSourceSpan, TextSourceStyleError};
 #[cfg(any(feature = "native-text", feature = "typst"))]
 use noon_core::{TextSourceKind, Vec2};
 #[cfg(feature = "native-text")]
-pub use noon_text::shaping::NativeFontFace;
+pub use noon_text::shaping::{NativeFontFace, NativeFontMetricsProfile};
 #[cfg(feature = "native-text")]
 use noon_text::shaping::{
     NativeTextCompiler, NativeTextError, NativeTextOptions, NativeTextResourceArtifact,
