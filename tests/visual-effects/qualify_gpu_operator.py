@@ -22,6 +22,7 @@ import unittest
 from pathlib import Path
 
 from mixed_image_evidence import MIXED_IMAGE_TEST, MIXED_IMAGE_MARKER, mixed_image_evidence_error
+from mixed_cache_evidence import MIXED_TEXT_TEST, MIXED_TEXT_MARKER, evidence_error as mixed_text_evidence_error
 
 TEST = "gpu::glow_filter::tests::pixels::native_gaussian_pixels_and_retained_updates"
 PAINTER_TEST = "gpu::glow_filter::tests::analytic_scene::retained_painter_glow_pixels"
@@ -54,6 +55,8 @@ def qualified(code: int, log: str, *, negative: bool = False, test: str = TEST) 
         accepted = accepted and re.search(r"(?m)^CACHE_GEOMETRY_PROBE_PASS\r?$", log) is not None
     if test == MIXED_IMAGE_TEST:
         accepted = accepted and re.search(r"(?m)^" + MIXED_IMAGE_MARKER + r"\r?$", log) is not None
+    if test == MIXED_TEXT_TEST:
+        accepted = accepted and re.search(r"(?m)^" + MIXED_TEXT_MARKER + r"\r?$", log) is not None
     return accepted
 
 
@@ -239,11 +242,11 @@ def run_stage(root: Path, output: Path, name: str, negative: bool, *, test: str 
     ]
     env = os.environ.copy()
     artifacts = None
-    if test in (CACHE_TEST, GEOMETRY_TEST, MIXED_IMAGE_TEST):
+    if test in (CACHE_TEST, GEOMETRY_TEST, MIXED_IMAGE_TEST, MIXED_TEXT_TEST):
         # A fresh attempt directory prevents stale success or readbacks from a
         # previous attempt being reported as evidence for this invocation.
         prefix = {CACHE_TEST: "cache-msaa", GEOMETRY_TEST: "cache-geometry",
-                  MIXED_IMAGE_TEST: "cache-mixed-image"}[test]
+                  MIXED_IMAGE_TEST: "cache-mixed-image", MIXED_TEXT_TEST: "cache-mixed-text"}[test]
         artifacts = output / f"{prefix}-{time.time_ns()}"
         artifacts.mkdir()
         env["NOON_CACHE_PROBE_ARTIFACTS"] = str(artifacts)
@@ -282,7 +285,8 @@ def run_stage(root: Path, output: Path, name: str, negative: bool, *, test: str 
             for path in sorted(artifacts.rglob("*")) if path.is_file()
         }
         validator = {CACHE_TEST: cache_evidence_error, GEOMETRY_TEST: geometry_evidence_error,
-                     MIXED_IMAGE_TEST: mixed_image_evidence_error}[test]
+                     MIXED_IMAGE_TEST: mixed_image_evidence_error,
+                     MIXED_TEXT_TEST: mixed_text_evidence_error}[test]
         record["evidence_error"] = validator(artifacts)
         record["accepted"] = record["accepted"] and record["evidence_error"] is None
     (output / f"{name}.json").write_text(json.dumps(record, indent=2) + "\n")
@@ -312,6 +316,7 @@ def main() -> None:
         "cache_probe": {"scope": "#2094 synthetic 4x sample-storage operator only", "accepted": False},
         "geometry_probe": {"scope": "#2094 production geometry draw experiment only", "accepted": False},
         "mixed_image_probe": {"scope": "#2094 image/vector experiment only", "accepted": False},
+        "mixed_text_probe": {"scope": "#2094 image/glyph/vector experiment only", "accepted": False},
         "passed": False,
     }
     try:
@@ -324,6 +329,17 @@ def main() -> None:
                                               "accepted": checked.testsRun == 8 and checked.wasSuccessful()}
         if not report["mixed_image_checker_tests"]["accepted"]:
             raise RuntimeError("mixed-image checker regressions did not execute and pass")
+        text_checker_log = io.StringIO()
+        text_suite = unittest.defaultTestLoader.discover(
+            str(root / "tests/visual-effects"), pattern="test_mixed_cache_evidence.py")
+        text_checked = unittest.TextTestRunner(stream=text_checker_log, verbosity=2).run(text_suite)
+        (output / "mixed-text-checker-tests.log").write_text(text_checker_log.getvalue())
+        report["mixed_text_checker_tests"] = {
+            "count": text_checked.testsRun,
+            "accepted": text_checked.testsRun == 13 and text_checked.wasSuccessful(),
+        }
+        if not report["mixed_text_checker_tests"]["accepted"]:
+            raise RuntimeError("mixed-text checker regressions did not execute and pass")
         baseline = run_stage(root, output, "published-source", False)
         records.append(baseline)
         if not baseline["accepted"]:
@@ -418,9 +434,35 @@ def main() -> None:
         if lock.is_file():
             (output / "cache-mixed-image-Cargo.lock").write_bytes(lock.read_bytes())
         report["mixed_image_probe"] = mixed
-        report["passed"] = mixed["accepted"] and mixed["source_unchanged"]
-        if not report["passed"]:
+        report["mixed_image_passed"] = mixed["accepted"] and mixed["source_unchanged"]
+        if not report["mixed_image_passed"]:
             raise RuntimeError("#2094 mixed image prefix probe failed; not a passing skip")
+        text_sources = (
+            "crates/noon-render-wgpu/src/gpu/presentation/prefix_restore_tests/mixed.rs",
+            "crates/noon-typst/src/lib.rs",
+            "tests/visual-effects/mixed_cache_evidence.py",
+            "tests/visual-effects/test_mixed_cache_evidence.py",
+        )
+        text_hashes = dict(image_hashes)
+        for source in text_sources:
+            content = (root / source).read_bytes()
+            # Keep source paths: multiple crates have a lib.rs.
+            destination = output / "mixed-text-sources" / source
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
+            text_hashes[source] = sha256(content)
+        mixed_text = run_stage(root, output, "cache-mixed-text", False, test=MIXED_TEXT_TEST)
+        mixed_text["scope"] = "#2094 image/glyph/vector draw experiment; no automatic caching"
+        mixed_text["source_sha256"] = text_hashes
+        mixed_text["source_unchanged"] = all(sha256((root / path).read_bytes()) == digest
+                                             for path, digest in text_hashes.items())
+        mixed_text["cargo_lock_sha256"] = sha256(lock.read_bytes()) if lock.is_file() else None
+        if lock.is_file():
+            (output / "cache-mixed-text-Cargo.lock").write_bytes(lock.read_bytes())
+        report["mixed_text_probe"] = mixed_text
+        report["passed"] = mixed_text["accepted"] and mixed_text["source_unchanged"]
+        if not report["passed"]:
+            raise RuntimeError("#2094 mixed text prefix probe failed; not a passing skip")
     finally:
         report["source_restored"] = shader.read_bytes() == original
         (output / "qualification.json").write_text(json.dumps(report, indent=2) + "\n")

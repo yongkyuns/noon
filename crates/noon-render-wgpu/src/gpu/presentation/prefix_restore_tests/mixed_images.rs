@@ -338,10 +338,16 @@ fn mixed_image_prefix_sample_restore() {
                 }
                 let ordinary_pixels = ordinary(&probe, &renderer, &prepared, &text, &output, clear);
                 if step == 0 {
-                    render_pass!(&probe, &stored, None, wgpu::LoadOp::Clear(clear), |pass| {
-                        let stats = draw(&renderer, pass, &prepared, &text, &suffix);
-                        assert_eq!(stats.images, 1);
-                    });
+                    render_pass!(
+                        &probe,
+                        &stored,
+                        None,
+                        wgpu::LoadOp::Clear(clear),
+                        |pass| {
+                            let stats = draw(&renderer, pass, &prepared, &text, &suffix);
+                            assert_eq!(stats.images, 1);
+                        }
+                    );
                     prefix_samples = probe.samples(&stored);
                 }
                 render_pass!(
@@ -397,16 +403,17 @@ fn mixed_image_prefix_sample_restore() {
                 true,
             );
             {
-                let prepared = resources.prepare(
+                let prepared =
+                    resources.prepare(&probe, &mut preparer, &frame, &FrameChanges::default(), size);
+                render_pass!(
                     &probe,
-                    &mut preparer,
-                    &frame,
-                    &FrameChanges::default(),
-                    size,
+                    &work,
+                    Some(&candidate),
+                    wgpu::LoadOp::Load,
+                    |pass| {
+                        draw(&renderer, pass, &prepared, &text, &prefix);
+                    }
                 );
-                render_pass!(&probe, &work, Some(&candidate), wgpu::LoadOp::Load, |pass| {
-                    draw(&renderer, pass, &prepared, &text, &prefix);
-                });
                 compare(
                     &directory,
                     &format!("i{profile}-accumulated"),
@@ -474,9 +481,15 @@ fn mixed_image_prefix_sample_restore() {
                 &probe.readback(&candidate),
                 false,
             );
-            render_pass!(&probe, &stored, None, wgpu::LoadOp::Clear(clear), |pass| {
-                draw(&renderer, pass, &prepared, &text, &suffix);
-            });
+            render_pass!(
+                &probe,
+                &stored,
+                None,
+                wgpu::LoadOp::Clear(clear),
+                |pass| {
+                    draw(&renderer, pass, &prepared, &text, &suffix);
+                }
+            );
             render_pass!(
                 &probe,
                 &reference_samples,
