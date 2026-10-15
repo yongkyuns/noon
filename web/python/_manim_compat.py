@@ -101,7 +101,7 @@ class VMobject(Mobject):
     def get_mobject_type_class():
         return VMobject
 
-    def __init__(self, *, color=None, **kwargs):
+    def __init__(self, *, color=_base.WHITE, **kwargs):
         from _manim_semantic_handles import _empty_path_init
         _empty_path_init(self, color=color, kind="VMobject", **kwargs)
 

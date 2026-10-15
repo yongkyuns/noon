@@ -401,7 +401,7 @@ def _empty_path_init(
     self: _base.Mobject, *, color=None, kind: str = "Mobject", **kwargs: Any,
 ) -> None:
     """Construct a point-free wrapper through the shared Rust geometry owner."""
-    parsed = None if color is None else _constructor_color("color", color)
+    parsed = _base.BLACK if color is None else _constructor_color("color", color)
     if _geometry_options is None:
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     options = engine_call(_geometry_options.emptyPath)
