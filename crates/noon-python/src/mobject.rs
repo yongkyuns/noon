@@ -14,6 +14,20 @@ impl MobjectHandle {
 }
 #[pymethods]
 impl MobjectHandle {
+    #[pyo3(name = "fillColor")]
+    fn fill_color(&self) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.handle
+            .fill_color()
+            .map(|color| color.map(Into::into))
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "strokeColor")]
+    fn stroke_color(&self) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.handle
+            .stroke_color()
+            .map(|color| color.map(Into::into))
+            .map_err(engine_error)
+    }
     #[pyo3(name = "imagePixelWidth")]
     fn image_pixel_width(&self) -> PyResult<u32> {
         self.handle

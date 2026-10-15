@@ -17,6 +17,7 @@ mod mobject;
 mod options;
 mod path_query;
 mod render_options;
+mod svg;
 #[cfg(feature = "native-text")]
 mod text;
 mod vector_path;
@@ -51,6 +52,7 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 
 #[pymodule]
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<svg::SvgDefaults>()?;
     m.add_class::<image::ImageOptions>()?;
     #[cfg(feature = "native-text")]
     text::register(m)?;

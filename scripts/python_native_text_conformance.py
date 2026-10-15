@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode every native Text or image frame against its independent Rust source."""
+"""Decode every native Text, image or SVG frame against its independent Rust source."""
 import argparse
 import asyncio
 import hashlib
@@ -14,15 +14,17 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--python-path", type=Path, required=True)
 p.add_argument("--rust-binary", type=Path, required=True)
 p.add_argument("--output", type=Path, required=True)
-p.add_argument("--profile", choices=("text", "image"), default="text",
+p.add_argument("--profile", choices=("text", "image", "svg"), default="text",
                help="Select an existing independent Rust/Python resource source")
 a = p.parse_args()
 sys.path.insert(0, str(a.python_path.resolve()))
 from noon_native import export_source
 
-FRAME_COUNT, FRAME_RATE, MAX_FRAMES, SOURCE = ((6, 30, 16, "parity/python-host/native_text.py")
-                                  if a.profile == "text" else
-                                  (16, 4, 32, "web/python/examples/raster_image.py"))
+FRAME_COUNT, FRAME_RATE, MAX_FRAMES, SOURCE = {
+    "text": (6, 30, 16, "parity/python-host/native_text.py"),
+    "image": (16, 4, 32, "web/python/examples/raster_image.py"),
+    "svg": (6, 30, 16, "parity/python-host/native_svg.py"),
+}[a.profile]
 
 
 def require(condition, message):

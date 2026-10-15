@@ -13,6 +13,25 @@ impl GeometryOptions {
 }
 #[pymethods]
 impl GeometryOptions {
+    #[staticmethod]
+    #[pyo3(name = "svgDefaultTransport", signature = (width, fill_color, fill_opacity, stroke_color, stroke_opacity, stroke_width))]
+    fn svg_default_transport(
+        width: Option<f64>,
+        fill_color: Option<u32>,
+        fill_opacity: Option<f64>,
+        stroke_color: Option<u32>,
+        stroke_opacity: Option<f64>,
+        stroke_width: Option<f64>,
+    ) -> PyResult<crate::svg::SvgDefaults> {
+        crate::svg::defaults(
+            width,
+            fill_color,
+            fill_opacity,
+            stroke_color,
+            stroke_opacity,
+            stroke_width,
+        )
+    }
     #[pyo3(name = "setZIndex")]
     pub fn set_z_index(&mut self, value: f64) -> Result<(), PyErr> {
         self.options.set_z_index(value).map_err(engine_error)

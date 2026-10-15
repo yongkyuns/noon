@@ -179,6 +179,13 @@ admission and post-wait creation use the existing Rust image API. Browser URL
 and Blob loading require the browser host; mutable pixels and other codecs
 remain outside this profile.
 
+`SVGMobject` imports the existing bounded static vector SVG profile in the
+native host, including local files, `from_string`, inherited paint, `svg_default`,
+and post-import style overrides. Parsing, placement, membership and publication
+remain shared Rust operations. Precreated SVG families support ordinary live
+family edits. Constructing new SVG resources after an execution barrier, SVG
+text/images, gradients and group compositing remain outside this profile.
+
 `noon_native.export_scene` and `export_source` expose the same options. Quality,
 resolution, FPS, and format values are resolved by the shared Rust integration.
 The source loader selects one Scene or `result`; named/multiple scene selection,

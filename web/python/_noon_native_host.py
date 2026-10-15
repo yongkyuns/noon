@@ -54,6 +54,10 @@ def noonCreateAuthoringImageHandle(options):
     return _arena().image(options)
 
 
+def noonCreateAuthoringSvgHandle(source, should_center, height, width_or_defaults):
+    return _arena().svg(source, should_center, height, width_or_defaults)
+
+
 noonResolveRenderOptions = _native.resolve_render_options
 noonResolveAnimationOptions = _native.resolve_animation_options
 noonResolveCreateAnimationOptions = _native.resolve_create_options

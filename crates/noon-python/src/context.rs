@@ -98,6 +98,16 @@ impl Store {
             .map(MobjectHandle::from_semantic_mobject)
             .map_err(engine_error)
     }
+    #[pyo3(signature = (source, should_center, height, width_or_defaults))]
+    fn svg(
+        &self,
+        source: &str,
+        should_center: bool,
+        height: Option<f64>,
+        width_or_defaults: &Bound<'_, PyAny>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        crate::svg::authored(self, source, should_center, height, width_or_defaults)
+    }
 }
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct MembershipBatch {
@@ -1160,6 +1170,40 @@ impl Context {
         ))
     }
 
+    #[pyo3(name = "queryMobjectFillColor")]
+    fn query_fill_color(
+        &mut self,
+        target: &MobjectHandle,
+    ) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.require_active()?;
+        self.same_store(target)?;
+        if !self.bound_ids.contains(&target.handle.node_id()) {
+            return Err(engine_error("mobject is not bound to this canonical Scene"));
+        }
+        let color = if self.execution.is_some() {
+            self.with_live(|live| live.effective_fill_color(&target.handle))?
+        } else {
+            target.handle.fill_color().map_err(engine_error)?
+        };
+        Ok(color.map(Into::into))
+    }
+    #[pyo3(name = "queryMobjectStrokeColor")]
+    fn query_stroke_color(
+        &mut self,
+        target: &MobjectHandle,
+    ) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.require_active()?;
+        self.same_store(target)?;
+        if !self.bound_ids.contains(&target.handle.node_id()) {
+            return Err(engine_error("mobject is not bound to this canonical Scene"));
+        }
+        let color = if self.execution.is_some() {
+            self.with_live(|live| live.effective_stroke_color(&target.handle))?
+        } else {
+            target.handle.stroke_color().map_err(engine_error)?
+        };
+        Ok(color.map(Into::into))
+    }
     #[pyo3(name = "queryMobjectFillOpacity")]
     fn query_fill_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
