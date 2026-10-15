@@ -90,19 +90,33 @@ jobs:
           export NOON_TRIANGLE_PROFILE_RUNTIME="$RUNNER_TEMP/triangle-profile-runtime"
           echo "NOON_TRIANGLE_PROFILE_RUNTIME=$NOON_TRIANGLE_PROFILE_RUNTIME" >> "$GITHUB_ENV"
           mkdir -p "$NOON_TRIANGLE_PROFILE_RUNTIME/web"
-          gh run download 38418171156 --repo "$GITHUB_REPOSITORY" --name github-pages --dir "$RUNNER_TEMP/triangle-profile-archive"
-          python3 - <<'PY'
-          import os, pathlib, runpy, tarfile
+          # Recover the exact original release from its source-build archive.
+          # Pages' one-day artifact expired; the engine identity stays unchanged.
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/11827693078/zip" > "$RUNNER_TEMP/triangle-original-baseline.zip"
+          git fetch --no-tags origin "$NOON_TRIANGLE_PROFILE_ENGINE_SHA"
+          python3 - <<'PYCODE'
+          import hashlib, os, pathlib, runpy, subprocess, zipfile
+          archive = pathlib.Path(os.environ['RUNNER_TEMP']) / 'triangle-original-baseline.zip'
+          if hashlib.sha256(archive.read_bytes()).hexdigest() != 'b5a75357e5e99ac248d436264bebcfed42c45918a83c852c1ac79c7a8fea3246':
+              raise SystemExit('Original baseline archive digest mismatch')
           destination = pathlib.Path(os.environ['NOON_TRIANGLE_PROFILE_RUNTIME']) / 'web'
-          archive = pathlib.Path(os.environ['RUNNER_TEMP']) / 'triangle-profile-archive/artifact.tar'
-          with tarfile.open(archive) as data:
-              data.extractall(destination, filter='data')
+          with zipfile.ZipFile(archive) as data:
+              if data.testzip() is not None:
+                  raise SystemExit('Original baseline archive CRC mismatch')
+              for name in data.namelist():
+                  if not (destination / name).resolve().is_relative_to(destination.resolve()):
+                      raise SystemExit('Unsafe original baseline archive path')
+              data.extractall(destination)
+          # This source-only verifier was omitted from optimized-web-pkg. Its
+          # bytes must match the original engine's sealed runtime identity.
+          verifier = subprocess.check_output(['git', 'show', os.environ['NOON_TRIANGLE_PROFILE_ENGINE_SHA'] + ':web/runtime-build-verifier.js'])
+          (destination / 'runtime-build-verifier.js').write_bytes(verifier)
           verify = runpy.run_path('scripts/showcase-triangle-light-preview.py')['verify_runtime']
           identity = verify(destination)
-          if identity['sourceRevision'] != os.environ['NOON_TRIANGLE_PROFILE_ENGINE_SHA']:
-              raise SystemExit('Wrong diagnostic baseline engine')
-          print('Verified baseline:', identity['sourceRevision'], identity['buildId'])
-          PY
+          if identity['sourceRevision'] != os.environ['NOON_TRIANGLE_PROFILE_ENGINE_SHA'] or identity['buildId'] != 'e33bf8f91e3f3930ce8cffa584b10f2178bac12822147bbfc8fd132c0c2bb7cb':
+              raise SystemExit('Wrong original diagnostic baseline engine')
+          print('Verified byte-identical original baseline:', identity['sourceRevision'], identity['buildId'])
+          PYCODE
       - name: Install the existing pinned browser tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
