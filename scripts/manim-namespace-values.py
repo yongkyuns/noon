@@ -177,9 +177,15 @@ def main():
     errors.extend(class_queries["errors"])
     standard_library = qualify_standard_library(args.manim_source, installed_manim=args.installed_manim)
     errors.extend(standard_library["errors"])
+    color_palettes = runpy.run_path(
+        str(Path(__file__).with_name("manim-color-palettes.py")),
+        run_name="_color_palette_qualification",
+    )["qualify"](args.manim_source)
+    errors.extend(color_palettes["errors"])
     print(json.dumps({"colors": len(colors), "scalar_constants": len(constants), "axis_aliases": len(axes),
                       "enum_types": len(enums), "enum_members": sum(len(members) for _, members in enums.values()),
                       "class_queries": class_queries, "standard_library": standard_library,
+                      "color_palettes": color_palettes,
                       "errors": errors}, indent=2))
     return bool(errors)
 
