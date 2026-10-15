@@ -23,13 +23,21 @@ class Angle(_compat.VMobject):
         points = [line1.get_start(), line1.get_end(), line2.get_start(), line2.get_end()]
         values = dict(kwargs)
         components = _sector_component_count(values.pop("num_components", 9))
+        coordinates = to_js([coordinate for point in points for coordinate in point])
+        radius_value = (
+            None if radius is None else _base._ir._finite_number("radius", radius)
+        )
         candidate = engine_call(_shared._geometry_options.angle,
-            to_js([coordinate for point in points for coordinate in point]),
-            None if radius is None else _base._ir._finite_number("radius", radius),
+            coordinates,
+            radius_value,
             _base._ir._finite_number("quadrant[0]", quadrant[0]),
             _base._ir._finite_number("quadrant[1]", quadrant[1]),
             bool(other_angle), bool(elbow), components)
         _finish_candidate(self, candidate, type(self).__name__, values)
+        if radius_value is not None:
+            # Pinned Manim stores an explicitly supplied radius, while its
+            # computed default remains an implementation detail.
+            self.radius = radius_value
         self.lines = (line1, line2)
         self.quadrant = quadrant
         self.elbow = bool(elbow)

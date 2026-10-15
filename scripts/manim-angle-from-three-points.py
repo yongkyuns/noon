@@ -1,4 +1,4 @@
-"""Guard the pinned Angle.from_three_points delegation contract."""
+"""Guard pinned Angle constructor metadata and from_three_points contracts."""
 import argparse
 import ast
 import hashlib
@@ -14,6 +14,52 @@ def _method(tree):
     return next(
         node for node in angle.body
         if isinstance(node, ast.FunctionDef) and node.name == "from_three_points"
+    )
+
+
+def _constructor(tree):
+    angle = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Angle"
+    )
+    return next(
+        node for node in angle.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+
+
+def _radius_none_check(node):
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "radius"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Is)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value is None
+    )
+
+
+def _stores_explicit_radius(node):
+    targets = (
+        node.targets if isinstance(node, ast.Assign)
+        else [node.target] if isinstance(node, ast.AnnAssign)
+        else []
+    )
+    return (
+        any(
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "self"
+            and target.attr == "radius"
+            for target in targets
+        )
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "radius"
     )
 
 
@@ -43,6 +89,7 @@ def qualify(manim_source, *, installed_manim=False):
     data = source.read_bytes()
     tree = ast.parse(data, filename=str(source))
     method = _method(tree)
+    constructor = _constructor(tree)
     decorators = [
         node.id for node in method.decorator_list if isinstance(node, ast.Name)
     ]
@@ -58,6 +105,28 @@ def qualify(manim_source, *, installed_manim=False):
     if len(returns) != 1 or ast.dump(returns[0]) != ast.dump(_expected_return()):
         errors.append("pinned Line/Angle delegation differs")
 
+    radius_checks = [node for node in constructor.body if _radius_none_check(node)]
+    explicit_radius_assignments = [
+        node for node in ast.walk(constructor) if _stores_explicit_radius(node)
+    ]
+    conditional_assignments = (
+        [
+            node
+            for statement in radius_checks[0].orelse
+            for node in ast.walk(statement)
+            if _stores_explicit_radius(node)
+        ]
+        if len(radius_checks) == 1
+        else []
+    )
+    radius_attribute_checked = (
+        len(radius_checks) == 1
+        and len(explicit_radius_assignments) == 1
+        and len(conditional_assignments) == 1
+    )
+    if not radius_attribute_checked:
+        errors.append("pinned explicit-radius attribute assignment differs")
+
     if installed_manim:
         module = importlib.import_module("manim.mobject.geometry.line")
         if Path(module.__file__).read_bytes() != data:
@@ -66,6 +135,7 @@ def qualify(manim_source, *, installed_manim=False):
     return {
         "source_sha256": hashlib.sha256(data).hexdigest(),
         "installed_module_checked": installed_manim,
+        "explicit_radius_attribute_checked": radius_attribute_checked,
         "errors": errors,
     }
 
