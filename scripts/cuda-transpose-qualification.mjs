@@ -11,6 +11,7 @@ import {PNG} from 'pngjs';
 import {serveRepository} from './browser-test-server.mjs';
 import {browserArgs} from './manim-raster-support.mjs';
 import {checkSample, checkHighlight, checkTextRegions} from './cuda-transpose-pixels.mjs';
+import {stringifyEvidence} from './cuda-transpose-report.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifactDir = path.resolve(process.env.NOON_CUDA_ARTIFACTS ?? path.join(root, 'cuda-transpose-qualification'));
@@ -167,7 +168,7 @@ try {
             const png = await page.locator('#scene').screenshot();
             if (retain) {
               await writeFile(path.join(dir, filename+'.png'), png);
-              await writeFile(path.join(dir, filename+'.json'), JSON.stringify(receipt, null, 2));
+              await writeFile(path.join(dir, filename+'.json'), stringifyEvidence(receipt));
             }
             const checked = checkSample(PNG.sync.read(png), event, alpha);
             midpointChecks += alpha === 0.5 ? checked.checked : 0;
@@ -186,7 +187,7 @@ try {
       evidence.error = String(error?.stack ?? error);
       try { await page.locator('#scene').screenshot({path:path.join(dir, 'failure.png')}); } catch {}
     } finally {
-      await writeFile(path.join(dir,'observations.json'), JSON.stringify(observations,null,2));
+      await writeFile(path.join(dir,'observations.json'), stringifyEvidence(observations));
       await page.evaluate(() => { const h=window.cudaQualification; h?.execution.terminate(); h?.authoring.terminate(); }).catch(()=>{});
       await page.close();
     }
@@ -198,7 +199,7 @@ try {
       evidence.status='failed'; report.cases.push(evidence); throw failure;
     }
     report.cases.push(evidence);
-    await writeFile(path.join(artifactDir,'report.json'), JSON.stringify(report,null,2));
+    await writeFile(path.join(artifactDir,'report.json'), stringifyEvidence(report));
     console.log(`${evidence.status}: ${name}`);
   }
   report.status='passed';
@@ -206,5 +207,5 @@ try {
   report.status='failed'; report.error=String(error?.stack ?? error); throw error;
 } finally {
   await browser?.close(); await server?.close();
-  await writeFile(path.join(artifactDir,'report.json'), JSON.stringify(report,null,2));
+  await writeFile(path.join(artifactDir,'report.json'), stringifyEvidence(report));
 }
