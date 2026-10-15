@@ -63,6 +63,34 @@ def _stores_explicit_radius(node):
     )
 
 
+def _parallel_empty_return(node):
+    if not isinstance(node, ast.Try):
+        return False
+    for handler in node.handlers:
+        if not (
+            isinstance(handler.type, ast.Name)
+            and handler.type.id == "ValueError"
+        ):
+            continue
+        stores_zero_value = any(
+            isinstance(statement, ast.Assign)
+            and isinstance(statement.value, ast.Constant)
+            and statement.value.value == 0.0
+            and any(
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+                and target.attr == "angle_value"
+                for target in statement.targets
+            )
+            for statement in handler.body
+        )
+        returns_empty = any(isinstance(statement, ast.Return) for statement in handler.body)
+        if stores_zero_value and returns_empty:
+            return True
+    return False
+
+
 def _expected_return():
     return ast.Return(
         value=ast.Call(
@@ -106,6 +134,10 @@ def qualify(manim_source, *, installed_manim=False):
         errors.append("pinned Line/Angle delegation differs")
 
     radius_checks = [node for node in constructor.body if _radius_none_check(node)]
+    parallel_return_indices = [
+        index for index, node in enumerate(constructor.body)
+        if _parallel_empty_return(node)
+    ]
     explicit_radius_assignments = [
         node for node in ast.walk(constructor) if _stores_explicit_radius(node)
     ]
@@ -126,6 +158,13 @@ def qualify(manim_source, *, installed_manim=False):
     )
     if not radius_attribute_checked:
         errors.append("pinned explicit-radius attribute assignment differs")
+    parallel_empty_return_checked = (
+        len(parallel_return_indices) == 1
+        and len(radius_checks) == 1
+        and parallel_return_indices[0] < constructor.body.index(radius_checks[0])
+    )
+    if not parallel_empty_return_checked:
+        errors.append("pinned parallel-line empty return no longer precedes radius storage")
 
     if installed_manim:
         module = importlib.import_module("manim.mobject.geometry.line")
@@ -136,6 +175,7 @@ def qualify(manim_source, *, installed_manim=False):
         "source_sha256": hashlib.sha256(data).hexdigest(),
         "installed_module_checked": installed_manim,
         "explicit_radius_attribute_checked": radius_attribute_checked,
+        "parallel_empty_return_checked": parallel_empty_return_checked,
         "errors": errors,
     }
 

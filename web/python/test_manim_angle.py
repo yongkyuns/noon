@@ -53,11 +53,17 @@ class AngleAdapters(unittest.TestCase):
         self.assertEqual(calls[0],([-1.,0.,1.,0.,0.,-1.,0.,1.],None,1.,1.,False,False,9))
         self.assertEqual(calls[1][1:],(0.5,-1.,1.,False,True,9))
 
-    def test_radius_attribute_preserves_only_explicit_angle_radius(self):
+    def test_radius_attribute_is_absent_for_parallel_empty_angles(self):
         calls=[]
+        radius_attributes=iter((0.5, None, 0.4, None))
         ffi=types.ModuleType("pyodide.ffi");ffi.to_js=lambda values:values
-        options=types.SimpleNamespace(angle=lambda *args:calls.append(args) or object())
+        def angle_candidate(*args):
+            calls.append(args)
+            return types.SimpleNamespace(explicitAngleRadius=next(radius_attributes))
+
+        options=types.SimpleNamespace(angle=angle_candidate)
         first=FakeLine((-1,0),(1,0));second=FakeLine((0,-1),(0,1))
+        parallel=FakeLine((-1,1),(1,1))
         with patch.dict(sys.modules,{"pyodide.ffi":ffi}), \
              patch.object(angle,"_require_geometry_host"), \
              patch.object(angle,"_finish_candidate"), \
@@ -65,11 +71,13 @@ class AngleAdapters(unittest.TestCase):
             explicit=angle.Angle(first,second,radius=0.5)
             defaulted=angle.Angle(first,second)
             right=angle.RightAngle(first,second,length=0.4)
+            empty=angle.Angle(first,parallel,radius=0.7)
 
         self.assertEqual(explicit.radius,0.5)
         self.assertFalse(hasattr(defaulted,"radius"))
         self.assertEqual(right.radius,0.4)
-        self.assertEqual([call[1] for call in calls],[0.5,None,0.4])
+        self.assertFalse(hasattr(empty,"radius"))
+        self.assertEqual([call[1] for call in calls],[0.5,None,0.4,0.7])
 
     def test_value_is_observed_from_rust_metadata(self):
         calls=[]

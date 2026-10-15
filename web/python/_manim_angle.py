@@ -33,11 +33,11 @@ class Angle(_compat.VMobject):
             _base._ir._finite_number("quadrant[0]", quadrant[0]),
             _base._ir._finite_number("quadrant[1]", quadrant[1]),
             bool(other_angle), bool(elbow), components)
+        explicit_radius_attribute = getattr(candidate, "explicitAngleRadius", None)
         _finish_candidate(self, candidate, type(self).__name__, values)
-        if radius_value is not None:
-            # Pinned Manim stores an explicitly supplied radius, while its
-            # computed default remains an implementation detail.
-            self.radius = radius_value
+        if explicit_radius_attribute is not None:
+            # Rust omits this when parallel lines produce Manim's empty Angle.
+            self.radius = float(explicit_radius_attribute)
         self.lines = (line1, line2)
         self.quadrant = quadrant
         self.elbow = bool(elbow)
