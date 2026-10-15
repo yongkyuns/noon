@@ -51,8 +51,6 @@ class UserRotationDataTests(unittest.TestCase):
         np.testing.assert_array_equal(axis, [0, 0, 2])
         self.assertFalse(np.shares_memory(axis, matrix))
 
-
-
     def test_numeric_shape_and_type_errors_are_not_coerced(self):
         from decimal import Decimal
         with self.assertRaises(TypeError):
