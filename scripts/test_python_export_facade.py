@@ -26,7 +26,7 @@ class FacadeTests(TestCase):
             def drive(self, context):
                 events.append(('drive', context))
                 return 'video-event'
-        self.native = SimpleNamespace(VideoExport=Video, GeometryOptions=object,
+        self.native = SimpleNamespace(VideoExport=Video, GeometryOptions=object, ImageOptions=object,
                                       AuthoringVectorPath=object, resolve_create_options=object,
                                       resolve_animation_options=object, resolve_transform_options=object,
                                       resolve_render_options=mock.Mock(return_value=SimpleNamespace(

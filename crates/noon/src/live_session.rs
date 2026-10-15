@@ -14,6 +14,7 @@ mod family_layout;
 mod image;
 mod path_editing;
 mod spatial;
+mod svg;
 pub use family_layout::LiveLayoutTarget;
 
 #[cfg(test)]
@@ -415,6 +416,7 @@ pub enum LiveSessionError {
     // The remaining animation-specific shape checks are migrated in R2b.
     Mobject(String),
     Callback(crate::ExecutionSessionCallbackError),
+    Svg(crate::SvgAuthoringError),
     #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
     Text(crate::TextAuthoringError),
     Animation(String),
@@ -435,6 +437,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::Authoring(error) => error.fmt(formatter),
             Self::Mobject(error) => error.fmt(formatter),
             Self::Callback(error) => error.fmt(formatter),
+            Self::Svg(error) => error.fmt(formatter),
             #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
@@ -453,6 +456,7 @@ impl std::error::Error for LiveSessionError {
         match self {
             Self::Authoring(error) => Some(error),
             Self::Callback(error) => Some(error),
+            Self::Svg(error) => Some(error),
             #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => Some(error),
             Self::Activation(error) => Some(error),
@@ -1486,6 +1490,44 @@ impl<'a> LiveSession<'a> {
             .style
             .stroke
             .map(crate::semantic_mobject::opaque_paint_color))
+    }
+
+    /// Observe current paint while preserving authored precision when lowering agrees.
+    pub fn effective_manim_fill_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, LiveSessionError> {
+        let authored = self.authored(mobject)?.style;
+        crate::semantic_mobject::manim_paint_color(authored.fill.as_ref(), authored.fill_opacity)
+            .map_err(LiveSessionError::from)?;
+        let effective = self.effective(mobject)?;
+        let (paint, opacity) = crate::effective_capture::paint_from_effective(
+            authored.fill.as_ref(),
+            authored.fill_opacity,
+            effective.style.fill,
+        );
+        crate::semantic_mobject::manim_paint_color(paint.as_ref(), opacity)
+            .map_err(LiveSessionError::from)
+    }
+
+    pub fn effective_manim_stroke_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, LiveSessionError> {
+        let authored = self.authored(mobject)?.style;
+        crate::semantic_mobject::manim_paint_color(
+            authored.stroke.as_ref(),
+            authored.stroke_opacity,
+        )
+        .map_err(LiveSessionError::from)?;
+        let effective = self.effective(mobject)?;
+        let (paint, opacity) = crate::effective_capture::paint_from_effective(
+            authored.stroke.as_ref(),
+            authored.stroke_opacity,
+            effective.style.stroke,
+        );
+        crate::semantic_mobject::manim_paint_color(paint.as_ref(), opacity)
+            .map_err(LiveSessionError::from)
     }
 
     pub fn effective_stroke_width(&self, mobject: &Mobject) -> Result<f64, LiveSessionError> {

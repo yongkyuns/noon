@@ -2,6 +2,61 @@ use super::*;
 use crate::Scene;
 
 #[test]
+fn manim_paint_queries_preserve_raw_paint_and_distinguish_zero_rgba() {
+    let mut scene = Scene::new();
+    let mut object = scene.circle(1.0).unwrap();
+    object.set_fill(0.0, 0.0, 0.0, 0.0).unwrap();
+    object.set_stroke_color(0.0, 0.0, 0.0, 1.0).unwrap();
+    object.set_stroke_opacity(0.0).unwrap();
+    let before = object.state().unwrap();
+    let revision = scene.revision();
+    assert_eq!(object.fill_color().unwrap(), Some(Color::BLACK));
+    assert_eq!(object.stroke_color().unwrap(), Some(Color::BLACK));
+    assert_eq!(object.manim_fill_color().unwrap(), None);
+    assert_eq!(object.manim_stroke_color().unwrap(), None);
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(scene.revision(), revision);
+    object.set_fill(0.0, 0.0, 1.0, 0.0).unwrap();
+    assert_eq!(
+        object.manim_fill_color().unwrap(),
+        Some(Color::rgb(0.0, 0.0, 1.0))
+    );
+    object.set_fill(0.0, 0.0, 0.0, 0.25).unwrap();
+    object.set_stroke_opacity(0.25).unwrap();
+    assert_eq!(object.manim_fill_color().unwrap(), Some(Color::BLACK));
+    assert_eq!(object.manim_stroke_color().unwrap(), Some(Color::BLACK));
+}
+
+#[test]
+fn manim_paint_queries_use_current_live_publication_without_composite_opacity() {
+    let mut scene = Scene::new();
+    let mut object = scene.circle(1.0).unwrap();
+    object.set_fill(0.0, 0.0, 0.0, 1.0).unwrap();
+    object.set_object_opacity(0.0).unwrap();
+    scene.add(&object).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    assert_eq!(
+        live.effective_manim_fill_color(&object).unwrap(),
+        Some(Color::BLACK)
+    );
+    live.set_fill(&object, 0.0, 0.0, 0.0, 0.0).unwrap();
+    live.set_stroke_color(&object, 0.0, 0.0, 0.0, 1.0).unwrap();
+    live.set_stroke_opacity(&object, 0.0).unwrap();
+    assert_eq!(live.effective_manim_fill_color(&object).unwrap(), None);
+    assert_eq!(live.effective_manim_stroke_color(&object).unwrap(), None);
+    assert_eq!(
+        live.effective_fill_color(&object).unwrap(),
+        Some(Color::BLACK)
+    );
+    live.set_fill(&object, 0.0, 0.0, 1.0, 0.0).unwrap();
+    assert_eq!(
+        live.effective_manim_fill_color(&object).unwrap(),
+        Some(Color::rgb(0.0, 0.0, 1.0))
+    );
+}
+
+#[test]
 fn empty_path_layout_ignores_pose_until_world_points_exist() {
     let mut scene = Scene::new();
     let mut object = scene
@@ -828,4 +883,36 @@ fn content_validation_retains_missing_resource_identity_without_mutation() {
     assert_eq!(store.scene_revision(), before);
     assert!(store.geometry_resources().is_empty());
     assert!(store.text_resources().is_empty());
+}
+
+#[test]
+fn manim_paint_queries_preserve_tiny_positive_opacity_across_live_publication() {
+    let mut scene = Scene::new();
+    let mut object = scene.circle(1.0).unwrap();
+    object.set_fill(0.0, 0.0, 0.0, 1.0).unwrap();
+    object.set_fill_opacity(1e-50).unwrap();
+    object.set_stroke_color(0.0, 0.0, 0.0, 1.0).unwrap();
+    object.set_stroke_opacity(1e-50).unwrap();
+    scene.add(&object).unwrap();
+    let authored = object.state().unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let segment = live.wait_segment(0.1).unwrap();
+    live.advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    live.complete_segment(segment).unwrap();
+    assert_eq!(live.effective(&object).unwrap().fill_opacity(), 0.0);
+    assert_eq!(
+        live.effective_manim_fill_color(&object).unwrap(),
+        Some(Color::BLACK)
+    );
+    assert_eq!(
+        live.effective_manim_stroke_color(&object).unwrap(),
+        Some(Color::BLACK)
+    );
+    assert_eq!(object.state().unwrap(), authored);
+    live.set_fill_opacity(&object, 0.0).unwrap();
+    live.set_stroke_opacity(&object, 0.0).unwrap();
+    assert_eq!(live.effective_manim_fill_color(&object).unwrap(), None);
+    assert_eq!(live.effective_manim_stroke_color(&object).unwrap(), None);
 }

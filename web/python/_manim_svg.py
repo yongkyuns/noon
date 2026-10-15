@@ -142,7 +142,8 @@ class SVGMobject(_compat.VGroup):
     Direct filesystem paths, :meth:`from_string`, inherited ``svg_default`` paint
     and ordinary constructor paint overrides are supported in this partial slice.
     Browser URL/blob loading, non-default path-string tuning, cache-policy
-    compatibility and construction after live execution starts remain explicit gaps.
+    compatibility remain explicit gaps. Live construction uses the current shared
+    resource-admission transaction.
     """
 
     def __init__(
@@ -171,10 +172,7 @@ class SVGMobject(_compat.VGroup):
             raise NotImplementedError(
                 "unsupported SVGMobject constructor option(s): " + ", ".join(sorted(kwargs))
             )
-        if _live_constructor_context("SVG") is not None:
-            raise NotImplementedError(
-                "live SVGMobject construction requires atomic retained-resource publication"
-            )
+        context = _live_constructor_context("SVG")
         _validate_parser_options(path_string_config)
         normalized_svg_default, has_custom_svg_default = _normalize_svg_default(svg_default)
         if not use_svg_cache:
@@ -210,13 +208,17 @@ class SVGMobject(_compat.VGroup):
         if has_custom_svg_default:
             width_or_defaults = _svg_default_transport(self.svg_width, self.svg_default)
         family = engine_call(
-            _create_svg_handle,
+            _create_svg_handle if context is None else context.liveCreateSvg,
             source,
             self.should_center,
             self.svg_height,
             width_or_defaults,
         )
         _wrap_imported_family(self, family)
+        if context is not None:
+            self._canonical_live_target_context = context
+            for leaf in self._semantic_member_wrappers.values():
+                leaf._canonical_live_target_context = context
 
         # Manim v0.21 applies these explicit paint overrides after parsing. Its
         # top-level `color`/`opacity` fields are retained metadata here as there,

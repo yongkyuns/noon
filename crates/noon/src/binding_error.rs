@@ -939,6 +939,7 @@ impl From<LiveSessionError> for AuthoringFailure {
         match error {
             E::Authoring(cause) => Self::caused_by("live.authoring", message, cause.into()),
             E::Callback(cause) => Self::caused_by("live.callback", message, cause.into()),
+            E::Svg(cause) => Self::caused_by("live.svg", message, cause.into()),
             #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             E::Text(cause) => Self::caused_by("live.text", message, cause.into()),
             E::ForeignMobjectStore => Self::new("foreign_handle", "live.foreign_store", message),

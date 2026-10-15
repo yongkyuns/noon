@@ -18,7 +18,7 @@ use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct Store {
-    semantics: Rc<RefCell<SemanticStore>>,
+    pub(crate) semantics: Rc<RefCell<SemanticStore>>,
 }
 #[pymethods]
 impl Store {
@@ -59,10 +59,54 @@ impl Store {
         .map(|family| crate::family::FamilyHandle { family })
         .map_err(engine_error)
     }
+    #[cfg(feature = "native-text")]
+    #[pyo3(signature = (source, family, size, spacing, colors=None, face=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn text(
+        &self,
+        source: &str,
+        family: &str,
+        size: f64,
+        spacing: f64,
+        colors: Option<PyRefMut<'_, crate::text::TextColorBatch>>,
+        face: Option<PyRef<'_, crate::text::FontFace>>,
+    ) -> PyResult<MobjectHandle> {
+        crate::text::authored(self, source, family, size, spacing, colors, face, false)
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(signature = (source, family, size, spacing, face=None))]
+    fn markup_text(
+        &self,
+        source: &str,
+        family: &str,
+        size: f64,
+        spacing: f64,
+        face: Option<PyRef<'_, crate::text::FontFace>>,
+    ) -> PyResult<MobjectHandle> {
+        crate::text::authored(self, source, family, size, spacing, None, face, true)
+    }
     fn geometry(&self, options: &GeometryOptions) -> PyResult<MobjectHandle> {
         Mobject::from_manim_geometry(Rc::clone(&self.semantics), options.options.clone())
             .map(MobjectHandle::from_semantic_mobject)
             .map_err(engine_error)
+    }
+    fn image(
+        &self,
+        mut options: PyRefMut<'_, crate::image::ImageOptions>,
+    ) -> PyResult<MobjectHandle> {
+        Mobject::from_image(Rc::clone(&self.semantics), options.take()?)
+            .map(MobjectHandle::from_semantic_mobject)
+            .map_err(engine_error)
+    }
+    #[pyo3(signature = (source, should_center, height, width_or_defaults))]
+    fn svg(
+        &self,
+        source: &str,
+        should_center: bool,
+        height: Option<f64>,
+        width_or_defaults: &Bound<'_, PyAny>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        crate::svg::authored(self, source, should_center, height, width_or_defaults)
     }
 }
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
@@ -177,7 +221,7 @@ impl Context {
         }
         target.family.validate().map_err(engine_error)
     }
-    fn available(&self) -> PyResult<()> {
+    pub(crate) fn available(&self) -> PyResult<()> {
         self.require_active()?;
         if self.segment.is_some() {
             Err(engine_error("a segment is already active"))
@@ -229,6 +273,47 @@ impl Context {
 }
 #[pymethods]
 impl Context {
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "liveCreateManimText", signature = (source, family, size, spacing, r, g, b, a, opacity, colors=None, face=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn live_text(
+        &mut self,
+        source: &str,
+        family: &str,
+        size: f64,
+        spacing: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+        opacity: f64,
+        colors: Option<PyRefMut<'_, crate::text::TextColorBatch>>,
+        face: Option<PyRef<'_, crate::text::FontFace>>,
+    ) -> PyResult<MobjectHandle> {
+        crate::text::live(
+            self, source, family, size, spacing, r, g, b, a, opacity, colors, face, false,
+        )
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "liveCreateManimMarkupText", signature = (source, family, size, spacing, r, g, b, a, opacity, face=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn live_markup_text(
+        &mut self,
+        source: &str,
+        family: &str,
+        size: f64,
+        spacing: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+        opacity: f64,
+        face: Option<PyRef<'_, crate::text::FontFace>>,
+    ) -> PyResult<MobjectHandle> {
+        crate::text::live(
+            self, source, family, size, spacing, r, g, b, a, opacity, None, face, true,
+        )
+    }
     #[pyo3(name = "liveExecutionOwnership")]
     fn ownership(&self) -> PyResult<&'static str> {
         self.require_active()?;
@@ -398,6 +483,19 @@ impl Context {
         };
         Ok(color.into())
     }
+    #[pyo3(name = "liveCreateSvg", signature = (source, should_center, height, width_or_defaults))]
+    fn create_svg(
+        &mut self,
+        source: &str,
+        should_center: bool,
+        height: Option<f64>,
+        width_or_defaults: &Bound<'_, PyAny>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        let (options, style) = crate::svg::request(should_center, height, width_or_defaults)?;
+        self.with_live(|live| live.create_svg(source, options, style))
+            .map(|family| crate::family::FamilyHandle { family })
+    }
     #[pyo3(name = "liveCreateFamily")]
     fn create_family(
         &mut self,
@@ -490,6 +588,109 @@ impl Context {
         self.available()?;
         self.same_family_store(target)?;
         self.with_live(|live| live.scale_family(&target.family, x, y).map(|_| ()))
+    }
+    #[pyo3(name = "liveSetStyle")]
+    #[allow(clippy::too_many_arguments)]
+    fn set_object_style(
+        &mut self,
+        target: &MobjectHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let update = noon::integration::authoring_style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.with_live(|live| live.set_style(&target.handle, update).map(|_| ()))
+    }
+    #[pyo3(name = "liveMatchStyle")]
+    fn match_object_style(
+        &mut self,
+        target: &MobjectHandle,
+        source: &MobjectHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.same_store(source)?;
+        self.with_live(|live| live.match_style(&target.handle, &source.handle).map(|_| ()))
+    }
+    #[pyo3(name = "liveSetFamilyStyle")]
+    #[allow(clippy::too_many_arguments)]
+    fn set_family_style(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        let update = noon::integration::authoring_style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.with_live(|live| live.set_family_style(&target.family, update).map(|_| ()))
+    }
+    #[pyo3(name = "liveMatchFamilyStyle")]
+    fn match_family_style(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        source: &crate::family::FamilyHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.same_family_store(source)?;
+        self.with_live(|live| {
+            live.match_family_style(&target.family, &source.family)
+                .map(|_| ())
+        })
     }
     #[pyo3(name = "liveSetFamilyFill", signature = (target, has_color, red, green, blue, alpha, opacity=None))]
     #[allow(clippy::too_many_arguments)]
@@ -626,6 +827,20 @@ impl Context {
         self.available()?;
         self.with_live(|live| live.create_manim_geometry(options.options.clone()))
             .map(MobjectHandle::from_semantic_mobject)
+    }
+    #[pyo3(name = "liveCreateImage")]
+    fn image(
+        &mut self,
+        mut options: PyRefMut<'_, crate::image::ImageOptions>,
+    ) -> PyResult<MobjectHandle> {
+        crate::image::live(self, &mut options)
+    }
+    #[pyo3(name = "liveSetImageSampling")]
+    fn set_image_sampling(&mut self, target: &MobjectHandle, value: &str) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let sampling = noon::integration::image_sampling(value).map_err(engine_error)?;
+        self.with_live(|live| live.set_image_sampling(&target.handle, sampling))
     }
     #[pyo3(name = "liveStartNewPath")]
     fn start_new_path(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
@@ -1071,6 +1286,40 @@ impl Context {
         ))
     }
 
+    #[pyo3(name = "queryMobjectFillColor")]
+    fn query_fill_color(
+        &mut self,
+        target: &MobjectHandle,
+    ) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.require_active()?;
+        self.same_store(target)?;
+        if !self.bound_ids.contains(&target.handle.node_id()) {
+            return Err(engine_error("mobject is not bound to this canonical Scene"));
+        }
+        let color = if self.execution.is_some() {
+            self.with_live(|live| live.effective_manim_fill_color(&target.handle))?
+        } else {
+            target.handle.manim_fill_color().map_err(engine_error)?
+        };
+        Ok(color.map(Into::into))
+    }
+    #[pyo3(name = "queryMobjectStrokeColor")]
+    fn query_stroke_color(
+        &mut self,
+        target: &MobjectHandle,
+    ) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.require_active()?;
+        self.same_store(target)?;
+        if !self.bound_ids.contains(&target.handle.node_id()) {
+            return Err(engine_error("mobject is not bound to this canonical Scene"));
+        }
+        let color = if self.execution.is_some() {
+            self.with_live(|live| live.effective_manim_stroke_color(&target.handle))?
+        } else {
+            target.handle.manim_stroke_color().map_err(engine_error)?
+        };
+        Ok(color.map(Into::into))
+    }
     #[pyo3(name = "queryMobjectFillOpacity")]
     fn query_fill_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;

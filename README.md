@@ -142,8 +142,9 @@ native realtime playback. Async `construct` and ordinary synchronous helpers
 use the shared Rust operation/completion contract. The binding supports the
 analytic 2D geometry, transform/create/fade/composition, membership, effective
 query, and property-callback slice exercised in `parity/python-host`. Native
-text/LaTeX, spatial/family construction and callback content/membership producers
-are not yet qualified. No JavaScript shim or second Python scene is used.
+Text is opt in as described below. Typst/LaTeX, spatial construction and callback
+content/membership producers remain unqualified. No JavaScript shim or second
+Python scene is used.
 
 The real-host gate runs `scripts/python_host_conformance.py` and then
 `scripts/python-host-browser.mjs` against WebGPU and WebGL2. It compares the same
@@ -161,6 +162,33 @@ python3 scripts/build-native-python.py --profile release --export-video
 PYTHONPATH=build/python python3 -m noon_native scene.py --output movie.mp4 --quality l
 PYTHONPATH=build/python python3 -m noon_native scene.py --output frames --format png --resolution 960,540 --fps 30000/1001
 ```
+
+Add `--native-text` when building the extension to enable the existing Rust
+plain Text and bounded MarkupText shaping profile with bundled fonts. The same
+flag works with `--export-video`. `NativeFontFace.bundled(...)` and explicit font
+bytes use immutable Rust font inputs. Authored and post-wait text construction
+share resource admission with the browser host; no host font discovery occurs.
+Text part indexing, content-producing callbacks, Typst/LaTeX and broader text
+options still require their own native bindings and qualification.
+
+`ImageMobject` also accepts immutable nested grayscale/RGB/RGBA arrays in the
+native host. Add `--image-decode` to enable the same bounded PNG/JPEG decoder as
+the browser, including bytes, local paths and readable files. This flag combines
+with `--export-video` and `--native-text`. Pixel sizing, sampling, resource
+admission and post-wait creation use the existing Rust image API. Browser URL
+and Blob loading require the browser host; mutable pixels and other codecs
+remain outside this profile.
+
+Native `Text` source-part and substring observations use the same Rust UTF-8,
+cluster and vector ranges as browser authoring, including after a wait. Copied
+observations remain immutable; queries reject a retired scene owner.
+
+`SVGMobject` imports the existing bounded static vector SVG profile in the
+native host, including local files, `from_string`, inherited paint, `svg_default`,
+and post-import style overrides. Parsing, placement, membership and publication
+remain shared Rust operations. Construction after a wait and ordinary live
+family edits share the existing atomic resource-publication route. SVG text/images,
+gradients and group compositing remain outside this profile.
 
 `noon_native.export_scene` and `export_source` expose the same options. Quality,
 resolution, FPS, and format values are resolved by the shared Rust integration.

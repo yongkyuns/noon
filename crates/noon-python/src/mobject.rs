@@ -14,6 +14,109 @@ impl MobjectHandle {
 }
 #[pymethods]
 impl MobjectHandle {
+    #[pyo3(name = "setStyle")]
+    #[allow(clippy::too_many_arguments)]
+    fn set_style(
+        &mut self,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        let update = noon::integration::authoring_style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.handle.set_style(update).map_err(engine_error)
+    }
+    #[pyo3(name = "matchStyle")]
+    fn match_style(&self, target: &MobjectHandle) -> PyResult<()> {
+        self.handle
+            .match_style(&target.handle)
+            .map_err(engine_error)
+    }
+
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "textParts")]
+    fn text_parts(&self) -> PyResult<crate::text_parts::TextPartList> {
+        self.handle
+            .text_parts()
+            .map(crate::text_parts::TextPartList::new)
+            .map_err(engine_error)
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "textSource")]
+    fn text_source(&self) -> PyResult<String> {
+        self.handle
+            .text_source()
+            .map(|source| source.to_string())
+            .map_err(engine_error)
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "textSourcePartsFor")]
+    fn text_source_parts_for(&self, needle: &str) -> PyResult<crate::text_parts::TextPartList> {
+        self.handle
+            .text_source_parts_for(needle)
+            .map(crate::text_parts::TextPartList::new)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "fillColor")]
+    fn fill_color(&self) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.handle
+            .manim_fill_color()
+            .map(|color| color.map(Into::into))
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "strokeColor")]
+    fn stroke_color(&self) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.handle
+            .manim_stroke_color()
+            .map(|color| color.map(Into::into))
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "imagePixelWidth")]
+    fn image_pixel_width(&self) -> PyResult<u32> {
+        self.handle
+            .image_dimensions()
+            .map(|(width, _)| width)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "imagePixelHeight")]
+    fn image_pixel_height(&self) -> PyResult<u32> {
+        self.handle
+            .image_dimensions()
+            .map(|(_, height)| height)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "setImageSampling")]
+    fn set_image_sampling(&mut self, value: &str) -> PyResult<()> {
+        let sampling = noon::integration::image_sampling(value).map_err(engine_error)?;
+        self.handle
+            .set_image_sampling(sampling)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "manimColor")]
     fn manim_color(&self) -> PyResult<crate::family::ColorObservation> {
         self.handle

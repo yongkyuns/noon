@@ -90,6 +90,7 @@ pub(super) struct NativeCapture {
     overlay: OverlayGpuState,
     target: wgpu::Texture,
     view: wgpu::TextureView,
+    resolve_target: Option<(wgpu::Texture, wgpu::TextureView)>,
     readback: wgpu::Buffer,
     layout: Rgba8ReadbackLayout,
     pixels: Vec<u8>,
@@ -165,7 +166,9 @@ impl NativeCapture {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let view = target.create_view(&Default::default());
@@ -186,6 +189,7 @@ impl NativeCapture {
             overlay: OverlayGpuState::default(),
             target,
             view,
+            resolve_target: None,
             readback,
             layout,
             pixels,
@@ -262,6 +266,40 @@ impl NativeCapture {
             self.renderer
                 .upload_derived(&self.device, &self.queue, &transient);
         }
+        // A resolved image has a dedicated texture role. In particular, do not
+        // turn the preceding single-sample attachment into an MSAA resolve
+        // target when late vector paths first appear (wgpu Metal issue #2241).
+        let multisampled = self
+            .renderer
+            .retained_scene_sample_count(&prepared, Some(&transient))
+            > 1;
+        if multisampled && self.resolve_target.is_none() {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Noon capture dedicated resolve target"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            self.resolve_target = Some((texture, view));
+        }
+        let scene_view = if multisampled {
+            &self
+                .resolve_target
+                .as_ref()
+                .expect("resolve target just initialized")
+                .1
+        } else {
+            &self.view
+        };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -283,7 +321,7 @@ impl NativeCapture {
         self.renderer
             .encode_retained_with_transient_presentations_and_overlay(
                 &mut encoder,
-                &self.view,
+                scene_view,
                 InteractiveRetainedFrame {
                     prepared: &prepared,
                     text: &self.text,
@@ -297,6 +335,21 @@ impl NativeCapture {
                 self.renderer.invalidate_analytic_glows();
                 CaptureError::gpu(error)
             })?;
+        if multisampled {
+            encoder.copy_texture_to_texture(
+                self.resolve_target
+                    .as_ref()
+                    .expect("resolved scene target")
+                    .0
+                    .as_image_copy(),
+                self.target.as_image_copy(),
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         if read_pixels {
             encoder.copy_texture_to_buffer(
                 self.target.as_image_copy(),

@@ -26,36 +26,7 @@ pub(crate) fn gradient_colors(
 }
 
 #[cfg(target_arch = "wasm32")]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn style_update(
-    fill_enabled: bool,
-    fill_red: f64,
-    fill_green: f64,
-    fill_blue: f64,
-    fill_alpha: f64,
-    fill_opacity: Option<f64>,
-    stroke_enabled: bool,
-    stroke_red: f64,
-    stroke_green: f64,
-    stroke_blue: f64,
-    stroke_alpha: f64,
-    stroke_width: Option<f64>,
-    stroke_opacity: Option<f64>,
-) -> Result<noon::StyleUpdate, String> {
-    Ok(noon::StyleUpdate {
-        fill_color: family_color(fill_enabled, fill_red, fill_green, fill_blue, fill_alpha)?,
-        fill_opacity,
-        stroke_color: family_color(
-            stroke_enabled,
-            stroke_red,
-            stroke_green,
-            stroke_blue,
-            stroke_alpha,
-        )?,
-        stroke_width,
-        stroke_opacity,
-    })
-}
+pub(crate) use noon::integration::authoring_style_update as style_update;
 
 #[cfg(target_arch = "wasm32")]
 use noon::integration::authoring_render_f64 as render_f64;
@@ -96,12 +67,13 @@ pub(crate) fn manim_text(
     line_spacing: f64,
     font_face: Option<noon::NativeFontFace>,
 ) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
-    configure_native_text(
-        noon::Text::new(source),
+    noon::integration::native_text_options(
+        source,
         font_family,
         font_size,
         line_spacing,
         font_face,
+        false,
     )
 }
 
@@ -113,35 +85,14 @@ pub(crate) fn manim_markup_text(
     line_spacing: f64,
     font_face: Option<noon::NativeFontFace>,
 ) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
-    configure_native_text(
-        noon::MarkupText::new(source).into(),
+    noon::integration::native_text_options(
+        source,
         font_family,
         font_size,
         line_spacing,
         font_face,
+        true,
     )
-}
-
-#[cfg(target_arch = "wasm32")]
-fn configure_native_text(
-    text: noon::Text,
-    font_family: &str,
-    font_size: f64,
-    line_spacing: f64,
-    font_face: Option<noon::NativeFontFace>,
-) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
-    let font_size = text_authoring_f32("font size", font_size)?;
-    let line_spacing = text_authoring_f32("line spacing", line_spacing)?;
-    if line_spacing != -1.0 && line_spacing <= -1.0 {
-        return Err("line spacing must be -1 or greater than -1".into());
-    }
-    let text = match font_face {
-        Some(face) => text.with_font_face(face),
-        None => text.with_font(font_family),
-    };
-    Ok(text
-        .with_font_size(font_size)
-        .with_line_spacing(line_spacing))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1691,7 +1642,7 @@ mod wasm {
         #[wasm_bindgen(js_name = fillColor)]
         pub fn fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
             self.handle
-                .fill_color()
+                .manim_fill_color()
                 .map(|color| color.map(WasmManimColor::from_color))
                 .map_err(js_error)
         }
@@ -1699,7 +1650,7 @@ mod wasm {
         #[wasm_bindgen(js_name = strokeColor)]
         pub fn stroke_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
             self.handle
-                .stroke_color()
+                .manim_stroke_color()
                 .map(|color| color.map(WasmManimColor::from_color))
                 .map_err(js_error)
         }

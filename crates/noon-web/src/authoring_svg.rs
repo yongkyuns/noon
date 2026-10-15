@@ -103,12 +103,12 @@ impl WasmAuthoringFamilyHandle {
     }
 }
 
-struct SvgImportRequest {
-    width: Option<f64>,
-    svg_default: Option<noon::SvgDefaultStyle>,
+pub(crate) struct SvgImportRequest {
+    pub(crate) width: Option<f64>,
+    pub(crate) svg_default: Option<noon::SvgDefaultStyle>,
 }
 
-fn parse_width_or_defaults(value: JsValue) -> Result<SvgImportRequest, JsValue> {
+pub(crate) fn parse_width_or_defaults(value: JsValue) -> Result<SvgImportRequest, JsValue> {
     if value.is_null() || value.is_undefined() {
         return Ok(SvgImportRequest {
             width: None,

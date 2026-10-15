@@ -40,12 +40,12 @@ except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_typst_handle = None
 
 try:
-    from js import noonNativeFontFace as _create_native_font_face
+    from _noon_host import noonNativeFontFace as _create_native_font_face
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_native_font_face = None
 
 try:
-    from js import noonBundledNativeFontFace as _create_bundled_native_font_face
+    from _noon_host import noonBundledNativeFontFace as _create_bundled_native_font_face
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_bundled_native_font_face = None
 
@@ -81,12 +81,12 @@ class NativeFontFace:
         raw = bytes(data)
         if not raw:
             raise ValueError("font data must not be empty")
-        if _create_native_font_face is None or _to_js is None:
+        if _create_native_font_face is None:
             raise RuntimeError("NativeFontFace requires the shared Rust authoring host")
         handle = engine_call(
             _create_native_font_face,
             family,
-            _to_js(memoryview(raw)),
+            _to_js(memoryview(raw)) if _to_js is not None else raw,
             face_index,
         )
         self._initialize_handle(handle, family, face_index)
@@ -415,6 +415,8 @@ class _RetainedTextMobject(_base.Mobject):
 
         if not isinstance(needle, str):
             raise TypeError("text source-part needle must be a string")
+        import _manim_semantic_handles
+        _manim_semantic_handles._live_mutation_context(self)
         handle = self._semantic_handle
         if not hasattr(handle, "textSourcePartsFor"):
             raise NotImplementedError(
@@ -425,6 +427,8 @@ class _RetainedTextMobject(_base.Mobject):
     def text_parts(self) -> tuple[TextSourcePart, ...]:
         """Return the compiler-authored top-level partition in source order."""
 
+        import _manim_semantic_handles
+        _manim_semantic_handles._live_mutation_context(self)
         handle = self._semantic_handle
         if not hasattr(handle, "textParts"):
             raise NotImplementedError(

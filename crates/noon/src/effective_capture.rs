@@ -95,20 +95,16 @@ pub(crate) fn target_style_from_effective(
             UnsupportedAuthoringOperation::CaptureResourcePaint,
         ));
     }
-    let (fill, fill_opacity) =
-        if lowered_solid_color(authored.fill.as_ref(), authored.fill_opacity) == effective.fill {
-            (authored.fill.clone(), authored.fill_opacity)
-        } else {
-            (effective.fill.map(SemanticPaint::Solid), 1.0)
-        };
-    let (stroke, stroke_opacity) =
-        if lowered_solid_color(authored.stroke.as_ref(), authored.stroke_opacity)
-            == effective.stroke
-        {
-            (authored.stroke.clone(), authored.stroke_opacity)
-        } else {
-            (effective.stroke.map(SemanticPaint::Solid), 1.0)
-        };
+    let (fill, fill_opacity) = paint_from_effective(
+        authored.fill.as_ref(),
+        authored.fill_opacity,
+        effective.fill,
+    );
+    let (stroke, stroke_opacity) = paint_from_effective(
+        authored.stroke.as_ref(),
+        authored.stroke_opacity,
+        effective.stroke,
+    );
     Ok(SemanticStyle {
         fill,
         fill_opacity,
@@ -128,6 +124,20 @@ pub(crate) fn target_style_from_effective(
             f64::from(effective.opacity)
         },
     })
+}
+
+/// Reuse authored precision when the current publication has the same lowered
+/// paint. Otherwise capture the effective paint at its actual publication.
+pub(crate) fn paint_from_effective(
+    authored: Option<&SemanticPaint>,
+    opacity: f64,
+    effective: Option<Color>,
+) -> (Option<SemanticPaint>, f64) {
+    if lowered_solid_color(authored, opacity) == effective {
+        (authored.cloned(), opacity)
+    } else {
+        (effective.map(SemanticPaint::Solid), 1.0)
+    }
 }
 
 fn lowered_solid_color(paint: Option<&SemanticPaint>, opacity: f64) -> Option<Color> {

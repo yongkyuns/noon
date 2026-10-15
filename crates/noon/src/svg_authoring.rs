@@ -283,46 +283,58 @@ impl MobjectFamily {
         style: StyleUpdate,
         import_key: Option<&str>,
     ) -> Result<Self, SvgAuthoringError> {
-        let mut prepared = prepare_svg(source, options)?;
-        apply_style_update(&mut prepared.leaves, style)?;
-        let mut paths = Vec::with_capacity(prepared.leaves.len());
-        let mut metadata = Vec::with_capacity(prepared.leaves.len());
-        for leaf in prepared.leaves {
-            paths.push(leaf.path);
-            metadata.push((leaf.style, leaf.identity_locator));
-        }
-
-        let family_id = {
-            let mut store = store_rc.borrow_mut();
-            store.with_geometry_paths(paths, |store, handles| {
-                let mut transaction = SemanticMutationTransaction::new();
-                let family_creation =
-                    with_svg_source_identity(SemanticNodeCreation::family(), import_key, "root");
-                let family = transaction.create_node(family_creation);
-                for (handle, (style, identity_locator)) in handles.iter().copied().zip(metadata) {
-                    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
-                    state.transform = prepared.transform.into();
-                    state.style = style;
-                    let creation = with_svg_source_identity(
-                        SemanticNodeCreation::object(state),
-                        import_key,
-                        &identity_locator,
-                    );
-                    let object = transaction.create_node(creation);
-                    transaction.add_member(family, object);
-                }
-                let result = transaction
-                    .apply(store)
-                    .map_err(AuthoringError::from)
-                    .map_err(SvgAuthoringError::from)?;
-                result.resolve(family).ok_or(SvgAuthoringError::Authoring(
-                    AuthoringError::UnresolvedCreatedNode(family),
-                ))
-            })?
-        };
+        let family_id = publish_svg_creation(
+            &mut store_rc.borrow_mut(),
+            source,
+            options,
+            style,
+            import_key,
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )?;
 
         Self::from_node(store_rc, family_id).map_err(SvgAuthoringError::from)
     }
+}
+
+/// Admit immutable paths and publish the complete family within one rollback scope.
+pub(crate) fn publish_svg_creation(
+    store: &mut SemanticStore,
+    source: &str,
+    options: SvgImportOptions,
+    style: StyleUpdate,
+    import_key: Option<&str>,
+    publish: impl FnOnce(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<noon_core::SemanticNodeId, SvgAuthoringError> {
+    let mut prepared = prepare_svg(source, options)?;
+    apply_style_update(&mut prepared.leaves, style)?;
+    let mut paths = Vec::with_capacity(prepared.leaves.len());
+    let mut metadata = Vec::with_capacity(prepared.leaves.len());
+    for leaf in prepared.leaves {
+        paths.push(leaf.path);
+        metadata.push((leaf.style, leaf.identity_locator));
+    }
+    store.with_geometry_paths(paths, |store, handles| {
+        let mut transaction = SemanticMutationTransaction::new();
+        let creation = with_svg_source_identity(SemanticNodeCreation::family(), import_key, "root");
+        let family = transaction.create_node(creation);
+        for (handle, (style, locator)) in handles.iter().copied().zip(metadata) {
+            let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+            state.transform = prepared.transform.into();
+            state.style = style;
+            let creation =
+                with_svg_source_identity(SemanticNodeCreation::object(state), import_key, &locator);
+            let object = transaction.create_node(creation);
+            transaction.add_member(family, object);
+        }
+        publish(store, transaction)?
+            .resolve(family)
+            .ok_or(SvgAuthoringError::Authoring(
+                AuthoringError::UnresolvedCreatedNode(family),
+            ))
+    })
 }
 
 impl Scene {
@@ -517,6 +529,8 @@ fn prepare_svg(source: &str, options: SvgImportOptions) -> Result<PreparedSvg, S
     let document = parse_xml(source)?;
     reject_source_features(&document)?;
     let normalized_source = with_manim_svg_defaults(source, &document);
+    let normalized_document = parse_xml(&normalized_source)?;
+    let normalized_source = crate::svg_opacity::normalize(&normalized_source, &normalized_document);
     let normalized_document = parse_xml(&normalized_source)?;
 
     let tree = usvg::Tree::from_xmltree(&normalized_document, &usvg::Options::default())
@@ -760,7 +774,7 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
             }
             (
                 Some(SemanticPaint::Solid(solid_paint(fill.paint())?)),
-                f64::from(fill.opacity().get()),
+                crate::svg_opacity::byte_opacity(f64::from(fill.opacity().get())),
             )
         }
         None => (None, 1.0),
@@ -803,7 +817,7 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
             };
             (
                 Some(SemanticPaint::Solid(solid_paint(stroke.paint())?)),
-                f64::from(stroke.opacity().get()),
+                crate::svg_opacity::byte_opacity(f64::from(stroke.opacity().get())),
                 width,
                 join,
                 cap,
@@ -928,7 +942,9 @@ fn placement_transform(
     let translation = if options.should_center {
         SemanticVec3::new(-center_x * scale, -center_y * scale, 0.0)
     } else {
-        SemanticVec3::new(center_x * (1.0 - scale), center_y * (1.0 - scale), 0.0)
+        // Manim flips around the imported object's own center before fitting.
+        // The points above already have their Y axis inverted around zero.
+        SemanticVec3::new(center_x * (1.0 - scale), -center_y * (1.0 + scale), 0.0)
     };
     SemanticTransform2_5D {
         translation,
@@ -940,6 +956,43 @@ fn placement_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_svg_publication_releases_new_paths_without_retiring_existing_resources() {
+        let scene = Scene::new();
+        let existing = scene
+            .svg_from_str(r#"<svg><rect width="1" height="1"/></svg>"#)
+            .unwrap();
+        let store_rc = scene.integration_store();
+        let before = (
+            scene.revision(),
+            store_rc.borrow().len(),
+            store_rc.borrow().geometry_resources().len(),
+        );
+        let error = publish_svg_creation(
+            &mut store_rc.borrow_mut(),
+            r#"<svg><path d="M0 0 L17 0 L17 29 Z"/></svg>"#,
+            SvgImportOptions::default(),
+            StyleUpdate::default(),
+            None,
+            |_, _| Err(AuthoringError::ForeignStore),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            SvgAuthoringError::Authoring(AuthoringError::ForeignStore)
+        ));
+        assert_eq!(
+            before,
+            (
+                scene.revision(),
+                store_rc.borrow().len(),
+                store_rc.borrow().geometry_resources().len()
+            )
+        );
+        existing.validate().unwrap();
+        assert!(existing.layout_bounds().unwrap().is_some());
+    }
 
     #[test]
     fn svg_cubic_fitting_uses_manim_control_points_not_tight_extrema() {
@@ -978,6 +1031,35 @@ mod tests {
             should_center: false,
             height: None,
             width: None,
+        }
+    }
+
+    #[test]
+    fn uncentered_svg_preserves_original_center_during_height_and_width_fitting() {
+        // Pinned ManimCE 0.21.0 flips around the object's own center. Both
+        // fitting operations also use that center, including after a Y flip.
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10"/></svg>"#;
+        for (height, width, expected_width, expected_height) in [
+            (None, None, 20.0, 10.0),
+            (Some(2.0), None, 4.0, 2.0),
+            (Some(2.0), Some(6.0), 6.0, 3.0),
+        ] {
+            let scene = Scene::new();
+            let family = scene
+                .svg_from_str_with_options(
+                    source,
+                    SvgImportOptions {
+                        should_center: false,
+                        height,
+                        width,
+                    },
+                )
+                .unwrap();
+            let bounds = family.layout_bounds().unwrap().unwrap();
+            assert!(((bounds.min_x + bounds.max_x) * 0.5 - 10.0).abs() < 1e-6);
+            assert!(((bounds.min_y + bounds.max_y) * 0.5 - 5.0).abs() < 1e-6);
+            assert!((bounds.width() - expected_width).abs() < 1e-6);
+            assert!((bounds.height() - expected_height).abs() < 1e-6);
         }
     }
 
@@ -1192,8 +1274,10 @@ mod tests {
         let object =
             crate::Mobject::from_node(Rc::clone(scene.integration_store()), member).unwrap();
         let query = object.path_query().unwrap();
-        assert_eq!(query.start().unwrap(), (4.0, -7.0));
-        assert_eq!(query.end().unwrap(), (7.0, -7.0));
+        // ManimCE 0.21.0 retains y=7 when flipping this horizontal path
+        // around its own center; the transformed x coordinates are unchanged.
+        assert_eq!(query.start().unwrap(), (4.0, 7.0));
+        assert_eq!(query.end().unwrap(), (7.0, 7.0));
     }
 
     #[test]
@@ -1218,8 +1302,8 @@ mod tests {
             state.style.stroke,
             Some(SemanticPaint::Solid(Color::from_hex(0xABCDEF)))
         );
-        assert!((state.style.fill_opacity - 0.25).abs() < 1e-6);
-        assert!((state.style.stroke_opacity - 0.5).abs() < 1e-6);
+        assert_eq!(state.style.fill_opacity, 64.0 / 255.0);
+        assert_eq!(state.style.stroke_opacity, 128.0 / 255.0);
         assert!((state.style.stroke_width - 0.02).abs() < 1e-6);
     }
 

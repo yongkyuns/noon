@@ -100,9 +100,9 @@ when a browser player is leased to its execution endpoint.
 CPython extension. `noon_native` provides a finite, explicitly sampled,
 renderer-free execution host. Its first conformance profile covers analytic 2D
 geometry, ordinary transform/create/fade/composition, membership, effective
-queries, and property callbacks. Native realtime window integration, text/LaTeX,
-family/spatial construction, and callback structural/content producers are not
-claimed by that profile. Unsupported bindings must fail explicitly rather than
+queries, and property callbacks. Native realtime window integration,
+Typst/LaTeX, spatial construction, and callback structural/content producers
+remain unqualified. The bounded family and optional Text profiles follow below. Unsupported bindings must fail explicitly rather than
 emulate browser objects or approximate semantic behavior. The existing browser
 renderer and native Rust window host remain separate platform integrations.
 
@@ -130,6 +130,21 @@ state is context-local and always retires native/callback resources, including
 source failure and cancellation. Render-option values share one Rust resolver
 across native Python and WASM. This is a bounded file-output profile, not named
 scene selection, configuration-file loading, or a broader resource binding.
+
+The optional native Text profile delegates plain/markup preparation to one
+shared Rust integration helper also used by the WASM binding. Font faces retain
+immutable bytes and metrics recipes; text-color batches are consumed inputs.
+Cold construction uses the existing semantic text importer. Construction after
+a source barrier uses `LiveSession::create_text`, so resource import and runtime
+publication stay atomic and existing ownership/retirement guards apply. The
+native adapter adds no shaping, layout, callback scheduling or resource cache.
+
+Native image inputs are consumable inert Rust options. Nested arrays adapt to
+one immutable byte input; the optional `image-decode` feature enables the shared
+bounded PNG/JPEG decoder. Cold admission uses `Mobject::from_image`, while live
+creation and sampling changes use `LiveSession`. Both hosts share sampling-value
+validation. No native URL loader, Python decoder, resource cache or frame path
+is introduced.
 
 ### Direct Rust execution invariant
 

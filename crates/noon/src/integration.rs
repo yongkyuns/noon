@@ -24,10 +24,16 @@
 mod export_frames;
 mod forward_sample;
 mod frame_grid;
+mod image_options;
+pub use image_options::image_sampling;
 mod path_edits;
 mod pixel_readback;
 mod render_options;
 mod svg_failure;
+#[cfg(feature = "native-text")]
+mod text_options;
+#[cfg(feature = "native-text")]
+pub use text_options::{native_text_options, text_color_channel};
 mod vector_path;
 pub use vector_path::{authoring_path_point, AuthoringVectorPath};
 
@@ -126,6 +132,38 @@ pub fn family_color(
         blue as f32,
         alpha as f32,
     )))
+}
+
+/// Decode an atomic paint update with the shared host color validation.
+#[allow(clippy::too_many_arguments)]
+pub fn authoring_style_update(
+    fill_enabled: bool,
+    fill_red: f64,
+    fill_green: f64,
+    fill_blue: f64,
+    fill_alpha: f64,
+    fill_opacity: Option<f64>,
+    stroke_enabled: bool,
+    stroke_red: f64,
+    stroke_green: f64,
+    stroke_blue: f64,
+    stroke_alpha: f64,
+    stroke_width: Option<f64>,
+    stroke_opacity: Option<f64>,
+) -> Result<crate::StyleUpdate, String> {
+    Ok(crate::StyleUpdate {
+        fill_color: family_color(fill_enabled, fill_red, fill_green, fill_blue, fill_alpha)?,
+        fill_opacity,
+        stroke_color: family_color(
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+        )?,
+        stroke_width,
+        stroke_opacity,
+    })
 }
 
 /// Construct one detached family through an explicitly supplied live execution

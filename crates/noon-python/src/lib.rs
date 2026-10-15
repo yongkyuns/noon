@@ -12,10 +12,16 @@ mod context;
 mod export;
 mod family;
 mod geometry;
+mod image;
 mod mobject;
 mod options;
 mod path_query;
 mod render_options;
+mod svg;
+#[cfg(feature = "native-text")]
+mod text;
+#[cfg(feature = "native-text")]
+mod text_parts;
 mod vector_path;
 
 fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
@@ -48,9 +54,17 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 
 #[pymodule]
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<svg::SvgDefaults>()?;
+    m.add_class::<image::ImageOptions>()?;
+    #[cfg(feature = "native-text")]
+    text::register(m)?;
     m.add_class::<geometry::GeometryOptions>()?;
     m.add_class::<vector_path::AuthoringVectorPath>()?;
     m.add_class::<path_query::PathQuery>()?;
+    #[cfg(feature = "native-text")]
+    m.add_class::<text_parts::TextPart>()?;
+    #[cfg(feature = "native-text")]
+    m.add_class::<text_parts::TextPartList>()?;
     m.add_class::<context::Store>()?;
     m.add_class::<context::Context>()?;
     m.add_class::<context::MembershipBatch>()?;

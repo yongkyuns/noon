@@ -31,6 +31,72 @@ pub struct FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "setStyle")]
+    #[allow(clippy::too_many_arguments)]
+    fn set_style(
+        &self,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        let update = noon::integration::authoring_style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.family.set_style(update).map_err(engine_error)
+    }
+    #[pyo3(name = "matchStyle")]
+    fn match_style(&self, target: &FamilyHandle) -> PyResult<()> {
+        self.family
+            .match_style(&target.family)
+            .map_err(engine_error)
+    }
+
+    #[getter(memberCount)]
+    fn member_count(&self) -> PyResult<usize> {
+        let store = self.family.integration_store().borrow();
+        Ok(store
+            .semantic_family_checked(self.family.node_id())
+            .map_err(engine_error)?
+            .members_iter()
+            .count())
+    }
+    #[pyo3(name = "memberMobject")]
+    fn member_mobject(&self, index: usize) -> PyResult<MobjectHandle> {
+        let store = std::rc::Rc::clone(self.family.integration_store());
+        let member = store
+            .borrow()
+            .semantic_family_members_checked(self.family.node_id())
+            .map_err(engine_error)?
+            .get(index)
+            .copied()
+            .ok_or_else(|| engine_error("family member index is out of bounds"))?;
+        noon::Mobject::from_node(store, member)
+            .map(MobjectHandle::from_semantic_mobject)
+            .map_err(engine_error)
+    }
     fn layout(&self) -> PyResult<FamilyLayoutObservation> {
         self.family
             .layout()

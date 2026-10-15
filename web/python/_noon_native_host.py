@@ -47,10 +47,33 @@ def _arena():
 
 noonAuthoringGeometryOptions = _native.GeometryOptions
 noonAuthoringVectorPath = _native.AuthoringVectorPath
+noonAuthoringImageOptions = _native.ImageOptions
+
+
+def noonCreateAuthoringImageHandle(options):
+    return _arena().image(options)
+
+
+def noonCreateAuthoringSvgHandle(source, should_center, height, width_or_defaults):
+    return _arena().svg(source, should_center, height, width_or_defaults)
+
+
 noonResolveRenderOptions = _native.resolve_render_options
 noonResolveAnimationOptions = _native.resolve_animation_options
 noonResolveCreateAnimationOptions = _native.resolve_create_options
 noonResolveTransformAnimationOptions = _native.resolve_transform_options
+
+
+if hasattr(_native, "FontFace"):
+    noonNativeFontFace = _native.FontFace
+    noonBundledNativeFontFace = _native.bundled_native_font_face
+    noonTextColorBatch = _native.TextColorBatch
+
+    def noonCreateAuthoringTextHandle(*args):
+        return _arena().text(*args)
+
+    def noonCreateAuthoringMarkupTextHandle(*args):
+        return _arena().markup_text(*args)
 
 
 def noonCreateAuthoringGeometryHandle(options):
