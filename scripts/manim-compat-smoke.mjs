@@ -617,6 +617,14 @@ assert lingering is __import__("_manim_rate_functions").lingering
 assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
+assert SVGNAMES.ALICEBLUE == color_from_hex(0xEFF7FF)
+assert X11.ALICEBLUE == color_from_hex(0xF0F8FF)
+assert DVIPSNAMES.RED == color_from_hex(0xED1B23)
+assert AS2700.B11_RICH_BLUE == color_from_hex(0x2B3770)
+assert BS381.BS381_101 == color_from_hex(0x94BFAC)
+assert XKCD.AMBER == color_from_hex(0xFEB308)
+assert XKCD.AMBER is XKCD.AMBER
+assert "numpy" not in sys.modules
 result = Scene()
 `);
       const arrayNamespace = await client.run(`
