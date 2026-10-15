@@ -178,18 +178,8 @@ pub fn export_file<C: LiveContinuation>(
     if cancellation.is_cancelled() {
         return Err(FileExportError::Capture(CaptureRunError::Cancelled));
     }
-    let source_duration = if frame_options.final_hold_seconds == 0.0
-        && capture.sampling.reason == ExportEndReason::SourceEnd
-    {
-        capture
-            .sampling
-            .source_end
-            .map(|end| end - capture.sampling.start_time)
-    } else {
-        None
-    };
     let (path, format, encoder_diagnostics) = sink
-        .finish_with_source_end(capture.sampling.frames, source_duration)
+        .finish_source(&capture.sampling, frame_options.final_hold_seconds)
         .map_err(FileExportError::Output)?;
     Ok(FileExportSummary {
         capture,
@@ -199,7 +189,9 @@ pub fn export_file<C: LiveContinuation>(
     })
 }
 
-struct FileSink {
+/// A native source host feeds shared-policy frames to this existing sink.
+/// Dropping unfinished output abandons its staged destination.
+pub struct FileSink {
     // Encoder drops BEFORE its destination so an aborted process cannot keep
     // writing into a directory while the file owner is cleaning it up.
     encoder: Option<Encoder>,
@@ -216,7 +208,24 @@ struct FileSink {
 }
 
 impl FileSink {
-    fn new(
+    /// Finalize one completed source using the same terminal-duration policy as
+    /// compiled Rust output. Cropping, source-end bounds and final holds retain
+    /// their existing meanings; errors abandon the output rather than replay it.
+    pub fn finish_source(
+        self,
+        sampling: &noon::integration::ExportFrameSummary,
+        final_hold_seconds: f64,
+    ) -> io::Result<(PathBuf, OutputFormat, String)> {
+        let source_duration =
+            if final_hold_seconds == 0.0 && sampling.reason == ExportEndReason::SourceEnd {
+                sampling.source_end.map(|end| end - sampling.start_time)
+            } else {
+                None
+            };
+        self.finish_with_source_end(sampling.frames, source_duration)
+    }
+
+    pub fn new(
         mut options: OutputOptions,
         rate: FrameRate,
         width: u32,
@@ -287,7 +296,7 @@ impl FileSink {
         })
     }
 
-    fn write(&mut self, frame: CapturedFrame<'_>) -> io::Result<()> {
+    pub fn write(&mut self, frame: CapturedFrame<'_>) -> io::Result<()> {
         let result = (|| {
             if self.failed
                 || frame.frame.pts != self.frames

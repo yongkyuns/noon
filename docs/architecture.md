@@ -122,6 +122,15 @@ Python execution, or a claim of responsive arbitrary CPU-bound user code.
 Pyodide runs compare their observations at controlled logical samples. Issue
 #2015 tracks qualification and remaining capability breadth.
 
+The opt-in `noon-python/export` adapter owns only output policy, capture, and
+encoder lifetime. It reuses `ExportFramePolicy`, the existing execution session,
+`SessionCapture`, and the Rust exporter's staged `FileSink`. Python runs at
+source/callback barriers; it does not iterate video frames. Export invocation
+state is context-local and always retires native/callback resources, including
+source failure and cancellation. Render-option values share one Rust resolver
+across native Python and WASM. This is a bounded file-output profile, not named
+scene selection, configuration-file loading, or a broader resource binding.
+
 ### Direct Rust execution invariant
 
 Native Rust and Rust compiled to WASM use the same typed engine path; only the platform shell changes:

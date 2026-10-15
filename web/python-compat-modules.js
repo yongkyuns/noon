@@ -1,4 +1,5 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
+  { sourcePath: "python/_noon_render_options.py", runtimePath: "/tmp/_noon_render_options.py", label: "Noon shared render-option values" },
   { sourcePath: "python/_manim_color_palettes.py", runtimePath: "/tmp/_manim_color_palettes.py", label: "Noon pinned named color palettes" },
   { sourcePath: "python/_manim_user_vectors.py", runtimePath: "/tmp/_manim_user_vectors.py", label: "Noon explicit Python user-data vectors" },
   { sourcePath: "python/_manim_file_paths.py", runtimePath: "/tmp/_manim_file_paths.py", label: "Noon Python user-path filesystem helpers" },

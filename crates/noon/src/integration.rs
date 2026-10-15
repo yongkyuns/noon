@@ -26,6 +26,7 @@ mod forward_sample;
 mod frame_grid;
 mod path_edits;
 mod pixel_readback;
+mod render_options;
 mod svg_failure;
 mod vector_path;
 pub use vector_path::{authoring_path_point, AuthoringVectorPath};
@@ -42,6 +43,10 @@ pub use frame_grid::{FrameGrid, FrameGridError, FrameRate, FrameSample};
 pub use path_edits::{publish_borrowed_path_edit, BorrowedPathEdit};
 pub use pixel_readback::{
     PixelChannelOrder, PixelReadbackError, PixelRowOrder, Rgba8ReadbackLayout,
+};
+pub use render_options::{
+    parse_render_frame_rate, RenderFormat, RenderOptionInputs, RenderOptionsError,
+    ResolvedRenderOptions,
 };
 
 /// Conversion from Manim Cairo pixel stroke widths to Noon scene units.

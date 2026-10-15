@@ -120,6 +120,8 @@ mod pointer_selection_smoke;
     any(debug_assertions, feature = "renderer-smoke")
 ))]
 mod raster_image_smoke;
+#[cfg(target_arch = "wasm32")]
+mod render_options;
 mod renderer_observation;
 #[cfg(all(
     feature = "renderer",
@@ -203,6 +205,8 @@ pub use matching_shapes_smoke::*;
     any(debug_assertions, feature = "renderer-smoke")
 ))]
 pub use raster_image_smoke::*;
+#[cfg(target_arch = "wasm32")]
+pub use render_options::*;
 pub use renderer_observation::*;
 #[cfg(all(
     feature = "renderer",

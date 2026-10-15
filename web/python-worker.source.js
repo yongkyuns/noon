@@ -24,9 +24,11 @@ import initNoonWeb, {
   WasmTableOptions,
   noonLinearTransformationPathArc,
   resolveAnimationOptions,
+  resolveRenderOptions,
   resolveCreateAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
+import { resolveRenderOptionsPlain } from "./render-options.js";
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
@@ -402,6 +404,7 @@ async function initializePyodide() {
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex, ...color) => color.length
     ? authoringStore.createFamilyWithColor(batch, zIndex, ...color)
     : authoringStore.createFamily(batch, zIndex);
+  self.noonResolveRenderOptions = (...args) => resolveRenderOptionsPlain(resolveRenderOptions, ...args);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
   self.noonResolveCreateAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveCreateAnimationOptions, ...args);
   self.noonResolveTransformAnimationOptions = (...args) =>

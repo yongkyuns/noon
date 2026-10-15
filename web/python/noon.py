@@ -922,6 +922,8 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 
 _PUBLIC_EXPORTS = {
+    "RenderOptions": "_noon_render_options",
+    "resolve_render_options": "_noon_render_options",
     "lingering": "_manim_rate_functions",
     "AS2700": "_manim_color_palettes",
     "BS381": "_manim_color_palettes",
