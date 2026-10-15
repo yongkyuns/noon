@@ -33,12 +33,7 @@ impl Fixture {
             for y in 0..8_u8 {
                 for x in 0..8_u8 {
                     // Straight RGBA includes colored zero-alpha and partial texels.
-                    rgba.extend([
-                        x * 31,
-                        y * 29,
-                        variant,
-                        [0, 85, 170, 255][(x % 4) as usize],
-                    ]);
+                    rgba.extend([x * 31, y * 29, variant, [0, 85, 170, 255][(x % 4) as usize]]);
                 }
             }
             let handle = images.intern_rgba8(8, 8, rgba).unwrap();
@@ -304,17 +299,11 @@ fn run(directory: &std::path::Path) {
             assert!(full.text.instances_drawn > 0 && full.geometry.instances_drawn > 0);
             let pixels = probe.readback(&ordinary);
             if step == 0 {
-                render_pass!(
-                    &probe,
-                    &prefix,
-                    None,
-                    wgpu::LoadOp::Clear(clear),
-                    |pass| {
-                        let stats = draw(&gpu, pass, &prepared, &text, &suffix_ids);
-                        assert_eq!(stats.images, 1);
-                        assert!(stats.text.instances_drawn > 0);
-                    }
-                );
+                render_pass!(&probe, &prefix, None, wgpu::LoadOp::Clear(clear), |pass| {
+                    let stats = draw(&gpu, pass, &prepared, &text, &suffix_ids);
+                    assert_eq!(stats.images, 1);
+                    assert!(stats.text.instances_drawn > 0);
+                });
             }
             let render_candidate = || {
                 render_pass!(
@@ -335,7 +324,11 @@ fn run(directory: &std::path::Path) {
             };
             render_candidate();
             if step >= 4 {
-                let name = if step == 4 { "stale-image" } else { "stale-text" };
+                let name = if step == 4 {
+                    "stale-image"
+                } else {
+                    "stale-text"
+                };
                 compare(
                     directory,
                     &format!("p{profile}-{name}"),
@@ -344,15 +337,9 @@ fn run(directory: &std::path::Path) {
                     false,
                 );
                 // Deliberate explicit rebuild; not automatic invalidation policy.
-                render_pass!(
-                    &probe,
-                    &prefix,
-                    None,
-                    wgpu::LoadOp::Clear(clear),
-                    |pass| {
-                        draw(&gpu, pass, &prepared, &text, &suffix_ids);
-                    }
-                );
+                render_pass!(&probe, &prefix, None, wgpu::LoadOp::Clear(clear), |pass| {
+                    draw(&gpu, pass, &prepared, &text, &suffix_ids);
+                });
                 render_candidate();
             }
             render_pass!(
