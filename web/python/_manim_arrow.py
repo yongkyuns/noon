@@ -380,6 +380,10 @@ class Arrow(_compat.Group):
         """Read the retained shaft width in Manim's public stroke units."""
         return float(self._shaft.get_stroke_width())
 
+    def get_color(self) -> _base.Color:
+        """Observe current shaft paint through its shared semantic owner."""
+        return self._shaft.get_color()
+
     def has_tip(self) -> bool:
         return self.tip is not None
 
