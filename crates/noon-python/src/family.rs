@@ -31,6 +31,49 @@ pub struct FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "setStyle")]
+    #[allow(clippy::too_many_arguments)]
+    fn set_style(
+        &self,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        let update = noon::integration::authoring_style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.family.set_style(update).map_err(engine_error)
+    }
+    #[pyo3(name = "matchStyle")]
+    fn match_style(&self, target: &FamilyHandle) -> PyResult<()> {
+        self.family
+            .match_style(&target.family)
+            .map_err(engine_error)
+    }
+
     #[getter(memberCount)]
     fn member_count(&self) -> PyResult<usize> {
         let store = self.family.integration_store().borrow();

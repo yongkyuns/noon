@@ -44,6 +44,70 @@ class ZeroPaint(Scene):
                 batch.appendMobject('', member)
         return store.family(batch, 0)
 
+    def test_atomic_style_updates_preserve_omissions_and_reject_invalid_inputs(self):
+        store = native.Store()
+        child = store.geometry(native.GeometryOptions.square(2))
+        family = self.family(store, child, child)
+        values = (True, 0, 1, 0, 1, .75, True, 0, 0, 1, 1, .125, .625)
+        for target in (child, family):
+            target.setStyle(*values)
+            self.assertEqual((child.fillOpacity, child.strokeWidth, child.strokeOpacity),
+                             (.75, .125, .625))
+            target.setStyle(False, 0, 0, 0, 1, None, False, 0, 0, 0, 1, None, None)
+            for index, bad in ((1, float('nan')), (5, 2), (11, -1), (12, -1)):
+                invalid = list(values)
+                invalid[index] = bad
+                with self.assertRaises(RuntimeError): target.setStyle(*invalid)
+                self.assertEqual((child.fillOpacity, child.strokeWidth, child.strokeOpacity),
+                                 (.75, .125, .625))
+
+    def test_style_context_checks_foreign_and_retired_handles_before_mutation(self):
+        left, right = native.Store(), native.Store()
+        local = left.geometry(native.GeometryOptions.square(2))
+        foreign = right.geometry(native.GeometryOptions.square(2))
+        context = left.context()
+        values = (True, 0, 1, 0, 1, .75, False, 0, 0, 0, 1, None, None)
+        for own, other, suffix in ((local, foreign, ''),
+                                  (self.family(left, local), self.family(right, foreign), 'Family')):
+            with self.assertRaisesRegex(RuntimeError, 'foreign|different.*store|another.*store'):
+                getattr(context, 'liveSet'+suffix+'Style')(other, *values)
+            for pair in ((own, other), (other, own)):
+                with self.assertRaisesRegex(RuntimeError, 'foreign|different.*store|another.*store'):
+                    getattr(context, 'liveMatch'+suffix+'Style')(*pair)
+        context.retire()
+        with self.assertRaisesRegex(RuntimeError, 'retired'): context.liveSetStyle(local, *values)
+        with self.assertRaisesRegex(RuntimeError, 'retired'): context.liveMatchStyle(local, local)
+
+    def test_atomic_style_and_matching_across_barriers_on_both_native_routes(self):
+        source = '''from noon import *
+class Style(Scene):
+ def construct(self):
+  self.a=Circle().set_style(fill_color=GREEN,fill_opacity=.75,stroke_color=BLUE,stroke_width=7,stroke_opacity=.625)
+  self.b=Square().match_style(self.a)
+  self.family=VGroup(self.a,self.b)
+  self.add(self.family)
+  assert abs(self.b.get_stroke_width()-7)<1e-6
+  self.wait(.1)
+  self.a.set_stroke(RED,width=3,opacity=.5)
+  self.b.match_style(self.a)
+  assert abs(self.b.get_stroke_width()-3)<1e-6
+  self.family.set_style(fill_color=YELLOW,fill_opacity=.25,stroke_width=9)
+  assert abs(self.a.get_fill_opacity()-.25)<1e-6
+  assert abs(self.b.get_stroke_width()-9)<1e-6
+  self.other=VGroup(Circle(),Square()).match_style(self.family)
+  self.add(self.other)
+  assert abs(self.other[0].get_stroke_width()-9)<1e-6
+  self.wait(.1)
+'''
+        async def check():
+            for portable in (False, True):
+                scene = await run_source(source, portable=portable, sample_hz=10)
+                try:
+                    self.assertAlmostEqual(scene.b.get_stroke_width(),9,places=5)
+                    self.assertAlmostEqual(scene.a.get_fill_opacity(),.25,places=6)
+                finally: close_scene(scene)
+        asyncio.run(check())
+
     def test_family_fill_and_stroke_preserve_omitted_fields_and_reject_invalid_paint(self):
         store = native.Store()
         child = store.geometry(native.GeometryOptions.square(2))

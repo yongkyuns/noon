@@ -134,6 +134,38 @@ pub fn family_color(
     )))
 }
 
+/// Decode an atomic paint update with the shared host color validation.
+#[allow(clippy::too_many_arguments)]
+pub fn authoring_style_update(
+    fill_enabled: bool,
+    fill_red: f64,
+    fill_green: f64,
+    fill_blue: f64,
+    fill_alpha: f64,
+    fill_opacity: Option<f64>,
+    stroke_enabled: bool,
+    stroke_red: f64,
+    stroke_green: f64,
+    stroke_blue: f64,
+    stroke_alpha: f64,
+    stroke_width: Option<f64>,
+    stroke_opacity: Option<f64>,
+) -> Result<crate::StyleUpdate, String> {
+    Ok(crate::StyleUpdate {
+        fill_color: family_color(fill_enabled, fill_red, fill_green, fill_blue, fill_alpha)?,
+        fill_opacity,
+        stroke_color: family_color(
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+        )?,
+        stroke_width,
+        stroke_opacity,
+    })
+}
+
 /// Construct one detached family through an explicitly supplied live execution
 /// authority. This is for platform integrations that intentionally own a
 /// store/root/session pairing outside [`Scene`](crate::Scene); ordinary Rust

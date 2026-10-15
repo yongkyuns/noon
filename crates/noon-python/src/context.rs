@@ -589,6 +589,109 @@ impl Context {
         self.same_family_store(target)?;
         self.with_live(|live| live.scale_family(&target.family, x, y).map(|_| ()))
     }
+    #[pyo3(name = "liveSetStyle")]
+    #[allow(clippy::too_many_arguments)]
+    fn set_object_style(
+        &mut self,
+        target: &MobjectHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let update = noon::integration::authoring_style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.with_live(|live| live.set_style(&target.handle, update).map(|_| ()))
+    }
+    #[pyo3(name = "liveMatchStyle")]
+    fn match_object_style(
+        &mut self,
+        target: &MobjectHandle,
+        source: &MobjectHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.same_store(source)?;
+        self.with_live(|live| live.match_style(&target.handle, &source.handle).map(|_| ()))
+    }
+    #[pyo3(name = "liveSetFamilyStyle")]
+    #[allow(clippy::too_many_arguments)]
+    fn set_family_style(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        let update = noon::integration::authoring_style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.with_live(|live| live.set_family_style(&target.family, update).map(|_| ()))
+    }
+    #[pyo3(name = "liveMatchFamilyStyle")]
+    fn match_family_style(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        source: &crate::family::FamilyHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.same_family_store(source)?;
+        self.with_live(|live| {
+            live.match_family_style(&target.family, &source.family)
+                .map(|_| ())
+        })
+    }
     #[pyo3(name = "liveSetFamilyFill", signature = (target, has_color, red, green, blue, alpha, opacity=None))]
     #[allow(clippy::too_many_arguments)]
     fn family_fill(
