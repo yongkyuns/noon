@@ -132,10 +132,13 @@ jobs:
         with:
           version: v0.16.0
 
+      # PR Fast Gate runs these same commands at the merge checkout.
       - name: Format workspace
+        if: github.event_name != 'pull_request'
         run: cargo fmt --all -- --check
 
       - name: Clippy workspace
+        if: github.event_name != 'pull_request'
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test workspace

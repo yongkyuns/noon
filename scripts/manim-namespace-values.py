@@ -2,6 +2,7 @@
 """Compare lightweight namespace values with untouched pinned Manim source."""
 import argparse
 import ast
+import hashlib
 import json
 import runpy
 import sys
@@ -66,9 +67,70 @@ def expected_enums(source_root):
     return result
 
 
+def qualify_standard_library(source_root, *, installed_manim=False):
+    """Preserve the exact host aliases exported by the pinned package entrypoint."""
+    import __future__
+    import importlib.metadata as metadata
+    import inspect
+    import tempfile
+    from unittest.mock import patch
+    import noon
+
+    source = source_root / "manim/__init__.py"
+    imports = {(node.module, alias.name, alias.asname)
+               for node in ast.parse(source.read_text()).body
+               if isinstance(node, ast.ImportFrom) for alias in node.names}
+    aliases = {"annotations": __future__.annotations,
+               "PackageNotFoundError": metadata.PackageNotFoundError,
+               "version": metadata.version}
+    expected_imports = {("__future__", "annotations", None),
+                        ("importlib.metadata", "PackageNotFoundError", None),
+                        ("importlib.metadata", "version", None)}
+    if not expected_imports <= imports:
+        raise ValueError("pinned standard-library namespace imports changed")
+
+    def observe(namespace):
+        result = [[name, namespace[name] is expected]
+                  for name, expected in aliases.items()]
+        result.append(["version_signature", str(inspect.signature(namespace["version"]))])
+        feature = namespace["annotations"]
+        result.append(["future_feature", feature.getOptionalRelease(),
+                       feature.getMandatoryRelease(), feature.compiler_flag])
+        with tempfile.TemporaryDirectory() as directory:
+            info = Path(directory) / "noon_namespace_fixture-1.2.3.dist-info"
+            info.mkdir()
+            (info / "METADATA").write_text(
+                "Metadata-Version: 2.1\nName: noon-namespace-fixture\nVersion: 1.2.3\n")
+            with patch.object(sys, "path", [directory, *sys.path]):
+                for name in ["noon-namespace-fixture", "noon_namespace_fixture"]:
+                    result.append(["distribution", name, namespace["version"](name)])
+                try:
+                    namespace["version"]("noon-namespace-absent")
+                except namespace["PackageNotFoundError"] as error:
+                    result.append(["missing_distribution", error.name, str(error)])
+                else:
+                    result.append(["missing_distribution", "did not raise"])
+        return result
+
+    expected = observe(aliases)
+    actual = observe({name: getattr(noon, name) for name in aliases})
+    errors = [] if actual == expected else ["standard-library namespace observations differ"]
+    errors.extend(f"{name}: missing public export" for name in aliases if name not in noon.__all__)
+    if installed_manim:
+        import manim
+        if Path(manim.__file__).read_bytes() != source.read_bytes():
+            raise ValueError("installed Manim package entrypoint differs from pin")
+        if observe(vars(manim)) != expected:
+            errors.append("installed Manim namespace aliases differ")
+    return {"symbols": len(aliases), "observations": len(expected),
+            "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "installed_module_checked": installed_manim, "errors": errors}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("manim_source", type=Path)
+    parser.add_argument("--installed-manim", action="store_true")
     args = parser.parse_args()
     sys.path.insert(0, str(ROOT / "web/python"))
     import noon
@@ -113,9 +175,18 @@ def main():
         run_name="_class_query_qualification",
     )["qualify"](args.manim_source)
     errors.extend(class_queries["errors"])
+    standard_library = qualify_standard_library(args.manim_source, installed_manim=args.installed_manim)
+    errors.extend(standard_library["errors"])
+    color_palettes = runpy.run_path(
+        str(Path(__file__).with_name("manim-color-palettes.py")),
+        run_name="_color_palette_qualification",
+    )["qualify"](args.manim_source)
+    errors.extend(color_palettes["errors"])
     print(json.dumps({"colors": len(colors), "scalar_constants": len(constants), "axis_aliases": len(axes),
                       "enum_types": len(enums), "enum_members": sum(len(members) for _, members in enums.values()),
-                      "class_queries": class_queries, "errors": errors}, indent=2))
+                      "class_queries": class_queries, "standard_library": standard_library,
+                      "color_palettes": color_palettes,
+                      "errors": errors}, indent=2))
     return bool(errors)
 
 

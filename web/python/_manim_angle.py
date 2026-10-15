@@ -35,6 +35,11 @@ class Angle(_compat.VMobject):
         self.elbow = bool(elbow)
         self.dot_distance = dot_distance
 
+    @staticmethod
+    def from_three_points(A, B, C, **kwargs):
+        """Construct the angle ABC through shared Line and Angle semantics."""
+        return Angle(_compat.Line(B, A), _compat.Line(B, C), **kwargs)
+
     def get_lines(self):
         return _compat.VGroup(*self.lines)
 

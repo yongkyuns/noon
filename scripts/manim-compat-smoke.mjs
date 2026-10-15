@@ -557,6 +557,11 @@ try {
 from noon import *
 import sys
 assert "numpy" not in sys.modules
+import __future__
+import importlib.metadata as metadata
+assert annotations is __future__.annotations
+assert PackageNotFoundError is metadata.PackageNotFoundError
+assert version is metadata.version
 for cls, group, base in [(Mobject, Group, Mobject), (Group, Group, Mobject),
                          (VMobject, VGroup, VMobject), (VGroup, VGroup, VMobject),
                          (Circle, VGroup, VMobject), (Square, VGroup, VMobject)]:
@@ -572,6 +577,17 @@ path = Path("movie.mp4")
 assert add_extension_if_not_present(path, ".mp4") is path
 assert add_extension_if_not_present(path, ".png") == Path("movie.mp4.png")
 with tempfile.TemporaryDirectory() as directory:
+    info = Path(directory) / "noon_namespace_fixture-1.2.3.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\\nName: noon-namespace-fixture\\nVersion: 1.2.3\\n")
+    with patch.object(sys, "path", [directory, *sys.path]):
+        assert version("noon-namespace-fixture") == "1.2.3"
+        try:
+            version("noon-namespace-absent")
+        except PackageNotFoundError as error:
+            assert error.name == "noon-namespace-absent"
+        else:
+            raise AssertionError("missing distribution must raise PackageNotFoundError")
     target = Path(directory) / "nested" / "target"
     assert guarantee_existence(target) == target.resolve(strict=True)
     (target / "old.txt").write_text("remove")
@@ -592,9 +608,20 @@ assert interpolate(0, 8, 0.25) == 2
 assert integer_interpolate(0, 8, 0.25) == (2, 0.0)
 assert mid(0, 8) == 4
 assert clip(5, 10, 0) == 10
+assert batch_by_property([1, 1, 2, 1], lambda value: value) == [([1, 1], 1), ([2], 2), ([1], 1)]
+assert list(uniq_chain([1, 2, 1], iter([2, 3]))) == [1, 2, 3]
+assert hash_obj({"a": [1, 2], "b": {3, 4}}) == hash_obj({"b": {4, 3}, "a": (1, 2)})
 assert "numpy" not in sys.modules
 assert (PURE_RED.red, PURE_RED.green, PURE_RED.blue) == (1.0, 0.0, 0.0)
 assert (PURE_GREEN.red, PURE_GREEN.green, PURE_GREEN.blue) == (0.0, 1.0, 0.0)
+assert SVGNAMES.ALICEBLUE == color_from_hex(0xEFF7FF)
+assert X11.ALICEBLUE == color_from_hex(0xF0F8FF)
+assert DVIPSNAMES.RED == color_from_hex(0xED1B23)
+assert AS2700.B11_RICH_BLUE == color_from_hex(0x2B3770)
+assert BS381.BS381_101 == color_from_hex(0x94BFAC)
+assert XKCD.AMBER == color_from_hex(0xFEB308)
+assert XKCD.AMBER is XKCD.AMBER
+assert "numpy" not in sys.modules
 result = Scene()
 `);
       const arrayNamespace = await client.run(`
@@ -647,6 +674,19 @@ assert calls == [0, 0.5, 1]
 assert logistic(np.array([0, 1], dtype=np.float32)).dtype == np.float32
 result = Scene()
 `);
+      const angleNamespace = await client.run(`
+from noon import Angle, Scene
+angle = Angle.from_three_points((1, 0, 0), (0, 0, 0), (0, 1, 0))
+assert isinstance(angle, Angle)
+assert angle.lines[0].get_start().x == 0
+assert angle.lines[0].get_start().y == 0
+assert angle.lines[0].get_end().x == 1
+assert angle.lines[0].get_end().y == 0
+assert angle.lines[1].get_end().x == 0
+assert angle.lines[1].get_end().y == 1
+assert abs(angle.get_value(degrees=True) - 90) < 1e-9
+result = Scene()
+`);
       const numpyNamespace = await client.run(`
 from noon import *
 import sys
@@ -664,6 +704,7 @@ result = Scene()
         coldNamespace: Boolean(coldNamespace.semanticExecution),
         arrayNamespace: Boolean(arrayNamespace.semanticExecution),
         numericalNamespace: Boolean(numericalNamespace.semanticExecution),
+        angleNamespace: Boolean(angleNamespace.semanticExecution),
         numpyNamespace: Boolean(numpyNamespace.semanticExecution),
         sharedScene: Boolean(result.semanticExecution),
         terminated: client.terminated,
@@ -676,6 +717,7 @@ result = Scene()
   assert.equal(sceneOnlyAuthoring.coldNamespace, true, "cold star-import authoring must not load NumPy");
   assert.equal(sceneOnlyAuthoring.arrayNamespace, true, "aliased array helper loads NumPy before the real Python worker call");
   assert.equal(sceneOnlyAuthoring.numericalNamespace, true, "user numerical helpers execute in the actual worker");
+  assert.equal(sceneOnlyAuthoring.angleNamespace, true, "Angle.from_three_points executes through shared geometry");
   assert.equal(sceneOnlyAuthoring.numpyNamespace, true, "implicit np must resolve to real NumPy before execution");
   assert.equal(sceneOnlyAuthoring.sharedScene, true, "worker accepts a shared Scene after an invalid result");
   assert.equal(sceneOnlyAuthoring.terminated, false, "ordinary authoring errors keep the worker reusable");
@@ -1000,7 +1042,7 @@ result = Scene()
 
   assert.deepEqual(errors, [], `browser errors while testing Manim compatibility:\n${errors.join("\n")}`);
   console.log(
-    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, typed spatial mesh adapters and camera motion, z=0 vectors, and shared deterministic Manim rate-function lowering.",
+    "Manim compatibility smoke passed: construct discovery, shape classes, scene/group semantics, callable and chained animate builders, detached animate auto-add, per-animation timing, play overrides, concurrent shared Text Write, shared Text Write/Unwrite lifecycle, MathTex Create, mixed Text/ordinary composition, shared detached query/dimension transforms, Angle.from_three_points, typed spatial mesh adapters and camera motion, z=0 vectors, and shared deterministic Manim rate-function lowering.",
   );
 } finally {
   await browser?.close();

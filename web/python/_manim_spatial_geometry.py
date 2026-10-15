@@ -122,6 +122,8 @@ def _initialize_translucent_prism_family(
 
 class Cube(_WorldMobject, _compat.Group):
     """Six retained face meshes with Manim's Cairo shading defaults."""
+    set_opacity = _compat.VGroup.set_opacity
+
 
     def __init__(self, side_length=2, fill_opacity=0.75, fill_color=_base.BLUE,
                  stroke_width=0, shade_in_3d=True, **kwargs):
@@ -135,6 +137,8 @@ class Cube(_WorldMobject, _compat.Group):
 
 class Prism(_WorldMobject, _compat.Group):
     """Six retained face meshes with Manim's Cairo shading defaults."""
+    set_opacity = _compat.VGroup.set_opacity
+
 
     def __init__(self, dimensions=(3, 2, 1), fill_opacity=0.75, fill_color=_base.BLUE,
                  stroke_width=0, shade_in_3d=True, **kwargs):
@@ -169,6 +173,8 @@ class Surface(_Mesh3D, _compat.Group):
     Cairo-compatible shading retains its sampled control points as mesh
     appearance metadata. ``point_lit`` remains Noon-native lighting.
     """
+    set_opacity = _compat.VGroup.set_opacity
+
 
     def __init__(self, func, u_range=(0, 1), v_range=(0, 1), resolution=32,
                  fill_color=_base.BLUE_D, fill_opacity=1,

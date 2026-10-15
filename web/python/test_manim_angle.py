@@ -10,6 +10,35 @@ class FakeLine(angle._compat.Line):
     def get_end(self): return self.endpoints[1]
 
 class AngleAdapters(unittest.TestCase):
+    def test_from_three_points_preserves_pinned_line_order_and_angle_type(self):
+        points = (object(), object(), object())
+        line_calls = []
+        angle_calls = []
+
+        def make_line(start, end):
+            line = object()
+            line_calls.append((start, end, line))
+            return line
+
+        def initialize(self, line1, line2, **kwargs):
+            angle_calls.append((type(self), line1, line2, kwargs))
+
+        with patch.object(angle._compat, "Line", side_effect=make_line), \
+             patch.object(angle.Angle, "__init__", new=initialize):
+            result = angle.Angle.from_three_points(*points, radius=0.5, other_angle=True)
+            inherited = angle.RightAngle.from_three_points(*points, length=0.4)
+
+        self.assertIs(type(result), angle.Angle)
+        self.assertIs(type(inherited), angle.Angle)
+        self.assertEqual([(start, end) for start, end, _ in line_calls],
+                         [(points[1], points[0]), (points[1], points[2])] * 2)
+        self.assertEqual(angle_calls[0],
+                         (angle.Angle, line_calls[0][2], line_calls[1][2],
+                          {"radius": 0.5, "other_angle": True}))
+        self.assertEqual(angle_calls[1],
+                         (angle.Angle, line_calls[2][2], line_calls[3][2],
+                          {"length": 0.4}))
+
     def test_defaults_and_right_angle_only_coerce_and_delegate(self):
         calls=[]
         ffi=types.ModuleType("pyodide.ffi");ffi.to_js=lambda values:values

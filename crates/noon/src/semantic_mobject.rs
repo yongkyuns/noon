@@ -18,7 +18,7 @@ mod manim_geometry;
 mod style;
 use bounds::transform_layout_xy;
 pub(crate) use bounds::{
-    boundary_for_content, layout_for_content, transformed_path_layout_bounds,
+    boundary_center, boundary_for_content, layout_for_content, transformed_path_layout_bounds,
     transformed_rect_layout_bounds,
 };
 pub(crate) use style::{
@@ -890,14 +890,10 @@ impl Mobject {
         // introduce platform-dependent rounding even for centrally symmetric content.
         transform.translation.x = 0.0;
         transform.translation.y = 0.0;
-        let center =
-            boundary_for_content(&store, state.content, transform)?.map_or((0.0, 0.0), |bounds| {
-                (
-                    (bounds.min_x + bounds.max_x) * 0.5,
-                    (bounds.min_y + bounds.max_y) * 0.5,
-                )
-            });
-        Ok((center.0 + translation.x, center.1 + translation.y))
+        Ok(boundary_center(
+            boundary_for_content(&store, state.content, transform)?,
+            (translation.x, translation.y),
+        ))
     }
     pub fn width(&self) -> Result<f64, AuthoringError> {
         Ok(self.layout_bounds()?.map_or(0.0, Bounds2D64::width))
