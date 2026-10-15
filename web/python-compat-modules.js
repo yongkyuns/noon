@@ -2,6 +2,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_typing.py", runtimePath: "/tmp/_manim_typing.py", label: "Noon lazy Python type namespace" },
   { sourcePath: "python/_manim_typing_values.py", runtimePath: "/tmp/_manim_typing_values.py", label: "Noon Python type aliases" },
   { sourcePath: "python/_manim_user_vector_bases.py", runtimePath: "/tmp/_manim_user_vector_bases.py", label: "Noon explicit Python vector basis helpers" },
+  { sourcePath: "python/_manim_color_palettes.py", runtimePath: "/tmp/_manim_color_palettes.py", label: "Noon pinned named color palettes" },
   { sourcePath: "python/_manim_user_vectors.py", runtimePath: "/tmp/_manim_user_vectors.py", label: "Noon explicit Python user-data vectors" },
   { sourcePath: "python/_manim_file_paths.py", runtimePath: "/tmp/_manim_file_paths.py", label: "Noon Python user-path filesystem helpers" },
   { sourcePath: "python/_manim_simple_functions.py", runtimePath: "/tmp/_manim_simple_functions.py", label: "Noon Python user-data numerical helpers" },

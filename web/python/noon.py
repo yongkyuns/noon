@@ -918,6 +918,12 @@ _PUBLIC_EXPORTS = {
     "typing": "_manim_typing",
     "get_unit_normal": "_manim_user_vector_bases",
     "z_to_vector": "_manim_user_vector_bases",
+    "AS2700": "_manim_color_palettes",
+    "BS381": "_manim_color_palettes",
+    "DVIPSNAMES": "_manim_color_palettes",
+    "SVGNAMES": "_manim_color_palettes",
+    "X11": "_manim_color_palettes",
+    "XKCD": "_manim_color_palettes",
     "rate_functions": "_manim_rate_functions",
     "unit": "_manim_unit",
 
