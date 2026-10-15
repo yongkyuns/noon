@@ -90,8 +90,15 @@ class FakeGeometryOptions:
         return value
 
     @staticmethod
+    def emptyPath():
+        return FakeGeometryOptions.path(FakeVectorPath())
+
+    @staticmethod
     def path(path):
         return FakeGeometryOptions({"vector_path": {"commands": list(path.commands)}})
+
+    def setZIndex(self, value):
+        self.snapshot["z_index"] = float(value)
 
     def setTranslation(self, x, y):
         self.snapshot["transform"]["translation"] = {"x": x, "y": y}
