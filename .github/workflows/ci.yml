@@ -19,6 +19,9 @@ on:
       - ".github/workflows/compiler-cache-seed.yml"
       - ".github/workflows/pr-fast.yml"
       - "scripts/ci-qualification-scope.mjs"
+      - "scripts/cuda-transpose*.mjs"
+      - "tools/cuda-transpose/**"
+      - "tests/cuda_visual_validation_test.py"
       - "scripts/python-editor-*.mjs"
       - "scripts/composition-authoring-smoke.mjs"
       - "scripts/shared-authoring-smoke.mjs"
@@ -270,6 +273,20 @@ jobs:
         run: node scripts/composition-authoring-smoke.mjs
       - name: Test executable Manim tutorial corpus
         run: node scripts/manim-tutorial-smoke.mjs
+      - name: Test CUDA demo CPU-backed visual fidelity
+        timeout-minutes: 15
+        run: |
+          python3 tests/cuda_visual_validation_test.py
+          node --test scripts/cuda-transpose-pixels.test.mjs
+          node scripts/cuda-transpose-qualification.mjs
+      - name: Preserve CUDA demo fidelity evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cuda-transpose-fidelity
+          path: cuda-transpose-qualification
+          if-no-files-found: warn
+          retention-days: 3
 
   browser-reactive:
     name: Browser reactive and editor
