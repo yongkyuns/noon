@@ -277,7 +277,7 @@ jobs:
         timeout-minutes: 15
         run: |
           python3 tests/cuda_visual_validation_test.py
-          node --test scripts/cuda-transpose-pixels.test.mjs
+          node --test scripts/cuda-transpose-pixels.test.mjs scripts/cuda-transpose-report.test.mjs
           node scripts/cuda-transpose-qualification.mjs
       - name: Preserve CUDA demo fidelity evidence
         if: always()
@@ -431,7 +431,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: browser-backend-visual-parity
+          name: browser-backend-parity
           path: browser-backend-parity-report
           if-no-files-found: error
           retention-days: 3
