@@ -223,11 +223,17 @@ impl Probe {
     fn samples(&self, source: &wgpu::Texture) -> Vec<u8> {
         let output = self.target([source.width() * 4, source.height()], 1);
         let group = self.binding(&self.extract, source);
-        render_pass!(self, &output, None, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), |pass| {
-            pass.set_pipeline(&self.extract);
-            pass.set_bind_group(0, &group, &[]);
-            pass.draw(0..3, 0..1);
-        });
+        render_pass!(
+            self,
+            &output,
+            None,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            |pass| {
+                pass.set_pipeline(&self.extract);
+                pass.set_bind_group(0, &group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        );
         self.readback(&output)
     }
 }
@@ -447,8 +453,7 @@ fn ordered_prefix_sample_restore() {
         for (step, offset) in [0.0, 0.37, 0.0, 0.0].into_iter().enumerate() {
             frame.objects[2].transform.translation = Vec2::new(offset, -offset * 0.7);
             frame.reveals[4] = if step == 1 { 0.4 } else { 1.0 };
-            let prepared =
-                preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![2, 4]));
+            let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![2, 4]));
             let current: Vec<_> = prepared
                 .ordered_render_batches()
                 .map(|r| r.batch.clone())
@@ -468,16 +473,28 @@ fn ordered_prefix_sample_restore() {
                 clear,
             );
             probe.queue.submit([encoder.finish()]);
-            render_pass!(&probe, &unsplit, Some(&reference), wgpu::LoadOp::Clear(clear), |pass| {
-                renderer.draw_ordered(pass, &prepared, false);
-            });
-            render_pass!(&probe, &work, Some(&candidate), wgpu::LoadOp::Clear(clear), |pass| {
-                pass.set_pipeline(&probe.restore);
-                pass.set_bind_group(0, &restore, &[]);
-                pass.draw(0..3, 0..1);
-                let tail = draw_range(&renderer, pass, &prepared, PREFIX..total);
-                assert!(tail.draw_calls > 0 && tail.instances_drawn < full.instances_drawn);
-            });
+            render_pass!(
+                &probe,
+                &unsplit,
+                Some(&reference),
+                wgpu::LoadOp::Clear(clear),
+                |pass| {
+                    renderer.draw_ordered(pass, &prepared, false);
+                }
+            );
+            render_pass!(
+                &probe,
+                &work,
+                Some(&candidate),
+                wgpu::LoadOp::Clear(clear),
+                |pass| {
+                    pass.set_pipeline(&probe.restore);
+                    pass.set_bind_group(0, &restore, &[]);
+                    pass.draw(0..3, 0..1);
+                    let tail = draw_range(&renderer, pass, &prepared, PREFIX..total);
+                    assert!(tail.draw_calls > 0 && tail.instances_drawn < full.instances_drawn);
+                }
+            );
             let pixels = probe.readback(&ordinary);
             assert!(
                 pixels.as_chunks::<4>().0.windows(2).any(|p| p[0] != p[1]),
@@ -534,9 +551,15 @@ fn ordered_prefix_sample_restore() {
         let prepared = preparer.prepare_incremental(&frame, &FrameChanges::default());
         let total = prepared.ordered_render_batches().count();
         let pixels = probe.readback(&ordinary);
-        render_pass!(&probe, &work, Some(&candidate), wgpu::LoadOp::Load, |pass| {
-            draw_range(&renderer, pass, &prepared, PREFIX..total);
-        });
+        render_pass!(
+            &probe,
+            &work,
+            Some(&candidate),
+            wgpu::LoadOp::Load,
+            |pass| {
+                draw_range(&renderer, pass, &prepared, PREFIX..total);
+            }
+        );
         compare(
             &directory,
             &format!("p{profile}-accumulated"),
@@ -544,14 +567,20 @@ fn ordered_prefix_sample_restore() {
             &probe.readback(&candidate),
             false,
         );
-        render_pass!(&probe, &work, Some(&candidate), wgpu::LoadOp::Clear(clear), |pass| {
-            pass.set_pipeline(&probe.restore);
-            pass.set_bind_group(0, &restore, &[]);
-            pass.draw(0..3, 0..1);
-            // Forbidden gather: move later static geometry below the active layer.
-            draw_range(&renderer, pass, &prepared, PREFIX + 1..total);
-            draw_range(&renderer, pass, &prepared, PREFIX..PREFIX + 1);
-        });
+        render_pass!(
+            &probe,
+            &work,
+            Some(&candidate),
+            wgpu::LoadOp::Clear(clear),
+            |pass| {
+                pass.set_pipeline(&probe.restore);
+                pass.set_bind_group(0, &restore, &[]);
+                pass.draw(0..3, 0..1);
+                // Forbidden gather: move later static geometry below the active layer.
+                draw_range(&renderer, pass, &prepared, PREFIX + 1..total);
+                draw_range(&renderer, pass, &prepared, PREFIX..PREFIX + 1);
+            }
+        );
         compare(
             &directory,
             &format!("p{profile}-reordered"),
@@ -572,12 +601,18 @@ fn ordered_prefix_sample_restore() {
         );
         probe.queue.submit([encoder.finish()]);
         let changed = probe.readback(&ordinary);
-        render_pass!(&probe, &work, Some(&candidate), wgpu::LoadOp::Clear(clear), |pass| {
-            pass.set_pipeline(&probe.restore);
-            pass.set_bind_group(0, &restore, &[]);
-            pass.draw(0..3, 0..1);
-            draw_range(&renderer, pass, &prepared, PREFIX..total);
-        });
+        render_pass!(
+            &probe,
+            &work,
+            Some(&candidate),
+            wgpu::LoadOp::Clear(clear),
+            |pass| {
+                pass.set_pipeline(&probe.restore);
+                pass.set_bind_group(0, &restore, &[]);
+                pass.draw(0..3, 0..1);
+                draw_range(&renderer, pass, &prepared, PREFIX..total);
+            }
+        );
         compare(
             &directory,
             &format!("p{profile}-stale-prefix"),
@@ -589,12 +624,18 @@ fn ordered_prefix_sample_restore() {
         render_pass!(&probe, &prefix, None, wgpu::LoadOp::Clear(clear), |pass| {
             draw_range(&renderer, pass, &prepared, 0..PREFIX);
         });
-        render_pass!(&probe, &work, Some(&candidate), wgpu::LoadOp::Clear(clear), |pass| {
-            pass.set_pipeline(&probe.restore);
-            pass.set_bind_group(0, &restore, &[]);
-            pass.draw(0..3, 0..1);
-            draw_range(&renderer, pass, &prepared, PREFIX..total);
-        });
+        render_pass!(
+            &probe,
+            &work,
+            Some(&candidate),
+            wgpu::LoadOp::Clear(clear),
+            |pass| {
+                pass.set_pipeline(&probe.restore);
+                pass.set_bind_group(0, &restore, &[]);
+                pass.draw(0..3, 0..1);
+                draw_range(&renderer, pass, &prepared, PREFIX..total);
+            }
+        );
         compare(
             &directory,
             &format!("p{profile}-rebuilt-resolved"),
