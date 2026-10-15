@@ -431,7 +431,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: browser-backend-parity
+          name: browser-backend-visual-parity
           path: browser-backend-parity-report
           if-no-files-found: error
           retention-days: 3
