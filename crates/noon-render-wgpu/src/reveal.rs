@@ -148,7 +148,11 @@ mod replacement_tests {
                 let mut fresh = preparer(individual);
                 let reference = fresh.prepare(&state);
                 assert_eq!(active_heads(&prepared), active_heads(&reference));
-                assert_eq!(prepared.lines.len(), 1, "replacement must not leak head slots");
+                assert_eq!(
+                    prepared.lines.len(),
+                    1,
+                    "replacement must not leak head slots"
+                );
                 assert_eq!(prepared.stats.full_rebuilds, 0);
                 assert!(prepared.rectangle_dirty_ranges.is_empty());
             }
