@@ -405,6 +405,20 @@ def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
     return -value if z < 0.0 else value
 
 
+def _set_group_metadata(group, name, value):
+    # Non-vector Group inherits Manim's deprecated arbitrary-attribute setters.
+    # These attributes have no paint or runtime meaning.
+    import warnings
+    warnings.warn(
+        "This method is not guaranteed to stay around. Please prefer "
+        "setting the attribute normally or with Mobject.set().",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    setattr(group, name, value)
+    return group
+
+
 class Group(Mobject):
     """Python identities and ergonomics over a shared Rust semantic family."""
 
@@ -533,31 +547,14 @@ class Group(Mobject):
         from _manim_semantic_handles import _group_set_color
         return _group_set_color(self, color, family=family)
 
-    def set_fill(self, color: object = None, opacity: float | None = None) -> Group:
-        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
-            return _base.Mobject.set_fill(self, color, opacity)
-        from _manim_semantic_handles import _group_set_fill
-        return _group_set_fill(self, color, opacity)
+    def set_fill(self, value: Any) -> Group:
+        return _set_group_metadata(self, "fill", value)
 
-    def set_stroke(self, color: object = None, width: float | None = None,
-                   opacity: float | None = None) -> Group:
-        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
-            return _base.Mobject.set_stroke(self, color, width, opacity)
-        from _manim_semantic_handles import _group_set_stroke
-        return _group_set_stroke(self, color, width, opacity)
+    def set_stroke(self, value: Any) -> Group:
+        return _set_group_metadata(self, "stroke", value)
 
     def set_opacity(self, value: Any) -> Group:
-        # Manim's non-vector Group inherits the deprecated generic setter.
-        # This arbitrary attribute has no paint or runtime meaning.
-        import warnings
-        warnings.warn(
-            "This method is not guaranteed to stay around. Please prefer "
-            "setting the attribute normally or with Mobject.set().",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.opacity = value
-        return self
+        return _set_group_metadata(self, "opacity", value)
 
     def fade(self, darkness: float = 0.5, family: bool = True) -> Group:
         return _base.Mobject.fade(self, darkness, family)
@@ -641,6 +638,19 @@ class VGroup(Group):
     # The family wrapper reuses vector-class queries without duplicating them.
     get_group_class = VMobject.get_group_class
     get_mobject_type_class = staticmethod(VMobject.get_mobject_type_class)
+
+    def set_fill(self, color: object = None, opacity: float | None = None) -> VGroup:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_fill(self, color, opacity)
+        from _manim_semantic_handles import _group_set_fill
+        return _group_set_fill(self, color, opacity)
+
+    def set_stroke(self, color: object = None, width: float | None = None,
+                   opacity: float | None = None) -> VGroup:
+        if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:
+            return _base.Mobject.set_stroke(self, color, width, opacity)
+        from _manim_semantic_handles import _group_set_stroke
+        return _group_set_stroke(self, color, width, opacity)
 
     def set_opacity(self, opacity: float) -> VGroup:
         if not _is_shared_family(self) and getattr(self, "_semantic_handle", None) is not None:

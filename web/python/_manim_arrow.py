@@ -273,6 +273,8 @@ class Arrow(_compat.Group):
     """Straight Manim Arrow backed by one shared Rust semantic family."""
     # This typed vector wrapper retains the shared family-paint contract.
     set_opacity = _compat.VGroup.set_opacity
+    set_fill = _compat.VGroup.set_fill
+    set_stroke = _compat.VGroup.set_stroke
 
 
     def __init__(
