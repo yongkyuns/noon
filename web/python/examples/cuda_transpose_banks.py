@@ -94,6 +94,7 @@ def reference_trace(stride, column, base_word=0):
     return dict(stride=stride, base_word=base_word, loads=loads,
                 reads=selected, verified_output_words=valid)
 
+
 def get_trace(stride):
     if GPU_TRACE is None:
         return reference_trace(stride, COLUMN)
@@ -113,6 +114,7 @@ def get_trace(stride):
     if any(run.get(k) != v for k, v in expected.items()):
         raise ValueError("GPU trace does not match the fixed 32x32 transpose fixture.")
     return run
+
 
 def service_batches(reads):
     """One distinct word per bank per schematic round; duplicates broadcast.
@@ -289,11 +291,28 @@ def packet_motion(parts, destination, scale=1.0):
 class CudaTransposeBanks(Scene):
     """One retained scene, ordinary Noon animations, no frame callbacks."""
 
-    def play_for(self, *animations, seconds=0.5):
+    def play_for(self, *animations, seconds=0.5, proof=None):
+        # Optional test observer only: it cannot schedule or interpolate the scene.
+        # Ordinary gallery playback does not install a probe.
+        probe = getattr(self, "_cuda_probe", None)
+        if probe is not None:
+            probe.before(self, seconds / SPEED, proof)
         self.play(*animations, run_time=seconds / SPEED)
+        if probe is not None:
+            probe.after(self, proof)
 
     def pause(self, seconds=0.7):
+        probe = getattr(self, "_cuda_probe", None)
+        if probe is not None:
+            probe.before(self, seconds / SPEED, None)
         self.wait(seconds / SPEED)
+        if probe is not None:
+            probe.after(self, None)
+
+    def observe(self, event, **values):
+        probe = getattr(self, "_cuda_probe", None)
+        if probe is not None:
+            probe.checkpoint(self, event, **values)
 
     def fade(self, objects, seconds=0.30):
         if objects:
@@ -375,10 +394,10 @@ class CudaTransposeBanks(Scene):
             )
         self.active_keys = keys
 
-    def move_step(self, step, *animations, seconds=0.5):
+    def move_step(self, step, *animations, seconds=0.5, proof=None):
         # The source focus is established BEFORE the corresponding data movement.
         self.focus(step)
-        self.play_for(*animations, seconds=seconds)
+        self.play_for(*animations, seconds=seconds, proof=proof)
 
     def tile_grid(self, title):
         x, top, size = TILE_LEFT, TILE_TOP, 32 * CELL
@@ -425,9 +444,11 @@ class CudaTransposeBanks(Scene):
         self.pause(1.0)
         for trace in traces:
             self.load_tile(trace)
+        self.observe("complete")
         self.finish(traces)
 
     def load_tile(self, trace):
+        self.observe("launch", trace=trace)
         stride = trace["stride"]
         self.phase("EDIT LAYOUT" if stride == 33 else "01  LOAD ROWS", 32)
         self.status("New launch  |  0 / 1,024 words ready")
@@ -481,11 +502,14 @@ class CudaTransposeBanks(Scene):
             # Both halves of the assignment remain lit throughout the transfer.
             self.move_step("copy", *(p.animate.move_to(tile_point(row, lane))
                                      for lane, p in enumerate(packets)),
-                           FadeIn(band), seconds=0.95 if stride == 32 and k == 0 else 0.42)
+                           FadeIn(band), seconds=0.95 if stride == 32 and k == 0 else 0.42,
+                           proof={"kind": "load", "trace": trace, "j": j,
+                                  "packets": [(p,) for p in packets], "band": band})
             self.remove(*packets)
             bands.append(band)
             self.status("j=%02d complete  |  %d / 1,024 words ready" %
                         (j, sum(trace["loads"][:k + 1])), color)
+            self.observe("load_ready", trace=trace, j=j)
             if k == 0 and stride == 32:
                 self.pause(1.1)
         self.status("j loop complete  |  1,024 words ready", GREEN)
@@ -498,6 +522,7 @@ class CudaTransposeBanks(Scene):
         self.play_for(*(FadeIn(o) for o in arrivals), seconds=0.30)
         self.play_for(*(o.animate.set_fill(PINK, opacity=0.85) for o in arrivals), seconds=0.65)
         self.pause(1.8 if stride == 32 else 1.0)
+        self.observe("barrier", trace=trace, arrivals=arrivals)
         self.fade(arrivals, 0.18)
         self.show_code("output", stride)
         self.phase("03  READ A COLUMN", stride)
@@ -524,7 +549,8 @@ class CudaTransposeBanks(Scene):
         self.move_step("read", *(FadeOut(o) for o in visual + bands + selection),
                        *(animation for lane, parts in enumerate(requests)
                          for animation in packet_motion(parts, queue_point(lane), scale=5.0)),
-                       seconds=0.80)
+                       seconds=0.80,
+                       proof={"kind": "tray", "trace": trace, "packets": requests})
         self.bank_replay(trace, requests)
 
     def bank_replay(self, trace, requests):
@@ -550,6 +576,7 @@ class CudaTransposeBanks(Scene):
                                          REGISTER_CELL_H, EDGE, 0.12, 1))
             register_objects.append(label(lane, x, y + 0.17, 9, MUTED))
         self.play_for(*(FadeIn(o) for o in facts + bank_objects + register_objects), seconds=0.45)
+        self.observe("banks", trace=trace, banks=bank_objects, registers=register_objects)
         used = sorted({event[2] % 32 for event in reads})
         color = GREEN if len(batches) == 1 else CORAL
         self.play_for(*(bank_boxes[b].animate.set_stroke(color, width=2) for b in used), seconds=0.3)
@@ -576,12 +603,16 @@ class CudaTransposeBanks(Scene):
                            *(animation for lane in batch
                              for animation in packet_motion(
                                  requests[lane], bank_point(reads[lane][2] % 32))),
-                           seconds=ROUND_IN)
+                           seconds=ROUND_IN,
+                           proof={"kind": "bank", "trace": trace,
+                                  "batch": batch, "packets": requests})
             self.move_step("read",
                            *(animation for lane in batch
                              for animation in packet_motion(
                                  requests[lane], register_point(lane), scale=REGISTER_SCALE)),
-                           seconds=ROUND_OUT)
+                           seconds=ROUND_OUT,
+                           proof={"kind": "register", "trace": trace,
+                                  "batch": batch, "packets": requests})
         self.status("%d / %d read rounds complete" % (len(batches), len(batches)), color)
         self.pause(0.7)
         self.phase("04  STORE A ROW", stride)
@@ -599,7 +630,8 @@ class CudaTransposeBanks(Scene):
                        *(animation for lane, parts in enumerate(requests)
                          for animation in packet_motion(
                              parts, output_point(lane, COLUMN), scale=to_tile_scale)),
-                       seconds=0.95)
+                       seconds=0.95,
+                       proof={"kind": "store", "trace": trace, "packets": requests})
         values = ", ".join(str(int(r[4])) for r in reads[:8])
         result = [label("out[%d, 0:8]" % COLUMN, -3.45, 0.75, 18, GREEN),
                   label(values, -3.45, 0.27, 17, INK, width=5.85),
@@ -609,6 +641,7 @@ class CudaTransposeBanks(Scene):
                         -3.45, -1.12, 29, color),
                   label("Full fixture: 1,024 / 1,024 values match", -3.45, -1.77, 13, MUTED)]
         self.play_for(*(FadeIn(o) for o in result), seconds=0.5)
+        self.observe("output_row", trace=trace, packets=requests, labels=result)
         self.status("Shown: one output row. Validation covers the whole tile.", GREEN)
         self.pause(2.2)
         self.fade(output + [band] + result + packet_leaves(requests) + self.code_objects, 0.4)
