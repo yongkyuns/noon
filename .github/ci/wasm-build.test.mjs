@@ -587,13 +587,25 @@ test("product camera measurements reuse the restored packages and fixed alternat
   assert.doesNotMatch(measurements, /build-web-demo|cargo |wasm-pack/);
 });
 
-test("Pages builds use the shared optimized production WASM configuration", async () => {
+test("Pages builds and deploys the optimized production package on one runner", async () => {
   const workflow = await readFile(new URL("../workflows/pages.yml", import.meta.url), "utf8");
-  const buildJob = workflow.slice(workflow.indexOf("  build:"), workflow.indexOf("\n  deploy:"));
+  const jobs = workflow.slice(workflow.indexOf("\njobs:\n"));
+  assert.deepEqual([...jobs.matchAll(/^  ([\w-]+):\s*$/gm)].map(match => match[1]), ["build"],
+    "Pages must not queue another runner after the package is built");
+  const buildJob = jobs.slice(jobs.indexOf("  build:"));
   const installer = buildJob.indexOf("uses: ./.github/actions/install-wasm-opt");
   const browserBuild = buildJob.indexOf("- name: Build and validate playground");
   assert.ok(installer >= 0 && browserBuild > installer,
     "Pages must install the shared verified wasm-opt before building the browser package");
+  const upload = buildJob.indexOf("uses: actions/upload-pages-artifact@");
+  const deploy = buildJob.indexOf("uses: actions/deploy-pages@");
+  const verify = buildJob.indexOf("- name: Verify deployed revision");
+  assert.ok(upload > browserBuild && deploy > upload && verify > deploy,
+    "Pages must build, upload, deploy and verify sequentially on the same runner");
+  assert.match(buildJob, /environment:\n\s+name: github-pages\n\s+url: \$\{\{ steps\.deployment\.outputs\.page_url \}\}/);
+  assert.doesNotMatch(buildJob, /^\s+(?:if|continue-on-error):/m,
+    "Pages must stop before deployment when an earlier step fails");
+  assert.match(workflow, /cancel-in-progress: false/);
 
   const product = productConfig("candidate");
   assert.equal(product.profile, "release");
