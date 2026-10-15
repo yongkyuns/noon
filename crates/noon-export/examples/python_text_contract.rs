@@ -31,7 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     live.add(&other)?;
                     live.shift(&self.label, 1.0, 0.0)?;
                     assert_eq!(
-                        self.label.text_source_parts_for("text")?[0].source_span,
+                        self.label
+                            .text_source_parts_for("text")
+                            .expect("retained text source parts")[0]
+                            .source_span,
                         noon::TextSourceSpan::new(7, 11)
                     );
                     Ok(ContinuationStep::Await(live.wait_segment(0.1)?))
