@@ -11,6 +11,7 @@ import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRe
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
 import { readProductPair } from "./paired-product-metrics.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
+import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -248,6 +249,7 @@ async function synchronizeFinalFrame(page, seconds) {
 
 let browser = null;
 let context = null;
+let page = null;
 const pageErrors = [];
 const consoleErrors = [];
 try {
@@ -259,7 +261,7 @@ try {
     viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 1,
   });
-  const page = await context.newPage();
+  page = await context.newPage();
   await page.addInitScript(profileStages => {
     const NativeWorker = window.Worker;
     // The product client rejects this ID before issuing it (counter exhausted).
@@ -466,6 +468,7 @@ try {
   await writeFile(path.join(artifactDir, "failure.json"), `${JSON.stringify({
     label, exampleId, siteRoot, pair, startedAtMs, finishedAtMs: Date.now(),
     error: error?.stack ?? String(error), runEvidence, pageErrors, consoleErrors, serverOutput,
+    attemptedPage: await captureAttemptedPage(page),
   }, null, 2)}\n`, "utf8");
   throw error;
 } finally {
