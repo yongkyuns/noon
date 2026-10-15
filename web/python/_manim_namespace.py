@@ -40,6 +40,8 @@ _OPTIONAL_HELPER_PACKAGES = {
     "thick_diagonal": "numpy",
     "rotation_about_z": "numpy",
     "rotation_matrix": "scipy",
+    "rotate_vector": "scipy",
+    "compass_directions": "scipy",
     "cartesian_to_spherical": "numpy",
     "spherical_to_cartesian": "numpy",
     "complex_to_R3": "numpy",

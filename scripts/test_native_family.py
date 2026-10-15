@@ -58,6 +58,29 @@ class TinyPaint(Scene):
                     close_scene(scene)
         asyncio.run(check())
 
+    def test_empty_constructor_omission_and_none_keep_distinct_colors(self):
+        source = '''from noon import *
+class ConstructorColors(Scene):
+    def construct(self):
+        objects = [cls(**options) for cls in (Mobject, VMobject)
+                   for options in ({}, {"color": None})]
+        self.add(*objects)
+        def colors():
+            return [(c.red, c.green, c.blue) for c in
+                    (obj.get_color() for obj in objects)]
+        self.observations = [colors()]
+        self.wait(.125)
+        self.observations.append(colors())
+'''
+        expected = [(1., 1., 1.), (0., 0., 0.)] * 2
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                scene = asyncio.run(run_source(source, portable=portable, sample_hz=8))
+                try:
+                    self.assertEqual(scene.observations, [expected, expected])
+                finally:
+                    close_scene(scene)
+
     @staticmethod
     def family(store, *members):
         batch = native.MembershipBatch('add')

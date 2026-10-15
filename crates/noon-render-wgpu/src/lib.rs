@@ -974,13 +974,17 @@ impl FramePreparer {
                     }
                     if let Some(head_index) = reveal_head {
                         let cache_index = self.path_batch_cache_indices[batch];
-                        let packed_head = pack_path_reveal_head(
+                        let mut packed_head = pack_path_reveal_head(
                             object,
                             frame.render_transform(object_index),
                             &self.path_mesh_cache[cache_index].mesh,
                             reveal,
                             frame.morph(object_index),
                         );
+                        // Analytic partial geometry already contains its endpoint.
+                        if partial_reveal_bits.is_some() {
+                            packed_head.style.opacity = 0.0;
+                        }
                         instances_repacked += 1;
                         if self.lines[head_index] != packed_head {
                             self.lines[head_index] = packed_head;
@@ -1411,7 +1415,12 @@ impl FramePreparer {
                 _ => None,
             })
             .expect("unique path replacement preflight requires renderable path geometry");
-        let PreparedSlot::Path { batch, .. } = self.slots[object_index] else {
+        let PreparedSlot::Path {
+            batch,
+            reveal_head: previous_reveal_head,
+            ..
+        } = self.slots[object_index]
+        else {
             unreachable!("unique path replacement preflight requires a path slot");
         };
         let (cache_index, cache_miss) = self.cache_path_mesh_at_progress(
@@ -1494,6 +1503,25 @@ impl FramePreparer {
         self.path_batch_cache_indices[batch] = cache_index;
         self.transient_path_groups_packed = false;
         self.path_batches[batch].coverage = path_coverage(&self.path_mesh_cache[cache_index].mesh);
+        // Keep at most one endpoint slot per object across mesh replacements.
+        // A full-to-partial reveal allocates it once; later invalid states
+        // retain the slot but pack it with zero opacity before submission.
+        let replacement_reveal_head = previous_reveal_head.or_else(|| {
+            if temporary_reveal.is_some() || !should_create_path_reveal_head(object, reveal) {
+                return None;
+            }
+            let index = self.lines.len();
+            self.line_ids.push(object.id);
+            self.lines.push(pack_path_reveal_head(
+                object,
+                frame.render_transform(object_index),
+                &self.path_mesh_cache[cache_index].mesh,
+                reveal,
+                frame.morph(object_index),
+            ));
+            push_dirty_range(&mut self.line_dirty_ranges, index);
+            Some(index)
+        });
         if let PreparedSlot::Path {
             analytic_reveal,
             partial_reveal_bits,
@@ -1505,7 +1533,7 @@ impl FramePreparer {
             *partial_reveal_bits = temporary_reveal
                 .as_ref()
                 .map(|_| reveal.clamp(0.0, 1.0).to_bits());
-            *reveal_head = None;
+            *reveal_head = replacement_reveal_head;
         }
         self.detach_mega_path(batch);
         Ok(PathReplacementStats {
@@ -2655,7 +2683,7 @@ fn pack_path_reveal_head(
         style.stroke = [0.0; 4];
         style.stroke_enabled = 0;
     }
-    let active = reveal > 0.0 && reveal < 1.0;
+    let active = reveal > 0.0 && should_create_path_reveal_head(object, reveal);
     style.opacity *= f32::from(active);
     if object.style.stroke.is_none() {
         style.opacity *= 1.0 - smoothstep(0.75, 1.0, reveal);

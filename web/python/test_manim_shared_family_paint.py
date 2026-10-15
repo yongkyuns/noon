@@ -27,6 +27,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
             group.set_opacity(None)
         self.assertIsNone(group.opacity)
 
+
     def test_constructor_color_is_passed_in_the_single_family_creation(self):
         handle = Mock()
         for context in (None, Mock()):
