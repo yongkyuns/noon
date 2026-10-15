@@ -20,9 +20,10 @@ COLUMN = 3
 GPU_TRACE = None  # Replace with the recorder's assignment to use captured reads.
 SYNTAX_HIGHLIGHT = True
 
-# Active-line emphasis is deliberately quieter than syntax/data colors.
-CODE_HIGHLIGHT_COLOR = color_from_hex("#536678")
-CODE_HIGHLIGHT_FILL = 0.07
+# Strong enough to identify active lines, while staying quieter than syntax colors.
+# Tune fill between 0.15 (softer) and 0.25 (stronger) for your display.
+CODE_HIGHLIGHT_COLOR = color_from_hex("#68839B")
+CODE_HIGHLIGHT_FILL = 0.20
 CODE_HIGHLIGHT_STROKE = 0
 
 # Every constructor receives a Noon Color, never an unconverted CSS string.
