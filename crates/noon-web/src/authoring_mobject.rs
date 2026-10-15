@@ -96,12 +96,13 @@ pub(crate) fn manim_text(
     line_spacing: f64,
     font_face: Option<noon::NativeFontFace>,
 ) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
-    configure_native_text(
-        noon::Text::new(source),
+    noon::integration::native_text_options(
+        source,
         font_family,
         font_size,
         line_spacing,
         font_face,
+        false,
     )
 }
 
@@ -113,35 +114,14 @@ pub(crate) fn manim_markup_text(
     line_spacing: f64,
     font_face: Option<noon::NativeFontFace>,
 ) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
-    configure_native_text(
-        noon::MarkupText::new(source).into(),
+    noon::integration::native_text_options(
+        source,
         font_family,
         font_size,
         line_spacing,
         font_face,
+        true,
     )
-}
-
-#[cfg(target_arch = "wasm32")]
-fn configure_native_text(
-    text: noon::Text,
-    font_family: &str,
-    font_size: f64,
-    line_spacing: f64,
-    font_face: Option<noon::NativeFontFace>,
-) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
-    let font_size = text_authoring_f32("font size", font_size)?;
-    let line_spacing = text_authoring_f32("line spacing", line_spacing)?;
-    if line_spacing != -1.0 && line_spacing <= -1.0 {
-        return Err("line spacing must be -1 or greater than -1".into());
-    }
-    let text = match font_face {
-        Some(face) => text.with_font_face(face),
-        None => text.with_font(font_family),
-    };
-    Ok(text
-        .with_font_size(font_size)
-        .with_line_spacing(line_spacing))
 }
 
 #[cfg(target_arch = "wasm32")]

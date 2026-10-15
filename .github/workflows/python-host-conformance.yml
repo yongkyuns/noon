@@ -18,6 +18,8 @@ on:
       - "scripts/python_host_*.py"
       - "scripts/python_export_conformance.py"
       - "scripts/test_python_export_facade.py"
+      - "scripts/test_native_text.py"
+      - "scripts/python_native_text_conformance.py"
       - "scripts/build-native-python.py"
       - "parity/python-host/**"
       - "Cargo.toml"
@@ -177,5 +179,56 @@ jobs:
         with:
           name: native-python-export-${{ github.sha }}
           path: artifacts/python-export/
+          retention-days: 3
+          if-no-files-found: error
+
+  text:
+    name: Native Python shaped Text resources
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      PYO3_PYTHON: python3
+      WGPU_BACKEND: vulkan
+      NOON_EXPORT_FORCE_FALLBACK: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install repository-pinned Rust
+        run: source scripts/ci-setup-rust.sh
+      - name: Install independent decoder and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg mesa-vulkan-drivers libvulkan1
+      - name: Build optional shaping and output binding
+        run: python3 scripts/build-native-python.py --profile release --native-text --export-video --output build/python-text
+      - name: Qualify resource inputs, live construction, ownership and cleanup
+        run: PYTHONPATH=build/python-text python3 scripts/test_native_text.py -v
+      - name: Build independent Rust Text source
+        run: cargo build -p noon-export --no-default-features --features native-text,bundled-fonts --release --example python_text_contract
+      - name: Decode every plain and markup Text frame on both source routes
+        run: |
+          python3 scripts/python_native_text_conformance.py --python-path build/python-text \
+            --rust-binary target/release/examples/python_text_contract --output artifacts/python-text/media
+      - name: Retain exact Text source and tool versions including failures
+        if: always()
+        run: |
+          mkdir -p artifacts/python-text
+          git rev-parse HEAD > artifacts/python-text/source-sha.txt
+          cp parity/python-host/native_text.py artifacts/python-text/
+          cp Cargo.lock artifacts/python-text/
+          rustc -Vv > artifacts/python-text/rust-version.txt
+          ffmpeg -version > artifacts/python-text/ffmpeg-version.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-python-text-${{ github.sha }}
+          path: artifacts/python-text/
           retention-days: 3
           if-no-files-found: error

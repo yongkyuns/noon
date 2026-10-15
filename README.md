@@ -162,6 +162,14 @@ PYTHONPATH=build/python python3 -m noon_native scene.py --output movie.mp4 --qua
 PYTHONPATH=build/python python3 -m noon_native scene.py --output frames --format png --resolution 960,540 --fps 30000/1001
 ```
 
+Add `--native-text` when building the extension to enable the existing Rust
+plain Text and bounded MarkupText shaping profile with bundled fonts. The same
+flag works with `--export-video`. `NativeFontFace.bundled(...)` and explicit font
+bytes use immutable Rust font inputs. Authored and post-wait text construction
+share resource admission with the browser host; no host font discovery occurs.
+Text part indexing, content-producing callbacks, Typst/LaTeX and broader text
+options still require their own native bindings and qualification.
+
 `noon_native.export_scene` and `export_source` expose the same options. Quality,
 resolution, FPS, and format values are resolved by the shared Rust integration.
 The source loader selects one Scene or `result`; named/multiple scene selection,

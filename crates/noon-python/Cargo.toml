@@ -7,6 +7,8 @@ description = "Native CPython binding to the shared Noon authoring and execution
 
 [features]
 default = []
+native-text = ["noon/native-text"]
+bundled-fonts = ["native-text", "noon/bundled-fonts"]
 export = ["dep:noon-export"]
 
 [lib]

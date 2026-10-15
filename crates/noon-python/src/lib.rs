@@ -16,6 +16,8 @@ mod mobject;
 mod options;
 mod path_query;
 mod render_options;
+#[cfg(feature = "native-text")]
+mod text;
 mod vector_path;
 
 fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
@@ -48,6 +50,8 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 
 #[pymodule]
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "native-text")]
+    text::register(m)?;
     m.add_class::<geometry::GeometryOptions>()?;
     m.add_class::<vector_path::AuthoringVectorPath>()?;
     m.add_class::<path_query::PathQuery>()?;

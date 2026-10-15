@@ -18,7 +18,7 @@ use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct Store {
-    semantics: Rc<RefCell<SemanticStore>>,
+    pub(crate) semantics: Rc<RefCell<SemanticStore>>,
 }
 #[pymethods]
 impl Store {
@@ -58,6 +58,32 @@ impl Store {
         )
         .map(|family| crate::family::FamilyHandle { family })
         .map_err(engine_error)
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(signature = (source, family, size, spacing, colors=None, face=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn text(
+        &self,
+        source: &str,
+        family: &str,
+        size: f64,
+        spacing: f64,
+        colors: Option<PyRefMut<'_, crate::text::TextColorBatch>>,
+        face: Option<PyRef<'_, crate::text::FontFace>>,
+    ) -> PyResult<MobjectHandle> {
+        crate::text::authored(self, source, family, size, spacing, colors, face, false)
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(signature = (source, family, size, spacing, face=None))]
+    fn markup_text(
+        &self,
+        source: &str,
+        family: &str,
+        size: f64,
+        spacing: f64,
+        face: Option<PyRef<'_, crate::text::FontFace>>,
+    ) -> PyResult<MobjectHandle> {
+        crate::text::authored(self, source, family, size, spacing, None, face, true)
     }
     fn geometry(&self, options: &GeometryOptions) -> PyResult<MobjectHandle> {
         Mobject::from_manim_geometry(Rc::clone(&self.semantics), options.options.clone())
@@ -177,7 +203,7 @@ impl Context {
         }
         target.family.validate().map_err(engine_error)
     }
-    fn available(&self) -> PyResult<()> {
+    pub(crate) fn available(&self) -> PyResult<()> {
         self.require_active()?;
         if self.segment.is_some() {
             Err(engine_error("a segment is already active"))
@@ -229,6 +255,47 @@ impl Context {
 }
 #[pymethods]
 impl Context {
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "liveCreateManimText", signature = (source, family, size, spacing, r, g, b, a, opacity, colors=None, face=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn live_text(
+        &mut self,
+        source: &str,
+        family: &str,
+        size: f64,
+        spacing: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+        opacity: f64,
+        colors: Option<PyRefMut<'_, crate::text::TextColorBatch>>,
+        face: Option<PyRef<'_, crate::text::FontFace>>,
+    ) -> PyResult<MobjectHandle> {
+        crate::text::live(
+            self, source, family, size, spacing, r, g, b, a, opacity, colors, face, false,
+        )
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "liveCreateManimMarkupText", signature = (source, family, size, spacing, r, g, b, a, opacity, face=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn live_markup_text(
+        &mut self,
+        source: &str,
+        family: &str,
+        size: f64,
+        spacing: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+        opacity: f64,
+        face: Option<PyRef<'_, crate::text::FontFace>>,
+    ) -> PyResult<MobjectHandle> {
+        crate::text::live(
+            self, source, family, size, spacing, r, g, b, a, opacity, None, face, true,
+        )
+    }
     #[pyo3(name = "liveExecutionOwnership")]
     fn ownership(&self) -> PyResult<&'static str> {
         self.require_active()?;

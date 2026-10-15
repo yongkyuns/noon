@@ -53,6 +53,18 @@ noonResolveCreateAnimationOptions = _native.resolve_create_options
 noonResolveTransformAnimationOptions = _native.resolve_transform_options
 
 
+if hasattr(_native, "FontFace"):
+    noonNativeFontFace = _native.FontFace
+    noonBundledNativeFontFace = _native.bundled_native_font_face
+    noonTextColorBatch = _native.TextColorBatch
+
+    def noonCreateAuthoringTextHandle(*args):
+        return _arena().text(*args)
+
+    def noonCreateAuthoringMarkupTextHandle(*args):
+        return _arena().markup_text(*args)
+
+
 def noonCreateAuthoringGeometryHandle(options):
     return _arena().geometry(options)
 

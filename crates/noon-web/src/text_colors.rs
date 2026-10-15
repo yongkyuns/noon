@@ -22,17 +22,7 @@ impl Default for WasmTextColorBatch {
 }
 
 fn channel(value: f64) -> Result<f32, JsValue> {
-    if value.is_finite() && (0.0..=1.0).contains(&value) {
-        Ok(value as f32)
-    } else {
-        Err(crate::authoring_error::js_error(
-            crate::AuthoringFailure::new(
-                "invalid_input",
-                "text.invalid_color",
-                "text color channels must be finite and between zero and one",
-            ),
-        ))
-    }
+    noon::integration::text_color_channel(value).map_err(crate::authoring_error::js_error)
 }
 
 #[wasm_bindgen]

@@ -23,11 +23,18 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=ROOT / "build/python")
     parser.add_argument("--export-video", action="store_true",
                         help="Build optional windowless native MP4/PNG output")
+    parser.add_argument("--native-text", action="store_true",
+                        help="Include native shaping and bundled font resources")
     args = parser.parse_args()
     output = args.output.resolve()
     command = ["cargo", "build", "-p", "noon-python"]
+    features = []
     if args.export_video:
-        command.extend(("--features", "export"))
+        features.append("export")
+    if args.native_text:
+        features.append("bundled-fonts")
+    if features:
+        command.extend(("--features", ",".join(features)))
     if args.profile == "release":
         command.append("--release")
     environment = dict(os.environ, PYO3_PYTHON=sys.executable, PYO3_BUILD_EXTENSION_MODULE="1")

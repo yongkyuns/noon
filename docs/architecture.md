@@ -131,6 +131,14 @@ source failure and cancellation. Render-option values share one Rust resolver
 across native Python and WASM. This is a bounded file-output profile, not named
 scene selection, configuration-file loading, or a broader resource binding.
 
+The optional native Text profile delegates plain/markup preparation to one
+shared Rust integration helper also used by the WASM binding. Font faces retain
+immutable bytes and metrics recipes; text-color batches are consumed inputs.
+Cold construction uses the existing semantic text importer. Construction after
+a source barrier uses `LiveSession::create_text`, so resource import and runtime
+publication stay atomic and existing ownership/retirement guards apply. The
+native adapter adds no shaping, layout, callback scheduling or resource cache.
+
 ### Direct Rust execution invariant
 
 Native Rust and Rust compiled to WASM use the same typed engine path; only the platform shell changes:

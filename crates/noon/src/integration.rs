@@ -28,6 +28,10 @@ mod path_edits;
 mod pixel_readback;
 mod render_options;
 mod svg_failure;
+#[cfg(feature = "native-text")]
+mod text_options;
+#[cfg(feature = "native-text")]
+pub use text_options::{native_text_options, text_color_channel};
 mod vector_path;
 pub use vector_path::{authoring_path_point, AuthoringVectorPath};
 
