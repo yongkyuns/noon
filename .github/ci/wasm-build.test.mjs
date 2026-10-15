@@ -565,6 +565,16 @@ test("product gate resolves one matching dependency lock before its first packag
   assert.match(producer, /Build candidate production package[\s\S]*?prepare candidate candidate/);
 });
 
+test("standalone host measurements revalidate the producer pair before opening a browser", async () => {
+  const runner = await readFile(new URL("../../scripts/python-host-perf.mjs", import.meta.url), "utf8");
+  assert.match(runner, /import \{ verifyProductArtifact \} from "\.\.\/\.github\/ci\/product-artifact\.mjs"/);
+  const check = runner.indexOf("identities.push(await verifyProductArtifact(root, process.env, role))");
+  assert.ok(check >= 0 && check < runner.indexOf("browser = await playwright.chromium.launch"));
+  assert.doesNotMatch(runner, /process\.env\.GITHUB_SHA|import.*\{ verify \}/);
+  // No private source resolver may compete with the upstream artifact contract.
+  await assert.rejects(readFile(new URL("./product-baseline.mjs", import.meta.url)), { code: "ENOENT" });
+});
+
 test("product gate requires PNG comparison controls after dependency setup", async () => {
   const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
   const adjacentJob = workflow.slice(workflow.indexOf("  measure-adjacent:"), workflow.indexOf("  measure-cumulative:"));
@@ -572,7 +582,7 @@ test("product gate requires PNG comparison controls after dependency setup", asy
   assert.ok(controls > adjacentJob.indexOf("npm install --no-save --ignore-scripts"));
   const controlStep = adjacentJob.slice(controls, adjacentJob.indexOf("      - name:", controls + 10));
   assert.match(controlStep, /NOON_PRODUCT_IMAGE_TESTS: "1"/);
-  assert.match(controlStep, /node --test web\/playground-product-compare-validation\.test\.mjs/);
+  assert.match(controlStep, /node --test scripts\/paired-product-metrics\.test\.mjs web\/playground-product-compare-validation\.test\.mjs/);
 });
 
 test("product camera measurements reuse the restored packages and fixed alternating pairs", async () => {

@@ -10,7 +10,7 @@ from _manim_typst import (
 )
 
 try:
-    from js import (
+    from _noon_host import (
         noonPrepareLatex as _prepare,
         noonCreateAuthoringLatexHandle as _create,
         noonCreateAuthoringLatexStringsHandle as _create_strings,

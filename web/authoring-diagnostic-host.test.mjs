@@ -34,7 +34,7 @@ assert.equal(typeof scripts.execute, "string");
 
 const cases = [
   ["scene result", "from noon import Scene\nresult=Scene()\n", null, null],
-  ["construct once", "from noon import Scene\ncontext['events']=[]\nclass Demo(Scene):\n    def construct(self):\n        context['events'].append('once')\n", null, null],
+  ["construct once", "from noon import Scene\ncontext['events']=[]\nclass Demo(Scene):\n    def construct(self):\n        context['events'].append('once')\n        self.events=context['events']\n", null, null],
   ["named syntax error", "label='😀'; result=(1+)\n", "SyntaxError", 1],
   ["module source line", "label='😀'\nmissing\n", "NameError", 2],
   ["construct source line", "from noon import Scene\nclass Demo(Scene):\n    def construct(self):\n        missing\n", "NameError", 4],
@@ -90,7 +90,7 @@ async def main():
         results.append({"label": label, "failure": failure,
             "diagnostics": [json.loads(value) for value in emitted],
             "result": namespace.get("__noon_result_json"),
-            "events": namespace.get("__noon_namespace", {}).get("context", {}).get("events")})
+            "events": getattr(namespace.get("__noon_result"), "events", None)})
     print(json.dumps(results))
 asyncio.run(main())
 `;

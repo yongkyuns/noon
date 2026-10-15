@@ -61,6 +61,9 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                     self.calls.append("becomeHandle" if not any(flags) else ("becomeHandle", *flags))
                     self.snapshot = copy.deepcopy(other.snapshot)
 
+                def centerCoordinates(self):
+                    return (self.centerX, self.centerY)
+
                 @property
                 def centerX(self):
                     return float(self.snapshot["transform"]["translation"]["x"])
@@ -266,6 +269,10 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                     if self.transferred:
                         raise RuntimeError("live execution session is running in the semantic engine")
                     self.live_calls.append(("become", source, target, *flags))
+
+                def queryMobjectCenter(self, queried):
+                    layout = self.queryMobjectLayout(queried)
+                    return (layout.centerX, layout.centerY)
 
                 def queryMobjectLayout(self, queried):
                     self.queries.append(queried)

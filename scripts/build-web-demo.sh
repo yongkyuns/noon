@@ -72,6 +72,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/python-editor-input-smoke.mjs
   node --check scripts/playground-layout-smoke.mjs
   node --check scripts/playground-product-e2e.mjs
+  node --check scripts/playground-product-pair.mjs
   node --check scripts/playground-product-fps.mjs
   node --check scripts/composition-authoring-smoke.mjs
   node --check scripts/reactive-authoring-smoke.mjs
@@ -80,6 +81,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/paired-authoring-qualification.mjs
   node --check scripts/polynomial-rate-qualification.mjs
   node --check scripts/polynomial-easing-qualification.mjs
+  node --check scripts/elastic-bounce-easing-qualification.mjs
+  node --check scripts/lingering-qualification.mjs
   node --check scripts/cubic-bezier-qualification.mjs
   node --check scripts/special-camera-qualification.mjs
   node --check scripts/plotting-qualification.mjs

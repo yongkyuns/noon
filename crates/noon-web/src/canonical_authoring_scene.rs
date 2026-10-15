@@ -2584,6 +2584,12 @@ impl CanonicalAuthoringScene {
                     options,
                     noon_core::AnimationOptions::new(),
                 )
+            } else if matches!(child, OrdinaryCompositionChild::Create { .. }) {
+                noon_core::resolve_create_animation_options(
+                    noon_core::AnimationDefaults::MANIM,
+                    options,
+                    noon_core::AnimationOptions::new(),
+                )
             } else if matches!(child, OrdinaryCompositionChild::Add { .. }) {
                 noon_core::resolve_add_animation_options(
                     noon_core::AnimationDefaults::MANIM,
@@ -4060,25 +4066,23 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = criticalX)]
-        pub fn critical_x(&self, direction_x: f64, _direction_y: f64) -> f64 {
-            if direction_x < 0.0 {
-                self.center_x - self.width * 0.5
-            } else if direction_x > 0.0 {
-                self.center_x + self.width * 0.5
-            } else {
-                self.center_x
-            }
+        pub fn critical_x(&self, direction_x: f64, direction_y: f64) -> f64 {
+            noon::integration::layout_critical_point(
+                (self.center_x, self.center_y),
+                (self.width, self.height),
+                (direction_x, direction_y),
+            )
+            .0
         }
 
         #[wasm_bindgen(js_name = criticalY)]
-        pub fn critical_y(&self, _direction_x: f64, direction_y: f64) -> f64 {
-            if direction_y < 0.0 {
-                self.center_y - self.height * 0.5
-            } else if direction_y > 0.0 {
-                self.center_y + self.height * 0.5
-            } else {
-                self.center_y
-            }
+        pub fn critical_y(&self, direction_x: f64, direction_y: f64) -> f64 {
+            noon::integration::layout_critical_point(
+                (self.center_x, self.center_y),
+                (self.width, self.height),
+                (direction_x, direction_y),
+            )
+            .1
         }
     }
 
@@ -5373,6 +5377,7 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            reverse_rate_function: bool,
         ) -> Result<(), JsValue> {
             let entering_id = if object_id.is_empty() {
                 None
@@ -5382,7 +5387,8 @@ mod wasm {
             self.children.push(OrdinaryCompositionChild::Create {
                 entering_id,
                 target: target.semantic_mobject().clone(),
-                options: Self::options(child_run_time, rate_function)?,
+                options: Self::options(child_run_time, rate_function)?
+                    .reverse_rate_function(reverse_rate_function),
             });
             Ok(())
         }
@@ -13452,6 +13458,33 @@ mod tests {
         assert!(!context.live_contains_mobject(&square).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&square.node_id()));
         assert_eq!(context.identities.get(&square.node_id()), Some(&id));
+    }
+
+    #[test]
+    fn ordinary_reverse_create_lingering_preserves_typed_admission() {
+        let mut context = CanonicalAuthoringScene::default();
+        let circle = context.scene.circle(0.4).unwrap();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Lingering)
+            .reverse_rate_function(true);
+        let end = context
+            .begin_ordinary_mixed_composition(
+                noon_core::SemanticAnimationCompositionKind::Parallel,
+                &create_requests(&[(ObjectId::new(0), circle.clone(), options)]),
+                AnimationOptions::new(),
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        assert_eq!(end, 1.0);
+        assert_eq!(
+            context.bindings.get(&ObjectId::new(0)),
+            Some(&circle.node_id())
+        );
+        let player = context.active_live_player().unwrap();
+        player.live_advance_segment_to(end).unwrap();
+        player.live_complete_segment().unwrap();
+        assert!(context.live_contains_mobject(&circle).unwrap());
     }
 
     #[test]

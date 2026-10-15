@@ -9,6 +9,8 @@ import playwright from "playwright";
 import pngjs from "pngjs";
 import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
+import { readProductPair } from "./paired-product-metrics.mjs";
+import { browserArgs } from "./manim-raster-support.mjs";
 import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
 
 const { chromium } = playwright;
@@ -26,15 +28,8 @@ const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle"
 const measurement = productMeasurement(exampleId);
 const MIN_PRODUCT_MEASUREMENT_MS = 1_000;
 const startedAtMs = Date.now();
-const pair = process.env.NOON_PRODUCT_PAIR_INDEX === undefined ? null : {
-  index: Number(process.env.NOON_PRODUCT_PAIR_INDEX),
-  position: Number(process.env.NOON_PRODUCT_PAIR_POSITION),
-};
-if (pair !== null) {
-  assert.ok(Number.isSafeInteger(pair.index) && pair.index >= 1 && pair.index <= 3,
-    "product pair index must be between one and three");
-  assert.ok(pair.position === 1 || pair.position === 2, "product pair position must be one or two");
-}
+const pair = readProductPair(process.env);
+const browserWsEndpoint = process.env.NOON_PRODUCT_BROWSER_WS_ENDPOINT?.trim() || null;
 
 await mkdir(artifactDir, { recursive: true });
 
@@ -253,25 +248,16 @@ async function synchronizeFinalFrame(page, seconds) {
 }
 
 let browser = null;
+let context = null;
 let page = null;
 const pageErrors = [];
 const consoleErrors = [];
 try {
   await waitForServer();
-  browser = await chromium.launch({
-    channel: "chromium",
-    headless: true,
-    args: [
-      "--disable-features=WebGPU",
-      "--enable-unsafe-swiftshader",
-      "--ignore-gpu-blocklist",
-      "--use-gl=angle",
-      "--use-angle=swiftshader",
-      "--disable-gpu-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-  const context = await browser.newContext({
+  browser = browserWsEndpoint === null
+    ? await chromium.launch({ channel: "chromium", headless: true, args: browserArgs("webgl") })
+    : await chromium.connect(browserWsEndpoint);
+  context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 1,
   });
@@ -461,6 +447,7 @@ try {
       viewport: { width: 1280, height: 800 },
       deviceScaleFactor: 1,
       gpuMode: "software-WebGL",
+      sharedBrowserProcess: browserWsEndpoint !== null,
     },
     pageErrors,
     consoleErrors,
@@ -485,6 +472,9 @@ try {
   }, null, 2)}\n`, "utf8");
   throw error;
 } finally {
+  await context?.close();
+  // Browser.close() disconnects this client when connected via launchServer;
+  // without it the Node child never exits even after writing its report.
   await browser?.close();
   server.kill("SIGTERM");
   await serverClosed;

@@ -29,7 +29,12 @@ test("detached Mobject layout queries stay owned by the shared semantic handle",
 
   const getCenter = functionBody(semanticHandlesSource, "_get_center");
   assert.match(getCenter, /_handle_for\(self\)/);
-  assert.match(getCenter, /return _layout_center\(self\)/);
+  assert.match(getCenter, /_bound_layout_observation\(self, "queryMobjectCenter"\)/);
+  assert.match(getCenter, /coordinates = engine_call\(handle\.centerCoordinates\)/);
+  assert.match(getCenter, /return _base\.Vec2\(float\(coordinates\[0\]\), float\(coordinates\[1\]\)\)/);
+  // A value projection is allowed; Python geometry or an authored-state
+  // fallback for a failed live observation is not.
+  assert.doesNotMatch(getCenter, /_current_raw|_raw|\bexcept\b/);
 
   const width = functionBody(semanticHandlesSource, "_width");
   assert.match(width, /handle\.width/);
@@ -75,4 +80,25 @@ test("Rust semantic handle remains the layout-query source of truth", () => {
   const heightEnd = rustHandleSource.indexOf("pub fn critical_point", widthEnd);
   const heightBody = rustHandleSource.slice(widthEnd, heightEnd);
   assert.match(heightBody, /self\.layout_bounds\(\)/);
+});
+
+
+test("both center bindings project the existing checked Rust queries", () => {
+  const wasm = readFileSync(
+    new URL("../crates/noon-web/src/authoring_center.rs", import.meta.url), "utf8",
+  );
+  const native = readFileSync(
+    new URL("../crates/noon-python/src/context.rs", import.meta.url), "utf8",
+  );
+  const nativeHandle = readFileSync(
+    new URL("../crates/noon-python/src/mobject.rs", import.meta.url), "utf8",
+  );
+
+  // Bound observations must keep the checked authored/effective query. Native
+  // and WASM only change the return representation at the language boundary.
+  assert.match(wasm, /let layout = self\.query_mobject_layout\(handle\)\?;/);
+  assert.match(wasm, /Ok\(vec!\[layout\.center_x\(\), layout\.center_y\(\)\]\)/);
+  assert.match(native, /fn center\([^]*?let layout = self\.layout\(target\)\?;\s+Ok\(layout\.center\)/);
+  assert.match(wasm, /semantic_mobject\(\)\s*\.center\(\)\s*\.map_err\(crate::authoring_error::js_error\)\?/);
+  assert.match(nativeHandle, /fn center_coordinates\([^]*?self\.handle\.center\(\)\.map_err\(engine_error\)/);
 });

@@ -302,6 +302,52 @@ class KeyedSceneMembershipTests(unittest.TestCase):
         self.assertEqual([slot for _, slot in self.context.edits[-1][1]], [11])
         self.assertEqual([slot for _, slot in self.context.edits[-1][2]], [11])
 
+    def test_membership_identity_getters_are_shared_only_within_one_operation(self):
+        # Every getter is a language/engine boundary in the actual host. An
+        # overlapping Group and keyed leaf must use one coherent projection,
+        # while the next operation must not retain an old handle identity.
+        class ObservedHandle:
+            slot = 10
+            generation = 0
+
+            def __init__(self):
+                self.reads = []
+
+            @property
+            def semanticSlot(self):
+                self.reads.append("slot")
+                return self.slot
+
+            @property
+            def semanticGeneration(self):
+                self.reads.append("generation")
+                return self.generation
+
+        target = self.mobject(10)
+        handle = target._semantic_handle = ObservedHandle()
+        group = Group(100, target)
+        self.scene.add_foreground_mobjects(group, target)
+        self.assertEqual(handle.reads.count("generation"), 1)
+        self.assertIs(self.scene._canonical_membership_wrappers["10:0"], target)
+
+        # A separate operation gets a fresh projection even for the same
+        # wrapper. Actual generation admission remains the Rust batch's job.
+        handle.generation = 1
+        self.scene.add(target, key=self.scene._object_keys[target.id])
+        self.assertEqual(handle.reads.count("generation"), 2)
+        self.assertIs(self.scene._canonical_membership_wrappers["10:1"], target)
+
+    def test_failed_membership_does_not_leave_identity_cache_on_wrappers(self):
+        target = self.mobject(10)
+        self.context.reject = True
+        with self.assertRaisesRegex(RuntimeError, "publication rejection"):
+            self.scene.add(target)
+        target._semantic_handle = SimpleNamespace(semanticSlot=20, semanticGeneration=3)
+        self.context.reject = False
+        self.scene.add(target)
+        self.assertEqual(self.context.edits[-1][2], ((str(target.id), 20),))
+        self.assertIs(self.scene._canonical_membership_wrappers["20:3"], target)
+
 
 if __name__ == "__main__":
     unittest.main()

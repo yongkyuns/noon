@@ -44,6 +44,9 @@ class ManimDotEllipseTests(unittest.TestCase):
                         ty + height / 2.0,
                     )
 
+                def centerCoordinates(self):
+                    return (self.centerX, self.centerY)
+
                 @property
                 def centerX(self):
                     low_x, _, high_x, _ = self._bounds()

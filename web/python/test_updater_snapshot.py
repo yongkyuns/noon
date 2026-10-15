@@ -1,5 +1,6 @@
 import math
 import unittest
+from _noon_host import encode_callback
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -970,7 +971,7 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
             raise RuntimeError("callback body failed")
         except RuntimeError:
             context.discard_membership()
-        self.assertEqual(context._callback_player.staged, [("{\"generation\":9}", "first")])
+        self.assertEqual(context._callback_player.staged, [(encode_callback({"generation":9}), "first")])
         self.assertEqual(finalized, [])
         self.assertEqual(context._membership_finalizers, [])
 
@@ -996,10 +997,10 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
         self.assertEqual(
             context._callback_player.staged,
             [
-                ('{"generation":9}', "provisional_geometry", "circle-options"),
-                ('{"generation":9}', "shift", "provisional", 0.5, -1.0),
-                ('{"generation":9}', "fill", "provisional", 0.2, 0.4, 0.8, 0.75, 0.6),
-                ('{"generation":9}', "center", "provisional"),
+                (encode_callback({"generation":9}), "provisional_geometry", "circle-options"),
+                (encode_callback({"generation":9}), "shift", "provisional", 0.5, -1.0),
+                (encode_callback({"generation":9}), "fill", "provisional", 0.2, 0.4, 0.8, 0.75, 0.6),
+                (encode_callback({"generation":9}), "center", "provisional"),
             ],
         )
 
@@ -1024,9 +1025,9 @@ class CallbackMembershipFinalizerTests(unittest.TestCase):
         self.assertEqual(
             context._callback_player.staged,
             [
-                ('{"generation":9}', "provisional_geometry", "circle-options"),
-                ('{"generation":9}', "fill", "provisional", 0.2, 0.4, 0.8, 0.75, 0.6),
-                ('{"generation":9}', "center", "provisional"),
-                ('{"generation":9}', "shift", "provisional", 2.5, 4.0),
+                (encode_callback({"generation":9}), "provisional_geometry", "circle-options"),
+                (encode_callback({"generation":9}), "fill", "provisional", 0.2, 0.4, 0.8, 0.75, 0.6),
+                (encode_callback({"generation":9}), "center", "provisional"),
+                (encode_callback({"generation":9}), "shift", "provisional", 2.5, 4.0),
             ],
         )

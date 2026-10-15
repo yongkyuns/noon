@@ -608,6 +608,9 @@ assert interpolate(0, 8, 0.25) == 2
 assert integer_interpolate(0, 8, 0.25) == (2, 0.0)
 assert mid(0, 8) == 4
 assert clip(5, 10, 0) == 10
+assert lingering(0.4) == 0.5
+assert lingering(0.9) == 1.0
+assert lingering is __import__("_manim_rate_functions").lingering
 assert batch_by_property([1, 1, 2, 1], lambda value: value) == [([1, 1], 1), ([2], 2), ([1], 1)]
 assert list(uniq_chain([1, 2, 1], iter([2, 3]))) == [1, 2, 3]
 assert hash_obj({"a": [1, 2], "b": {3, 4}}) == hash_obj({"b": {4, 3}, "a": (1, 2)})

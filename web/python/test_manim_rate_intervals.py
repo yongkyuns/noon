@@ -38,6 +38,12 @@ class KnownRateIdentityTests(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             rates.easing_from_rate_func(Callable())
 
+    def test_ordinary_transform_rates_do_not_allocate_bytecode_instructions(self):
+        from unittest.mock import patch
+        with patch.object(rates.dis, "get_instructions",
+                          side_effect=AssertionError("unnecessary bytecode inspection")):
+            self.assertFalse(rates.is_reverse_smooth_rate_func(lambda value: value))
+
     def test_reverse_admission_does_not_consult_a_spoofed_class(self):
         class Callable:
             @property

@@ -405,7 +405,7 @@ impl WasmManimGeometryOptions {
     }
 
     pub fn path(path: WasmAuthoringVectorPath) -> Result<Self, JsValue> {
-        noon::ManimGeometryOptions::path(path.path)
+        noon::ManimGeometryOptions::path(path.path.into_path())
             .map(Self::from_options)
             .map_err(js_error)
     }
@@ -415,12 +415,11 @@ impl WasmManimGeometryOptions {
 #[wasm_bindgen]
 #[derive(Default)]
 pub struct WasmAuthoringVectorPath {
-    path: VectorPath,
+    path: noon::integration::AuthoringVectorPath,
 }
 
 pub(crate) fn point(x: f64, y: f64) -> Result<Vec2, JsValue> {
-    let value = noon::integration::authoring_xy_f64(x, y).map_err(js_error)?;
-    Ok(Vec2::new(value.x as f32, value.y as f32))
+    noon::integration::authoring_path_point(x, y).map_err(js_error)
 }
 
 pub(crate) fn points(values: &[f64]) -> Result<Vec<Vec2>, JsValue> {
@@ -482,16 +481,12 @@ impl WasmAuthoringVectorPath {
 
     #[wasm_bindgen(js_name = moveTo)]
     pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-        let to = point(x, y)?;
-        self.path = std::mem::take(&mut self.path).move_to(to);
-        Ok(())
+        self.path.move_to(x, y).map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = lineTo)]
     pub fn line_to(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-        let to = point(x, y)?;
-        self.path = std::mem::take(&mut self.path).line_to(to);
-        Ok(())
+        self.path.line_to(x, y).map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = quadraticTo)]
@@ -502,10 +497,9 @@ impl WasmAuthoringVectorPath {
         x: f64,
         y: f64,
     ) -> Result<(), JsValue> {
-        let control = point(control_x, control_y)?;
-        let to = point(x, y)?;
-        self.path = std::mem::take(&mut self.path).quadratic_to(control, to);
-        Ok(())
+        self.path
+            .quadratic_to(control_x, control_y, x, y)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = cubicTo)]
@@ -518,15 +512,13 @@ impl WasmAuthoringVectorPath {
         x: f64,
         y: f64,
     ) -> Result<(), JsValue> {
-        let first = point(first_x, first_y)?;
-        let second = point(second_x, second_y)?;
-        let to = point(x, y)?;
-        self.path = std::mem::take(&mut self.path).cubic_to(first, second, to);
-        Ok(())
+        self.path
+            .cubic_to(first_x, first_y, second_x, second_y, x, y)
+            .map_err(js_error)
     }
 
     pub fn close(&mut self) {
-        self.path = std::mem::take(&mut self.path).close();
+        self.path.close();
     }
 }
 

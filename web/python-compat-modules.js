@@ -6,6 +6,8 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_interpolation.py", runtimePath: "/tmp/_manim_interpolation.py", label: "Noon explicit Python user-data interpolation" },
   { sourcePath: "python/_manim_iterables.py", runtimePath: "/tmp/_manim_iterables.py", label: "Noon Python iterable helpers" },
   { sourcePath: "python/_manim_config_utils.py", runtimePath: "/tmp/_manim_config_utils.py", label: "Noon Python dictionary helpers" },
+  { sourcePath: "python/_noon_source.py", runtimePath: "/tmp/_noon_source.py", label: "Noon shared Python source lifecycle" },
+  { sourcePath: "python/_noon_host.py", runtimePath: "/tmp/_noon_host.py", label: "Noon host binding selection" },
   { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },
   { sourcePath: "python/_noon_diagnostics.py", runtimePath: "/tmp/_noon_diagnostics.py", label: "Noon Python source diagnostics" },
   { sourcePath: "python/_noon_effects.py", runtimePath: "/tmp/_noon_effects.py", label: "Noon effect declaration adapter" },

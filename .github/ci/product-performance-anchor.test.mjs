@@ -214,3 +214,48 @@ for (const exampleId of workloadIds) {
       sha256: createHash("sha256").update(expected).digest("hex") });
   });
 }
+
+test("producer preflight-only checks cannot be mistaken for different executed build recipes", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const producer = workflow.split("\n  build:\n")[1]?.split("\n  compare:\n")[0];
+  const consumer = workflow.split("\n  compare:\n")[1];
+  assert.ok(producer && consumer, "required producer/comparison jobs are missing");
+  assert.match(producer, /^      NOON_SKIP_WEB_PREFLIGHT: "1"$/m,
+    "producer must skip the source-dependent preflight for both production builds");
+  assert.match(consumer, /^      NOON_PRODUCT_PREFLIGHT_SKIPPED: "1"$/m,
+    "consumer must explicitly attest the matching producer preflight selection");
+  assert.match(consumer, /node scripts\/python-host-perf\.mjs/);
+});
+
+test("comparison step conditions refer to IDs defined in their own job", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const comparison = workflow.split("\n  compare:\n")[1];
+  assert.ok(comparison, "comparison job must exist");
+  const ids = new Set([...comparison.matchAll(/^        id: ([\w-]+)$/gm)].map(match => match[1]));
+  const references = [...comparison.matchAll(/steps\.([\w-]+)\.(?:outcome|conclusion|outputs)/g)];
+  assert.ok(references.length > 0, "fixed-work measurement must require verified production packages");
+  for (const [, id] of references) {
+    assert.ok(ids.has(id), `comparison condition references missing job-local step: ${id}`);
+  }
+  const verification = comparison.split("      - name: Verify source, configuration and package contents\n")[1]?.split("\n      - name:")[0];
+  assert.match(verification, /id: production-verified/);
+  assert.match(verification, /verify baseline baseline/);
+  assert.match(verification, /verify candidate candidate/);
+});
+
+test("fixed-work comparison job installs its pinned browser prerequisites", async () => {
+  const workflow = await readFile(new URL("../workflows/playground-product-gate.yml", import.meta.url), "utf8");
+  const comparison = workflow.split("\n  compare:\n")[1];
+  assert.ok(comparison, "comparison job must exist");
+  const installation = comparison.split("      - name: Install pinned comparison and host measurement dependencies\n")[1]?.split("\n      - name:")[0];
+  assert.match(installation, /working-directory: candidate/);
+  assert.match(installation, /npm install --no-save --ignore-scripts playwright@1\.62\.1 pngjs@7\.0\.0/);
+  assert.match(installation, /npx playwright install chromium/);
+  assert.ok(comparison.indexOf("Install pinned comparison and host measurement dependencies")
+    < comparison.indexOf("Measure fixed-work Python host overhead on matched packages"));
+  for (const job of ["measure-adjacent", "measure-cumulative"]) {
+    const source = workflow.split(`\n  ${job}:\n`)[1]?.split(/^  [\w-]+:\n/m)[0];
+    assert.match(source, /playwright@1\.62\.1 pngjs@7\.0\.0/);
+    assert.match(source, /npx playwright install chromium/);
+  }
+});
