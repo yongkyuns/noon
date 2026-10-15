@@ -491,6 +491,49 @@ impl Context {
         self.same_family_store(target)?;
         self.with_live(|live| live.scale_family(&target.family, x, y).map(|_| ()))
     }
+    #[pyo3(name = "liveSetFamilyFill", signature = (target, has_color, red, green, blue, alpha, opacity=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn family_fill(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        has_color: bool,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        let color = noon::integration::family_color(has_color, red, green, blue, alpha)
+            .map_err(engine_error)?;
+        self.with_live(|live| {
+            live.set_family_fill(&target.family, color, opacity)
+                .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveSetFamilyStroke", signature = (target, has_color, red, green, blue, alpha, width=None, opacity=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn family_stroke(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        has_color: bool,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        let color = noon::integration::family_color(has_color, red, green, blue, alpha)
+            .map_err(engine_error)?;
+        self.with_live(|live| {
+            live.set_family_stroke(&target.family, color, width, opacity)
+                .map(|_| ())
+        })
+    }
     #[pyo3(name = "liveSetFamilyOpacity")]
     fn family_opacity(
         &mut self,

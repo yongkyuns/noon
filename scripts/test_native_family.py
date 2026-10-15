@@ -41,6 +41,55 @@ class ConstructorColors(Scene):
                 batch.appendMobject('', member)
         return store.family(batch, 0)
 
+    def test_family_fill_and_stroke_preserve_omitted_fields_and_reject_invalid_paint(self):
+        store = native.Store()
+        child = store.geometry(native.GeometryOptions.square(2))
+        family = self.family(store, child, child)
+        family.setFill(True, 0, 1, 0, 1, .75)
+        family.setStroke(True, 1, 1, 0, 1, .25, .625)
+        self.assertEqual((child.fillOpacity, child.strokeOpacity, child.strokeWidth),
+                         (.75, .625, .25))
+        family.setFill(False, 0, 0, 0, 1, None)
+        family.setStroke(False, 0, 0, 0, 1, None, None)
+        self.assertEqual((child.fillOpacity, child.strokeOpacity, child.strokeWidth),
+                         (.75, .625, .25))
+        for operation, arguments in (
+            (family.setFill, (True, float('nan'), 0, 0, 1, .5)),
+            (family.setFill, (True, 1.1, 0, 0, 1, .5)),
+            (family.setFill, (True, 1, 0, 0, 1, 2)),
+            (family.setStroke, (True, 1, 0, 0, 1, -1, .5)),
+        ):
+            with self.assertRaises(RuntimeError):
+                operation(*arguments)
+            self.assertEqual((child.fillOpacity, child.strokeOpacity, child.strokeWidth),
+                             (.75, .625, .25))
+            self.assertEqual(child.manimColor().green, 1)
+
+    def test_authored_stroke_width_projects_the_existing_semantic_handle(self):
+        child = native.Store().geometry(native.GeometryOptions.square(2))
+        child.setStrokeWidth(.125)
+        self.assertEqual(child.strokeWidth, .125)
+        child.setStrokeWidth(.25)
+        self.assertEqual(child.strokeWidth, .25)
+
+    def test_live_family_fill_and_stroke_reject_foreign_and_retired_contexts(self):
+        left, right = native.Store(), native.Store()
+        local, foreign = self.family(left), self.family(right)
+        context = left.context()
+        for name, arguments in (
+            ('liveSetFamilyFill', (True, 1, 0, 0, 1, .5)),
+            ('liveSetFamilyStroke', (True, 1, 0, 0, 1, .25, .5)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, 'foreign|different.*store|another.*store'):
+                getattr(context, name)(foreign, *arguments)
+        context.retire()
+        for name, arguments in (
+            ('liveSetFamilyFill', (True, 1, 0, 0, 1, .5)),
+            ('liveSetFamilyStroke', (True, 1, 0, 0, 1, .25, .5)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, 'retired'):
+                getattr(context, name)(local, *arguments)
+
     def test_empty_family_shift_and_scale_do_not_move_a_late_child(self):
         store = native.Store()
         family = self.family(store)
